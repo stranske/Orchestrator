@@ -1,0 +1,843 @@
+#!/usr/bin/env python3
+"""ux_review.py — Gate 2: evidence-bound UX + wiring review of a running frontend.
+
+WHY THIS EXISTS: Gate 1 (frontend_verify) proves named interactions wire correctly; this gate asks
+whether a first-time user can actually finish the core workflow — scored by an anonymized panel of
+LLM evaluators plus a hostile adversarial critic, recorded to feedback.py for cross-repo learning
+and anchored by human calibration. It is the structural cure for "claimed done/usable but never
+really evaluated."
+
+Pairs with Gate 1. Consumes a pre-captured bundle (a11y trees, scenario transcripts with OBSERVED
+outcomes, Gate-1 wired findings); evaluators judge from text evidence only.
+
+Out of scope for v1: multimodal screenshot input to evaluators; automated bundle capture (operator-
+supplied for now); auto-running on every PR (manual invocation first, wire to a lane later).
+
+Pure helpers are selftested offline (`--selftest`).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path
+
+import adapters
+import dispatcher
+import feedback
+from exp_abcd import (
+    AGENT_MODE,
+    EVALUATOR_TOPUP_ORDER,
+    MIN_EVALUATORS,
+    _ensure_min_evaluators,
+    _eval_command,
+    _extract_json,
+)
+
+ORCH = Path(__file__).resolve().parent
+REVIEW_DIR = Path(os.environ.get("ORCH_UX_REVIEW_DIR", ORCH / "ux_reviews"))
+
+DIMENSIONS = ("wired", "usability", "help_clarity", "workflow_productivity")
+FAILURE_MODES = frozenset({
+    "false_success",
+    "recovery_failure",
+    "efficiency_trap",
+    "confusion",
+    "missing_help",
+})
+
+
+def median(values: list[float]) -> float:
+    """Robust central tendency for panel scores (pure; selftested)."""
+    if not values:
+        return 0.0
+    s = sorted(float(v) for v in values)
+    n = len(s)
+    mid = n // 2
+    if n % 2:
+        return s[mid]
+    return (s[mid - 1] + s[mid]) / 2.0
+
+
+def consensus_flag(scores: list[float]) -> bool:
+    """True when evaluator score spread is >= 3 → route to human calibration (pure; selftested).
+    Uses >= (not >) so a 4-vs-7 split on a 0-10 dimension escalates: meaningful disagreement, not noise."""
+    if len(scores) < 2:
+        return False
+    return max(scores) - min(scores) >= 3
+
+
+def has_reproducible_click_path(finding: dict) -> bool:
+    click_path = finding.get("click_path")
+    return isinstance(click_path, list) and len(click_path) > 0 and all(str(s).strip() for s in click_path)
+
+
+def finding_key(finding: dict) -> tuple[str, str, str]:
+    return (
+        str(finding.get("screen") or ""),
+        str(finding.get("element") or ""),
+        str(finding.get("failure_mode") or ""),
+    )
+
+
+def dedupe_findings(findings: list[dict]) -> list[dict]:
+    """Dedupe by (screen, element, failure_mode), keeping max severity + max confidence (pure; selftested)."""
+    merged: dict[tuple[str, str, str], dict] = {}
+    for f in findings:
+        k = finding_key(f)
+        if k not in merged:
+            merged[k] = dict(f)
+            continue
+        cur = merged[k]
+        cur["severity"] = max(int(cur.get("severity") or 0), int(f.get("severity") or 0))
+        cur["confidence"] = max(float(cur.get("confidence") or 0), float(f.get("confidence") or 0))
+        if float(f.get("stuck_probability") or 0) > float(cur.get("stuck_probability") or 0):
+            cur["stuck_probability"] = f.get("stuck_probability")
+    out = list(merged.values())
+    out.sort(key=lambda x: (-int(x.get("severity") or 0), x.get("screen", ""), x.get("element", "")))
+    return out
+
+
+def _merge_finding_group(group: list[dict]) -> dict:
+    base = dict(group[0])
+    for f in group[1:]:
+        base["severity"] = max(int(base.get("severity") or 0), int(f.get("severity") or 0))
+        base["confidence"] = max(float(base.get("confidence") or 0), float(f.get("confidence") or 0))
+        if float(f.get("stuck_probability") or 0) > float(base.get("stuck_probability") or 0):
+            base["stuck_probability"] = f.get("stuck_probability")
+    # Preserve EVERY distinct fix_hint across the cluster — the per-evaluator improvement
+    # ideas are the productive payload, and a single-rep merge silently dropped all but one.
+    fix_hints: list[str] = []
+    seen_fh: set[str] = set()
+    for f in group:
+        fh = " ".join(str(f.get("fix_hint") or "").split())
+        if fh and fh.lower() not in seen_fh:
+            seen_fh.add(fh.lower())
+            fix_hints.append(fh[:500])
+    if fix_hints:
+        base["fix_hints"] = fix_hints
+    for k in ("_source", "_adversarial", "reject_reason"):
+        base.pop(k, None)
+    return base
+
+
+def aggregate_accepted_findings(
+    evaluator_findings: dict[str, list[dict]],
+    adversarial_findings: list[dict],
+    n_evaluators: int,
+) -> tuple[list[dict], list[dict]]:
+    """Accept findings by majority (screen, element, failure_mode) or adversarial stuck_probability>=0.5.
+
+    Reject findings without a reproducible click_path as non_findings (audit trail only).
+    Returns (accepted, non_findings). Pure; selftested.
+    """
+    raw: list[dict] = []
+    for ev, findings in evaluator_findings.items():
+        for f in findings or []:
+            raw.append({**f, "_source": ev, "_adversarial": False})
+    for f in adversarial_findings or []:
+        raw.append({**f, "_source": "adversarial", "_adversarial": True})
+
+    non_findings: list[dict] = []
+    candidates: list[dict] = []
+    for f in raw:
+        if not has_reproducible_click_path(f):
+            nf = dict(f)
+            nf["reject_reason"] = "missing_click_path"
+            non_findings.append(nf)
+            continue
+        candidates.append(f)
+
+    # Cluster by FAILURE MODE (the stable semantic category), NOT the exact
+    # (screen, element, failure_mode) string. Evaluators describe the same issue with different
+    # screen/element wording, so an exact-key majority silently DROPPED real corroborated findings
+    # (observed: panels emitted 4-9 findings each, all discarded -> report showed findings:[]).
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for f in candidates:
+        groups[str(f.get("failure_mode") or "")].append(f)
+
+    accepted: list[dict] = []
+    majority_needed = (n_evaluators // 2) + 1
+    for group in groups.values():
+        ev_sources = {g["_source"] for g in group if not g.get("_adversarial")}
+        adv_hits = [g for g in group if g.get("_adversarial")]
+        adv_accept = any(float(g.get("stuck_probability") or 0) >= 0.5 for g in adv_hits)
+        if len(ev_sources) >= majority_needed or adv_accept:
+            rep = _merge_finding_group(group)
+            rep["corroboration"] = len(ev_sources)
+            accepted.append(rep)
+
+    return dedupe_findings(accepted), non_findings
+
+
+def finding_severity_spread(evaluator_findings: dict[str, list[dict]], key: tuple[str, str, str]) -> int:
+    severities: list[int] = []
+    for findings in evaluator_findings.values():
+        for f in findings or []:
+            if finding_key(f) == key:
+                severities.append(int(f.get("severity") or 0))
+    if len(severities) < 2:
+        return 0
+    return max(severities) - min(severities)
+
+
+def compute_overall_median(evaluator_overalls: list[float], accepted_findings: list[dict]) -> float:
+    """Blocker-dominated overall: a confirmed severity-4 caps the median at <=3 (pure; selftested)."""
+    raw = median(evaluator_overalls)
+    if any(int(f.get("severity") or 0) >= 4 for f in accepted_findings):
+        return min(raw, 3.0)
+    return raw
+
+
+DERIVE_THRESHOLD = 6.0
+_DIM_FAILMODE = {
+    "wired": "false_success",
+    "usability": "confusion",
+    "help_clarity": "missing_help",
+    "workflow_productivity": "efficiency_trap",
+}
+
+
+def severity_from_median(m: float) -> int:
+    """Map a low dimension median to a derived-finding severity (pure; selftested)."""
+    if m <= 3:
+        return 3
+    if m < DERIVE_THRESHOLD:
+        return 2
+    return 0
+
+
+def derive_findings(bundle: dict, dimension_medians: dict, threshold: float = DERIVE_THRESHOLD) -> list[dict]:
+    """Deterministically derive GROUNDED findings for low-scored dimensions from the bundle's OBSERVED
+    failures. The panel reliably scores a failure low but won't restate a documented failure as a finding
+    (observed across 3 real reviews), so the report otherwise carries a verdict but no findings. Each
+    derived finding cites real bundle evidence and is marked source='derived'; a dimension with NO concrete
+    bundle evidence yields NO finding (left as an evidence_gap — never fabricate). Pure; selftested."""
+    out: list[dict] = []
+    screens = bundle.get("screens") or [{}]
+    first_screen = (screens[0] or {}).get("name") or "App"
+    failed_scenarios = [s for s in (bundle.get("scenarios") or []) if s.get("goal_achieved") is False]
+    failed_wired = [f for f in ((bundle.get("wired") or {}).get("findings") or []) if f.get("passed") is False]
+    help_text = bundle.get("help_surfaces") or ""
+    for dim in DIMENSIONS:
+        m = dimension_medians.get(dim)
+        if m is None or float(m) >= threshold:
+            continue
+        sev = severity_from_median(float(m))
+        if sev == 0:
+            continue
+        screen, click_path, element, evidence = first_screen, ["open the app"], dim, None
+        if dim == "wired" and failed_wired:
+            wf = failed_wired[0]
+            element = str(wf.get("interaction") or "control")
+            evidence = str(wf.get("note") or "control does not behave as claimed")
+            click_path = ["open the app", f"observe '{element}'"]
+        elif dim in ("usability", "workflow_productivity") and failed_scenarios:
+            sc = failed_scenarios[0]
+            steps = sc.get("steps") or []
+            element = str(sc.get("goal") or sc.get("name") or "core task")
+            click_path = [str(step.get("action") if isinstance(step, dict) else step) for step in steps] or ["open the app"]
+            last = steps[-1] if steps else None
+            evidence = str((last.get("observed") if isinstance(last, dict) else None) or "the workflow did not reach its goal")
+        elif dim == "help_clarity" and help_text:
+            element = "in-app help / field labels / error messages"
+            evidence = str(help_text)[:300]
+            click_path = ["open the app", "read the labels and any error/help text"]
+        if evidence is None:
+            continue  # no concrete bundle evidence -> leave as evidence_gap; do NOT fabricate
+        out.append({
+            "dimension": dim, "severity": sev, "screen": screen, "element": element,
+            "click_path": click_path, "expected": f"{dim.replace('_', ' ')} holds for a first-time user",
+            "actual": evidence, "failure_mode": _DIM_FAILMODE.get(dim, "confusion"),
+            "confidence": 0.6, "source": "derived", "dimension_median": float(m),
+        })
+    return out
+
+
+def build_rubric_prompt(bundle: dict) -> str:
+    """Evidence-bound rubric prompt (verbatim rubric text; selftested)."""
+    bundle_json = json.dumps(bundle, indent=2, default=str)
+    return (
+        "You are a UX evaluator reviewing a pre-captured frontend bundle (accessibility trees, "
+        "scenario transcripts with OBSERVED outcomes, and Gate-1 wiring findings). Evaluators do "
+        "NOT browse the live URL — judge ONLY from the supplied evidence.\n\n"
+        "Score four dimensions 0-10:\n"
+        "- wired: do controls do what they claim? cross-check the wired findings; flag claimed-but-dead\n"
+        "- usability: can a first-time user finish the core task without confusion?\n"
+        "- help_clarity: are labels/tooltips/empty-states/errors sufficient & clear?\n"
+        "- workflow_productivity: is the core workflow efficient — steps/clicks/friction?\n\n"
+        "Return STRICT JSON only, exactly this shape:\n"
+        '{"scores":{"wired":0-10,"usability":0-10,"help_clarity":0-10,"workflow_productivity":0-10},\n'
+        ' "findings":[{"dimension":"<wired|usability|help_clarity|workflow_productivity>",'
+        '"severity":0-4,"screen":"<name>","element":"<what>",'
+        '"click_path":["step1","step2"],"expected":"<...>","actual":"<...>","fix_hint":"<...>",'
+        '"confidence":0-1,'
+        '"failure_mode":"<false_success|recovery_failure|efficiency_trap|confusion|missing_help>"}],\n'
+        ' "overall":0-10,\n'
+        ' "evidence_gaps":["<bundle data that was missing to judge well>"]}\n\n'
+        "HARD RULES:\n"
+        "(a) For EVERY dimension you score below 8 you MUST emit at least one finding for that "
+        "dimension, citing screen + click_path + expected + actual — no abstract findings (\"feels "
+        "clunky\") allowed. A low score with no finding is invalid output.\n"
+        "(b) severity scale 0=none, 1=cosmetic, 2=minor, 3=major, 4=blocker;\n"
+        "(c) return STRICT JSON only, no prose.\n\n"
+        "OBSERVED OUTCOMES RULE: Each scenario step includes an \"observed\" field documenting what "
+        "actually happened (from Gate-1 click→assert). Never infer behavior not present in observed. "
+        "But an OBSERVED failure — a dead-end, an error, a cryptic message, a missing affordance — IS "
+        "finding evidence: write it as a finding, citing the observed outcome as `actual` and what the "
+        "user expected as `expected`. `evidence_gaps` are ONLY for an aspect you genuinely could not "
+        "judge for lack of data — they are NOT a substitute for a finding about a failure you DID observe.\n\n"
+        "===== BUNDLE =====\n"
+        f"{bundle_json}\n"
+    )
+
+
+def build_adversarial_prompt(bundle: dict) -> str:
+    """Adversarial critic prompt (verbatim hostile-user framing; selftested)."""
+    bundle_json = json.dumps(bundle, indent=2, default=str)
+    return (
+        "You are a hostile, novice first-time user who WANTS to fail. Using ONLY the supplied "
+        "screens/scenarios, find the places a confused user gets stuck or does the wrong thing.\n\n"
+        "Return STRICT JSON only, exactly this shape:\n"
+        '{"findings":[{"dimension":"adversarial","severity":0-4,"screen":"<name>","element":"<what>",'
+        '"click_path":["step1","step2"],"expected":"<...>","actual":"<...>","fix_hint":"<...>",'
+        '"confidence":0-1,'
+        '"failure_mode":"<false_success|recovery_failure|efficiency_trap|confusion|missing_help>",'
+        '"stuck_probability":0-1}],\n'
+        ' "worst_case":"<the single most likely point of failure>",\n'
+        ' "evidence_gaps":["<bundle data that was missing>"]}\n\n'
+        "HARD RULES: same severity scale; findings MUST cite screen + click_path + expected + actual; "
+        "never infer beyond observed outcomes; STRICT JSON only. An observed dead-end, error, or "
+        "confusing state IS where a novice gets stuck — you MUST emit it as a finding with a high "
+        "stuck_probability; do NOT return empty findings when the scenario shows a failure.\n\n"
+        "===== BUNDLE =====\n"
+        f"{bundle_json}\n"
+    )
+
+
+def _normalize_evidence_gaps(parsed: dict | None) -> list[str]:
+    if not isinstance(parsed, dict):
+        return []
+    raw = parsed.get("evidence_gaps")
+    if raw is None:
+        return []
+    values = raw if isinstance(raw, list) else [raw]
+    gaps: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value.get("gap") if isinstance(value, dict) else value).strip()
+        text = " ".join(text.split())
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        gaps.append(text[:500])
+    return gaps
+
+
+def aggregate_panel(
+    evaluator_results: dict[str, dict | None],
+    adversarial_result: dict | None,
+    n_evaluators: int,
+) -> dict:
+    """Pure aggregation of parsed evaluator JSON into dimension medians, flags, and findings."""
+    dimension_scores: dict[str, list[float]] = {d: [] for d in DIMENSIONS}
+    evaluator_overalls: list[float] = []
+    evaluator_findings: dict[str, list[dict]] = {}
+    panel: dict[str, dict] = {}
+    all_gaps: list[str] = []
+
+    for ev, parsed in evaluator_results.items():
+        if not parsed:
+            evaluator_findings[ev] = []
+            continue
+        scores = parsed.get("scores") or {}
+        panel[ev] = scores if isinstance(scores, dict) else {}
+        for dim in DIMENSIONS:
+            if dim in scores:
+                try:
+                    dimension_scores[dim].append(float(scores[dim]))
+                except (TypeError, ValueError):
+                    pass
+        try:
+            evaluator_overalls.append(float(parsed.get("overall", 0)))
+        except (TypeError, ValueError):
+            pass
+        evaluator_findings[ev] = list(parsed.get("findings") or [])
+        all_gaps.extend(_normalize_evidence_gaps(parsed))
+
+    adv_findings = list((adversarial_result or {}).get("findings") or [])
+    all_gaps.extend(_normalize_evidence_gaps(adversarial_result))
+
+    dimension_medians = {d: median(dimension_scores[d]) for d in DIMENSIONS}
+    consensus_flags: dict[str, bool] = {d: consensus_flag(dimension_scores[d]) for d in DIMENSIONS}
+
+    accepted, non_findings = aggregate_accepted_findings(
+        evaluator_findings, adv_findings, n_evaluators,
+    )
+
+    for f in accepted:
+        sev = int(f.get("severity") or 0)
+        if sev >= 3:
+            spread = finding_severity_spread(evaluator_findings, finding_key(f))
+            if spread >= 2:
+                flag_key = f"finding:{f.get('screen')}:{f.get('element')}:{f.get('failure_mode')}"
+                consensus_flags[flag_key] = True
+
+    overall_median = compute_overall_median(evaluator_overalls, accepted)
+    blockers = [f for f in accepted if int(f.get("severity") or 0) >= 4]
+
+    return {
+        "dimension_medians": dimension_medians,
+        "consensus_flags": consensus_flags,
+        "overall_median": overall_median,
+        "findings": accepted,
+        "non_findings": non_findings,
+        "adversarial": {
+            "worst_case": (adversarial_result or {}).get("worst_case"),
+            "findings": adv_findings,
+        },
+        "evidence_gaps": all_gaps,
+        "panel": panel,
+        "blockers": blockers,
+    }
+
+
+def review(
+    bundle: dict,
+    evaluators: list[str] | None = None,
+    adversary: str = "claude",
+    timeout: int = 1500,
+) -> dict:
+    """Run the UX review panel concurrently (mirrors exp_abcd.evaluate launch pattern)."""
+    evaluators = _ensure_min_evaluators(evaluators or ["claude", "codex", "cursor", "gemini"])
+    review_id = bundle["review_id"]
+    app = bundle["app"]
+    rdir = REVIEW_DIR / review_id.replace(":", "_")
+    rdir.mkdir(parents=True, exist_ok=True)
+
+    procs: dict[str, tuple[subprocess.Popen, object, Path]] = {}
+    for ev in evaluators:
+        pf = rdir / f"rubric-prompt-{ev}.txt"
+        pf.write_text(build_rubric_prompt(bundle))
+        out_path = rdir / f"rubric-out-{ev}.txt"
+        out = out_path.open("w")
+        mode = AGENT_MODE.get(ev, "full")
+        run_id = f"{review_id}:eval:{ev}"
+        target = f"{app} [ux_review]"
+        feedback.record_run(
+            run_id, target, "ux_review", ev, mode=mode,
+            reasoning_level=mode, experiment_id=review_id,
+            model=adapters.model_identity(ev, mode),
+            rationale="Gate 2 UX review panel evaluator",
+        )
+        out.write(
+            f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} UX-REVIEW "
+            f"{ev}/{mode} run_id={run_id} ===\n"
+        )
+        out.flush()
+        procs[ev] = (
+            subprocess.Popen(
+                ["bash", "-lc", dispatcher._net_hygiene_prelude() + _eval_command(ev, str(pf))],
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            ),
+            out,
+            out_path,
+        )
+
+    adv_pf = rdir / f"adversarial-prompt-{adversary}.txt"
+    adv_pf.write_text(build_adversarial_prompt(bundle))
+    adv_out_path = rdir / f"adversarial-out-{adversary}.txt"
+    adv_out = adv_out_path.open("w")
+    adv_mode = AGENT_MODE.get(adversary, "full")
+    adv_run_id = f"{review_id}:adversary:{adversary}"
+    adv_target = f"{app} [ux_review adversary]"
+    feedback.record_run(
+        adv_run_id, adv_target, "ux_review", adversary, mode=adv_mode,
+        reasoning_level=adv_mode, experiment_id=review_id,
+        model=adapters.model_identity(adversary, adv_mode),
+        rationale="Gate 2 UX review adversarial critic",
+    )
+    adv_out.write(
+        f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} UX-ADVERSARY "
+        f"{adversary}/{adv_mode} run_id={adv_run_id} ===\n"
+    )
+    adv_out.flush()
+    adv_proc = subprocess.Popen(
+        ["bash", "-lc", dispatcher._net_hygiene_prelude() + _eval_command(adversary, str(adv_pf))],
+        stdout=adv_out,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    evaluator_results: dict[str, dict | None] = {}
+    for ev, (proc, out, out_path) in procs.items():
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        out.close()
+        evaluator_results[ev] = _extract_json(out_path.read_text(errors="replace"))
+
+    try:
+        adv_proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        adv_proc.kill()
+        try:
+            adv_proc.wait(timeout=5)
+        except Exception:
+            pass
+    adv_out.close()
+    adversarial_result = _extract_json(adv_out_path.read_text(errors="replace"))
+
+    agg = aggregate_panel(evaluator_results, adversarial_result, len(evaluators))
+
+    for ev in evaluators:
+        parsed = evaluator_results.get(ev) or {}
+        scores = parsed.get("scores") or {}
+        findings = parsed.get("findings") or []
+        try:
+            overall = float(parsed.get("overall", 0))
+        except (TypeError, ValueError):
+            overall = 0.0
+        feedback.record_evaluation(
+            review_id, app, ev, overall,
+            verdict={"scores": scores, "n_findings": len(findings), "findings": findings},
+        )
+        for gap in _normalize_evidence_gaps(parsed):
+            feedback.record_evidence_gap(review_id, ev, gap)
+
+    for gap in _normalize_evidence_gaps(adversarial_result):
+        feedback.record_evidence_gap(review_id, adversary, gap)
+
+    # Fallback ONLY when the panel + aggregation surfaced no findings (e.g. a clean app, or all
+    # findings uncorroborated). The primary path is the real evaluator findings via aggregate_panel.
+    if not agg.get("findings"):
+        derived = derive_findings(bundle, agg.get("dimension_medians") or {})
+        if derived:
+            agg["derived_findings"] = derived
+            agg["findings"] = derived
+            feedback.record_evaluation(
+                review_id, app, "_panel_derived", float(agg.get("overall_median") or 0.0),
+                verdict={"findings": derived, "source": "derived"},
+            )
+    return {
+        "review_id": review_id,
+        "app": app,
+        **agg,
+    }
+
+
+def cross_repo_patterns(window_days: int = 120, min_recurrence: int = 2) -> list[dict]:
+    """Read-only SQL over feedback evaluations to surface recurring high-severity UX finding categories."""
+    since = int(time.time()) - window_days * 86400
+    patterns: dict[str, dict] = defaultdict(
+        lambda: {"apps": set(), "examples": [], "max_severity": 0, "count": 0},
+    )
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT implementer, experiment_id, verdict FROM evaluations "
+            "WHERE ts>=? AND experiment_id LIKE '%:uxreview:%'",
+            (since,),
+        ).fetchall()
+    for implementer, _exp_id, verdict_json in rows:
+        if not verdict_json:
+            continue
+        try:
+            verdict = json.loads(verdict_json)
+        except Exception:
+            continue
+        for f in verdict.get("findings") or []:
+            sev = int(f.get("severity") or 0)
+            if sev < 3:
+                continue
+            fm = str(f.get("failure_mode") or "unknown")
+            entry = patterns[fm]
+            entry["apps"].add(implementer)
+            entry["count"] += 1
+            entry["max_severity"] = max(entry["max_severity"], sev)
+            if len(entry["examples"]) < 5:
+                entry["examples"].append({
+                    "app": implementer,
+                    "screen": f.get("screen"),
+                    "element": f.get("element"),
+                    "severity": sev,
+                })
+    out: list[dict] = []
+    for failure_mode, data in sorted(patterns.items(), key=lambda kv: (-len(kv[1]["apps"]), kv[0])):
+        if len(data["apps"]) < min_recurrence:
+            continue
+        out.append({
+            "failure_mode": failure_mode,
+            "category": failure_mode,
+            "app_count": len(data["apps"]),
+            "apps": sorted(data["apps"]),
+            "occurrences": data["count"],
+            "max_severity": data["max_severity"],
+            "examples": data["examples"],
+        })
+    return out
+
+
+def calibrate(review_id: str, human_verdict: str, note: str | None = None) -> None:
+    """DEPRECATED / DO NOT REWIRE (2026-07-08). This was a weekly human spot-check anchoring the
+    panel to owner taste. No human code/UX-quality review gate is available in this deployment (see LOCAL_POLICY.md and the project
+    CLAUDE.md human-involvement rule); calibration is now ZERO-OWNER via machine ground-truth
+    (objective_anchor.py) + consensus (judge_reliability.py). This stub is kept ONLY to make the
+    forbidden path explicit — do not wire it into any cadence or gate. Use objective_anchor."""
+    raise NotImplementedError(
+        "ux_review.calibrate is retired: owner-code-review calibration is forbidden; "
+        "use objective_anchor.py (machine ground truth) — see Orchestrator/CLAUDE.md"
+    )
+
+
+def gate_decision(gate1_verdict: dict, gate2_report: dict, min_overall: float = 7.0) -> dict:
+    """Pure gate: done only when Gate 1 passed, overall >= min, and no blockers (selftested)."""
+    reasons: list[str] = []
+    done = True
+
+    gate1_ok = gate1_verdict.get("ok") if isinstance(gate1_verdict, dict) else False
+    if not gate1_ok:
+        done = False
+        reasons.append("gate1_not_ok")
+
+    overall = float(gate2_report.get("overall_median") or 0)
+    if overall < min_overall:
+        done = False
+        reasons.append(f"overall_median_below_{min_overall}")
+
+    blockers = [
+        f for f in (gate2_report.get("findings") or gate2_report.get("blockers") or [])
+        if int(f.get("severity") or 0) >= 4
+    ]
+    if blockers:
+        done = False
+        reasons.append("blockers_present")
+
+    return {"done": done, "reasons": reasons}
+
+
+def synthesize_improvements(report: dict) -> dict:
+    """Mine the panel for actionable improvement ideas + coverage gaps.
+
+    The score and top-line findings answer "is it good"; this answers "how do I make it
+    better". It surfaces every distinct per-evaluator ``fix_hint`` behind each corroborated
+    finding (preserved by ``_merge_finding_group``), ranked by severity x corroboration, plus
+    the unioned ``evidence_gaps`` as the coverage to drive on the next pass. Mining the full
+    per-evaluator output is thus a single call, not a manual re-read of rubric files. Pure.
+    """
+    improvements: list[dict] = []
+    for f in (report.get("findings") or []):
+        hints = list(f.get("fix_hints") or [])
+        if not hints and f.get("fix_hint"):
+            hints = [str(f["fix_hint"])]
+        improvements.append({
+            "dimension": f.get("dimension"),
+            "failure_mode": f.get("failure_mode"),
+            "severity": int(f.get("severity") or 0),
+            "corroboration": int(f.get("corroboration") or 0),
+            "element": f.get("element"),
+            "fix_hints": hints,
+        })
+    improvements.sort(
+        key=lambda x: (x["severity"] * max(x["corroboration"], 1), x["severity"]), reverse=True,
+    )
+    return {
+        "improvements": improvements,
+        "coverage_gaps": list(report.get("evidence_gaps") or []),
+        "n_findings": len(improvements),
+        "n_with_hints": sum(1 for i in improvements if i["fix_hints"]),
+    }
+
+
+def _sample_bundle() -> dict:
+    return {
+        "app": "stranske/Trend_Model_Project",
+        "review_id": "stranske/Trend_Model_Project:uxreview:2026-06-22",
+        "url": "http://localhost:8600/",
+        "wired": {"ok": True, "findings": [{"target": "Run Demo", "pass": True}]},
+        "screens": [{"name": "Home", "a11y": "button Run Demo", "notes": ""}],
+        "scenarios": [{
+            "name": "Run the demo",
+            "steps": [
+                {"action": "open Home", "observed": "Home screen visible"},
+                {"action": "click Run Demo", "observed": "results table appears"},
+            ],
+            "goal": "see results",
+        }],
+    }
+
+
+def _selftest() -> None:
+    bundle = _sample_bundle()
+
+    rubric = build_rubric_prompt(bundle)
+    for dim in DIMENSIONS:
+        assert dim in rubric, dim
+    assert "workflow_productivity" in rubric
+    assert '"scores":{"wired":0-10' in rubric or '"scores":{"wired":0-10,' in rubric.replace("\n", "")
+    assert "HARD RULES" in rubric and "feels clunky" in rubric
+    assert "severity scale 0=none" in rubric
+    assert "STRICT JSON only" in rubric
+    assert "confidence" in rubric and "failure_mode" in rubric
+    assert "Never infer behavior not present in observed" in rubric
+    assert "stranske/Trend_Model_Project" in rubric
+    assert '"observed"' in rubric
+
+    adv = build_adversarial_prompt(bundle)
+    assert "hostile, novice first-time user who WANTS to fail" in adv
+    assert "stuck_probability" in adv
+    assert "worst_case" in adv
+    assert '"dimension":"adversarial"' in adv.replace("\n", "") or '"dimension":"adversarial"' in adv
+
+    assert median([1, 2, 3, 4, 100]) == 3.0
+    assert median([1, 2, 3, 4]) == 2.5
+    assert median([]) == 0.0
+    assert consensus_flag([5, 6, 7]) is False
+    assert consensus_flag([5, 6, 10]) is True
+
+    f1 = {"screen": "Home", "element": "Run", "failure_mode": "confusion",
+          "severity": 2, "confidence": 0.6, "click_path": ["a"]}
+    f2 = {"screen": "Home", "element": "Run", "failure_mode": "confusion",
+          "severity": 4, "confidence": 0.8, "click_path": ["a"]}
+    f3 = {"screen": "Home", "element": "Help", "failure_mode": "missing_help",
+          "severity": 3, "confidence": 0.5, "click_path": ["b"]}
+    deduped = dedupe_findings([f1, f2, f3])
+    assert deduped[0]["severity"] == 4 and deduped[0]["confidence"] == 0.8
+    assert len(deduped) == 2
+
+    ev_findings = {
+        "claude": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
+                    "click_path": ["x"], "confidence": 0.5}],
+        "codex": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
+                   "click_path": ["x"], "confidence": 0.6}],
+        "cursor": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
+                    "click_path": ["x"], "confidence": 0.4}],
+        "gemini": [],
+    }
+    accepted, non = aggregate_accepted_findings(ev_findings, [], n_evaluators=4)
+    assert len(accepted) == 1 and accepted[0]["severity"] == 3
+
+    # fix_hints are collected across the whole cluster (not just the first member) and
+    # surfaced by synthesize_improvements, with evidence_gaps carried as coverage_gaps.
+    fh_findings = {
+        "claude": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
+                    "click_path": ["x"], "fix_hint": "hide empty state"}],
+        "codex": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
+                   "click_path": ["x"], "fix_hint": "show completed-state line"}],
+        "cursor": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
+                    "click_path": ["x"], "fix_hint": "hide empty state"}],
+        "gemini": [],
+    }
+    fh_acc, _ = aggregate_accepted_findings(fh_findings, [], n_evaluators=4)
+    assert fh_acc and set(fh_acc[0]["fix_hints"]) == {"hide empty state", "show completed-state line"}
+    syn = synthesize_improvements({"findings": fh_acc, "evidence_gaps": ["tabs not driven"]})
+    assert syn["n_findings"] == 1 and syn["n_with_hints"] == 1
+    assert syn["coverage_gaps"] == ["tabs not driven"]
+
+    adv_only, _ = aggregate_accepted_findings(
+        {"claude": [], "codex": [], "cursor": [], "gemini": []},
+        [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
+          "click_path": ["x"], "stuck_probability": 0.7, "dimension": "adversarial"}],
+        n_evaluators=4,
+    )
+    assert len(adv_only) == 1
+
+    rejected, non2 = aggregate_accepted_findings(
+        {"claude": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2}]},
+        [],
+        n_evaluators=4,
+    )
+    assert rejected == [] and len(non2) == 1 and non2[0]["reject_reason"] == "missing_click_path"
+
+    assert compute_overall_median([8.0, 8.5, 9.0], []) == 8.5
+    assert compute_overall_median([8.0, 8.5, 9.0], [{"severity": 4}]) == 3.0
+
+    agg = aggregate_panel({
+        "claude": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8, "workflow_productivity": 8},
+                   "overall": 8, "findings": [], "evidence_gaps": ["missing tooltip text"]},
+        "codex": {"scores": {"wired": 9, "usability": 4, "help_clarity": 8, "workflow_productivity": 8},
+                  "overall": 7, "findings": [], "evidence_gaps": []},
+        "cursor": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8, "workflow_productivity": 8},
+                   "overall": 8, "findings": [], "evidence_gaps": []},
+        "gemini": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8, "workflow_productivity": 8},
+                   "overall": 8, "findings": [], "evidence_gaps": []},
+    }, {"worst_case": "Run Demo", "findings": []}, n_evaluators=4)
+    assert agg["dimension_medians"]["usability"] == 7.0
+    assert agg["consensus_flags"]["usability"] is True
+    assert "missing tooltip text" in agg["evidence_gaps"]
+
+    g1_ok = {"ok": True}
+    g1_bad = {"ok": False}
+    rep_pass = {"overall_median": 8.0, "findings": [{"severity": 2}]}
+    rep_low = {"overall_median": 6.0, "findings": []}
+    rep_block = {"overall_median": 8.0, "findings": [{"severity": 4}]}
+    assert gate_decision(g1_ok, rep_pass)["done"] is True
+    assert gate_decision(g1_bad, rep_pass)["done"] is False
+    assert gate_decision(g1_ok, rep_low)["done"] is False
+    assert gate_decision(g1_ok, rep_block)["done"] is False
+    assert "blockers_present" in gate_decision(g1_ok, rep_block)["reasons"]
+
+    # derive_findings: grounded synthesis for low dimensions; no evidence -> no finding (never fabricate)
+    assert severity_from_median(2) == 3 and severity_from_median(5) == 2 and severity_from_median(8) == 0
+    _db = {
+        "screens": [{"name": "Home"}],
+        "wired": {"findings": [{"interaction": "Run", "passed": False, "note": "dead-ends"}]},
+        "scenarios": [{"name": "Run it", "goal": "see results", "goal_achieved": False,
+                       "steps": [{"action": "click Run", "observed": "error, no results"}]}],
+        "help_surfaces": "no tooltips; cryptic error",
+    }
+    _der = derive_findings(_db, {"wired": 5, "usability": 2, "help_clarity": 1, "workflow_productivity": 3})
+    assert {"wired", "usability", "help_clarity", "workflow_productivity"} <= {f["dimension"] for f in _der}
+    assert all(f["source"] == "derived" and f.get("click_path") and f.get("actual") for f in _der)
+    assert derive_findings({"screens": [{"name": "X"}]}, {"usability": 2}) == []   # no evidence -> no finding
+    assert derive_findings(_db, {"usability": 9}) == []                            # above threshold -> none
+
+    print(
+        "ux_review.py selftest: OK (rubric+adversarial prompts, median, consensus_flag, finding "
+        "dedupe+acceptance+non_findings, blocker-capped overall, gate_decision, evidence-gap passthrough, "
+        "fix_hint collection + improvement synthesis, derive_findings grounded synthesis)"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = argv if argv is not None else sys.argv[1:]
+    if "--selftest" in argv:
+        _selftest()
+        return 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--selftest", action="store_true", help="Run offline selftest")
+    parser.add_argument("--bundle", help="Path to UX candidate bundle JSON")
+    parser.add_argument("--evaluators", help="Comma-separated evaluator agents")
+    parser.add_argument("--adversary", default="claude", help="Adversarial critic agent")
+    parser.add_argument("--timeout", type=int, default=1500, help="Per-agent timeout seconds")
+    args = parser.parse_args(argv)
+    if args.selftest:
+        _selftest()
+        return 0
+    if not args.bundle:
+        print(__doc__)
+        return 2
+    bundle = json.loads(Path(args.bundle).read_text())
+    evs = args.evaluators.split(",") if args.evaluators else None
+    print(json.dumps(review(bundle, evaluators=evs, adversary=args.adversary, timeout=args.timeout),
+                     indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

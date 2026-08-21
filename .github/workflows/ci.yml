@@ -1,0 +1,55 @@
+name: CI
+
+# WHY THIS EXISTS. Until 2026-08-21 this tool's suite ran on exactly one machine, on a
+# Dropbox-synced volume that makes pytest 10-50x slower — so in practice it ran rarely. It was red
+# for weeks without anyone knowing: 9 pytest failures plus a module selftest broken since
+# 2026-06-18. A clean-machine CI run is the single strongest reason this code is in a repo at all.
+#
+# The suite is STATE-INDEPENDENT: verified 2026-08-21 by running it with ORCH_STATE_DIR pointed at
+# an empty directory — 330 passed. So CI needs no Brain database, no capability ledger and no
+# seeded state, which is what keeps the owner's rule (no evaluation databases stored remotely)
+# compatible with having CI at all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify.py (real pytest counts + selftests + capability gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml
+
+      - name: Verify
+        env:
+          # State is machine-local by design. A fresh directory proves the suite does not depend on
+          # this developer's Brain, ledger or cadence stamps.
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+        run: |
+          mkdir -p "$ORCH_STATE_DIR"
+          python3 verify.py
+
+      # verify.py already fails on: any pytest failure, ZERO tests collected, a collection count
+      # below the recorded floor, a module selftest that exits 0 without saying anything, and any
+      # of the five capability gates. Deliberately no `|| true` anywhere — an exit code that cannot
+      # fail is the defect this repo exists to stop repeating.

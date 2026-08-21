@@ -1,0 +1,266 @@
+# Orchestrator architecture — rails vs. agent-roles
+
+> **Keeping this current (CONTRACT).** This file and [`orchestrator-loop.svg`](orchestrator-loop.svg)
+> are the source of truth for the rails/roles taxonomy and the loop. **Any change to the system's
+> stages, components, the rail/role classification, the feedback surfaces, or the role registry
+> (`roles.py`) MUST update BOTH this doc and the diagram in the same change.** `PLANNING.md` and
+> `ORCHESTRATOR.md` point here — do not let them drift. If you touch `roles.py` / `route_role` / the
+> registry, or move a component across the rail/role line, updating the diagram is not optional.
+
+![Orchestrator loop: deterministic rails vs. callable agent-roles](orchestrator-loop.svg)
+
+## The one rule: selection stays deterministic; judgment becomes agent-roles
+
+The discriminator for "should this be an agent?" is **who decides the next step — code or the model.**
+
+- **Do NOT agentify the Decide stage's selection step.** Choosing *which agent/LLM* does a piece of
+  work (`router.select_agent`) looks like judgment, but it is a **learned policy**, not an LLM call —
+  and it is the signal `feedback.py` estimates. Replacing it with an LLM would (a) blur the
+  credit-assignment the learner depends on, (b) add per-item token cost, and (c) make routing
+  non-reproducible and un-A/B-able. Selection is the place that **stays code**. The agentic layer may
+  *override* the router (the seat already does), but the router itself is a rail.
+- **Agentify judgment under an open/ambiguous action space** — redirect, decompose, triage,
+  prompt-authoring, adjudication. Each becomes a **typed agent-role** whose LLM backend is **swappable
+  and router-chosen**.
+
+## Reading the diagram
+
+The five boxes are the orchestrator's cycle (`ORCHESTRATOR.md` → "Your loop, each cycle"). Inside each
+stage, every component is tagged:
+
+- **blue = deterministic rail** — code. Keep it predictable; determinism is the safety/auditability property.
+- **amber, dashed = agent-role** — LLM judgment behind a typed contract; the model is swappable.
+- **teal = delegated sub-agent** — the worker CLIs spawned in isolated worktrees.
+
+The single left arc is the loop closing. What it carries back is the point: `feedback.py` relearns
+**both** surfaces — `selection weights` (blue) and `role ↔ backend fit` (amber) — into the next cycle.
+
+## Rails — deterministic, keep as code
+
+`router` (selection) · `claims` · `capacity` · `provision` · `dispatcher` (transport) · `adapters` ·
+`feedback` (the learner/store) · gates (`testgen_gate`, `local_verify`, `merge_guard`,
+`runtime_ac_gate`, `frontend_verify` (Gate 1), `ux_review.gate_decision` (Gate 2 pass-requirement)).
+
+Determinism here is load-bearing: the claims/capacity/provision rails are what the "0 unsafe
+delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An
+LLM verifier (a review panel) is a *supplement* to a gate, never a replacement for it.
+
+## Agent-roles — judgment, typed contract, swappable backend
+
+A role is defined in `roles.py` as `Role(name, route_as, eligible_backends, mode, build_prompt,
+validate)`. `route_role(role, cap)` reuses `router.select_agent` restricted to the role's
+`eligible_backends` (RESERVE seats — claude — excluded by default, allowed only as last resort or
+`high_leverage=True`). So **role-backend choice obeys the same capacity + learned weights as worker
+selection**, and every role becomes a **new learnable surface**: `exp_abcd` / `feedback` can learn the
+best backend *per role* the same way they learn the best implementer per task_type.
+
+`route_as` is an **existing `ROUTE_TABLE` task_type used only as the routing prior**. Once a role has
+accepted downstream outcomes, `route_role()` prefers learned weights for `role:<name>` and falls back to
+`route_as` only while that role-specific surface is cold.
+
+| role | replaces / upgrades | judgment it adds | status |
+|---|---|---|---|
+| **RedirectAgent** | `redirect_policy` heuristics | read log+diff+AC → action + corrected prompt | **built, shadow (2026-06-19)** |
+| **PromptAgent** | dispatcher generic templates | issue → scoped prompt + definition-of-done | **built, shadow (2026-06-20)** |
+| **DecomposerAgent** | `epic_lane` planner prompts | vague/large goal → subtask DAG | **built, shadow (2026-06-20)** |
+| **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
+| **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
+
+## The feedback loop closes over both surfaces
+
+`feedback.py` learns (1) **router weights** — which agent per task_type — and (2) **role ↔ backend
+fit** — which LLM per role. Both return to the next cycle. Surface (2) is wired through role runs:
+`feedback.record_role_run()` records a `task_type='role:<name>'` decision, and the downstream run's
+outcome comes back to that role run over an **accepted influence edge**. That link forms automatically at
+the dispatch seam — the accepted `role_run_id` is stamped onto the dispatch
+(`dispatcher.delegate --influenced-by-role-run-id`, emitted into the plan by
+`redirect_plan.attach_role_lineage`), `feedback.record_run()` writes the `influence_type='role'` edge, and
+`feedback._propagate_outcome_lineage_in_conn()` back-propagates the acting run's terminal verdict when it
+lands. `feedback.join_role_to_outcome()` is the manual equivalent for links made after the fact.
+Attribution is to the ACTING run: only an `accepted=1` edge back-propagates, so a role whose proposal was
+rejected records the disagreement and inherits no PASS. This keeps role learning separate from normal
+implement/review weights while still using the same `relearn_quality()` machinery.
+
+## Gate 2 — the usability review panel (`ux_review.py`, built 2026-06-22)
+
+Frontend work has two gates. **Gate 1** is `frontend_verify` (a deterministic rail: assert→click→assert
+on the accessibility tree — *does the control do what it claims*). **Gate 2** is `ux_review` — an
+evidence-bound *usability* review by an anonymized panel of ≥4 evaluator backends plus an adversarial
+critic, scoring four dimensions (`wired` / `usability` / `help_clarity` / `workflow_productivity`) where
+every sub-8 score must cite screen + click-path + expected-vs-actual (no abstract findings).
+
+Per the rule above — *an LLM review panel is a **supplement** to a gate, never a replacement* — the
+**panel is LLM judgment, not a rail.** The **rail is the deterministic `ux_review.gate_decision`**, which
+marks a frontend "done" only when Gate 1 passed AND the panel's `overall_median ≥ threshold` AND there is
+no severity-4 blocker. The panel reuses `exp_abcd`'s anonymized-evaluator machinery (`_eval_command`,
+`_ensure_min_evaluators`, `_extract_json`) and launches with `dispatcher._net_hygiene_prelude()`
+(proxy-scrubbed to match the fleet's clean env).
+
+It is a **new feedback *source*, not a new surface**: it writes the existing `feedback.evaluations`
+(per-evaluator UX scores), `evidence_gaps` (the self-evolving "what evidence did I lack?" growth layer),
+and `human_calibration` (the weekly owner spot-check that anchors the panel). `ux_review.cross_repo_patterns()`
+queries `evaluations` to surface a flaw recurring across apps as a prior for the next review. Evaluator
+disagreement (score spread ≥3, or a contested severity-3/4 finding) is **flagged → routed to human
+calibration**, never averaged away — so "the panel agreed" can't masquerade as "the panel was right."
+
+**The score is not the deliverable — the improvements are.** `ux_review.synthesize_improvements(report)`
+mines the panel for *how to make it better*: it preserves every distinct per-evaluator `fix_hint`
+behind each corroborated finding (the merge used to keep only one) and ranks them by
+severity×corroboration, and it surfaces the unioned `evidence_gaps` as the **coverage to drive next
+pass**. Two operational disciplines (in the `/ux-review` skill, not the orchestrator rails) keep this
+honest: (1) a **full-coverage pass** — drive *every* primary surface, recording a `coverage` ledger in
+the bundle so a happy-path-only review can't post a falsely clean score; (2) a **diff-anchored in-repo
+`docs/ux-review/REVIEW_LOG.md`** — each run records the reviewed commit SHA + coverage + finding
+dispositions, so the next run `git diff`s that SHA→HEAD and concentrates on new + likely-affected
+functionality. These extend the existing component; they add no new rail, role, or `feedback.py` surface.
+
+## RedirectAgent — the first role (built 2026-06-19)
+
+The highest-value autonomy gap is closed-loop monitor→redirect: `ORCHESTRATOR.md` names redirect "your
+defining skill / the thing a deterministic dispatcher cannot do," its absence compounds (a drifting
+unattended agent isn't caught until a bad outcome hours later), and the scaffolding already existed
+(`watch.py` → `policy_decision` + `redirect_plan.py` dry-run/apply). So redirect is the first amber box.
+
+- **Contract.** Input `{report (a watch.py report), acceptance_criteria[, attempt_history]}` →
+  `{action ∈ wait|collect|inspect|redirect|decompose, reason, confidence, corrected_prompt, switch_agent}`.
+- **Routing.** `route_as="review"` (prior only), `eligible_backends={gemini, codex, cursor, claude}`,
+  claude reserved.
+- **Shadow only — never mutates.** It proposes into `redirect_plan.plan()` by injecting its decision as
+  `report["policy_decision"]` and passing its authored prompt via the new `prompt_override` param. The
+  existing `redirect_plan.py --apply --confirm-target` remains the **single human/seat-gated mutation
+  path**. An invalid proposal is rejected and falls back to the deterministic `redirect_policy.decide`
+  baseline.
+- **Rollout discipline (do not skip).** advisor → measure proposal quality vs. outcomes → *only then*
+  autonomous action. `redirect_shadow.py` is the measurement layer: it records real RedirectAgent
+  proposals against the deterministic baseline, links accepted/applied advice to downstream outcomes, and
+  reports `ready_for_supervised_apply`. Historical keepalive-shadow rows may identify replay candidates,
+  but are not proposal evidence until rerun as fresh/blinded RedirectAgent proposals and outcome-linked.
+  This is the same shadow → supervised → live ramp used for cron activation. The diagram shows the target
+  architecture; the amber boxes light up one at a time, redirect first.
+
+### CLI
+
+```bash
+python3 roles.py --selftest                       # offline contract checks
+python3 roles.py route --role redirect            # show the router-chosen backend
+python3 roles.py redirect --report-json r.json --ac "<acceptance criteria>" \
+    [--proposal-json p.json]   # replay a captured proposal (offline)
+python3 roles.py redirect --report-json r.json --ac "..." --dispatch   # live offload to the backend
+python3 redirect_shadow.py record --report-json r.json --ac "..." --dispatch
+python3 redirect_shadow.py summarize
+python3 redirect_shadow.py historical-candidates
+python3 redirect_shadow.py link-outcome --role-run-id RID --influenced-run-id DOWNSTREAM_RID
+python3 roles.py link-outcome --role-run-id RID --influenced-run-id DOWNSTREAM_RID
+```
+
+All `redirect` invocations print a dry-run plan and a SHADOW banner; none mutate state. Live dispatches
+also return `role_run_id` plus the backend offload `run_id`, and an accepted proposal's plan carries that
+id on its `delegate-retry` argv (`--influenced-by-role-run-id`) so the downstream run stamps itself.
+
+**Applying is machine-authorised, not reviewed** (`redirect_apply.py`, 2026-08-21). `redirect_plan.apply_plan`
+had no caller at all, and the Stage-2 gate that would authorise one (`ready_for_supervised_apply`) counts
+only *applied* advice — `join_role_to_outcome` returns `synced=False` for unaccepted links and historical
+replay links are deliberately `not_role_learning=True` — so the gate required ten applied outcomes before
+anything could apply. `redirect_apply.py` breaks that deadlock at both ends: `link_applied_outcomes()`
+turns each applied redirect's own influence edge into the corpus link automatically, and a default-OFF,
+self-disabling bootstrap (`ORCH_REDIRECT_APPLY_BOOTSTRAP`) applies at most one authorised plan per day.
+Authorisation is a pure function of recorded state — dead prior process, no foreign claim, lineage stamp
+present, gate deficit still open, per-target and per-day bounds — never an owner review queue.
+
+## PromptAgent — the second role (built 2026-06-20)
+
+PromptAgent upgrades generic delegation templates without changing deterministic selection. It turns
+`{target, goal, task_type, lane, context}` into a strict JSON prompt proposal containing a standalone
+`scoped_prompt`, `definition_of_done`, acceptance criteria, validation, expected paths, out-of-scope
+boundaries, risks, and confidence.
+
+- **Routing.** `route_as="implement"` (prior only), `eligible_backends={gemini, codex, cursor, claude, vibe}`,
+  claude reserved by default through `route_role()`.
+- **Shadow only — never delegates.** It returns a dispatch-ready prompt string for the orchestrator to
+  inspect. It does not call `dispatcher.delegate`, write claims, label PRs, create branches, or open PRs.
+- **Rail preservation.** The output `task_type` must match the deterministic rail-selected input
+  `task_type`; PromptAgent may not reclassify work or replace `router.select_agent`.
+- **Validation.** The role rejects missing DoD/AC/validation, task-type mismatch, agent persona leakage, and
+  duplicated repo-playbook text because dispatcher injects persona and approved repo context.
+
+### CLI
+
+```bash
+python3 roles.py route --role prompt
+python3 roles.py prompt --target owner/repo#N --goal "..." --task-type implement \
+  --target-detail "issue body or PR context" [--proposal-json p.json]
+python3 roles.py prompt --target owner/repo#N --goal "..." --task-type implement --dispatch
+```
+
+## DecomposerAgent — the third role (built 2026-06-20)
+
+DecomposerAgent upgrades the epic planning lane into a callable role. It turns a large/vague goal into an
+`epic_lane.py` plan: epic metadata, dispatchable subtasks, dependencies, integration order, final
+verification, and re-decomposition triggers.
+
+- **Routing.** `route_as="epic"` (prior only), `eligible_backends={gemini, codex, cursor, vibe}`,
+  matching the existing epic-lane prior while learning `role:decomposer` separately.
+- **Shadow only — never dispatches.** It returns validated `dispatch_prompts` for the orchestrator to
+  inspect. It does not call `dispatcher.delegate`, write claims, label PRs, create branches, or open PRs.
+- **Validation.** The role reuses `epic_lane.validate_plan()` and `epic_lane.build_dispatch_prompts()` so
+  the CLI lane and role lane cannot drift. Invalid proposals fall back to the deterministic planner prompt
+  only; no dummy dispatchable plan is emitted.
+
+### CLI
+
+```bash
+python3 roles.py route --role decomposer
+python3 roles.py decompose --goal "..." --repo owner/repo --target owner/repo#N \
+  [--subtask-count 3] [--proposal-json plan.json]
+python3 roles.py decompose --goal "..." --repo owner/repo --dispatch
+```
+
+## TriageAgent — the fourth role (built 2026-06-20)
+
+TriageAgent upgrades the backlog worth-it pass into a callable role. It turns a discovered backlog snapshot
+into advisory recommendations: work now, defer, needs scope, skip, monitor, and optional logical batches.
+
+- **Routing.** `route_as="review"` (prior only), `eligible_backends={cursor, vibe, gemini, codex, claude}`,
+  with claude reserved by default through `route_role()`.
+- **Shadow only — never selects workers or mutates backlog state.** It does not call `router.select_agent`,
+  `dispatcher.delegate`, claims, label mutation, branch creation, or PR actions. Router capacity, claims,
+  task type, lane, and worker selection remain deterministic rails.
+- **Validation.** The role requires exactly one recommendation for each visible target, rejects unknown or
+  duplicate targets, rejects unregistered batch IDs, forbids extra recommendation/batch keys that could
+  smuggle worker selection or task reclassification, and falls back to deterministic backlog order when a
+  proposal is invalid.
+- **Input quality.** `backlog.py` now retains issue/PR `body` text so triage can judge underspecification
+  from more than titles and labels.
+
+### CLI
+
+```bash
+python3 roles.py route --role triage
+python3 roles.py triage --backlog-json ~/.codex/handoff/backlog.json [--proposal-json triage.json]
+python3 roles.py triage --backlog-json ~/.codex/handoff/backlog.json --dispatch
+```
+
+## AdjudicatorAgent — the fifth role (built 2026-06-20)
+
+AdjudicatorAgent upgrades disputed-reviewer handling into a callable role. It reviews one blocker/veto
+against supplied ground-truth evidence and advises whether to uphold it, reject it, or gather more
+evidence.
+
+- **Routing.** `route_as="review"` (prior only), `eligible_backends={gemini, codex, claude}`. Claude is
+  reserved by default through `route_role()`, so routine shadow adjudication starts with Gemini/Codex.
+- **Shadow only — never emits terminal verifier verdicts or mutates.** It does not produce `PASS`, `FAIL`,
+  `BLOCKED`, or `verifier_verdict`, and it does not call merge/label/claim/delegate paths.
+- **Rail preservation.** `runtime_ac_panel.adjudicate_panel()` and `adversarial.aggregate_veto()` remain the
+  deterministic aggregation math. Automated gate failures still block through the gate/merge rails; an
+  adjudicator recommendation is evidence for the orchestrator/human to inspect, not an override.
+- **Validation.** The role rejects terminal/mutating keys, requires cited ground-truth refs when upholding
+  or rejecting a blocker, requires evidence gaps for `needs_more_evidence`, and rejects next steps that ask
+  for mutating execution.
+
+### CLI
+
+```bash
+python3 roles.py route --role adjudicator
+python3 roles.py adjudicate --case-json case.json [--proposal-json adjudication.json]
+python3 roles.py adjudicate --case-json case.json --dispatch
+```

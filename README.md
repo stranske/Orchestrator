@@ -1,0 +1,301 @@
+# Orchestrator
+
+A personal-scale multi-agent fleet controller. It coordinates subscription CLI coding agents
+(Claude Code, OpenAI codex, Cursor, Gemini via Antigravity `agy`, Mistral `vibe`, aider) across
+~11 GitHub repos, routes work by **learned** per-agent×task-type weights under **expiring
+subscription-quota windows**, runs continuous A/B/C experiments on real tasks, and feeds every
+outcome back into a local SQLite "Brain." The 2026-07 field survey (six independent research
+briefs under `Code/Audits/Orchestrator/2026-07-03-research/`) found no published equivalent of the
+core combination: learned cross-vendor routing + drain-before-refresh quota economics + live
+production duels.
+
+> **Before changing anything, read [`CLAUDE.md`](CLAUDE.md).** This project's dominant failure mode
+> is not bugs — it is **built-and-forgotten features**. Between 2026-07-03 and 2026-07-08, *six*
+> fully-built subsystems were found dormant and activated (followup evaluation, adversarial gate,
+> range-lane slot, ship-gate, redirect-corpus intake, and more). The dedup-before-develop check in
+> CLAUDE.md exists to stop that recurring. The historical dormancy scan is
+> `Code/Audits/Orchestrator/2026-07-08-dormancy-rescan.md`; current activation truth is generated
+> from the local capability ledger with `python3 capabilities.py inventory`.
+
+## How it runs (execution topology)
+
+```
+CANONICAL (edit here):  ~/Library/CloudStorage/Dropbox/Learning/Code/Orchestrator/
+   └─ orch-sync-mirror.sh  (RUN AFTER EVERY EDIT) ──►  ~/.codex/orchestrator-mirror/  (exec mirror)
+          why: launchd/cron get EPERM on CloudStorage paths; the schedule runs the mirror copy.
+LAUNCHD:   com.stranske.orchestrator — hourly at :40 → mirror/orchestrate.sh --active
+STATE:     ~/.codex/orchestrator/   (Brain DB feedback/orchestrator.db, repos/, worktrees/,
+                                      capabilities.json, offloads/, agent-runtime/, experiments/,
+                                      .last-*/.fail-* stamps)
+HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lanes yield to it;
+                                      capacity.json, backlog.json, tick log orchestrator-cron.log)
+```
+
+- **Shadow vs active.** `./orchestrate.sh` (no args) = SHADOW: capacity + discovery + a dry-run
+  plan, prints what it *would* do, writes no heartbeat and dispatches nothing — safe to run
+  anytime alongside the live fleet. `--active` (launchd only) claims targets, writes the heartbeat,
+  and dispatches.
+- **Editing safely.** Edit the canonical Dropbox copy, run `orch-sync-mirror.sh`, and confirm the
+  mirror matches. A concurrent fleet tick writes only to worktrees and state — never to this
+  canonical tree — so canonical edits are yours alone, but always re-sync so the schedule sees them.
+- **Every module has a `--selftest`.** Run it after editing that module; it is the project's test
+  suite (there is no separate pytest tree). `python3 <module>.py --selftest`.
+- **Activation is evidence-backed.** `features.py` describes reusable code maturity;
+  `capabilities.py` is the activation authority. An `active` declaration must prove its matcher,
+  invocation, artifact consumer, outcome sink, expiry, kill switch, and rollback. Each active tick
+  validates the ledger and writes `capability-validation.json` plus `capability-inventory.md` under
+  the local state directory.
+
+## Important functionality (what actually runs, grouped by job)
+
+Verdicts (ACTIVE / gated / CLI-only) reflect the 2026-07-08 dormancy re-scan; re-run that scan to
+refresh. "Gated" = code is live but a default-OFF `ORCH_*` flag holds it back — an intentional
+safety switch, not dead code.
+
+### The tick (hourly `orchestrate.sh --active`)
+1. **capacity.py** — per-seat budget/policy across 5h + weekly quota windows (steady/reserve/drain),
+   plus two **dispatchability gates that run before any budget math**: a seat sheds if its CLI
+   cannot authenticate (`unavailable_auth_failed`) or if a pinned model in any tier is not in the
+   CLI's own catalog (`unavailable_model_unresolved`). Both fail SAFE — an unrunnable check is
+   UNKNOWN and never sheds a working seat. Added 2026-08-08 after a rotted gemini model pin made
+   every dispatch exit 1 while this file still reported `ok` with full headroom.
+2. **backlog.py** — discovers actionable issues/PRs across the fleet from GitHub labels.
+3. **router.py** — ranks agents per task: capacity tier → learned route weights → **continuous
+   drain urgency** (unused expiring quota reads cheaper). ε-greedy exploration is default; a
+   Thompson-sampling path exists, gated behind `ORCH_EXPLORATION_MODE` pending the weekly
+   evidence gate's recommendation.
+4. **tick.py → dispatcher.py** — claims a target (claims.py: atomic, live-pid-guarded, reap-grace +
+   reap-mutex), spawns the agent in an isolated worktree with a kill-proof done-marker, releases on
+   exit. High-stakes closer items pass through the **adversarial.py** refute-mode veto panel.
+5. **exp_abcd.py followup** — collects + cross-evaluates finished A/B/C experiments (nothing used to;
+   this drained a 249-experiment backlog in July 2026), records objective anchors, and resumes the
+   `synthesis_promotion.py` lifecycle. Useful syntheses must complete, pass scope/secret/local
+   deliberate-break/runtime-AC/repo gates, and compile one local canonical delivery candidate before
+   the daily ship-gate stamps. The harness never publishes or auto-merges. Arm/member/profile identity is exact, so the same provider can occupy
+   multiple model or strategy arms without artifact collisions or evaluator ambiguity.
+6. **range_lane_rollout.py** — daily slot that exercises the specialized lanes (testgen/epic/codemod/
+   cross_repo/runtime_ac); PREVIEW by default, live dispatch behind `ORCH_RANGE_LANE_ROLLOUT`.
+7. **runtime_ac_flow_monitor.py** — daily read-only monitor over structured gate events. Its
+   denominator is required active closer gates, never generic closer traffic; the legacy cron log is
+   archival-only. Runtime AC is a hard opt-in machine gate for labeled/spec-backed closer work:
+   active progression requires a target-exact spec, `ORCH_RUN_RUNTIME_AC=1`, and `PASS`. The separate
+   adversarial reviewer panel remains advisory.
+8. **issue_readiness.py** — daily cadence step that decides which open issues the fleet may work,
+   removing the owner from the ready-label queue. Four verdicts (auto_ready / owner_review /
+   needs_specification / not_opener_work); only risk-labelled AND actionable issues reach the owner,
+   via a non-blocking `feedback.owner_questions` entry that auto-ratifies to *proceed* at expiry so
+   nothing can latch. Read-only assessment by default; label writes are gated behind
+   `ORCH_ISSUE_AUTOREADY`. The report states its own attention cost each run (measured 2026-08-18:
+   well under the weekly attention budget (LOCAL_POLICY.md)), so a drift in the issue mix surfaces instead of
+   quietly growing.
+9. **redirect_apply.py** — the consumer `redirect_plan.apply_plan` never had. Daily and local (no
+   gh). `--link-outcomes` is ALWAYS ON and mutates nothing: for every redirect role run whose
+   stamped dispatch reached a terminal outcome it appends the corpus outcome link, which is what
+   makes `synced_role_outcomes` climb with no owner in the loop (the manual `link-outcome` design
+   produced 5 links in ~2 months). `--apply` is DEFAULT OFF behind `ORCH_REDIRECT_APPLY_BOOTSTRAP`;
+   armed, it applies at most one *authorised* plan per day, only on an ALREADY-DEAD lane (so no kill
+   ever runs and the apply reduces to release-claim + delegate, which the rails already do to a dead
+   stalled lane), never over a foreign claim, never on an un-stamped plan, and it disarms itself the
+   moment the Stage-2 deficits close. It exists because that gate is a structural deadlock:
+   `synced_role_outcomes` counts only applied advice, so the gate authorising apply required ten
+   applied outcomes. The machine-checkable arming condition lives in
+   `capability_recurrence_check.SWITCH_ON_CRITERIA`, not in anyone's judgement.
+10. **research_scheduler.py + research_subjects.py** — opportunistic acquisition uses only capacity
+   left after production/range reservation. A durable target/task/spec/base/arm fingerprint blocks
+   active, cooldown, per-subject, and global unevaluated duplicates; repeated runs on one subject
+   sum to one effective learner observation.
+
+### The Brain (feedback.py, SQLite at ~/.codex/orchestrator/feedback/orchestrator.db)
+- **Capability attribution at dispatch** — a run is tagged with the infrastructure capabilities it
+  actually exercises (`dispatcher._exercised_capability_ids`: the gemini adapter path for
+  `agy-runtime-isolation`, an actual Thompson challenger choice for `thompson-hybrid-routing`;
+  range-lane assignments tag themselves before dispatch; a role run tags `offload` when a
+  `backend_run_id` shows one produced its proposal). Each condition is the same one the capability's
+  own heartbeat fires on — never an entrypoint-string guess, which
+  `capability_outcome_bridge` refuses by design. `capability_outcome_bridge` then turns those edges
+  into ledger outcome heartbeats, so a capability records not just that it RAN but how the work
+  turned out. Its `run_tagged` resolver was dead code until 2026-08-21 (it read a column that does
+  not exist), and its edge repairs now run before the heartbeat pass rather than a cycle behind it.
+- **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
+  the code path that would produce an outcome (Thompson never chooses while the mode is
+  epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label
+  write is gated). Those read `deliberately_gated` instead of accruing a permanent "fix outcome
+  linkage" instruction they cannot act on. Deliberately opt-in: 16 of 39 capabilities carry a
+  `gate_reason`, so reordering the checks for everyone would have hidden real gaps.
+- **runs / execution_attempts / outcomes / costs / route_weights / evaluations_v2** — decisions,
+  causally scoped worker/evaluator/verifier attempts, exact experiment identities, and results.
+  Generic trace models and legacy `runs.model` tags never resolve worker identity; unresolved rows
+  remain usable for agent-level learning without contaminating exact-model evidence.
+- **Structured runtime-AC gate events** — `runtime_ac_gate.py` records required/planned/missing,
+  skipped/error, executed verdict, exact target/spec/hash, closer/verifier joins, and downstream
+  outcome linkage in the existing `completion_events` plane. Range-lane specs are installed only by
+  `runtime_ac_gate.py --materialize-range-spec <artifact> --target owner/repo#N`; cross-target or
+  invalid artifacts terminate as non-installed evidence instead of becoming gate inputs.
+- **Verified synthesis delivery lifecycle** — each evaluated experiment can persist
+  `synthesis-promotion.json` through `evaluated → synth_running → synth_complete → synth_verified →
+  candidate_ready → delegated_or_pr → merged → durable`, with discarded/reverted work retired.
+  These subordinate phases derive canonical capability states; they do not create a second lifecycle
+  enum. `exp_abcd.py followup` reconciles/resumes them exactly once. Candidate bodies use the canonical
+  agent issue sections and preserve experiment/arm/member/evaluator/profile/synthesis/capacity and
+  accepted influence lineage. An explicit external delivery link hands authority to Workflows
+  auto-pilot/Keepalive; no `gh`, push, publication, or merge path exists in the promotion module.
+- **relearn_report.py** (weekly) re-estimates versioned route weights: Beta-Binomial posteriors
+  with recency decay, cost/effort imputation (missing telemetry never reads as free — the cost
+  plane is repaired), and **Bradley-Terry warm-starts** blended from the A/B/C duel data.
+- **judge_reliability.py** — leave-one-out consensus weights per judge (de-saturated so real error
+  spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
+  machine ground-truth anchors (no owner code-review required — see CLAUDE.md).
+- **Two-tier outcomes**: signal-killed/infra failures are classified `transient_infra` and excluded
+  from learning, so environment noise never trains as agent incapability.
+- **Independent-subject weighting**: explicitly linked research repetitions are down-weighted by
+  `(agent, subject_family)` before posterior updates; legacy rows keep agent-level value without
+  receiving invented subject provenance.
+- **Execution profiles**: `execution_profiles.py` keeps provider capacity pools separate from
+  model/profile identity (`codex-5.6-sol`, `codex-5.6-terra`, `codex-5.6-luna`). Profile routing
+  is fail-closed, capacity-aware, and shadow-learns per-agent/provider priors before any live
+  promotion. `feedback.py completion-events --jsonl` exports the canonical phase envelope used by
+  downstream learning; it never fabricates historical observations.
+- **Sol/Terra/Luna trial bridge**: `model_profile_trial_bridge.py preflight|prepare|collect-remote|ingest|qualify`
+  binds the frozen trial packet to replayable per-profile request IDs, one live shared-capacity
+  snapshot, external quarantine artifacts, and strict requested/selected/reported identity while
+  preserving provider-resolved identity as null. It never dispatches a remote workflow or writes
+  the Brain. The dedicated Workflows runner is pinned and read-only; normal workspace-write Keepalive
+  rejects trial profiles and is not a substitute. `collect-remote` binds authenticated GitHub run,
+  workflow, source, artifact, archive-digest, and embedded JSON identity before ingest. The 2026-07-10
+  serial Terra/Luna/Sol canary passed those checks and was correctly quarantined because subscription
+  execution did not expose independent provider-resolved identity. `qualify --manifest ... --envelope
+  ... --results ... --quarantine ...` replays the sealed source manifests, request/envelope hashes,
+  identity artifacts, and exact quarantine result. Its default output is
+  `transport-qualification.json` beside the supplied quarantine; use `--output` for staging. A passing
+  qualification releases only the pinned transport and CLI-reported profile contract for future
+  no-learning instrumentation. Provider-resolved identity remains null and unclaimed; the canary remains
+  ineligible for Brain ingestion, quality-weight updates, and promotion. Provider-attested finalization
+  is unchanged. Instrumentation completion events are excluded from Pattern Miner input. Run
+  `python3 model_profile_trial_bridge.py selftest` before preparing a canary.
+- **Pattern-to-capability compiler**: `pattern_miner.py` consumes those seven-phase completion
+  envelopes and emits candidate-only capability IR. It is intentionally non-dispatching: inspect
+  `~/.codex/orchestrator/pattern-miner-status.json`, `pattern-miner-inventory.json`, and
+  `pattern-miner-state.json` after the daily cadence (or run `python3 pattern_miner.py status`
+  and `inventory`). A useful first check-in is after 7 daily runs or 20 accepted episodes, whichever
+  comes first; review candidate evidence, counterexamples, and expiry before promoting anything.
+  Deterministic candidates can then be dry-compiled by `capability_compiler.py`; its reference rail
+  proves lifecycle consumption without granting an apply or arbitrary-shell path.
+  The same existing `capability:reference-sync-hygiene-test-gate` now accepts typed
+  `workflows.consumer-sync-plan/v1` evidence through `consumer_sync_shadow.py`. The classifier
+  emits only read-only create/update/remove/skip/no-change proposals, and
+  `runner_effect_bridge.py` validates provider-neutral runner effect evidence before recording
+  idempotent outcomes or counterexamples in the existing capability ledger. Run
+  `python3 consumer_sync_shadow.py dashboard` to see distinct effects, harms, reduced-supervision
+  evidence, expiry/kill-switch state, and explicit promotion blockers. The rail remains shadow-only;
+  no consumer writes, dispatch, merge, or promotion authority is exposed.
+  `consumer_sync_artifact_ingest.py preview` validates the latest successful producer artifact and
+  the consumers' default-branch content without writing state. It reads each consumer through ONE
+  recursive git-tree call plus per-blob fetches memoised on the content-addressed blob id (cached
+  in the ingest state file across runs) — never a whole-repo archive, which made a 122MB consumer
+  unreadable and cost ~171MB/day of transfer for ~4MB of signal. The same tree yields a read-only
+  `hygiene` section per repo in the ingest report, naming committed dependency/cache directories
+  with evidence-based dispositions (`untrack` only where no ecosystem-matched manifest vouches for
+  the directory; `review_vendored`/`review_owner` otherwise). Findings escalate through existing
+  surfaces only: machine-decidable ones become a digest line in `periodic_report.py`
+  (`consumer_sync_hygiene`), and material judgment calls become a single auto-expiring
+  `feedback.record_owner_question` whose default changes nothing — measured at ~0.17 questions per
+  month, so no backlog is possible. The active-only daily cadence uses
+  `ingest` for at most one artifact and five registered consumers, records only local evidence, and
+  runs a self-expiring human-on-exception phase through 2026-07-25. It has no consumer or GitHub
+  write path; exceptions fail the cadence and remain visible in the local report/state.
+  For a concise check-in, run `python3 periodic_report.py --json --window-days 7` and inspect the
+  `model_profile_trial`, `model_profile_transport_qualification`, `role_activation`, `pattern_miner`,
+  and `dataset` sections alongside the
+  generated status/inventory artifacts.
+- Candidate extensions are also available through `capability_compiler.py`: skill packages remain
+  under a shadow candidate directory until separately promoted, while evidence contracts report
+  independent-subject counts, named capture hooks, influence measures, expiry, and rollback.
+  Judgment-only candidates can compile into strict, provider/profile-agnostic roles with bounded
+  selectors, capacity policy, prompt hashes, expiry, kill switches, and predecessor rollback.
+  Generated roles register only in the process-local shadow registry in `roles.py`; they cannot
+  alter the static production roster, dispatch work, or mutate baseline behavior. Accepted and
+  rejected proposals both join the existing role influence/outcome lineage.
+  Repo-specific durable candidates can compile into low-risk managed playbook canaries only after
+  exact current path/symbol checks, independent durable evidence, negative examples, dedupe, and
+  expiry/rollback validation. `repo_knowledge.py` preserves user-authored `AGENTS.md` content,
+  reports managed blocks as `absent`, `stale`, `mismatched`, or `current`, and can merge the hashed
+  rule into an optional Workflows capability bundle without replacing unrelated bundle content.
+  Matches, injections, acceptances, counterfactual rejections, and downstream outcomes reuse the
+  existing completion-event and capability-influence planes.
+
+### Telemetry & recovery (ledger_reconcile.py, daily)
+- Harvests real cost (agent-reported `total_cost_usd`), latency, tokens, done-markers, **resume
+  tokens** (CLI session IDs → `feedback.py resume-hint <run_id>`), and **owner questions** from run
+  logs. Backfills killed completions from markers.
+
+### Human touchpoints (all non-blocking — see CLAUDE.md attention budget)
+- **Owner questions** (interrupt-as-data): agents record a product-level question + the default they
+  proceed on; unanswered questions auto-ratify their default at expiry (no possible backlog); answers
+  steer future prompts. `feedback.py questions` / `answer <id> "<text>"`, or via the MCP server.
+- **periodic_report.py / observability_dashboard.py** (weekly) — FYI dashboards, not action queues.
+
+### Interfaces
+- **agent_auth_check.py** (CLI-only) — "can every seat actually authenticate and dispatch, right
+  now?" Checks the way the FLEET does: it sources each agent's credential file and disables the
+  interactive credential store, because a bare `cursor-agent status` in your shell answers about a
+  stored session the headless lane never reads (it reports "logged in" with a dead API key and
+  "Not logged in" with a live one). Prints the per-seat refresh hint; never prints secret values.
+  `--json` for machines; exit 1 only when a seat is *definitively* broken, never on UNKNOWN.
+- **mcp_server.py** — exposes the fleet to any MCP client (registered user-scope as `orchestrator`):
+  capacity, fleet summary, route weights, owner-question list/answer, resume hints. Read-only plus
+  the two bounded owner-question actions; no dispatch through this door.
+- **Cadence resilience** — failing daily/weekly steps back off (`.fail-<step>` stamps,
+  `ORCH_CADENCE_RETRY_HOURS`) and ALERT after N consecutive failures instead of retrying hourly.
+- **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
+  pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
+  result, not a reason to seed synthetic data.
+
+## Governing docs
+`ORCHESTRATOR.md` (role/philosophy) · `ARCHITECTURE.md` (data flow) · `FEEDBACK_LOOP.md` (learning
+loop) · `EVAL_AND_TESTING.md` (selftest/gate regime) · `PLANNING.md` (roadmap) ·
+`IMPROVEMENT_BACKLOG.md` (numbered items + status log) · `CLAUDE.md` (agent rules) ·
+**`ADDING_CAPABILITIES.md`** (the enforced procedure for adding or reviving a capability, and the
+nine failure modes it exists to stop).
+Durable audit history: `Code/Audits/Orchestrator/`.
+
+## Adding a capability (enforced)
+
+`capability_admission.py` is the admission gate, and unlike the other capability tooling it is
+PROSPECTIVE: everything else checks the capabilities that already exist. A capability must arrive
+with eight parts — a recorded dedup finding, a caller, a heartbeat on the executed path, a
+recurrence fixture, an outcome path (declared consumer **and** learning sink), a kill switch, a
+rollback, and an expiry-or-cadence. `--preflight '<spec json>'` answers this before the code is
+written, returning caller/heartbeat/fixture as explicit obligations rather than skipping them.
+
+It also tracks **commitments**: a citation to a dated record that does not exist, or a deadline that
+passed with no record naming its subject, fails `test_capability_admission.py`. That check exists
+because a scheduled trial review fired on time, wrote nothing, and let a flag revert by timeout for
+36 days while live code cited the record nobody wrote.
+
+Enforcement binds on capabilities registered from 2026-08-21; the pre-gate set is reported as legacy
+debt on every run and does not fail the suite. Rationale and the nine failure modes:
+`ADDING_CAPABILITIES.md`.
+
+## Capability activation inventory
+
+`python3 capabilities.py usage` answers the question the inventory cannot: **why** a capability is
+not being used, and what would change that. It reports invocations/week, `evidence_debt` (how many
+further independent durable reuses the promotion policy still wants), and one next action per
+capability, rolled up into READY TO LIFT / PROMOTABLE / MEASUREMENT GAPS / WORTH FEEDING / RETIRE
+CANDIDATES. The distinction that matters: a gate is usually **starved of evidence**, not awaiting a
+decision — `_causal_readiness` needs ≥3 independent durable reuses, so a capability nothing invokes
+can never lift no matter how often it is reviewed. `unblock()["feed"]` marks the only class worth
+spending real capacity on; measurement gaps and retirement candidates are explicitly NOT fed.
+
+`gate_readiness()` evaluates a capability's OWN `evidence_threshold` for any status (the causal
+reconciler consults readiness only for `canary`). Encode countable bounds in the optional
+`gate_criteria` field; name anything the causal record cannot supply under `requires`. **A gate is
+never reported ready while any criterion is unevaluated** — un-encoded prose, missing observations,
+and unrecognised criteria all block readiness, so silence cannot read as a pass. Layer 2 reports
+readiness; lifting a gate stays a deliberate act (see the safety-switch policy in CLAUDE.md).
+
+Do not maintain a second static list of supposedly active or gated features here. Generate the
+current inventory with `python3 capabilities.py inventory` (or inspect
+`~/.codex/orchestrator/capability-inventory.md` after an active tick). It distinguishes deliberate
+gates, canaries, no matching work, matched-but-not-invoked seams, missing outcomes, and stale active
+capabilities from ordinary code maturity.

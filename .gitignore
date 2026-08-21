@@ -1,0 +1,65 @@
+# ============================================================================
+# Orchestrator — what NEVER goes remote.
+#
+# The tree is ~88% local state by size (code+docs 4.6 MB, state 29.8 MB), so
+# this file is the boundary that makes a repo viable at all. Owner's hard rules:
+# no evaluation databases stored remotely, no reliance on remote access to work.
+#
+# Runtime state proper lives OUTSIDE this tree at $ORCH_STATE_DIR (default
+# ~/.codex/orchestrator, ~20 GB: the Brain, cadence stamps, worktrees, venvs,
+# the capability ledger). That separation is why a second instance needs only a
+# different ORCH_STATE_DIR, not a code change.
+#
+# NOTE ON FORMAT: git does NOT support trailing comments on pattern lines. The
+# first version of this file put explanatory comments after each pattern, which
+# silently made every pattern inert — 795 files staged instead of 141, including
+# the Brain export. Keep comments on their own lines, and verify with
+# `git check-ignore -v` or `git status`, never with a hand-rolled parser.
+# ============================================================================
+
+# --- evaluation & experiment output: machine-local by the owner's explicit rule ---
+# experiments/ is 17 MB / 390 files of per-arm logs, diffs and ship gates.
+experiments/
+# ux_reviews/ is 2.6 MB / 262 files of UX panel transcripts and scores.
+ux_reviews/
+# data/ holds feedback-snapshot.json (1.9 MB) — a Brain export, not source.
+data/
+*.sqlite
+*.sqlite3
+*.db
+# GitHub rate-limit accounting for THIS machine only.
+gh-rate-ledger.ndjson
+
+# --- durable audit history belongs to the workspace, not the tool ---
+# Code/Audits/Orchestrator/ is the system-of-record for dated decision records;
+# capability_admission.commitments() reads it from there. A second copy here
+# would be a parallel inventory — the failure mode this project is named for.
+Audits/
+
+# --- python / tooling noise ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- lock and backup artifacts ---
+*.lock
+*.bak
+*.pre-ingest-fix-*
+
+# --- editor / OS ---
+.DS_Store
+*.swp
+
+# --- machine-local policy and evidence (the tool is public; the evidence is not) ---
+# The split is tool-vs-evidence: generic capabilities and gates ship, while this
+# instance's failure history, spend calibration and availability stay local.
+# Sanitized public twins of the load-bearing docs are committed under their
+# canonical names; these are the full versions.
+LOCAL_POLICY.md
+IMPROVEMENT_BACKLOG.md
+CAPABILITY_USEFULNESS.md
+*.local.md

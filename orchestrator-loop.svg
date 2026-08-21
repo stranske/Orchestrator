@@ -1,0 +1,99 @@
+<svg width="680" viewBox="0 0 680 542" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Orchestrator loop: deterministic rails versus callable agent-roles</title>
+<desc>A five-stage orchestrator cycle — reap and assess, check in-flight, decide, delegate, monitor and verify — with each component tagged as a deterministic rail (blue) or a swappable-backend agent-role (amber, dashed). RedirectAgent, PromptAgent, DecomposerAgent, TriageAgent, and AdjudicatorAgent are registered shadow roles; an accepted RedirectAgent plan is consumed by the deterministic redirect-apply rail, which authorises from recorded state only and stays behind a default-OFF, self-disabling flag; delegated sub-agents run in isolated worktrees (teal); their outcomes feed feedback.py, which relearns both selection weights and role-to-backend fit and returns them to the next cycle. In Monitor and verify, ux_review (Gate 2) supplements the frontend_verify gate with an evidence-bound usability panel — at least four evaluators plus an adversarial critic — whose evaluations and evidence gaps feed feedback.py, and whose per-evaluator fix-hints and coverage gaps are mined by synthesize_improvements into ranked improvement ideas and the next pass's focus.</desc>
+<style>
+  .bg{fill:#ffffff;stroke:#e4e8ee;}
+  .t,.th,.subhead{font:500 14px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2328;}
+  .subhead{fill:#0b5a47;}
+  .ts{font:400 12px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#57606a;}
+  .ct{font:400 12px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#1f2328;}
+  .ctsub{font:400 12px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:#0b5a47;}
+  .stage{fill:#f6f8fa;stroke:#d0d7de;}
+  .rail{fill:#e8eefb;stroke:#3b5ba9;}
+  .role{fill:#fbf0db;stroke:#b5841f;stroke-dasharray:3 2;}
+  .sub{fill:#e1f5ee;stroke:#0f6e56;}
+  .arrow{stroke:#8a9099;stroke-width:1.5;fill:none;}
+  .return{stroke:#6a737d;stroke-width:1.5;fill:none;}
+</style>
+<defs>
+<marker id="ah" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#8a9099"/></marker>
+</defs>
+
+<rect class="bg" x="1" y="1" width="678" height="540" rx="12"/>
+
+<!-- legend -->
+<rect class="rail" x="40" y="26" width="14" height="14" rx="3"/>
+<text class="ts" x="60" y="37">deterministic rail</text>
+<rect class="role" x="178" y="26" width="14" height="14" rx="3"/>
+<text class="ts" x="198" y="37">agent-role</text>
+<rect class="sub" x="268" y="26" width="14" height="14" rx="3"/>
+<text class="ts" x="288" y="37">delegated sub-agent</text>
+<text class="ts" x="40" y="53">agent-roles are typed contracts; the model behind each is router-chosen and swappable</text>
+
+<!-- stage 1 -->
+<rect class="stage" x="56" y="64" width="584" height="52" rx="8"/>
+<text class="th" x="68" y="95">Reap + assess</text>
+<rect class="rail" x="250" y="78" width="82" height="24" rx="4"/><text class="ct" x="291" y="94" text-anchor="middle">claims reap</text>
+<rect class="rail" x="342" y="78" width="64" height="24" rx="4"/><text class="ct" x="374" y="94" text-anchor="middle">capacity</text>
+<rect class="rail" x="416" y="78" width="58" height="24" rx="4"/><text class="ct" x="445" y="94" text-anchor="middle">backlog</text>
+<rect class="rail" x="484" y="78" width="100" height="24" rx="4"/><text class="ct" x="534" y="94" text-anchor="middle">router (prior)</text>
+
+<!-- stage 2 -->
+<rect class="stage" x="56" y="130" width="584" height="52" rx="8"/>
+<text class="th" x="68" y="161">Check in-flight first</text>
+<rect class="rail" x="250" y="144" width="46" height="24" rx="4"/><text class="ct" x="273" y="160" text-anchor="middle">watch</text>
+<rect class="role" x="306" y="144" width="100" height="24" rx="4"/><text class="ct" x="356" y="160" text-anchor="middle">redirect agent</text>
+<rect class="rail" x="412" y="144" width="118" height="24" rx="4"/><text class="ct" x="471" y="160" text-anchor="middle">redirect apply (gated)</text>
+
+<!-- stage 3 -->
+<rect class="stage" x="56" y="196" width="584" height="52" rx="8"/>
+<text class="th" x="68" y="227">Decide</text>
+<rect class="rail" x="250" y="210" width="142" height="24" rx="4"/><text class="ct" x="321" y="226" text-anchor="middle">select agent (router)</text>
+<rect class="role" x="402" y="210" width="52" height="24" rx="4"/><text class="ct" x="428" y="226" text-anchor="middle">triage</text>
+<rect class="role" x="464" y="210" width="76" height="24" rx="4"/><text class="ct" x="502" y="226" text-anchor="middle">decomposer</text>
+
+<!-- stage 4 -->
+<rect class="stage" x="56" y="262" width="584" height="52" rx="8"/>
+<text class="th" x="68" y="293">Delegate</text>
+<rect class="role" x="246" y="276" width="100" height="24" rx="4"/><text class="ct" x="296" y="292" text-anchor="middle">prompt agent</text>
+<rect class="rail" x="348" y="276" width="148" height="24" rx="4"/><text class="ct" x="422" y="292" text-anchor="middle">dispatcher + provision</text>
+
+<!-- stage 5 -->
+<rect class="stage" x="56" y="328" width="584" height="52" rx="8"/>
+<text class="th" x="68" y="359">Monitor + verify</text>
+<rect class="rail" x="250" y="342" width="46" height="24" rx="4"/><text class="ct" x="273" y="358" text-anchor="middle">watch</text>
+<rect class="role" x="306" y="342" width="100" height="24" rx="4"/><text class="ct" x="356" y="358" text-anchor="middle">redirect agent</text>
+<rect class="rail" x="416" y="342" width="46" height="24" rx="4"/><text class="ct" x="439" y="358" text-anchor="middle">gates</text>
+<rect class="role" x="472" y="342" width="82" height="24" rx="4"/><text class="ct" x="513" y="358" text-anchor="middle">adjudicator</text>
+<rect class="role" x="560" y="342" width="76" height="24" rx="4"/><text class="ct" x="598" y="358" text-anchor="middle">ux_review</text>
+
+<!-- flow arrows -->
+<line class="arrow" x1="348" y1="117" x2="348" y2="128" marker-end="url(#ah)"/>
+<line class="arrow" x1="348" y1="183" x2="348" y2="194" marker-end="url(#ah)"/>
+<line class="arrow" x1="348" y1="249" x2="348" y2="260" marker-end="url(#ah)"/>
+<line class="arrow" x1="348" y1="315" x2="348" y2="326" marker-end="url(#ah)"/>
+
+<!-- spawn -->
+<line class="arrow" x1="348" y1="381" x2="348" y2="396" marker-end="url(#ah)"/>
+<text class="ts" x="358" y="391">spawn · watch · redirect</text>
+
+<!-- sub-agent band -->
+<rect class="sub" x="56" y="398" width="584" height="54" rx="8"/>
+<text class="subhead" x="68" y="417">delegated sub-agents · isolated worktrees</text>
+<text class="ctsub" x="68" y="439">cursor · vibe · gemini · codex · aider · claude</text>
+
+<!-- outcome -->
+<line class="arrow" x1="348" y1="453" x2="348" y2="468" marker-end="url(#ah)"/>
+<text class="ts" x="358" y="462">outcome: merge · durability · verifier</text>
+
+<!-- feedback band -->
+<rect class="stage" x="56" y="470" width="584" height="52" rx="8"/>
+<text class="th" x="68" y="489">feedback.py · record → ingest → relearn (beta-binomial)</text>
+<text class="ts" x="68" y="514">learns via outcomes:</text>
+<rect class="rail" x="118" y="502" width="104" height="18" rx="4"/><text class="ct" x="170" y="514" text-anchor="middle">selection weights</text>
+<rect class="role" x="232" y="502" width="116" height="18" rx="4"/><text class="ct" x="290" y="514" text-anchor="middle">role:&lt;name&gt; fit</text>
+
+<!-- return arc -->
+<path class="return" d="M56,500 L32,500 Q28,500 28,496 L28,94 Q28,90 32,90 L56,90" marker-end="url(#ah)"/>
+<text class="ts" x="14" y="300" text-anchor="middle" transform="rotate(-90 14 300)">next cycle</text>
+</svg>

@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""test_capability_set_coverage.py — the capability set is a SET, and this test enforces it.
+
+WHY THIS EXISTS. Repeatedly, instructions that applied to "the capabilities" were answered for a
+convenient subset: four analysed in depth and thirty-one summarised in a sentence; a recurrence
+check built for sixteen and reported as if it covered all; twelve gated capabilities dismissed with
+one line. Every time, the omission was invisible in the output — the numbers quoted (18 of 21) were
+about FIXTURES, and nothing in the system objected that nineteen capabilities had no fixture at all.
+
+So this is not a promise to do better. It is a gate that FAILS when the set is treated as optional:
+
+  1. Every capability in the ledger MUST have a recurrence fixture. Adding a capability without one
+     breaks this test, which is the point — coverage becomes a precondition of adding, not a
+     follow-up someone remembers.
+  2. Every capability MUST appear in the activation audit, and its audit row must be complete.
+  3. Every fixture MUST name a real capability — a typo silently covering nothing is also a failure.
+  4. A capability that cannot fire MUST have a stated reason. "Blocked" is acceptable; unexplained
+     is not, because unexplained is how nineteen of them stayed invisible.
+
+Run it directly (`python3 test_capability_set_coverage.py`) or under pytest. It is deliberately part
+of the standard suite so a normal verification run cannot pass while the set is under-covered.
+"""
+from __future__ import annotations
+
+import sys
+
+import capabilities
+import capability_activation_audit as audit
+import capability_recurrence_check as recurrence
+
+# Capabilities exempt from needing a recurrence fixture, each with a REASON. This list exists so an
+# exemption is a deliberate, reviewable act rather than a silent omission. Keep it empty if possible.
+FIXTURE_EXEMPT: dict[str, str] = {}
+
+
+def _fixture_capabilities() -> set[str]:
+    """Every capability named by a fixture (guards and flag probes excluded)."""
+    named = [f.get("capability") for f in recurrence.FIXTURES]
+    named += [f.get("capability") for f in recurrence.PREDICATE_FIXTURES]
+    return {n for n in named if n and not str(n).endswith("-flag")}
+
+
+def test_every_capability_has_a_recurrence_fixture():
+    """No capability may sit outside the recurrence check.
+
+    This is the specific failure this file exists to prevent: 19 of 35 capabilities had no fixture
+    while the reported score ("18 of 21") looked comprehensive.
+    """
+    ledger = set(capabilities.load(capabilities.REG))
+    covered = _fixture_capabilities()
+    missing = sorted(ledger - covered - set(FIXTURE_EXEMPT))
+    assert not missing, (
+        f"{len(missing)} capability(ies) have NO recurrence fixture. Add one that replays a real "
+        f"historical condition, or add an explicit FIXTURE_EXEMPT entry with a reason: {missing}"
+    )
+
+
+def test_no_fixture_names_an_unknown_capability():
+    """A fixture pointing at a nonexistent capability covers nothing while looking like coverage."""
+    ledger = set(capabilities.load(capabilities.REG))
+    unknown = sorted(_fixture_capabilities() - ledger)
+    assert not unknown, f"fixtures name capabilities absent from the ledger: {unknown}"
+
+
+def test_every_capability_appears_in_the_activation_audit():
+    """The audit must see the whole set, with a complete row for each."""
+    ledger = capabilities.load(capabilities.REG)
+    rep = audit.audit(use_cache=True)
+    rows = {r["capability_id"]: r for r in rep["rows"]}
+    missing = sorted(set(ledger) - set(rows))
+    assert not missing, f"capabilities absent from the activation audit: {missing}"
+    for cap_id, row in rows.items():
+        for field in ("entry_class", "defects", "reachable"):
+            assert field in row, f"{cap_id} audit row missing {field!r}"
+        assert row["entry_class"] in (
+            audit.ENTRY_TASK_ROUTED, audit.ENTRY_DIRECT, audit.ENTRY_GATED, audit.ENTRY_UNKNOWN
+        ), (cap_id, row["entry_class"])
+
+
+def test_unreachable_capabilities_state_a_reason():
+    """"Cannot fire" is allowed. "Cannot fire, unexplained" is not."""
+    rep = audit.audit(use_cache=True)
+    silent = [r["capability_id"] for r in rep["rows"]
+              if not r["reachable"] and not r["defects"]]
+    assert not silent, f"capabilities blocked with no named defect: {silent}"
+
+
+def test_every_defect_is_a_known_class():
+    """A defect string with no entry in DEFECT_CLASSES cannot be aimed at or counted."""
+    rep = audit.audit(use_cache=True)
+    unknown = sorted({d for r in rep["rows"] for d in r["defects"]
+                      if d not in audit.DEFECT_CLASSES})
+    assert not unknown, f"defects with no DEFECT_CLASSES description: {unknown}"
+
+
+def test_exemptions_carry_reasons_and_exist():
+    """An exemption must name a real capability and say why — never a bare skip."""
+    ledger = set(capabilities.load(capabilities.REG))
+    for cap_id, reason in FIXTURE_EXEMPT.items():
+        assert cap_id in ledger, f"FIXTURE_EXEMPT names unknown capability {cap_id!r}"
+        assert reason and len(reason) > 20, f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"
+
+
+def roster() -> str:
+    """EVERY capability with its coverage and firing status — never just the failures.
+
+    A gate that reports only what FAILS still permits reporting on a subset: "all checks passed"
+    says nothing about how many capabilities exist. That is how 19 uncovered capabilities sat behind
+    a headline of "18 of 21". So the roster prints the whole set, every run, and the count is the
+    ledger count by construction.
+    """
+    import capability_recurrence_check as rc
+    ledger = capabilities.load(capabilities.REG)
+    covered = _fixture_capabilities()
+    rep = audit.audit(use_cache=True)
+    rows = {r["capability_id"]: r for r in rep["rows"]}
+    try:
+        rec = rc.replay(offline=True)
+        fired: dict[str, bool] = {}
+        for row in rec["rows"]:
+            cap = row.get("capability")
+            if cap and not str(cap).endswith("-flag"):
+                fired[cap] = fired.get(cap, True) and bool(row["fires"])
+    except Exception:                                          # noqa: BLE001
+        fired = {}
+
+    out = [f"# Capability set roster — all {len(ledger)} capabilities", "",
+           "| Capability | Fixture | Can fire | Recurrence | Blocker |",
+           "|---|---|---|---|---|"]
+    for cap_id in sorted(ledger):
+        row = rows.get(cap_id) or {}
+        fx = "yes" if cap_id in covered else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
+        can = "yes" if row.get("reachable") else "NO"
+        fire = {True: "fires", False: "miss"}.get(fired.get(cap_id), "—")
+        out.append(f"| {cap_id} | {fx} | {can} | {fire} | "
+                   f"{', '.join(row.get('defects') or []) or '—'} |")
+    uncovered = sorted(set(ledger) - covered - set(FIXTURE_EXEMPT))
+    blocked = sorted(c for c in ledger if not (rows.get(c) or {}).get("reachable"))
+    out += ["", f"  fixtures: {len(covered)}/{len(ledger)}   "
+                f"uncovered: {len(uncovered)}   blocked: {len(blocked)}"]
+    return "\n".join(out) + "\n"
+
+
+def main() -> int:
+    if "--roster" in sys.argv:
+        print(roster(), end="")
+        return 0
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    failures = []
+    for fn in tests:
+        try:
+            fn()
+            print(f"  OK   {fn.__name__}")
+        except AssertionError as exc:
+            failures.append((fn.__name__, str(exc)))
+            print(f"  FAIL {fn.__name__}")
+            print(f"       {str(exc)[:400]}")
+    if failures:
+        print(f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED")
+        return 1
+    ledger = capabilities.load(capabilities.REG)
+    print(f"\nall {len(tests)} capability-set coverage checks passed "
+          f"over ALL {len(ledger)} ledger capabilities "
+          f"(--roster for the per-capability table)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

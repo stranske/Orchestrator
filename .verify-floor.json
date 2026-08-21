@@ -1,0 +1,5 @@
+{
+ "collected": 330,
+ "passed": 330,
+ "note": "floor recorded by verify.py --update-floor; a later run collecting fewer tests FAILS, because silently running fewer tests looks exactly like passing"
+}
