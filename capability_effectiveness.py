@@ -218,6 +218,33 @@ def _selftest() -> None:
     c = _arm_stats([e for e in edges if e["counterfactual"]])
     assert c["terminal"] == 5 and c["durable_rate"] == 0.4, c
 
+    # AN EDGE WITH NO COMPLETION ENVELOPE IS NOT MEASURABLE EVIDENCE. `capability_causal_evidence`
+    # already refuses to consume one (feedback.py:1430); this module must agree, or the same table
+    # means two different things to two consumers. Regression for the live case: 5 hand-created
+    # `link-outcome` edges targeting advisory `role:redirect:*` runs were 100% of `offload`'s
+    # durable signal at a reported rate of 0.059, with no causal link behind any of them.
+    import sqlite3 as _sqlite3
+    _c = _sqlite3.connect(":memory:")
+    _c.executescript(feedback.SCHEMA)
+    feedback._migrate_schema(_c)
+    for _eid, _tev in (("e-linked", "ev-1"), ("e-orphan", None)):
+        _c.execute(
+            "INSERT INTO influence_edges (edge_id,schema_version,influence_type,influence_id,"
+            "source_run_id,target_event_id,target_run_id,capability_id,accepted,counterfactual,"
+            "outcome_verdict,durability,created_ts,metadata_hash) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (_eid, 1, "capability", "offload", "src", _tev, f"remote:o/r#{_eid}:codex", "offload",
+             1, 0, "PASS", "durable", 0, "h"),
+        )
+    _rows = _edge_rows(_c)
+    _ids = {r["run_id"] for r in _rows}
+    assert any("e-linked" in i for i in _ids), _ids
+    # The orphan must be absent from `attributed` as well as from `terminal` — reporting a
+    # capability as busy on evidence it cannot be measured by is the same lie one layer up.
+    assert not any("e-orphan" in i for i in _ids), _ids
+    assert _arm_stats(_rows)["attributed"] == 1, _arm_stats(_rows)
+    _c.close()
+
     # CORRELATED ATTEMPTS MUST NOT INFLATE THE SAMPLE. 30 retries of one stuck target is one
     # observation, not 30 — the confound that produced a false 0% for role-triage on 2026-08-18.
     stuck = [{"capability_id": "c2", "accepted": True, "counterfactual": False,

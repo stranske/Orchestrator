@@ -294,14 +294,24 @@ def assess_candidate(
     close = conn is None
     now = int(now or time.time())
     try:
-        backlog_ids = unevaluated_experiment_ids(db)
+        # `now` is threaded through deliberately: this function already takes an injected clock, and
+        # a window computed from the REAL clock while the rest of the decision uses the injected one
+        # is two clocks disagreeing — the same shape as the two windows this whole fix is about.
+        backlog_ids = unevaluated_experiment_ids(db, now=now)
         backlog_count = len(backlog_ids)
+        # THE GATE MUST REPORT ITS OWN DRAIN, not just its blocker. `backlog_count` is now the
+        # REACHABLE count (bounded by EVALUABLE_WINDOW_DAYS); `backlog_total` is every unevaluated
+        # experiment including the ones past the drain's reach. Reporting one number is what let
+        # this gate sit at "128 of 25" for five weeks reading as ordinary backpressure — the pair
+        # `reachable 0 / total 128` names the deadlock on sight. See ~/.claude/skills/latched-gate-check.
+        backlog_total = len(unevaluated_experiment_ids(db, window_days=10**9, now=now))
         if max(0, int(unevaluated_cap)) <= backlog_count:
             return {
                 **identity,
                 "eligible": False,
                 "reason": "unevaluated_backlog_cap",
                 "unevaluated_backlog": backlog_count,
+                "unevaluated_backlog_total": backlog_total,
                 "unevaluated_cap": max(0, int(unevaluated_cap)),
             }
         if not _table_exists(db, "research_subjects"):
@@ -310,6 +320,7 @@ def assess_candidate(
                 "eligible": True,
                 "reason": "admitted",
                 "unevaluated_backlog": backlog_count,
+                "unevaluated_backlog_total": backlog_total,
                 "unevaluated_cap": max(0, int(unevaluated_cap)),
             }
         if identity.get("base_sha") is None:
@@ -340,6 +351,7 @@ def assess_candidate(
                     "reason": f"subject_{lifecycle}",
                     "existing_exp_id": exact[1],
                     "unevaluated_backlog": backlog_count,
+                    "unevaluated_backlog_total": backlog_total,
                     "unevaluated_cap": max(0, int(unevaluated_cap)),
                 }
             if int(exact[2] or 0) > now:
@@ -350,6 +362,7 @@ def assess_candidate(
                     "cooldown_until": int(exact[2]),
                     "existing_exp_id": exact[1],
                     "unevaluated_backlog": backlog_count,
+                    "unevaluated_backlog_total": backlog_total,
                     "unevaluated_cap": max(0, int(unevaluated_cap)),
                 }
         family_open = 0
@@ -381,6 +394,7 @@ def assess_candidate(
                 "subject_open_backlog": family_open,
                 "per_subject_cap": max(1, int(per_subject_cap)),
                 "unevaluated_backlog": backlog_count,
+                "unevaluated_backlog_total": backlog_total,
                 "unevaluated_cap": max(0, int(unevaluated_cap)),
             }
         return {
@@ -388,6 +402,7 @@ def assess_candidate(
             "eligible": True,
             "reason": "admitted",
             "unevaluated_backlog": backlog_count,
+            "unevaluated_backlog_total": backlog_total,
             "unevaluated_cap": max(0, int(unevaluated_cap)),
         }
     finally:
@@ -741,6 +756,15 @@ def _selftest() -> None:
     assert "exp-stale" not in pending, pending
     # FAIL SAFE: unknown age counts, so a missing timestamp can never silently unblock the arm.
     assert "exp-nots" in pending, pending
+    # THE GATE MUST NAME ITS OWN DRAIN. Reporting only the blocker is what made a five-week
+    # deadlock read as ordinary backpressure; the pair reachable-vs-total names it on sight.
+    verdict = assess_candidate(
+        target="Owner/Repo#42", task_type="testgen", spec="s", base_sha="f0",
+        arms=["codex", "cursor"], conn=conn, now=cap_now, unevaluated_cap=99,
+    )
+    assert verdict["unevaluated_backlog_total"] >= verdict["unevaluated_backlog"], verdict
+    assert verdict["unevaluated_backlog_total"] >= 3, verdict  # includes the 60-day-old one
+    assert verdict["unevaluated_backlog"] == 2, verdict        # reachable: fresh + unknown-age only
     # ...and an evaluated experiment leaves the count by the original path, unchanged.
     conn.execute(
         "INSERT INTO evaluations (experiment_id,implementer,evaluator,score,ts) VALUES (?,?,?,?,?)",

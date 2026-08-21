@@ -52,8 +52,16 @@ Do not create a second event log, model registry, or capability inventory.
 
 ## 1. Editing & sync
 
-- Edit the CANONICAL Dropbox copy. Run `orch-sync-mirror.sh` after every edit and verify the mirror
-  matches (launchd runs the mirror; unsynced edits do nothing). Confirm with `cmp`.
+- **Git is canonical** (`stranske/Orchestrator`, public) as of 2026-08-21. The Dropbox tree is a
+  working clone, not the source of truth — commit and push; do not leave work only on disk.
+- **Three trees, and they are not interchangeable.** (1) the repo/clone you edit; (2)
+  `~/.codex/orchestrator-mirror`, which launchd actually RUNS — run `orch-sync-mirror.sh` after
+  every edit and confirm with `cmp`, because unsynced edits do nothing; (3) `$ORCH_STATE_DIR`
+  (default `~/.codex/orchestrator`), the machine-local state, which is never committed.
+  `cmp`-clean is not agreement: re-run the verdict FROM THE MIRROR, since a path resolved relative
+  to a module's own directory is right in one tree and wrong in the other.
+- **A remote merge is inert until the mirror is synced.** Keep that gap manual. It is the only
+  circuit breaker between an agent's change and the dispatcher that dispatches those agents.
 - Run the touched module's `--selftest` (the project's test suite). Add a selftest case for new
   behavior, including a deliberate-break→revert demonstration for correctness-critical logic.
 - Register or update lifecycle state in `capabilities.py` for any new/wired capability. Run
@@ -61,8 +69,18 @@ Do not create a second event log, model registry, or capability inventory.
   capability active from code existence, a passing selftest, or a feature-registry maturity alone;
   activation requires executable producer, consumer, outcome, expiry, kill-switch, and rollback
   evidence.
-- Not a git repo. There is no CI. Selftests + the dormancy scan + the audit ledger are the safety
-  net. Snapshot before large edits if you want a rollback point.
+- **Verify with `python3 verify.py`, never with `for t in test_*.py; do python3 "$t"; done`.**
+  Most test files are pytest-only: run directly they define their tests, execute nothing, and exit
+  0 — which is how 9 failures and a two-month-old broken selftest went unnoticed. `verify.py` runs
+  real pytest, reads the COUNTS rather than the exit status, enforces a collection floor so tests
+  silently ceasing to run cannot look like tests passing, treats a silent zero-exit selftest as a
+  failure, and runs the five capability gates. CI runs the same command on a clean machine.
+- **The split is TOOL vs EVIDENCE.** Generic capabilities, gates and tests are committed. This
+  instance's evidence is not: `IMPROVEMENT_BACKLOG.md`, `CAPABILITY_USEFULNESS.md`,
+  `LOCAL_POLICY.md`, `*.local.md`, `experiments/`, `ux_reviews/`, `data/`, `Audits/`. When adding a
+  personal figure — spend, availability, a habit — it goes in `LOCAL_POLICY.md`; the code refers to
+  it. The boundary is file location, not recall. Published VENDOR list prices are fine and are kept
+  deliberately: they are public and they are the model-tier rationale.
 - A live fleet tick runs hourly and writes only to worktrees/state, never to this canonical tree —
   but if another interactive/headless session is editing here too, coordinate (the fleet-checkout
   hazard is real; see the user's memory). Look before overwriting a file you didn't create.
