@@ -13,6 +13,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable
@@ -536,10 +537,68 @@ def _valid_completed_envelope(envelope: Any, plan: dict[str, Any], partition: di
     return isinstance(envelope, dict) and not _validate_envelope(envelope, plan, partition)
 
 
+def register_review_round(
+    plan: dict[str, Any],
+    arms: list[str],
+    *,
+    date: str | None = None,
+    conn=None,
+) -> dict[str, Any]:
+    """Register one corpus review as ONE research subject, and return what happened.
+
+    THE LARGEST UNTAPPED SIGNAL IN THE SYSTEM. A corpus review fans a scope out to several agents
+    over many partitions -- structurally the same shape as a UX-review panel, which IS captured --
+    but nothing bound those offloads together, so each partition was an unrelated run against an
+    ephemeral temp path and thousands of offload runs across six agents produced nothing the
+    learner could compare.
+
+    Identity: the target is `domain/<review_id>` because a corpus review is not cut from a commit
+    (which is exactly why base_sha is inapplicable here), and the spec is the objective PINNED to
+    `plan_sha256` -- so two reviews asking the same question of different corpora are different
+    subjects, and a resumed run of the same plan is the same subject.
+
+    NEVER PADS THE ARM SET. `arms` is the agents that actually did the work; a one-agent review is
+    one arm. A forged arm set manufactures independence the evidence does not have, and would make
+    a single agent's opinion look like a panel's agreement.
+
+    Returns a dict, never raises for a Brain problem: capture is subordinate to the review itself,
+    so a registration failure is REPORTED in the summary rather than losing the review. It is never
+    silent -- an unregistered round says so by name.
+    """
+    import research_subjects
+
+    review_id = str(plan.get("review_id") or "").strip()
+    if not review_id:
+        return {"registered": False, "reason": "plan has no review_id"}
+    arm_list = [str(a).strip() for a in arms if str(a).strip()]
+    if not arm_list:
+        return {"registered": False, "reason": "no agent actually did the work"}
+    spec = f"{plan.get('objective') or ''}\n\nplan_sha256:{plan.get('plan_sha256') or ''}"
+    try:
+        round_id, identity = research_subjects.record_research_round(
+            research_subjects.domain_target(review_id),
+            "review-corpus",
+            date or time.strftime("%Y-%m-%d"),
+            spec,
+            arm_list,
+            task_type="review",
+            conn=conn,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal to the review
+        return {"registered": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {
+        "registered": True,
+        "round_id": round_id,
+        "subject_id": identity["subject_id"],
+        "arms": arm_list,
+    }
+
+
 def run_plan(
     plan: dict[str, Any], *, agent: str, cwd: str | Path, results_dir: str | Path,
     timeout: int = DEFAULT_PARTITION_TIMEOUT, resume: bool = True,
     offload_fn: Callable[..., dict[str, Any]] | None = None,
+    round_agents: list[str] | None = None, round_date: str | None = None,
 ) -> dict[str, Any]:
     errors = validate_plan(plan)
     if errors:
@@ -550,6 +609,11 @@ def run_plan(
         import dispatcher
         offload_fn = dispatcher.offload
     results_root = Path(results_dir)
+    # Register BEFORE the first offload: the round id has to exist to be stamped onto the attempts.
+    round_info = register_review_round(
+        plan, round_agents or [agent], date=round_date
+    )
+    research_round = round_info.get("round_id")
     statuses: list[dict[str, Any]] = []
     for partition in plan["partitions"]:
         result_path = _partition_path(results_root, partition["partition_id"])
@@ -563,7 +627,10 @@ def run_plan(
                 continue
         prompt = build_partition_prompt(plan, partition)
         try:
-            offload = offload_fn(agent, prompt, cwd=str(cwd), timeout=timeout, isolate=False)
+            offload = offload_fn(
+                agent, prompt, cwd=str(cwd), timeout=timeout, isolate=False,
+                research_round=research_round,
+            )
         except Exception as exc:  # one bad lane must not erase the remaining partition evidence
             offload = {"agent": agent, "exit": 70, "output": "", "error": f"offload raised: {exc}"}
         validation_errors: list[str] = []
@@ -613,6 +680,10 @@ def run_plan(
         "partition_statuses": statuses,
         "coverage_status": "complete" if not incomplete else "incomplete",
         "incomplete_partition_ids": incomplete,
+        # Reported beside the coverage it accompanies. An unregistered round is visible here by
+        # name instead of being an absence nobody notices -- the failure mode this repo is named
+        # after.
+        "research_round": round_info,
     }
     _atomic_json(results_root / "run-summary.json", summary)
     return summary
@@ -932,6 +1003,16 @@ def main(argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, A
     run.add_argument("--cwd", default=".")
     run.add_argument("--timeout", type=int, default=DEFAULT_PARTITION_TIMEOUT)
     run.add_argument("--no-resume", action="store_true")
+    # A round fanned out to several seats is several ARMS of one subject. Default is this
+    # invocation's own agent -- one arm, never padded, because a forged arm set would make one
+    # agent's opinion look like a panel's agreement.
+    run.add_argument(
+        "--round-agents",
+        help="comma-separated agents that actually work this round (default: --agent alone)",
+    )
+    # Given explicitly when resuming a round started on an earlier day, so the resumed run lands
+    # on the SAME subject rather than creating a second one.
+    run.add_argument("--round-date", help="YYYY-MM-DD of the round (default: today)")
     synth = sub.add_parser("synthesize", help="fail-closed synthesis and optional advisory adjudication")
     synth.add_argument("--plan", required=True)
     synth.add_argument("--results-dir", required=True)
@@ -962,6 +1043,9 @@ def main(argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, A
         summary = run_plan(
             _read_json(args.plan), agent=args.agent, cwd=args.cwd,
             results_dir=args.results_dir, timeout=args.timeout,
+            round_agents=[a.strip() for a in (args.round_agents or "").split(",") if a.strip()]
+            or None,
+            round_date=args.round_date,
             resume=not args.no_resume, offload_fn=offload_fn,
         )
         print(json.dumps(summary, indent=2, sort_keys=True))

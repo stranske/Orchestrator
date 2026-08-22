@@ -393,3 +393,91 @@ def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
 
 def test_dispatcher_exposes_partitioned_review_selftest() -> None:
     assert dispatcher.main(["review-corpus", "--selftest"]) == 0
+
+
+def test_review_round_is_registered_as_one_subject_and_stamped_on_every_partition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A corpus review fans one scope out to several agents — the same shape as a UX panel.
+
+    Nothing bound those offloads together, so each partition was an unrelated run against an
+    ephemeral temp path and thousands of offload runs across six agents produced nothing the
+    learner could compare. The round id is what makes them ONE subject with a real arm set.
+
+    Written because the existing test doubles take `**kwargs`: they would have swallowed
+    `research_round` silently, so a binding that never happened would look identical to one that
+    did — this repo's founding defect wearing a different hat.
+    """
+    import feedback
+    import research_subjects
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    plan = review.partition_corpus(
+        _corpus([_item("CW-71", "source-pr-71"), _item("CW-72", "source-pr-72")]),
+        max_items=1,
+        max_prompt_chars=12_000,
+    )
+    seen_rounds: list = []
+    calls = 0
+
+    def fake_offload(agent, prompt, **kwargs):
+        nonlocal calls
+        seen_rounds.append(kwargs.get("research_round"))
+        partition = plan["partitions"][calls]
+        calls += 1
+        return _success_offload(
+            _result(
+                plan,
+                partition,
+                {partition["items"][0]["item_id"]: "unresolved_design_dispositions"},
+            ),
+            calls,
+        )
+
+    run = review.run_plan(
+        plan,
+        agent="gemini",
+        cwd=tmp_path,
+        results_dir=tmp_path / "results",
+        timeout=30,
+        offload_fn=fake_offload,
+        round_agents=["gemini", "cursor", "codex"],
+        round_date="2026-08-22",
+    )
+
+    info = run["research_round"]
+    assert info["registered"] is True, info
+    expected_target = research_subjects.domain_target(plan["review_id"])
+    assert info["round_id"] == f"{expected_target}:review-corpus:2026-08-22", info
+    # THE ARM SET IS THE AGENTS THAT DID THE WORK, in the order the round declared them.
+    assert info["arms"] == ["gemini", "cursor", "codex"], info
+
+    # Every partition offload carries the round, so the attempts join back to one subject.
+    assert seen_rounds and all(r == info["round_id"] for r in seen_rounds), seen_rounds
+
+    # The subject really landed, and it is ONE subject for the whole round.
+    subject = research_subjects  # readability
+    rows = __import__("sqlite3").connect(feedback.DB_PATH).execute(
+        "SELECT subject_id, canonical_target, task_type, base_sha FROM research_subjects"
+    ).fetchall()
+    assert len(rows) == 1, rows
+    assert rows[0][0] == info["subject_id"]
+    assert rows[0][1] == expected_target
+    # base_sha is INAPPLICABLE, not missing: a corpus review is not cut from a commit.
+    assert rows[0][3] in (None, ""), rows[0]
+    assert subject.is_domain_target(rows[0][1])
+
+    # A ONE-AGENT ROUND IS ONE ARM. Padding it would make one opinion look like a panel's
+    # agreement, so the default must never invent companions.
+    solo = review.register_review_round(plan, ["gemini"], date="2026-08-23")
+    assert solo["arms"] == ["gemini"], solo
+    assert solo["subject_id"] != info["subject_id"], "arm set must change the subject identity"
+
+    # Capture is SUBORDINATE to the review: a Brain failure is reported, never fatal, never silent.
+    monkeypatch.setattr(
+        research_subjects, "record_research_round",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("brain offline")),
+    )
+    broken = review.register_review_round(plan, ["gemini"], date="2026-08-24")
+    assert broken["registered"] is False
+    assert "brain offline" in broken["reason"], broken
