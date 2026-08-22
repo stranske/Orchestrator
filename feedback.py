@@ -1521,13 +1521,30 @@ def validate_operation_role(operation_role: str | None) -> str:
     return role
 
 
+# A PLACEHOLDER IS NOT AN IDENTITY. `SYNTHETIC_ADAPTER_MODEL_RE` only catches `agent:`-prefixed
+# routing tags, so a function named `validate_resolved_worker_model` happily accepted `<synthetic>`,
+# `unknown`, `none` and `default` -- and Claude's own transcripts really do write `"model":
+# "<synthetic>"` on some turns (3 of 1,691 in one session sampled 2026-08-22). Admitting one of
+# those as provenance is worse than recording nothing: it makes an unresolved attempt look resolved,
+# which is the exact inversion this table exists to prevent. Two shapes are refused, both narrow so
+# a real vendor id can never be caught by them: a bracketed marker, and this short literal list.
+MODEL_PLACEHOLDERS = frozenset(
+    {"unknown", "none", "null", "default", "n/a", "na", "-", "?", "tbd", "synthetic"}
+)
+
+
 def validate_resolved_worker_model(model: str | None) -> str | None:
-    """Reject adapter routing tags that are not provider-resolved model identities."""
+    """Reject adapter routing tags and placeholders that are not resolved model identities."""
     value = str(model or "").strip()
     if not value:
         return None
     if SYNTHETIC_ADAPTER_MODEL_RE.match(value):
         raise ValueError(f"synthetic adapter tag is not a resolved worker model: {value}")
+    bare = value.strip("<>[](){}").strip().lower()
+    if value.startswith("<") or value.startswith("["):
+        raise ValueError(f"bracketed marker is not a resolved worker model: {value}")
+    if bare in MODEL_PLACEHOLDERS:
+        raise ValueError(f"placeholder is not a resolved worker model: {value}")
     return value
 
 

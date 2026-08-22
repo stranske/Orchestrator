@@ -22,6 +22,7 @@ import shlex
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 import execution_profiles
@@ -556,6 +557,152 @@ def model_identity(agent: str, mode: str | None = None, profile=None) -> str | N
         # beside the model is real provenance, not a placeholder for an unknown.
         return f"agy:{_tier_model('gemini', mode) or gemini_model() or 'default'}"
     return None
+
+
+# ---------------------------------------------------------------------------
+# CLI-REPORTED EXECUTION IDENTITY
+#
+# `model_identity()` above is REQUEST-side -- it says what we asked for, lands in `runs.model`, and
+# is explicitly not provenance. That left `execution_attempts.resolved_model` with no writer at all
+# outside the quarantined trial bridge: 1,374 attempts, 25 of them `worker`, and NONE resolved, so
+# `unresolved_model_provenance` blocked every research-claiming completion event in the system
+# (203 of 203 on 2026-08-22). The only legal way out is what §2 already names -- "a local Codex
+# session rollout may establish CLI-reported identity" -- so read the identity the CLI itself
+# recorded for the run, and read it from the CLI's own log rather than inferring it.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO: it never falls back to the requested model, the catalog, or a
+# lane tag. A run whose CLI left no identity returns a NAMED reason and stays unresolved. Grepping a
+# run's stdout for a model-shaped string was tried and rejected on 2026-08-22: the offload logs are
+# full of `gpt-4o-mini` and `CostModel` because the AGENT WAS EDITING CODE ABOUT MODELS, and a
+# fabricated identity is worse than a skipped event.
+CODEX_SESSIONS = Path(os.environ.get("ORCH_CODEX_SESSIONS_DIR", HOME / ".codex" / "sessions"))
+CLAUDE_PROJECTS = Path(os.environ.get("ORCH_CLAUDE_PROJECTS_DIR", HOME / ".claude" / "projects"))
+# Seats whose CLI leaves no per-session identity log we can read. Named, not silently absent, so
+# per-agent mining coverage can say WHY a seat is unminable instead of showing an empty count.
+NO_SESSION_LOG_AGENTS = {
+    "cursor": "cursor-agent writes no per-session model log under ~/.cursor",
+    "gemini": "agy/antigravity writes no per-session model log we can join to a run",
+    "vibe": "vibe writes no per-session transcript; its model is single-lane config, not a report",
+    "aider": "aider writes no per-session model log; codestral-latest floats anyway",
+}
+ROLLOUT_TS_RE = re.compile(r"rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})")
+
+
+def _claude_project_dir(workspace: str | Path) -> Path:
+    """Claude mangles a cwd into a directory name by replacing `/` and `.` with `-`."""
+    resolved = str(Path(workspace).expanduser().resolve())
+    return CLAUDE_PROJECTS / re.sub(r"[/.]", "-", resolved)
+
+
+def _first_real_model(values: Iterable[str]) -> str | None:
+    """First value that survives the resolved-model contract, else None."""
+    import feedback  # local: adapters is imported by feedback's callers, not the reverse
+
+    for value in values:
+        try:
+            accepted = feedback.validate_resolved_worker_model(value)
+        except ValueError:
+            continue  # `<synthetic>`, `codex:full:default` -- a marker, not an identity
+        if accepted:
+            return accepted
+    return None
+
+
+def _models_in_jsonl(path: Path, *, limit_bytes: int = 4_000_000) -> list[str]:
+    """Every `"model": "..."` string in a JSONL log, newest occurrence last.
+
+    Read as text on purpose. These logs are large and deeply nested (codex records the model at
+    seven different paths), and a regex over the raw line is both cheaper and more robust to the
+    CLI moving the field than walking a schema we do not own.
+    """
+    try:
+        with path.open("r", errors="ignore") as handle:
+            blob = handle.read(limit_bytes)
+    except OSError:
+        return []
+    return re.findall(r'"model"\s*:\s*"([^"]+)"', blob)
+
+
+def _codex_rollout_for(workspace: str | Path, started_ts: int | None, window_s: int) -> Path | None:
+    """The rollout file whose session ran in `workspace`.
+
+    Bounded on purpose: `codex doctor` takes 12.2s because it scans every rollout file, and this
+    runs inside reconcile. The filename carries a wall-clock stamp, so a run with a known start is
+    narrowed to its own window before any file is opened.
+    """
+    target = str(Path(workspace).expanduser().resolve())
+    candidates = sorted(CODEX_SESSIONS.rglob("rollout-*.jsonl"), reverse=True)
+    for path in candidates:
+        if started_ts is not None:
+            match = ROLLOUT_TS_RE.search(path.name)
+            if match:
+                try:
+                    stamp = time.mktime(time.strptime(match.group(1), "%Y-%m-%dT%H-%M-%S"))
+                except ValueError:
+                    stamp = None
+                if stamp is not None and abs(stamp - started_ts) > window_s:
+                    continue
+        try:
+            with path.open("r", errors="ignore") as handle:
+                head = handle.readline()
+        except OSError:
+            continue
+        if target in head:
+            return path
+    return None
+
+
+def cli_reported_model(
+    agent: str,
+    workspace: str | Path | None,
+    *,
+    started_ts: int | None = None,
+    window_s: int = 7200,
+) -> dict:
+    """Identity the agent's own CLI recorded for the run in `workspace`.
+
+    Always returns a dict, never None, and always says why when it says nothing:
+    ``{"model": str | None, "cli_version": str | None, "source": str | None, "reason": str | None}``.
+    An unresolved answer with a named reason is the whole point -- silence here was indistinguishable
+    from "no such run".
+    """
+    blank = {"model": None, "cli_version": None, "source": None, "reason": None}
+    if agent in NO_SESSION_LOG_AGENTS:
+        return {**blank, "reason": f"no_cli_session_log:{NO_SESSION_LOG_AGENTS[agent]}"}
+    if not workspace:
+        return {**blank, "reason": "no_workspace_recorded_for_run"}
+    if agent == "codex":
+        path = _codex_rollout_for(workspace, started_ts, window_s)
+        if path is None:
+            return {**blank, "reason": "no_codex_rollout_matched_workspace"}
+        model = _first_real_model(_models_in_jsonl(path))
+        if not model:
+            return {**blank, "reason": "codex_rollout_named_no_real_model"}
+        version = None
+        try:
+            meta = json.loads(path.open("r", errors="ignore").readline() or "{}")
+            version = ((meta.get("payload") or {}) or {}).get("cli_version")
+        except (OSError, json.JSONDecodeError):
+            version = None
+        return {"model": model, "cli_version": version, "source": str(path), "reason": None}
+    if agent == "claude":
+        directory = _claude_project_dir(workspace)
+        if not directory.is_dir():
+            return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
+        newest = sorted(
+            directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        for path in newest[:4]:
+            model = _first_real_model(_models_in_jsonl(path))
+            if model:
+                return {
+                    "model": model,
+                    "cli_version": None,
+                    "source": str(path),
+                    "reason": None,
+                }
+        return {**blank, "reason": "claude_transcript_named_no_real_model"}
+    return {**blank, "reason": f"no_cli_identity_reader_for_agent:{agent}"}
 
 
 def build_command(

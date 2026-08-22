@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import adapters
+import execution_profiles
 import feedback
 
 
@@ -240,6 +241,42 @@ def _done_marker(log_file: Path | None, run_id: str) -> dict[str, Any] | None:
     return obj if isinstance(obj, dict) and obj.get("run_id") == run_id else None
 
 
+def _provider_for_profile(profile_id: str) -> str:
+    """The profile's own provider. Read from the immutable registry, never guessed from the model
+    string -- `complete_profile_attempt` refuses a resolved model with no provider, and inventing
+    one would put a fabricated field beside a real one."""
+    return str(execution_profiles.get_profile(profile_id)["provider"])
+
+
+def _workspace_from_rows(run_rows) -> str | None:
+    """The run's own workspace, recovered from the `offload:<path>` target it already records.
+
+    `dispatcher.offload` has always written `target = f"offload:{run_cwd}"`, so the join key to the
+    agent's session log was in the database the whole time -- 1,614 offload runs carry it. Nothing
+    read it, which is why `resolved_model` had no writer outside the quarantined trial bridge.
+    """
+    for row in run_rows:
+        value = str(row.get("target") or "")
+        if value.startswith("offload:/"):
+            return value[len("offload:"):]
+    return None
+
+
+def _cli_identity_for_run(run_rows, started_ts: int | None = None) -> dict:
+    """CLI-reported identity for a run, or a NAMED reason there is none.
+
+    Never guesses. A seat whose CLI leaves no per-session log returns the reason and the attempt
+    stays unresolved -- `fallback_reason` then says which seat and why, instead of the single
+    undifferentiated `resolved_model_not_reported_by_completion` that every seat used to get.
+    """
+    agent = next((str(row.get("agent")) for row in run_rows if row.get("agent")), "")
+    if not agent:
+        return {"model": None, "cli_version": None, "source": None, "reason": "no_agent_on_run"}
+    return adapters.cli_reported_model(
+        agent, _workspace_from_rows(run_rows), started_ts=started_ts
+    )
+
+
 def record_completion(
     run_id: str,
     agent: str,
@@ -258,6 +295,21 @@ def record_completion(
     arm_id: str | None = None,
 ) -> None:
     if selected_profile_id:
+        probe_reason = None
+        if not resolved_model and str(target or "").startswith("offload:/"):
+            # Last chance to record real provenance before the attempt completes unresolved
+            # forever: ask the agent's own CLI log what served this run. Only fills a field the
+            # caller left EMPTY -- an explicitly supplied resolved_model always wins, because the
+            # caller may have provenance this reader cannot see.
+            probed = adapters.cli_reported_model(
+                agent, target[len("offload:"):], started_ts=started_ts
+            )
+            probe_reason = probed.get("reason")
+            if probed.get("model"):
+                resolved_model = probed["model"]
+                resolved_provider = resolved_provider or _provider_for_profile(
+                    selected_profile_id
+                )
         if resolved_model:
             if not resolved_provider:
                 raise ValueError("resolved_model completion evidence requires resolved_provider")
@@ -272,7 +324,14 @@ def record_completion(
             feedback.complete_profile_attempt_unresolved(
                 run_id,
                 selected_profile_id=selected_profile_id,
-                fallback_reason="resolved_model_not_reported_by_completion",
+                # NAME THE SEAT. `resolved_model_not_reported_by_completion` was identical for a
+                # seat whose CLI cannot report and a seat whose log simply was not found -- one is
+                # permanent and one is a bug, and they read the same. The suffix separates them.
+                fallback_reason=(
+                    f"resolved_model_not_reported_by_completion:{probe_reason}"
+                    if probe_reason
+                    else "resolved_model_not_reported_by_completion"
+                )[:200],
                 completed_ts=int(time.time()),
             )
     adapters.record_ledger(
@@ -335,6 +394,7 @@ def reconcile(
     written = 0
     marker_backfills = 0
     profile_unresolved_backfills = 0
+    profile_resolved_backfills = 0
     infra_classified = 0
     resume_tokens_captured = 0
     owner_questions_recorded = 0
@@ -441,13 +501,36 @@ def reconcile(
                     f"run {run_id} changed selected profile in capacity ledger"
                 )
             if profile_ids and not dry_run:
-                feedback.complete_profile_attempt_unresolved(
-                    run_id,
-                    selected_profile_id=next(iter(profile_ids)),
-                    fallback_reason="resolved_model_not_reported_marker_backfill",
-                    completed_ts=marker_ts or int(time.time()),
+                # RESOLVE IF THE CLI SAID SO, otherwise stay unresolved with the seat NAMED.
+                # This branch used to complete every seat unresolved unconditionally, so
+                # `execution_attempts.resolved_model` had no writer at all and
+                # `unresolved_model_provenance` was unavoidable on every event in the system.
+                started = min(
+                    (int(r.get("ts") or 0) for r in run_rows if r.get("event") == "start" and r.get("ts")),
+                    default=None,
                 )
-                profile_unresolved_backfills += 1
+                identity = _cli_identity_for_run(run_rows, started_ts=started)
+                selected = next(iter(profile_ids))
+                if identity.get("model"):
+                    feedback.complete_profile_attempt(
+                        run_id,
+                        selected_profile_id=selected,
+                        resolved_provider=_provider_for_profile(selected),
+                        resolved_model=identity["model"],
+                        completed_ts=marker_ts or int(time.time()),
+                    )
+                    profile_resolved_backfills += 1
+                else:
+                    feedback.complete_profile_attempt_unresolved(
+                        run_id,
+                        selected_profile_id=selected,
+                        fallback_reason=(
+                            f"resolved_model_not_reported_marker_backfill:"
+                            f"{identity.get('reason') or 'unknown'}"
+                        )[:200],
+                        completed_ts=marker_ts or int(time.time()),
+                    )
+                    profile_unresolved_backfills += 1
         # item 9 two-tier enum: rc>128 means the AGENT process died by SIGNAL — its non-merged
         # outcome is infrastructure noise, not capability evidence; classify so learners skip it.
         # Eventual-consistent: if the outcome row doesn't exist yet, a later daily pass catches it.
@@ -492,6 +575,9 @@ def reconcile(
         "written_cost_rows": written,
         "marker_backfills": marker_backfills,
         "profile_unresolved_backfills": profile_unresolved_backfills,
+        # Reported BESIDE the unresolved count, never instead of it: `resolved 2 /
+        # unresolved 1414` is a coverage statement, while either number alone is not.
+        "profile_resolved_backfills": profile_resolved_backfills,
         "infra_classified": infra_classified,
         "resume_tokens_captured": resume_tokens_captured,
         "owner_questions_recorded": owner_questions_recorded,

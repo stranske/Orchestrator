@@ -464,3 +464,152 @@ def test_role_run_creates_a_capability_tagged_edge(tmp_path):
         assert all(r[2] for r in tagged), "capability edge needs its version id"
     finally:
         feedback.DB_PATH = old_db
+
+
+def test_placeholder_is_never_accepted_as_a_resolved_model():
+    """`SYNTHETIC_ADAPTER_MODEL_RE` only catches `agent:` tags, so a function named
+    `validate_resolved_worker_model` accepted `<synthetic>`, `unknown`, `none` and `default`.
+
+    Claude's own transcripts really do write `"model": "<synthetic>"` on some turns, so this was
+    reachable from live data, not hypothetical. Admitting one makes an UNRESOLVED attempt look
+    resolved, which inverts the one guarantee this table provides.
+    """
+    for placeholder in ("<synthetic>", "unknown", "none", "null", "default", "[unset]", "N/A"):
+        with pytest.raises(ValueError):
+            feedback.validate_resolved_worker_model(placeholder)
+
+    # The refusal must stay NARROW -- a real vendor id can never be caught by it.
+    for real in ("gpt-5.6-terra", "claude-opus-5", "mistral-medium-3.5", "gemini-3.1-pro",
+                 "composer-2.5", "mistral/codestral-latest"):
+        assert feedback.validate_resolved_worker_model(real) == real
+
+    # And the adapter-tag rule it already had is untouched.
+    for tag in ("codex:full:default", "cursor:composer-1", "agy:gemini-3.1-pro"):
+        with pytest.raises(ValueError, match="synthetic adapter tag"):
+            feedback.validate_resolved_worker_model(tag)
+
+
+def test_cli_reported_identity_resolves_only_seats_that_actually_report(tmp_path, monkeypatch):
+    """A CLI-reported model is real provenance; a seat that cannot report gets a NAMED reason.
+
+    `execution_attempts.resolved_model` had no writer outside the quarantined trial bridge, so
+    every research-claiming completion event in the system was blocked on
+    `unresolved_model_provenance`. §2 permits exactly this source -- "a local Codex session rollout
+    may establish CLI-reported identity" -- so the reader reads the CLI's own log.
+    """
+    import json
+
+    import adapters
+    import ledger_reconcile
+
+    workspace = tmp_path / "offloads" / "20260822T000000Z-issue-1-1"
+    workspace.mkdir(parents=True)
+    sessions = tmp_path / "sessions" / "2026" / "08" / "22"
+    sessions.mkdir(parents=True)
+    rollout = sessions / "rollout-2026-08-22T00-00-00-abc.jsonl"
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {
+            "cwd": str(workspace.resolve()), "cli_version": "0.149.0"}}) + "\n"
+        + json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}}) + "\n"
+    )
+    monkeypatch.setattr(adapters, "CODEX_SESSIONS", tmp_path / "sessions")
+
+    found = adapters.cli_reported_model("codex", workspace)
+    assert found["model"] == "gpt-5.6-terra", found
+    assert found["cli_version"] == "0.149.0"
+    assert found["reason"] is None
+
+    # NEVER GUESSED. A rollout that names no real model resolves to nothing, with a reason --
+    # the requested model and the catalog are both deliberately unreachable from here.
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}}) + "\n"
+        + json.dumps({"type": "turn_context", "payload": {"model": "<synthetic>"}}) + "\n"
+    )
+    blank = adapters.cli_reported_model("codex", workspace)
+    assert blank["model"] is None
+    assert blank["reason"] == "codex_rollout_named_no_real_model"
+
+    # Seats whose CLI leaves no per-session log say so BY NAME, so per-agent coverage can report
+    # why a seat is unminable instead of showing an indistinguishable empty count.
+    for agent in ("cursor", "gemini", "vibe"):
+        reason = adapters.cli_reported_model(agent, workspace)["reason"]
+        assert reason.startswith("no_cli_session_log:"), (agent, reason)
+        assert len(reason) > 30, f"{agent} needs a real justification, got {reason!r}"
+
+    # A run with no workspace recorded is distinguishable from a seat that cannot report.
+    assert adapters.cli_reported_model("codex", None)["reason"] == "no_workspace_recorded_for_run"
+
+    # The workspace join comes from the target the dispatcher ALREADY writes.
+    rows = [{"agent": "codex", "target": f"offload:{workspace}", "event": "start", "ts": 1}]
+    assert ledger_reconcile._workspace_from_rows(rows) == str(workspace)
+    assert ledger_reconcile._workspace_from_rows([{"target": "stranske/Repo#1"}]) is None
+
+
+def test_completion_records_cli_identity_and_never_invents_one(tmp_path, monkeypatch):
+    """End-to-end: `started` -> `complete` with a real resolved model, or `unresolved` with a reason.
+
+    DELIBERATE BREAK -> REVERT is at the bottom: disabling the reader puts the chain back exactly
+    where it was (unresolved, generic reason, no exact-model claim available), which is what made
+    `unresolved_model_provenance` unavoidable on 203 of 203 events.
+    """
+    import json
+
+    import adapters
+    import ledger_reconcile
+
+    old_db = feedback.DB_PATH
+    feedback.DB_PATH = tmp_path / "feedback.db"
+    try:
+        workspace = tmp_path / "offloads" / "ws-1"
+        workspace.mkdir(parents=True)
+        sessions = tmp_path / "sessions"
+        (sessions / "2026").mkdir(parents=True)
+        # The filename stamp is load-bearing: the reader narrows to the run's own window before
+        # opening anything, because scanning every rollout file is what makes `codex doctor` 12.2s.
+        # Derive it from the same clock the completion uses so this test is not time-of-day flaky.
+        started = int(time.time())
+        stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime(started))
+        (sessions / "2026" / f"rollout-{stamp}-x.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}}) + "\n"
+            + json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}}) + "\n"
+        )
+        monkeypatch.setattr(adapters, "CODEX_SESSIONS", sessions)
+
+        def _run(agent, profile_id, run_id):
+            feedback.record_run(run_id, f"offload:{workspace}", "offload", agent)
+            feedback.record_execution_attempt(
+                run_id, attempt_id=f"attempt:profile:{run_id}", operation_role="worker",
+                profile_id=profile_id, requested_provider="x", requested_model="y",
+                status="started", source="orchestrator-profile-decision",
+                started_ts=started,
+            )
+            ledger_reconcile.record_completion(
+                run_id, agent, target=f"offload:{workspace}", task_type="offload",
+                selected_profile_id=profile_id, started_ts=started,
+            )
+            return sqlite3.connect(feedback.DB_PATH).execute(
+                "SELECT status, resolved_provider, resolved_model, fallback_reason "
+                "FROM execution_attempts WHERE run_id=?", (run_id,)
+            ).fetchone()
+
+        status, provider, model, _ = _run("codex", "codex-5.6-terra-high", "r-codex")
+        assert (status, provider, model) == ("complete", "openai", "gpt-5.6-terra")
+        assert feedback.latest_worker_identity_for_agent("codex") is not None
+
+        # A seat that cannot report stays unresolved, and the reason NAMES the seat -- one string
+        # for "permanently cannot report" and "log not found" made a permanent limit look like a bug.
+        status, _, model, reason = _run("cursor", "cursor-composer-2.5", "r-cursor")
+        assert status == "unresolved" and model is None
+        assert "no_cli_session_log" in reason, reason
+        assert feedback.latest_worker_identity_for_agent("cursor") is None
+
+        # DELIBERATE BREAK: reader always blank, as before the fix.
+        monkeypatch.setattr(
+            adapters, "cli_reported_model",
+            lambda *a, **k: {"model": None, "cli_version": None, "source": None, "reason": None},
+        )
+        status, _, model, _ = _run("codex", "codex-5.6-terra-high", "r-broken")
+        assert (status, model) == ("unresolved", None), "the break must restore the old behaviour"
+        # REVERTED by monkeypatch teardown; the codex row above still carries real provenance.
+    finally:
+        feedback.DB_PATH = old_db
