@@ -120,10 +120,29 @@ AUTH_PROBES: dict[str, dict] = {
     # cursor: --list-models exercises the key (proven: an invalid key is rejected). NOT `status`,
     # which answers about the interactive session the headless lane never reads.
     "cursor": {"cmd": ["cursor-agent", "--list-models"], "strength": "validates"},
-    # codex: 0.1s vs 12.2s for `codex doctor` (which scans every rollout file). Presence-only
-    # until someone can safely prove it round-trips — do not upgrade this on assumption.
-    "codex": {"cmd": ["codex", "login", "status"], "strength": "presence"},
-    "claude": {"cmd": ["claude", "auth", "status"], "strength": "presence"},
+    # codex: 0.1s vs 12.2s for `codex doctor` (which scans every rollout file). PRESENCE IS
+    # PERMANENT here, investigated and closed 2026-08-22 — not a pending upgrade. The CLI exposes
+    # no non-billing round-trip: its whole command set is exec/review/login/logout/mcp/plugin/
+    # app-server/doctor/sandbox/debug/apply/resume, `login` has only `status`, and the sole
+    # server-touching alternative is `exec`, which BILLS. `doctor` is local and 12.2s.
+    "codex": {
+        "cmd": ["codex", "login", "status"], "strength": "presence",
+        "limit": "permanent: codex exposes no non-billing round-trip (only `login status`, "
+                 "local `doctor`, or billing `exec`) — re-probed 2026-08-22",
+    },
+    # claude: PRESENCE IS PERMANENT here too, for a different and subtler reason. `auth status`
+    # returns account identity (email, orgId, orgName, subscriptionType), which is strictly more
+    # than "a credential file exists" — but a claude.ai OAuth token can carry those in its own
+    # claims, so the output does not DISTINGUISH a local decode from a server round-trip. Proving
+    # the difference means presenting an INVALID credential to the live seat, which is not a safe
+    # experiment on the owner's working auth. Upgrading on the strength of plausible-looking output
+    # is exactly what the original note forbade.
+    "claude": {
+        "cmd": ["claude", "auth", "status"], "strength": "presence",
+        "limit": "permanent: `auth status` returns token-claim identity that cannot be shown to "
+                 "require a server round-trip without invalidating live credentials — "
+                 "investigated 2026-08-22",
+    },
     # gemini: `agy models` is a server round-trip AND non-billing, so it genuinely validates.
     # Same command as the catalog probe; the caches are separate but both are TTL'd.
     "gemini": {"cmd": ["agy", "models"], "strength": "validates"},
@@ -781,6 +800,22 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     a = build_command("aider", "do x")
     assert a[0].endswith("/aider-venv/bin/aider"), a                 # isolated venv binary
     assert "mistral/codestral-latest" in a, a
+    # A PRESENCE-ONLY PROBE MUST SAY WHY, PERMANENTLY OR NOT. `presence` means the probe proves a
+    # credential EXISTS, not that the server accepts it, so every one is a known weakness. Without a
+    # documented limit such a probe reads as an unfinished upgrade forever and gets re-investigated
+    # every audit -- which is what happened to codex/claude between 2026-08-09 and 2026-08-22. A new
+    # presence-only probe therefore cannot be added without stating its limit.
+    for _agent, _spec in AUTH_PROBES.items():
+        if _spec["strength"] == "presence":
+            assert _spec.get("limit"), f"{_agent}: presence-only probe needs a documented limit"
+            assert "permanent" in _spec["limit"] or "pending" in _spec["limit"], (
+                f"{_agent}: a limit must say whether it is permanent or pending", _spec["limit"])
+        else:
+            # A validating probe must NOT carry a limit: that would be a contradiction in the record.
+            assert not _spec.get("limit"), (_agent, _spec)
+    assert AUTH_PROBES["cursor"]["strength"] == "validates", "cursor round-trips; do not downgrade"
+    assert AUTH_PROBES["gemini"]["strength"] == "validates", "agy models round-trips; do not downgrade"
+
     v = build_command("vibe", "do x")
     assert v[0] == "vibe" and "--auto-approve" in v and "--prompt" in v, v   # subscription headless
     assert "--trust" in v, "vibe must --trust the cwd or it silently ignores AGENTS.md (2026-06-15 fix)"
