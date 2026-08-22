@@ -479,6 +479,15 @@ def census(issues: list[dict]) -> dict:
         "raw_open": len(issues),
         "durable": len(durable),
         "true_open": len(actionable),
+        # SCOPE, carried in the payload so it cannot be dropped in the retelling. These counts are
+        # THIS TOOL'S view of what its own opener lane could pick up -- they are NOT fleet throughput
+        # and not a measure of whether the fleet has work. Fleet work originates in the approved-issue
+        # queue (system-of-record: the Workflows repo) and is driven by the opener lane and GitHub
+        # Actions keepalive, none of which reads these numbers. On 2026-08-22 a true_open of 1 was
+        # reported as "the fleet has no work" while the real pipeline closed 8 issues overnight.
+        "scope": ("orchestrator-local dispatch lane only; NOT fleet throughput. Fleet work "
+                  "originates in the Workflows approved-issue queue and is driven by the opener "
+                  "lane + Actions keepalive."),
         "label_gap": len(unlabelled),
         "durable_rows": durable,
         "actionable_rows": actionable,
@@ -828,6 +837,11 @@ def _selftest() -> None:
     assert cen["raw_open"] == len(corpus)
     assert cen["durable"] + cen["true_open"] == cen["raw_open"], cen
     assert cen["durable"] == 5 and cen["true_open"] == 4, cen      # 4 dashboards + 1 labelled
+    # THE SCOPE LABEL IS PART OF THE CONTRACT, not a comment. These counts were read as fleet
+    # throughput on 2026-08-22 -- a true_open of 1 reported as "the fleet has no work" while the real
+    # pipeline closed 8 issues overnight. A number that invites that misreading has to carry its own
+    # scope in the payload, because prose in a docstring does not travel with the JSON.
+    assert "NOT fleet throughput" in cen["scope"], cen.get("scope")
     assert cen["label_gap"] == 4, cen                              # the 4 unlabelled dashboards
     text = format_census(cen)
     assert "TRUE open backlog" in text and "Missing `tracker:durable`" in text

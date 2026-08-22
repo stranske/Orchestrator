@@ -798,6 +798,30 @@ def collect(repo: str, exp_id: str) -> dict:
         agent = member["agent"]
         artifact_member = None if member["legacy"] else member["member_id"]
         wt = exp_worktree(repo, exp_id, agent, artifact_member)
+        # THE WORKTREE IS NOT THE ONLY COPY, AND ASSUMING IT WAS DESTROYED RECOVERED EVIDENCE.
+        # Worktrees are reclaimed by the GC after 14 days; the arm's commits live on in the shared
+        # per-repo store as `exp/<exp_id>-<agent>`, which is exactly why the GC skips the archive
+        # tier for this root. Without this fallback, collect() on a reclaimed experiment returned an
+        # EMPTY diff, and followup then stamped `followup-skip.json` -- permanently marking evidence
+        # as lost while the branch sat intact. Measured 2026-08-21: it zeroed 4 recovered experiments
+        # before the fallback landed. Same computation, branch instead of worktree.
+        if not (wt / ".git").exists():
+            try:
+                import experiment_recovery
+                recovered = experiment_recovery.arm_diff(repo, exp_id, agent, base=base)
+            except Exception:
+                recovered = None
+            if recovered is not None:
+                rp = edir / exp_diff_path(agent, artifact_member)
+                # NEVER REPLACE EVIDENCE WITH SILENCE: an empty recovery must not clobber a diff that
+                # is already on disk. An empty diff is a real verdict (apply-fail / no-delivery), so
+                # writing one over real content would forge machine ground truth.
+                if recovered.strip() or not (rp.exists() and rp.read_text().strip()):
+                    rp.write_text(recovered)
+                written[member["member_id"]] = {
+                    "path": str(rp), "bytes": len(rp.read_text()), "source": "branch",
+                }
+                continue
         merge_base = provision._run(
             ["git", "-C", str(wt), "merge-base", "HEAD", base_ref], check=False
         ).stdout.strip() or base_ref
@@ -2542,6 +2566,51 @@ def _selftest():
         adapters._ADVERTISED_MEMO.clear()
         adapters._ADVERTISED_MEMO.update(old_advertised_memo)
         shutil.rmtree(tmp, ignore_errors=True)
+    # COLLECT MUST RECOVER FROM THE BRANCH WHEN THE WORKTREE IS GONE -- exercised against a REAL
+    # repo with a real branch and NO worktree, because a test that re-implements the guard's own
+    # condition proves nothing about the code path. Worktrees are GC'd after 14 days while the arm's
+    # commits persist as `exp/<id>-<agent>` in the shared store; without this fallback collect()
+    # returned an EMPTY diff and followup stamped `followup-skip.json`, permanently recording
+    # "evidence lost" while the branch sat intact. It zeroed 4 recovered experiments on 2026-08-21.
+    with tempfile.TemporaryDirectory(prefix="collect-branch-") as _td:
+        _root = Path(_td)
+        _store = _root / "store"
+        _store.mkdir()
+        _genv = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        def _g(*a):
+            subprocess.run(["git", "-C", str(_store), *a], check=True,
+                           capture_output=True, text=True, env=_genv)
+        _g("init", "-q", "-b", "main")
+        (_store / "f.txt").write_text("base\n")
+        _g("add", "-A"); _g("commit", "-qm", "base")
+        _g("update-ref", "refs/remotes/origin/main", "HEAD")
+        _xid = "tick-1700000000-owner-repo-1"
+        _g("checkout", "-q", "-b", exp_branch(_xid, "codex"))
+        (_store / "f.txt").write_text("base\nARM WORK\n")
+        _g("add", "-A"); _g("commit", "-qm", "arm")
+        _g("checkout", "-q", "main")
+
+        _old_repos, _old_expdir = provision.REPOS_DIR, EXP_DIR
+        try:
+            provision.REPOS_DIR = _root
+            (_root / provision.repo_slug("owner/repo")).symlink_to(_store)
+            globals()["EXP_DIR"] = _root / "experiments"
+            _ed = EXP_DIR / _xid
+            _ed.mkdir(parents=True)
+            (_ed / "meta.json").write_text(json.dumps({
+                "schema_version": 2, "repo": "owner/repo", "base": "main", "base_sha": None,
+                "agents": ["codex"], "exp_id": _xid, "task_type": "implement",
+                "arms": [], "members": []}))
+            # No worktree exists anywhere -- this is the reclaimed-experiment case.
+            _out = collect("owner/repo", _xid)["diffs"]["codex"]
+            assert _out["source"] == "branch", _out
+            assert _out["bytes"] > 0, _out
+            assert "ARM WORK" in (_ed / exp_diff_path("codex")).read_text()
+        finally:
+            provision.REPOS_DIR = _old_repos
+            globals()["EXP_DIR"] = _old_expdir
+
     print(
         "exp_abcd.py selftest: OK (branch/worktree naming, mode map, frozen implement prompt, "
         "anonymized eval prompt, PATH+auth wrapper, JSON extraction, eval commands, "

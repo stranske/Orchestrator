@@ -253,6 +253,14 @@ safety switch, not dead code.
   the two bounded owner-question actions; no dispatch through this door.
 - **Cadence resilience** — failing daily/weekly steps back off (`.fail-<step>` stamps,
   `ORCH_CADENCE_RETRY_HOURS`) and ALERT after N consecutive failures instead of retrying hourly.
+- **Per-step kill switch** — `ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"` (comma or space
+  separated) skips named steps. One mechanism instead of a flag per capability. It ANNOUNCES every
+  skip (a silent disable is the latched-gate pattern), touches NO stamp (re-enabling makes the step
+  immediately due — it defers work, it never fakes completion), and WARNS on an unknown key so a
+  typo cannot leave a step running while you believe it is off. Unset/empty disables nothing.
+- **Other kill switches** — `ORCH_OFFLOAD_DISABLED=1` refuses at the top of `dispatcher.offload`
+  before any spend; `ORCH_REPO_PLAYBOOK=0` stops playbook injection into delegation prompts on the
+  next dispatch without editing the registry.
 - **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
   pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
   result, not a reason to seed synthetic data.

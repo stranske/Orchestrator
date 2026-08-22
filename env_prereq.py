@@ -129,6 +129,31 @@ def ledger_invocation_history_absent(*capability_ids: str) -> str | None:
             f"only accrues on the running instance")
 
 
+def ledger_declaration_absent(field: str, *capability_ids: str) -> str | None:
+    """Reason string when a row exists but does not carry a DECLARATION-owned field.
+
+    Some declarations are applied to the running instance's ledger rather than shipped in the tree —
+    `kill_switch_category`, `control_point`, a kill-switch string. A test that asserts on one is
+    asserting about machine-local state, so on a machine where the declaration has not been applied
+    it must SKIP with the reason, not fail as though the code were wrong.
+
+    This exists because two such tests were written without it (2026-08-22, the kill-switch exemption
+    pair). They passed on the instance where the declarations had been applied and would have failed
+    on a fresh checkout — the same shape as the `gate_blocks_execution` test that went red from the
+    mirror, and the reason `env_prereq` exists at all.
+    """
+    try:
+        ledger = _ledger()
+    except Exception as exc:                                        # noqa: BLE001
+        return f"capability ledger unreadable ({type(exc).__name__}: {exc})"
+    undeclared = sorted(c for c in capability_ids if not (ledger.get(c) or {}).get(field))
+    if not undeclared:
+        return None
+    return (f"capability ledger carries no `{field}` for {', '.join(undeclared)} — that declaration "
+            f"is applied to the running instance's ledger, not shipped in the tree, so a fresh "
+            f"checkout has none")
+
+
 def ledger_legacy_rows_absent() -> str | None:
     """Reason string when the ledger holds no capability registered before the admission gate.
 

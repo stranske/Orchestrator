@@ -750,3 +750,39 @@ def test_expiry_raises_an_owner_question_once(monkeypatch, tmp_path):
         assert feedback.open_owner_questions(limit=50) == []
     finally:
         feedback.DB_PATH = old
+
+
+def test_aider_is_backup_only_and_vibe_is_a_real_lane():
+    """Lane membership is a POLICY, and it was only ever a comment.
+
+    Owner directive 2026-06-21 made aider backup-only, and `capacity.py` says so in prose while
+    `router.BACKUP_AGENTS` enforces it — but nothing asserted the pair stayed in agreement, and
+    aider still appears in 8 of 9 `ROUTE_TABLE` entries. That gap is not theoretical: reading the
+    route table alone, one concludes epsilon-greedy would preferentially explore aider as the
+    least-observed agent. It cannot — `router.py` skips backup agents unless explicitly demanded —
+    but the table LOOKS like it can, and a policy you can misread from the source is one nobody can
+    rely on. Reaffirmed 2026-08-21 (owner): aider is not a lane, vibe is. Pins both directions.
+    """
+    import capacity
+    import router
+
+    assert router.BACKUP_AGENTS == {"aider"}, router.BACKUP_AGENTS
+
+    cap = capacity.build()
+    # NOT A LANE: aider must never be the routine choice for any task type.
+    for task_type in router.ROUTE_TABLE:
+        chosen = router.select_agent(task_type, cap)
+        if chosen:
+            assert chosen["agent"] != "aider", (task_type, chosen)
+
+    # A LANE: vibe must be eligible in EVERY task type. The failure this catches is silent removal —
+    # a table edit that drops vibe from a lane looks like nothing until that lane's evidence stops.
+    for task_type, spec in router.ROUTE_TABLE.items():
+        agents = [entry["agent"] for entry in spec["agents"]]
+        assert "vibe" in agents, (task_type, agents)
+
+    # THE ESCAPE HATCH SURVIVES, and it is why aider's route entries are NOT deleted. The directive
+    # kept aider "reachable only on explicit demand", and that path resolves THROUGH the route
+    # table — remove the entries and `--agent aider` silently stops routing.
+    explicit = router.select_agent("implement", cap, only={"aider"})
+    assert explicit and explicit["agent"] == "aider", explicit

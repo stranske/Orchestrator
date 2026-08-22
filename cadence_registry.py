@@ -119,15 +119,6 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "next_transition": "retry the feature scan after backoff; report-only, writes require --apply",
     },
     {
-        "key": "watch-sweep",
-        "success_stamp": ".last-watch-sweep",
-        "cadence_days": 0,
-        "artifact": "watch-sweep.json",
-        "log": "watch-sweep.log",
-        "gate": None,
-        "next_transition": "retry the stall sweep after backoff; read-only classifier, never blocks",
-    },
-    {
         "key": "capability-activation-audit",
         "success_stamp": ".last-capability-activation-audit",
         "cadence_days": 0,

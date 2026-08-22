@@ -1247,6 +1247,7 @@ def _record_influence_edge_in_conn(
     capability_version_id: str | None = None,
     acceptance_gate_id: str | None = None,
     metadata: dict | None = None,
+    allow_unlinked: bool = False,
 ) -> dict:
     kind = str(influence_type or "").strip().lower()
     if kind not in VALID_INFLUENCE_TYPES:
@@ -1259,6 +1260,22 @@ def _record_influence_edge_in_conn(
         _latest_completion_event_id(c, source_run_id) if source_run_id else None
     )
     target_event_id = target_event_id or _latest_completion_event_id(c, target_run_id)
+    # AN EDGE WITH NO TARGET ENVELOPE CAN NEVER BE CAUSAL EVIDENCE, and until now that was implicit
+    # -- you only learned it by reading `capability_causal_evidence`'s `consumed` guard. The sibling
+    # `record_capability_consumption` already RAISES on this exact condition; this one inserted
+    # silently, and 296 such edges accumulated (measured 2026-08-21), 202 of them created in a single
+    # backfill that reported success. They were inert, but five carried PASS/durable and were 100% of
+    # `offload`'s measured durable signal until the consumer guard landed.
+    #
+    # OPT-IN AND DECLARED, never inferred: an unlinked edge is a legitimate ASSOCIATION for advisory
+    # role runs, which are written to `runs` but never emit a completion envelope. Those callers pass
+    # `allow_unlinked=True` and say why. Everyone else now RAISES, so a new caller cannot create
+    # orphans by accident -- which is exactly how the 202 arrived.
+    if target_event_id is None and not allow_unlinked:
+        raise ValueError(
+            f"influence edge for target_run_id={target_run_id!r} has no completion event to point "
+            "at, so it can never become causal evidence. If this target is an advisory run that "
+            "legitimately emits no envelope, pass allow_unlinked=True and record why")
     edge_identity = "|".join(
         str(item or "")
         for item in (
@@ -2699,6 +2716,12 @@ def join_role_to_outcome(
             source_run_id=role_run_id,
             accepted=accepted,
             metadata={"notes_hash": _completion_hash(notes) if notes else None},
+            # DECLARED UNLINKED: the influenced run may be an advisory role run, which is written to
+            # `runs` but never emits a completion envelope, so there is no event to point at. That
+            # is a legitimate ASSOCIATION and not causal evidence -- `capability_causal_evidence`
+            # correctly refuses to consume it. Saying so here is what keeps the guard meaningful for
+            # every other caller.
+            allow_unlinked=True,
         )
         downstream = c.execute(
             "SELECT verifier_verdict, adjudicated_verdict, merged, ci_status, durability, notes "
@@ -5196,6 +5219,32 @@ def _selftest():
         assert mark_transient_infra("ti_unlucky_fail", reason="marker rc=137") is True
         assert mark_transient_infra("ti_unlucky_fail") is False  # idempotent
         assert mark_transient_infra("ti_sturdy_ok0") is False  # merged rows refuse
+
+        # AN EDGE WITH NO TARGET ENVELOPE MUST RAISE UNLESS THE CALLER DECLARES IT. 296 orphan edges
+        # accumulated silently because this writer inserted them while its sibling
+        # `record_capability_consumption` raised on the identical condition -- and 202 arrived in ONE
+        # backfill that reported plain success. Both directions asserted: a leaking guard would stop
+        # every role proposal recording, which is the more expensive failure.
+        with _conn() as _c:
+            # A run written WITHOUT a completion event -- `record_run` emits one, so it cannot be
+            # used here; the whole point is a target that has no envelope to point at.
+            _c.execute("INSERT OR IGNORE INTO runs (run_id,ts,target,task_type,agent) "
+                       "VALUES ('orphan-probe',0,'o/r#1','implement','codex')")
+            try:
+                _record_influence_edge_in_conn(
+                    _c, target_run_id="orphan-probe", influence_type="role",
+                    influence_id="role:probe", accepted=True)
+                raise AssertionError("an unlinked edge must not be insertable by default")
+            except ValueError as exc:
+                assert "no completion event" in str(exc), exc
+            _ok = _record_influence_edge_in_conn(
+                _c, target_run_id="orphan-probe", influence_type="role",
+                influence_id="role:probe", accepted=True, allow_unlinked=True)
+            assert _ok["edge_id"].startswith("edge:"), _ok
+            # Clean up: a later assertion in this selftest checks the fixture holds ZERO orphan
+            # edges, and that check is worth more than this one's leftovers.
+            _c.execute("DELETE FROM influence_edges WHERE edge_id=?", (_ok["edge_id"],))
+            _c.execute("DELETE FROM runs WHERE run_id='orphan-probe'")
         ti_v = relearn_quality({"infratest": {"sturdy": 0.5, "unlucky": 0.5}})
         ti_w = {x["agent"]: x for x in current_weights("infratest", ti_v)}
         assert ti_w["unlucky"]["posterior"] > ti_w["sturdy"]["posterior"], ti_w

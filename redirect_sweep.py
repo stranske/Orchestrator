@@ -459,7 +459,12 @@ def sweep(
     action_counts: dict[str, int] = {}
     state_counts: dict[str, int] = {}
 
-    for target, meta in list(active.items())[:max_reports]:
+    # THE CAP MUST NOT DROP CLAIMS SILENTLY. `max_reports` truncates, and a truncated sweep reports
+    # a smaller world than exists -- the same shape as a collection floor nobody watches. Count what
+    # was skipped and return it, so "50 watched" can never quietly mean "50 of 300".
+    ordered = list(active.items())
+    truncated = ordered[max_reports:]
+    for target, meta in ordered[:max_reports]:
         inputs = _claim_watch_inputs(target, meta)
         if inputs["pid"] is None and not inputs["log"] and not inputs["worktree"]:
             unwatchable.append(
@@ -500,6 +505,8 @@ def sweep(
         "mutates_state": False,
         "active_claim_count": len(active),
         "watched_count": len(reports),
+        "truncated_count": len(truncated),
+        "truncated_targets": [t for t, _ in truncated[:20]],
         "unwatchable_count": len(unwatchable),
         "actionable_count": len(actionable),
         "action_counts": action_counts,
@@ -691,6 +698,19 @@ def _selftest() -> None:
     try:
         log_dir = tmp / "dispatch-logs"
         log_dir.mkdir(parents=True)
+
+        # Truncation is COUNTED, not silent: 3 claims with a cap of 2 leaves exactly 1 reported.
+        # A sweep that reports only `watched_count` claims a smaller world than exists.
+        _fake = {f"o/r#{i}": {"agent": "codex", "pid": None, "log": "", "worktree": ""}
+                 for i in range(3)}
+        _orig_active = claims.active_claims
+        try:
+            claims.active_claims = lambda **kw: _fake
+            _t = sweep(max_reports=2)
+            assert _t["active_claim_count"] == 3 and _t["truncated_count"] == 1, _t
+            assert len(_t["truncated_targets"]) == 1, _t["truncated_targets"]
+        finally:
+            claims.active_claims = _orig_active
         log = log_dir / "o__r_1.cursor.log"
         log.write_text("HTTP 401 Unauthorized\n", encoding="utf-8")
         now = 1_800_000_000.0
