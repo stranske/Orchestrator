@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -457,6 +458,13 @@ def resolve_panel_base_sha(bundle: dict) -> str | None:
     supplied = str(bundle.get("base_sha") or "").strip()
     if supplied:
         return supplied
+    # HISTORICAL PANELS MUST NOT BORROW TODAY'S HEAD. The git fallback below is right for a panel
+    # running NOW -- the app under review is the checkout at HEAD -- and catastrophically wrong for
+    # a backfill of a June panel, because it would stamp August's commit onto it and make two
+    # different states of the same app look like one subject. That is precisely the failure this
+    # function's docstring warns about, so a caller replaying history says so and gets None.
+    if bundle.get("base_sha_unrecoverable"):
+        return None
     app = str(bundle.get("app") or "").strip()
     if "/" not in app:
         return None
@@ -815,7 +823,56 @@ def _sample_bundle() -> dict:
     }
 
 
+def _selftest_panel_backfill() -> None:
+    """Historical panels register from what is on disk, and never from what is convenient."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # A real panel: one rubric shared by every arm, one retried seat, one failed attempt.
+        good = root / "stranske" / "Demo-App_uxreview_2026-06-01"
+        good.mkdir(parents=True)
+        for agent in ("claude", "codex", "vibe", "vibe-retry1"):
+            (good / f"rubric-prompt-{agent}.txt").write_text("IDENTICAL RUBRIC")
+            (good / f"rubric-out-{agent}.txt").write_text("scores")
+        (good / "rubric-out-vibe.FAILED-http520.txt").write_text("boom")
+        # A smoke fixture, and a panel whose arms were asked DIFFERENT questions.
+        smoke = root / "stranske" / "_gate2_smoke_uxreview_2026-06-01"
+        smoke.mkdir(parents=True)
+        (smoke / "rubric-prompt-codex.txt").write_text("SMOKE")
+        (smoke / "rubric-out-codex.txt").write_text("ok")
+        split = root / "stranske" / "Split-App_uxreview_2026-06-02"
+        split.mkdir(parents=True)
+        (split / "rubric-prompt-codex.txt").write_text("QUESTION A")
+        (split / "rubric-prompt-claude.txt").write_text("QUESTION B - DIFFERENT")
+        (split / "rubric-out-codex.txt").write_text("ok")
+        (split / "rubric-out-claude.txt").write_text("ok")
+
+        panels = discover_historical_panels(root)
+        ids = {panel["review_id"] for panel in panels}
+        assert "_gate2_smoke_uxreview_2026-06-01" not in ids, "a smoke fixture is not evidence"
+        panel = next(p for p in panels if p["review_id"].startswith("Demo-App"))
+        assert panel["app"] == "stranske/Demo-App", panel["app"]
+        # ONE AGENT IS ONE ARM: retry and failure decoration collapse, the failure is dropped.
+        assert panel["arms"] == ["claude", "codex", "vibe"], panel["arms"]
+        assert panel["base_sha_unrecoverable"] is True, "must never borrow today's HEAD"
+
+        result = backfill_panel_subjects(root, apply=False)
+        assert result["applied"] is False
+        skipped = {row["review_id"]: row["reason"] for row in result["skipped"]}
+        assert "Split-App_uxreview_2026-06-02" in skipped, result["skipped"]
+        assert "differs" in skipped["Split-App_uxreview_2026-06-02"], skipped
+        # Blocking AND drainable quantity: a registered subject with no base commit is still
+        # not minable, so both counts are reported or neither is meaningful.
+        assert "with_base_sha" in result and "without_base_sha" in result, result
+
+    # A historical bundle must not inherit the current checkout's commit.
+    assert resolve_panel_base_sha({"app": "stranske/Workflows", "base_sha_unrecoverable": True}) is None
+    assert resolve_panel_base_sha({"app": "x/y", "base_sha": "abc123"}) == "abc123"
+
+
 def _selftest() -> None:
+    _selftest_panel_backfill()
     bundle = _sample_bundle()
 
     rubric = build_rubric_prompt(bundle)
@@ -947,6 +1004,140 @@ def _selftest() -> None:
     )
 
 
+ARM_RETRY_RE = re.compile(r"^(?P<agent>[a-z0-9]+)(?:[-.](?:retry\d*|attempt\d*|FAILED.*))?$", re.I)
+
+
+def _arm_agent(raw: str) -> str:
+    """The agent behind an on-disk arm filename, with retry/failure decoration removed."""
+    match = ARM_RETRY_RE.match(raw.strip())
+    return (match.group("agent") if match else raw.strip()).lower()
+
+
+PANEL_DIR_RE = re.compile(r"^(?P<app>.+)_uxreview_(?P<date>\d{4}-\d{2}-\d{2})(?P<suffix>.*)$")
+
+
+def discover_historical_panels(root: Path | None = None) -> list[dict]:
+    """Every panel already on disk, as a bundle the live registrar can consume.
+
+    Reads only what the panel actually recorded. The rubric prompt IS the spec -- byte-identical
+    across a panel's arms, which is what makes one spec hash per panel correct -- and the arm set is
+    the agents that actually produced output, never the agents that were asked.
+
+    `base_sha_unrecoverable` is set on every panel, because none of them captured the commit under
+    review and inferring one from today's checkout would fuse two states of the same app into one
+    subject. A panel whose evidence DOES name a commit gets it; see `--base-sha`.
+    """
+    root = Path(root or REVIEW_DIR)
+    if not root.is_dir():
+        return []
+    panels: list[dict] = []
+    for prompt in sorted(root.rglob("rubric-prompt-*.txt")):
+        directory = prompt.parent
+        match = PANEL_DIR_RE.match(directory.name)
+        if not match:
+            continue
+        # The app is owner/name when the panel sits under an owner directory, and a bare local
+        # name otherwise -- `local-Reader` is a tool, not a repo, and must not be given a slash.
+        owner = directory.parent.name if directory.parent != root else ""
+        app_part = match.group("app")
+        app = f"{owner}/{app_part}" if owner else app_part
+        review_id = directory.name
+        if any(existing["review_id"] == review_id for existing in panels):
+            continue
+        # A SMOKE FIXTURE IS NOT EVIDENCE. `_gate2_smoke` is an underscore-prefixed harness run
+        # (2.5KB rubric against a real panel's 8.7KB) that exists to prove the pipeline executes.
+        # Registering it as a research subject would put a self-test into the population the miner
+        # learns from, which is worse than leaving it out -- the learner cannot tell a rehearsal
+        # from a review.
+        if app_part.startswith("_"):
+            continue
+        specs = {
+            candidate.read_bytes()
+            for candidate in sorted(directory.glob("rubric-prompt-*.txt"))
+        }
+        # ONE AGENT IS ONE ARM, however many times it was asked. On disk a retried seat leaves
+        # `rubric-out-vibe.txt`, `rubric-out-vibe-retry1.txt` AND
+        # `rubric-out-vibe.FAILED-http520.txt`; taken literally that is three arms, which would
+        # manufacture independence the evidence does not have and treble that seat's weight in
+        # every comparison drawn from the subject. A `.FAILED-*` attempt produced no usable output
+        # and is not an arm at all.
+        arms = sorted({
+            _arm_agent(out.name[len("rubric-out-"): -len(".txt")])
+            for out in directory.glob("rubric-out-*.txt")
+            if out.stat().st_size > 0 and ".FAILED-" not in out.name
+        })
+        panels.append({
+            "app": app,
+            "review_id": review_id,
+            "date": match.group("date"),
+            "spec": prompt.read_text(errors="ignore"),
+            "spec_variants": len(specs),
+            "arms": arms,
+            "path": str(directory),
+            "base_sha_unrecoverable": True,
+        })
+    return panels
+
+
+def backfill_panel_subjects(
+    root: Path | None = None, *, apply: bool = False, conn=None
+) -> dict:
+    """Register the panels already on disk as research subjects. Idempotent; dry-run by default.
+
+    WHY THIS IS NOT A FABRICATION. Every field comes off disk: the target is the app directory, the
+    spec is the panel's own rubric bytes, the arm set is the agents that actually returned output.
+    Nothing is imputed. The one field that CANNOT be recovered -- the commit the app was running --
+    is left null rather than borrowed from today's checkout, so these subjects are honestly
+    identified but most of them stay non-minable, and this reports exactly how many.
+
+    A panel whose rubric prompts are not byte-identical across arms is SKIPPED, not merged: a
+    differing spec means the arms were not asked the same question, so one spec hash would claim a
+    comparison the evidence does not support.
+    """
+    panels = discover_historical_panels(root)
+    registered: list[dict] = []
+    skipped: list[dict] = []
+    for panel in panels:
+        if not panel["arms"]:
+            skipped.append({"review_id": panel["review_id"], "reason": "no arm produced output"})
+            continue
+        if panel["spec_variants"] != 1:
+            skipped.append({
+                "review_id": panel["review_id"],
+                "reason": f"rubric differs across arms ({panel['spec_variants']} variants)",
+            })
+            continue
+        if not apply:
+            registered.append({
+                "review_id": panel["review_id"], "app": panel["app"],
+                "arms": panel["arms"], "would_register": True,
+            })
+            continue
+        identity = register_panel_subject(
+            panel, panel["arms"], spec=panel["spec"], conn=conn
+        )
+        if identity is None:
+            skipped.append({"review_id": panel["review_id"], "reason": "registration failed"})
+            continue
+        registered.append({
+            "review_id": panel["review_id"], "app": panel["app"], "arms": panel["arms"],
+            "subject_id": identity["subject_id"], "base_sha": identity.get("base_sha"),
+        })
+    minable = [row for row in registered if row.get("base_sha")]
+    return {
+        "applied": apply,
+        "panels_found": len(panels),
+        "registered": len(registered),
+        "skipped": skipped,
+        # BLOCKING AND DRAINABLE QUANTITY IN ONE PLACE. "26 subjects registered" would read as
+        # "mining unblocked"; it is not, because a repo-scoped subject with no base commit still
+        # cannot produce an acceptable completion event. Say both numbers or say neither.
+        "with_base_sha": len(minable),
+        "without_base_sha": len(registered) - len(minable),
+        "detail": registered,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     if "--selftest" in argv:
@@ -958,7 +1149,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evaluators", help="Comma-separated evaluator agents")
     parser.add_argument("--adversary", default="claude", help="Adversarial critic agent")
     parser.add_argument("--timeout", type=int, default=1500, help="Per-agent timeout seconds")
+    parser.add_argument("--backfill-panels", action="store_true",
+                        help="register panels already on disk as research subjects (dry-run)")
+    parser.add_argument("--apply", action="store_true",
+                        help="with --backfill-panels, actually write the subjects")
     args = parser.parse_args(argv)
+    if args.backfill_panels:
+        print(json.dumps(backfill_panel_subjects(apply=args.apply), indent=2, default=str))
+        return 0
     if args.selftest:
         _selftest()
         return 0
