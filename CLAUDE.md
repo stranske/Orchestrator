@@ -11,6 +11,50 @@
 Read `README.md` first for what this project is and its important functionality. This file is the
 rules for anyone (human or agent) *changing* it.
 
+## −2. REQUIRED READING BEFORE ANY WORK HERE: `ARCHITECTURE.md`
+
+**Read `ARCHITECTURE.md` and look at `orchestrator-loop.svg` before starting work in this tree — not
+only before proposing a design change.** §5 below already makes them a contract you must UPDATE; this
+rule makes them something you must READ first, because the doc defines the vocabulary every other
+rule in this file uses, and reasoning about this system without it produces confident, wrong answers.
+That has happened: a full session's work was planned and executed here while treating "capability" as
+the system's core noun, when `ARCHITECTURE.md`'s taxonomy is rails / roles / delegated sub-agents /
+gates / feedback surfaces — and "capability" is a different axis entirely.
+
+**The vocabulary, so it stays regular:**
+
+- **Rail** — deterministic code. Same inputs, same behaviour, no model call. `router` (selection),
+  `claims`, `capacity`, `provision`, `dispatcher`, `adapters`, `feedback`, and the gates. Determinism
+  is the safety/auditability property; it is why *selection stays a rail* (agentifying it would blur
+  the credit assignment the learner depends on).
+- **Role** — a slot where an LLM makes a judgment, behind a typed contract
+  (`Role(name, route_as, eligible_backends, mode, build_prompt, validate)`) whose **model is
+  swappable and router-chosen**. Redirect, decompose, triage, prompt-authoring, adjudication.
+- **Capability** — **what a tool in the Orchestrator DOES.** This is the unit of accounting, and it
+  is orthogonal to rail/role: rail-vs-role says how a thing is IMPLEMENTED, capability says what it
+  is FOR. One capability routinely spans both (`adversarial-review` is role judgment invoked by a
+  rail gate and recorded over a rail acceptance edge).
+- **The admission parts are not the definition of a capability.** A caller, heartbeat, outcome path,
+  fixture, kill switch, rollback, expiry and dedup finding are the components that must be present
+  for a capability to WORK WITH THIS SYSTEM — to be invocable, observable and improvable. Do not
+  describe a capability by its admission parts; describe it by what it does, then check the parts.
+
+**Two kinds of capability, and their measurement stories differ — do not average across them:**
+
+1. **Workflow capabilities** run implementation code when invoked (`testgen_lane.py`,
+   `local_verify.py`, `runtime_ac_gate.py`, `partitioned_review.py`). Success is a definable
+   condition, so effectiveness is a pass/fail rate on a stated task.
+2. **Sub-agent capabilities** spin out a bounded, goal-scoped agent whose backend is router-chosen
+   (the five `role-*` capabilities, `adversarial-review`, `ux_review`, `offload`). Effectiveness is
+   **backend fit**, which needs arm + member identity — never collapse two same-agent arms back to
+   the provider name, and never average a member into an ensemble verdict.
+
+**The objective this work serves.** The point is not to maximise capability INVOCATIONS. It is to
+turn a capability on, let it accomplish a stated task, and collect whether it accomplished it — so
+the learner can rank capabilities by measured effectiveness and improve the ones that fail. Building
+more measurement while producing zero completed, scored invocations is the failure mode this rule
+exists to name; it has already consumed a session.
+
 ## −1. THIS IS A COMPONENT, NOT THE SYSTEM (read before any fleet-level claim)
 
 **The Orchestrator is one part of a larger pipeline whose SYSTEM-OF-RECORD IS ELSEWHERE.** Every rule
