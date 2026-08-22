@@ -11,6 +11,7 @@ import capabilities
 import capability_compiler as compiler
 import capability_lifecycle
 import capability_targets
+import env_prereq
 import feedback
 import roles
 from test_evidence_contract_compiler import _plan as evidence_contract_plan
@@ -166,6 +167,11 @@ def _record_target_run(run_id: str, subject: str) -> None:
 def test_all_target_kinds_complete_shadow_canary_lifecycle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The `skill` kind compiles the reference skill package, which hashes a REAL installed skill
+    # resource under ~/.codex/skills — deliberately, so the compiler is exercised against a
+    # genuine file rather than a fixture. Without it installed there is no skill to take through
+    # the lifecycle, and the other four kinds are covered by their own tests.
+    env_prereq.require(env_prereq.skill_resource_absent())
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     now = int(time.time())
     for kind in ("role", "workflow", "skill", "playbook", "gate"):

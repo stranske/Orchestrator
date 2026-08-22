@@ -36,6 +36,7 @@ import re
 import sys
 
 import capabilities
+import env_prereq
 
 # Free text -> the task_type vocabulary the fleet actually records. Deterministic and inspectable;
 # a model call here would make the same task classify differently on different days, which would
@@ -334,7 +335,15 @@ def _selftest_front_door() -> None:
     capability) was unreachable because TASK_SIGNALS had no entry for it AND its kind-based matcher
     can never match a task_type trigger; and the legacy-removal campaign — proven-valuable codemod
     work — classified as nothing at all.
+
+    Every case names a capability the advisor must FIND, so the whole function needs those rows
+    present. They are registered by running the system, not by checking out the tree.
     """
+    gaps: list[str] = []
+    if not env_prereq.runnable(gaps, env_prereq.ledger_rows_absent(
+            "offload", "codemod-campaign", "testgen-lane")):
+        env_prereq.report_gaps("capability_advisor.py front-door", gaps)
+        return
     cases = [
         ("summarise these 200 pages of docs", "offload"),
         ("offload this big read to a cheap agent", "offload"),

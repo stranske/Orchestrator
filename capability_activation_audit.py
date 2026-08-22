@@ -43,6 +43,7 @@ import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -444,9 +445,19 @@ def _fleet_label_index(*, use_cache: bool = True) -> dict:
         except (OSError, ValueError):
             pass
     index = {}
+    # A FAILED gh call already means "unknown for this repo" (unauthenticated, offline, no
+    # access), and the loop skips it. An ABSENT gh binary meant an uncaught FileNotFoundError
+    # that took the whole audit down — same information, opposite outcome. Named here, and it
+    # short-circuits: with no gh at all there is nothing to ask 12 times.
+    if not shutil.which("gh"):
+        return {"generated_at": time.time(), "repos": {},
+                "unreadable": "gh CLI not installed; fleet label vocabulary unknown"}
     for full in getattr(backlog, "SUPPORTED_REPOS", []):
-        proc = subprocess.run(["gh", "label", "list", "--repo", full, "--limit", "300",
-                               "--json", "name"], capture_output=True, text=True, timeout=120)
+        try:
+            proc = subprocess.run(["gh", "label", "list", "--repo", full, "--limit", "300",
+                                   "--json", "name"], capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            continue                       # unknown for this repo, exactly like a nonzero exit
         if proc.returncode != 0:
             continue
         try:
