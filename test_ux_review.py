@@ -219,5 +219,50 @@ class TestPanelSubjectRegistration(unittest.TestCase):
 
 
 
+
+class TestPanelArmOutcome(unittest.TestCase):
+    """Route weights learn from outcomes, so each arm needs an un-gameable label."""
+
+    def test_unparseable_or_unscored_arm_fails(self):
+        self.assertEqual(ur.panel_arm_outcome(None, [], set(), True)[0], "FAIL")
+        self.assertEqual(ur.panel_arm_outcome({}, [], set(), True)[0], "FAIL")
+        # produced prose but no rubric scores -> did not do the task
+        v, d, _ = ur.panel_arm_outcome({"overall": 7}, [], set(), True)
+        self.assertEqual((v, d), ("FAIL", "reverted"))
+
+    def test_corroborated_finding_is_durable(self):
+        f = {"screen": "Home", "element": "Run", "failure_mode": "dead"}
+        v, d, note = ur.panel_arm_outcome(
+            {"scores": {"wired": 5}}, [f], {ur.finding_key(f)}, True
+        )
+        self.assertEqual((v, d), ("PASS", "durable"))
+        self.assertIn("corroborated", note)
+
+    def test_uncorroborated_findings_are_not_durable(self):
+        mine = {"screen": "A", "element": "b", "failure_mode": "c"}
+        other = {"screen": "X", "element": "y", "failure_mode": "z"}
+        v, d, _ = ur.panel_arm_outcome(
+            {"scores": {"wired": 5}}, [mine], {ur.finding_key(other)}, True
+        )
+        self.assertEqual((v, d), ("PASS", "reverted"))
+
+    def test_clean_app_does_not_penalise_a_silent_arm(self):
+        """Marking arms down for finding nothing on a sound app would train them to invent findings."""
+        v, d, note = ur.panel_arm_outcome({"scores": {"wired": 9}}, [], set(), False)
+        self.assertEqual((v, d), ("PASS", "held"))
+        self.assertIn("clean-app", note)
+        self.assertIn(d, ("durable", "held", "survived"))  # counts as durable to the learner
+
+    def test_durability_values_are_learner_recognised(self):
+        """A label the learner does not recognise is the same as no label at all."""
+        from pattern_miner import DURABLE_STATUSES, TERMINAL_FAILURE_DURABILITY
+        known = set(DURABLE_STATUSES) | set(TERMINAL_FAILURE_DURABILITY)
+        for args in [(None, [], set(), True),
+                     ({"scores": {"wired": 1}}, [], set(), False),
+                     ({"scores": {"wired": 1}}, [], {("a", "b", "c")}, True)]:
+            self.assertIn(ur.panel_arm_outcome(*args)[1], known)
+
+
+
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
