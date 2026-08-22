@@ -774,6 +774,26 @@ def record_hygiene_escalation(escalation: dict[str, Any]) -> dict[str, Any]:
     return {"recorded": recorded, "asked": len(recorded)}
 
 
+# Consumer repos that must NEVER be drift SUBJECTS, even though they are registered consumers.
+#
+# stranske/Orchestrator is the tool that HOSTS this drift detection. It was registered as consumer
+# 14 on 2026-08-21 so the agent lanes can reach it, which also put it in
+# REGISTERED_CONSUMER_REPOS — the list this module reads. Left alone it would become a subject of
+# its own detector, and subject identity is what `capability:reference-sync-hygiene-test-gate`
+# promotes on, so the tool could feed its own promotion gate. That is circular self-evidence, the
+# same defect as attributing feature-building PRs as usage of the feature.
+#
+# It is currently excluded only INCIDENTALLY, because the cohort is intersected with the repo-review
+# registry and Orchestrator is not in it yet. That protection disappears the moment the repo is
+# added to the registry for review — which it should be. So the exclusion is made deliberate here.
+NON_SUBJECT_CONSUMERS = frozenset({"stranske/orchestrator"})
+
+
+def is_drift_subject(repo: str) -> bool:
+    """May this registered consumer be a drift SUBJECT? Registration alone is not consent."""
+    return str(repo or "").strip().lower() not in NON_SUBJECT_CONSUMERS
+
+
 def get_maint_68_repos(fallback_allowed: bool = True) -> list[str]:
     _gh_throttle("core")
     try:
@@ -1639,6 +1659,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     registry_set = {r.lower() for r in registry_repos}
 
+    # Registration makes a repo a sync TARGET; it does not make it a drift SUBJECT.
+    cohort = [r for r in cohort if is_drift_subject(r)]
     validated_cohort = []
     for repo in cohort:
         if not re.fullmatch(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):

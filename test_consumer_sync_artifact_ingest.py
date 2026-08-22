@@ -951,3 +951,27 @@ def test_end_to_end_idempotency(
 
 def test_module_selftests():
     consumer_sync_artifact_ingest.run_selftests()
+
+
+def test_orchestrator_is_registered_but_never_a_drift_subject():
+    """Registration makes a repo a sync TARGET; it does not make it a drift SUBJECT.
+
+    Orchestrator was registered as consumer 14 on 2026-08-21 so agent lanes could reach it, which
+    also put it in REGISTERED_CONSUMER_REPOS — the list this module reads for its cohort. Left
+    alone, the tool that HOSTS drift detection becomes a subject of its own detector, and subject
+    identity is exactly what `capability:reference-sync-hygiene-test-gate` promotes on. The tool
+    could then feed its own promotion gate: circular self-evidence.
+
+    It was already excluded incidentally, because the cohort is intersected with the repo-review
+    registry and Orchestrator is not in it. That is not a guarantee — it disappears as soon as the
+    repo is added for review. This pins the deliberate exclusion instead.
+    """
+    import consumer_sync_artifact_ingest as ingest
+
+    assert not ingest.is_drift_subject("stranske/Orchestrator")
+    assert not ingest.is_drift_subject("STRANSKE/ORCHESTRATOR"), "matching must be case-insensitive"
+    assert not ingest.is_drift_subject("  stranske/orchestrator  "), "and whitespace-tolerant"
+    # A real consumer must still be a subject — an exclusion that swallows everything is worse
+    # than none, since it would silently empty the evidence set the gate depends on.
+    for repo in ("stranske/Ready", "stranske/Template", "stranske/Fine-Art-Archive"):
+        assert ingest.is_drift_subject(repo), repo
