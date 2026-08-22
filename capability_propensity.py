@@ -65,6 +65,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 
 import capabilities
@@ -397,6 +398,22 @@ def _selftest() -> None:
         assert rep["capabilities_with_evidence"] == 2, rep
         assert rep["capabilities_without_evidence"] == 1, rep
         assert [r["capability_id"] for r in rep["ranked"]][0] == "helper", rep["ranked"]
+
+    # THE LANE-FACING CONTRACT. Both lane automations now call this from bash, so the shapes they
+    # depend on are pinned here. A loop that can only be closed from Python cannot be closed by an
+    # automation, and an experiment id the caller never receives cannot be passed back.
+    import capability_advisor
+    task = "resolve the unresolved review threads on this PR"
+    eid = capability_advisor.experiment_id(task)
+    assert eid.startswith(ADVICE_REF_PREFIX), eid
+    assert eid == capability_advisor.experiment_id(task), "experiment id must be stable per task"
+    assert eid != capability_advisor.experiment_id("something else"), "and task-specific"
+    # advise() must HAND BACK the id it recorded under, in both the classified and unclassified
+    # branches -- the caller cannot close a loop whose key it was never told.
+    got = capability_advisor.advise(task, lane="closer", record=False)
+    assert got["experiment_id"] == eid, (got.get("experiment_id"), eid)
+    blank = capability_advisor.advise("xyzzy plugh frobnicate", record=False)
+    assert blank["experiment_id"] == capability_advisor.experiment_id("xyzzy plugh frobnicate"), blank
     print("capability_propensity.py selftest: OK (natural experiments with a reported control arm, "
           "usefulness orders recommendation, no-evidence stays drainable, window shared)")
 
@@ -422,13 +439,43 @@ def _fmt(rep: dict) -> str:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("command", nargs="?", default="report",
-                    choices=["report", "experiments"])
+                    choices=["report", "experiments", "trigger", "useful"])
+    # A loop that can only be closed from Python cannot be closed by a lane, which runs bash. These
+    # two subcommands are the whole reason the recording edges are reachable from an automation.
+    ap.add_argument("--capability", default="", help="capability id, for trigger/useful")
+    ap.add_argument("--experiment", default="", help="advice:<digest> from capability_advice")
+    ap.add_argument("--evidence", default="", help="what the capability CHANGED (required by useful)")
+    ap.add_argument("--not-useful", action="store_true",
+                    help="record that triggering it did NOT help")
+    # ISOLATION FOR PROOFS. Wiring this up, I recorded a trial into the LIVE ledger whose evidence
+    # described the wiring rather than the capability's review value -- a mislabeled trial, and the
+    # system's first data point. A proof belongs on a throwaway ledger; without this flag the only
+    # way to demonstrate the path was to pollute the thing being demonstrated.
+    ap.add_argument("--ledger", default="",
+                    help="write to this ledger instead of the live one (use for demos and proofs)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--window-days", type=int, default=WINDOW_DAYS)
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        return 0
+    if args.command in {"trigger", "useful"}:
+        if not args.capability or not args.experiment:
+            ap.error("--capability and --experiment are required")
+        ledger = pathlib.Path(args.ledger) if args.ledger else None
+        if args.command == "trigger":
+            ok = record_trigger(args.capability, args.experiment, path=ledger)
+        else:
+            if not args.evidence.strip():
+                ap.error("--evidence is required: an unevidenced verdict is an opinion, and "
+                         "'it ran' is not usefulness")
+            ok = record_usefulness(args.capability, args.experiment,
+                                   useful=not args.not_useful, evidence=args.evidence,
+                                   path=ledger)
+        print(json.dumps({"recorded": bool(ok), "command": args.command,
+                          "ledger": str(ledger) if ledger else "live",
+                          "capability": args.capability, "experiment": args.experiment}))
         return 0
     if args.command == "experiments":
         data = experiments(window_days=args.window_days)

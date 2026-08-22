@@ -218,7 +218,8 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     candidates = classify_task(text)
     if not candidates:
         return {
-            "task": text, "useful": False, "confidence": "none", "skill": skill or None,
+            "task": text, "experiment_id": experiment_id(text),
+            "useful": False, "confidence": "none", "skill": skill or None,
             "repository": repository, "task_types": [], "capabilities": [],
             "dispatch_ready_count": 0,
             "not_applicable": [],
@@ -306,6 +307,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         by_mode.setdefault(row["requirement"]["mode"], []).append(row["capability_id"])
     result = {
         "task": text,
+        "experiment_id": experiment_id(text),
         "useful": bool(matched),
         "confidence": confidence,
         "skill": skill or None,
@@ -379,6 +381,17 @@ def should_reask(previous: dict | None, current_context: dict) -> dict:
     return {"reask": bool(reasons), "reasons": reasons}
 
 
+def experiment_id(task: str) -> str:
+    """The natural-experiment id for this task text.
+
+    A caller that receives advice and then USES one of the candidates has to be able to say so
+    against the same key the advice was recorded under. Without this the loop cannot be closed from
+    outside this module: `_record_matches` derived the digest privately and threw it away.
+    """
+    import hashlib
+    return "advice:" + hashlib.sha1(str(task or "").encode()).hexdigest()[:12]
+
+
 def _record_matches(advice: dict, *, skill: str = "", path=None) -> int:
     """Record that these capabilities matched REAL work, with the skill that surfaced it.
 
@@ -393,6 +406,7 @@ def _record_matches(advice: dict, *, skill: str = "", path=None) -> int:
     """
     import hashlib
     digest = hashlib.sha1(str(advice.get("task") or "").encode()).hexdigest()[:12]
+    # exposed via experiment_id() so a caller can record trigger/outcome against it
     written = 0
     for entry in advice.get("capabilities") or []:
         ok = capabilities.heartbeat(
