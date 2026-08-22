@@ -873,7 +873,7 @@ def _selftest() -> None:
         assert present["fires"] and present["external_blocker"] is False, present
         # ...and the LIVE row must agree with the caller actually on disk, in whichever direction.
         docs = [r for r in rep["rows"] if r["capability"] == "docs-drift-fix-agent"][0]
-        _cap = capabilities.load(capabilities.REG)["docs-drift-fix-agent"]
+        _cap = capabilities.load_declared(capabilities.REG)["docs-drift-fix-agent"]
         _live = _audit.external_caller(_cap)
         assert docs["fires"] is bool(_live and _live.get("exists")), (docs, _live)
 
