@@ -895,6 +895,27 @@ def _selftest() -> None:
     print("partitioned_review.py selftest: OK (bounded groups, strict categories, name-scan break/revert, fail-closed missing partitions)")
 
 
+DISABLED = os.environ.get("ORCH_PARTITIONED_REVIEW_DISABLED", "").strip() == "1"
+
+
+def _capability_heartbeat(event_type: str = "invocation") -> None:
+    """Credit this capability when it actually runs.
+
+    It shipped (PR #2) with no ledger record, no heartbeat and a CLI-only caller — the
+    built-and-forgotten shape that is this project's dominant defect class. Without a heartbeat the
+    firing monitor can only ever report it as never-fired, so no amount of real use would show up
+    and the module would eventually read as dead code worth deleting.
+
+    Deliberately best-effort: an observability failure must never break a review run.
+    """
+    try:
+        import capabilities
+        capabilities.production_heartbeat(
+            "partitioned-review", event_type, ref="partitioned_review.main")
+    except Exception:                                              # noqa: BLE001
+        pass
+
+
 def main(argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, Any]] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--selftest", action="store_true")
@@ -922,6 +943,13 @@ def main(argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, A
     if args.selftest:
         _selftest()
         return 0
+    # Kill switch. This module is reached only through an explicit dispatcher subcommand, so not
+    # invoking it is already a full stop; the flag exists so an operator can disable it fleet-wide
+    # without editing code, which is what the admission gate means by "nothing can stop it".
+    if DISABLED:
+        print(json.dumps({"skipped": "ORCH_PARTITIONED_REVIEW_DISABLED=1"}, sort_keys=True))
+        return 0
+    _capability_heartbeat()
     if args.command == "prepare":
         plan = partition_corpus(
             _read_json(args.corpus), max_items=args.max_items,

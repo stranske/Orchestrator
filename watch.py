@@ -457,6 +457,13 @@ def classify_lane(
     now: float | None = None,
 ) -> dict:
     """Classify one watched lane without mutating live state."""
+    # Credit the capability HERE, not only in main(). The heartbeat used to live solely on the CLI
+    # path, but every production driver calls this function directly — redirect_sweep.py:473,
+    # watch_sweep.py and exp_abcd.py:737 — so the activation audit reported `heartbeat_off_path`
+    # and stall-watcher read as unable to fire while running fine. A heartbeat stranded on a path
+    # nothing takes is the same defect as no heartbeat at all: the capability can never accrue
+    # evidence of its own usefulness, and eventually reads as dead code.
+    _capability_heartbeat()
     if pid is None and not log and not worktree:
         report = {
             "agent": agent,
