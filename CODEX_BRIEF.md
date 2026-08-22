@@ -233,6 +233,9 @@ weight. Scores (0–10) are human-facing context only, never the ship gate.
   with structured diagnostics for browser/setup/target failures and a CDP browser-endpoint fallback for
   sandboxed automation, plus JSON-compatible `frontend_verify.py --doctor` preflight for helper/node/CDP
   endpoint readiness;
+  `partitioned_review.py` bounded review/reconciliation plans routed through `dispatcher.py review-corpus`,
+  with strict six-category results, raw-name-scan rejection, per-partition offload/source provenance,
+  resumable timeout/failure envelopes, and synthesis that fails closed on missing or stale partitions;
   `local_verify.py` local deliberate-break verifier whose
   `FAIL_HOLLOW`/`FAIL_BROKEN` verdicts can patch `outcomes.verifier_verdict` and count against relearn;
   adversarial high-stakes merge review hook in `tick.py` (advisory, opt-in active execution);

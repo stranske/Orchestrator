@@ -98,6 +98,18 @@ cursor-agent live outside the default PATH):
     the ambient proxy/CA/`NODE_OPTIONS` vars so the culprit is legible. (Diagnosed via per-session evidence:
     one session's codex+gemini offloads were 6/6 hung while a concurrent session's were 0/6 — inherited env,
     not contention/auth/desktop-app/concurrency, all of which were ruled out.)
+- **Review a large corpus in bounded partitions** — use `python3 dispatcher.py review-corpus prepare
+  --corpus corpus.json --plan plan.json`, then `review-corpus run --plan plan.json --results-dir <dir>
+  --agent <agent> --cwd <repo> [--timeout N]`, then `review-corpus synthesize --plan plan.json
+  --results-dir <dir> --output synthesis.json [--adjudicator-agent <agent>]`. The corpus groups items with
+  `group_key` (for example one source PR per group); `--max-items` and `--max-prompt-chars` split oversized
+  groups. Every partition must classify every item exactly once as a removed product surface, test-only
+  runtime seam, intentional adapter, historical/negative assertion, confirmed defect, or unresolved design
+  disposition, with non-name-scan evidence. Category records the feedback surface; the separate disposition
+  records whether it is satisfied, remaining, partial, intentional, historical-only, or unresolved. Each result envelope retains the source refs plus offload
+  run/model/log/timeout provenance (the bounded default is 300 seconds). Synthesis reads the expected partition IDs from the hashed plan and
+  returns `INCOMPLETE` when any partition is missing, failed, stale, or invalid; it never infers completeness
+  from the files that happen to exist. Optional adjudication is advisory and also uses `dispatcher.offload`.
 - **Concurrency** — `python3 claims.py` (who's working what) · `claims.py release <target>` ·
   `claims.py reap` (clear stale at the start of a cycle).
 - **Monitor** — `python3 watch.py --agent <a> --target <t> --pid <pid> --log <log> --worktree <wt>
