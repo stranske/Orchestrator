@@ -1972,6 +1972,13 @@ def main(argv: list[str]) -> int:
             return 2
         print(_offload_prompt("SHOW-PROMPT TASK", Path.cwd(), argv[1]))
         return 0
+    if argv and argv[0] == "review-corpus":
+        # Deterministic partitioning/validation around the existing synchronous offload
+        # transport.  Pass this module's function explicitly so partitioned_review does
+        # not create another dispatcher, claim, routing, or agent-execution seam.
+        import partitioned_review
+
+        return partitioned_review.main(argv[1:], offload_fn=offload)
     if "--selftest" in argv:
         _selftest()
         return 0
