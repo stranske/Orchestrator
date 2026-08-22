@@ -25,6 +25,7 @@ outputs are machine-readable JSON; none creates a human review queue.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict, dataclass, replace
 import json
 import os
@@ -62,6 +63,13 @@ DURABLE_STATUSES = {"durable", "held", "survived"}
 TERMINAL_FAILURE_DURABILITY = {"broke_later", "reopened", "reverted", "reworked"}
 
 
+# A systemic input fault rejects every event, so the per-event detail is capped in
+# the emitted artifact while the aggregate below stays complete. Without the cap a
+# corpus-wide fault trades silence for a status file the size of the corpus, echoed
+# into the cadence log on every tick.
+MAX_REPORTED_REJECTIONS = 200
+
+
 @dataclass(frozen=True)
 class Rejection:
     event_id: str
@@ -70,6 +78,25 @@ class Rejection:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _reason_counts(rejections: Iterable["Rejection"]) -> dict[str, int]:
+    """Count rejected events per stable reason code.
+
+    Grouped on the code before the first ``:`` so detail-bearing reasons
+    (``missing_phase:trigger``, ``invalid_artifact_ref:3``) cannot make the
+    summary unbounded. This is what makes a systemic input fault legible:
+    ``accepted_event_count 0`` alone reads as a quiet cadence, whereas
+    ``accepted 0 / skipped N / invalid_normalized_spec_hash N`` names the cause on
+    sight. Reported beside the counts it explains, per the runtime rule
+    that a gate must publish its blocking quantity and its drainable quantity in
+    the same place.
+    """
+    counts: Counter[str] = Counter()
+    for rejection in rejections:
+        for code in {reason.split(":", 1)[0] for reason in rejection.reasons}:
+            counts[code] += 1
+    return dict(sorted(counts.items()))
 
 
 @dataclass(frozen=True)
@@ -113,7 +140,17 @@ class MiningResult:
 
     def to_dict(self, *, include_candidates: bool = True) -> dict[str, Any]:
         payload = dict(self.status)
-        payload["rejections"] = [item.to_dict() for item in self.rejections]
+        payload["rejections"] = [
+            item.to_dict() for item in self.rejections[:MAX_REPORTED_REJECTIONS]
+        ]
+        # Never a silent cap: say what was dropped, so a truncated sample cannot
+        # be mistaken for the whole rejection set.
+        if len(self.rejections) > MAX_REPORTED_REJECTIONS:
+            payload["rejections_truncated"] = {
+                "reported": MAX_REPORTED_REJECTIONS,
+                "total": len(self.rejections),
+                "note": "full per-code totals in rejected_event_reasons",
+            }
         payload["tombstones"] = [item.to_dict() for item in self.tombstones]
         if include_candidates:
             payload["candidates"] = [item.to_dict() for item in self.candidates]
@@ -862,6 +899,10 @@ class PatternMiner:
                 1 for item in self.candidates if item.lifecycle.state == "retired"
             ),
             "rejection_count": len(self.rejections),
+            "rejected_event_reasons": _reason_counts(
+                rejection for rejection in self.rejections
+                if rejection.phase == "envelope"
+            ),
             "threshold_progress": progress,
             "next_actions": next_actions,
             "human_review_queue_count": 0,

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from completion_event_adapter import adapt_completion_event_envelope
-from pattern_miner import PHASES, PatternMiner, main
+from pattern_miner import MAX_REPORTED_REJECTIONS, PHASES, PatternMiner, main
 import research_subjects
 
 
@@ -392,6 +392,72 @@ def test_candidate_without_new_evidence_expires_to_tombstone():
     )
     assert tombstone.fingerprint == expired.candidates[0].fingerprint
     assert expired.status["expired_candidate_count"] == 1
+
+
+def test_one_unusable_event_is_skipped_without_aborting_the_batch():
+    """One identity-less event must not destroy the run's other episodes.
+
+    The adapter appended ``invalid_normalized_spec_hash`` and then derived
+    identity from the value it had just rejected. research_subjects raised a bare
+    ValueError, which is not an EnvelopeError, so it escaped the per-event skip in
+    ``_assemble`` and aborted the whole run -- turning one absent field into a
+    total, silent outage.
+    """
+    events = [row for index in range(1, 4) for row in completion_episode(index)]
+    # A verification event from a gate that terminated with gate_status
+    # "missing_spec" genuinely has no spec: it is a faithful record that none was
+    # materialized. Such an event must be skipped, never given a fabricated hash.
+    unusable = completion_episode(9)[0]
+    unusable["identity"]["normalized_spec_hash"] = None
+
+    result = PatternMiner().mine([unusable, *events], now=200)
+
+    # The three good episodes survive the one bad event and still emit.
+    assert len(result.candidates) == 1
+    assert result.status["accepted_event_count"] == 21
+    assert result.status["rejected_event_count"] == 1
+    reasons = {reason for rejection in result.rejections for reason in rejection.reasons}
+    assert "invalid_normalized_spec_hash" in reasons
+    # The skip is counted per stable code, not merely logged.
+    assert result.status["rejected_event_reasons"]["invalid_normalized_spec_hash"] == 1
+    assert result.status["rejected_event_reasons"]["identity_derivation_failed"] == 1
+
+
+def test_corpus_wide_identity_fault_reports_counts_and_bounds_detail():
+    """Every event unusable is a clean, legible zero -- not a crash, not a flood."""
+    events = []
+    for index in range(1, 61):
+        for row in completion_episode(index):
+            row["identity"]["normalized_spec_hash"] = None
+            events.append(row)
+
+    result = PatternMiner().mine(events, now=200)
+
+    assert result.status["raw_event_count"] == 420
+    assert result.status["accepted_event_count"] == 0
+    assert result.status["rejected_event_count"] == 420
+    assert not result.candidates
+    # The cause is named once, with its full total, beside the zero it explains.
+    assert result.status["rejected_event_reasons"]["invalid_normalized_spec_hash"] == 420
+    # Per-event detail is capped, and the cap declares itself.
+    payload = result.to_dict(include_candidates=False)
+    assert len(payload["rejections"]) == MAX_REPORTED_REJECTIONS
+    assert payload["rejections_truncated"]["total"] == 420
+    assert payload["rejected_event_reasons"]["invalid_normalized_spec_hash"] == 420
+
+
+def test_valid_spec_hash_still_derives_identity_and_is_not_skipped():
+    """Guards the revert half of the break/revert demonstration.
+
+    If the fix above ever degrades into skipping every event, this fails: a
+    well-formed corpus must still be accepted and still derive real identity.
+    """
+    events = [row for index in range(1, 4) for row in completion_episode(index)]
+    result = PatternMiner().mine(events, now=200)
+    assert result.status["accepted_event_count"] == 21
+    assert result.status["rejected_event_count"] == 0
+    assert result.status["rejected_event_reasons"] == {}
+    assert len(result.candidates) == 1
 
 
 def test_status_command_is_machine_readable_and_queue_free(tmp_path, capsys):

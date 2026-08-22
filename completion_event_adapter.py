@@ -454,25 +454,41 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         reasons.append("missing_subject_id")
     if not supplied_observation_id:
         reasons.append("missing_observation_id")
-    expected_ids = derive_completion_identity_ids(
-        canonical_target=canonical_target,
-        task_type=task_type,
-        normalized_spec_hash=spec_hash,
-        base_sha=base_sha,
-        run_id=_string(event_raw.get("run_id")),
-        attempt_id=joined_attempt_id,
-        subject_arms=subject_arms,
-        subject_profiles=subject_profiles,
-    )
-    if supplied_subject_id and supplied_subject_id != expected_ids["subject_id"]:
-        reasons.append("subject_identity_mismatch")
-    if (
-        supplied_observation_id
-        and supplied_observation_id != expected_ids["observation_id"]
-    ):
-        reasons.append("observation_identity_mismatch")
-    if supplied_family_id and supplied_family_id != expected_ids["family_id"]:
-        reasons.append("family_identity_mismatch")
+    # Never derive identity from inputs this function has ALREADY rejected.
+    # research_subjects is right to refuse a non-hash spec_hash, but it signals
+    # that with a bare ValueError, not an EnvelopeError -- so it bypasses the
+    # caller's per-event skip and aborts the entire batch. When a field is absent
+    # corpus-wide, the first event then kills every run, and the failure presents
+    # as silence rather than as a rejected event. One malformed event must cost
+    # exactly one counted rejection, never the run.
+    expected_ids: dict[str, str] | None = None
+    try:
+        expected_ids = derive_completion_identity_ids(
+            canonical_target=canonical_target,
+            task_type=task_type,
+            normalized_spec_hash=spec_hash,
+            base_sha=base_sha,
+            run_id=_string(event_raw.get("run_id")),
+            attempt_id=joined_attempt_id,
+            subject_arms=subject_arms,
+            subject_profiles=subject_profiles,
+        )
+    except ValueError as exc:
+        reasons.append(f"identity_derivation_failed:{exc}")
+    # The comparisons below need the derived contract. Skipping them keeps the
+    # remaining independent reasons (attempt resolution, join mismatch) in the
+    # rejection, which is the whole point of accumulating reasons rather than
+    # raising at the first fault.
+    if expected_ids is not None:
+        if supplied_subject_id and supplied_subject_id != expected_ids["subject_id"]:
+            reasons.append("subject_identity_mismatch")
+        if (
+            supplied_observation_id
+            and supplied_observation_id != expected_ids["observation_id"]
+        ):
+            reasons.append("observation_identity_mismatch")
+        if supplied_family_id and supplied_family_id != expected_ids["family_id"]:
+            reasons.append("family_identity_mismatch")
     if attempt_resolution == "ambiguous":
         reasons.append("ambiguous_multiple_successful_attempts")
     elif attempt_resolution != "resolved":
@@ -484,6 +500,10 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         reasons.append("event_attempt_join_mismatch")
     if reasons:
         raise EnvelopeError(event_id, reasons)
+    if expected_ids is None:  # pragma: no cover - unreachable, guards a regression
+        # A failed derivation always appends a reason, so the raise above fired.
+        # Kept so a later edit cannot reintroduce an absent-identity dereference.
+        raise EnvelopeError(event_id, ["identity_derivation_failed:missing_contract"])
 
     return CompletionEvent(
         event_id=event_id,
