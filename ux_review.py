@@ -29,6 +29,7 @@ from pathlib import Path
 import adapters
 import dispatcher
 import feedback
+import research_subjects
 from exp_abcd import (
     AGENT_MODE,
     EVALUATOR_TOPUP_ORDER,
@@ -341,6 +342,37 @@ def _normalize_evidence_gaps(parsed: dict | None) -> list[str]:
     return gaps
 
 
+def panel_arm_outcome(
+    parsed: dict | None,
+    arm_findings: list[dict],
+    accepted_keys: set,
+    panel_found_anything: bool,
+) -> tuple[str, str, str]:
+    """Machine ground truth for ONE panel arm: (verdict, durability, note). Pure; selftested.
+
+    Route weights learn from `outcomes`, so a UX-review arm needs an un-gameable label or its
+    evidence cannot reach the router. Two objective signals, both already computed by the panel:
+
+    * The arm either produced parseable rubric JSON with dimension scores, or it did not. That is
+      not a judgement call, so it is the verdict.
+    * Durability is CONTRIBUTION TO CORROBORATED CONSENSUS: did any of this arm's findings survive
+      `aggregate_accepted_findings`? An arm whose every finding was rejected as a non-finding added
+      noise, not evidence.
+
+    The clean-app case is deliberately not penalised. When the panel corroborated nothing at all,
+    every parsing arm is credited `held`. Marking an arm down for reporting no findings on a sound
+    app would train arms to invent findings -- the exact gaming this label exists to prevent.
+    """
+    if not parsed or not (parsed.get("scores") or {}):
+        return "FAIL", "reverted", "objective:unparseable-or-unscored"
+    if not panel_found_anything:
+        return "PASS", "held", "objective:clean-app-consensus"
+    contributed = any(finding_key(f) in accepted_keys for f in arm_findings)
+    if contributed:
+        return "PASS", "durable", "objective:finding-corroborated"
+    return "PASS", "reverted", "objective:no-finding-corroborated"
+
+
 def aggregate_panel(
     evaluator_results: dict[str, dict | None],
     adversarial_result: dict | None,
@@ -409,6 +441,48 @@ def aggregate_panel(
     }
 
 
+def register_panel_subject(
+    bundle: dict,
+    evaluators: list[str],
+    *,
+    spec: str | None = None,
+    conn=None,
+) -> dict | None:
+    """Register ONE research subject for a UX-review panel, and return its identity.
+
+    This is the join key the completion-event exporter needs: it resolves identity through
+    ``research_subject_experiments -> research_subjects`` keyed on ``experiment_id``. Without a
+    subject row every run the panel records is identity-less, so the panel's evidence stays
+    invisible to pattern mining no matter how many arms it scores.
+
+    Nothing here is invented. The spec is the panel's real rubric prompt -- byte-identical for
+    every arm, which is what makes one spec hash per panel correct -- and the arm set is the real
+    evaluator list. Returns None when registration fails, having said so on stderr.
+    """
+    spec = build_rubric_prompt(bundle) if spec is None else spec
+    review_id = bundle["review_id"]
+    try:
+        identity = research_subjects.subject_identity(
+            bundle["app"], "ux_review", spec, bundle.get("base_sha"), evaluators
+        )
+        research_subjects.record_subject(
+            identity,
+            lifecycle="active",
+            exp_id=review_id,
+            reason="uxreview_panel",
+            conn=conn,
+        )
+        return identity
+    except Exception as exc:  # must not kill a panel that costs real agent time
+        # Never silent: a swallowed failure here is indistinguishable from a panel that was
+        # never meant to be mined, which is exactly how this evidence went missing before.
+        print(
+            f"warn: ux_review subject registration failed for {review_id}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def review(
     bundle: dict,
     evaluators: list[str] | None = None,
@@ -422,10 +496,16 @@ def review(
     rdir = REVIEW_DIR / review_id.replace(":", "_")
     rdir.mkdir(parents=True, exist_ok=True)
 
+    # The rubric prompt is the panel's SPEC and is identical for every arm, so it is built
+    # once here rather than per evaluator, and reused as the subject's spec below.
+    rubric_prompt = build_rubric_prompt(bundle)
+
+    register_panel_subject(bundle, evaluators, spec=rubric_prompt)
+
     procs: dict[str, tuple[subprocess.Popen, object, Path]] = {}
     for ev in evaluators:
         pf = rdir / f"rubric-prompt-{ev}.txt"
-        pf.write_text(build_rubric_prompt(bundle))
+        pf.write_text(rubric_prompt)
         out_path = rdir / f"rubric-out-{ev}.txt"
         out = out_path.open("w")
         mode = AGENT_MODE.get(ev, "full")
@@ -505,6 +585,10 @@ def review(
     adversarial_result = _extract_json(adv_out_path.read_text(errors="replace"))
 
     agg = aggregate_panel(evaluator_results, adversarial_result, len(evaluators))
+    # Corroborated-consensus set, computed once: the arm labels below are relative to what the
+    # PANEL accepted, not to what any single arm claimed.
+    accepted_keys = {finding_key(f) for f in (agg.get("findings") or [])}
+    panel_found_anything = bool(accepted_keys)
 
     for ev in evaluators:
         parsed = evaluator_results.get(ev) or {}
@@ -518,6 +602,21 @@ def review(
             review_id, app, ev, overall,
             verdict={"scores": scores, "n_findings": len(findings), "findings": findings},
         )
+        # An evaluation is a SCORE; only an outcome reaches the learner. Without this the panel's
+        # arms are invisible to route weights no matter how many times it runs.
+        verdict_label, durability, note = panel_arm_outcome(
+            evaluator_results.get(ev), findings, accepted_keys, panel_found_anything
+        )
+        try:
+            feedback.record_outcome(
+                f"{review_id}:eval:{ev}",
+                verifier_verdict=verdict_label,
+                adjudicated_verdict=verdict_label,
+                durability=durability,
+                notes=note,
+            )
+        except Exception as exc:  # a learner write must never lose a completed panel
+            print(f"warn: ux_review outcome failed for {ev}: {exc}", file=sys.stderr)
         for gap in _normalize_evidence_gaps(parsed):
             feedback.record_evidence_gap(review_id, ev, gap)
 

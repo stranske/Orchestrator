@@ -1062,7 +1062,7 @@ def _capability_heartbeat(event_type: str, *, agent: str, mode: str | None) -> N
 
 def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             timeout: int | None = None, isolate: bool = False,
-            profile_id: str | None = None) -> dict:
+            profile_id: str | None = None, research_round: str | None = None) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
     By default this runs in `cwd`. With isolate=True, it first copies `cwd` to a persistent local
@@ -1072,7 +1072,13 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     Runs a cheaper agent and RETURNS its output to the orchestrating seat — no claim, no PR.
     This is how the seat offloads token-heavy READING (e.g. summarize 200 pages →
     gemini's huge context) and gets back only the result, spending the cheap agent's capacity
-    instead of its own. Records a ledger row (it consumes the agent's budget)."""
+    instead of its own. Records a ledger row (it consumes the agent's budget).
+
+    `research_round` binds this offload to a multi-agent research round (see
+    `research_subjects.record_research_round`). An audit or study that fans work out to several
+    agents is comparable evidence, but only if the runs carry the round as their experiment_id:
+    without it each agent is an unrelated run against an ephemeral temp path, which is why
+    thousands of offload runs across six agents produced nothing the learner could compare."""
     # KILL SWITCH. Added 2026-08-21 because the admission gate was literally right: nothing could
     # stop the fleet's most-used capability (~196 runs/week) without a code change. That is not
     # theoretical -- on 2026-08-08 the gemini model pin rotted and EVERY offload to that seat exited
@@ -1161,6 +1167,7 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     def _record_offload_run() -> None:
         feedback.record_run(
             run_id, target, task_type, agent, mode="offload",
+            experiment_id=research_round or None,
             reasoning_level=(profile.get("reasoning_effort") if profile else mode), model=model,
             routing_metadata={
                 "selected_profile_id": profile_id,

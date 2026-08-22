@@ -233,6 +233,107 @@ def unevaluated_experiment_ids(
         return set()
 
 
+DOMAIN_PREFIX = "domain/"
+
+
+def domain_target(slug: str) -> str:
+    """Canonical target for research that is not about a repository. Pure; selftested.
+
+    Every research producer derives its target from a repo/issue, so research the owner actually
+    runs most often -- a topic study, a tool comparison, a technique to learn -- has no target
+    shape and therefore cannot be registered as a subject at all. `domain/<slug>` gives it one.
+
+    The payoff is retrieval before learning: a registered domain subject makes prior research
+    addressable by a later session, which is what "you have access to the research project showing
+    how to use Luminar, don't you?" was asking for and not getting.
+    """
+    text = re.sub(r"[^a-z0-9]+", "-", str(slug or "").strip().lower()).strip("-")
+    if not text:
+        raise ValueError("domain research slug must contain at least one alphanumeric character")
+    return f"{DOMAIN_PREFIX}{text}"
+
+
+def is_domain_target(target: str) -> bool:
+    """True when a canonical target names domain research rather than a repository."""
+    return str(target or "").strip().lower().startswith(DOMAIN_PREFIX)
+
+
+def record_domain_research(
+    slug: str,
+    spec: str,
+    arms: list[str] | tuple[str, ...],
+    *,
+    exp_id: str,
+    task_type: str = "research",
+    profiles: dict | list | None = None,
+    lifecycle: str = "active",
+    reason: str = "domain_research",
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """Register a non-repo research project as a subject and return its identity.
+
+    `spec` is the real scope of the study -- the question asked, the rubric, the brief -- and is
+    hashed, never stored raw. `arms` are the agents that actually did the work; a single-agent
+    study is one arm and must not be padded to look comparative.
+
+    Deliberately NO score or outcome is written here. There is no un-gameable success label for
+    "was this research any good", and inventing one would corrupt the learner far more than the
+    missing record does. Capture and retrieval only.
+    """
+    identity = subject_identity(domain_target(slug), task_type, spec, None, arms, profiles)
+    record_subject(
+        identity, lifecycle=lifecycle, exp_id=exp_id, reason=reason, conn=conn
+    )
+    return identity
+
+
+def research_round_id(area: str, kind: str, date: str) -> str:
+    """Stable id for one multi-agent research round, e.g. `stranske/Workflows:audit:2026-08-16`.
+
+    Mirrors the shape UX-review panels already use, because audits have the same structure: one
+    scope, several agents working it in parallel. The round id is what binds those agents into ONE
+    subject with a real arm set -- without it each offloaded agent is an unrelated run against an
+    ephemeral temp path, which is why thousands of offload runs across six agents produced nothing
+    the learner could compare.
+    """
+    area = str(area or "").strip().lower()
+    kind = re.sub(r"[^a-z0-9]+", "-", str(kind or "").strip().lower()).strip("-")
+    date = str(date or "").strip()
+    if not area or not kind or not date:
+        raise ValueError("research round needs area, kind and date")
+    return f"{area}:{kind}:{date}"
+
+
+def record_research_round(
+    area: str,
+    kind: str,
+    date: str,
+    spec: str,
+    arms: list[str] | tuple[str, ...],
+    *,
+    task_type: str | None = None,
+    base_sha: str | None = None,
+    profiles: dict | list | None = None,
+    lifecycle: str = "active",
+    conn: sqlite3.Connection | None = None,
+) -> tuple[str, dict]:
+    """Register a multi-agent research round as ONE subject. Returns (round_id, identity).
+
+    `arms` must be the agents that actually did the work. An audit round fanned out to four agents
+    is four arms and is comparable evidence; a round done by one agent is one arm and must not be
+    padded, because a forged arm set manufactures independence the evidence does not have.
+    """
+    arm_list = [str(a).strip() for a in arms if str(a).strip()]
+    if not arm_list:
+        raise ValueError("a research round needs at least one arm")
+    round_id = research_round_id(area, kind, date)
+    identity = subject_identity(area, task_type or kind, spec, base_sha, arm_list, profiles)
+    record_subject(
+        identity, lifecycle=lifecycle, exp_id=round_id, reason=f"{kind}_round", conn=conn
+    )
+    return round_id, identity
+
+
 def _effective_lifecycle(conn: sqlite3.Connection, row: tuple) -> str:
     lifecycle, exp_id = str(row[0]), row[1]
     if exp_id:
@@ -826,9 +927,82 @@ def _selftest() -> None:
     assert report["effective_sample_count"] == 3.0, report
     assert report["registered_run_count"] == 22, report
     conn.close()
+
+    # --- domain research namespace (line C): non-repo research must be registrable ---
+    assert domain_target("  Luminar Editing!! ") == "domain/luminar-editing"
+    assert domain_target("SBA Portfolio") == "domain/sba-portfolio"
+    for bad in ("", "   ", "!!!", None):
+        try:
+            domain_target(bad)
+        except ValueError:
+            pass
+        else:  # a blank slug must not become the target "domain/"
+            raise AssertionError(f"blank slug accepted: {bad!r}")
+    assert is_domain_target("domain/luminar-editing")
+    assert not is_domain_target("stranske/Ready#1")
+    dconn = sqlite3.connect(":memory:")
+    ensure_schema(dconn)
+    dident = record_domain_research(
+        "SBA Portfolio", "history + portfolio construction", ["codex", "claude"],
+        exp_id="domain:sba-2026-08-21", conn=dconn,
+    )
+    assert dident["canonical_target"] == "domain/sba-portfolio", dident
+    assert dident["arms"] == ["claude", "codex"], dident
+    drow = dconn.execute(
+        "SELECT s.canonical_target, s.task_type, x.exp_id FROM research_subject_experiments x "
+        "JOIN research_subjects s ON s.subject_id = x.subject_id"
+    ).fetchone()
+    assert drow == ("domain/sba-portfolio", "research", "domain:sba-2026-08-21"), drow
+    # A one-agent study is ONE arm; padding it would forge comparative evidence.
+    solo = record_domain_research(
+        "Luminar Editing", "curves tool", ["claude"],
+        exp_id="domain:luminar-1", conn=dconn,
+    )
+    assert solo["arms"] == ["claude"], solo
+    assert solo["subject_id"] != dident["subject_id"], "distinct topics must be distinct subjects"
+    dconn.close()
+
+    # --- multi-agent research rounds (line B): audits fan out to several agents ---
+    assert research_round_id("stranske/Workflows", "Audit", "2026-08-16") == \
+        "stranske/workflows:audit:2026-08-16"
+    for bad in (("", "audit", "2026-01-01"), ("a", "", "2026-01-01"), ("a", "audit", "")):
+        try:
+            research_round_id(*bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"incomplete round id accepted: {bad}")
+    rconn = sqlite3.connect(":memory:")
+    ensure_schema(rconn)
+    rid, rident = record_research_round(
+        "stranske/Workflows", "audit", "2026-08-16", "8 audit categories",
+        ["codex", "gemini", "cursor", "vibe"], conn=rconn,
+    )
+    assert rid == "stranske/workflows:audit:2026-08-16", rid
+    # Every arm retained: an audit fanned out to four agents is FOUR arms of comparable evidence.
+    assert rident["arms"] == ["codex", "cursor", "gemini", "vibe"], rident
+    assert rconn.execute(
+        "SELECT x.exp_id FROM research_subject_experiments x JOIN research_subjects s "
+        "ON s.subject_id = x.subject_id WHERE s.canonical_target='stranske/workflows'"
+    ).fetchone() == (rid,), "round must join exp_id -> subject"
+    # A solo round is ONE arm and must not be padded into false independence.
+    _, solo_round = record_research_round(
+        "local/Reader", "audit", "2026-08-09", "scope", ["claude"], conn=rconn,
+    )
+    assert solo_round["arms"] == ["claude"], solo_round
+    for empty in ([], ["", "  "]):
+        try:
+            record_research_round("a/b", "audit", "2026-01-01", "s", empty, conn=rconn)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("a round with no real arm was accepted")
+    rconn.close()
+
     print(
         "research_subjects.py selftest: OK (canonical identity, active/cooldown gate, "
-        "legacy-safe provenance, independent-subject effective sample count)"
+        "legacy-safe provenance, independent-subject effective sample count, "
+        "domain research namespace, multi-agent research rounds)"
     )
 
 
