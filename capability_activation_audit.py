@@ -631,8 +631,14 @@ def heartbeat_env_gate(*, here: Path | None = None) -> dict:
 # `TASK_SIGNALS` or loosening a matcher TO MOVE THIS NUMBER is forbidden — it would corrupt the
 # learned associations, which is the exact trap of measuring the thing you are optimising.
 #
-# `offload` is deliberately NOT in the baseline: it is reachable only through a hardcoded map, and a
-# hardcode cannot shrink quietly — deleting it IS a diff. This set covers DECLARED reach only.
+# DECLARED reach only, and the direct-entry set is tracked SEPARATELY below. `offload` was left out
+# of this baseline on 2026-08-22 because it was reachable only through a HARDCODED map inside
+# `advise()`, and a hardcode cannot shrink quietly — deleting it IS a diff. That premise died the
+# same day: #20 replaced the hardcode with `capability_advisor.direct_entry()`, DERIVED from
+# `dispatcher.TASK_TYPE_CAPABILITY`. Derived reach can now shrink with no diff in either module —
+# drop an entry from the dispatcher's map and the front door narrows silently. So the exemption that
+# was correct for a literal is exactly wrong for a derivation, and the direct set gets its own
+# baseline rather than no baseline.
 ADVISOR_REACH_BASELINE = frozenset({
     "codemod-campaign",
     "cross-repo-coordination",
@@ -640,6 +646,11 @@ ADVISOR_REACH_BASELINE = frozenset({
     "epic-decomposition",
     "testgen-lane",
 })
+# Targets reachable ONLY through the derived direct-entry map — never through a declared matcher.
+# `runtime-ac-checks` is the case that proves the point: the dispatcher has routed `runtime_ac` to it
+# all along while the advisor named `deliberate-break-verifier` for the same work, and nothing
+# reported the disagreement because neither side measured the other.
+ADVISOR_DIRECT_ENTRY_BASELINE = frozenset({"offload", "runtime-ac-checks"})
 ADVISOR_REACH_PROBE_REPO = "stranske/Ready"
 ADVISOR_REACH_PROBE_LANE = "opener"
 
@@ -656,7 +667,18 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
     except Exception as exc:                                   # noqa: BLE001
         return {"unreadable": f"capability_advisor unavailable ({type(exc).__name__})",
                 "reachable": [], "by_capability": {}, "task_types": [],
-                "regressed": sorted(ADVISOR_REACH_BASELINE)}
+                "regressed": sorted(ADVISOR_REACH_BASELINE),
+                "direct_entry": {}, "direct_entry_targets": [], "direct_entry_only": [],
+                "direct_entry_baseline": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
+                "direct_entry_regressed": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
+                "total_reachable_count": 0}
+    # ONE source for the direct-entry map: the advisor's own, which derives from the dispatcher.
+    # Re-listing it here would be the second inventory this function exists to prevent.
+    try:
+        direct = dict(capability_advisor.direct_entry())
+    except Exception:                                          # noqa: BLE001
+        direct = {}
+    direct_targets = {str(v) for v in direct.values() if v}
     by_capability: dict[str, list[str]] = {}
     for task_type in task_types:
         trigger = {"repository": ADVISOR_REACH_PROBE_REPO, "task_type": task_type,
@@ -677,9 +699,15 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
         "capability_count": len(caps),
         "baseline": sorted(ADVISOR_REACH_BASELINE),
         "regressed": sorted(ADVISOR_REACH_BASELINE - set(reachable)),
-        "direct_entry_note": ("the advisor also names `offload` through a hardcoded direct-entry "
-                             "map inside advise(); a hardcode cannot shrink quietly, so declared "
-                             "reach is what is tracked here"),
+        # THE DERIVED HALF. Reported next to the declared half because "5 reachable" and
+        # "7 reachable" are both true of different populations, and two disagreeing reach numbers in
+        # two modules is how a parallel inventory starts.
+        "direct_entry": dict(sorted(direct.items())),
+        "direct_entry_targets": sorted(direct_targets),
+        "direct_entry_only": sorted(direct_targets - set(reachable)),
+        "direct_entry_baseline": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
+        "direct_entry_regressed": sorted(ADVISOR_DIRECT_ENTRY_BASELINE - direct_targets),
+        "total_reachable_count": len(set(reachable) | direct_targets),
     }
 
 
@@ -1180,6 +1208,20 @@ def _selftest() -> None:
     assert reach["reachable"] == ["task-shaped"], reach
     assert reach["by_capability"]["task-shaped"] == ["testgen"], reach
     assert reach["capability_count"] == 3, "the denominator must travel with the count"
+    # THE DERIVED HALF must be reported and must agree with the advisor's own total. Two modules
+    # publishing different "reach" numbers for the same front door is a parallel inventory.
+    import capability_advisor
+    assert reach["direct_entry"] == dict(sorted(capability_advisor.direct_entry().items())), reach
+    assert reach["total_reachable_count"] == len(
+        set(reach["reachable"]) | set(reach["direct_entry_targets"])), reach
+    # A derived direct-entry map CAN shrink with no diff in either module (drop an entry from
+    # dispatcher.TASK_TYPE_CAPABILITY and the front door narrows in silence), which is why the
+    # derived set has its own baseline. Simulate the shrink: an empty map must regress.
+    import unittest.mock as _mock
+    with _mock.patch.object(capability_advisor, "direct_entry", lambda: {}):
+        shrunk = advisor_reach(synthetic)
+    assert shrunk["direct_entry_regressed"] == sorted(ADVISOR_DIRECT_ENTRY_BASELINE), shrunk
+    assert shrunk["direct_entry_targets"] == [], shrunk
     # A kind-shaped matcher failing to match is CORRECT, not a defect: it is entered directly.
     kind_row = audit_capability("kind-shaped", synthetic["kind-shaped"], emittable=em,
                                 templates=tmpl, label_index=idx, reach=reach)
