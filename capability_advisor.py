@@ -254,17 +254,29 @@ def learned_associations(*, path=None) -> dict:
     repeated observation ties them to the SKILLS that surface that work. Nothing is hand-declared
     here — if invoking the audit skill keeps surfacing adversarial-review, that association shows up
     on its own once the observations exist.
+
+    EVERY COUNT NAMES ITS OWN POPULATION (FM5, fixed 2026-08-22). `observations` used to be the sum
+    over `by_skill` ALONE, so an advisory match recorded WITHOUT a skill was invisible in the count
+    while still landing in `by_task_type` — the live ledger read "observations: 3" beside 12
+    task-type observations, and the difference looked like a bug in the ledger rather than in the
+    denominator. A convenient denominator in the reporting path of the very tool meant to measure
+    skill wiring would make "the skills are wired now" unfalsifiable. The three counts below
+    reconcile by construction: with_skill + without_skill == observations.
     """
     caps = capabilities.load(path or capabilities.REG)
     by_skill: dict[str, dict[str, int]] = {}
     by_task_type: dict[str, dict[str, int]] = {}
+    total = 0
+    with_skill = 0
     for cap_id, cap in caps.items():
         for event in cap.get("event_history") or []:
             meta = event.get("metadata") or {}
             if meta.get("source") != "capability_advisor":
                 continue
+            total += 1
             skill = meta.get("skill")
             if skill:
+                with_skill += 1
                 by_skill.setdefault(str(skill), {}).setdefault(cap_id, 0)
                 by_skill[str(skill)][cap_id] += 1
             tt = meta.get("task_type")
@@ -274,7 +286,17 @@ def learned_associations(*, path=None) -> dict:
     return {
         "by_skill": {s: dict(sorted(v.items(), key=lambda kv: -kv[1])) for s, v in sorted(by_skill.items())},
         "by_task_type": {t: dict(sorted(v.items(), key=lambda kv: -kv[1])) for t, v in sorted(by_task_type.items())},
-        "observations": sum(sum(v.values()) for v in by_skill.values()),
+        "observations": total,
+        "observations_with_skill": with_skill,
+        "observations_without_skill": total - with_skill,
+        "populations": {
+            "observations": "every capability_advisor match event in the ledger",
+            "observations_with_skill":
+                "the subset naming a skill — the ONLY population by_skill can cover",
+            "observations_without_skill":
+                "matches with no skill attributed: counted in by_task_type, absent from by_skill",
+            "by_task_type": "every match event carrying a task_type, skill-attributed or not",
+        },
     }
 
 
@@ -465,8 +487,29 @@ def _selftest() -> None:
         assert after["last_match"], after
         assert capabilities.classify_liveness(after) == "matched_not_invoked", after
 
+        # --- DENOMINATORS: a skill-less match must not be invisible (FM5) -------------------
+        # THE BUG THIS CATCHES: `observations` was the sum over by_skill alone, so an advisory
+        # match with no skill attributed vanished from the count while still being counted in
+        # by_task_type. Every skill-wiring claim measured with that number was unfalsifiable.
+        # An advisory call with NO skill — exactly what a session that forgets `skill=` produces.
+        advise("add unit tests for the anonymous caller", path=ledger)
+        d = learned_associations(path=ledger)
+        # by_skill is blind to it, by design; the totals are not, and they reconcile.
+        assert "" not in d["by_skill"] and None not in d["by_skill"], d["by_skill"]
+        assert d["observations_with_skill"] == sum(
+            sum(v.values()) for v in d["by_skill"].values()), d
+        assert d["observations_without_skill"] >= 1, d      # the skill-less match IS visible
+        assert d["observations"] == (
+            d["observations_with_skill"] + d["observations_without_skill"]), d
+        # The old definition would have made these two equal; they must differ here, or the
+        # convenient denominator is back.
+        assert d["observations"] > d["observations_with_skill"], d
+        # Every count states which population it covers, so a subset cannot pass as the set.
+        assert set(d["populations"]) >= {"observations", "observations_with_skill",
+                                         "observations_without_skill", "by_task_type"}, d
+
     print("capability_advisor.py selftest: OK (deterministic classification, says NO, "
-          "advice never implies dispatch, retired/unmatched excluded)")
+          "advice never implies dispatch, retired/unmatched excluded, denominators named)")
 
 
 def main(argv: list[str]) -> int:
