@@ -93,7 +93,11 @@ export ORCH_ROLE_MAX_PER_CYCLE="${ORCH_ROLE_MAX_PER_CYCLE:-1}"
 # (opt-in per issue, low volume). Required active closer/merge work blocks until the gate executes
 # and returns PASS. The separate adversarial reviewer panel remains advisory. Shell
 # command/non_regression checks stay SEPARATELY gated behind ORCH_RUNTIME_AC_ALLOW_COMMANDS
-# (left OFF here) so this never executes arbitrary agent-authored commands. Aligns with the owner
+# (left OFF here) so this never executes an arbitrary agent-authored `command` STRING. Precise scope,
+# corrected 2026-08-22: that flag covers the `command` and `non_regression` kinds only (see
+# ORCH-ANCHOR: runtime-ac-command-exec-gate). `deliberate_break` runs WITHOUT it — its outer command
+# is template-built, and its agent-authored `test_cmd` reaches local_verify via shlex.split with
+# shell=False after every shell control character has been rejected. Aligns with the owner
 # constraint: prefer machine gates over human review. Export ORCH_RUN_RUNTIME_AC=0 to pause.
 export ORCH_RUN_RUNTIME_AC="${ORCH_RUN_RUNTIME_AC:-1}"
 # Range-lane LIVE dispatch — BOUNDED TRIAL started 2026-07-08 (owner: "turn it on as a bounded
@@ -163,22 +167,25 @@ if [[ "$mode" == "active" ]] && ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-# Capacity + discovery write only orchestrator-owned artifacts (capacity.json/backlog.json);
-# the legacy lanes never read them, so this is safe in either mode.
-python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
-python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
-if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
-  if python3 "$ORCH/frontend_verify.py" --doctor --require-browser-endpoint --start-browser >/dev/null 2>&1; then
-    :
-  else
-    echo "  warn: frontend_verify browser endpoint not ready after start attempt (continuing)"
-  fi
-fi
-
+# ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
+# `capabilities.production_heartbeat` and `daily_heartbeat` are NO-OPS unless
+# ORCH_CAPABILITY_HEARTBEATS=1 is in the CHILD process's environment. So this export must sit above
+# every heartbeat-emitting producer, or the producer runs and records nothing — and "recorded
+# nothing" is indistinguishable from "never ran", which is the silence this whole ledger exists to
+# break. Measured 2026-08-22: the export sat BELOW `capacity.py` and the frontend doctor, so
+#   * `frontend-verifier` could never accrue a single invocation (the doctor is its only tick
+#     caller), making ORCH_FRONTEND_VERIFY_START_BROWSER=1 look like a switch that did not help; and
+#   * `windowed-capacity-policy`'s declared cadence "every tick (capacity.build at the top of the
+#     tick)" was false — its evidence came only from LATER in-process callers.
+# DO NOT cite this block by line number; cite the anchor above. The stored criterion for
+# ORCH_FRONTEND_VERIFY_START_BROWSER cited `orchestrate.sh:133`/`:152` and both had rotted to
+# 171/190 by the time anyone read them. Enforced by test_heartbeat_ordering.py, which fails if any
+# producer that calls production_heartbeat/daily_heartbeat is invoked above this anchor.
+#
+# Ordering INSIDE this block is also load-bearing and unchanged: validate lifecycle truth FIRST,
+# then enable heartbeats. Invalid active declarations are a dispatch blocker — continuing would
+# manufacture evidence outside the declared producer/consumer/outcome contract.
 if [[ "$mode" == "active" ]]; then
-  # Create/migrate and validate lifecycle truth before any producer can emit a heartbeat.
-  # Invalid active declarations are a dispatch blocker: continuing would manufacture
-  # evidence outside the declared producer/consumer/outcome contract.
   if ! python3 "$ORCH/capabilities.py" --json validate > "$STAMP_DIR/capability-validation.json"; then
     echo "  ABORT: capability lifecycle validation failed; see $STAMP_DIR/capability-validation.json" >&2
     exit 1
@@ -188,6 +195,24 @@ if [[ "$mode" == "active" ]]; then
     exit 1
   fi
   export ORCH_CAPABILITY_HEARTBEATS=1
+fi
+
+# ORCH-ANCHOR: heartbeat-producers ---------------------------------------------------------------
+# Everything from here down may emit capability heartbeats. Capacity + discovery write only
+# orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
+# this is safe in either mode.
+python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
+python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
+# ORCH-ANCHOR: frontend-verify-doctor -- the ONLY tick caller of the frontend-verifier capability.
+if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
+  if python3 "$ORCH/frontend_verify.py" --doctor --require-browser-endpoint --start-browser >/dev/null 2>&1; then
+    :
+  else
+    echo "  warn: frontend_verify browser endpoint not ready after start attempt (continuing)"
+  fi
+fi
+
+if [[ "$mode" == "active" ]]; then
   python3 "$ORCH/claims.py" reap     >/dev/null 2>&1 || true
   # Heartbeat so the legacy opener/closer cron lanes YIELD to the orchestrator this tick (stale in 15m).
   printf '{"generated_at": %s, "pid": %s}\n' "$(date +%s)" "$$" > "$HOME/.codex/handoff/orchestrator.json"

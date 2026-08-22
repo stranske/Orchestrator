@@ -73,6 +73,9 @@ DEFECT_CLASSES = {
     "no_prompt_template": "no PROMPT_TEMPLATES entry, so there is nothing to dispatch",
     "label_absent_from_fleet": "the labels that would produce its task_type exist in ~no repo",
     "heartbeat_off_path": "its code runs, but the heartbeat is unreachable from any driver",
+    "heartbeat_env_suppressed": "a shell driver invokes its entrypoint ABOVE the "
+                                "ORCH_CAPABILITY_HEARTBEATS export, so the heartbeat call runs "
+                                "and records nothing",
     "no_heartbeat": "the entrypoint records nothing at all",
     "entrypoint_no_caller": "no driver module calls the entrypoint",
     "entrypoint_missing": "the declared entrypoint file does not exist",
@@ -80,6 +83,9 @@ DEFECT_CLASSES = {
                            "change there, not here",
     "trigger_shape_mismatch": "kind-matched, so a task_type trigger can never reach it",
     "vocabulary_mismatch": "the fleet uses a label in this namespace that the code does not accept",
+    "advisor_reach_regression": "it used to be nameable from a free-text task at the advisor front "
+                               "door and no longer is; a tightened matcher dropped it out of the "
+                               "front door with nothing reporting it",
 }
 
 # Code-side label vocabularies that gate behaviour, and the capability each one gates. A fleet label
@@ -468,6 +474,215 @@ def heartbeat_reachable(cap: dict) -> dict:
     return {"status": "no_heartbeat", "files": [p.name for p in files]}
 
 
+# ------------------------------------------------------------------ heartbeat ENABLEMENT (env gate)
+#
+# `heartbeat_reachable` above answers "can a driver reach the heartbeat CALL?". That is not the same
+# question as "will the heartbeat RECORD anything?", and until 2026-08-22 nothing owned the second
+# one. `capabilities.production_heartbeat` / `daily_heartbeat` return False immediately unless
+# ORCH_CAPABILITY_HEARTBEATS=1 is in the CHILD process's environment, and only orchestrate.sh
+# exports it. So a shell invocation placed ABOVE that export reaches the call and records NOTHING —
+# reachable and silent at the same time.
+#
+# MEASURED, not hypothetical (2026-08-22, orchestrate.sh before this was fixed): the export sat 19
+# lines below `frontend_verify.py --doctor`, whose invocation is the frontend-verifier capability's
+# only tick caller. `heartbeat_reachable` reported it `reachable` (main() heartbeat + a shell CLI
+# invocation), the firing monitor reported `never fired`, and both were right — flipping
+# ORCH_FRONTEND_VERIFY_START_BROWSER=1 would have recorded nothing and read as "the switch did not
+# help". `capacity.py` was in the same position, making `windowed-capacity-policy`'s declared cadence
+# ("every tick, capacity.build at the top of the tick") false: its evidence came only from later
+# in-process callers.
+#
+# Reported with BOTH numbers, per the latched-gate runtime rule: `suppressed` alone cannot be read,
+# because zero suppressed looks identical whether the ordering is correct or the parse found no
+# invocations at all. `invocations_after` is the denominator that tells those apart.
+HEARTBEAT_ENV_FLAG = "ORCH_CAPABILITY_HEARTBEATS"
+HEARTBEAT_EXPORT_ANCHOR = "ORCH-ANCHOR: heartbeat-export"
+SHELL_DRIVERS = tuple(d for d in DRIVER_MODULES if d.endswith(".sh"))
+
+# A call, never a definition. `capabilities.py` DEFINES both helpers and calls neither, so matching
+# the bare name would report the validation gate — which must stay above the export — as a defect.
+_HEARTBEAT_CALL_RE = re.compile(r"\b(?:production_heartbeat|daily_heartbeat)\s*\(")
+_HEARTBEAT_DEF_RE = re.compile(r"^\s*def\s+(?:production_heartbeat|daily_heartbeat)\b")
+_SHELL_FUNC_OPEN_RE = re.compile(r"^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{")
+_SHELL_PY_INVOKE_RE = re.compile(r"(?:python3?|\bexec\b)")
+_SHELL_PY_MODULE_RE = re.compile(r"([A-Za-z0-9_]+)\.py")
+
+
+def emits_heartbeat(path: Path) -> bool:
+    """Does this module CALL a production heartbeat? (A definition is not a call.)"""
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return False
+    return any(_HEARTBEAT_CALL_RE.search(line) and not _HEARTBEAT_DEF_RE.match(line)
+               for line in text.splitlines())
+
+
+def shell_heartbeat_gate(text: str) -> dict:
+    """Split a shell driver's python invocations around the heartbeat export. PURE.
+
+    Three buckets, because two would lie:
+      * `before`   — invoked above the export, so any heartbeat it emits is discarded.
+      * `after`    — invoked below it; heartbeats land. This is the denominator.
+      * `deferred` — inside a shell FUNCTION body, so the position of the definition says nothing
+                     about when it runs (`_gh_gate` is defined near the top and called throughout).
+                     Reported rather than guessed; calling a deferred invocation `before` would
+                     manufacture a defect out of a definition.
+    """
+    export_line: int | None = None
+    before: list[tuple[int, str]] = []
+    after: list[tuple[int, str]] = []
+    deferred: list[tuple[int, str]] = []
+    depth = 0
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        # Classify with the depth the line ITSELF sits at, then update. A one-line function
+        # (`_gh_gate() { ...python3 gh_capacity.py...; }`) opens and closes on the same line, so
+        # updating first would return depth to 0 and bucket its body as top-level `before` — the
+        # exact false positive this bucket exists to avoid.
+        opens = depth == 0 and bool(_SHELL_FUNC_OPEN_RE.match(line))
+        in_function = depth > 0 or opens
+        if opens:
+            depth = line.count("{") - line.count("}")
+        elif depth > 0:
+            depth += line.count("{") - line.count("}")
+        depth = max(depth, 0)
+        if not stripped or stripped.startswith("#"):
+            continue
+        if export_line is None and re.search(
+                rf"^\s*export\s+{re.escape(HEARTBEAT_ENV_FLAG)}=1\b", line):
+            export_line = lineno
+            continue
+        if not _SHELL_PY_INVOKE_RE.search(line.split("#", 1)[0]):
+            continue
+        # Deduped per line: a single invocation whose warn message repeats the module name
+        # (`python3 "$ORCH/capacity.py" || echo "warn: capacity.py failed"`) is ONE invocation, and
+        # counting it twice would inflate the denominator these buckets exist to make readable.
+        for mod in dict.fromkeys(_SHELL_PY_MODULE_RE.findall(line.split("#", 1)[0])):
+            entry = (lineno, f"{mod}.py")
+            if in_function:
+                deferred.append(entry)
+            elif export_line is None:
+                before.append(entry)
+            else:
+                after.append(entry)
+    return {"export_line": export_line, "before": before, "after": after, "deferred": deferred}
+
+
+def heartbeat_env_gate(*, here: Path | None = None) -> dict:
+    """Which heartbeat-emitting modules does a shell driver invoke before enabling heartbeats?
+
+    `suppressed_modules` is the defect set. `invocations_after` is published alongside it so a zero
+    can be read: 0 suppressed of 40 invocations is a correct ordering, 0 of 0 is a broken parse.
+    """
+    root = here or HERE
+    out = {"flag": HEARTBEAT_ENV_FLAG, "anchor": HEARTBEAT_EXPORT_ANCHOR, "drivers": {},
+           "suppressed_modules": [], "invocations_before": 0, "invocations_after": 0,
+           "invocations_deferred": 0, "anchor_present": False}
+    suppressed: dict[str, list[str]] = {}
+    for driver in SHELL_DRIVERS:
+        dpath = root / driver
+        if not dpath.exists():
+            continue
+        text = dpath.read_text(errors="ignore")
+        gate = shell_heartbeat_gate(text)
+        if HEARTBEAT_EXPORT_ANCHOR in text:
+            out["anchor_present"] = True
+        emitting_before = sorted({
+            mod for _, mod in gate["before"] if emits_heartbeat(root / mod)})
+        out["drivers"][driver] = {
+            "export_line": gate["export_line"],
+            "invocations_before": len(gate["before"]),
+            "invocations_after": len(gate["after"]),
+            "invocations_deferred": len(gate["deferred"]),
+            "heartbeat_emitters_before": emitting_before,
+        }
+        out["invocations_before"] += len(gate["before"])
+        out["invocations_after"] += len(gate["after"])
+        out["invocations_deferred"] += len(gate["deferred"])
+        for mod in emitting_before:
+            suppressed.setdefault(mod, []).append(driver)
+    out["suppressed_modules"] = sorted(suppressed)
+    out["suppressed_by_driver"] = {k: sorted(v) for k, v in sorted(suppressed.items())}
+    return out
+
+
+# ------------------------------------------------------- advisor reach (span of the FRONT DOOR)
+#
+# `capability_advisor.advise` (and the `capability_advice` MCP tool) is the front door: it turns a
+# free-text task into a list of capabilities. A capability no free-text task can NAME is invisible
+# there — and that is a property of its MATCHER SHAPE, not of demand. `capabilities._matches_trigger`
+# is handed {repository, task_type, lane} and fails closed against a kind-based matcher, by design.
+# Measured 2026-08-22 over the 41-row ledger: FIVE capabilities are nameable from a task type, all
+# five carrying `{"field": "task_type", ...}`; the other 36 carry kind-shaped matchers (tick_phase 9,
+# role 5, env 4, then singletons). The advisor names a sixth, `offload`, through a hardcoded
+# direct-entry map inside `advise()`.
+#
+# WHY THIS IS AUDITED. Reach has already SHRUNK in silence. The learned skill->capability
+# associations still hold observations for `docs-drift-fix-agent` (2) and `adversarial-review` (1) —
+# both alive, both once reachable, which is how those observations exist. Each was later retuned to
+# a kind-shaped matcher (`ci_workflow`, `closer_gate`), correctly, and each thereby dropped out of
+# the front door with nothing reporting it. A measuring instrument whose own span narrows unobserved
+# is a latched gate inside the gauge.
+#
+# THE BASELINE IS A FLOOR, NOT A TARGET, AND MUST NOT BE CHASED. Reach may grow freely. It may not
+# shrink without appearing in a diff: a matcher legitimately tightened must drop its name from this
+# set in the same change, which puts the decision in review instead of in silence. Widening
+# `TASK_SIGNALS` or loosening a matcher TO MOVE THIS NUMBER is forbidden — it would corrupt the
+# learned associations, which is the exact trap of measuring the thing you are optimising.
+#
+# `offload` is deliberately NOT in the baseline: it is reachable only through a hardcoded map, and a
+# hardcode cannot shrink quietly — deleting it IS a diff. This set covers DECLARED reach only.
+ADVISOR_REACH_BASELINE = frozenset({
+    "codemod-campaign",
+    "cross-repo-coordination",
+    "deliberate-break-verifier",
+    "epic-decomposition",
+    "testgen-lane",
+})
+ADVISOR_REACH_PROBE_REPO = "stranske/Ready"
+ADVISOR_REACH_PROBE_LANE = "opener"
+
+
+def advisor_reach(caps: dict[str, dict]) -> dict:
+    """Which capabilities can a free-text task NAME through their declared matcher? PURE.
+
+    Pure over an already-loaded ledger dict on purpose: no second `capabilities.load`, so this can
+    never take a writing load of the live ledger, and the selftest can drive it with three rows.
+    """
+    try:
+        import capability_advisor
+        task_types = list(capability_advisor.TASK_SIGNALS)
+    except Exception as exc:                                   # noqa: BLE001
+        return {"unreadable": f"capability_advisor unavailable ({type(exc).__name__})",
+                "reachable": [], "by_capability": {}, "task_types": [],
+                "regressed": sorted(ADVISOR_REACH_BASELINE)}
+    by_capability: dict[str, list[str]] = {}
+    for task_type in task_types:
+        trigger = {"repository": ADVISOR_REACH_PROBE_REPO, "task_type": task_type,
+                   "lane": ADVISOR_REACH_PROBE_LANE}
+        for cap_id, cap in sorted(caps.items()):
+            if cap.get("status") in {"retired", "superseded"}:
+                continue
+            ok, _reasons = capabilities._matches_trigger(cap, trigger)
+            if ok:
+                by_capability.setdefault(cap_id, []).append(task_type)
+    reachable = sorted(by_capability)
+    return {
+        "reachable": reachable,
+        "by_capability": {k: sorted(v) for k, v in sorted(by_capability.items())},
+        "task_types": task_types,
+        # BOTH numbers again: "5 reachable" is only readable next to the total it is drawn from.
+        "reachable_count": len(reachable),
+        "capability_count": len(caps),
+        "baseline": sorted(ADVISOR_REACH_BASELINE),
+        "regressed": sorted(ADVISOR_REACH_BASELINE - set(reachable)),
+        "direct_entry_note": ("the advisor also names `offload` through a hardcoded direct-entry "
+                             "map inside advise(); a hardcode cannot shrink quietly, so declared "
+                             "reach is what is tracked here"),
+    }
+
+
 # --------------------------------------------------------------------------- fleet vocabulary
 
 def _fleet_label_index(*, use_cache: bool = True) -> dict:
@@ -524,7 +739,8 @@ def label_coverage(task_type: str, index: dict) -> dict:
 # --------------------------------------------------------------------------- the audit
 
 def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: set[str],
-                     label_index: dict, vocab_gaps: dict | None = None) -> dict:
+                     label_index: dict, vocab_gaps: dict | None = None,
+                     env_gate: dict | None = None, reach: dict | None = None) -> dict:
     """One capability: entry class, machinery verdict, named defects. Never a demand guess."""
     entry = entry_class(cap)
     defects: list[str] = []
@@ -598,6 +814,30 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
         notes.append(f"fleet uses {', '.join(gaps[:4])}, which its label set does not accept")
         row["vocabulary_gaps"] = gaps
 
+    # Entry-class agnostic on purpose: a mis-ordered shell invocation silences a gated capability's
+    # producer exactly as thoroughly as a directly-entered one's, and the frontend-verifier instance
+    # was BOTH (kind-matched, and held behind ORCH_FRONTEND_VERIFY_START_BROWSER).
+    # ADVISOR REACH is recorded on EVERY row, reachable or not, because "the advisor never
+    # recommended it" has two causes with opposite fixes: nobody asked for that work, versus the
+    # front door structurally cannot name it. Without this column those two read identically —
+    # standing rule 6 ("no demand" vs "could not fire") showing up in a new place.
+    if reach is not None:
+        row["advisor_reachable"] = cap_id in set(reach.get("reachable") or [])
+        row["advisor_task_types"] = (reach.get("by_capability") or {}).get(cap_id) or []
+        if cap_id in set(reach.get("regressed") or []):
+            defects.append("advisor_reach_regression")
+            notes.append("was nameable at the advisor front door and no longer is; a tightened "
+                         "matcher dropped it out without any diff saying so")
+
+    suppressed = set((env_gate or {}).get("suppressed_modules") or [])
+    if suppressed:
+        mine = sorted({p.name for p in _entrypoint_files(cap) if p.name in suppressed})
+        if mine:
+            defects.append("heartbeat_env_suppressed")
+            notes.append(f"{', '.join(mine)} is invoked above the "
+                         f"{HEARTBEAT_ENV_FLAG} export, so its heartbeat records nothing")
+            row["heartbeat_env_suppressed"] = mine
+
     row["defects"] = sorted(set(defects))
     row["notes"] = [n for n in notes if n]
     row["reachable"] = not row["defects"]
@@ -626,8 +866,10 @@ def audit(*, path=None, use_cache: bool = True) -> dict:
     templates = _prompt_templates()
     index = _fleet_label_index(use_cache=use_cache)
     vgaps = vocabulary_gaps(index)
+    env_gate = heartbeat_env_gate()
+    reach = advisor_reach(caps)
     rows = [audit_capability(cid, cap, emittable=emittable, templates=templates,
-                             label_index=index, vocab_gaps=vgaps)
+                             label_index=index, vocab_gaps=vgaps, env_gate=env_gate, reach=reach)
             for cid, cap in sorted(caps.items())]
     by_defect: dict[str, list[str]] = {}
     for row in rows:
@@ -646,6 +888,10 @@ def audit(*, path=None, use_cache: bool = True) -> dict:
         "by_entry_class": by_entry,
         "by_defect": {k: sorted(v) for k, v in sorted(by_defect.items())},
         "emittable_task_types": sorted(emittable),
+        # Published with BOTH numbers so a zero can be read: `suppressed_modules: []` with
+        # `invocations_after: 0` is a broken parse, not a clean ordering.
+        "heartbeat_env_gate": env_gate,
+        "advisor_reach": reach,
         "rows": rows,
     }
 
@@ -844,6 +1090,116 @@ def _selftest() -> None:
         finally:
             HERE = saved_here
 
+    # HEARTBEAT ENABLEMENT — reachable is NOT the same as recorded. Synthetic fixture on purpose
+    # (the real orchestrate.sh is now correctly ordered, so asserting against it would only prove
+    # today's file and would go on passing if the ordering regressed in a way the parse missed).
+    # Both directions, so a regression to a hardcoded verdict fails here.
+    with tempfile.TemporaryDirectory(prefix="cap-envgate-") as td:
+        root = Path(td)
+        (root / "producer.py").write_text(
+            "import capabilities\n"
+            "def go():\n    capabilities.production_heartbeat('p','invocation')\n")
+        # DEFINES the helpers and calls neither — the shape of capabilities.py, which MUST be
+        # allowed above the export because it is the validation gate that authorises heartbeats.
+        (root / "gatekeeper.py").write_text(
+            "def production_heartbeat(a, b):\n    return False\n"
+            "def daily_heartbeat(a, b):\n    return False\n")
+        assert emits_heartbeat(root / "producer.py")
+        assert not emits_heartbeat(root / "gatekeeper.py"), "a definition is not a call"
+
+        bad = ('python3 "$ORCH/gatekeeper.py" --validate\n'
+               'python3 "$ORCH/producer.py" --run\n'
+               "export ORCH_CAPABILITY_HEARTBEATS=1\n"
+               'python3 "$ORCH/producer.py" --run-again\n')
+        (root / "orchestrate.sh").write_text(bad)
+        broken = heartbeat_env_gate(here=root)
+        assert broken["suppressed_modules"] == ["producer.py"], broken
+        assert broken["invocations_before"] == 2 and broken["invocations_after"] == 1, broken
+        assert not broken["anchor_present"], broken
+
+        # REVERT: move the export above the producer and the defect must clear — and the
+        # denominator must stay non-zero, so a clean verdict is distinguishable from a dead parse.
+        good = (f"# {HEARTBEAT_EXPORT_ANCHOR}\n"
+                'python3 "$ORCH/gatekeeper.py" --validate\n'
+                "export ORCH_CAPABILITY_HEARTBEATS=1\n"
+                'python3 "$ORCH/producer.py" --run\n')
+        (root / "orchestrate.sh").write_text(good)
+        fixed = heartbeat_env_gate(here=root)
+        assert fixed["suppressed_modules"] == [], fixed
+        assert fixed["invocations_after"] >= 1, "a zero denominator cannot be read as clean"
+        assert fixed["anchor_present"], fixed
+
+        # A one-line shell FUNCTION is deferred, not `before`: the definition's position says
+        # nothing about when it runs, and calling it `before` invents a defect (`_gh_gate` defines
+        # `python3 gh_capacity.py` at the top of orchestrate.sh and is called throughout).
+        (root / "orchestrate.sh").write_text(
+            '_g() { python3 "$ORCH/producer.py" --gate; }\n'
+            "export ORCH_CAPABILITY_HEARTBEATS=1\n"
+            'python3 "$ORCH/gatekeeper.py" --x\n')
+        fn = heartbeat_env_gate(here=root)
+        assert fn["suppressed_modules"] == [], fn
+        assert fn["invocations_deferred"] == 1, fn
+
+        # A COMMENT is not an invocation.
+        (root / "orchestrate.sh").write_text(
+            '# python3 "$ORCH/producer.py" --run\n'
+            "export ORCH_CAPABILITY_HEARTBEATS=1\n"
+            'python3 "$ORCH/producer.py" --run\n')
+        cm = heartbeat_env_gate(here=root)
+        assert cm["suppressed_modules"] == [], cm
+        assert cm["invocations_before"] == 0, cm
+
+        # And the defect must reach the capability ROW, or the audit reports a clean sheet while
+        # the producer records nothing.
+        (root / "orchestrate.sh").write_text(bad)
+        gate = heartbeat_env_gate(here=root)
+        saved_here = HERE
+        try:
+            HERE = root
+            row = audit_capability("p", {"matcher": {"kind": "tick_phase", "name": "p"},
+                                         "entrypoint": "producer.py", "status": "generated"},
+                                   emittable=em, templates=tmpl, label_index=idx, env_gate=gate)
+        finally:
+            HERE = saved_here
+        assert "heartbeat_env_suppressed" in row["defects"], row
+        assert not row["reachable"], row
+
+    # ADVISOR REACH — the span of the front door, and whether it has narrowed. Synthetic ledger, so
+    # this exercises the mechanism rather than today's ledger contents.
+    synthetic = {
+        "task-shaped": {"capability_id": "task-shaped", "status": "generated",
+                        "matcher": {"field": "task_type", "operator": "in",
+                                    "value": ["testgen"]}},
+        "kind-shaped": {"capability_id": "kind-shaped", "status": "generated",
+                        "matcher": {"kind": "tick_phase", "name": "x"}},
+        "retired-task-shaped": {"capability_id": "retired-task-shaped", "status": "retired",
+                                "matcher": {"field": "task_type", "operator": "in",
+                                            "value": ["testgen"]}},
+    }
+    reach = advisor_reach(synthetic)
+    assert reach["reachable"] == ["task-shaped"], reach
+    assert reach["by_capability"]["task-shaped"] == ["testgen"], reach
+    assert reach["capability_count"] == 3, "the denominator must travel with the count"
+    # A kind-shaped matcher failing to match is CORRECT, not a defect: it is entered directly.
+    kind_row = audit_capability("kind-shaped", synthetic["kind-shaped"], emittable=em,
+                                templates=tmpl, label_index=idx, reach=reach)
+    assert kind_row["advisor_reachable"] is False, kind_row
+    assert "advisor_reach_regression" not in kind_row["defects"], kind_row
+    # ...but a capability IN THE BASELINE that is no longer reachable is a silent narrowing, and
+    # must surface. Simulate it by naming a baseline member the synthetic ledger cannot reach.
+    victim = sorted(ADVISOR_REACH_BASELINE)[0]
+    regressed = advisor_reach({victim: {"capability_id": victim, "status": "generated",
+                                        "matcher": {"kind": "ci_workflow", "name": "y"}}})
+    assert regressed["regressed"], regressed
+    reg_row = audit_capability(victim, {"capability_id": victim, "status": "generated",
+                                        "matcher": {"kind": "ci_workflow", "name": "y"},
+                                        "entrypoint": "nothing.py"},
+                               emittable=em, templates=tmpl, label_index=idx, reach=regressed)
+    assert "advisor_reach_regression" in reg_row["defects"], reg_row
+    # An unreadable advisor must report the whole baseline as regressed rather than an empty,
+    # reassuring result — silence must never read as a pass.
+    assert advisor_reach({})["regressed"] == sorted(ADVISOR_REACH_BASELINE)
+
     # EXTERNAL CALLER. `entrypoint_external` is a blocker only while the cross-repo change is
     # OUTSTANDING. Once the caller lands, continuing to report "blocked" would be the same
     # false-negative this module exists to prevent.
@@ -992,7 +1348,8 @@ def _selftest() -> None:
         assert progress(r2, path=Path(td) / "absent.json")["baseline"] is None
 
     print("capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
-          "heartbeat off-path vs no-heartbeat vs reachable, progress + regression tracking)")
+          "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
+          "directions, advisor reach + narrowing, progress + regression tracking)")
 
 
 def main(argv: list[str]) -> int:

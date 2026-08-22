@@ -44,13 +44,28 @@ EXCLUDE_NAMES = {"features.py", "feature_scan.py", "conftest.py", "setup.py"}
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
-    """Credit the feature-reflection capability at the path a driver actually enters."""
-    try:
-        import capabilities
-        capabilities.production_heartbeat("feature-reflection-cli", event_type,
-                                          ref="feature_scan.scan")
-    except Exception:
-        pass
+    """Credit the capabilities entered at this path, at the path a driver actually enters.
+
+    TWO ledger rows declare `feature_scan.py:scan` as their entrypoint — `feature-scan` (matcher
+    `{"kind": "tick_phase", "name": "feature_scan"}`, cadence "cadence step feature-scan") and
+    `feature-reflection-cli` (matcher `{..., "name": "reflection"}`). Until 2026-08-22 this function
+    credited only the second, so `feature-scan` had NO PRODUCER AT ALL: the daily cadence step ran,
+    `feature-reflection-cli` accrued invocations, and `feature-scan` read `never fired` forever. That
+    is not a dormant capability, it is an unrecorded one — and the two are indistinguishable in the
+    firing monitor, which is the whole failure this ledger exists to prevent.
+
+    Both rows are credited because the step genuinely enters the entrypoint both declare. It is
+    NOT a fix for the underlying question of whether two rows should describe one code path; that is
+    a lifecycle decision (merge or retire) needing its own evidence, and inventing an extra
+    heartbeat is the wrong way to make it. Recording what actually ran is the honest floor.
+    """
+    for capability_id in ("feature-scan", "feature-reflection-cli"):
+        try:
+            import capabilities
+            capabilities.production_heartbeat(capability_id, event_type,
+                                              ref="feature_scan.scan")
+        except Exception:
+            pass
 
 
 def is_reusable_structure(path: Path) -> tuple[bool, str]:
