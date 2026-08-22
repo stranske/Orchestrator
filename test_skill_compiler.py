@@ -11,10 +11,23 @@ import pytest
 
 import capabilities
 import capability_compiler as compiler
+import env_prereq
 import feedback
 
 
 QUICK_VALIDATE = Path.home() / ".codex" / "skills" / ".system" / "skill-creator" / "scripts" / "quick_validate.py"
+
+# EVERY test here builds from `compiler.reference_skill_source()`, which hashes a real installed
+# skill resource under ~/.codex/skills — on purpose: the skill compiler is exercised against a
+# genuine installed skill, not a synthetic fixture, because a fixture could not catch a manifest
+# that fails the real validator. So the resource is this file's prerequisite in full.
+#
+# `skipif` rather than a module-level raise: skipif leaves all 7 items COLLECTED and skips them
+# individually with the reason attached, while a raise at import time would drop the collection
+# count by 7 — and a dropped collection count is exactly what verify.py's floor exists to catch.
+_SKILL_RESOURCE_ABSENT = env_prereq.skill_resource_absent()
+pytestmark = pytest.mark.skipif(bool(_SKILL_RESOURCE_ABSENT),
+                                reason=_SKILL_RESOURCE_ABSENT or "")
 
 
 @pytest.fixture

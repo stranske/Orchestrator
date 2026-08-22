@@ -7,6 +7,7 @@ import pytest
 import adapters
 import capacity
 import dispatcher
+import env_prereq
 import execution_profiles
 import feedback
 import ledger_reconcile
@@ -63,6 +64,10 @@ def test_capacity_build_reads_shared_pool_burn_once(tmp_path, monkeypatch, codex
 
 
 def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
+    # `build_command` with an exact profile resolves the version-capable Codex binary and fails
+    # closed if it is absent, rather than falling back to whatever `codex` is on PATH. Nothing
+    # about the permission rails can be observed without a command to inspect.
+    env_prereq.require(env_prereq.codex_profile_binary_absent())
     monkeypatch.setenv("ORCH_CODEX_BYPASS_INNER_SANDBOX", "0")
     models = set()
     for profile in execution_profiles.profiles_for_agent("codex"):
@@ -82,6 +87,7 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
 
 
 def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
+    env_prereq.require(env_prereq.codex_profile_binary_absent())
     monkeypatch.setenv("CODEX_SANDBOX", "seatbelt")
     monkeypatch.delenv("ORCH_CODEX_BYPASS_INNER_SANDBOX", raising=False)
     profile = execution_profiles.get_profile("codex-5.6-sol-high")

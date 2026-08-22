@@ -733,7 +733,7 @@ def _selftest():
     old_codex_sandbox = os.environ.pop("CODEX_SANDBOX", None)
     old_codex_bypass = os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
     try:
-        _selftest_inner()
+        _selftest_inner(gaps=[])
     finally:
         if old_codex_sandbox is not None:
             os.environ["CODEX_SANDBOX"] = old_codex_sandbox
@@ -741,7 +741,9 @@ def _selftest():
             os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = old_codex_bypass
 
 
-def _selftest_inner():
+def _selftest_inner(*, gaps: list[str] | None = None):
+    import env_prereq                       # imported here: env_prereq reads this module
+    gaps = gaps if gaps is not None else []
     c = build_command("cursor", "do x")
     # Composer is PINNED, not implied: omitting --model selects `auto`, which routes across every
     # frontier model cursor sells. Owner policy is Composer only (2026-08-08).
@@ -772,23 +774,30 @@ def _selftest_inner():
     # Non-tier modes still pass NO --model and keep the legacy lane tag.
     assert "--model" not in build_command("codex", "x", mode="assess"), "assess must not pin a model"
     assert model_identity("codex", None) == "codex:full:default"
-    profile_commands = {}
-    for profile in execution_profiles.profiles_for_agent("codex"):
-        cmd = build_command("codex", "x", mode="full", profile=profile, transport="local")
-        assert cmd[0] == str(CODEX_PROFILE_BIN), cmd
-        assert cmd[cmd.index("--model") + 1] == profile["requested_model"], cmd
-        assert cmd[cmd.index("--sandbox") + 1] == "workspace-write", cmd
-        assert cmd[cmd.index("-c") + 1] == f'model_reasoning_effort="{profile["reasoning_effort"]}"', cmd
-        profile_commands[profile["profile_id"]] = cmd
-        assess = build_command(
-            "codex", "x", mode="assess", profile=profile, transport="offload",
-            permission_mode="read-only",
-        )
-        assert assess[assess.index("--sandbox") + 1] == "read-only", assess
-        assert "--json" not in assess and assess[assess.index("--model") + 1] == profile["requested_model"], assess
-    assert {
-        cmd[cmd.index("--model") + 1] for cmd in profile_commands.values()
-    } == {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+    # An EXACT profile resolves the version-capable Codex binary and `profile_codex_binary()`
+    # fails closed rather than falling back to PATH — deliberately, since a profile that cannot
+    # pin its version is not an exact profile. So this SECTION needs that binary installed; the
+    # default lives inside a macOS app bundle and cannot exist on a Linux runner. Everything else
+    # in this selftest runs anywhere.
+    if env_prereq.runnable(gaps, env_prereq.codex_profile_binary_absent()):
+        profile_commands = {}
+        for profile in execution_profiles.profiles_for_agent("codex"):
+            cmd = build_command("codex", "x", mode="full", profile=profile, transport="local")
+            assert cmd[0] == str(CODEX_PROFILE_BIN), cmd
+            assert cmd[cmd.index("--model") + 1] == profile["requested_model"], cmd
+            assert cmd[cmd.index("--sandbox") + 1] == "workspace-write", cmd
+            assert cmd[cmd.index("-c") + 1] == f'model_reasoning_effort="{profile["reasoning_effort"]}"', cmd
+            profile_commands[profile["profile_id"]] = cmd
+            assess = build_command(
+                "codex", "x", mode="assess", profile=profile, transport="offload",
+                permission_mode="read-only",
+            )
+            assert assess[assess.index("--sandbox") + 1] == "read-only", assess
+            assert "--json" not in assess and assess[assess.index("--model") + 1] == profile["requested_model"], assess
+        assert {
+            cmd[cmd.index("--model") + 1] for cmd in profile_commands.values()
+        } == {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+    env_prereq.report_gaps("adapters.py", gaps)
     codex_cwd = HOME / ".codex" / "orchestrator" / "worktrees" / "selftest"
     ccwd = build_command("codex", "x", cwd=codex_cwd)
     assert "--cd" in ccwd and ccwd[ccwd.index("--cd") + 1] == str(codex_cwd), ccwd

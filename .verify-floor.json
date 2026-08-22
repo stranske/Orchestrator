@@ -1,5 +1,8 @@
 {
  "collected": 330,
  "passed": 330,
- "note": "floor recorded by verify.py --update-floor; a later run collecting fewer tests FAILS, because silently running fewer tests looks exactly like passing"
+ "skipped_max": 24,
+ "selftest_skipped_max": 7,
+ "gate_skipped_max": 2,
+ "note": "Recorded by verify.py --update-floor, except the *_max ceilings, which are edited BY HAND and never re-measured. `collected` catches tests that stopped being collected; `passed` is compared against passed+skipped, so a check may move between passing and consciously-skipped but the two together may never shrink. The *_max ceilings bound the skipped side: 24/7/2 is exactly what a machine with none of this instance's local prerequisites skips (a GitHub runner: no agent CLIs, no ~/.codex/skills, no /Applications/ChatGPT.app, no populated capability ledger), measured 2026-08-21. On the owner's machine all prerequisites exist and nothing skips at all. Raising a ceiling is a deliberate act: it means agreeing that one more thing is allowed to go unchecked, so say which and why in the commit."
 }
