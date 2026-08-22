@@ -129,6 +129,27 @@ def _dispatcher_task_type_capability() -> dict:
         return {}
 
 
+def direct_entry() -> dict:
+    """task_type -> capability entered DIRECTLY rather than matched by a declared trigger.
+
+    Derived from `dispatcher.TASK_TYPE_CAPABILITY` so the two halves of the system cannot disagree.
+    It used to be the literal `{"offload": "offload"}` under a comment claiming it mirrored that
+    map -- it did not, and the drift was load-bearing: the dispatcher routed `runtime_ac` to
+    `runtime-ac-checks` while this advisor named `deliberate-break-verifier` for the same work.
+    ONE constant, defined once and consumed by both, is the only shape that cannot drift.
+
+    Module-level and returned rather than inlined so the agreement is assertable as CODE, with no
+    populated ledger required -- the ledger is machine-local, and a check that needs it can only
+    skip on a clean runner, which is where drift would land unnoticed.
+    """
+    table = dict(_dispatcher_task_type_capability())
+    # `offload` is transport-kind: entered directly, but never a prompt-built lane task, so it is
+    # deliberately NOT in the dispatcher's map. Adding it there would make the dispatcher record an
+    # offload match while building a lane prompt.
+    table.setdefault("offload", "offload")
+    return table
+
+
 def entry_requirement(cap: dict) -> dict:
     """What would have to be true for this capability to engage? Derived from its OWN matcher.
 
@@ -217,8 +238,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     # for the same work, so the two halves of the system disagreed about the same task type. Now
     # there is ONE constant, defined in the dispatcher and consumed here, plus an explicit local
     # addition -- and `_selftest_direct_entry_tracks_dispatcher` fails if they diverge again.
-    DIRECT_ENTRY = dict(_dispatcher_task_type_capability())
-    DIRECT_ENTRY.setdefault("offload", "offload")   # transport-kind; not a prompt-built lane task
+    DIRECT_ENTRY = direct_entry()
 
     matched: list[dict] = []
     unmatched: dict[str, dict] = {}
@@ -516,65 +536,110 @@ def _selftest_front_door() -> None:
 
 
 def _selftest_reach() -> None:
-    """The front door's REACH is now measured, so it cannot shrink in silence.
+    """The front door's REACH is measured, so it cannot shrink in silence.
 
-    Both halves of this test are real regressions that already happened:
+    SPLIT DELIBERATELY. The first version of this asserted a reach floor against the LIVE ledger and
+    passed on this machine (41 rows) while failing CI (14 rows) -- a machine-local assertion wearing
+    the clothes of a correctness test. The mechanism assertions are now built on a SYNTHETIC ledger
+    so they run everywhere, and only the live-instance claims are prerequisite-gated with the
+    missing thing NAMED. Isolation, not a skip: this makes CI check more, not less.
+
+    Both live regressions this guards already happened:
 
     1. DRIFT. `DIRECT_ENTRY` was a one-entry literal whose comment claimed it mirrored
        `dispatcher.TASK_TYPE_CAPABILITY`. It did not, so the dispatcher routed `runtime_ac` to
        `runtime-ac-checks` while this advisor named `deliberate-break-verifier` for the same work.
-       One constant, consumed by both, is the only thing that cannot drift.
 
     2. SILENT SHRINKAGE. `adversarial-review` and `docs-drift-fix-agent` both carry advisory match
-       history, which proves they were once reachable from free text. Their matchers were later
-       tightened to `closer_gate` / `ci_workflow` shapes and they dropped out of the front door with
-       no signal at all -- reach fell from >=8 to 6 and nothing anywhere noticed. Reach is now
-       asserted, so the next tightening fails a test instead of going quiet.
+       history, proving they were once reachable from free text. Their matchers were later tightened
+       to `closer_gate` / `ci_workflow` shapes and they left the front door with no signal at all.
+       Reach had never been measured, so it fell in silence.
     """
+    import tempfile
+    from pathlib import Path
+
+    # ---- PART 1: THE MECHANISM. Synthetic ledger, no instance state, runs on every machine.
+    with tempfile.TemporaryDirectory(prefix="advisor-reach-") as td:
+        ledger = Path(td) / "capabilities.json"
+        routed = capabilities._blank_capability("routed-lane")
+        routed["status"] = "generated"
+        routed["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+        gated = capabilities._blank_capability("gate-cap")
+        gated["status"] = "generated"
+        gated["matcher"] = {"kind": "closer_gate", "name": "high_stakes_review"}
+        flagged = capabilities._blank_capability("flag-cap")
+        flagged["status"] = "generated"
+        flagged["matcher"] = {"kind": "env", "name": "ORCH_ADVISOR_REACH_SELFTEST", "equals": "1"}
+        capabilities.save({"routed-lane": routed, "gate-cap": gated, "flag-cap": flagged}, ledger)
+
+        task = "add unit tests for the retry helper"
+        plain = advise(task, path=ledger, record=False)
+        ids = {m["capability_id"] for m in plain["capabilities"]}
+        assert ids == {"routed-lane"}, ids
+
+        # THE POINT: a kind-based capability is NOT a silent absence. It reports the reason
+        # `_matches_trigger` already returned, plus what would make it engage.
+        # CONTAINMENT, not equality: `capabilities.load` seeds KNOWN_DECLARATIONS into any ledger
+        # it reads, so a temp ledger is never only what was written to it. Asserting equality here
+        # passed locally and would have broken the moment the declaration set changed -- a test
+        # coupled to an unrelated constant. The mechanism is what matters, so assert that.
+        na = {r["capability_id"]: r for r in plain["not_applicable"]}
+        assert {"gate-cap", "flag-cap"} <= set(na), (
+            "kind-based capabilities came back as SILENCE, not as named non-matches; "
+            f"not_applicable held {sorted(na)}")
+        assert na["gate-cap"]["why_not"] == ["closer_gate_not_in_trigger"], na["gate-cap"]
+        assert na["gate-cap"]["requirement"]["mode"] == "entered_at", na["gate-cap"]
+        assert na["gate-cap"]["requirement"]["kind"] == "closer_gate", na["gate-cap"]
+        assert na["gate-cap"]["requirement"]["name"] == "high_stakes_review", na["gate-cap"]
+        assert na["flag-cap"]["requirement"]["mode"] == "env_gated", na["flag-cap"]
+        assert na["flag-cap"]["requirement"]["flag"] == "ORCH_ADVISOR_REACH_SELFTEST"
+        for row in plain["not_applicable"]:
+            assert row["why_not"], row
+            assert row["requirement"]["detail"], row
+
+        # WHOLE DENOMINATOR: every live capability in THIS ledger either matched or was named
+        # with a reason. Computed from the ledger, never hardcoded -- a literal here would be the
+        # "convenient denominator" this assertion exists to forbid.
+        live = {cid for cid, cap in capabilities.load_declared(ledger).items()
+                if cap.get("status") not in {"retired", "superseded"}}
+        assert live <= (ids | set(na)), f"unaccounted: {sorted(live - (ids | set(na)))}"
+        assert plain["coverage"]["ledger_count"] >= 3, plain["coverage"]
+
+        # CONTEXT IS THE MECHANISM. `capabilities._matches_trigger` matches a kind against a
+        # same-named field THE CALLER SUPPLIES, so supplying it reaches further -- this is what
+        # makes "structurally unreachable" false.
+        rich = advise(task, path=ledger, record=False,
+                      context={"closer_gate": "high_stakes_review"})
+        assert "gate-cap" in {m["capability_id"] for m in rich["capabilities"]}, rich
+
+        # ...and it must still FAIL CLOSED on absent, empty, or WRONG context. Widening what can
+        # be answered must never widen what is assumed.
+        for ctx in ({}, {"closer_gate": ""}, {"closer_gate": None},
+                    {"closer_gate": "some_other_gate"}):
+            got = {m["capability_id"] for m in
+                   advise(task, path=ledger, record=False, context=ctx)["capabilities"]}
+            assert "gate-cap" not in got, (ctx, got)
+
+    # ---- PART 2: THE DRIFT GUARD, code vs code. No ledger, so it runs on every machine --
+    # including the clean runner, which is exactly where this drift would otherwise land unseen.
     table = _dispatcher_task_type_capability()
-    assert table, "dispatcher.TASK_TYPE_CAPABILITY unreadable; reach would silently degrade"
+    assert table, "dispatcher.TASK_TYPE_CAPABILITY unreadable; advisor reach would silently degrade"
+    entry = direct_entry()
     for task_type, cap_id in table.items():
-        advice = advise(TASK_SIGNALS[task_type][0], record=False)
-        named = {m["capability_id"] for m in advice["capabilities"]}
-        assert cap_id in named, (
-            f"dispatcher routes {task_type!r} to {cap_id!r} but the advisor does not name it; "
-            "the two halves of the system disagree about the same task type")
+        assert entry.get(task_type) == cap_id, (
+            f"dispatcher routes {task_type!r} to {cap_id!r} but the advisor's direct-entry map says "
+            f"{entry.get(task_type)!r}; the two halves of the system disagree about one task type")
+    assert entry.get("offload") == "offload", entry
+    # Every task_type the dispatcher knows must be a task_type this advisor can classify, or the
+    # mapping is unreachable in practice.
+    for task_type in table:
+        assert task_type in TASK_SIGNALS, f"dispatcher routes {task_type!r}, advisor cannot classify it"
 
-    reach = reachable_set()
-    # A floor, not an equality: growth is welcome, shrinkage must be deliberate.
-    assert reach["reachable_count"] >= 7, (
-        f"advisor reach fell to {reach['reachable_count']}; a matcher was tightened and the front "
-        f"door lost a capability. Reachable: {sorted(reach['reachable'])}")
-    assert reach["ledger_count"] >= reach["reachable_count"]
-
-    # CONTEXT IS THE MECHANISM. `capabilities._matches_trigger` matches a kind against a same-named
-    # field THE CALLER SUPPLIES, so a caller that knows its context reaches further. This is what
-    # makes "35 unreachable" false -- it was a thin caller, not a structural limit.
-    plain = advise("review this PR against its acceptance criteria", lane="closer", record=False)
-    rich = advise("review this PR against its acceptance criteria", lane="closer",
-                  context={"closer_gate": "high_stakes_review"}, record=False)
-    plain_ids = {m["capability_id"] for m in plain["capabilities"]}
-    rich_ids = {m["capability_id"] for m in rich["capabilities"]}
-    assert "adversarial-review" not in plain_ids, plain_ids
-    assert "adversarial-review" in rich_ids, (
-        "supplying the closer_gate the caller knows must reach the closer_gate capability")
-    # ...and absent context must still FAIL CLOSED, never assume.
-    assert advise("review this PR", lane="closer", context={"closer_gate": ""},
-                  record=False) and "adversarial-review" not in {
-                      m["capability_id"] for m in advise(
-                          "review this PR", lane="closer", context={"closer_gate": ""},
-                          record=False)["capabilities"]}
-
-    # THE WHOLE DENOMINATOR. Every live capability is either matched or reported with a named
-    # reason. 35 capabilities returning as absence -- indistinguishable from "nothing else exists"
-    # -- is the silence this module was failing at.
-    live = {cid for cid, cap in capabilities.load_declared(capabilities.REG).items()
-            if cap.get("status") not in {"retired", "superseded"}}
-    accounted = plain_ids | {r["capability_id"] for r in plain["not_applicable"]}
-    assert live <= accounted, f"unaccounted capabilities: {sorted(live - accounted)}"
-    for row in plain["not_applicable"]:
-        assert row["why_not"], f"{row['capability_id']} reported with no reason"
-        assert row["requirement"]["detail"], f"{row['capability_id']} names no entry requirement"
+    # REACH SHRINKAGE IS NOT CHECKED HERE ON PURPOSE. `capability_firing_monitor.advisor_reach`
+    # owns it: it holds the declared-reach baseline and raises `advisor_reach_regression`, so a
+    # second copy here would be a parallel inventory -- the thing this project forbids. Matchers
+    # live only in the machine-local ledger, so a reach floor asserted here could only ever skip
+    # on a clean runner, spending a skip ceiling to check nothing where it matters.
 
 
 def _selftest() -> None:
