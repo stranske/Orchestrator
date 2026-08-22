@@ -1244,6 +1244,9 @@ def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
       * ``model_not_reportable`` - profile exists, but the adapter reports a routing tag, so the
                                    attempt completes unresolved and the work stays unminable.
       * ``no_worker_attempt``    - profile and a reportable model, but nothing recorded an attempt.
+      * ``attempts_unresolved``  - worker attempts exist, none carry a resolved model. Usually the
+                                   seat's CLI keeps no per-session log; see
+                                   `adapters.NO_SESSION_LOG_AGENTS` for the named reason.
       * ``minable``              - at least one resolved worker attempt exists.
     """
     close = conn is None
@@ -1281,6 +1284,13 @@ def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
             verdict = "model_not_reportable"
         elif not runs.get(agent):
             verdict = "no_runs"
+        elif total:
+            # ATTEMPTS EXIST BUT NONE RESOLVED — a different fault from "nothing recorded an
+            # attempt", and the old wording reported cursor as `no_worker_attempt` while it held 22
+            # of them. That sends a reader to look for a dispatch bug when the real answer is that
+            # the seat's CLI leaves no per-session log to read a model from. A wrong verdict is
+            # worse than a missing one: it is confidently actionable in the wrong direction.
+            verdict = "attempts_unresolved"
         else:
             verdict = "no_worker_attempt"
         if verdict == "minable":
@@ -2654,6 +2664,45 @@ def _selftest() -> None:
         assert len(cov["minable_agents"]) <= len(cov["working_agents"]), cov
         # A blocked seat must always carry a reason -- a blocked entry with no verdict is silence.
         assert all(bool(reason) for reason in (cov["blocked"] or {}).values()), cov["blocked"]
+        # CONSTRUCTED, not sampled. This block reads whatever the ambient DB holds, which on a
+        # fresh machine is nothing -- so asserting over it passed even with the fix removed, the
+        # vacuous shape this repo keeps re-growing. Build the exact state instead.
+        import tempfile as _tf
+        import time as _t
+
+        _probe = feedback.DB_PATH
+        try:
+            _tmpdir = _tf.mkdtemp(prefix="orch-cov-verdict-")
+            feedback.DB_PATH = Path(_tmpdir) / "coverage-verdicts.db"
+            feedback.record_run("cov-unres", "offload:/tmp/x", "offload", "cursor")
+            feedback.record_execution_attempt(
+                "cov-unres", attempt_id="attempt:profile:cov-unres", operation_role="worker",
+                profile_id="cursor-composer-2.5", requested_provider="cursor",
+                requested_model="composer-2.5", status="unresolved",
+                source="orchestrator-profile-decision", started_ts=int(_t.time()),
+            )
+            built = mining_coverage(30)["agents"]["cursor"]
+            # 22 worker attempts once reported as `no_worker_attempt`, sending the reader after a
+            # dispatch bug when the real answer is the seat's CLI keeps no log to read a model from.
+            # A wrong verdict is worse than a missing one: confidently actionable, in the wrong
+            # direction.
+            assert built["worker_attempts"] == 1, built
+            assert built["resolved_worker_attempts"] == 0, built
+            assert built["verdict"] == "attempts_unresolved", built
+        finally:
+            feedback.DB_PATH = _probe
+
+        # A VERDICT MUST NOT CONTRADICT ITS OWN COUNTS. `no_worker_attempt` was reported for a seat
+        # holding 22 worker attempts, which sends the reader hunting a dispatch bug when the real
+        # answer is that the seat's CLI leaves no log to read a model from. A wrong verdict is worse
+        # than a missing one -- it is confidently actionable in the wrong direction.
+        for agent, row in cov["agents"].items():
+            if row["verdict"] == "no_worker_attempt":
+                assert row["worker_attempts"] == 0, (agent, row)
+            if row["verdict"] == "attempts_unresolved":
+                assert row["worker_attempts"] > 0 and row["resolved_worker_attempts"] == 0, (agent, row)
+            if row["verdict"] == "minable":
+                assert row["resolved_worker_attempts"] > 0, (agent, row)
 
         print("periodic_report.py selftest: OK (incl. mining coverage)")
     finally:
