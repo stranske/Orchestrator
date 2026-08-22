@@ -100,8 +100,93 @@ def _usability(cap: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# ENTRY MODES. `capabilities._matches_trigger` matches a `{"kind": k, "name": n}` matcher against a
+# SAME-NAMED FIELD THE CALLER SUPPLIES, and says so in its own comment: "Adding a new trigger kind
+# is then a caller-side change, not an edit here." So the 35 capabilities this advisor could not
+# name were never structurally unreachable — THIS CALLER was passing a three-field trigger
+# (repository/task_type/lane) and no kind fields. Two consequences, both fixed below:
+#
+#   1. A caller that knows its context can supply it (`context=`) and those capabilities match.
+#   2. For the rest, `_matches_trigger` ALREADY RETURNS the named reason for every non-match
+#      (`closer_gate_not_in_trigger`, `env_mismatch:ORCH_X`, ...) and this function used to throw
+#      all of them away. Discarding them is what turned 35 capabilities into silence — the exact
+#      failure mode this project keeps re-committing. They are now reported.
+# ---------------------------------------------------------------------------
+
+def _dispatcher_task_type_capability() -> dict:
+    """The dispatcher's task_type -> capability map, read from the dispatcher itself.
+
+    Lazy + defensive on purpose: this advisor must keep answering even if the dispatcher cannot be
+    imported. Returning {} then degrades reach, and the selftest that compares the two maps is what
+    makes that degradation visible instead of silent.
+    """
+    try:
+        import dispatcher
+        table = getattr(dispatcher, "TASK_TYPE_CAPABILITY", None)
+        return dict(table) if isinstance(table, dict) else {}
+    except Exception:                                                      # noqa: BLE001
+        return {}
+
+
+def entry_requirement(cap: dict) -> dict:
+    """What would have to be true for this capability to engage? Derived from its OWN matcher.
+
+    Nothing is invented here: every value comes from the declared matcher. A capability that
+    declares `{"kind": "ci_workflow", "name": "maint-87-docs-drift-fix-agent"}` is telling us
+    exactly where it engages, and a session that is told that can act on it. Silence cannot.
+    """
+    m = cap.get("matcher") or {}
+    if not m:
+        return {"mode": "undeclared",
+                "detail": "declares no trigger, so nothing can route to it"}
+    if "field" in m:
+        values = m.get("value")
+        values = values if isinstance(values, list) else [values]
+        return {"mode": "task_routed", "field": str(m.get("field") or ""),
+                "values": [str(v) for v in values],
+                "detail": f"routed by {m.get('field')} in {[str(v) for v in values]}"}
+    if "kind" in m:
+        kind = str(m.get("kind") or "").lower()
+        if kind == "env":
+            return {"mode": "env_gated", "flag": str(m.get("name") or ""),
+                    "equals": str(m.get("equals")),
+                    "detail": f"gated by {m.get('name')}={m.get('equals')}"}
+        name = m.get("equals", m.get("name"))
+        return {"mode": "entered_at", "kind": kind, "name": None if name is None else str(name),
+                "detail": f"entered at {kind} {name!r}, not selected by task type"}
+    return {"mode": "legacy", "keys": sorted(str(k) for k in m),
+            "detail": f"legacy matcher over {sorted(str(k) for k in m)}"}
+
+
+# The trigger fields this advisor will forward from `context=` into the matcher trigger. Confined to
+# kinds actually declared in the ledger so a typo cannot silently become a new matching dimension.
+CONTEXT_FIELDS = ("closer_gate", "role", "tick_phase", "lane_event", "ci_workflow", "test_gate",
+                  "feedback_event", "experiment_phase", "prompt_phase", "adapter", "transport",
+                  "evidence_gate", "supervised_trial", "compiled_workflow", "cli_subcommand",
+                  "issue_readiness", "tick_preflight")
+
+
+def reachable_set(*, path=None) -> dict:
+    """Every capability this advisor can name from free text alone, and how.
+
+    Pinned by a selftest. `adversarial-review` and `docs-drift-fix-agent` were once reachable --
+    their advisory match history proves it -- and silently dropped out when their matchers were
+    tightened to `closer_gate` / `ci_workflow` shapes. Nothing noticed, because reach was never
+    measured. A shrinking front door now fails a test instead of going quiet.
+    """
+    caps = capabilities.load_declared(path or capabilities.REG)
+    out: dict[str, list[str]] = {}
+    for task_type, signals in TASK_SIGNALS.items():
+        advice = advise(signals[0], record=False, path=path)
+        for entry in advice.get("capabilities") or []:
+            out.setdefault(entry["capability_id"], []).append(task_type)
+    return {"reachable": {k: sorted(set(v)) for k, v in sorted(out.items())},
+            "reachable_count": len(out), "ledger_count": len(caps)}
+
+
 def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str = "",
-           record: bool = True, path=None) -> dict:
+           record: bool = True, path=None, context: dict | None = None) -> dict:
     """Should the Orchestrator be used for this task, and which capabilities apply?
 
     `skill` names the skill that surfaced this work, if any; it is recorded with each match so the
@@ -115,17 +200,28 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
             "task": text, "useful": False, "confidence": "none", "skill": skill or None,
             "repository": repository, "task_types": [], "capabilities": [],
             "dispatch_ready_count": 0,
+            "not_applicable": [],
+            "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
+                         "by_entry_mode": {}},
             "reason": ("could not classify this task into any work type the fleet records; "
                        "no capability can be matched to it"),
         }
 
     # Infrastructure capabilities are ENTERED DIRECTLY, never routed by task_type, so their
-    # kind-based matchers ({"kind": "transport"}) can never match a {task_type} trigger — it fails
-    # closed by design. Without this map the advisor is structurally unable to name them, which is
-    # how `offload` stayed invisible. Mirrors dispatcher.TASK_TYPE_CAPABILITY.
-    DIRECT_ENTRY = {"offload": "offload"}
+    # kind-based matchers ({"kind": "transport"}) cannot match a {task_type} trigger. This map is
+    # how `offload` stopped being invisible.
+    #
+    # It used to be a one-entry literal whose comment claimed it "Mirrors
+    # dispatcher.TASK_TYPE_CAPABILITY" -- it did not, and the drift was load-bearing: the dispatcher
+    # routed runtime_ac to `runtime-ac-checks` while this advisor named `deliberate-break-verifier`
+    # for the same work, so the two halves of the system disagreed about the same task type. Now
+    # there is ONE constant, defined in the dispatcher and consumed here, plus an explicit local
+    # addition -- and `_selftest_direct_entry_tracks_dispatcher` fails if they diverge again.
+    DIRECT_ENTRY = dict(_dispatcher_task_type_capability())
+    DIRECT_ENTRY.setdefault("offload", "offload")   # transport-kind; not a prompt-built lane task
 
     matched: list[dict] = []
+    unmatched: dict[str, dict] = {}
     for candidate in candidates:
         direct = DIRECT_ENTRY.get(candidate["task_type"])
         if direct and direct in caps and not any(m["capability_id"] == direct for m in matched):
@@ -135,11 +231,23 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
                             "entrypoint": cap.get("entrypoint"),
                             "entered_directly": True, **_usability(cap)})
         trigger = {"repository": repository, "task_type": candidate["task_type"], "lane": lane}
+        # Forward whatever context the CALLER actually knows. Absent context still fails closed --
+        # this widens what CAN be answered, never what is assumed.
+        for field in CONTEXT_FIELDS:
+            value = (context or {}).get(field)
+            if value not in (None, ""):
+                trigger[field] = value
         for cap_id, cap in sorted(caps.items()):
             if cap.get("status") in {"retired", "superseded"}:
                 continue
             ok, reasons = capabilities._matches_trigger(cap, trigger)
             if not ok:
+                # NOT a match, and NOT silence. The reason names the entry point.
+                if cap_id not in unmatched:
+                    unmatched[cap_id] = {"capability_id": cap_id,
+                                         "why_not": sorted(set(reasons)),
+                                         "requirement": entry_requirement(cap),
+                                         "status": cap.get("status")}
                 continue
             entry = {"capability_id": cap_id, "matched_task_type": candidate["task_type"],
                      "entrypoint": cap.get("entrypoint"), **_usability(cap)}
@@ -151,6 +259,17 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     top = candidates[0]["score"]
     confidence = "high" if top >= 2 else "low"
     usable = [m for m in matched if m["dispatch_ready"]]
+    # A capability that matched for ANY classified task type is not "not applicable".
+    for entry in matched:
+        unmatched.pop(entry["capability_id"], None)
+    not_applicable = sorted(unmatched.values(), key=lambda r: r["capability_id"])
+    # REPORT THE WHOLE DENOMINATOR (ADDING_CAPABILITIES.md standing rule 5). The old response
+    # returned only the matches, so 35 of 41 capabilities were absent with no reason given -- which
+    # reads identically to "there was nothing else". Grouping by entry mode turns that silence into
+    # an inspectable answer: what exists, and what would make each one engage.
+    by_mode: dict[str, list[str]] = {}
+    for row in not_applicable:
+        by_mode.setdefault(row["requirement"]["mode"], []).append(row["capability_id"])
     result = {
         "task": text,
         "useful": bool(matched),
@@ -161,6 +280,13 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         "classification_evidence": {c["task_type"]: c["hits"] for c in candidates},
         "capabilities": matched,
         "dispatch_ready_count": len(usable),
+        "not_applicable": not_applicable,
+        "coverage": {
+            "ledger_count": len(caps),
+            "matched": len(matched),
+            "not_applicable": len(not_applicable),
+            "by_entry_mode": {k: sorted(v) for k, v in sorted(by_mode.items())},
+        },
         "reason": (
             f"{len(matched)} capability(ies) declare a trigger matching "
             f"{', '.join(c['task_type'] for c in candidates)}"
@@ -389,6 +515,68 @@ def _selftest_front_door() -> None:
           "advice is actionable)")
 
 
+def _selftest_reach() -> None:
+    """The front door's REACH is now measured, so it cannot shrink in silence.
+
+    Both halves of this test are real regressions that already happened:
+
+    1. DRIFT. `DIRECT_ENTRY` was a one-entry literal whose comment claimed it mirrored
+       `dispatcher.TASK_TYPE_CAPABILITY`. It did not, so the dispatcher routed `runtime_ac` to
+       `runtime-ac-checks` while this advisor named `deliberate-break-verifier` for the same work.
+       One constant, consumed by both, is the only thing that cannot drift.
+
+    2. SILENT SHRINKAGE. `adversarial-review` and `docs-drift-fix-agent` both carry advisory match
+       history, which proves they were once reachable from free text. Their matchers were later
+       tightened to `closer_gate` / `ci_workflow` shapes and they dropped out of the front door with
+       no signal at all -- reach fell from >=8 to 6 and nothing anywhere noticed. Reach is now
+       asserted, so the next tightening fails a test instead of going quiet.
+    """
+    table = _dispatcher_task_type_capability()
+    assert table, "dispatcher.TASK_TYPE_CAPABILITY unreadable; reach would silently degrade"
+    for task_type, cap_id in table.items():
+        advice = advise(TASK_SIGNALS[task_type][0], record=False)
+        named = {m["capability_id"] for m in advice["capabilities"]}
+        assert cap_id in named, (
+            f"dispatcher routes {task_type!r} to {cap_id!r} but the advisor does not name it; "
+            "the two halves of the system disagree about the same task type")
+
+    reach = reachable_set()
+    # A floor, not an equality: growth is welcome, shrinkage must be deliberate.
+    assert reach["reachable_count"] >= 7, (
+        f"advisor reach fell to {reach['reachable_count']}; a matcher was tightened and the front "
+        f"door lost a capability. Reachable: {sorted(reach['reachable'])}")
+    assert reach["ledger_count"] >= reach["reachable_count"]
+
+    # CONTEXT IS THE MECHANISM. `capabilities._matches_trigger` matches a kind against a same-named
+    # field THE CALLER SUPPLIES, so a caller that knows its context reaches further. This is what
+    # makes "35 unreachable" false -- it was a thin caller, not a structural limit.
+    plain = advise("review this PR against its acceptance criteria", lane="closer", record=False)
+    rich = advise("review this PR against its acceptance criteria", lane="closer",
+                  context={"closer_gate": "high_stakes_review"}, record=False)
+    plain_ids = {m["capability_id"] for m in plain["capabilities"]}
+    rich_ids = {m["capability_id"] for m in rich["capabilities"]}
+    assert "adversarial-review" not in plain_ids, plain_ids
+    assert "adversarial-review" in rich_ids, (
+        "supplying the closer_gate the caller knows must reach the closer_gate capability")
+    # ...and absent context must still FAIL CLOSED, never assume.
+    assert advise("review this PR", lane="closer", context={"closer_gate": ""},
+                  record=False) and "adversarial-review" not in {
+                      m["capability_id"] for m in advise(
+                          "review this PR", lane="closer", context={"closer_gate": ""},
+                          record=False)["capabilities"]}
+
+    # THE WHOLE DENOMINATOR. Every live capability is either matched or reported with a named
+    # reason. 35 capabilities returning as absence -- indistinguishable from "nothing else exists"
+    # -- is the silence this module was failing at.
+    live = {cid for cid, cap in capabilities.load_declared(capabilities.REG).items()
+            if cap.get("status") not in {"retired", "superseded"}}
+    accounted = plain_ids | {r["capability_id"] for r in plain["not_applicable"]}
+    assert live <= accounted, f"unaccounted capabilities: {sorted(live - accounted)}"
+    for row in plain["not_applicable"]:
+        assert row["why_not"], f"{row['capability_id']} reported with no reason"
+        assert row["requirement"]["detail"], f"{row['capability_id']} names no entry requirement"
+
+
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
@@ -517,16 +705,21 @@ def main(argv: list[str]) -> int:
     ap.add_argument("task", nargs="*", help="the task, in plain words")
     ap.add_argument("--repository", default="")
     ap.add_argument("--lane", default="opener")
+    ap.add_argument("--context", default="",
+                    help='JSON of trigger context you actually know, e.g. '
+                         '\'{"closer_gate":"high_stakes_review"}\'')
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
         _selftest_front_door()
+        _selftest_reach()
         return 0
     if not args.task:
         ap.error("give the task in plain words, or use --selftest")
-    result = advise(" ".join(args.task), repository=args.repository, lane=args.lane)
+    result = advise(" ".join(args.task), repository=args.repository, lane=args.lane,
+                    context=json.loads(args.context) if args.context else None)
     print(json.dumps(result, indent=2) if args.json else format_advice(result), end="")
     return 0
 
