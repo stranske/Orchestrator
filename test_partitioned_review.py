@@ -481,3 +481,68 @@ def test_review_round_is_registered_as_one_subject_and_stamped_on_every_partitio
     broken = review.register_review_round(plan, ["gemini"], date="2026-08-24")
     assert broken["registered"] is False
     assert "brain offline" in broken["reason"], broken
+
+
+def test_audit_round_inherits_downstream_durability_and_never_infers_it(tmp_path, monkeypatch):
+    """B's durability half: the round inherits what the issues its findings produced achieved.
+
+    Everything downstream already existed — an issue becomes a PR, a merged PR gets a durability
+    label from `durability_sweep`, and `influence_edges` back-propagates it. The missing fact was
+    "round R, arm A produced issue N", which CANNOT be inferred: the only written trace is a
+    free-form prose line (`_Surfaced by the maint-69 outage investigated in #3007._`), and parsing
+    a sentence into a causal edge attributes work to an agent on the strength of grammar.
+
+    The label is un-gameable because the finding's author decides neither half: whether it is filed
+    is the filer's call, and whether the fix HOLDS is decided later by real work landing on top.
+    """
+    import feedback
+    import research_subjects
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    round_id, identity = research_subjects.record_research_round(
+        research_subjects.domain_target("audit-x"), "review-corpus", "2026-08-22",
+        "the objective", ["codex", "cursor"], task_type="review",
+    )
+
+    # The round's own arm runs, bound by experiment_id exactly as offload binds them.
+    for agent in ("codex", "cursor"):
+        feedback.record_run(f"round:{agent}", f"offload:/tmp/{agent}", "review", agent,
+                            experiment_id=round_id)
+
+    # Two issues the findings produced. One landed durably, one was abandoned, one never landed.
+    for target, durability in (("stranske/Repo#11", "durable"), ("stranske/Repo#12", "abandoned")):
+        feedback.record_run(f"impl{target[-2:]}", target, "implement", "claude")
+        feedback.record_outcome(f"impl{target[-2:]}", verifier_verdict="PASS", merged=True,
+                                durability=durability)
+    research_subjects.record_finding_issue(
+        round_id, "stranske/Repo#11", arm="codex", identity=identity)
+    research_subjects.record_finding_issue(
+        round_id, "stranske/Repo#12", arm="cursor", identity=identity)
+    research_subjects.record_finding_issue(
+        round_id, "stranske/Repo#99", arm="codex", identity=identity)  # never implemented
+
+    got = research_subjects.resolve_round_durability(round_id, apply_edges=True)
+    assert got["findings_filed"] == 3, got
+    # INHERITED, not judged: each arm carries what its own issue actually achieved.
+    assert got["per_arm_durability"]["codex"] == {"durable": 1}, got
+    assert got["per_arm_durability"]["cursor"] == {"abandoned": 1}, got
+    # Resolved AND unresolved together — 1 durable alone would read as a verdict on the round.
+    assert (got["resolved"], got["unresolved"]) == (2, 1), got
+    assert got["edges_written"] == 2, got
+
+    # The edge rides the EXISTING propagation, so durability arrives on the edge itself rather
+    # than through a second durability path growing beside `influence_edges`.
+    import sqlite3
+
+    edges = sqlite3.connect(feedback.DB_PATH).execute(
+        "SELECT source_run_id, durability FROM influence_edges WHERE influence_type='experiment' "
+        "AND influence_id=? ORDER BY source_run_id", (round_id,)
+    ).fetchall()
+    assert edges == [("round:codex", "durable"), ("round:cursor", "abandoned")], edges
+
+    # NEVER INFERRED: a finding with no recorded issue contributes nothing, and reading without
+    # `apply_edges` writes no edge at all.
+    empty = research_subjects.resolve_round_durability("round:nonexistent")
+    assert empty["findings_filed"] == 0 and empty["edges_written"] == 0, empty
+    readonly = research_subjects.resolve_round_durability(round_id)
+    assert readonly["edges_written"] == 0, "reading must not write"

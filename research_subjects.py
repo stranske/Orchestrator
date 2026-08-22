@@ -334,6 +334,138 @@ def record_research_round(
     return round_id, identity
 
 
+FINDING_FILED = "finding_filed"
+
+
+def record_finding_issue(
+    round_id: str,
+    issue_target: str,
+    *,
+    arm: str,
+    identity: dict,
+    finding_ref: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> str:
+    """Record that one arm's audit finding became a real issue. THE linkage B was missing.
+
+    Everything downstream of here already exists: an issue becomes a PR, a merged PR gets a
+    durability label from `durability_sweep`, and `influence_edges` already back-propagates that
+    label over accepted edges. What did not exist was the fact "round R, arm A produced issue N" --
+    and it cannot be inferred, because the only written trace is a free-form prose line
+    (`_Surfaced by the maint-69 outage investigated in #3007._`). Parsing that into a causal edge
+    would attribute work to an agent on the strength of a sentence, and a wrong attribution trains
+    the learner on a fiction. So the filer records it as a fact at filing time.
+
+    WHY THIS LABEL IS UN-GAMEABLE, which is the whole reason B is worth doing: the agent that found
+    the defect decides neither of the two things that score it. Whether the finding is filed is
+    decided by the filer's prove-before-file check, and whether the fix HOLDS is decided months
+    later by real work landing on top of it. An audit finding that was wrong gets falsified by
+    the codebase itself -- a better terminal signal than production delivery has.
+    """
+    return record_event(
+        FINDING_FILED,
+        identity=identity,
+        reason=f"{arm}_finding_filed",
+        exp_id=round_id,
+        metadata={
+            "issue_target": canonical_target(issue_target),
+            "arm": str(arm).strip().lower(),
+            "finding_ref": finding_ref,
+        },
+        conn=conn,
+    )
+
+
+def resolve_round_durability(
+    round_id: str, *, conn: sqlite3.Connection | None = None, apply_edges: bool = False
+) -> dict:
+    """Inherit the downstream durability of the issues a round's findings produced.
+
+    Reads only recorded facts: the `finding_filed` events for this round, the runs that actually
+    targeted those issues, and the durability those runs' outcomes already carry. It computes
+    nothing about quality itself.
+
+    `apply_edges` writes the linkage into `influence_edges` as an `experiment` edge from the arm's
+    round run to the implementing run, so the EXISTING propagation carries the label rather than a
+    second durability path growing beside it. Off by default: reading is safe, writing is a change.
+
+    Reports resolved AND unresolved counts together. "3 durable" alone would read as a verdict on
+    the round when 40 findings are still unlanded; the pair is the honest statement.
+    """
+    db = conn or feedback._conn()
+    close = conn is None
+    try:
+        ensure_schema(db)
+        rows = db.execute(
+            "SELECT metadata_json FROM research_subject_events "
+            "WHERE exp_id=? AND decision=? ORDER BY ts",
+            (round_id, FINDING_FILED),
+        ).fetchall()
+        filed: list[dict] = []
+        for (blob,) in rows:
+            try:
+                meta = json.loads(blob or "{}")
+            except (TypeError, ValueError):
+                continue
+            if meta.get("issue_target"):
+                filed.append(meta)
+        # The round's own arm runs, bound by `experiment_id` when the round was dispatched.
+        arm_runs: dict[str, str] = {}
+        for run_id, agent in db.execute(
+            "SELECT run_id, agent FROM runs WHERE experiment_id=?", (round_id,)
+        ).fetchall():
+            arm_runs.setdefault(str(agent or "").lower(), str(run_id))
+        per_arm: dict[str, dict[str, int]] = {}
+        unresolved = 0
+        edges_written = 0
+        for meta in filed:
+            arm = str(meta.get("arm") or "").lower()
+            target = meta["issue_target"]
+            outcome = db.execute(
+                # LOWER() on both sides: `canonical_target` lowercases the recorded issue while
+                # `runs.target` keeps the repo's real casing, so a literal compare silently found
+                # nothing and every finding looked unlanded.
+                "SELECT r.run_id, COALESCE(o.durability,'pending') FROM runs r "
+                "JOIN outcomes o ON o.run_id=r.run_id WHERE LOWER(r.target)=? "
+                "ORDER BY r.ts DESC LIMIT 1",
+                (target,),
+            ).fetchone()
+            if outcome is None:
+                unresolved += 1
+                continue
+            target_run, durability = str(outcome[0]), str(outcome[1])
+            bucket = per_arm.setdefault(arm, {})
+            bucket[durability] = bucket.get(durability, 0) + 1
+            if apply_edges and arm in arm_runs:
+                try:
+                    feedback.record_influence_edge(
+                        target_run_id=target_run,
+                        influence_type="experiment",
+                        influence_id=round_id,
+                        accepted=True,
+                        source_run_id=arm_runs[arm],
+                        allow_unlinked=True,
+                        metadata={"audit_round": round_id, "arm": arm, "issue": target},
+                    )
+                    edges_written += 1
+                except Exception:  # noqa: BLE001 - reported via the counts, never fatal
+                    pass
+        return {
+            "round_id": round_id,
+            "findings_filed": len(filed),
+            "per_arm_durability": per_arm,
+            # BLOCKING AND DRAINABLE IN ONE PLACE: a resolved count without its unresolved twin
+            # reads as a verdict on the round when most findings simply have not landed yet.
+            "resolved": len(filed) - unresolved,
+            "unresolved": unresolved,
+            "arms_with_runs": sorted(arm_runs),
+            "edges_written": edges_written,
+        }
+    finally:
+        if close:
+            db.close()
+
+
 def _effective_lifecycle(conn: sqlite3.Connection, row: tuple) -> str:
     lifecycle, exp_id = str(row[0]), row[1]
     if exp_id:
@@ -1006,8 +1138,70 @@ def _selftest() -> None:
     )
 
 
-if __name__ == "__main__":
-    if "--selftest" in sys.argv[1:]:
+def main(argv: list[str] | None = None) -> int:
+    """CLI so the ISSUE FILER can record a linkage without importing this module.
+
+    The filer is `file-agent-issue`, invoked by an agent in its own session; a subprocess call is
+    the only seam it has. Without a caller `record_finding_issue` would be one more fully-built
+    dormant feature, which is this project's dominant defect class, not a bug.
+    """
+    import argparse
+
+    argv = sys.argv[1:] if argv is None else argv
+    if "--selftest" in argv:
         _selftest()
-    else:
-        print(json.dumps(summary(), indent=2, sort_keys=True))
+        return 0
+    parser = argparse.ArgumentParser(prog="research_subjects.py")
+    sub = parser.add_subparsers(dest="cmd")
+    filed = sub.add_parser("finding-filed", help="record that a round's finding became an issue")
+    filed.add_argument("--round-id", required=True)
+    filed.add_argument("--issue", required=True, help="owner/repo#N the finding became")
+    filed.add_argument("--arm", required=True, help="the agent that produced the finding")
+    filed.add_argument("--finding-ref", help="stable id of the finding inside the round")
+    dur = sub.add_parser("round-durability", help="inherit downstream durability for a round")
+    dur.add_argument("--round-id", required=True)
+    dur.add_argument("--apply-edges", action="store_true",
+                     help="write the linkage into influence_edges (default: read only)")
+    args = parser.parse_args(argv)
+    if args.cmd == "finding-filed":
+        conn = feedback._conn()
+        try:
+            ensure_schema(conn)
+            row = conn.execute(
+                "SELECT s.subject_id, s.subject_family_id, s.canonical_target, s.task_type "
+                "FROM research_subject_experiments x "
+                "JOIN research_subjects s ON s.subject_id=x.subject_id WHERE x.exp_id=?",
+                (args.round_id,),
+            ).fetchone()
+            if row is None:
+                # FAIL LOUD, NOT SILENT. An unregistered round means the linkage would hang off no
+                # subject and inherit nothing; saying so is the difference between a fixable
+                # mistake and a fact that quietly never existed.
+                print(json.dumps({"recorded": False,
+                                  "reason": f"no registered round {args.round_id}"}))
+                return 1
+            identity = {
+                "subject_id": row[0], "subject_family_id": row[1],
+                "canonical_target": row[2], "task_type": row[3],
+            }
+            event_id = record_finding_issue(
+                args.round_id, args.issue, arm=args.arm, identity=identity,
+                finding_ref=args.finding_ref, conn=conn,
+            )
+        finally:
+            conn.close()
+        print(json.dumps({"recorded": True, "event_id": event_id,
+                          "round_id": args.round_id, "issue": args.issue, "arm": args.arm}))
+        return 0
+    if args.cmd == "round-durability":
+        print(json.dumps(
+            resolve_round_durability(args.round_id, apply_edges=args.apply_edges),
+            indent=2, sort_keys=True,
+        ))
+        return 0
+    print(json.dumps(summary(), indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
