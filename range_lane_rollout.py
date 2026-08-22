@@ -25,6 +25,7 @@ from typing import Any
 
 import backlog
 import capabilities
+import env_prereq
 import capacity
 import claims
 import dispatcher
@@ -478,6 +479,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.selftest:
+        # Every `build_rollout` here runs a dry dispatch preview, and a codex assignment resolves
+        # an EXACT profile — which needs the version-capable Codex binary and fails closed rather
+        # than falling back to PATH. That is the whole selftest's spine, not one section of it, so
+        # the gate is the selftest. The reason names the binary; verify.py counts it and bounds it.
+        if env_prereq.selftest_skipped("range_lane_rollout.py",
+                                       env_prereq.codex_profile_binary_absent()):
+            return 0
         _selftest()
         return 0
 

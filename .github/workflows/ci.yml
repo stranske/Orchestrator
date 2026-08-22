@@ -5,10 +5,18 @@ name: CI
 # for weeks without anyone knowing: 9 pytest failures plus a module selftest broken since
 # 2026-06-18. A clean-machine CI run is the single strongest reason this code is in a repo at all.
 #
-# The suite is STATE-INDEPENDENT: verified 2026-08-21 by running it with ORCH_STATE_DIR pointed at
-# an empty directory — 330 passed. So CI needs no Brain database, no capability ledger and no
-# seeded state, which is what keeps the owner's rule (no evaluation databases stored remotely)
-# compatible with having CI at all.
+# CORRECTED 2026-08-21 after the first run came back red. The claim here was that the suite is
+# STATE-INDEPENDENT, "verified by running it with ORCH_STATE_DIR pointed at an empty directory —
+# 330 passed". That verification moved the WRONG KNOB. There are two: ORCH_STATE_DIR (the audit
+# cache, firing monitor, redirect sweep) and ORCH_LOCAL_RUNTIME (the capability LEDGER and the
+# Brain). Only the second one holds the state those checks read, so the experiment left the
+# owner's populated 40-row ledger in place and proved nothing about a fresh machine. On a real
+# runner the ledger bootstraps to the 14 rows the code declares, and 21 checks that read the
+# other 26 failed.
+#
+# Both knobs are now set, so the run really is state-free, and the checks that need this
+# instance's registration history SKIP with the missing row named instead of failing. verify.py
+# bounds that skipping with a ceiling — see .verify-floor.json.
 
 on:
   push:
@@ -42,14 +50,20 @@ jobs:
 
       - name: Verify
         env:
-          # State is machine-local by design. A fresh directory proves the suite does not depend on
-          # this developer's Brain, ledger or cadence stamps.
+          # State is machine-local by design, and it lives behind TWO variables. Setting only one
+          # is what made the "state-independent" claim above wrong for two months of one day.
           ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
         run: |
-          mkdir -p "$ORCH_STATE_DIR"
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
           python3 verify.py
 
       # verify.py already fails on: any pytest failure, ZERO tests collected, a collection count
-      # below the recorded floor, a module selftest that exits 0 without saying anything, and any
-      # of the five capability gates. Deliberately no `|| true` anywhere — an exit code that cannot
-      # fail is the defect this repo exists to stop repeating.
+      # below the recorded floor, passed+skipped dropping below the floor, MORE SKIPS THAN THE
+      # AGREED CEILING, a module selftest that exits 0 without saying anything, a selftest or gate
+      # that exits 0 having skipped without naming what is missing, and any of the five capability
+      # gates. Deliberately no `|| true` anywhere — an exit code that cannot fail is the defect
+      # this repo exists to stop repeating.
+      #
+      # It also prints every skip and its reason, so a green run here always states what it did
+      # not check. If that list grows, the ceiling turns it into a red rather than a footnote.

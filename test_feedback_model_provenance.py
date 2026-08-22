@@ -3,6 +3,7 @@ import sqlite3
 
 import pytest
 
+import env_prereq
 import feedback
 
 
@@ -395,6 +396,13 @@ def test_multi_capability_run_records_one_edge_each(tmp_path):
     one-capability case — which meant a run declaring two capabilities recorded attribution for
     neither. Edges are the many-to-many surface (2026-08-09).
     """
+    # The Brain here is a fresh tmp DB, but the LEDGER is not: the edge writer resolves each
+    # capability's version lineage from it and refuses an edge without one (all-or-nothing, so a
+    # capability is never credited with a borrowed version). A ledger row with no lineage is the
+    # unregistered case, which the sibling test asserts produces no attribution.
+    env_prereq.require(
+        env_prereq.ledger_rows_absent("adversarial-review", "testgen-lane"),
+        env_prereq.ledger_version_lineage_absent("adversarial-review", "testgen-lane"))
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
@@ -435,6 +443,10 @@ def test_role_run_creates_a_capability_tagged_edge(tmp_path):
     payload and never to record_run, so 81 influence edges carried 0 capability tags and
     reconcile_causal_lifecycle — which reads exactly those tags — saw no evidence ever.
     """
+    # Same prerequisite as the multi-capability case: no version lineage in the ledger, no edge.
+    env_prereq.require(
+        env_prereq.ledger_rows_absent("role-triage"),
+        env_prereq.ledger_version_lineage_absent("role-triage"))
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:

@@ -44,6 +44,7 @@ import sys
 from pathlib import Path
 
 import capabilities
+import env_prereq
 import feedback
 
 # Terminal verdicts worth propagating. A still-pending outcome is not evidence yet.
@@ -594,47 +595,58 @@ def _selftest() -> None:
     # This is the bug the resolver shipped with: it reads row["capability_ids"], the SELECT never
     # fetched them, and there is no runs.capability_ids column — so every tag written by
     # record_run(capability_ids=...) produced a Brain edge that never reached the ledger.
-    import tempfile as _tf
-    _old_db = feedback.DB_PATH
-    with _tf.TemporaryDirectory(prefix="bridge-tagged-") as _td:
-        feedback.DB_PATH = Path(_td) / "brain.db"
-        try:
-            feedback.record_run("tagged:run", "o/r#1", "implement", "gemini",
-                                capability_ids=["agy-runtime-isolation"])
-            feedback.record_outcome("tagged:run", adjudicated_verdict="PASS", merged=True,
-                                    durability="durable")
-            rows = collect()
-            row = [r for r in rows if r["run_id"] == "tagged:run"][0]
-            assert row["capability_ids"] == ["agy-runtime-isolation"], row
-            mapped = attribute(rows, known={"agy-runtime-isolation"})
-            assert [l["capability_id"] for l in mapped["links"]] == ["agy-runtime-isolation"], mapped
-            assert mapped["links"][0]["resolver"] == "run_tagged", mapped
+    # The Brain below is a fresh tmp DB, but the edge writer resolves `agy-runtime-isolation`'s
+    # and `offload`'s version lineage from the LEDGER and refuses an edge without one — so the
+    # tags this block asserts on can only be written where those rows are registered. Gated as a
+    # SECTION: everything above and below it runs on any machine.
+    _gaps: list[str] = []
+    if env_prereq.runnable(
+            _gaps,
+            env_prereq.ledger_rows_absent("agy-runtime-isolation", "offload"),
+            env_prereq.ledger_version_lineage_absent("agy-runtime-isolation", "offload")):
+        import tempfile as _tf
+        _old_db = feedback.DB_PATH
+        with _tf.TemporaryDirectory(prefix="bridge-tagged-") as _td:
+            feedback.DB_PATH = Path(_td) / "brain.db"
+            try:
+                feedback.record_run("tagged:run", "o/r#1", "implement", "gemini",
+                                    capability_ids=["agy-runtime-isolation"])
+                feedback.record_outcome("tagged:run", adjudicated_verdict="PASS", merged=True,
+                                        durability="durable")
+                rows = collect()
+                row = [r for r in rows if r["run_id"] == "tagged:run"][0]
+                assert row["capability_ids"] == ["agy-runtime-isolation"], row
+                mapped = attribute(rows, known={"agy-runtime-isolation"})
+                assert [l["capability_id"] for l in mapped["links"]] == ["agy-runtime-isolation"], mapped
+                assert mapped["links"][0]["resolver"] == "run_tagged", mapped
 
-            # ---- offload backfill: the link is backend_run_id, and only backend_run_id --------
-            # record_role_run now tags `offload` at record time, so a CURRENT row needs no repair.
-            # These two are shaped like HISTORY — recorded before that tagging existed — which is
-            # exactly what the backfill is for.
-            for rid, target, payload in (
-                ("role:redirect:withoffload", "o/r#2",
-                 {"role": "redirect", "backend_run_id": "offload:xyz"}),
-                ("role:redirect:replayed", "o/r#3", {"role": "redirect"}),
-            ):
-                feedback.record_run(rid, target, "role:redirect", "cursor",
-                                    role_name="redirect", decomposition=payload)
-            first = backfill_offload_capability_edges()
-            assert first["backfilled"] == 1, first
-            with feedback._conn() as c:
-                tagged = {r[0] for r in c.execute(
-                    "SELECT target_run_id FROM influence_edges WHERE influence_type='capability' "
-                    "AND capability_id='offload'").fetchall()}
-            assert tagged == {"role:redirect:withoffload"}, tagged
-            assert backfill_offload_capability_edges()["backfilled"] == 0, "not idempotent"
-        finally:
-            feedback.DB_PATH = _old_db
+                # ---- offload backfill: the link is backend_run_id, and only backend_run_id --------
+                # record_role_run now tags `offload` at record time, so a CURRENT row needs no repair.
+                # These two are shaped like HISTORY — recorded before that tagging existed — which is
+                # exactly what the backfill is for.
+                for rid, target, payload in (
+                    ("role:redirect:withoffload", "o/r#2",
+                     {"role": "redirect", "backend_run_id": "offload:xyz"}),
+                    ("role:redirect:replayed", "o/r#3", {"role": "redirect"}),
+                ):
+                    feedback.record_run(rid, target, "role:redirect", "cursor",
+                                        role_name="redirect", decomposition=payload)
+                first = backfill_offload_capability_edges()
+                assert first["backfilled"] == 1, first
+                with feedback._conn() as c:
+                    tagged = {r[0] for r in c.execute(
+                        "SELECT target_run_id FROM influence_edges WHERE influence_type='capability' "
+                        "AND capability_id='offload'").fetchall()}
+                assert tagged == {"role:redirect:withoffload"}, tagged
+                assert backfill_offload_capability_edges()["backfilled"] == 0, "not idempotent"
+            finally:
+                feedback.DB_PATH = _old_db
 
+    env_prereq.report_gaps("capability_outcome_bridge.py", _gaps)
     print("capability_outcome_bridge.py selftest: OK (explicit attribution, no entrypoint "
           "inference, unknown ids refused, idempotent, dry-run inert, collect supplies "
-          "recorded tags so run_tagged is live, offload backfill keyed on backend_run_id)")
+          "recorded tags so run_tagged is live, offload backfill keyed on backend_run_id)"
+          + (f" — {len(set(_gaps))} section(s) skipped, see above" if _gaps else ""))
 
 
 def main(argv: list[str]) -> int:

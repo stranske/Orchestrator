@@ -39,6 +39,7 @@ import time
 
 import backlog
 import capabilities
+import env_prereq
 
 # --------------------------------------------------------------------------- fixtures
 # Each entry: the capability under test, the real instance, and how to decide if it would fire.
@@ -804,6 +805,15 @@ def format_report(rep: dict) -> str:
 
 
 def _selftest() -> None:
+    # `docs-drift-fix-agent`'s fixture reads its matcher out of the LIVE ledger, so on a machine
+    # where that row was never registered the fixture errors — and an errored fixture is
+    # indistinguishable from a broken one, which is what the loop below exists to catch. Gate it
+    # by NAME and keep the guard live for every other fixture: excusing one row is bounded, and
+    # the reason says which. Two places need it, so it is computed once.
+    gaps: list[str] = []
+    _docs_drift_ok = env_prereq.runnable(
+        gaps, env_prereq.ledger_rows_absent("docs-drift-fix-agent"))
+
     # The must-not-fire guards are the ones that keep this honest: a check that only ever says
     # "yes" would pass trivially and tell us nothing.
     rep = replay(offline=True)
@@ -831,6 +841,8 @@ def _selftest() -> None:
     # a real miss. Every fixture must exercise real machinery.
     for row in rep["rows"]:
         det = row.get("detail")
+        if not _docs_drift_ok and row["capability"] == "docs-drift-fix-agent":
+            continue                       # the ONE excused row, named in `gaps` above
         if isinstance(det, dict):
             assert "error" not in det, f"fixture for {row['capability']} ERRORED: {det['error']}"
 
@@ -839,23 +851,24 @@ def _selftest() -> None:
     # very latched-state bug the fixture exists to catch (a blocked verdict whose clear path is
     # never re-checked). So test the mechanism in BOTH directions; a regression to a hardcoded
     # verdict fails here rather than quietly under-reporting forever.
-    import capability_activation_audit as _audit
-    _stub = {"repo": "R", "workflow": "w", "path": "/p"}
-    _real = _audit.external_caller
-    try:
-        _audit.external_caller = lambda cap: {**_stub, "exists": False}
-        absent = _external_caller_state("docs-drift-fix-agent")
-        _audit.external_caller = lambda cap: {**_stub, "exists": True}
-        present = _external_caller_state("docs-drift-fix-agent")
-    finally:
-        _audit.external_caller = _real
-    assert not absent["fires"] and absent["external_blocker"] is True, absent
-    assert present["fires"] and present["external_blocker"] is False, present
-    # ...and the LIVE row must agree with the caller actually on disk, in whichever direction.
-    docs = [r for r in rep["rows"] if r["capability"] == "docs-drift-fix-agent"][0]
-    _cap = capabilities.load(capabilities.REG)["docs-drift-fix-agent"]
-    _live = _audit.external_caller(_cap)
-    assert docs["fires"] is bool(_live and _live.get("exists")), (docs, _live)
+    if _docs_drift_ok:
+        import capability_activation_audit as _audit
+        _stub = {"repo": "R", "workflow": "w", "path": "/p"}
+        _real = _audit.external_caller
+        try:
+            _audit.external_caller = lambda cap: {**_stub, "exists": False}
+            absent = _external_caller_state("docs-drift-fix-agent")
+            _audit.external_caller = lambda cap: {**_stub, "exists": True}
+            present = _external_caller_state("docs-drift-fix-agent")
+        finally:
+            _audit.external_caller = _real
+        assert not absent["fires"] and absent["external_blocker"] is True, absent
+        assert present["fires"] and present["external_blocker"] is False, present
+        # ...and the LIVE row must agree with the caller actually on disk, in whichever direction.
+        docs = [r for r in rep["rows"] if r["capability"] == "docs-drift-fix-agent"][0]
+        _cap = capabilities.load(capabilities.REG)["docs-drift-fix-agent"]
+        _live = _audit.external_caller(_cap)
+        assert docs["fires"] is bool(_live and _live.get("exists")), (docs, _live)
 
     # tick_env must EXECUTE orchestrate.sh's conditionals, not regex-scrape its defaults. The
     # range-lane flag is the proof case: its naive default is 1, but past the trial-review date the
@@ -1009,8 +1022,10 @@ def _selftest() -> None:
         assert not str(row.get("provenance", "")).startswith("live "), row
     text = format_report(rep)
     assert "WOULD FIRE" in text and "WOULD MISS" in text
+    env_prereq.report_gaps("capability_recurrence_check.py", gaps)
     print("capability_recurrence_check.py selftest: OK (must-not-fire guards hold, unemittable "
-          "task_type reads as a miss, offline stays offline)")
+          "task_type reads as a miss, offline stays offline)"
+          + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else ""))
 
 
 def main(argv: list[str]) -> int:

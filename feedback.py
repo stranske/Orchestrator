@@ -4638,7 +4638,10 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
 def _selftest():
     import tempfile
 
+    import env_prereq                       # imported here: this module is env_prereq's own dep
+
     tmp = tempfile.mkdtemp(prefix="feedback-selftest-")
+    gaps: list[str] = []
     global DB_PATH
     DB_PATH = Path(tmp) / "t.db"
     try:
@@ -5663,18 +5666,26 @@ def _selftest():
 
         # ---- an offload-backed role run carries the transport capability, and one without
         # ---- a backend run does not: the tag follows the recorded link, never the role name.
-        record_role_run("role:redirect:offloaded", "redirect", "owner/repo#tr", "cursor",
-                        backend_run_id="offload:abc123")
-        record_role_run("role:redirect:replayed", "redirect", "owner/repo#tr", "cursor")
-        with _conn() as c:
-            offloaded = {r[0] for r in c.execute(
-                "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
-                "AND influence_type='capability'", ("role:redirect:offloaded",)).fetchall()}
-            replayed = {r[0] for r in c.execute(
-                "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
-                "AND influence_type='capability'", ("role:redirect:replayed",)).fetchall()}
-        assert offloaded == {"role-redirect", "offload"}, offloaded
-        assert replayed == {"role-redirect"}, replayed
+        # The DB here is a fresh tmp file, but the tags come out of the LEDGER: this writer
+        # refuses a capability edge with no version lineage, on purpose, so a capability is never
+        # credited with a version it never had. `offload`'s row exists only on an instance that
+        # has run it, so the SECTION is gated and named — everything else here still runs.
+        if env_prereq.runnable(
+                gaps,
+                env_prereq.ledger_rows_absent("role-redirect", "offload"),
+                env_prereq.ledger_version_lineage_absent("role-redirect", "offload")):
+            record_role_run("role:redirect:offloaded", "redirect", "owner/repo#tr", "cursor",
+                            backend_run_id="offload:abc123")
+            record_role_run("role:redirect:replayed", "redirect", "owner/repo#tr", "cursor")
+            with _conn() as c:
+                offloaded = {r[0] for r in c.execute(
+                    "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
+                    "AND influence_type='capability'", ("role:redirect:offloaded",)).fetchall()}
+                replayed = {r[0] for r in c.execute(
+                    "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
+                    "AND influence_type='capability'", ("role:redirect:replayed",)).fetchall()}
+            assert offloaded == {"role-redirect", "offload"}, offloaded
+            assert replayed == {"role-redirect"}, replayed
 
         # ---- a REJECTED edge must never inherit the acting run's success ---------------
         # `_propagate_outcome_lineage_in_conn` filters on accepted=1. That filter is the whole
@@ -5709,56 +5720,63 @@ def _selftest():
         assert lineage_health["accepted_influence_linked"] >= 3, lineage_health
         assert lineage_health["orphan_edges"] == 0, lineage_health
 
-        # ---- capability attribution must reach a run that CAN resolve -------------------
-        # A role run is advisory and never gets an `outcomes` row, so its own capability edge is
-        # permanently unresolvable. The run that ACTS on the proposal inherits the attribution,
-        # and outcome propagation then resolves it on the already-existing path.
-        record_role_run("role:triage:x:1", "triage", "o/r#7", "gemini")
-        capq = ("SELECT capability_id,target_run_id,durability FROM influence_edges "
-                "WHERE influence_type='capability'")
-        with _conn() as cc:
-            pre = cc.execute(capq + " AND target_run_id='role:triage:x:1'").fetchall()
-        assert pre and pre[0][2] is None, f"advisory role run should have no outcome: {pre}"
-
-        record_run("cap-inherit-work", target="o/r#7", task_type="implement", agent="codex",
-                   influenced_by_role_run_ids=["role:triage:x:1"])
-        with _conn() as cc:
-            mid = cc.execute(capq + " AND target_run_id='cap-inherit-work'").fetchall()
-        assert mid and mid[0][0] == "role-triage", f"attribution not inherited: {mid}"
-
-        record_outcome("cap-inherit-work", verifier_verdict="PASS", merged=1, durability="durable")
-        with _conn() as cc:
-            post = cc.execute(capq + " AND target_run_id='cap-inherit-work'").fetchall()
-        assert post and post[0][2] == "durable", f"outcome did not reach the edge: {post}"
-
-        # A run declaring the capability ITSELF must not also get an inherited duplicate.
-        record_role_run("role:triage:x:2", "triage", "o/r#8", "gemini")
-        record_run("cap-nodupe", target="o/r#8", task_type="implement", agent="codex",
-                   capability_ids=["role-triage"],
-                   influenced_by_role_run_ids=["role:triage:x:2"])
-        with _conn() as cc:
-            dupes = cc.execute(capq + " AND target_run_id='cap-nodupe'").fetchall()
-        assert len(dupes) == 1, f"double-counted the same capability: {dupes}"
-
-        # DELIBERATE BREAK -> REVERT: stub the lookup and nothing is inherited, so the edge stays
-        # unresolvable — proving the inheritance is what makes measurement possible.
-        saved_lookup = globals()["_capability_attribution_of"]
-        try:
-            globals()["_capability_attribution_of"] = lambda *a, **k: []
-            record_role_run("role:triage:x:3", "triage", "o/r#9", "gemini")
-            record_run("cap-broken", target="o/r#9", task_type="implement", agent="codex",
-                       influenced_by_role_run_ids=["role:triage:x:3"])
+        # Same LEDGER prerequisite as above, and the same reason it is a SECTION rather than the
+        # whole selftest: every edge here is a `role-triage` capability edge, and the writer needs
+        # that row's version lineage to create one at all.
+        if env_prereq.runnable(
+                gaps,
+                env_prereq.ledger_rows_absent("role-triage"),
+                env_prereq.ledger_version_lineage_absent("role-triage")):
+            # ---- capability attribution must reach a run that CAN resolve -------------------
+            # A role run is advisory and never gets an `outcomes` row, so its own capability edge is
+            # permanently unresolvable. The run that ACTS on the proposal inherits the attribution,
+            # and outcome propagation then resolves it on the already-existing path.
+            record_role_run("role:triage:x:1", "triage", "o/r#7", "gemini")
+            capq = ("SELECT capability_id,target_run_id,durability FROM influence_edges "
+                    "WHERE influence_type='capability'")
             with _conn() as cc:
-                broken = cc.execute(capq + " AND target_run_id='cap-broken'").fetchall()
-            assert not broken, "break did not change behaviour — test is vacuous"
-        finally:
-            globals()["_capability_attribution_of"] = saved_lookup
-        record_role_run("role:triage:x:4", "triage", "o/r#10", "gemini")
-        record_run("cap-reverted", target="o/r#10", task_type="implement", agent="codex",
-                   influenced_by_role_run_ids=["role:triage:x:4"])
-        with _conn() as cc:
-            rev = cc.execute(capq + " AND target_run_id='cap-reverted'").fetchall()
-        assert rev, "revert did not restore inheritance"
+                pre = cc.execute(capq + " AND target_run_id='role:triage:x:1'").fetchall()
+            assert pre and pre[0][2] is None, f"advisory role run should have no outcome: {pre}"
+
+            record_run("cap-inherit-work", target="o/r#7", task_type="implement", agent="codex",
+                       influenced_by_role_run_ids=["role:triage:x:1"])
+            with _conn() as cc:
+                mid = cc.execute(capq + " AND target_run_id='cap-inherit-work'").fetchall()
+            assert mid and mid[0][0] == "role-triage", f"attribution not inherited: {mid}"
+
+            record_outcome("cap-inherit-work", verifier_verdict="PASS", merged=1, durability="durable")
+            with _conn() as cc:
+                post = cc.execute(capq + " AND target_run_id='cap-inherit-work'").fetchall()
+            assert post and post[0][2] == "durable", f"outcome did not reach the edge: {post}"
+
+            # A run declaring the capability ITSELF must not also get an inherited duplicate.
+            record_role_run("role:triage:x:2", "triage", "o/r#8", "gemini")
+            record_run("cap-nodupe", target="o/r#8", task_type="implement", agent="codex",
+                       capability_ids=["role-triage"],
+                       influenced_by_role_run_ids=["role:triage:x:2"])
+            with _conn() as cc:
+                dupes = cc.execute(capq + " AND target_run_id='cap-nodupe'").fetchall()
+            assert len(dupes) == 1, f"double-counted the same capability: {dupes}"
+
+            # DELIBERATE BREAK -> REVERT: stub the lookup and nothing is inherited, so the edge stays
+            # unresolvable — proving the inheritance is what makes measurement possible.
+            saved_lookup = globals()["_capability_attribution_of"]
+            try:
+                globals()["_capability_attribution_of"] = lambda *a, **k: []
+                record_role_run("role:triage:x:3", "triage", "o/r#9", "gemini")
+                record_run("cap-broken", target="o/r#9", task_type="implement", agent="codex",
+                           influenced_by_role_run_ids=["role:triage:x:3"])
+                with _conn() as cc:
+                    broken = cc.execute(capq + " AND target_run_id='cap-broken'").fetchall()
+                assert not broken, "break did not change behaviour — test is vacuous"
+            finally:
+                globals()["_capability_attribution_of"] = saved_lookup
+            record_role_run("role:triage:x:4", "triage", "o/r#10", "gemini")
+            record_run("cap-reverted", target="o/r#10", task_type="implement", agent="codex",
+                       influenced_by_role_run_ids=["role:triage:x:4"])
+            with _conn() as cc:
+                rev = cc.execute(capq + " AND target_run_id='cap-reverted'").fetchall()
+            assert rev, "revert did not restore inheritance"
 
         # JSON snapshot (the reviewable project copy of the dataset)
         snap = snapshot_json(Path(tmp) / "snap.json")
@@ -5769,12 +5787,14 @@ def _selftest():
             and snap["rows"]["execution_attempts"] >= 5
             and "evidence_types" in snap["rows"]
         ), snap
+        env_prereq.report_gaps("feedback.py", gaps)
         print(
             "feedback.py selftest: OK (prior→posterior learning, durability/verifier-as-success, late updates, "
             "versioned weights, eval matrix, human calibration, evidence-gap growth+prune+approval, "
             "trace retention, test_evaluator_trace_cannot_resolve_worker_model, conservative legacy migration, "
             "quality-magnitude/outcome learner + effort reward, safe completion lineage + "
             "rejected-edge non-inheritance, json snapshot)"
+            + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
         )
     finally:
         import shutil

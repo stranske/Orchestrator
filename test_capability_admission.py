@@ -17,6 +17,7 @@ import sys
 
 import capabilities
 import capability_admission as admission
+import env_prereq
 
 
 def test_new_capabilities_carry_all_required_parts():
@@ -26,6 +27,10 @@ def test_new_capabilities_carry_all_required_parts():
     a capability without them is how six subsystems went dormant, how `issue-readiness` shipped with
     no heartbeat, and how `reference-sync-hygiene` accrued 367 events its own gate could not read.
     """
+    # Enforcement is scoped to capabilities registered from 2026-08-21, and registration happens
+    # on the running instance. A ledger with no pre-gate rows has no enforced population either,
+    # so there is nothing for this to be a gate ON. Name that, do not pass on an empty set.
+    env_prereq.require(env_prereq.ledger_legacy_rows_absent())
     rep = admission.report()
     failing = rep["enforced_failing"]
     rows = {r["capability_id"]: r for r in rep["rows"]}
@@ -76,6 +81,7 @@ def test_legacy_debt_is_reported_not_forgiven():
     pushed into the predicates instead of the row, the debt would read as compliance — which is
     precisely how "all findings resolved; nothing dropped" coexisted with 13 blocked capabilities.
     """
+    env_prereq.require(env_prereq.ledger_legacy_rows_absent())
     rep = admission.report()
     legacy = [r for r in rep["rows"] if r["legacy"]]
     assert legacy, "expected pre-gate capabilities to be marked legacy"
@@ -100,17 +106,28 @@ def test_waivers_are_bounded_not_just_dated():
 
 def test_the_gate_admits_itself():
     """Dogfooding, and not for style: a gate exempt from its own rule is the rule being optional."""
+    # `admit()` raises ValueError on a capability the ledger has never heard of, so the gate can
+    # only be asked about itself where it is registered.
+    env_prereq.require(env_prereq.ledger_rows_absent("capability-admission-gate"))
     own = admission.admit("capability-admission-gate")
     assert own["admitted"], f"the admission gate fails its own requirements: {own['missing']}"
 
 
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    failures = []
+    failures, skipped = [], []
     for fn in tests:
         try:
             fn()
             print(f"  OK   {fn.__name__}")
+        # A skip is not a pass and not a failure. Catching it BEFORE AssertionError matters:
+        # MissingPrerequisite is a SkipTest, not an AssertionError, so an uncaught one would
+        # crash this runner — and printing it as OK would be worse, because the count would
+        # then claim coverage this machine cannot provide.
+        except env_prereq.MissingPrerequisite as exc:
+            skipped.append((fn.__name__, str(exc)))
+            print(f"  SKIP {fn.__name__}")
+            print(f"       {env_prereq.PREREQ_ABSENT_MARK} {str(exc)[:400]}")
         except AssertionError as exc:
             failures.append(fn.__name__)
             print(f"  FAIL {fn.__name__}")
@@ -118,6 +135,13 @@ def main() -> int:
     if failures:
         print(f"\n{len(failures)} of {len(tests)} admission checks FAILED")
         return 1
+    if skipped:
+        # Green, and saying exactly what did not run. verify.py greps the mark and counts it
+        # against a ceiling, so this can never quietly become the whole file.
+        print(f"\n{len(tests) - len(skipped)} of {len(tests)} admission checks passed, "
+              f"{len(skipped)} skipped: "
+              + "; ".join(f"{n} ({r[:80]})" for n, r in skipped))
+        return 0
     rep = admission.report()
     print(f"\nall {len(tests)} admission checks passed — "
           f"{rep['enforced_total']} enforced, {len(rep['legacy_debt'])} legacy debt, "
