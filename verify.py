@@ -67,9 +67,14 @@ COUNT_RE = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpasse
 
 def run_pytest(*, extra: list[str] | None = None) -> dict:
     """Execute the suite and read the COUNTS, not the exit code."""
-    # `-rs` makes pytest print the reason behind every skip. Without it a skip count is a number
-    # with no story, which is the shape a silent narrowing hides in.
-    cmd = [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider", "--no-header"]
+    # `-rfEs`: failures, errors AND skip reasons in the short summary. Skip reasons are why this
+    # flag is here at all — a skip count with no story is the shape a silent narrowing hides in.
+    # But `f` and `E` are NOT optional additions: pytest's default is `-rfE`, so passing a bare
+    # `-rs` REPLACES it and silently stops printing FAILED lines. That is exactly what happened —
+    # a run with 1 real failure printed "pytest failures (0)", from the very code added here to
+    # stop failures going unlisted. An instrument that reports less, introduced by the change that
+    # was meant to make it report more.
+    cmd = [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "--no-header"]
     cmd += extra or []
     proc = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True)
     tail = (proc.stdout or "") + (proc.stderr or "")
@@ -397,6 +402,20 @@ def _selftest() -> None:
     assert "did it run?" in got["failed"]["silent_mod"], got
     assert got["ok"] == ["loud_mod"], f"a skipped selftest must not be counted as ok: {got}"
     assert got["skipped"] == {"skipping_mod": ["the widget is not installed"]}, got
+
+    # THE -r FLAG MUST NOT SUPPRESS FAILURES. Passing `-rs` replaces pytest's default `-rfE`, so
+    # skip reasons arrive and FAILED lines silently stop — which is how a run with 1 real failure
+    # printed "pytest failures (0)" from the code added to stop exactly that. Assert on the flag,
+    # because the symptom only shows on a red run and a green suite would never reveal it.
+    import inspect
+    src = inspect.getsource(run_pytest)
+    flag = [tok for tok in src.split() if tok.strip('",\'') .startswith("-r")]
+    assert flag, "run_pytest no longer passes an -r flag; skip reasons would vanish"
+    got_flag = flag[0].strip('",\'')
+    for letter, what in (("f", "failures"), ("E", "errors"), ("s", "skip reasons")):
+        assert letter in got_flag[2:], (
+            f"{got_flag} omits {letter!r}: {what} would not be listed. pytest's default is -rfE, "
+            f"so any -r you pass must re-include f and E as well as s")
 
     # ---- THE SKIP CEILING, in both directions -------------------------------------------------
     # Bounding skips is the whole reason skipping was allowed at all, so the bound is tested the
