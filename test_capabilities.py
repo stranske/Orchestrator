@@ -1,4 +1,5 @@
 import json
+import pathlib
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -395,3 +396,94 @@ def test_observers_are_not_a_measurement_gap():
     # An observer that has never run is not "observing" — absence of a run is not observation.
     never = {**observer, "last_invocation": None}
     assert capabilities.classify_liveness(never, now=100) != "observing"
+
+
+def test_non_gate_declarations_are_code_seeded_and_read_only(tmp_path):
+    """`KNOWN_DECLARATIONS` must reseed stripped rows WITHOUT writing, and must not seed gate machinery.
+
+    The hazard this closes: `kill_switch_category`, `control_point` and `kill_switch_rationale` were
+    applied straight to the running instance's `capabilities.json`. That made them machine-local —
+    green on the instance where someone typed them, absent on a fresh checkout — so the two tests
+    that pinned the kill-switch exemption set could only skip on CI, and the exemption set was never
+    actually reviewed anywhere. Declaration-owned means code-owned; this is the same reconciliation
+    that already owns `gate_blocks_execution`.
+
+    `KNOWN_GATES` was the wrong home for them. It seeds a status, a GATED_TTL_DAYS expiry and
+    `next_transition: retired`, so registering `feedback-store` there would assert an expiry that
+    does not exist — the append-only write path is not scheduled to retire. Hence a sibling table
+    carrying ONLY declaration-owned fields, consumed by the SAME loop: one mechanism, two sources.
+    """
+    fields = ("kill_switch_category", "control_point", "kill_switch_rationale")
+
+    # A row that exists but carries none of the declarations — a fresh checkout, or drift.
+    stripped = {
+        cid: {**capabilities._blank_capability(cid), "status": "observed"}
+        for cid in capabilities.KNOWN_DECLARATIONS
+    }
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save(stripped, ledger)
+    on_disk = json.loads(ledger.read_text())["capabilities"]
+    assert not any(f in on_disk[cid] for cid in stripped for f in fields), "fixture was not stripped"
+
+    loaded = capabilities.load_declared(ledger)
+    for cid, declared in capabilities.KNOWN_DECLARATIONS.items():
+        for field, value in declared.items():
+            assert loaded[cid][field] == value, (cid, field, loaded[cid].get(field))
+
+    # READ-ONLY. `load_declared` reconciles in memory; the periodic report and the admission tests
+    # both read through it and must never mutate the shared live ledger.
+    after = json.loads(ledger.read_text())["capabilities"]
+    assert not any(f in after[cid] for cid in stripped for f in fields), "load_declared WROTE"
+
+    # NOT gate machinery: a non-gate declaration must not acquire an expiry or a retirement plan.
+    for cid, declared in capabilities.KNOWN_DECLARATIONS.items():
+        assert cid not in capabilities.KNOWN_GATES, cid
+        assert not (set(declared) - set(capabilities.DECLARATION_FIELDS)), (
+            f"{cid} declares non-declaration-owned fields: "
+            f"{sorted(set(declared) - set(capabilities.DECLARATION_FIELDS))}")
+        assert loaded[cid].get("expires_at") in (None, ""), (cid, loaded[cid].get("expires_at"))
+
+    # And a writing load must reach the same state, so the two paths cannot disagree.
+    written = capabilities.load(ledger, create=True)
+    for cid, declared in capabilities.KNOWN_DECLARATIONS.items():
+        for field, value in declared.items():
+            assert written[cid][field] == value, (cid, field)
+
+
+def test_verifying_the_system_never_writes_the_live_ledger():
+    """No test or selftest may take a WRITING load of the shared live capability ledger.
+
+    `load()` defaults to `create=True`, which RECONCILES AND PERSISTS. Nine test/selftest call sites
+    read the live ledger that way — they only ever read, but the write happened anyway whenever the
+    code tables and the ledger disagreed. So running `verify.py` mutated
+    `$ORCH_STATE_DIR/capabilities.json`, the same file the hourly tick reads.
+
+    That is not theoretical. On 2026-08-22 a deliberate break added `offload` to
+    `KNOWN_DECLARATIONS`; the suite's writing load persisted the fake exemption onto the live
+    `offload` row, and it survived the revert of the source — reconciliation only rewrites rows the
+    code tables still declare, so a row that LEAVES the table keeps whatever was stamped on it. A
+    verification run must not be able to do that. `load_declared()` reconciles in memory and writes
+    nothing, which is what every one of those readers actually wanted.
+    """
+    import re
+
+    # Built by concatenation so this file's own source cannot match the scan below.
+    forbidden = re.compile(r"capabilities\.load\(" + r"(?:capabilities\.)?REG\b")
+
+    # POSITIVE CONTROL: if the pattern stops matching, the scan is vacuous and this fails first.
+    assert forbidden.search("x = capabilities.load(" + "capabilities.REG)")
+    assert forbidden.search("x = capabilities.load(" + "REG)")
+    assert not forbidden.search("x = capabilities.load_declared(" + "capabilities.REG)")
+
+    root = pathlib.Path(__file__).resolve().parent
+    offenders = []
+    for path in sorted(root.glob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not (path.name.startswith("test_") or "_selftest" in text):
+            continue          # production code may legitimately persist; verification may not.
+        for num, line in enumerate(text.splitlines(), 1):
+            if forbidden.search(line):
+                offenders.append(f"{path.name}:{num}: {line.strip()}")
+    assert not offenders, (
+        "verification code takes a writing load of the live ledger; use load_declared():\n  "
+        + "\n  ".join(offenders))

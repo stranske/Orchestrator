@@ -546,7 +546,7 @@ def _probe_commitments(probe: pathlib.Path) -> None:
 
 
 def _selftest() -> None:
-    ledger = capabilities.load(capabilities.REG)
+    ledger = capabilities.load_declared(capabilities.REG)
     assert ledger, "ledger must load"
     # Sections needing this instance's registration history are gated individually and named at
     # the end — gating the WHOLE selftest for one block would drop everything below it, which is

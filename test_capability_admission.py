@@ -97,7 +97,7 @@ def test_waivers_are_bounded_not_just_dated():
     expiry", so the rule was satisfied while the exemption was permanent in practice. Requiring the
     expiry to be WITHIN a horizon is what makes it a real deadline.
     """
-    ledger = capabilities.load(capabilities.REG)
+    ledger = capabilities.load_declared(capabilities.REG)
     for cap_id in admission.WAIVERS:
         assert cap_id in ledger, f"WAIVERS names unknown capability {cap_id!r}"
     problems = admission.waiver_problems()
@@ -112,31 +112,38 @@ def test_safety_guard_exemption_is_declared_and_narrow():
     `--add-dir` guard keeps gemini's writes inside the target worktree, and "disabling" it means
     letting an agent write outside its worktree. The risk of any exemption is that it becomes the
     cheap way to clear a red, so this pins the DECLARED SET.
+
+    ASSERTS THE CODE TABLE, NOT THE LEDGER. These declarations used to be applied straight to the
+    running instance's `capabilities.json`, which made them machine-local -- green here, absent on a
+    fresh checkout -- so this test could only SKIP on CI and the exemption set was never actually
+    reviewed anywhere. `capabilities.KNOWN_DECLARATIONS` is the source now, so the set is pinned on
+    every machine and widening it shows up in a diff.
     """
     import capabilities
 
-    # These declarations are applied to the RUNNING INSTANCE's ledger, not shipped in the tree, so on
-    # a fresh checkout there is nothing to assert about and this must SKIP rather than fail.
-    env_prereq.require(
-        env_prereq.ledger_rows_absent("agy-runtime-isolation", "offload"),
-        env_prereq.ledger_declaration_absent("kill_switch_category", "agy-runtime-isolation"),
-    )
-    ledger = capabilities.load_declared(capabilities.REG)
-    declared = {cid for cid, cap in ledger.items()
-                if cap.get("kill_switch_category") == "safety_guard"}
+    declared = {cid for cid, d in capabilities.KNOWN_DECLARATIONS.items()
+                if d.get("kill_switch_category") == "safety_guard"}
     assert declared == {"agy-runtime-isolation"}, declared
     for cap_id in declared:
-        assert str(ledger[cap_id].get("kill_switch_rationale") or "").strip(), cap_id
+        assert str(capabilities.KNOWN_DECLARATIONS[cap_id].get("kill_switch_rationale")
+                   or "").strip(), cap_id
     # BOTH parts are required -- the category alone must not satisfy the gate.
-    probe = dict(ledger["agy-runtime-isolation"])
+    probe = dict(capabilities.KNOWN_DECLARATIONS["agy-runtime-isolation"])
     probe.pop("kill_switch_rationale", None)
     probe.pop("kill_switch", None)
     ok, _ = admission.req_kill_switch(probe, {})
     assert not ok, "category without a rationale must not satisfy the kill-switch requirement"
-    # NARROWNESS: offload is the control. Infrastructure, exempt-shaped, and NOT exempt.
-    offload_cap = ledger["offload"]
-    assert offload_cap.get("kill_switch_category") != "safety_guard", offload_cap
-    assert "ORCH_OFFLOAD_DISABLED" in str(offload_cap.get("kill_switch") or ""), offload_cap
+    # NARROWNESS, control case: `offload` had the identical complaint on the same day and got a REAL
+    # switch instead of an exemption. It must stay out of the table, and its switch must still exist
+    # in the tree -- `known_controls()` reads the source, so this fails if the guard is deleted.
+    assert "offload" not in capabilities.KNOWN_DECLARATIONS
+    assert "ORCH_OFFLOAD_DISABLED" in admission.known_controls()
+    # DRIFT GUARD: nothing may carry the exemption that the code table does not declare. This is what
+    # catches a category typed into a live ledger instead of into the diff.
+    ledger = capabilities.load_declared(capabilities.REG)
+    stray = {cid for cid, cap in ledger.items()
+             if cap.get("kill_switch_category") == "safety_guard"} - declared
+    assert not stray, f"ledger declares safety_guard for undeclared capabilities: {stray}"
 
 
 def test_compute_only_category_must_name_a_control_that_exists():
@@ -149,42 +156,40 @@ def test_compute_only_category_must_name_a_control_that_exists():
     """
     import capabilities
 
-    # Same as above: machine-local declarations, so absence is a skip, never a failure.
-    env_prereq.require(
-        env_prereq.ledger_rows_absent("windowed-capacity-policy", "redirect-policy",
-                                      "feedback-store", "repo-playbook", "offload",
-                                      "agy-runtime-isolation"),
-        env_prereq.ledger_declaration_absent("kill_switch_category", "windowed-capacity-policy",
-                                             "redirect-policy", "feedback-store"),
-    )
-    ledger = capabilities.load_declared(capabilities.REG)
-    declared = {cid for cid, cap in ledger.items()
-                if cap.get("kill_switch_category") == "compute_only"}
+    declared = {cid for cid, d in capabilities.KNOWN_DECLARATIONS.items()
+                if d.get("kill_switch_category") == "compute_only"}
     assert declared == {"windowed-capacity-policy", "redirect-policy", "feedback-store"}, declared
 
     controls = admission.known_controls()
     ctx = {"known_controls": controls}
     for cap_id in declared:
-        cap = ledger[cap_id]
+        cap = capabilities.KNOWN_DECLARATIONS[cap_id]
         assert str(cap.get("kill_switch_rationale") or "").strip(), cap_id
         assert cap["control_point"] in controls, (cap_id, cap.get("control_point"))
         ok, _ = admission.req_kill_switch(cap, ctx)
         assert ok, cap_id
 
     # THE ANTI-ABUSE CONDITION: naming a switch that does not exist must FAIL, not pass.
-    fake = {**ledger["windowed-capacity-policy"], "control_point": "ORCH_NOT_A_REAL_FLAG"}
+    fake = {**capabilities.KNOWN_DECLARATIONS["windowed-capacity-policy"],
+            "control_point": "ORCH_NOT_A_REAL_FLAG"}
     fake.pop("kill_switch", None)
     ok, detail = admission.req_kill_switch(fake, ctx)
     assert not ok and "not a known switch" in detail, detail
     # ...and the category with no control_point at all must also fail.
-    bare = {**ledger["windowed-capacity-policy"]}
+    bare = {**capabilities.KNOWN_DECLARATIONS["windowed-capacity-policy"]}
     bare.pop("kill_switch", None); bare.pop("control_point", None)
     ok2, _ = admission.req_kill_switch(bare, ctx)
     assert not ok2, "compute_only without a named control must not satisfy the requirement"
 
     # NARROWNESS: capabilities that DO something are not in this category.
     for acting in ("repo-playbook", "offload", "agy-runtime-isolation"):
-        assert ledger[acting].get("kill_switch_category") != "compute_only", acting
+        assert (capabilities.KNOWN_DECLARATIONS.get(acting) or {}
+                ).get("kill_switch_category") != "compute_only", acting
+    # DRIFT GUARD: same as the safety_guard case -- the ledger may not out-declare the code.
+    ledger = capabilities.load_declared(capabilities.REG)
+    stray = {cid for cid, cap in ledger.items()
+             if cap.get("kill_switch_category") == "compute_only"} - declared
+    assert not stray, f"ledger declares compute_only for undeclared capabilities: {stray}"
 
 
 def test_the_gate_admits_itself():

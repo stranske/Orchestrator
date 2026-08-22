@@ -1045,6 +1045,73 @@ def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[
     return retired
 
 
+# The fields a DECLARATION owns. Reconciliation rewrites these from code on every load, so a value
+# typed into a live ledger cannot survive — which is the point: the declaration is reviewed in a diff
+# or it is not reviewed at all. Everything else on a capability row is measured state (invocations,
+# outcomes, event history) and is owned by the ledger, never overwritten from here.
+#
+# `kill_switch_category` / `control_point` / `kill_switch_rationale` joined on 2026-08-22. They had
+# been applied straight to the running instance's ledger, which made them machine-local: green where
+# someone typed them, absent on a fresh checkout, and invisible to review.
+DECLARATION_FIELDS: tuple[str, ...] = (
+    "entrypoint", "matcher", "trigger_cadence", "flags_defaults",
+    "output_artifact", "downstream_consumer", "learning_sink",
+    "gate_reason", "gate_evidence", "evidence_threshold",
+    "gate_blocks_execution",
+    "kill_switch_category", "control_point", "kill_switch_rationale",
+)
+
+
+# Declaration-owned fields for capabilities that are NOT gates. `KNOWN_GATES` seeds gate machinery
+# — a status, a GATED_TTL_DAYS expiry, `next_transition: retired` — so putting a non-gate capability
+# there would assert an expiry it does not have. This table carries ONLY declaration-owned fields and
+# is consumed by the SAME `_reconcile_known_declarations` loop: one mechanism, two sources, not a
+# second inventory.
+#
+# WHY IT EXISTS. `kill_switch_category` / `control_point` / `kill_switch_rationale` were applied
+# straight to the running instance's ledger, so they were machine-local: green where applied, absent
+# on a fresh checkout, and invisible to code review. That is the same class as every other
+# declaration this module reconciles, and the fix is the same — declare it in code and let
+# reconciliation seed it. Adding a capability here means its declaration is reviewed with the diff
+# rather than typed into a live JSON file nobody diffs.
+KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "agy-runtime-isolation": {
+        "kill_switch_category": "safety_guard",
+        "kill_switch_rationale": (
+            "This capability IS the confinement: adapters.build_command adds an absolute "
+            "`--add-dir <cwd>` so gemini writes only inside the target worktree (without it AGY "
+            "falls back to an internal dir). Turning it OFF is strictly more dangerous than leaving "
+            "it ON, so a kill switch would be an anti-feature rather than a control."),
+    },
+    "windowed-capacity-policy": {
+        "kill_switch_category": "compute_only",
+        "control_point": "ORCH_DISABLE_STEPS",
+        "kill_switch_rationale": (
+            "Computes seat state; takes no action. Disabling it would not stop a dispatch — it would "
+            "blind the router and make selection WORSE, the opposite of what a kill switch is for. "
+            "The real control is at the consumers that act: the tick steps, each honouring "
+            "ORCH_DISABLE_STEPS, plus ORCH_OFFLOAD_DISABLED on the transport."),
+    },
+    "redirect-policy": {
+        "kill_switch_category": "compute_only",
+        "control_point": "ORCH_DISABLE_STEPS",
+        "kill_switch_rationale": (
+            "Produces an advisory wait/collect/inspect/redirect/decompose DECISION and nothing else. "
+            "Every mutating step downstream is separately gated. The control is at the sweep that "
+            "invokes it, ORCH_DISABLE_STEPS=redirect-sweep."),
+    },
+    "feedback-store": {
+        "kill_switch_category": "compute_only",
+        "control_point": "ORCH_DISABLE_STEPS",
+        "kill_switch_rationale": (
+            "The Brain's append-only write path — it RECORDS what other capabilities did and takes "
+            "no action of its own. A switch that stops it does not stop any work; it destroys the "
+            "telemetry for work that happens anyway, which is strictly worse than the failure it "
+            "would be reached for. Controls belong at the producers."),
+    },
+}
+
+
 def _reconcile_known_declarations(
     capabilities: dict[str, dict[str, Any]], now: int
 ) -> bool:
@@ -1057,13 +1124,10 @@ def _reconcile_known_declarations(
     downgrades an active, retired, or superseded capability.
     """
     changed = False
-    declaration_fields = (
-        "entrypoint", "matcher", "trigger_cadence", "flags_defaults",
-        "output_artifact", "downstream_consumer", "learning_sink",
-        "gate_reason", "gate_evidence", "evidence_threshold",
-        "gate_blocks_execution",
-    )
-    for name, gate in KNOWN_GATES.items():
+    declaration_fields = DECLARATION_FIELDS
+    # BOTH SOURCES, one loop. KNOWN_GATES carries gate machinery; KNOWN_DECLARATIONS carries only
+    # declaration-owned fields for capabilities that are not gates.
+    for name, gate in {**KNOWN_GATES, **KNOWN_DECLARATIONS}.items():
         cap = capabilities.get(name)
         if cap is None:
             continue

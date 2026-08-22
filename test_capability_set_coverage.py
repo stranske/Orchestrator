@@ -47,7 +47,7 @@ def test_every_capability_has_a_recurrence_fixture():
     This is the specific failure this file exists to prevent: 19 of 35 capabilities had no fixture
     while the reported score ("18 of 21") looked comprehensive.
     """
-    ledger = set(capabilities.load(capabilities.REG))
+    ledger = set(capabilities.load_declared(capabilities.REG))
     covered = _fixture_capabilities()
     missing = sorted(ledger - covered - set(FIXTURE_EXEMPT))
     assert not missing, (
@@ -63,14 +63,14 @@ def test_no_fixture_names_an_unknown_capability():
     # that has never run the system the ledger holds only the rows the code declares, and every
     # fixture beyond those would read as a typo. Name the absent rows instead of asserting.
     env_prereq.require(env_prereq.ledger_rows_absent(*sorted(_fixture_capabilities())))
-    ledger = set(capabilities.load(capabilities.REG))
+    ledger = set(capabilities.load_declared(capabilities.REG))
     unknown = sorted(_fixture_capabilities() - ledger)
     assert not unknown, f"fixtures name capabilities absent from the ledger: {unknown}"
 
 
 def test_every_capability_appears_in_the_activation_audit():
     """The audit must see the whole set, with a complete row for each."""
-    ledger = capabilities.load(capabilities.REG)
+    ledger = capabilities.load_declared(capabilities.REG)
     rep = audit.audit(use_cache=True)
     rows = {r["capability_id"]: r for r in rep["rows"]}
     missing = sorted(set(ledger) - set(rows))
@@ -101,7 +101,7 @@ def test_every_defect_is_a_known_class():
 
 def test_exemptions_carry_reasons_and_exist():
     """An exemption must name a real capability and say why — never a bare skip."""
-    ledger = set(capabilities.load(capabilities.REG))
+    ledger = set(capabilities.load_declared(capabilities.REG))
     for cap_id, reason in FIXTURE_EXEMPT.items():
         assert cap_id in ledger, f"FIXTURE_EXEMPT names unknown capability {cap_id!r}"
         assert reason and len(reason) > 20, f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"
@@ -116,7 +116,7 @@ def roster() -> str:
     ledger count by construction.
     """
     import capability_recurrence_check as rc
-    ledger = capabilities.load(capabilities.REG)
+    ledger = capabilities.load_declared(capabilities.REG)
     covered = _fixture_capabilities()
     rep = audit.audit(use_cache=True)
     rows = {r["capability_id"]: r for r in rep["rows"]}
@@ -172,7 +172,7 @@ def main() -> int:
     if failures:
         print(f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED")
         return 1
-    ledger = capabilities.load(capabilities.REG)
+    ledger = capabilities.load_declared(capabilities.REG)
     if skipped:
         print(f"\n{len(tests) - len(skipped)} of {len(tests)} capability-set coverage checks "
               f"passed over {len(ledger)} ledger capabilities, {len(skipped)} skipped: "

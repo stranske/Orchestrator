@@ -640,7 +640,12 @@ def test_daily_heartbeat_coalesces_hot_paths(monkeypatch, tmp_path):
                for _ in range(25)]
     assert written.count(True) == 1, written
     stored = C.load(ledger)["feedback-store"]
-    assert len(stored["event_history"]) == 1, stored["event_history"]
+    # Count the events under test, not the whole history. The property is "25 calls leave ONE
+    # invocation event", and asserting on the total made an unrelated event break it: `feedback-store`
+    # joined KNOWN_DECLARATIONS on 2026-08-22, so a load now also records `declaration_reconciled`.
+    # An exact-total assertion turns any new bookkeeping event into a false failure here.
+    invocations = [e for e in stored["event_history"] if e.get("type") == "invocation"]
+    assert len(invocations) == 1, stored["event_history"]
     assert stored["last_invocation"], "the signal that matters must still be recorded"
 
 
@@ -652,7 +657,9 @@ def test_daily_heartbeat_respects_the_production_gate(monkeypatch, tmp_path):
     rec["status"] = "generated"
     C.save({"feedback-store": rec}, ledger)
     assert C.daily_heartbeat("feedback-store", "invocation", ref="r", path=ledger) is False
-    assert C.load(ledger)["feedback-store"]["event_history"] == []
+    # Same reason as above: assert that NO heartbeat was recorded, not that the history is empty.
+    history = C.load(ledger)["feedback-store"]["event_history"]
+    assert [e for e in history if e.get("type") == "invocation"] == [], history
 
 
 def test_brain_write_path_survives_a_ledger_fault(monkeypatch, tmp_path):
