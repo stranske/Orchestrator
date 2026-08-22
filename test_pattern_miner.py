@@ -7,6 +7,7 @@ import pytest
 
 from completion_event_adapter import (
     EnvelopeError,
+    _canonical_target,
     OutOfScopeError,
     SUBJECTLESS_PRODUCERS,
     adapt_completion_event_envelope,
@@ -561,6 +562,34 @@ def test_every_declared_subjectless_producer_has_a_stated_reason():
     for producer, reason in SUBJECTLESS_PRODUCERS.items():
         assert producer == producer.lower(), producer
         assert len(reason) > 20, f"{producer} needs a real justification, got {reason!r}"
+
+
+def test_issue_scoped_targets_are_unchanged():
+    """KEEPALIVE GUARD. Extending the grammar must not move `owner/repo#N` by one character."""
+    assert _canonical_target("stranske/trip-planner#12") == (
+        "stranske/trip-planner#12", "stranske/trip-planner")
+    # Numeric normalisation is part of the old contract and must survive.
+    assert _canonical_target("stranske/trip-planner#007") == (
+        "stranske/trip-planner#7", "stranske/trip-planner")
+    assert _canonical_target("Stranske/Trip-Planner#3") == (
+        "stranske/trip-planner#3", "stranske/trip-planner")
+
+
+def test_research_scopes_without_an_issue_now_parse():
+    """Most research is not done on a GitHub issue; requiring one rejected all of it."""
+    assert _canonical_target("stranske/trip-planner") == (
+        "stranske/trip-planner", "stranske/trip-planner")
+    assert _canonical_target("domain/luminar-editing") == (
+        "domain/luminar-editing", "domain/luminar-editing")
+    assert _canonical_target("local/Reader") == ("local/reader", "local/reader")
+    assert _canonical_target("JobSearch.2026") == ("jobsearch.2026", "jobsearch.2026")
+
+
+def test_transport_noise_and_sentinels_are_still_rejected():
+    """Widening scope must not admit things that name no scope at all."""
+    for bad in ("offload:/private/tmp", "triage:20-items",
+                "stranske/trip-planner [ux_review]", "unknown", "none", "-", "", "   "):
+        assert _canonical_target(bad) is None, bad
 
 
 def test_status_command_is_machine_readable_and_queue_free(tmp_path, capsys):

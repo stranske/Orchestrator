@@ -193,8 +193,8 @@ class TestPanelSubjectRegistration(unittest.TestCase):
         self.assertEqual(row[1], "ux_review")
         # The spec hash is the hash of the REAL rubric prompt, not an invented value.
         expected = research_subjects.subject_identity(
-            SAMPLE_BUNDLE["app"], "ux_review",
-            ur.build_rubric_prompt(SAMPLE_BUNDLE), None, evaluators,
+            SAMPLE_BUNDLE["app"], "ux_review", ur.build_rubric_prompt(SAMPLE_BUNDLE),
+            ur.resolve_panel_base_sha(SAMPLE_BUNDLE), evaluators,
         )
         self.assertEqual(row[2], expected["spec_hash"])
         self.assertEqual(identity["subject_id"], expected["subject_id"])
@@ -261,6 +261,28 @@ class TestPanelArmOutcome(unittest.TestCase):
                      ({"scores": {"wired": 1}}, [], set(), False),
                      ({"scores": {"wired": 1}}, [], {("a", "b", "c")}, True)]:
             self.assertIn(ur.panel_arm_outcome(*args)[1], known)
+
+
+
+
+class TestPanelBaseSha(unittest.TestCase):
+    def test_supplied_base_sha_wins(self):
+        self.assertEqual(
+            ur.resolve_panel_base_sha({"app": "o/r", "base_sha": "deadbeef"}), "deadbeef")
+
+    def test_non_repo_app_gets_no_placeholder(self):
+        """An invented base commit makes two app states look like one subject."""
+        self.assertIsNone(ur.resolve_panel_base_sha({"app": "local-Reader"}))
+        self.assertIsNone(ur.resolve_panel_base_sha({}))
+
+    def test_panel_subject_uses_the_resolved_base_sha(self):
+        conn = sqlite3.connect(":memory:")
+        research_subjects.ensure_schema(conn)
+        bundle = dict(SAMPLE_BUNDLE, base_sha="abc123def")
+        identity = ur.register_panel_subject(bundle, ["claude", "codex"], conn=conn)
+        self.assertEqual(identity["base_sha"], "abc123def")
+        row = conn.execute("SELECT base_sha FROM research_subjects").fetchone()
+        self.assertEqual(row[0], "abc123def")
 
 
 

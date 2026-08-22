@@ -63,7 +63,12 @@ PHASES = (
     "outcome",
     "durability",
 )
+# `runtime_ac_gate` admitted 2026-08-22: it is the acceptance gate's own structured verdict
+# (gate_status, terminal_reason, materialization/verifier outcomes) and is exactly the evidence a
+# verification-phase event should carry. Its `spec_path` is a local temp path -- incidental, not
+# sensitive, and the secret/raw-prompt key walk below still applies to every nested key.
 PAYLOAD_ALLOWLIST = {
+    "runtime_ac_gate",
     "adjudication_id",
     "acceptance_gate_ids",
     "artifact_refs",
@@ -87,8 +92,37 @@ PAYLOAD_ALLOWLIST = {
 RAW_PROMPT_KEYS = {"prompt", "prompt_text", "raw_prompt", "system_prompt", "user_prompt"}
 SECRET_KEYS = {"access_token", "api_key", "password", "private_key", "secret", "token"}
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-TARGET_RE = re.compile(r"^([^/\s]+)/([^#\s]+)#(\d+)$")
+# Target grammar. An issue number is OPTIONAL, because most research is not done on a GitHub issue:
+# a UX panel reviews an app, an audit round covers a repo, a domain study has no repo at all.
+# Requiring `owner/repo#N` rejected every one of them as `invalid_canonical_target` -- 2,204 events
+# -- so the identity work upstream could never matter.
+#
+# Issue-scoped targets are UNCHANGED, deliberately: keepalive addresses `owner/repo#N` and its
+# canonical form, including `#007` -> `#7` normalisation, must round-trip exactly as before.
+# `test_issue_scoped_targets_are_unchanged` pins that.
+#
+# What must still be rejected is transport noise, not research scope: `offload:/private/tmp`,
+# `triage:20-items` (colons), `owner/repo [ux_review]` (spaces). Hence explicit character classes
+# rather than the old `[^/\s]+`, which admitted colons.
+TARGET_RE = re.compile(
+    r"^(?:(?P<owner>[A-Za-z0-9_.-]+)/)?(?P<name>[A-Za-z0-9_.-]+)(?:#(?P<issue>\d+))?$"
+)
+
+# A target that names nothing. These reach the exporter as placeholders, and admitting them would
+# let unrelated work collapse into one "subject" whose only shared property is having no target.
+SENTINEL_TARGETS = frozenset({"unknown", "none", "null", "n/a", "na", "-", "tbd"})
+# Extended 2026-08-22 after measuring every value the `roles` producer actually emits: booleans,
+# None, and bounded enum-like ids (`bounded_backlog_snapshot`, `no_matching_work`,
+# `matched_not_invoked`). No free text, no paths, no secrets -- so admitting them is a deliberate
+# contract decision, not a relaxation. Before this, 1,911 role events were rejected for carrying
+# their own selector telemetry, which drowned out the real defects.
 RESULT_ALLOWLIST = {
+    "accepted",
+    "disagreement",
+    "invoked",
+    "matched",
+    "selector_reason_id",
+    "selector_status",
     "action_id",
     "backend_run_id",
     "decision_source_id",
@@ -309,11 +343,23 @@ def _string(value: Any) -> str:
 
 
 def _canonical_target(value: Any) -> tuple[str, str] | None:
-    match = TARGET_RE.fullmatch(_string(value))
+    """Return (canonical_target, repository), or None when the value names no real scope.
+
+    Three accepted shapes, one canonical form each:
+      * ``owner/repo#12``        -> ``("owner/repo#12", "owner/repo")``   issue-scoped (keepalive)
+      * ``owner/repo``           -> ``("owner/repo", "owner/repo")``      repo-scoped (audit, panel)
+      * ``Reader``               -> ``("reader", "reader")``              un-namespaced local app
+    """
+    text = _string(value)
+    if text.lower() in SENTINEL_TARGETS:
+        return None
+    match = TARGET_RE.fullmatch(text)
     if not match:
         return None
-    owner, repo, issue = match.groups()
-    repository = f"{owner.lower()}/{repo.lower()}"
+    owner, name, issue = match.group("owner"), match.group("name"), match.group("issue")
+    repository = f"{owner.lower()}/{name.lower()}" if owner else name.lower()
+    if issue is None:
+        return repository, repository
     return f"{repository}#{int(issue)}", repository
 
 
