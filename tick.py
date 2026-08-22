@@ -178,6 +178,31 @@ def _research_claim_metadata(prepare_result: dict) -> dict:
     return meta
 
 
+def research_v2_arms(agents: list[str], profiles=None) -> list[dict]:
+    """Turn a plain agent list into v2 arm/member descriptors. Pure; selftested.
+
+    `exp_abcd.prepare` writes only `meta["agents"]`, so `experiment_members()` takes its legacy
+    fallback and every member comes back `legacy=True` -- which is why `record_evaluation_v2` never
+    fires and `evaluations_v2` sat empty while `evaluations` accumulated thousands of
+    `agent_parent_projection` rows. `prepare_arms` already persists the exact v2 manifest; the
+    launcher simply never called it.
+
+    One arm per agent, which is exactly what the legacy path meant: each agent is its own
+    experimental condition. `profile_id` is carried through when the plan knows it and left None
+    when it does not -- an honest unknown, never a fabricated identity.
+    """
+    lookup = profiles if isinstance(profiles, dict) else {}
+    arms: list[dict] = []
+    for agent in dict.fromkeys(str(a).strip() for a in agents if str(a).strip()):
+        arms.append({
+            "arm_id": f"agent-{agent}",
+            "agents": [agent],
+            "strategy": "single",
+            "profile_id": lookup.get(agent) or None,
+        })
+    return arms
+
+
 def research_tick(items: list[dict], cap: dict, *, learned: dict | None = None, dry_run: bool = True,
                   env: dict | None = None, max_experiments: int = RESEARCH_MAX_PER_TICK,
                   conn=None, prepare_fn=None, issue_body_fn=None, rng=None, hyps: list | None = None,
@@ -312,7 +337,8 @@ def research_tick(items: list[dict], cap: dict, *, learned: dict | None = None, 
             spec_dir = Path(tempfile.mkdtemp(prefix="orch-research-spec-"))
             spec_file = spec_dir / "spec.md"
             spec_file.write_text(spec, encoding="utf-8")
-            prepare = prepare_fn or exp_abcd.prepare
+            # prepare_arms, not prepare: the v2 manifest is what makes evaluations_v2 reachable.
+            prepare = prepare_fn or exp_abcd.prepare_arms
             capabilities.production_heartbeat(
                 "research-scheduler",
                 "invocation",
@@ -320,7 +346,9 @@ def research_tick(items: list[dict], cap: dict, *, learned: dict | None = None, 
                 metadata={"target": target, "task_type": task_type},
             )
             prepare_result = prepare(
-                repo, str(spec_file), exp_id, arms, task_type=task_type
+                repo, str(spec_file), exp_id,
+                research_v2_arms(arms, item.get("profiles")),
+                task_type=task_type,
             )
             launched.append(prepare_result)
             plan["active_status"] = "launched"
@@ -628,9 +656,9 @@ def _selftest():
             dry_run=False,
             env={"ORCH_RESEARCH_ARM": "1"},
             conn=subject_conn,
-            prepare_fn=lambda repo, spec_file, exp_id, agents, task_type="implement": fired.append(
+            prepare_fn=lambda repo, spec_file, exp_id, arms_v2, task_type="implement": fired.append(
                 {"repo": repo, "spec": Path(spec_file).read_text(), "exp_id": exp_id,
-                 "agents": agents, "task_type": task_type}
+                 "agents": arms_v2, "task_type": task_type}
             ) or {
                 "exp_id": exp_id,
                 "repo": repo,
@@ -662,10 +690,10 @@ def _selftest():
             dry_run=False,
             env={"ORCH_RESEARCH_ARM": "1"},
             conn=subject_conn,
-            prepare_fn=lambda repo, spec_file, exp_id, agents, task_type="implement": {
+            prepare_fn=lambda repo, spec_file, exp_id, arms_v2, task_type="implement": {
                 "exp_id": exp_id,
                 "repo": repo,
-                "launched": agents,
+                "launched": [m for a in arms_v2 for m in a["agents"]],
             },
             issue_body_fn=lambda target: "Concrete frozen spec",
             hyps=research_scheduler.SEED_HYPOTHESES,
@@ -734,6 +762,18 @@ def _selftest():
             )
             assert blocked_out["runtime_ac_gates"][0]["blocks"] is True, blocked_out
             assert blocked_out["blocked"] and not blocked_out["chosen"], blocked_out
+
+        # --- v2 arm identity (line D): legacy members are why evaluations_v2 stayed empty ---
+        v2 = research_v2_arms(["codex", "claude", "codex"], {"codex": "codex:gpt-5.6"})
+        assert [a["arm_id"] for a in v2] == ["agent-codex", "agent-claude"], v2
+        assert v2[0]["profile_id"] == "codex:gpt-5.6" and v2[1]["profile_id"] is None, v2
+        assert all(len(a["agents"]) == 1 for a in v2), v2
+        _arms_norm, _members = exp_abcd._normalize_arm_members(v2)
+        # The whole point: members must come back NON-legacy, or record_evaluation_v2 never fires.
+        assert [m["legacy"] for m in exp_abcd.experiment_members({"members": _members})] == [False, False], _members
+        assert {m["member_id"] for m in _members} == {
+            "agent-codex--member-01-codex", "agent-claude--member-01-claude"}, _members
+        assert research_v2_arms([]) == [], "empty agent list must not fabricate an arm"
 
         print("tick.py selftest: OK (remote choose->delegate per item, reserve-aware, learned weights, "
               "no-capacity skip, per-tick cap, adversarial review hook, runtime AC gate hook, "
