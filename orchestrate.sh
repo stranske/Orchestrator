@@ -312,6 +312,30 @@ fi
 # and mine them into a durable candidate/tombstone state. This is read-only from the Brain's
 # perspective; the state/report artifacts are local operator evidence. A failed run backs off and
 # remains visible instead of silently starving continuous learning.
+# Layer 3 evidence acquisition. SHADOW unless ORCH_EVIDENCE_ACQUISITION=1: it computes which
+# evidence-starved capability it would feed and writes the plan, routing nothing. Reports the
+# feedable count so "nothing happened" is a stated number rather than an absent line -- the whole
+# lesson of the pattern-miner outage. `feedable 0` is expected today: every capability short of its
+# threshold is held by a documented default-off switch, which unblock() refuses to feed.
+if _cadence_due evidence-acquisition && _attempt_ok evidence-acquisition; then
+  echo "  [cadence] evidence acquisition (Layer 3; shadow unless ORCH_EVIDENCE_ACQUISITION=1)"
+  if python3 "$ORCH/evidence_acquisition.py" --json \
+       --write "$STAMP_DIR/evidence-acquisition-plan.json" \
+       > "$STAMP_DIR/evidence-acquisition.log" 2>&1; then
+    python3 - "$STAMP_DIR/evidence-acquisition-plan.json" <<'EVIDENCE_ACQ' || true
+import json, sys
+try:
+    p = json.load(open(sys.argv[1])) or {}
+except Exception as exc:
+    print(f"  EVIDENCE-ACQ: plan unreadable ({exc})"); raise SystemExit(0)
+print(f"  EVIDENCE-ACQ: {p.get('state')} — {p.get('summary')}"
+      f"{' [LIVE]' if p.get('live') else ' [shadow]'}")
+EVIDENCE_ACQ
+    _mark_success evidence-acquisition
+  else
+    _mark_fail evidence-acquisition "see $STAMP_DIR/evidence-acquisition.log"
+  fi
+fi
 if _cadence_due pattern-miner && _attempt_ok pattern-miner; then
   echo "  [cadence] completion-event export + pattern-to-capability mining (daily)"
   # Keep the JSONL suffix on the temporary path so the miner selects its

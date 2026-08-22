@@ -582,6 +582,16 @@ PREDICATE_FIXTURES = (
     {"capability": "range-lane-rollout",
      "check": lambda: _predicate_flag("ORCH_RANGE_LANE_ROLLOUT"),
      "source": "the mechanism behind every specialized-lane dispatch ever made."},
+    # The condition this replays actually happened, on 2026-08-22, and is why the lane exists in
+    # shadow: `unblock()` marked range-lane-rollout and synthesis-promotion feedable while BOTH were
+    # held by a documented default-off switch. Feeding either would have manufactured work they
+    # cannot execute, so the durable reuse their gate needs could never be produced and the same two
+    # would be fed every cycle forever. Testing the flag tests the real condition -- the lane is held
+    # by a safety switch, not by a defect, and `feedable 0` behind it is the honest state.
+    {"capability": "evidence-acquisition",
+     "check": lambda: _predicate_flag("ORCH_EVIDENCE_ACQUISITION"),
+     "source": "2026-08-22: unblock() called 2 default-off capabilities feedable; the feed guard "
+               "closed that and the feedable set went to 0 of 42. Lane is shadow until a switch flips."},
     {"capability": "adversarial-review-flag",
      "check": lambda: _predicate_flag("ORCH_RUN_ADVERSARIAL_REVIEW"),
      "source": "orchestrate.sh exports this; checked here as the tick would see it."},
