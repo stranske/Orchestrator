@@ -635,7 +635,7 @@ def _selftest_reach() -> None:
     for task_type in table:
         assert task_type in TASK_SIGNALS, f"dispatcher routes {task_type!r}, advisor cannot classify it"
 
-    # REACH SHRINKAGE IS NOT CHECKED HERE ON PURPOSE. `capability_firing_monitor.advisor_reach`
+    # REACH SHRINKAGE IS NOT CHECKED HERE ON PURPOSE. `capability_activation_audit.advisor_reach`
     # owns it: it holds the declared-reach baseline and raises `advisor_reach_regression`, so a
     # second copy here would be a parallel inventory -- the thing this project forbids. Matchers
     # live only in the machine-local ledger, so a reach floor asserted here could only ever skip
