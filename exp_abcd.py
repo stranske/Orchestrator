@@ -2337,6 +2337,19 @@ def _selftest():
     old_handoff, old_ledger = adapters.HANDOFF, adapters.LEDGER
     old_build_command = adapters.build_command
     old_popen = subprocess.Popen
+    # ISOLATION, not a skip. This block replaces subprocess.Popen wholesale to fake the agent
+    # processes, and `_eval_command` resolves each seat's model on the way — which spawns a CLI
+    # catalog probe whenever the advertised-model cache is cold. The probe then lands in FakePopen,
+    # which is built for the evaluator's stdout contract, and dies on `stdout.write` with an int.
+    # It never showed up locally because the cache is always warm here; on a fresh machine (the
+    # first CI run, 2026-08-21) it was a hard AttributeError.
+    #
+    # ORCH_MODEL_PROBE is the module's own documented kill-switch for exactly this: catalog probes
+    # off, pinned models only, NO subprocess. Turning it off for the stubbed window makes the
+    # selftest hermetic on every machine — it now runs MORE than it did, not less, which is why
+    # this is a fix and not an applicability gate.
+    old_model_probe = os.environ.get("ORCH_MODEL_PROBE")
+    old_advertised_memo = dict(adapters._ADVERTISED_MEMO)
 
     class FakePopen:
         next_pid = 4900
@@ -2385,6 +2398,8 @@ def _selftest():
             return ["printf", "fake-agent"]
 
         adapters.build_command = fake_build_command
+        os.environ["ORCH_MODEL_PROBE"] = "0"
+        adapters._ADVERTISED_MEMO.clear()
         subprocess.Popen = FakePopen
 
         run_id = "e1:codex"
@@ -2520,6 +2535,12 @@ def _selftest():
         adapters.LEDGER = old_ledger
         adapters.build_command = old_build_command
         subprocess.Popen = old_popen
+        if old_model_probe is None:
+            os.environ.pop("ORCH_MODEL_PROBE", None)
+        else:
+            os.environ["ORCH_MODEL_PROBE"] = old_model_probe
+        adapters._ADVERTISED_MEMO.clear()
+        adapters._ADVERTISED_MEMO.update(old_advertised_memo)
         shutil.rmtree(tmp, ignore_errors=True)
     print(
         "exp_abcd.py selftest: OK (branch/worktree naming, mode map, frozen implement prompt, "

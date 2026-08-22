@@ -75,6 +75,24 @@ Do not create a second event log, model registry, or capability inventory.
   real pytest, reads the COUNTS rather than the exit status, enforces a collection floor so tests
   silently ceasing to run cannot look like tests passing, treats a silent zero-exit selftest as a
   failure, and runs the five capability gates. CI runs the same command on a clean machine.
+- **A check whose PREREQUISITE is absent skips with the missing thing NAMED, and skipping is
+  bounded.** Some checks need what only a running instance has: the populated capability ledger,
+  an installed agent CLI, `~/.codex/skills`, the version-capable Codex binary. Those gates live in
+  `env_prereq.py` — detect the prerequisite, never `$CI`, so the same code is right on any machine.
+  Three rules, and they are enforced, not advisory: every skip carries a reason naming what is
+  missing; `verify.py` prints all of them so a green run always states what it did not check; and
+  `.verify-floor.json` caps the number of skipped tests, selftests and gates, so skipping one more
+  thing than agreed is a RED, not a footnote. Raising a ceiling means agreeing that one more thing
+  goes unchecked — do it deliberately and say why. When a check fails only because a stub leaked
+  (a monkeypatched `Popen` catching a model-catalog probe, say), the fix is isolation, not a skip:
+  that makes CI run MORE. **Never turn a real failure into a skip**, and never add a skip without
+  a reason string — a reason-less skip is indistinguishable from a pass, which is this repo's
+  founding defect wearing a different hat.
+- **State lives behind TWO variables and they are not the same.** `ORCH_STATE_DIR` holds the audit
+  cache, firing-monitor and redirect-sweep state; `ORCH_LOCAL_RUNTIME` holds the capability LEDGER
+  and the Brain. Pointing only the first at an empty directory and concluding "the suite is
+  state-independent" is exactly the mistake that made the first CI run red — the ledger never
+  moved. Set both when testing a fresh-machine claim.
 - **The split is TOOL vs EVIDENCE.** Generic capabilities, gates and tests are committed. This
   instance's evidence is not: `IMPROVEMENT_BACKLOG.md`, `CAPABILITY_USEFULNESS.md`,
   `LOCAL_POLICY.md`, `*.local.md`, `experiments/`, `ux_reviews/`, `data/`, `Audits/`. When adding a

@@ -141,6 +141,17 @@ def test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy(tmp_path, monkeypat
     monkeypatch.setenv("ORCH_OBJECTIVE_ANCHOR", "0")
     monkeypatch.setattr(exp_abcd, "_record_execution_start", lambda *a, **kw: 1)
     monkeypatch.setattr(exp_abcd, "_record_execution_complete", lambda *a, **kw: None)
+    # ISOLATION, not a skip. FakePopen below replaces subprocess.Popen for the whole call, and
+    # `_eval_command` resolves each seat's model on the way — which spawns a CLI catalog probe
+    # when the advertised-model cache is cold. That probe then hits FakePopen, whose `stdout` is
+    # PIPE (an int), and dies on `stdout.write`. Warm cache here, cold on a fresh machine: it is
+    # why this test was red on the first CI run and green locally.
+    #
+    # ORCH_MODEL_PROBE=0 is adapters' own documented kill-switch — catalog probes off, pinned
+    # models only, no subprocess — so the test becomes hermetic instead of skipping. It asserts
+    # exactly what it asserted before, and now asserts it on every machine.
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+    monkeypatch.setattr(exp_abcd.adapters, "_ADVERTISED_MEMO", {})
 
     class FakePopen:
         def __init__(self, *_args, stdout=None, **_kwargs):

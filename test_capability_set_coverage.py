@@ -27,6 +27,7 @@ import sys
 import capabilities
 import capability_activation_audit as audit
 import capability_recurrence_check as recurrence
+import env_prereq
 
 # Capabilities exempt from needing a recurrence fixture, each with a REASON. This list exists so an
 # exemption is a deliberate, reviewable act rather than a silent omission. Keep it empty if possible.
@@ -57,6 +58,11 @@ def test_every_capability_has_a_recurrence_fixture():
 
 def test_no_fixture_names_an_unknown_capability():
     """A fixture pointing at a nonexistent capability covers nothing while looking like coverage."""
+    # This check compares fixtures against the LIVE ledger, so it can only distinguish a typo
+    # from an unregistered capability where the whole registered set is present. On a machine
+    # that has never run the system the ledger holds only the rows the code declares, and every
+    # fixture beyond those would read as a typo. Name the absent rows instead of asserting.
+    env_prereq.require(env_prereq.ledger_rows_absent(*sorted(_fixture_capabilities())))
     ledger = set(capabilities.load(capabilities.REG))
     unknown = sorted(_fixture_capabilities() - ledger)
     assert not unknown, f"fixtures name capabilities absent from the ledger: {unknown}"
@@ -146,11 +152,19 @@ def main() -> int:
         print(roster(), end="")
         return 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    failures = []
+    failures, skipped = [], []
     for fn in tests:
         try:
             fn()
             print(f"  OK   {fn.__name__}")
+        # MissingPrerequisite is a SkipTest, not an AssertionError — caught first so it neither
+        # crashes this runner nor gets counted as a pass. "5 of 6 passed, 1 skipped because X"
+        # is the honest line; "all 6 passed" over a set the machine cannot see is the lie this
+        # whole file exists to prevent.
+        except env_prereq.MissingPrerequisite as exc:
+            skipped.append((fn.__name__, str(exc)))
+            print(f"  SKIP {fn.__name__}")
+            print(f"       {env_prereq.PREREQ_ABSENT_MARK} {str(exc)[:400]}")
         except AssertionError as exc:
             failures.append((fn.__name__, str(exc)))
             print(f"  FAIL {fn.__name__}")
@@ -159,6 +173,11 @@ def main() -> int:
         print(f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED")
         return 1
     ledger = capabilities.load(capabilities.REG)
+    if skipped:
+        print(f"\n{len(tests) - len(skipped)} of {len(tests)} capability-set coverage checks "
+              f"passed over {len(ledger)} ledger capabilities, {len(skipped)} skipped: "
+              + "; ".join(f"{n} ({r[:80]})" for n, r in skipped))
+        return 0
     print(f"\nall {len(tests)} capability-set coverage checks passed "
           f"over ALL {len(ledger)} ledger capabilities "
           f"(--roster for the per-capability table)")

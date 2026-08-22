@@ -40,6 +40,13 @@ HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lan
   canonical tree — so canonical edits are yours alone, but always re-sync so the schedule sees them.
 - **Every module has a `--selftest`.** Run it after editing that module; it is the project's test
   suite (there is no separate pytest tree). `python3 <module>.py --selftest`.
+- **`python3 verify.py` is the whole verdict.** Real pytest plus every module selftest plus the five
+  capability gates, judged on the COUNTS rather than exit codes, against a recorded floor in
+  `.verify-floor.json`. It also bounds SKIPPING: a check needing something only a running instance
+  has (the populated capability ledger, an installed agent CLI, `~/.codex/skills`) skips with the
+  missing thing named — see `env_prereq.py` — and the floor file caps how many such skips are
+  allowed, so quietly checking less is a red. Every skip and its reason is printed, so a green run
+  always states what it did not check. On a machine with all prerequisites nothing skips at all.
 - **Activation is evidence-backed.** `features.py` describes reusable code maturity;
   `capabilities.py` is the activation authority. An `active` declaration must prove its matcher,
   invocation, artifact consumer, outcome sink, expiry, kill switch, and rollback. Each active tick

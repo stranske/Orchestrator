@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 import capabilities
+import env_prereq
 
 
 @pytest.fixture
@@ -284,6 +285,12 @@ def test_gate_blocks_execution_is_opt_in_and_narrow():
         {**base, "gate_blocks_execution": True, "gate_reason": None},
         now=100) == "invoked_without_outcomes"
 
+    # From here the check reads the LIVE ledger, which is machine-local state: `issue-readiness`
+    # is registered by running the system, not by checking out the tree, so on a machine that has
+    # never run it there is nothing to classify. Skip with the row named — never silently pass.
+    env_prereq.require(env_prereq.ledger_rows_absent(
+        "thompson-hybrid-routing", "range-lane-rollout", "issue-readiness", "role-triage"))
+
     # `load_declared`, not `load(create=False)`: `gate_blocks_execution` is a DECLARATION-owned
     # field, so a raw read answers with whatever is on disk at that instant. Both of these rows had
     # it reconciled mid-suite on 2026-08-21 (08:15:07), which is how this file produced a red that
@@ -320,6 +327,13 @@ def test_evidence_gate_kind_is_not_blanket_observer():
     # `tick_phase` at 08:07:28, mid-suite (the row's own `declaration_reconciled` event records it).
     # A raw `create=False` read asks "which side of that write did I land on?"; this asks the
     # question the test actually means, and still writes nothing.
+    #
+    # `observing` is a verdict about RECORDED HISTORY: a supervisor row that has never been
+    # invoked on this machine classifies `deliberately_gated`, correctly. So the prerequisite is
+    # the invocation history, and its absence is named rather than asserted around.
+    env_prereq.require(
+        env_prereq.ledger_rows_absent("live-keepalive-supervisor", "redirect-apply-bootstrap"),
+        env_prereq.ledger_invocation_history_absent("live-keepalive-supervisor"))
     ledger = capabilities.load_declared(capabilities.REG)
 
     supervisor = ledger["live-keepalive-supervisor"]

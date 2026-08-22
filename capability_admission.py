@@ -44,6 +44,7 @@ import re
 import sys
 
 import capabilities
+import env_prereq
 
 HERE = pathlib.Path(__file__).resolve().parent
 def _audits_dir() -> pathlib.Path:
@@ -468,9 +469,39 @@ def format_report(rep: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+def _probe_commitments(probe: pathlib.Path) -> None:
+    """Prove the commitment DETECTOR works, against synthetic files in `probe`.
+
+    Split out of `_selftest` so `AUDITS` can be swapped for a synthetic empty record set around
+    exactly this block and restored after — the assertions are verbatim.
+    """
+    (probe / "fake.sh").write_text("# see 2026-01-02-nonexistent-decision.md\n")
+    got = commitments(root=probe)
+    assert any(d["record"] == "2026-01-02-nonexistent-decision.md"
+               for d in got["dangling_citations"]), got
+    assert not got["clean"]
+    # A PLAN is not a decision record; citing one must not be flagged.
+    (probe / "fake.sh").write_text("# see 2026-01-02-thing-PLAN.md\n")
+    assert commitments(root=probe)["clean"], "a -PLAN citation must not be treated as a record"
+    # An overdue deadline with no record is flagged.
+    # The MOTIVATING SHAPE, verbatim: a shell default with the var repeated inside. The first
+    # pattern here could not match this, which would have made the whole check theatre.
+    (probe / "fake2.sh").write_text(
+        'ORCH_THING_TRIAL_UNTIL="${ORCH_THING_TRIAL_UNTIL:-2020-01-01}"\n')
+    over = commitments(root=probe)
+    assert any(o["date"] == "2020-01-01" for o in over["overdue_without_record"]), over
+    # A future deadline is not overdue.
+    (probe / "fake2.sh").write_text('ORCH_X_TRIAL_UNTIL="${ORCH_X_TRIAL_UNTIL:-2099-01-01}"\n')
+    assert not commitments(root=probe)["overdue_without_record"]
+
+
 def _selftest() -> None:
     ledger = capabilities.load(capabilities.REG)
     assert ledger, "ledger must load"
+    # Sections needing this instance's registration history are gated individually and named at
+    # the end — gating the WHOLE selftest for one block would drop everything below it, which is
+    # running less to report green.
+    gaps: list[str] = []
 
     # Every requirement must be able to FAIL. A predicate that always passes is decoration.
     ctx = {"audit_rows": {}, "fixtures": set()}
@@ -501,12 +532,16 @@ def _selftest() -> None:
     # Legacy scoping lives on the ROW (`legacy`/`enforced`), so a pre-gate capability still reports
     # exactly what it is missing — it simply does not block the suite. Were the exemption pushed
     # into the predicates instead, the debt would read as compliance and disappear.
-    ledger_rows = report()["rows"]
-    legacy_rows = [r for r in ledger_rows if r["legacy"]]
-    assert legacy_rows, "expected pre-gate capabilities to be marked legacy"
-    assert any(r["missing"] for r in legacy_rows), \
-        "legacy rows must still report their missing parts, not be silently passed"
-    assert all(not r["enforced"] for r in legacy_rows), "legacy rows must not block the suite"
+    # "Pre-gate" means registered before 2026-08-21 on the running instance, so this block can
+    # only be exercised where that history exists. A ledger bootstrapped from the committed tree
+    # has no legacy population at all.
+    if env_prereq.runnable(gaps, env_prereq.ledger_legacy_rows_absent()):
+        ledger_rows = report()["rows"]
+        legacy_rows = [r for r in ledger_rows if r["legacy"]]
+        assert legacy_rows, "expected pre-gate capabilities to be marked legacy"
+        assert any(r["missing"] for r in legacy_rows), \
+            "legacy rows must still report their missing parts, not be silently passed"
+        assert all(not r["enforced"] for r in legacy_rows), "legacy rows must not block the suite"
 
     # A waiver must EXPIRE. An exception with no end date is how "temporary" became a month.
     for cid, waiver in WAIVERS.items():
@@ -523,26 +558,27 @@ def _selftest() -> None:
     import tempfile
     with tempfile.TemporaryDirectory(prefix="cap-adm-") as td:
         probe = pathlib.Path(td)
-        (probe / "fake.sh").write_text("# see 2026-01-02-nonexistent-decision.md\n")
-        got = commitments(root=probe)
-        assert any(d["record"] == "2026-01-02-nonexistent-decision.md"
-                   for d in got["dangling_citations"]), got
-        assert not got["clean"]
-        # A PLAN is not a decision record; citing one must not be flagged.
-        (probe / "fake.sh").write_text("# see 2026-01-02-thing-PLAN.md\n")
-        assert commitments(root=probe)["clean"], "a -PLAN citation must not be treated as a record"
-        # An overdue deadline with no record is flagged.
-        # The MOTIVATING SHAPE, verbatim: a shell default with the var repeated inside. The first
-        # pattern here could not match this, which would have made the whole check theatre.
-        (probe / "fake2.sh").write_text(
-            'ORCH_THING_TRIAL_UNTIL="${ORCH_THING_TRIAL_UNTIL:-2020-01-01}"\n')
-        over = commitments(root=probe)
-        assert any(o["date"] == "2020-01-01" for o in over["overdue_without_record"]), over
-        # A future deadline is not overdue.
-        (probe / "fake2.sh").write_text('ORCH_X_TRIAL_UNTIL="${ORCH_X_TRIAL_UNTIL:-2099-01-01}"\n')
-        assert not commitments(root=probe)["overdue_without_record"]
+        # POINT `AUDITS` AT A SYNTHETIC, EMPTY RECORD SET for the duration of the probe. Two
+        # reasons, and neither is a skip:
+        #   1. `commitments()` returns "cannot judge" when the audit ledger is absent — correctly,
+        #      since record existence is unanswerable without it. But that made this block, whose
+        #      whole job is to prove the DETECTOR works either way, unprovable on a machine that
+        #      has no audit ledger: the first CI run died right here.
+        #   2. Even where the ledger exists, the verdicts below depended on which records happen
+        #      to be in it. A synthetic empty set makes all four deterministic everywhere.
+        # This is the harness, not an assertion: every assert below is unchanged, and now runs on
+        # any machine instead of only on this one.
+        audits_probe = probe / "audits"
+        audits_probe.mkdir()
+        saved_audits = globals()["AUDITS"]
+        globals()["AUDITS"] = audits_probe
+        try:
+            _probe_commitments(probe)
+        finally:
+            globals()["AUDITS"] = saved_audits
 
     # preflight must report obligations rather than pretending it verified them.
+
     pf = preflight({"capability_id": "capability:proposed-thing",
                     "notes": "dedup: checked X; absent", "downstream_consumer": "a.py:b",
                     "learning_sink": "feedback.outcomes", "kill_switch": "F=0",
@@ -553,8 +589,10 @@ def _selftest() -> None:
     pf2 = preflight({"capability_id": "capability:bare"})
     assert not pf2["ready_to_build"] and "kill_switch" in pf2["declarable_missing"], pf2
 
+    env_prereq.report_gaps("capability_admission.py", gaps)
     print("capability_admission.py selftest: OK (every requirement can fail and can pass, "
-          "grandfathering visible, waivers expire, dangling + overdue commitments detected)")
+          "grandfathering visible, waivers expire, dangling + overdue commitments detected)"
+          + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else ""))
 
 
 def main() -> int:

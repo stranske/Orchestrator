@@ -23,6 +23,7 @@ import pytest
 
 import adapters
 import capacity
+import env_prereq
 
 
 def _live_advertised_models() -> list[str]:
@@ -500,6 +501,11 @@ def test_presence_probe_still_detects_a_missing_credential(monkeypatch):
 def test_every_seat_has_some_free_signal():
     """No seat may report UNKNOWN: seats without a CLI probe fall back to a credential-file
     check. vibe is the case that forced this — `vibe -p` bills and everything else is a TUI."""
+    # The fallback chain is CLI probe -> credential file -> UNKNOWN, and `agent_auth_check`'s own
+    # rule is that UNKNOWN is never a failure. A seat with neither an installed CLI nor a
+    # credential file therefore has no free signal by design; asserting the absence of UNKNOWN
+    # on such a machine measures the machine's installation, not this chain.
+    env_prereq.require(env_prereq.seat_has_no_free_signal())
     import agent_auth_check
     for agent in agent_auth_check.AGENTS:
         row = agent_auth_check.check(agent)
@@ -508,6 +514,9 @@ def test_every_seat_has_some_free_signal():
 
 def test_file_only_seats_are_labelled_configured_not_ok():
     """A file check must never be sold as a working credential."""
+    # CONFIGURED is the verdict for "the credential file is there and holds the key". With the
+    # file absent the correct verdict is BROKEN, which the sibling test asserts directly.
+    env_prereq.require(env_prereq.credential_file_absent("vibe", "aider"))
     import agent_auth_check
     for agent in ("vibe", "aider"):
         assert agent not in adapters.AUTH_PROBES, agent
