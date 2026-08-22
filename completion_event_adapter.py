@@ -533,7 +533,20 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     if not SHA256_RE.fullmatch(spec_hash):
         reasons.append("invalid_normalized_spec_hash")
     base_sha = _string(identity_raw.get("base_sha")).lower()
-    if not base_sha:
+    # BASE_SHA IS INAPPLICABLE TO A DOMAIN SUBJECT, not merely absent. `record_domain_research`
+    # passes `base_sha=None` on purpose -- a study of model pricing or a tier comparison is not cut
+    # from a commit -- and `research_subjects` handles a null base_sha throughout (its identity hash
+    # maps it to "unknown" and its cooldown/backlog queries have explicit null branches). Requiring
+    # it unconditionally would have made the ENTIRE domain-research namespace permanently
+    # unminable, which is the largest volume of research the system captures.
+    #
+    # NOT A RELAXATION OF THE IDENTITY CONTRACT. The check is scoped to one closed namespace, and
+    # within it base_sha would be constant-null across every subject, so it distinguishes nothing:
+    # dropping an inapplicable component removes no discriminating power, whereas admitting a
+    # repo-scoped subject with no base_sha genuinely would (you could not say WHICH code was
+    # studied). Repo-scoped targets still require it, and that is where all 203 of today's
+    # rejections live -- so this clears none of them and is not a way to move the accepted count.
+    if not base_sha and not research_subjects.is_domain_target(canonical_target):
         reasons.append("missing_base_sha")
     profile_id = _string(identity_raw.get("profile_id")).lower()
     arm_id = _string(identity_raw.get("arm_id")).lower()

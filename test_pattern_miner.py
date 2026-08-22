@@ -600,6 +600,53 @@ def test_rejecting_health_names_its_blockers_and_never_implies_a_false_drain():
     assert seeing["top_blocker"] in seeing["detail"], seeing["detail"]
 
 
+def test_domain_research_mines_without_a_base_sha_but_a_repo_subject_still_cannot():
+    """`record_domain_research` passes `base_sha=None` on purpose -- a pricing study is not cut
+    from a commit -- so requiring it unconditionally made the whole domain namespace unminable.
+
+    The exemption is scoped to that ONE closed namespace, and this test pins both halves: a domain
+    subject mines with no base_sha, and a repo-scoped subject with no base_sha is still rejected.
+    Without the second half this would be a relaxation of the identity contract rather than
+    recognition that one component does not apply.
+    """
+    import research_subjects
+
+    domain = research_subjects.domain_target("model-tier-pricing")
+
+    def _domain_rows(index):
+        rows = completion_episode(index, target=domain, repository=domain)
+        for row in rows:
+            row["identity"]["base_sha"] = ""
+            ident = research_subjects.subject_identity_from_hash(
+                domain, "testgen", row["identity"]["normalized_spec_hash"], None,
+                row["identity"]["subject_arms"], row["identity"]["subject_profiles"],
+            )
+            row["identity"]["subject_id"] = ident["subject_id"]
+            row["identity"]["family_id"] = ident["subject_family_id"]
+            row["identity"]["observation_id"] = research_subjects.completion_observation_id(
+                ident["subject_id"], f"run-{index}", row["identity"]["attempt_id"]
+            )
+        return rows
+
+    rows = [r for i in (11, 12, 13) for r in _domain_rows(i)]
+    status = PatternMiner().mine(rows, now=200).status
+    assert "missing_base_sha" not in (status["rejected_event_reasons"] or {}), status[
+        "rejected_event_reasons"
+    ]
+    assert status["mining_health"]["state"] == "mining", status["mining_health"]
+    assert status["complete_episode_count"] == 3, status["mining_health"]
+
+    # THE OTHER HALF: a repo-scoped subject with no base_sha is still malformed. All 203 of the
+    # live rejections are repo-scoped, so the exemption above clears none of them.
+    repo_rows = completion_episode(21, target="owner/repo#21")
+    for row in repo_rows:
+        row["identity"]["base_sha"] = ""
+    repo_status = PatternMiner().mine(repo_rows, now=200).status
+    assert "missing_base_sha" in (repo_status["rejected_event_reasons"] or {}), repo_status[
+        "rejected_event_reasons"
+    ]
+
+
 def test_every_declared_subjectless_producer_has_a_stated_reason():
     """A declaration without a reason is an assertion nobody can audit later."""
     for producer, reason in SUBJECTLESS_PRODUCERS.items():
