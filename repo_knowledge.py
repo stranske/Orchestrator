@@ -299,6 +299,15 @@ def append_context(prompt: str, target_or_repo: str, *, task_type: str | None = 
     # only in main(), which no driver calls -- dispatcher/tick call this function
     # directly -- so the capability ran constantly and recorded nothing. (2026-08-20)
     _capability_heartbeat()
+    # KILL SWITCH. This is the one per-event capability here with a real operational need for one:
+    # the playbook is injected into EVERY delegation prompt, so a bad or poisoned rule reaches every
+    # agent on the next dispatch. Editing the registry to remove a rule is the correct permanent
+    # fix, but it is not a STOP -- you want injection off now and the diagnosis afterwards.
+    # Deliberately placed AFTER the heartbeat: the capability was still matched and considered, and
+    # recording that it was suppressed is more honest than making a disabled tick look like a tick
+    # where no dispatch happened.
+    if os.environ.get("ORCH_REPO_PLAYBOOK", "").strip() == "0":
+        return prompt
     ctx = context_for(target_or_repo, task_type=task_type, lane=lane, path=path, max_chars=max_chars)
     if not ctx or "REPO PLAYBOOK (" in prompt:
         return prompt

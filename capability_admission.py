@@ -176,8 +176,38 @@ def req_outcome_path(cap: dict, ctx: dict) -> tuple[bool, str]:
 
 
 def req_kill_switch(cap: dict, ctx: dict) -> tuple[bool, str]:
+    """Something must be able to stop it without a code change.
+
+    TWO NARROW EXEMPTIONS, both opt-in and DECLARED, following the `gate_blocks_execution` pattern:
+    each needs a category AND a written rationale, so neither can be set in passing.
+
+    `safety_guard` -- the capability IS a confinement, so its OFF state is strictly MORE dangerous
+    than its ON state and demanding a switch asks for an anti-feature. `agy-runtime-isolation` forced
+    this: it adds an absolute `--add-dir <cwd>` keeping gemini's writes inside the target worktree,
+    and "disabling" it means letting an agent write outside its worktree.
+
+    `compute_only` -- the capability COMPUTES rather than DOES, so stopping it halts no action, it
+    blinds a consumer. Disabling capacity computation does not stop routing, it makes routing worse.
+    The anti-abuse condition is the whole point: "read-only" is exactly what a capability would
+    self-certify to clear a red, so it must NAME a `control_point` and that switch must actually be
+    found in the tree. A category you can assert about yourself is one everything eventually joins.
+
+    The control case for both is `offload`: it had the identical complaint on the same day and got a
+    REAL switch (`ORCH_OFFLOAD_DISABLED`), because a transport genuinely should be stoppable.
+    """
     if _has(cap, "kill_switch"):
         return True, "kill switch declared"
+    if cap.get("kill_switch_category") == "safety_guard" and _has(cap, "kill_switch_rationale"):
+        return True, ("safety guard: its OFF state is more dangerous than its ON state, so a kill "
+                      "switch would be an anti-feature")
+    if (cap.get("kill_switch_category") == "compute_only"
+            and _has(cap, "kill_switch_rationale")
+            and _has(cap, "control_point")):
+        control = str(cap.get("control_point") or "")
+        if control in (ctx.get("known_controls") or set()):
+            return True, f"compute-only: the acting consumer carries the control ({control})"
+        return False, (f"compute-only capability names control_point '{control}', which is not a "
+                       "known switch in this tree -- an unverifiable control is not a control")
     return False, "no kill switch: nothing can stop it without a code change"
 
 
@@ -216,11 +246,31 @@ def _created_ts(cap: dict) -> int | None:
     return min(stamps) if stamps else None
 
 
+def known_controls() -> set[str]:
+    """Every switch a `compute_only` capability may legitimately point at as its real control.
+
+    DISCOVERED FROM THE TREE, not hand-listed: a `control_point` is only accepted if the named
+    switch actually appears in orchestrate.sh or a module, so a capability cannot clear the
+    kill-switch requirement by naming a flag that does not exist. That is the difference between
+    delegating a control and asserting one.
+    """
+    controls: set[str] = set()
+    here = pathlib.Path(__file__).resolve().parent
+    for name in ("orchestrate.sh", "dispatcher.py", "repo_knowledge.py", "router.py"):
+        try:
+            text = (here / name).read_text()
+        except OSError:
+            continue
+        controls |= set(re.findall(r"ORCH_[A-Z0-9_]+", text))
+    return controls
+
+
 def _context(path: pathlib.Path | None = None) -> dict:
     import capability_activation_audit as audit
     import test_capability_set_coverage as coverage
     rows = {r["capability_id"]: r for r in audit.audit(use_cache=True)["rows"]}
-    return {"audit_rows": rows, "fixtures": coverage._fixture_capabilities()}
+    return {"audit_rows": rows, "fixtures": coverage._fixture_capabilities(),
+            "known_controls": known_controls()}
 
 
 def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict:

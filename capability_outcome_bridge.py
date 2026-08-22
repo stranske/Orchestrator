@@ -38,10 +38,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import capabilities
 import env_prereq
@@ -236,6 +239,7 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                           AND x.influence_type = 'capability'
                           AND x.capability_id = ce.capability_id)"""
         ).fetchall()
+        unlinked = 0
         for role_run, work_run, cap_id, cap_version in rows:
             if dry_run:
                 created.append({"capability_id": cap_id, "target_run_id": work_run,
@@ -250,7 +254,16 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                 accepted=True,
                 capability_id=str(cap_id),
                 capability_version_id=str(cap_version),
+                # DECLARED UNLINKED: a backfill re-attributes onto runs that may predate the
+                # completion-event plane or be advisory, so some targets have no envelope. Those
+                # edges are associations, not causal evidence. Measured 2026-08-21: 202 of 296
+                # orphan edges came from exactly this class of backfill, reported as plain successes
+                # -- hence `unlinked_edges` below, so the count is visible where it is CREATED
+                # rather than found by an audit two weeks later.
+                allow_unlinked=True,
             )
+            if not feedback._latest_completion_event_id(c, str(work_run)):
+                unlinked += 1
             # Resolve immediately from the outcome that already exists for the acting run.
             resolved += feedback._propagate_outcome_lineage_in_conn(c, str(work_run))
             created.append({"capability_id": cap_id, "target_run_id": work_run,
@@ -261,6 +274,7 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
         if close:
             c.close()
     return {"backfilled": len(created), "edges_resolved": resolved, "skipped": skipped,
+            "unlinked_edges": unlinked,
             "dry_run": dry_run, "links": created[:20]}
 
 
@@ -427,6 +441,78 @@ def attribute_compiled_workflow_edges(*, dry_run: bool = False, conn=None,
             "links": created[:20]}
 
 
+# The cross-repo capabilities the Orchestrator can OBSERVE but never executes. Each names the
+# workflow whose runs prove it fired. Declared, not discovered: a capability is credited from CI only
+# because it is listed here with the exact workflow file, so nothing is inferred from a name match.
+EXTERNAL_CI_CAPABILITIES = {
+    "docs-drift-fix-agent": {
+        "repo": "stranske/Workflows",
+        "workflow": "maint-87-docs-drift-fix-agent.yml",
+    },
+}
+EXTERNAL_CI_LOOKBACK_RUNS = int(os.environ.get("ORCH_EXTERNAL_CI_LOOKBACK_RUNS", "10"))
+
+
+def _gh_workflow_runs(repo: str, workflow: str) -> list[dict]:
+    """Recent runs of one workflow, newest first. Read-only."""
+    proc = subprocess.run(
+        ["gh", "run", "list", "--repo", repo, "--workflow", workflow,
+         "--limit", str(EXTERNAL_CI_LOOKBACK_RUNS),
+         "--json", "databaseId,status,conclusion,createdAt"],
+        capture_output=True, text=True, timeout=60,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or "gh run list failed").strip()[:160])
+    return json.loads(proc.stdout or "[]")
+
+
+def ingest_external_ci_invocations(*, dry_run: bool = False, path: Path | None = None,
+                                   runs_fn=None) -> dict:
+    """Credit capabilities whose entrypoint lives in ANOTHER repo, from that repo's workflow runs.
+
+    THE GAP THIS CLOSES. `docs-drift-fix-agent`'s entrypoint is in the Workflows repo, so
+    `capability_activation_audit` correctly reports `no_local_entrypoint` and no local heartbeat is
+    possible -- the capability ran weekly in that repo's CI and this ledger recorded nothing.
+    `external_caller()` already answers CAN it fire (does the workflow exist); this answers DID it.
+
+    THE OBSERVATION IS THE RUN, NOT AN OUTCOME. A completed run proves the capability EXECUTED; it
+    says nothing about whether the resulting repair merged durably. So this records an `invocation`
+    heartbeat only. The outcome half belongs in keepalive_outcomes' ingest of the resulting PRs and
+    is deliberately still deferred -- building it for one data point is the built-and-forgotten
+    failure mode, and its revisit trigger is recorded in the ledger notes.
+
+    IDEMPOTENT PER RUN, keyed on the workflow run id, because this capability's deferral uses its
+    invocation COUNT as the revisit trigger: a number that inflated on each daily re-read would fire
+    that trigger falsely. `credited` counts only heartbeats that actually landed.
+    """
+    out: dict[str, Any] = {"observed": {}, "credited": 0, "already_recorded": 0, "errors": []}
+    for cap_id, spec in EXTERNAL_CI_CAPABILITIES.items():
+        try:
+            runs = (runs_fn or _gh_workflow_runs)(spec["repo"], spec["workflow"])
+        except Exception as exc:                 # noqa: BLE001 -- telemetry must not break the step
+            out["errors"].append({"capability_id": cap_id, "error": str(exc)[:160]})
+            continue
+        completed = [r for r in runs if str(r.get("status") or "") == "completed"]
+        out["observed"][cap_id] = {"runs_seen": len(runs), "completed": len(completed)}
+        if dry_run:
+            continue
+        for r in completed:
+            ref = f"{spec['repo']}:{spec['workflow']}:{r.get('databaseId')}"
+            try:
+                # `path or capabilities.REG`: heartbeat's default is the live ledger and it does NOT
+                # accept None. Passing the caller's None through raised
+                # "'NoneType' object has no attribute 'parent'" and was swallowed into `errors`.
+                if capabilities.heartbeat(cap_id, "invocation", ref=ref,
+                                          path=path or capabilities.REG,
+                                          idempotency_key=ref):
+                    out["credited"] += 1
+                else:
+                    out["already_recorded"] += 1
+            except Exception as exc:             # noqa: BLE001
+                out["errors"].append({"capability_id": cap_id, "error": str(exc)[:160]})
+    return out
+
+
 def run(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False,
         path: Path | None = None) -> dict:
     # EDGE REPAIRS RUN FIRST, so this cycle's heartbeats see them. They used to run after
@@ -447,6 +533,13 @@ def run(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False,
         offload_fix = backfill_offload_capability_edges(dry_run=dry_run)
     except Exception as exc:                     # noqa: BLE001
         offload_fix = {"error": str(exc)[:200], "backfilled": 0, "edges_resolved": 0}
+    # Cross-repo capabilities: observe the OTHER repo's workflow runs, because no local code path
+    # can ever credit them. Wrapped like the repairs above -- an unreachable `gh` must not break the
+    # local heartbeat path that follows.
+    try:
+        external_ci = ingest_external_ci_invocations(dry_run=dry_run, path=path)
+    except Exception as exc:                     # noqa: BLE001
+        external_ci = {"error": str(exc)[:200], "credited": 0, "observed": {}}
     rows = collect(lookback_days=lookback_days)
     mapped = attribute(rows, known=_known_capability_ids(path))
     result = apply_links(mapped["links"], path=path, dry_run=dry_run)
@@ -473,11 +566,46 @@ def run(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False,
         # have recorded no consumer repo yet, and while `attributed` stays 0 with subjects > 0 the
         # rails are running but their output is not reaching identified delivery.
         "compiled_workflow_edges": {k: v for k, v in compiled_fix.items() if k != "links"},
+        # Cross-repo observation: `credited` is invocations recorded from another repo's CI.
+        "external_ci": external_ci,
         **result,
     }
 
 
 def _selftest() -> None:
+    # CROSS-REPO CREDITING: a capability whose entrypoint lives in ANOTHER repo can never be
+    # credited by a local code path. Injected runs, so this never touches the network.
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(prefix="external-ci-") as _td:
+        _lp = Path(_td) / "caps.json"
+        capabilities.register("docs-drift-fix-agent", {
+            "status": "wired", "owner": "orchestrator",
+            "matcher": {"kind": "ci_workflow", "name": "maint-87"},
+            "entrypoint": "Workflows/scripts/docs_drift_fix_agent.py",
+            "trigger_cadence": "weekly", "expiry": capabilities._now() + 86400,
+            "kill_switch": "disable the workflow", "rollback": {"transition": "retired"},
+        }, path=_lp)
+        _runs = [{"databaseId": 111, "status": "completed", "conclusion": "success"},
+                 {"databaseId": 222, "status": "in_progress", "conclusion": None}]
+        _r1 = ingest_external_ci_invocations(path=_lp, runs_fn=lambda r, w: _runs)
+        # ONLY completed runs count: an in-progress run has not proved the capability executed.
+        assert _r1["credited"] == 1, _r1
+        assert _r1["observed"]["docs-drift-fix-agent"]["completed"] == 1, _r1
+        # IDEMPOTENT ON RE-READ. A daily cadence re-reads the same runs; a count that grows on
+        # repeat is unusable as the revisit trigger this capability's deferral depends on.
+        _r2 = ingest_external_ci_invocations(path=_lp, runs_fn=lambda r, w: _runs)
+        assert _r2["credited"] == 0 and _r2["already_recorded"] == 1, _r2
+        _cap = capabilities.load(_lp, create=False)["docs-drift-fix-agent"]
+        assert len([e for e in _cap["event_history"] if e.get("type") == "invocation"]) == 1
+        # A NEW run does credit, or the capability freezes at its first observation.
+        _r3 = ingest_external_ci_invocations(
+            path=_lp, runs_fn=lambda r, w: _runs + [{"databaseId": 333, "status": "completed"}])
+        assert _r3["credited"] == 1, _r3
+        # An unreachable `gh` is reported, never raised.
+        def _boom(r, w): raise RuntimeError("gh unavailable")
+        _r4 = ingest_external_ci_invocations(path=_lp, runs_fn=_boom)
+        assert _r4["errors"] and _r4["credited"] == 0, _r4
+
     import tempfile
 
     # Attribution is explicit: a role-influenced outcome resolves, an unlinked one does not.

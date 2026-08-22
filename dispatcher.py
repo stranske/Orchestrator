@@ -1073,6 +1073,15 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     This is how the seat offloads token-heavy READING (e.g. summarize 200 pages →
     gemini's huge context) and gets back only the result, spending the cheap agent's capacity
     instead of its own. Records a ledger row (it consumes the agent's budget)."""
+    # KILL SWITCH. Added 2026-08-21 because the admission gate was literally right: nothing could
+    # stop the fleet's most-used capability (~196 runs/week) without a code change. That is not
+    # theoretical -- on 2026-08-08 the gemini model pin rotted and EVERY offload to that seat exited
+    # 1 while `capacity.py` still reported `state: ok`; the only lever was per-seat capacity
+    # shedding, which is a shed, not a stop. Checked FIRST, before provisioning, model resolution or
+    # any ledger write, so a disabled offload spends nothing at all.
+    if os.environ.get("ORCH_OFFLOAD_DISABLED", "").strip() == "1":
+        return {"error": "offload disabled by ORCH_OFFLOAD_DISABLED=1", "agent": agent,
+                "disabled": True, "exit": None, "run_id": None}
     if mode is None:
         # Offloads are advisory READS, but this defaulted to 'full' for years — so a codex offload
         # burned Sol (flagship) and a gemini offload burned 3.1 Pro, contradicting the "runs a
@@ -1625,6 +1634,29 @@ def _selftest() -> None:
             assert _hb_calls, "offload did not reach capabilities.production_heartbeat"
             assert _hb_calls[0][0][0] == "offload", _hb_calls
             assert _hb_calls[0][0][1] == "invocation", _hb_calls
+
+            # KILL SWITCH: it must stop offload BEFORE anything is spent. Asserting "no heartbeat
+            # fired" is what proves nothing ran -- the heartbeat is the first thing offload does
+            # after the guard. A guard that refuses only after provisioning is a late abort, and the
+            # whole reason this switch exists is the 2026-08-08 case where a dead seat kept being
+            # dispatched to while capacity read `ok`.
+            _hb_calls.clear()
+            os.environ["ORCH_OFFLOAD_DISABLED"] = "1"
+            try:
+                _off = offload("definitely-not-an-agent", "probe", cwd=tmp, timeout=1)
+            finally:
+                os.environ.pop("ORCH_OFFLOAD_DISABLED", None)
+            assert _off.get("disabled") is True, _off
+            assert "ORCH_OFFLOAD_DISABLED" in str(_off.get("error")), _off
+            assert _off.get("run_id") is None, "a disabled offload must not record a run"
+            assert not _hb_calls, "disabled offload still reached the heartbeat -- it spent work"
+            # ...and the guard must be OFF by default, or the fleet's transport is dead on arrival.
+            _hb_calls.clear()
+            try:
+                offload("definitely-not-an-agent", "probe", cwd=tmp, timeout=1)
+            except Exception:
+                pass
+            assert _hb_calls, "guard leaked: offload refused with the flag unset"
 
             # Lane prompt-schema capabilities must be credited with a MATCH when their task type is
             # routed. They are never executed locally (the dispatcher hands their schema to an

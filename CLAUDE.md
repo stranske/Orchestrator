@@ -11,6 +11,54 @@
 Read `README.md` first for what this project is and its important functionality. This file is the
 rules for anyone (human or agent) *changing* it.
 
+## −1. THIS IS A COMPONENT, NOT THE SYSTEM (read before any fleet-level claim)
+
+**The Orchestrator is one part of a larger pipeline whose SYSTEM-OF-RECORD IS ELSEWHERE.** Every rule
+below is about changing this tool. None of them tell you what the wider system is doing, and reading
+only this file will make you confidently wrong about it — that has now happened.
+
+**The pipeline, and where work actually comes from:**
+
+1. Repo review (the `Workflows` repo) → human-decision packet → an **approved-issue queue** held by
+   the steward repo. That queue, plus already-published open issues from prior cycles, is the
+   origin of new work. **NOT** `status: ready` labels.
+2. The **opener lane** (local automation, outside this tree) reads that queue and creates issues +
+   draft PRs, under its own active-PR cap.
+3. **Keepalive** (GitHub Actions, in `Workflows`) drives each PR: an `agent:*` label + green Gate +
+   unchecked tasks → agent rounds until every acceptance criterion is checked, then it stands down.
+4. The **closer lane** (local) drives merge → verify → close.
+
+**What this tool's live role actually is.** The lanes consume it NARROWLY: `capacity.py` to choose
+which agent gets an advisory review, and an `orchestrator_review` fallback path for reviews. Its own
+`tick.py --active` additionally applies `agent:*` labels to drive keepalive on remote capacity. It is
+a capacity advisor, a review router and a keepalive driver — **it is not the fleet's work-discovery
+engine**, and `backlog._is_ready()` is this tool's own private discovery path, not the fleet's.
+
+**"ORCHESTRATOR" IS AN OVERLOADED WORD HERE, AND THE COLLISION IS LOAD-BEARING.** The keepalive
+contract doc in `Workflows` has a section titled *"Orchestrator Invariants"* — that means the GitHub
+Actions concurrency/round orchestration (concurrency groups, run summaries, bail reasons). It is a
+DIFFERENT SYSTEM from this repository. When a Workflows doc says "the orchestrator", assume it means
+the Actions workflow until proven otherwise.
+
+**Double-dispatch is prevented by a heartbeat, not by a lock.** When `orchestrate.sh --active` runs it
+writes a freshness heartbeat to the handoff dir; the lanes' prerun reads it and halts that round
+("legacy cron yields this tick"). Fail-open: absent, stale or malformed → the lanes proceed as
+normal. So at any moment one side drives, not both — but the exclusion is COARSE (whole round,
+~15-minute freshness), not per-target. Do not add a second dispatch path assuming per-issue locking.
+
+### The rule
+
+**Before making or acting on ANY claim about the fleet — how much work exists, why nothing is
+happening, what the fleet is doing, whether a lane fired — read the owning `Workflows` doc and NAME
+IT.** A local JSON artifact, a `backlog.json`, a readiness count or a capability inventory is
+downstream of that pipeline and does not answer the question. The documented failure is exactly this:
+an agent read an empty approved-issue queue and concluded "the opener has nothing to do", which was
+wrong because the selection space also includes already-published issues.
+
+**Metrics from this tree are SCOPED TO THIS TREE.** `backlog.json` item counts, `issue_readiness`
+verdicts and `true_open` measure *this tool's own dispatch lane*. They are not fleet throughput.
+Report them with that scope attached or the next reader will repeat the error.
+
 ## 0. Dedup-before-develop (MANDATORY — this project's #1 failure mode)
 
 The Orchestrator's dominant defect class is **built-and-forgotten features**, not bugs. Six

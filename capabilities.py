@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -1990,6 +1991,48 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
             "feed": False, "needs_trigger": False, "retire_candidate": False,
         }
     if live == "invoked_without_outcomes":
+        # THREE DIFFERENT SITUATIONS SHARE THIS CLASS, and for two of them "fix outcome linkage"
+        # describes work that DOES NOT EXIST. That is the third time this exact shape has appeared:
+        # the observer category error told reports to earn delivery outcomes they cannot produce,
+        # and the gated case told switched-off capabilities to fix linkage a switch was blocking.
+        # Both were fixed by making the CLASSIFICATION honest. Here the classification is literally
+        # true -- there really is no outcome evidence -- so the fix is one layer down, in the ADVICE.
+        #
+        # Why it matters more than wording: `invoked_without_outcomes` is a `dry_seam_audit` FAIL,
+        # so a permanently-wrong FAIL with unactionable advice is what teaches a reader to ignore
+        # the gate -- the same harm the tick_env fix named ("re-run until green" is how a real red
+        # gets missed). Each branch below is decided from evidence the ledger ALREADY holds; nothing
+        # new is stored and no capability self-declares its way out.
+
+        # (a) DEFERRED BY DECISION. A recorded deferral with a machine-checkable revisit condition
+        # is not debt -- telling it to "fix linkage" contradicts a decision someone already made.
+        notes = str(cap.get("notes") or "")
+        if re.search(r"\bREVISIT TRIGGER\b|deliberately NOT built|deferred with a", notes, re.I):
+            return {
+                "blocker": "no outcome linked -- deferred by an explicit decision",
+                "action": ("none: a resolver for this was deliberately not built and the deferral "
+                           "records its own revisit condition. Re-read the ledger `notes` before "
+                           "treating this as debt"),
+                "feed": False, "needs_trigger": False, "retire_candidate": False,
+            }
+
+        # (b) USAGE DROUGHT, not a linkage bug. An encoded gate with real bounds, zero accepted uses
+        # ever, and a stale last_invocation means the outcome path is intact and simply unexercised
+        # -- `role-prompt` ran ONCE, its proposal was REJECTED, so it correctly inherits no outcome.
+        # Manufacturing one for an advisory run is exactly what the un-gameable label forbids.
+        last_inv = cap.get("last_invocation")
+        drought_age = (current - int(last_inv)) / 86400.0 if last_inv else None
+        if (cap.get("gate_criteria") and not cap.get("outcome_links")
+                and drought_age is not None and drought_age >= 14):
+            return {
+                "blocker": f"no ACCEPTED use yet -- last invocation {int(drought_age)}d ago",
+                "action": ("wait for an accepted use; this is a USAGE drought, not a measurement "
+                           "gap. The outcome path is declared and its gate_criteria are encoded, so "
+                           "there is no linkage to fix -- do NOT hand-link an outcome"),
+                "feed": False, "needs_trigger": False, "retire_candidate": False,
+            }
+
+        # (c) A GENUINE MEASUREMENT GAP -- the original case, unchanged.
         return {
             "blocker": "runs, but no outcome is linked",
             "action": "fix outcome linkage — this is a MEASUREMENT gap, not a usage gap. This "

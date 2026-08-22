@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 import adapters
@@ -50,6 +52,11 @@ REFRESH_HINT = {
 AGENTS = ("cursor", "codex", "claude", "gemini", "vibe", "aider")
 
 
+# Bounded, like TICK_ENV_ATTEMPTS: enough to clear a blip, few enough that a real problem still
+# surfaces promptly rather than being retried into silence.
+CRED_READ_ATTEMPTS = int(os.environ.get("ORCH_CRED_READ_ATTEMPTS", "3"))
+
+
 def _credential_file_state(agent: str) -> dict:
     """Presence/shape of the credential file — never its contents."""
     entry = CREDENTIAL_FILES.get(agent)
@@ -58,10 +65,29 @@ def _credential_file_state(agent: str) -> dict:
     path, key = entry
     if not path.is_file():
         return {"path": str(path), "present": False, "expected_key": key, "key_present": False}
-    try:
-        text = path.read_text()
-    except OSError:
-        return {"path": str(path), "present": True, "expected_key": key, "key_present": None}
+    # BOUNDED RETRY, and it names WHY it failed. This tree lives on a cloud-sync mount that
+    # intercepts every open(), so a read can fail transiently on a file that plainly exists -- and an
+    # undeterminable key made `check()` return UNKNOWN, which
+    # `test_every_seat_has_some_free_signal` reads as a credential defect. That is a machine fault
+    # reported as a tree fault, the exact failure `tick_env` was hardened against ("a red pointing at
+    # the tree for a fault in the machine... teaches the reader to re-run until green, which is how a
+    # real red gets ignored"). Observed once on 2026-08-21 during a full verify.py run under load.
+    #
+    # A DETERMINISTIC defect is NOT retried: `path.is_file()` already returned False above for a
+    # genuinely absent credential, so everything reaching here is a file that exists and a read that
+    # did not work -- which is the retryable class by construction.
+    text, read_error = None, None
+    for attempt in range(CRED_READ_ATTEMPTS):
+        try:
+            text = path.read_text()
+            break
+        except OSError as exc:
+            read_error = f"{type(exc).__name__}: {exc}"
+            if attempt + 1 < CRED_READ_ATTEMPTS:
+                time.sleep(0.2 * (attempt + 1))
+    if text is None:
+        return {"path": str(path), "present": True, "expected_key": key, "key_present": None,
+                "read_error": read_error, "reason_class": "environment"}
     return {"path": str(path), "present": True, "expected_key": key,
             "key_present": any(line.strip().lstrip("export ").startswith(key + "=")
                                for line in text.splitlines())}
@@ -99,10 +125,20 @@ def check(agent: str, *, refresh: bool = True) -> dict:
         verdict = "CONFIGURED"
         detail = f"{cred['expected_key']} present in {cred['path']} (file check only, no probe)"
         strength = strength or "config"
+    elif cred.get("reason_class") == "environment":
+        # UNDETERMINABLE, and it says which side. The credential file EXISTS and the read failed
+        # after CRED_READ_ATTEMPTS -- a fact about the machine, not the seat. Still reported as
+        # UNKNOWN (deliberately NOT softened to a pass: an assertion weakened into a skip stops
+        # catching the absent credential it exists for), but the detail now names where to look.
+        verdict = "UNKNOWN"
+        detail = (f"could not read {cred['path']} after {CRED_READ_ATTEMPTS} attempts "
+                  f"({cred.get('read_error')}) -- this is an ENVIRONMENT fault (the file exists), "
+                  "not a missing credential; re-check the volume before changing any config")
     else:
         verdict, detail = "UNKNOWN", auth["reason"]
     return {"agent": agent, "verdict": verdict, "detail": detail, "tier_models": tiers,
             "auth_strength": strength, "credential_file": cred,
+            "reason_class": cred.get("reason_class") or ("ok" if verdict != "UNKNOWN" else "tree"),
             "refresh_hint": REFRESH_HINT.get(agent)}
 
 
@@ -158,6 +194,42 @@ def _selftest() -> None:
     live = run()
     assert {r["verdict"] for r in live} <= {"OK", "BROKEN", "PRESENT", "CONFIGURED", "UNKNOWN"}, live
     assert {r["agent"] for r in live} == set(AGENTS), live
+    # A MACHINE FAULT MUST NOT READ AS A CONFIG DEFECT. On a cloud-sync mount a read can fail on a
+    # file that plainly exists; that produced a bare UNKNOWN indistinguishable from "no credential".
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(prefix="cred-state-") as _td:
+        _p = Path(_td) / "seat.env"
+        _p.write_text("export MISTRAL_API_KEY=abc\n")
+        _saved = CREDENTIAL_FILES.get("vibe")
+        _real_read = Path.read_text
+        try:
+            CREDENTIAL_FILES["vibe"] = (_p, "MISTRAL_API_KEY")
+            _ok = _credential_file_state("vibe")
+            assert _ok["key_present"] is True and not _ok.get("reason_class"), _ok
+            _calls = []
+            def _boom(self, *a, **k):
+                if self == _p:
+                    _calls.append(1)
+                    raise OSError("Resource temporarily unavailable")
+                return _real_read(self, *a, **k)
+            Path.read_text = _boom
+            _bad = _credential_file_state("vibe")
+            assert _bad["key_present"] is None, _bad
+            assert _bad["reason_class"] == "environment", _bad
+            # NOT self-referential: `len(_calls) == CRED_READ_ATTEMPTS` alone passes happily when the
+            # constant is 1, i.e. when the retry has been removed. Assert the retry EXISTS too.
+            assert CRED_READ_ATTEMPTS >= 2, "the retry is the point; one attempt is no retry"
+            assert len(_calls) == CRED_READ_ATTEMPTS, (len(_calls), CRED_READ_ATTEMPTS)
+            # A file that is genuinely ABSENT stays a hard failure and is NOT retried.
+            Path.read_text = _real_read
+            CREDENTIAL_FILES["vibe"] = (Path(_td) / "nope.env", "MISTRAL_API_KEY")
+            _gone = _credential_file_state("vibe")
+            assert _gone["present"] is False and not _gone.get("reason_class"), _gone
+        finally:
+            Path.read_text = _real_read
+            if _saved is not None:
+                CREDENTIAL_FILES["vibe"] = _saved
+
     print("agent_auth_check.py selftest: OK (render, unknown-is-not-broken, live sweep)")
 
 

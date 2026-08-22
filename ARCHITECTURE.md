@@ -9,6 +9,55 @@
 
 ![Orchestrator loop: deterministic rails vs. callable agent-roles](orchestrator-loop.svg)
 
+## Where this sits in the larger pipeline (READ FIRST)
+
+**This document describes ONE COMPONENT.** Everything below — rails, roles, the feedback loop — is
+internal to the Orchestrator. The pipeline it participates in has its **system-of-record in the
+`Workflows` repo**, and nothing in this file can tell you what that pipeline is doing. Reading only
+this document has already produced confidently wrong fleet-level conclusions.
+
+```
+  repo review (Workflows)  ->  human-decision packet  ->  APPROVED-ISSUE QUEUE (steward repo)
+                                                                    |
+                                                     opener lane (local, outside this tree)
+                                                     creates issues + draft PRs, own PR cap
+                                                                    |
+                                        KEEPALIVE (Workflows GitHub Actions) drives each PR:
+                                        agent:* label + green Gate + unchecked tasks -> rounds,
+                                        stands down when all acceptance criteria are checked
+                                                                    |
+                                                     closer lane (local) merge -> verify -> close
+```
+
+**The Orchestrator's three real interfaces to that pipeline:**
+
+| Interface | Direction | What it is |
+|---|---|---|
+| `capacity.py` | pipeline → here | The lanes read it to choose which agent gets an advisory review |
+| `orchestrator_review` fallback | pipeline → here | A review-fallback path routes an advisory review through this tool |
+| `tick.py --active` → `delegate_remote` | here → pipeline | Applies `agent:*` labels, driving keepalive on REMOTE capacity |
+
+So this tool is a **capacity advisor, a review router, and a keepalive driver**. It is **not** the
+fleet's work-discovery engine: `backlog._is_ready()` is this tool's own private discovery path, and
+the fleet's work originates from the approved-issue queue, not from `status: ready` labels.
+
+### Two things that will mislead you if unstated
+
+**The word "orchestrator" is overloaded.** The keepalive contract in `Workflows` has a section headed
+*"Orchestrator Invariants"* which means the **GitHub Actions concurrency and round orchestration** —
+a different system from this repository. When a Workflows doc says "the orchestrator", assume it means
+the Actions workflow until proven otherwise.
+
+**Double-dispatch is prevented by a coarse heartbeat, not a per-target lock.** `orchestrate.sh
+--active` writes a freshness heartbeat; the lanes' prerun reads it and yields that round. Fail-open —
+absent, stale or malformed means the lanes proceed normally. One side drives at a time, but the
+exclusion covers a whole ROUND (~15-minute freshness), not an individual issue. `claims.py` is local
+and does **not** span the lanes' GitHub execution, so do not add a dispatch path that assumes
+per-issue locking.
+
+**Metrics from this tree are scoped to this tree.** `backlog.json` counts, `issue_readiness` verdicts
+and `true_open` describe this tool's own dispatch lane, never fleet throughput.
+
 ## The one rule: selection stays deterministic; judgment becomes agent-roles
 
 The discriminator for "should this be an agent?" is **who decides the next step — code or the model.**

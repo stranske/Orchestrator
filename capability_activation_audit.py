@@ -390,6 +390,42 @@ def heartbeat_reachable(cap: dict) -> dict:
     put theirs inside `main()` while the tick calls their FUNCTIONS directly, so main() never runs.
     Both look identical from a dispatch count: zero.
     """
+    # PROMPT-SCHEMA CAPABILITIES ARE CREDITED BY THE DISPATCHER, NOT BY THEIR OWN MODULE -- and
+    # asking this question of their entrypoint is the same category error as asking an observer for
+    # a delivery outcome. The lane modules are SCHEMAS: `PROMPT_TEMPLATES` says "produce strict JSON
+    # matching codemod_lane.py" and an agent returns conforming output. Verified 2026-08-21 that
+    # every non-test reference to those modules outside themselves is a prompt-template string, a
+    # doc, or a registry mention -- no code calls their functions, so their `main()` heartbeat can
+    # never fire and MOVING it has nowhere to move to. The real executed path is
+    # `dispatcher.build_prompt`, which records a `match` for exactly these via TASK_TYPE_CAPABILITY.
+    #
+    # DECLARED, NOT INFERRED: the source is dispatcher's own mapping, so a capability is credited
+    # here only because the dispatcher really does credit it. Nothing is guessed from naming.
+    try:
+        import dispatcher as _dispatcher
+        _lane_credited = set((_dispatcher.TASK_TYPE_CAPABILITY or {}).values())
+    except Exception:
+        _lane_credited = set()
+    if cap.get("capability_id") in _lane_credited:
+        return {"status": "reachable",
+                "via": ["dispatcher.build_prompt via TASK_TYPE_CAPABILITY (prompt-schema capability)"],
+                "functions": ["build_prompt"]}
+    # CROSS-REPO CAPABILITIES ARE CREDITED BY THE BRIDGE, for the same reason and by the same rule.
+    # `docs-drift-fix-agent`'s entrypoint lives in the Workflows repo, so asking whether a heartbeat
+    # sits on ITS path is unanswerable -- the file is in another repository.
+    # `capability_outcome_bridge.ingest_external_ci_invocations` observes that repo's completed
+    # workflow runs and records the invocation here, which IS the executed path for this shape.
+    # Declared from the bridge's own EXTERNAL_CI_CAPABILITIES mapping, never inferred.
+    try:
+        import capability_outcome_bridge as _bridge
+        _ci_credited = set(_bridge.EXTERNAL_CI_CAPABILITIES or {})
+    except Exception:
+        _ci_credited = set()
+    if cap.get("capability_id") in _ci_credited:
+        return {"status": "reachable",
+                "via": ["capability_outcome_bridge.ingest_external_ci_invocations "
+                        "(cross-repo CI observation)"],
+                "functions": ["ingest_external_ci_invocations"]}
     files = _entrypoint_files(cap)
     if not files:
         return {"status": "no_local_entrypoint", "detail": str(cap.get("entrypoint") or "")[:60]}
@@ -724,6 +760,32 @@ def _selftest() -> None:
     assert entry_class({"matcher": {"kind": "env", "name": "ORCH_X"}}) == ENTRY_GATED
     assert entry_class({"matcher": {}, "gate_reason": "held"}) == ENTRY_GATED
     assert entry_class({}) == ENTRY_UNKNOWN
+
+    # PROMPT-SCHEMA CREDITING is narrow and driven by the dispatcher's own mapping. It exists
+    # because a lane SCHEMA never executes -- its `main()` heartbeat has nowhere to move to -- while
+    # `dispatcher.build_prompt` really does credit it on every routed dispatch. Both halves matter:
+    # a capability in the mapping is credited, and one that is NOT in it still has to earn
+    # reachability the normal way, or this becomes a blanket excuse for a genuinely dead module.
+    import dispatcher as _d
+    _mapped = set((_d.TASK_TYPE_CAPABILITY or {}).values())
+    assert "codemod-campaign" in _mapped, _mapped
+    assert heartbeat_reachable({"capability_id": "codemod-campaign",
+                                "entrypoint": "codemod_lane.py"})["status"] == "reachable"
+    # NARROWNESS CONTROL: `deliberate-break-verifier` is the same shape but is NOT in the mapping,
+    # and must keep reporting a real defect -- local_verify.py genuinely has no caller.
+    assert "deliberate-break-verifier" not in _mapped, _mapped
+    assert heartbeat_reachable({"capability_id": "deliberate-break-verifier",
+                                "entrypoint": "local_verify.py"})["status"] != "reachable"
+    # CROSS-REPO CREDITING, same rule and same narrowness.
+    import capability_outcome_bridge as _bridge
+    _ci = set(_bridge.EXTERNAL_CI_CAPABILITIES or {})
+    assert "docs-drift-fix-agent" in _ci, _ci
+    assert heartbeat_reachable({"capability_id": "docs-drift-fix-agent",
+                                "entrypoint": "Workflows/scripts/docs_drift_fix_agent.py"}
+                               )["status"] == "reachable"
+    assert heartbeat_reachable({"capability_id": "not-declared-anywhere",
+                                "entrypoint": "Other/repo/script.py"}
+                               )["status"] == "no_local_entrypoint"
 
     # classify() reachability, derived from backlog's own vocabulary rather than hardcoded.
     em = emittable_task_types()

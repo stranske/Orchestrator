@@ -118,6 +118,34 @@ _gh_gate() { local rc=0; python3 "$ORCH/gh_capacity.py" --gate "$1" || rc=$?; [[
 mode="shadow"; [[ "${1:-}" == "--active" ]] && mode="active"
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] orchestrate tick: $mode"
 STAMP_DIR="${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}"; mkdir -p "$STAMP_DIR" 2>/dev/null || true
+
+# --- Log rotation (every tick, cheap, fail-open) -------------------------------------------------
+# This tick's own stdout/stderr go to the handoff cron log via launchd's StandardOutPath, and NOTHING
+# rotated it: measured 2026-08-21 at 59.8 MB / 1,876,027 lines, 5x the 11.8 MB the hygiene item
+# recorded, still growing. An unrotated log is not just disk -- it is the reason "the GC is dead" was
+# concluded from a log whose 102 lines were all the same benign error.
+#
+# COPYTRUNCATE, deliberately: keep the tail in place and truncate the SAME inode rather than
+# renaming. launchd reopens StandardOutPath per invocation so a rename would usually be safe, but a
+# rename during a running tick silently detaches the writer and the rest of that tick's output is
+# lost to a deleted file. Truncating in place cannot do that.
+_rotate_log() {  # $1=path  $2=max bytes (default 16MiB)
+  local f="$1" cap="${2:-16777216}" sz
+  [[ -f "$f" ]] || return 0
+  sz="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  [[ "$sz" -gt "$cap" ]] || return 0
+  gzip -c "$f" > "${f%.log}-$(date +%Y%m%d%H%M).log.gz" 2>/dev/null || return 0
+  tail -n 2000 "$f" > "$f.keep" 2>/dev/null && cat "$f.keep" > "$f" && rm -f "$f.keep"
+  # Keep the last 8 archives; unbounded archives are the same defect one directory over.
+  ls -1t "${f%.log}"-*.log.gz 2>/dev/null | tail -n +9 | while read -r old; do rm -f "$old"; done
+  echo "  rotated $(basename "$f") (was $sz bytes)"
+}
+_rotate_log "$HOME/.codex/handoff/orchestrator-cron.log" "${ORCH_LOG_MAX_BYTES:-16777216}"
+for _lg in "$STAMP_DIR"/*.log; do
+  [[ -e "$_lg" ]] || continue
+  _rotate_log "$_lg" "${ORCH_LOG_MAX_BYTES:-16777216}"
+done
+unset _lg
 # Cadence identity/stamps/days are generated from one typed registry also read by
 # observability_dashboard.py. Refuse to run with an unreadable registry: falling
 # back to duplicated shell constants would recreate invisible failure stamps.
@@ -186,7 +214,48 @@ fi
 # re-estimates the VERSIONED route_weights from accumulated outcomes (the router already reads
 # current_weights). Stamp-gated so the hourly tick runs them at the right cadence; never breaks the tick.
 _due() { [[ ! -f "$1" ]] && return 0; [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]; }   # due if missing or older than $2 days
-_cadence_due() { local stamp; stamp="$(cadence_stamp "$1")" || return 2; _due "$STAMP_DIR/$stamp" "$(cadence_days "$1")"; }
+# --- Per-step kill switch -------------------------------------------------------------------------
+# ONE mechanism giving every step a real off-lever, instead of a bespoke ORCH_* flag per capability.
+# Added 2026-08-21: the admission gate flagged six capabilities with "nothing can stop it without a
+# code change", and six new single-use flags would be six new untested branches on hot paths -- an
+# untested kill switch is theatre, because it reports a control nobody has proved works.
+#
+#   ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"   # comma or space separated
+#
+# THREE PROPERTIES, each of them the fix for a failure this repo has already paid for:
+#  1. IT ANNOUNCES ITSELF EVERY TICK. A silent disable is the latched-gate pattern exactly -- a thing
+#     that stays off because nothing says it is off. Every skipped step prints a line, so a disable
+#     left in place is visible in the very next log instead of five weeks later.
+#  2. IT TOUCHES NO STAMP. Re-enabling makes the step immediately due; the switch defers work, it
+#     does not fake completion. (A disable that marked success would silently skip a whole cadence.)
+#  3. IT REJECTS UNKNOWN KEYS LOUDLY. `ORCH_DISABLE_STEPS=feature-scanned` would otherwise disable
+#     nothing while the operator believes the step is off -- a control that lies is worse than none.
+#     Unknown names WARN and are ignored, so a typo can never silently leave a step running.
+# Fails toward MOTION: unset, empty or unparseable means nothing is disabled.
+_step_disabled() {   # $1=step key -> 0 (true) when the operator has disabled it
+  local key="$1" raw entry
+  raw="${ORCH_DISABLE_STEPS:-}"
+  [[ -z "$raw" ]] && return 1
+  for entry in ${raw//,/ }; do
+    [[ "$entry" == "$key" ]] || continue
+    echo "  [disabled] $key skipped by ORCH_DISABLE_STEPS (no stamp touched; re-enable and it runs next tick)"
+    return 0
+  done
+  return 1
+}
+_warn_unknown_disable_steps() {   # a typo must not read as a working switch
+  local raw entry
+  raw="${ORCH_DISABLE_STEPS:-}"
+  [[ -z "$raw" ]] && return 0
+  for entry in ${raw//,/ }; do
+    cadence_known "$entry" 2>/dev/null && continue
+    [[ "$entry" == "redirect-sweep" ]] && continue      # named tick step, not in the cadence registry
+    echo "  WARN: ORCH_DISABLE_STEPS names unknown step '$entry' -- nothing was disabled by it" >&2
+  done
+}
+_warn_unknown_disable_steps
+
+_cadence_due() { local stamp; stamp="$(cadence_stamp "$1")" || return 2; _step_disabled "$1" && return 1; _due "$STAMP_DIR/$stamp" "$(cadence_days "$1")"; }
 # item 10 (2026-07-08 audit): a FAILING daily/weekly step used to retry EVERY hourly tick forever
 # (its success stamp never lands, so _due stays true -- observed: 183 hourly langsmith retries
 # burning gh budget and burying real warns). Failures now back off on their own stamp: after a
@@ -263,6 +332,7 @@ if _cadence_due pattern-miner && _attempt_ok pattern-miner; then
 fi
 # Every tick: classify active local claims and persist redirect/decompose advisories.
 # SHADOW-ONLY: redirect_sweep.py never kills, releases claims, delegates, or applies redirect_plan.
+if _step_disabled redirect-sweep; then :; else
 echo "  [cadence] redirect watch sweep (shadow-only, no live action)"
 redirect_sweep_args=(--write "$STAMP_DIR/redirect-sweep.json")
 # Optional evidence bridge for IMPROVEMENT_BACKLOG.md #5. When explicitly enabled, the sweep dispatches
@@ -277,6 +347,7 @@ if [[ "${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}" == "1" ]]; then
   [[ -n "${ORCH_REDIRECT_SHADOW_CORPUS:-}" ]] && redirect_sweep_args+=(--corpus "$ORCH_REDIRECT_SHADOW_CORPUS")
 fi
 if python3 "$ORCH/redirect_sweep.py" "${redirect_sweep_args[@]}" >> "$STAMP_DIR/redirect-sweep.log" 2>&1; then :; else echo "  warn: redirect_sweep failed (continuing; see $STAMP_DIR/redirect-sweep.log)"; fi
+fi   # end: _step_disabled redirect-sweep
 if _cadence_due keepalive-stage2-plan && _attempt_ok keepalive-stage2-plan; then
   if _gh_gate search && _gh_gate core; then
     echo "  [cadence] keepalive supervisor Stage 2 live plan (daily; read-only surfacing)"
@@ -378,19 +449,6 @@ if _cadence_due feature-scan && _attempt_ok feature-scan; then
     _mark_success feature-scan
   else
     _mark_fail feature-scan "see $STAMP_DIR/feature-scan.log"
-  fi
-fi
-if _cadence_due watch-sweep && _attempt_ok watch-sweep; then
-  # The missing caller for watch.py. claims.update_metadata records pid/log/worktree explicitly so
-  # "automatic watch sweeps" could find them, but no sweep existed — so every stall in this fleet
-  # was found by hand (the 78-day opener_cap_pressure latch, 24 expired-but-blocking blockers, the
-  # review lane silent from 2026-07-15). Read-only: classifies live claims, mutates nothing.
-  echo "  [cadence] stall sweep (classify live claims; read-only)"
-  if python3 "$ORCH/watch_sweep.py" --json > "$STAMP_DIR/watch-sweep.json" \
-       2>> "$STAMP_DIR/watch-sweep.log"; then
-    _mark_success watch-sweep
-  else
-    _mark_fail watch-sweep "see $STAMP_DIR/watch-sweep.log"
   fi
 fi
 if _cadence_due capability-activation-audit && _attempt_ok capability-activation-audit; then

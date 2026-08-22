@@ -39,7 +39,22 @@ HISTORICAL_SOURCE = "historical-replay"
 APPLY_KIND = "redirect_apply"
 
 
-def _slug(value: str) -> str:
+# FIVE `_slug`-SHAPED HELPERS EXIST IN THIS TREE AND THEY MUST NOT BE UNIFIED.
+# `redirect_shadow._corpus_entry_slug` KEEPS `#`, `redirect_plan._prompt_path_slug` STRIPS it, and
+# `exploration_backfill._exp_id_slug` uses `-` and does not map `/`->`__`. That divergence was
+# filed as a hygiene item ("same target != same key across modules"), and the fix is NOT to merge
+# them: verified 2026-08-21 that nothing joins their outputs -- each feeds a different identifier
+# namespace (corpus entry_id / prompt file path / experiment id), and unifying would rewrite
+# existing entry_ids, prompt paths and `backfill-` exp_ids, breaking dedupe against historical
+# rows for no gain. The real hazard is that a shared NAME invites a future join, so each is named
+# for its namespace instead. If you need a target key that crosses modules, add one deliberately;
+# do not reach for whichever of these is nearest.
+# The hygiene item said THREE; it is five. The other two are `claims._slug` (claim file path,
+# and the only one deliberately called cross-module -- range_lane_rollout uses it to build a
+# claim path, which is correct BECAUSE it is module-qualified) and `partitioned_review._slug`
+# (partition_id, 48-char capped). Both are also namespace-local; neither was renamed because
+# their names are already reached through their module.
+def _corpus_entry_slug(value: str) -> str:
     s = (value or "").strip().lower().replace("/", "__")
     s = re.sub(r"[^a-z0-9_.#-]+", "_", s)
     return s.strip("_") or "target"
@@ -221,7 +236,7 @@ def build_entry(
     entry = {
         "kind": "redirect_proposal",
         "schema_version": SCHEMA_VERSION,
-        "entry_id": f"redirect-shadow:{_slug(target)}:{ts_ns}",
+        "entry_id": f"redirect-shadow:{_corpus_entry_slug(target)}:{ts_ns}",
         "ts": int(time.time()),
         "source": source,
         "shadow": True,

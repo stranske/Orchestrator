@@ -348,6 +348,35 @@ def live_fetch_prs(repo: str) -> list:
 
 
 # ---------------------------------------------------------------------------
+# SCOPE, carried in the artifact rather than in prose. `items` is what THIS TOOL's dispatch lane
+# discovered -- never the fleet's workload. Fleet work originates in the Workflows approved-issue queue
+# and is driven by the opener lane + Actions keepalive, none of which read this file. So an empty or
+# 1-item list does NOT mean "the fleet has no work": that inference was made on 2026-04-29 (recorded
+# in the workspace CLAUDE.md) and again on 2026-08-22, when a 1-item list was reported as fleet
+# starvation while the real pipeline closed 8 issues overnight. A docstring does not travel with JSON.
+SCOPE_NOTE = ("orchestrator-local dispatch lane only; NOT fleet workload. See "
+              "Workflows/docs/ops/REPO_REVIEW_PROCESS.md for where fleet work comes from.")
+
+
+def build_payload(items: list, live_blockers, expired, raised) -> dict:
+    """The backlog.json artifact. Split out of main() so the scope label is TESTABLE.
+
+    It was first "tested" by grepping this file for the label -- an assertion whose own literal
+    satisfied the grep, so it passed against the label's removal. Build the real payload instead.
+    """
+    return {
+        "generated_at": int(time.time()),
+        "items": items,
+        "scope": SCOPE_NOTE,
+        # Reported every run so an empty backlog is never mistaken for "no work exists": these are
+        # the counts that explain WHY it is empty (the 2026-08-10 stall took an hour to diagnose
+        # precisely because this was invisible).
+        "scoped_blockers_live": len(live_blockers),
+        "scoped_blockers_expired": len(expired),
+        "owner_questions_raised": len(raised),
+    }
+
+
 def _selftest() -> None:
     repos = ["o/A", "o/B"]
     issues = {
@@ -389,6 +418,12 @@ def _selftest() -> None:
         "o/B": [],
     }
     items = build_backlog(repos, lambda r: issues.get(r, []), lambda r: prs.get(r, []))
+    # THE ARTIFACT MUST CARRY ITS OWN SCOPE, asserted against the REAL payload. The first version of
+    # this grepped the source for the label -- and the assertion's own string literal satisfied the
+    # grep, so it passed against the label's removal. Assert behaviour, never a mechanism vs itself.
+    _pay = build_payload(items, set(), [], [])
+    assert "NOT fleet workload" in _pay["scope"], _pay.get("scope")
+    assert "REPO_REVIEW_PROCESS" in _pay["scope"], _pay.get("scope")
     by_t = {i["target"]: i for i in items}
 
     assert by_t["o/A#1"] == {"target": "o/A#1", "task_type": "implement", "lane": "opener",
@@ -496,16 +531,7 @@ def main(argv: list[str]) -> int:
     # A lapsed human-awaited block silently starts letting work through. Raise it to the owner on
     # the live path only (dry-run stays read-only), deduped per target by the owner-question store.
     raised = raise_expired_blocker_questions() if "--live" in argv else []
-    payload = {
-        "generated_at": int(time.time()),
-        "items": items,
-        # Reported every run so an empty backlog is never mistaken for "no work exists": these are
-        # the counts that explain WHY it is empty (the 2026-08-10 stall took an hour to diagnose
-        # precisely because this was invisible).
-        "scoped_blockers_live": len(live_blockers),
-        "scoped_blockers_expired": len(expired),
-        "owner_questions_raised": len(raised),
-    }
+    payload = build_payload(items, live_blockers, expired, raised)
     if "--live" in argv:
         HANDOFF.mkdir(parents=True, exist_ok=True)
         BACKLOG_JSON.write_text(json.dumps(payload, indent=2) + "\n")
