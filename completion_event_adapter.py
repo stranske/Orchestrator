@@ -203,7 +203,19 @@ class OutOfScopeError(EnvelopeError):
 SUBJECTLESS_PRODUCERS = {
     "keepalive": "delivery mechanism: drives an existing PR forward; no spec, no arm set",
     "langsmith": "evaluator/observability trace; non-worker traces must not carry provenance (CLAUDE.md §2)",
-    "roles": "advisory role proposal; deterministic rails keep apply authority, no delivering arm",
+    "roles": (
+        # MEASURED 2026-08-22, correcting this entry's own earlier claim of "no delivering arm":
+        # the `redirect` role ran on 8 target/role cells across 2-3 agents each, and acceptance is
+        # tracked on influence_edges (14 accepted / 211 counterfactual) with durability already
+        # propagating. So a role round CAN carry a real arm set. It stays declared subjectless
+        # because the 1,397 events on record present no design set at all and would become
+        # rejections rather than episodes -- not because the producer is incapable. A role run that
+        # registers a round and presents a self-consistent subject identity now graduates on its
+        # own evidence; see the graduation branch below.
+        "advisory role proposal; the 1,397 events on record present no design set. NOT incapable: "
+        "the redirect role does fan out across agents, and such a round graduates via a "
+        "self-consistent subject identity without editing this declaration"
+    ),
     "feedback.record_role_run": "role execution under deterministic rails; no arm/profile design set",
     "runtime_ac_gate": "acceptance-gate verdict; a gate result is not an experimental arm",
     "ledger_reconcile": "bookkeeping reconciliation; no work and no design set",
@@ -633,7 +645,28 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         # The declaration above says this producer has no subject. If it suddenly carries a
         # research context the contract changed, and admitting it silently would let an
         # undeclared identity path grow. Say so instead.
-        reasons.append("subjectless_producer_carries_experiment")
+        #
+        # BUT THE DECLARATION MUST NOT LATCH. As first written this reason fired on ANY
+        # experiment_id, so a declared-subjectless producer that started doing real research was
+        # rejected as malformed until a human edited a Python dict -- and the rejection was the
+        # only evidence that would have prompted the edit. That is a gate whose drain is blocked by
+        # the thing it measures. It matters concretely: `roles` is declared subjectless on the
+        # grounds that it has "no delivering arm", and that is empirically false for the `redirect`
+        # role -- 8 target/role cells ran it across 2-3 agents each, with acceptance tracked on
+        # `influence_edges` (14 accepted / 211 counterfactual) and durability already propagating.
+        #
+        # The drain that works while the gate is shut: a SELF-CONSISTENT subject identity. An event
+        # whose supplied subject_id equals the id derived from its own declared contract went
+        # through the registered-round path; it is a declared identity, not an undeclared one. A
+        # forged or borrowed experiment_id cannot satisfy this, because the derivation is over the
+        # event's own target/spec/arms and the miner already rejects a mismatch.
+        graduated = bool(
+            supplied_subject_id
+            and expected_ids is not None
+            and supplied_subject_id == expected_ids["subject_id"]
+        )
+        if not graduated:
+            reasons.append("subjectless_producer_carries_experiment")
     if reasons:
         codes = {reason.split(":", 1)[0] for reason in reasons}
         # Out of scope when NOTHING is wrong except the absence of a research design set, and the

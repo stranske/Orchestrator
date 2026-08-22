@@ -647,6 +647,42 @@ def test_domain_research_mines_without_a_base_sha_but_a_repo_subject_still_canno
     ]
 
 
+def test_a_subjectless_producer_can_graduate_without_a_code_edit():
+    """The declaration must not latch: it once rejected the very evidence that would revise it.
+
+    `subjectless_producer_carries_experiment` originally fired on ANY experiment_id, so a producer
+    declared subjectless could never demonstrate otherwise -- a human had to edit a Python dict,
+    and the only signal prompting that edit was the rejection itself. `roles` is the live case: it
+    is declared to have "no delivering arm", which is empirically false for the `redirect` role
+    (8 target/role cells across 2-3 agents each, 14 accepted / 211 counterfactual role edges).
+
+    The drain that works while the gate is shut is a SELF-CONSISTENT identity, and both halves are
+    pinned here: a coherent one graduates, a forged one does not.
+    """
+    producer = sorted(SUBJECTLESS_PRODUCERS)[0]
+
+    # GRADUATES: identity derives from the event's own contract, so it went through the registered
+    # path. The producer declaration does not veto real evidence.
+    good = [row for index in (31, 32, 33) for row in completion_episode(index)]
+    for row in good:
+        row["event"]["producer"] = producer
+        row["identity"]["experiment_id"] = "round:some-audit:2026-08-22"
+    status = PatternMiner().mine(good, now=200).status
+    reasons = status["rejected_event_reasons"] or {}
+    assert "subjectless_producer_carries_experiment" not in reasons, reasons
+    assert status["mining_health"]["state"] == "mining", status["mining_health"]
+
+    # DOES NOT GRADUATE: an experiment_id with a subject_id that does not derive from the event's
+    # own contract is a borrowed or forged identity, and is still called out by name.
+    forged = completion_episode(34)
+    for row in forged:
+        row["event"]["producer"] = producer
+        row["identity"]["experiment_id"] = "round:borrowed:2026-08-22"
+        row["identity"]["subject_id"] = "subject:0000000000000000000000ff"
+    forged_reasons = PatternMiner().mine(forged, now=200).status["rejected_event_reasons"] or {}
+    assert "subjectless_producer_carries_experiment" in forged_reasons, forged_reasons
+
+
 def test_every_declared_subjectless_producer_has_a_stated_reason():
     """A declaration without a reason is an assertion nobody can audit later."""
     for producer, reason in SUBJECTLESS_PRODUCERS.items():
