@@ -2,8 +2,11 @@
 """Offline unit tests for ux_review pure helpers (no network, no live agents)."""
 from __future__ import annotations
 
+import json
+import sqlite3
 import unittest
 
+import research_subjects
 import ux_review as ur
 
 
@@ -161,6 +164,59 @@ class TestAggregatePanel(unittest.TestCase):
         self.assertEqual(agg["dimension_medians"]["usability"], 7.0)
         self.assertTrue(agg["consensus_flags"]["usability"])
         self.assertIn("missing tooltip", agg["evidence_gaps"])
+
+
+
+class TestPanelSubjectRegistration(unittest.TestCase):
+    """The panel's evidence is only minable if the panel registers a research subject."""
+
+    def _conn(self):
+        conn = sqlite3.connect(":memory:")
+        research_subjects.ensure_schema(conn)
+        return conn
+
+    def test_panel_registers_one_subject_with_the_real_rubric_spec(self):
+        conn = self._conn()
+        evaluators = ["claude", "codex", "cursor", "vibe"]
+        identity = ur.register_panel_subject(SAMPLE_BUNDLE, evaluators, conn=conn)
+        self.assertIsNotNone(identity, "panel must register a subject")
+        # The subject row exists and is linked to the panel's experiment id -- the join key
+        # the completion-event exporter resolves identity through.
+        row = conn.execute(
+            "SELECT s.canonical_target, s.task_type, s.spec_hash, s.arms_json "
+            "FROM research_subject_experiments x "
+            "JOIN research_subjects s ON s.subject_id = x.subject_id WHERE x.exp_id=?",
+            (SAMPLE_BUNDLE["review_id"],),
+        ).fetchone()
+        self.assertIsNotNone(row, "exp_id must join to a research_subjects row")
+        self.assertEqual(row[0], SAMPLE_BUNDLE["app"].lower())
+        self.assertEqual(row[1], "ux_review")
+        # The spec hash is the hash of the REAL rubric prompt, not an invented value.
+        expected = research_subjects.subject_identity(
+            SAMPLE_BUNDLE["app"], "ux_review",
+            ur.build_rubric_prompt(SAMPLE_BUNDLE), None, evaluators,
+        )
+        self.assertEqual(row[2], expected["spec_hash"])
+        self.assertEqual(identity["subject_id"], expected["subject_id"])
+        # Every arm is retained: collapsing the panel to one arm would forge independence.
+        self.assertEqual(sorted(json.loads(row[3])), sorted(evaluators))
+
+    def test_distinct_rubrics_are_distinct_subjects(self):
+        """Two panels on the same app with different rubrics are NOT one subject."""
+        conn = self._conn()
+        evaluators = ["claude", "codex"]
+        a = ur.register_panel_subject(SAMPLE_BUNDLE, evaluators, spec="rubric A", conn=conn)
+        other = dict(SAMPLE_BUNDLE, review_id=SAMPLE_BUNDLE["review_id"] + "b")
+        b = ur.register_panel_subject(other, evaluators, spec="rubric B", conn=conn)
+        self.assertNotEqual(a["subject_id"], b["subject_id"])
+        n = conn.execute("SELECT COUNT(*) FROM research_subjects").fetchone()[0]
+        self.assertEqual(n, 2)
+
+    def test_registration_failure_is_reported_not_swallowed(self):
+        """A swallowed failure is indistinguishable from 'never meant to be mined'."""
+        broken = {"review_id": "x:uxreview:1"}  # no "app" -> KeyError inside
+        self.assertIsNone(ur.register_panel_subject(broken, ["claude"], spec="s"))
+
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from pathlib import Path
 import adapters
 import dispatcher
 import feedback
+import research_subjects
 from exp_abcd import (
     AGENT_MODE,
     EVALUATOR_TOPUP_ORDER,
@@ -409,6 +410,48 @@ def aggregate_panel(
     }
 
 
+def register_panel_subject(
+    bundle: dict,
+    evaluators: list[str],
+    *,
+    spec: str | None = None,
+    conn=None,
+) -> dict | None:
+    """Register ONE research subject for a UX-review panel, and return its identity.
+
+    This is the join key the completion-event exporter needs: it resolves identity through
+    ``research_subject_experiments -> research_subjects`` keyed on ``experiment_id``. Without a
+    subject row every run the panel records is identity-less, so the panel's evidence stays
+    invisible to pattern mining no matter how many arms it scores.
+
+    Nothing here is invented. The spec is the panel's real rubric prompt -- byte-identical for
+    every arm, which is what makes one spec hash per panel correct -- and the arm set is the real
+    evaluator list. Returns None when registration fails, having said so on stderr.
+    """
+    spec = build_rubric_prompt(bundle) if spec is None else spec
+    review_id = bundle["review_id"]
+    try:
+        identity = research_subjects.subject_identity(
+            bundle["app"], "ux_review", spec, bundle.get("base_sha"), evaluators
+        )
+        research_subjects.record_subject(
+            identity,
+            lifecycle="active",
+            exp_id=review_id,
+            reason="uxreview_panel",
+            conn=conn,
+        )
+        return identity
+    except Exception as exc:  # must not kill a panel that costs real agent time
+        # Never silent: a swallowed failure here is indistinguishable from a panel that was
+        # never meant to be mined, which is exactly how this evidence went missing before.
+        print(
+            f"warn: ux_review subject registration failed for {review_id}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def review(
     bundle: dict,
     evaluators: list[str] | None = None,
@@ -422,10 +465,16 @@ def review(
     rdir = REVIEW_DIR / review_id.replace(":", "_")
     rdir.mkdir(parents=True, exist_ok=True)
 
+    # The rubric prompt is the panel's SPEC and is identical for every arm, so it is built
+    # once here rather than per evaluator, and reused as the subject's spec below.
+    rubric_prompt = build_rubric_prompt(bundle)
+
+    register_panel_subject(bundle, evaluators, spec=rubric_prompt)
+
     procs: dict[str, tuple[subprocess.Popen, object, Path]] = {}
     for ev in evaluators:
         pf = rdir / f"rubric-prompt-{ev}.txt"
-        pf.write_text(build_rubric_prompt(bundle))
+        pf.write_text(rubric_prompt)
         out_path = rdir / f"rubric-out-{ev}.txt"
         out = out_path.open("w")
         mode = AGENT_MODE.get(ev, "full")
