@@ -613,3 +613,38 @@ def test_completion_records_cli_identity_and_never_invents_one(tmp_path, monkeyp
         # REVERTED by monkeypatch teardown; the codex row above still carries real provenance.
     finally:
         feedback.DB_PATH = old_db
+
+
+def test_reconcile_finds_the_profile_when_the_ledger_never_carried_one(tmp_path, monkeypatch):
+    """The ledger `start` row has no `selected_profile_id` field, so the resolution branch was dead.
+
+    Symptom in production: 250 marker backfills, 0 resolved, 0 unresolved, every run. `profile_ids`
+    was built solely from ledger rows that never contained the key, so the branch that resolves a
+    worker attempt could not execute at all — a gate whose drain could never run.
+    """
+    import ledger_reconcile
+
+    old_db = feedback.DB_PATH
+    feedback.DB_PATH = tmp_path / "feedback.db"
+    try:
+        feedback.record_run("r-attempt", "offload:/tmp/ws", "offload", "codex")
+        feedback.record_execution_attempt(
+            "r-attempt", attempt_id="attempt:profile:r-attempt", operation_role="worker",
+            profile_id="codex-5.6-terra-high", requested_provider="openai",
+            requested_model="gpt-5.6-terra", status="started",
+            source="orchestrator-profile-decision", started_ts=int(time.time()),
+        )
+        # The attempt knows its own profile even though no ledger row ever said so.
+        assert ledger_reconcile._profile_id_from_attempt("r-attempt") == "codex-5.6-terra-high"
+        # A run with no worker attempt yields None rather than a guess.
+        assert ledger_reconcile._profile_id_from_attempt("r-missing") is None
+
+        # Once resolved, it is NOT offered again — otherwise reconcile would keep reopening
+        # attempts that already carry provenance.
+        feedback.complete_profile_attempt(
+            "r-attempt", selected_profile_id="codex-5.6-terra-high",
+            resolved_provider="openai", resolved_model="gpt-5.6-terra",
+        )
+        assert ledger_reconcile._profile_id_from_attempt("r-attempt") is None
+    finally:
+        feedback.DB_PATH = old_db

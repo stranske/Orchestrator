@@ -241,6 +241,88 @@ def _done_marker(log_file: Path | None, run_id: str) -> dict[str, Any] | None:
     return obj if isinstance(obj, dict) and obj.get("run_id") == run_id else None
 
 
+def resolve_unresolved_worker_attempts(*, apply: bool = False, limit: int = 5000) -> dict:
+    """Resolve worker attempts that were completed `unresolved` before a reader existed.
+
+    The normal completion path only visits a run ONCE: `reconcile`'s marker branch fires for runs
+    with no `complete` event, and after it runs the attempt is `unresolved` forever. So every
+    attempt recorded before `adapters.cli_reported_model` existed is stranded with
+    `resolved_model_not_reported_by_completion` even though its CLI log is still on disk and still
+    says exactly what served it.
+
+    Reads the same single source as the live path and applies the same refusals — a seat whose CLI
+    keeps no per-session log stays unresolved with its reason NAMED, and nothing is ever inferred
+    from the requested model. Dry-run by default; reports the per-agent breakdown either way, so
+    "resolved 37" always arrives next to "16 cannot report and here is why".
+    """
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT ea.run_id, ea.profile_id, r.agent, r.target, r.ts "
+            "FROM execution_attempts ea JOIN runs r ON r.run_id=ea.run_id "
+            "WHERE ea.operation_role='worker' AND ea.resolved_model IS NULL "
+            "AND ea.profile_id IS NOT NULL ORDER BY r.ts DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    resolved: dict[str, int] = {}
+    blocked: dict[str, int] = {}
+    failed: dict[str, str] = {}
+    for run_id, profile_id, agent, target, ts in rows:
+        agent = str(agent or "").lower()
+        workspace = (
+            str(target)[len("offload:"):] if str(target or "").startswith("offload:/") else None
+        )
+        probe = adapters.cli_reported_model(agent, workspace, started_ts=int(ts or 0))
+        if not probe.get("model"):
+            key = f"{agent}:{str(probe.get('reason') or 'unknown').split(':')[0]}"
+            blocked[key] = blocked.get(key, 0) + 1
+            continue
+        if not apply:
+            resolved[agent] = resolved.get(agent, 0) + 1
+            continue
+        try:
+            feedback.complete_profile_attempt(
+                run_id,
+                selected_profile_id=str(profile_id),
+                resolved_provider=_provider_for_profile(str(profile_id)),
+                resolved_model=probe["model"],
+            )
+        except Exception as exc:  # noqa: BLE001 - counted, never fatal to the sweep
+            failed[run_id] = f"{type(exc).__name__}: {exc}"
+            continue
+        resolved[agent] = resolved.get(agent, 0) + 1
+    return {
+        "applied": apply,
+        "candidates": len(rows),
+        "resolved_by_agent": resolved,
+        # The drainable count's twin: a seat that structurally cannot report is not a backlog.
+        "blocked_by_reason": blocked,
+        "failed": failed,
+    }
+
+
+def _profile_id_from_attempt(run_id: str) -> str | None:
+    """The profile this run's own worker attempt recorded, when the LEDGER did not carry it.
+
+    The capacity ledger's `start` row has no `selected_profile_id` field at all — its keys are
+    (agent, cost_usd, count, event, log_file, mode, model, run_id, started_ts, target, task_type,
+    ts). So `profile_ids` below was ALWAYS empty and the resolution branch was structurally dead:
+    250 marker backfills, 0 resolved, 0 unresolved, every time. Another gate whose drain could
+    never run.
+
+    `execution_attempts` already knows, because `offload` wrote the profile onto the attempt row it
+    created. Reading it there needs no dispatcher change AND works retroactively on attempts already
+    on record, which a new ledger field could never do.
+    """
+    with feedback._conn() as c:
+        row = c.execute(
+            "SELECT profile_id FROM execution_attempts WHERE run_id=? AND operation_role='worker' "
+            "AND profile_id IS NOT NULL AND resolved_model IS NULL "
+            "ORDER BY attempt_ordinal DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
 def _provider_for_profile(profile_id: str) -> str:
     """The profile's own provider. Read from the immutable registry, never guessed from the model
     string -- `complete_profile_attempt` refuses a resolved model with no provider, and inventing
@@ -500,6 +582,11 @@ def reconcile(
                 raise ValueError(
                     f"run {run_id} changed selected profile in capacity ledger"
                 )
+            if not profile_ids:
+                # Fall back to what the attempt itself recorded; see _profile_id_from_attempt.
+                from_attempt = _profile_id_from_attempt(run_id)
+                if from_attempt:
+                    profile_ids = {from_attempt}
             if profile_ids and not dry_run:
                 # RESOLVE IF THE CLI SAID SO, otherwise stay unresolved with the seat NAMED.
                 # This branch used to complete every seat unresolved unconditionally, so
@@ -767,8 +854,20 @@ def main(argv: list[str]) -> int:
     rec.add_argument("--dry-run", action="store_true")
     rec.add_argument("--strict", action="store_true")
     rec.add_argument("--json", action="store_true")
+    res = sub.add_parser(
+        "resolve-unresolved",
+        help="resolve worker attempts stranded unresolved before a CLI reader existed",
+    )
+    res.add_argument("--apply", action="store_true", help="write (default: dry run)")
+    res.add_argument("--limit", type=int, default=5000)
 
     args = parser.parse_args(argv)
+    if args.cmd == "resolve-unresolved":
+        print(json.dumps(
+            resolve_unresolved_worker_attempts(apply=args.apply, limit=args.limit),
+            indent=2, sort_keys=True,
+        ))
+        return 0
     if args.cmd == "complete":
         record_completion(
             args.run_id,

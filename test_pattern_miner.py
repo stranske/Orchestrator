@@ -683,6 +683,47 @@ def test_a_subjectless_producer_can_graduate_without_a_code_edit():
     assert "subjectless_producer_carries_experiment" in forged_reasons, forged_reasons
 
 
+def test_a_resolved_model_alone_does_not_make_a_production_event_a_defect():
+    """Regression: worker provenance landing on production runs must not create 111 fake defects.
+
+    `presents_identity` once counted `subject_profiles`, which was safe only while profiles
+    appeared exclusively on research runs. The moment `resolved_model` started resolving on
+    ordinary offloads, 111 production events with no subject, no arms and no experiment flipped
+    from correctly EXCLUDED to reported as malformed — purely for naming the model that served
+    them. One root cause wearing 111 hats, hiding the real rejections behind it.
+
+    A profile is an execution detail. The design set is the arm set.
+    """
+    rows = [_strip_identity(row) for row in completion_episode(41)]
+    for row in rows:
+        row["event"]["producer"] = "orchestrator_local"
+        row["identity"]["subject_profiles"] = ["codex-5.6-terra-high"]
+        row["identity"]["resolved_provider"] = "openai"
+        row["identity"]["resolved_model"] = "gpt-5.6-terra"
+    status = PatternMiner().mine(rows, now=200).status
+    assert status["rejected_event_count"] == 0, status["rejected_event_reasons"]
+    assert status["excluded_event_count"] == len(rows), status["mining_health"]
+    assert status["mining_health"]["state"] == "all_out_of_scope", status["mining_health"]
+
+    # A REAL research claim still gets judged as one: an arm set is the design set, so an
+    # incomplete claim beside it is a defect and not a scope question.
+    claiming = [_strip_identity(row) for row in completion_episode(42)]
+    for row in claiming:
+        row["event"]["producer"] = "orchestrator_local"
+        row["identity"]["subject_arms"] = ["codex", "cursor"]
+    claim_status = PatternMiner().mine(claiming, now=200).status
+    assert claim_status["rejected_event_count"] == len(claiming), claim_status["mining_health"]
+
+    # AND the profile-set check stays a real check where a subject DOES exist: a registration gap
+    # between the subject's declared profiles and the one that actually ran is still named.
+    mismatched = completion_episode(43)
+    for row in mismatched:
+        row["identity"]["subject_profiles"] = ["codex:some-other-profile"]
+        row["identity"]["profile_id"] = "codex-5.6-terra-high"
+    reasons = PatternMiner().mine(mismatched, now=200).status["rejected_event_reasons"] or {}
+    assert "selected_profile_not_in_subject_set" in reasons, reasons
+
+
 def test_every_declared_subjectless_producer_has_a_stated_reason():
     """A declaration without a reason is an assertion nobody can audit later."""
     for producer, reason in SUBJECTLESS_PRODUCERS.items():

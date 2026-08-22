@@ -588,7 +588,16 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         reasons.append("missing_subject_design_set")
     if arm_id and subject_arms and arm_id not in subject_arms:
         reasons.append("selected_arm_not_in_subject_set")
-    if isinstance(subject_profiles, list) and profile_id:
+    # ONLY JUDGEABLE WHEN A SUBJECT EXISTS, same rule as repository_target_mismatch above. A
+    # production event has no subject at all, so its profile cannot be "in the subject's set" and
+    # saying so is a cascade of one root cause, not a second defect: 111 events reported this on
+    # top of missing_subject_id, and because this code is not one of NO_SUBJECT_REASONS it dragged
+    # all 111 out of correctly-excluded and into the rejection count.
+    if (
+        isinstance(subject_profiles, list)
+        and profile_id
+        and (supplied_subject_id or subject_arms)
+    ):
         profile_set = {_string(value).lower() for value in subject_profiles}
         if profile_id not in profile_set:
             reasons.append("selected_profile_not_in_subject_set")
@@ -679,9 +688,17 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         # it is a defect, not a scope question -- otherwise the accepted count could be moved by
         # corrupting one identity field instead of supplying it. Out of scope means the event
         # offers no design set at all, which is the honest shape of production delivery.
+        # A PROFILE IS NOT A RESEARCH CLAIM. `subject_profiles` used to belong in this test because
+        # only research runs carried a profile at all. That stopped being true the moment worker
+        # provenance started resolving on ordinary production offloads: 111 production events with
+        # no subject, no arms and no experiment flipped from correctly EXCLUDED to reported as
+        # malformed, purely because they now name the model that served them. A profile is an
+        # execution detail; the design set is `subject_arms`. Counting it here inflated the defect
+        # count with non-defects, which is the same cascade the repository_target_mismatch comment
+        # above describes -- one root cause wearing 111 hats and hiding the real rejections.
         presents_identity = bool(
             experiment_id or supplied_subject_id or supplied_family_id
-            or subject_arms or subject_profiles or base_sha
+            or subject_arms or base_sha
         )
         no_research_context = (
             producer in SUBJECTLESS_PRODUCERS or not presents_identity
