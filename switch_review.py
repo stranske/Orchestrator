@@ -46,7 +46,14 @@ APPLY_ENABLED = os.environ.get("ORCH_SWITCH_REVIEW", "").strip() == "1"
 # flag -> the capability whose invocations prove the switch is doing anything.
 SWITCH_CAPABILITY = {
     "ORCH_RANGE_LANE_ROLLOUT": "range-lane-rollout",
-    "ORCH_RUNTIME_AC_ALLOW_COMMANDS": "deliberate-break-verifier",
+    # REMAPPED 2026-08-22. This pointed at `deliberate-break-verifier` on the belief that the flag
+    # gated the deliberate-break command. It does not (ORCH-ANCHOR:
+    # runtime-ac-command-exec-gate — COMMAND_EXEC_GATED_TYPES excludes deliberate_break, verified by
+    # executing a real spec both ways). Pointing the "ON but silent" arm at a capability the switch
+    # cannot influence made this review unable to say anything true about either one. The capability
+    # whose invocations DO prove this switch is doing something is the runtime-AC gate that runs the
+    # command checks it authorises.
+    "ORCH_RUNTIME_AC_ALLOW_COMMANDS": "runtime-ac-checks",
     "ORCH_FRONTEND_VERIFY_START_BROWSER": "frontend-verifier",
     "ORCH_STRATEGY_EXPERIMENT": "strategy-experiments",
     "ORCH_EXPLORATION_MODE": "thompson-hybrid-routing",

@@ -67,7 +67,10 @@ ONDEMAND_RE = re.compile(r"supervised|on demand|ad hoc|manual|dispatch|when |foc
 
 
 # `capabilities.production_heartbeat` is a NO-OP unless ORCH_CAPABILITY_HEARTBEATS=1, which only
-# orchestrate.sh sets (line ~152) inside an active tick. So the firing record measures TICK activity
+# orchestrate.sh sets, at `ORCH-ANCHOR: heartbeat-export`, inside an active tick. (That said "line
+# ~152" until 2026-08-22, by which point the export was at 190 — hence the anchor. Everything
+# invoked ABOVE that anchor records nothing at all; `capability_activation_audit.heartbeat_env_gate`
+# is what watches for that, and it caught two live cases.) So the firing record measures TICK activity
 # and nothing else. A capability whose caller is the test suite or a hand-run CLI will therefore read
 # "never fired" forever while working perfectly — an artifact of where heartbeats are enabled, not a
 # fact about the capability. Reporting those in the same column as a genuinely dormant lane would be

@@ -69,8 +69,12 @@ safety switch, not dead code.
 2. **backlog.py** — discovers actionable issues/PRs across the fleet from GitHub labels.
 3. **router.py** — ranks agents per task: capacity tier → learned route weights → **continuous
    drain urgency** (unused expiring quota reads cheaper). ε-greedy exploration is default; a
-   Thompson-sampling path exists, gated behind `ORCH_EXPLORATION_MODE` pending the weekly
-   evidence gate's recommendation.
+   Thompson-sampling path exists, gated behind `ORCH_EXPLORATION_MODE`. That gate is no longer
+   "pending a review": `exploration_review` was run on 2026-08-22 and returned
+   `keep_epsilon_greedy` / `epsilon_still_preferred` — its evidence gates ARE met, and Thompson-hybrid
+   improves simulated challenger quality and direct exploration outcomes not *both*. So ε-greedy is
+   kept on merit, and `capability_recurrence_check._check_thompson` now runs the review and reports
+   its recommendation, so the switch re-raises itself if that verdict ever flips.
 4. **tick.py → dispatcher.py** — claims a target (claims.py: atomic, live-pid-guarded, reap-grace +
    reap-mutex), spawns the agent in an isolated worktree with a kill-proof done-marker, releases on
    exit. High-stakes closer items pass through the **adversarial.py** refute-mode veto panel.

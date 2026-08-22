@@ -39,6 +39,32 @@ MUTATING_GIT_SUBCOMMANDS = {"reset", "checkout", "restore", "clean", "commit", "
 MUTATING_GH_PR_SUBCOMMANDS = {"create", "merge", "close", "edit", "ready"}
 SHELL_REVIEW_MARKERS = ("|", "&&", "||", ";", ">", "<", "`", "$(")
 SHELL_EXPANSION_MARKERS = ("*", "$", "~")
+
+# ORCH-ANCHOR: runtime-ac-command-exec-gate
+# WHICH check types ORCH_RUNTIME_AC_ALLOW_COMMANDS decides. Named ONCE so the runtime gate and the
+# recurrence fixture that reports on that switch consume the same name — a shared name cannot drift,
+# a matching pair of literals will.
+#
+# `command` and `non_regression` carry a `command` string authored ENTIRELY by the agent and handed
+# to `shlex.split`, so they are opt-in. `deliberate_break` is deliberately NOT here and never was:
+# its executed command is built from a template by `_local_verify_command`, and its agent-authored
+# payload is `test_cmd`, which local_verify runs with `shlex.split` + `shell=False` only after
+# `_has_shell_marker` has rejected every shell control character.
+#
+# THIS MATTERS BECAUSE A STORED VERDICT SAID OTHERWISE. The recorded criterion for
+# ORCH_RUNTIME_AC_ALLOW_COMMANDS said it gated BOTH kinds and that the flag had to be SPLIT before
+# it could be turned on, which is why `deliberate-break-verifier` sat in the "held switches" bucket.
+# The split already existed — right here. Measured 2026-08-22 by running a real deliberate_break
+# spec: identical results with allow_command_checks False and True. That was a frozen diagnosis, not
+# a blocker, and the honest fix is to name the split rather than to add a second gate (a new
+# default-OFF gate over a path that currently works would create the latch, not remove one).
+COMMAND_EXEC_GATED_TYPES = frozenset({"command", "non_regression"})
+
+
+def command_execution_gated(check_type: str | None) -> bool:
+    """Does ORCH_RUNTIME_AC_ALLOW_COMMANDS decide whether this check type may execute?"""
+    return check_type in COMMAND_EXEC_GATED_TYPES
+
 BLOCKING_STATUSES = {"FAIL", "ERROR", "UNSAFE"}
 INCOMPLETE_STATUSES = {"MISSING", "NEEDS_REVIEW", "SKIP"}
 VERDICT_BY_GATE = {
@@ -1018,7 +1044,9 @@ def run_verification(
                 "reason": "manual evidence must be supplied externally",
             })
             continue
-        if check_type in {"command", "non_regression"} and not allow_command_checks:
+        # See ORCH-ANCHOR: runtime-ac-command-exec-gate for which types this holds, and why
+        # deliberate_break is not one of them.
+        if command_execution_gated(check_type) and not allow_command_checks:
             results.append({
                 "id": check["id"],
                 "type": check_type,
@@ -1159,6 +1187,39 @@ def _selftest() -> None:
     skipped = run_verification(command_spec, confirm_run=True, allow_command_checks=False)
     assert skipped["check_results"][0]["status"] == "SKIP", skipped
     assert skipped["gate"]["verdict"] == "FAIL", skipped["gate"]
+
+    # THE SPLIT (ORCH-ANCHOR: runtime-ac-command-exec-gate). ORCH_RUNTIME_AC_ALLOW_COMMANDS decides
+    # agent-authored command strings and NOTHING else. A stored switch criterion claimed it also
+    # held the template-built deliberate_break check and asked for the flag to be split before it
+    # could be flipped; the split was already here, and that stale verdict is what parked
+    # `deliberate-break-verifier` in the held-switch bucket.
+    assert command_execution_gated("command"), "agent-authored commands must stay opt-in"
+    assert command_execution_gated("non_regression"), "agent-authored commands must stay opt-in"
+    assert not command_execution_gated("deliberate_break"), (
+        "deliberate_break is template-built; gating it here is what made the switch look unflippable")
+    assert not command_execution_gated("frontend") and not command_execution_gated("manual")
+    assert not command_execution_gated(None)
+    # And prove it through the RUNTIME path, not just the predicate: with the flag OFF a
+    # deliberate_break check must reach the shell-marker screen (UNSAFE), never be SKIPped. A
+    # regression that adds deliberate_break to COMMAND_EXEC_GATED_TYPES turns this into SKIP.
+    marker_break = {
+        "verification": {"id": "break-not-gated", "title": "t", "goal": "g", "risk_level": "low"},
+        "runtime_context": {"worktree": str(ORCH_DIR)},
+        "acceptance_criteria": [{
+            "id": "AC1",
+            "statement": "s",
+            "evidence_required": ["test_output", "deliberate_break"],
+            "checks": [{"id": "AC1-BREAK", "type": "deliberate_break", "name": "n",
+                        "test_cmd": "pytest x && echo y", "test_paths": ["t.py"],
+                        "target_paths": ["m.py"]}],
+        }],
+        "verdict_policy": {"require_runtime_evidence": False,
+                           "require_deliberate_break_for_tests": True,
+                           "fail_on_missing_checks": True,
+                           "required_check_ids": ["AC1-BREAK"], "min_pass_ratio": 1.0},
+    }
+    not_gated = run_verification(marker_break, confirm_run=True, allow_command_checks=False)
+    assert not_gated["check_results"][0]["status"] == "UNSAFE", not_gated["check_results"]
     executed = run_verification(command_spec, confirm_run=True, allow_command_checks=True, timeout=30)
     assert executed["check_results"][0]["status"] == "PASS", executed
     assert executed["gate"]["verdict"] == "PASS", executed["gate"]
