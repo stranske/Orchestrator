@@ -47,6 +47,7 @@ admission gate does not bind on it.
 from __future__ import annotations
 
 import os
+import pathlib
 import shutil
 import unittest
 from pathlib import Path
@@ -245,6 +246,32 @@ def seat_has_no_free_signal() -> str | None:
 
 
 # --------------------------------------------------------------------------- harness glue
+
+def vibe_config_absent() -> str | None:
+    """Reason string when vibe's local config is not readable, so its active model cannot be read.
+
+    The model identity below is a FACT about this machine's configuration, not a vendor constant, so
+    the check that guards it must skip with the missing file named on a runner that has no vibe
+    install rather than fail for an environmental reason.
+    """
+    path = pathlib.Path(os.environ.get("VIBE_HOME", pathlib.Path.home() / ".vibe")) / "config.toml"
+    if path.is_file():
+        return None
+    return f"vibe config absent: {path} — active_model cannot be read to check for drift"
+
+
+def vibe_active_model() -> str | None:
+    """vibe's configured active model, read from its own config. None when unreadable."""
+    path = pathlib.Path(os.environ.get("VIBE_HOME", pathlib.Path.home() / ".vibe")) / "config.toml"
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("active_model"):
+                return stripped.split("=", 1)[1].strip().strip('"').strip("'") or None
+    except OSError:
+        return None
+    return None
+
 
 def require(*reasons: str | None) -> None:
     """Raise `MissingPrerequisite` for the first named absence, or return.

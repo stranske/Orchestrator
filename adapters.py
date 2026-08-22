@@ -53,6 +53,11 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 #            on this box. Left EMPTY deliberately: cursor draws a metered mid-tier pool (LOCAL_POLICY.md) and the historic
 #            burn came from an unpinned frontier default, so guessed ids are the one thing not to
 #            ship here. Populate from the live probe once `agent login` is restored.
+# vibe is a single-model lane, so it has no tier map -- but the model IS known. Kept as a named
+# constant so `test_vibe_model_matches_local_config` can check it against the CLI's own config and
+# fail if either drifts. Empty MODEL_TIERS below means "no tiers to pin", never "model unknown".
+VIBE_MODEL = "mistral-medium-3.5"
+
 MODEL_TIERS: dict[str, dict[str, str]] = {
     "codex":  {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5", "full": "claude-opus-5"},
@@ -505,14 +510,31 @@ def model_identity(agent: str, mode: str | None = None, profile=None) -> str | N
             return tiered
         return f"{agent}:{mode or 'full'}:default"
     if agent == "cursor":
+        # The `cursor:` prefix STAYS. Tried stripping it 2026-08-22 and reverted: it is not
+        # ignorance about the model -- `--model` is sent bare and `CURSOR_COMPOSER_MODEL` names it --
+        # it records WHICH SEAT served the work, and this seat is metered separately. `runs.model`
+        # is a drift tag, so the router belongs in it; this module's own selftest asserts the prefix
+        # and four other modules depend on it. The bare vendor id lives on the execution PROFILE's
+        # `requested_model`, which is what a provider-resolved model is compared against.
         if mode and mode.startswith("frontier") and ":" in mode:
             return f"cursor:{mode.split(':', 1)[1]}"
         return f"cursor:{CURSOR_COMPOSER_MODEL}"
     if agent == "vibe":
-        return "vibe:default"
+        # NAMED, not a lane tag. `vibe:default` said nothing, which made this seat look permanently
+        # unidentifiable when the model is simply single-lane. Read from the CLI's own config on
+        # 2026-08-22: `active_model = "mistral-medium-3.5"`, matching the 2026-08-08 tier research.
+        #
+        # This is the REQUESTED identity. Note the config maps that alias to provider id
+        # `mistral-vibe-cli-latest`, which FLOATS -- so an immutable resolved identity still has to
+        # come from the provider's own response, exactly as for aider's `codestral-latest`. Naming
+        # the request honestly is an improvement; it is not a resolution claim.
+        return VIBE_MODEL
     if agent == "aider":
         return "mistral/codestral-latest"
     if agent == "gemini":
+        # The `agy:` prefix STAYS, same reasoning as cursor. agy is a multi-provider ROUTER -- its
+        # advertised-models probe lists gemini, claude AND gpt-oss ids -- so recording the router
+        # beside the model is real provenance, not a placeholder for an unknown.
         return f"agy:{_tier_model('gemini', mode) or gemini_model() or 'default'}"
     return None
 

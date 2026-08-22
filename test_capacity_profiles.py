@@ -500,14 +500,28 @@ def test_capacity_pools_match_capacity_agents():
 
 
 def test_registry_models_match_adapters():
-    """A registry that disagrees with the adapter would request a model the seat never runs."""
+    """A registry that disagrees with the adapter would request a model the seat never runs.
+
+    The two representations differ ON PURPOSE and this reconciles them rather than flattening one:
+    `model_identity` is a DRIFT TAG that keeps the router (`agy:`, `cursor:`) because the seat that
+    served the work is metered separately, while a profile's `requested_model` is the bare vendor id
+    -- the thing a provider-resolved model is compared against. So the router prefix is stripped
+    before comparing, and only the model part must agree.
+    """
     import adapters
     import execution_profiles
-    by_agent = {}
+
+    def bare(model: str) -> str:
+        # Strip a leading `<seat>:` router prefix. Only these seats route through a wrapper; a
+        # vendor id containing a slash (`mistral/codestral-latest`) is untouched.
+        head, _, tail = str(model).partition(":")
+        return tail if tail and head in {"agy", "cursor", "claude", "codex", "vibe", "aider"} else str(model)
+
+    by_agent: dict[str, set[str]] = {}
     for profile in execution_profiles.PROFILE_REGISTRY.values():
-        by_agent.setdefault(profile["agent"], set()).add(profile["requested_model"])
+        by_agent.setdefault(profile["agent"], set()).add(bare(profile["requested_model"]))
     for agent, models in by_agent.items():
-        reported = {adapters.model_identity(agent, mode) for mode in ("mid", "full")}
+        reported = {bare(adapters.model_identity(agent, mode)) for mode in ("mid", "full")}
         assert models & reported, (
             f"{agent}: registry {sorted(models)} matches none of the adapter identities "
             f"{sorted(reported)}")
@@ -520,3 +534,64 @@ def test_every_agent_can_record_a_worker_attempt():
     for agent in capacity.AGENTS:
         assert execution_profiles.profiles_for_agent(agent, transport="offload"), (
             f"{agent} has no offload profile, so dispatcher.offload cannot record a worker attempt")
+
+
+def test_vibe_model_matches_local_config():
+    """vibe's named model must match the CLI's OWN config, or one of them has drifted.
+
+    `mistral-medium-3.5` is a fact about this machine's vibe install, not a vendor constant, so the
+    check reads the real config and SKIPS with the missing file named when vibe is not installed
+    (a CI runner). It never guesses.
+    """
+    import env_prereq
+    import adapters
+    env_prereq.require(env_prereq.vibe_config_absent())
+    configured = env_prereq.vibe_active_model()
+    assert configured, "vibe config present but active_model unreadable"
+    assert adapters.VIBE_MODEL == configured, (adapters.VIBE_MODEL, configured)
+    assert adapters.model_identity("vibe") == configured
+
+
+def test_named_models_are_not_adapter_tags():
+    """A seat whose model is NAMED must not be reported as a routing tag, and vice versa.
+
+    This is the line between "cannot be identified" and "identified but not yet confirmed". Getting
+    it wrong in either direction misreports coverage: a tag counted as a model claims provenance
+    that cannot exist, and a real model counted as a tag hides a seat that only needs tracing.
+    """
+    import feedback
+    import execution_profiles
+    tag_seats, named_seats = set(), set()
+    for profile in execution_profiles.PROFILE_REGISTRY.values():
+        target = tag_seats if feedback.SYNTHETIC_ADAPTER_MODEL_RE.match(
+            str(profile["requested_model"])) else named_seats
+        target.add(profile["agent"])
+    # NO seat may request a routing tag. Each model is named from that seat's own authority --
+    # codex/claude from tier research, gemini from agy's advertised-models probe, cursor from its
+    # known default, vibe from its CLI config, aider from its floating alias. A tag here would mean
+    # a seat had been quietly reclassified as unidentifiable when it is merely unconfirmed.
+    # No PROFILE may request a routing tag -- that is the field compared against a resolved model.
+    # `model_identity` legitimately still carries the router prefix; these are different fields.
+    assert tag_seats == set(), sorted(tag_seats)
+    assert {"codex", "claude", "aider", "vibe", "gemini", "cursor"} <= named_seats, sorted(named_seats)
+
+
+def test_gemini_model_is_one_the_seat_advertises():
+    """gemini's requested model must appear in agy's OWN advertised-models probe.
+
+    Skips with the missing file named when the probe cache is absent (a runner). The point is that
+    the id is not guessed: agy publishes what it serves, and drifting off that list would request a
+    model the seat cannot route.
+    """
+    import json
+    import adapters
+    import env_prereq
+    import execution_profiles
+    cache = adapters.GEMINI_MODEL_CACHE
+    env_prereq.require(None if cache.is_file() else f"agy advertised-models cache absent: {cache}")
+    advertised = set((json.loads(cache.read_text()) or {}).get("models") or [])
+    assert advertised, f"cache present but lists no models: {cache}"
+    for profile in execution_profiles.PROFILE_REGISTRY.values():
+        if profile["agent"] == "gemini":
+            assert profile["requested_model"] in advertised, (
+                profile["requested_model"], sorted(advertised))

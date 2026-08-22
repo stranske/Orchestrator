@@ -130,15 +130,17 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile("aider-codestral-high", "mistral/codestral-latest", "high",
                  agent="aider", provider="mistral", pool="aider-paygo",
                  adapter_version="aider-cli-profile-v1"),
-        # These three can only report a routing tag, so their attempts complete UNRESOLVED and their
-        # work stays unminable. Registered so the gap is attributable rather than silent.
-        _profile("gemini-3.1-pro-high", "agy:gemini-3.1-pro-high", "high",
+        # Every seat's model is NAMED, each from the seat's own authority: codex/claude from the
+        # tier research, vibe from its CLI config, aider from its floating alias, gemini from agy's
+        # advertised-models probe, cursor from its known default. None is a routing tag, so no seat
+        # is unidentifiable -- what they all still need is worker TRACING to confirm what served.
+        _profile("gemini-3.1-pro-high", "gemini-3.1-pro-high", "high",
                  agent="gemini", provider="google", pool="gemini-prepaid",
                  adapter_version="agy-cli-profile-v1"),
-        _profile("cursor-composer-2.5", "cursor:composer-2.5", "high",
+        _profile("cursor-composer-2.5", "composer-2.5", "high",
                  agent="cursor", provider="cursor", pool="cursor-subscription",
                  adapter_version="cursor-cli-profile-v1"),
-        _profile("vibe-default", "vibe:default", "high",
+        _profile("vibe-medium-3.5", "mistral-medium-3.5", "high",
                  agent="vibe", provider="mistral", pool="vibe-subscription",
                  adapter_version="vibe-cli-profile-v1"),
     )

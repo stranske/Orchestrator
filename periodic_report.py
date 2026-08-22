@@ -2641,15 +2641,14 @@ def _selftest() -> None:
         # Every registered agent appears, so a seat can never be silently uncovered.
         for agent in {p["agent"] for p in execution_profiles.PROFILE_REGISTRY.values()}:
             assert agent in cov["agents"], (agent, sorted(cov["agents"]))
-        # A routing tag can never resolve, so those seats must be named unminable rather than
-        # counted as healthy. This is the "small subset" case the coverage line exists to expose.
-        for tag_agent in ("gemini", "cursor", "vibe"):
-            row = cov["agents"][tag_agent]
-            assert row["model_reportable"] is False, (tag_agent, row)
-            assert row["verdict"] in {"model_not_reportable", "no_runs"}, (tag_agent, row)
-        # Seats whose adapter reports a real model must NOT be marked unreportable.
-        for real_agent in ("codex", "claude", "aider"):
-            assert cov["agents"][real_agent]["model_reportable"] is True, (real_agent, cov["agents"][real_agent])
+        # Every seat's model is now named from the seat's own authority, so NONE may be reported as
+        # an unidentifiable routing tag. If a seat regresses to a tag this fails, because that would
+        # silently reclassify "needs tracing" as "can never be identified" -- the exact conflation
+        # that made a one-seat miner look like a fleet-wide impossibility.
+        for agent in ("codex", "claude", "gemini", "cursor", "vibe", "aider"):
+            row = cov["agents"][agent]
+            assert row["model_reportable"] is True, (agent, row)
+            assert row["verdict"] != "model_not_reportable", (agent, row)
         # The headline must state a FRACTION. "it ran" is what hid a dead miner for 43 days.
         assert " of " in cov["coverage"] and "minable" in cov["coverage"], cov["coverage"]
         assert len(cov["minable_agents"]) <= len(cov["working_agents"]), cov
