@@ -22,25 +22,48 @@ def codex_profile_registry():
 
 
 def test_three_profiles_share_one_pool(codex_profile_registry):
-    pool_ids = {
+    """Codex's three model profiles debit ONE real subscription, not three balances.
+
+    Scoped to codex deliberately. The registry now holds a profile per agent, so a registry-wide
+    "exactly one pool" assertion would only re-assert that codex is the only seat -- never the
+    property. The property is that multiple profiles of the SAME agent share that agent's real
+    account, and it is now asserted for every agent.
+    """
+    codex_pools = {
         pool_id
         for profile in codex_profile_registry.values()
+        if profile["agent"] == "codex"
         for pool_id in profile["capacity_pool_ids"]
     }
-    assert len(pool_ids) == 1, "shared subscription counted as 3 pools"
+    assert len(codex_pools) == 1, "shared subscription counted as 3 pools"
+    by_agent: dict[str, set[str]] = {}
+    for profile in codex_profile_registry.values():
+        by_agent.setdefault(profile["agent"], set()).update(profile["capacity_pool_ids"])
+    for agent, pools in by_agent.items():
+        assert len(pools) == 1, f"{agent} profiles span {sorted(pools)}"
+    # The burn-once property is about ONE agent's profiles sharing ONE real balance, so the events
+    # and registry are scoped to codex. Feeding every seat's profile in would test arithmetic across
+    # unrelated accounts, not the shared-subscription invariant.
+    codex_only = {
+        pid: profile for pid, profile in codex_profile_registry.items()
+        if profile["agent"] == "codex"
+    }
+    assert len(codex_only) == 3, sorted(codex_only)
     events = [
         {"selected_profile_id": profile_id, "event": "start", "units": 1}
-        for profile_id in codex_profile_registry
+        for profile_id in codex_only
     ]
-    usage = capacity.debit_profile_pools(events, codex_profile_registry)
+    usage = capacity.debit_profile_pools(events, codex_only)
     assert usage == {"codex-subscription": 3.0}
     snapshot = capacity.profile_capacity_snapshot(
         {"agents": {"codex": {"state": "ok"}}},
         pool_usage=usage,
         pool_limits={"codex-subscription": 3},
-        registry=codex_profile_registry,
+        registry=codex_only,
     )
-    assert list(snapshot["pools"]) == ["codex-subscription"]
+    # `profile_capacity_snapshot` reports every real pool, so assert codex's is present and
+    # exhausted rather than that it is the only account in existence.
+    assert "codex-subscription" in snapshot["pools"], list(snapshot["pools"])
     assert {row["state"] for row in snapshot["profiles"].values()} == {"shed"}
 
 
@@ -58,9 +81,14 @@ def test_capacity_build_reads_shared_pool_burn_once(tmp_path, monkeypatch, codex
     monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "shed")
     built = capacity.build(ccusage_block=None)
     assert built["pools"]["codex-subscription"]["used"] == 3.0
-    assert {row["capacity_pool_ids"][0] for row in built["profiles"].values()} == {
-        "codex-subscription"
+    # Only codex burned this pool, and all three of its profiles map to it. Other agents now have
+    # their own pools, so filter rather than assert the registry is codex-only.
+    codex_rows = {
+        pid: row for pid, row in built["profiles"].items()
+        if codex_profile_registry.get(pid, {}).get("agent") == "codex"
     }
+    assert codex_rows, built["profiles"]
+    assert {row["capacity_pool_ids"][0] for row in codex_rows.values()} == {"codex-subscription"}
 
 
 def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
@@ -157,7 +185,10 @@ def test_profile_schema_is_additive_and_immutable(tmp_path, monkeypatch):
         assert {"execution_profiles", "capacity_pools", "routing_decisions_v2", "route_weights_v2"} <= tables
         assert conn.execute("SELECT COUNT(*) FROM runs WHERE run_id='legacy'").fetchone()[0] == 1
         execution_profiles.ensure_schema(conn)
-        assert conn.execute("SELECT COUNT(*) FROM execution_profiles").fetchone()[0] == 3
+        # Every registered profile must persist. Comparing to the registry rather than a literal
+        # keeps this a real check when a seat is added, instead of a count to bump.
+        assert conn.execute("SELECT COUNT(*) FROM execution_profiles").fetchone()[0] == len(
+            execution_profiles.PROFILE_REGISTRY)
 
 
 def _profile_run(run_id, task_type, profile, *, resolved_model, verdict, tmp_ts):
@@ -421,8 +452,16 @@ def test_profile_learning_collapses_same_subject_retries(tmp_path, monkeypatch):
 
 def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    # Scoped to codex's three profiles: this test is about propensity across ONE agent's model
+    # choices and its shared subscription. Passing the whole registry would make 1/N a statement
+    # about how many seats exist, which is not the property being checked.
+    codex_candidates = sorted(
+        pid for pid, profile in execution_profiles.PROFILE_REGISTRY.items()
+        if profile["agent"] == "codex"
+    )
+    assert len(codex_candidates) == 3, codex_candidates
     envelope = execution_profiles.select_profile(
-        "implement", "o/r#report", list(execution_profiles.PROFILE_REGISTRY),
+        "implement", "o/r#report", codex_candidates,
         rng_seed=7, exploration=True, exploration_policy="fixture",
     )
     feedback.record_profile_decision(envelope)
@@ -430,8 +469,54 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     assert summary["cold_starts"] == 3
     assert summary["routing_decisions"] == 1
     assert summary["mean_assignment_probability"] == pytest.approx(1 / 3)
-    assert summary["shared_capacity_pools"] == ["codex-subscription"]
+    # This field reports every REAL account, not "the pools in this decision", so it must equal the
+    # pool registry. Asserting a single literal only held while codex was the sole seat.
+    assert summary["shared_capacity_pools"] == sorted(execution_profiles.CAPACITY_POOLS)
+    assert "codex-subscription" in summary["shared_capacity_pools"]
+    # The decision itself was scoped to codex, so only codex's models may appear in it.
     assert {row["requested_model"] for row in summary["profiles"]} == {
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"
     }
 
+
+def test_capacity_pools_match_capacity_agents():
+    """The pools are a COPY of capacity.AGENTS; this fails if either side drifts.
+
+    execution_profiles cannot import capacity (capacity imports it), so the account/window facts are
+    duplicated by necessity. A pool that misdescribes a real account would mis-report capacity to the
+    dispatcher, so the duplication is guarded rather than trusted.
+    """
+    import capacity
+    import execution_profiles
+    for pool_id, pool in execution_profiles.CAPACITY_POOLS.items():
+        agent = pool.get("agent")
+        if not agent or agent not in capacity.AGENTS:
+            continue
+        truth = capacity.AGENTS[agent]
+        assert pool["account"] == truth["account"], (pool_id, pool["account"], truth["account"])
+    # And every agent capacity knows about must have a pool, or its seat can never be profiled.
+    pooled = {p.get("agent") for p in execution_profiles.CAPACITY_POOLS.values()}
+    assert set(capacity.AGENTS) <= pooled, sorted(set(capacity.AGENTS) - pooled)
+
+
+def test_registry_models_match_adapters():
+    """A registry that disagrees with the adapter would request a model the seat never runs."""
+    import adapters
+    import execution_profiles
+    by_agent = {}
+    for profile in execution_profiles.PROFILE_REGISTRY.values():
+        by_agent.setdefault(profile["agent"], set()).add(profile["requested_model"])
+    for agent, models in by_agent.items():
+        reported = {adapters.model_identity(agent, mode) for mode in ("mid", "full")}
+        assert models & reported, (
+            f"{agent}: registry {sorted(models)} matches none of the adapter identities "
+            f"{sorted(reported)}")
+
+
+def test_every_agent_can_record_a_worker_attempt():
+    """One profile per agent -- without it, that seat's work can never carry provenance."""
+    import capacity
+    import execution_profiles
+    for agent in capacity.AGENTS:
+        assert execution_profiles.profiles_for_agent(agent, transport="offload"), (
+            f"{agent} has no offload profile, so dispatcher.offload cannot record a worker attempt")

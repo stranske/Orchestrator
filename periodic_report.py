@@ -1229,6 +1229,84 @@ def _consumer_sync_hygiene_summary(state_dir: Path | None = None) -> dict:
     }
 
 
+def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
+    """Per-agent answer to "is the miner working, and on how much of the target?".
+
+    An up/down signal is not enough. The miner can be perfectly healthy while covering one seat out
+    of six, and that looks identical to full health if the only number reported is "it ran". This
+    reports, per agent that actually did work: whether a profile exists, whether that profile's
+    model identity can ever be RESOLVED (an `agy:`/`cursor:`/`vibe:` routing tag cannot), and how
+    many of its worker attempts actually resolved.
+
+    Verdicts, in the order they block:
+      * ``no_runs``              - the seat did no work in the window; nothing to mine either way.
+      * ``no_profile``           - no registered profile, so no worker attempt can ever be written.
+      * ``model_not_reportable`` - profile exists, but the adapter reports a routing tag, so the
+                                   attempt completes unresolved and the work stays unminable.
+      * ``no_worker_attempt``    - profile and a reportable model, but nothing recorded an attempt.
+      * ``minable``              - at least one resolved worker attempt exists.
+    """
+    close = conn is None
+    c = conn or feedback._conn()
+    cutoff = int(time.time()) - max(1, int(window_days)) * 86400
+    try:
+        runs = dict(c.execute(
+            "SELECT agent, COUNT(*) FROM runs WHERE ts>=? AND agent IS NOT NULL "
+            "AND agent<>'none' GROUP BY agent", (cutoff,)).fetchall())
+        attempts = {}
+        for agent, total, resolved in c.execute(
+            "SELECT r.agent, COUNT(*), SUM(CASE WHEN ea.resolved_model IS NOT NULL THEN 1 ELSE 0 END) "
+            "FROM execution_attempts ea JOIN runs r ON r.run_id=ea.run_id "
+            "WHERE ea.operation_role='worker' AND r.ts>=? GROUP BY r.agent", (cutoff,)).fetchall():
+            attempts[agent] = (int(total or 0), int(resolved or 0))
+    finally:
+        if close:
+            c.close()
+
+    agents = sorted(set(runs) | set(attempts) | {
+        p["agent"] for p in execution_profiles.PROFILE_REGISTRY.values()})
+    rows, minable = {}, []
+    for agent in agents:
+        profiles = execution_profiles.profiles_for_agent(agent)
+        total, resolved = attempts.get(agent, (0, 0))
+        # A routing tag can never become resolved identity, so the profile cannot help this seat.
+        reportable = bool(profiles) and not any(
+            feedback.SYNTHETIC_ADAPTER_MODEL_RE.match(str(p["requested_model"]))
+            for p in profiles)
+        if resolved:
+            verdict = "minable"
+        elif not profiles:
+            verdict = "no_profile"
+        elif not reportable:
+            verdict = "model_not_reportable"
+        elif not runs.get(agent):
+            verdict = "no_runs"
+        else:
+            verdict = "no_worker_attempt"
+        if verdict == "minable":
+            minable.append(agent)
+        rows[agent] = {
+            "runs": int(runs.get(agent, 0)),
+            "profiles": len(profiles),
+            "model_reportable": reportable,
+            "worker_attempts": total,
+            "resolved_worker_attempts": resolved,
+            "verdict": verdict,
+        }
+    working = [a for a in agents if runs.get(a)]
+    blocked = {a: r["verdict"] for a, r in rows.items() if r["verdict"] not in ("minable", "no_runs")}
+    return {
+        "window_days": int(window_days),
+        "agents": rows,
+        "minable_agents": sorted(minable),
+        "working_agents": sorted(working),
+        # The pair that makes a subset visible: how many seats CAN be mined out of how many are
+        # actually doing work. "1 of 6" is a coverage problem; "it ran" hides it.
+        "coverage": f"{len(minable)} of {len(working)} working agents minable",
+        "blocked": blocked,
+    }
+
+
 def build_report(
     window_days: int = 90,
     min_gap_recurrence: int = 3,
@@ -1292,6 +1370,10 @@ def build_report(
                 model_profile_qualification_path
             )
         ),
+        # Coverage sits next to the miner status it qualifies: the status says whether the miner
+        # RAN, the coverage says how much of the fleet it could ever cover. Reporting one without
+        # the other is how "healthy" and "healthy on one seat of six" became indistinguishable.
+        "mining_coverage": mining_coverage(window_days),
         "pattern_miner": {
             "status": pattern_status,
             "inventory": {
@@ -1714,13 +1796,25 @@ def format_human(report: dict) -> str:
         f"next={json.dumps(runtime_state.get('actions') or [])}"
     )
     compiler = report.get("pattern_miner") or {}
+    # `.get('status').get('status')` printed None forever: the miner's status artifact has no
+    # `status` key. `mining_health` is the field that actually says what happened.
+    health = (compiler.get("status") or {}).get("mining_health") or {}
     lines.append(
-        f"pattern compiler: status={(compiler.get('status') or {}).get('status')} "
+        f"pattern compiler: state={health.get('state', 'unknown')} "
+        f"[{health.get('summary', 'no summary')}] "
         f"candidates={(compiler.get('inventory') or {}).get('emitted_candidate_count', 0)} "
         f"expired={(compiler.get('inventory') or {}).get('expired_candidate_count', 0)} "
         f"tombstones={(compiler.get('inventory') or {}).get('tombstone_count', 0)} "
         f"next={json.dumps((compiler.get('inventory') or {}).get('next_actions') or [])}"
     )
+    cov = report.get("mining_coverage") or {}
+    if cov:
+        lines.append(f"mining coverage ({cov.get('window_days')}d): {cov.get('coverage')}"
+                     + (f" | minable: {', '.join(cov['minable_agents'])}" if cov.get("minable_agents") else ""))
+        for agent, why in sorted((cov.get("blocked") or {}).items()):
+            row = (cov.get("agents") or {}).get(agent) or {}
+            lines.append(f"  {agent:<9} {why:<22} runs={row.get('runs', 0)} "
+                         f"worker={row.get('resolved_worker_attempts', 0)}/{row.get('worker_attempts', 0)}")
     if subjects.get("rejections_by_reason"):
         rejection_bits = " ".join(
             f"{reason}={count}"
@@ -2541,7 +2635,28 @@ def _selftest() -> None:
         except SystemExit as exc:
             assert exc.code != 0, exc
 
-        print("periodic_report.py selftest: OK")
+        # --- mining coverage: an up/down signal cannot show a one-seat-of-six miner ---
+        cov = mining_coverage(30)
+        assert set(cov) >= {"agents", "minable_agents", "working_agents", "coverage", "blocked"}, cov
+        # Every registered agent appears, so a seat can never be silently uncovered.
+        for agent in {p["agent"] for p in execution_profiles.PROFILE_REGISTRY.values()}:
+            assert agent in cov["agents"], (agent, sorted(cov["agents"]))
+        # A routing tag can never resolve, so those seats must be named unminable rather than
+        # counted as healthy. This is the "small subset" case the coverage line exists to expose.
+        for tag_agent in ("gemini", "cursor", "vibe"):
+            row = cov["agents"][tag_agent]
+            assert row["model_reportable"] is False, (tag_agent, row)
+            assert row["verdict"] in {"model_not_reportable", "no_runs"}, (tag_agent, row)
+        # Seats whose adapter reports a real model must NOT be marked unreportable.
+        for real_agent in ("codex", "claude", "aider"):
+            assert cov["agents"][real_agent]["model_reportable"] is True, (real_agent, cov["agents"][real_agent])
+        # The headline must state a FRACTION. "it ran" is what hid a dead miner for 43 days.
+        assert " of " in cov["coverage"] and "minable" in cov["coverage"], cov["coverage"]
+        assert len(cov["minable_agents"]) <= len(cov["working_agents"]), cov
+        # A blocked seat must always carry a reason -- a blocked entry with no verdict is silence.
+        assert all(bool(reason) for reason in (cov["blocked"] or {}).values()), cov["blocked"]
+
+        print("periodic_report.py selftest: OK (incl. mining coverage)")
     finally:
         feedback.DB_PATH = old_db_path
         shutil.rmtree(temp_dir, ignore_errors=True)

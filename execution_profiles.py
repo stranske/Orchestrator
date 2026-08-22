@@ -24,6 +24,11 @@ MAX_SUCCESSOR_TRANSFER = 0.10
 
 # Provider pool policy is authoritative here and consumed by capacity.py and
 # research_scheduler.py.  Multiple profiles can map to the same real balance.
+# One pool per real account. Every field below is copied from `capacity.AGENTS` -- the authoritative
+# per-agent account/window model -- rather than invented here. execution_profiles CANNOT import
+# capacity (capacity imports this module), so `test_capacity_pools_match_capacity_agents` asserts the
+# two agree and fails if either drifts. A pool that misdescribes an account would mis-report capacity
+# to the dispatcher, so this is a copy with a guard, never a guess.
 CAPACITY_POOLS = {
     "codex-subscription": {
         "provider": "openai",
@@ -31,6 +36,41 @@ CAPACITY_POOLS = {
         "window": "5h+weekly",
         "tier": "metered",
         "agent": "codex",
+    },
+    "claude-subscription": {
+        "provider": "anthropic",
+        "account": "claude-team-max",
+        "window": "5h+weekly",
+        "tier": "metered",
+        "agent": "claude",
+    },
+    "cursor-subscription": {
+        "provider": "cursor",
+        "account": "cursor-pro-plus",
+        "window": "monthly",
+        "tier": "metered",
+        "agent": "cursor",
+    },
+    "gemini-prepaid": {
+        "provider": "google",
+        "account": "antigravity-ai-pro",
+        "window": "5h+weekly",
+        "tier": "metered",
+        "agent": "gemini",
+    },
+    "vibe-subscription": {
+        "provider": "mistral",
+        "account": "mistral-vibe-sub",
+        "window": "subscription",
+        "tier": "flat",
+        "agent": "vibe",
+    },
+    "aider-paygo": {
+        "provider": "mistral",
+        "account": "mistral-codestral",
+        "window": "daily",
+        "tier": "paygo",
+        "agent": "aider",
     },
 }
 
@@ -41,20 +81,33 @@ def _profile(
     reasoning: str,
     *,
     prior_offset: float = 0.0,
+    agent: str = "codex",
+    provider: str = "openai",
+    pool: str = "codex-subscription",
+    adapter_version: str = "codex-cli-profile-v1",
 ) -> dict[str, Any]:
+    """One registered execution profile. Defaults stay codex so existing entries are unchanged.
+
+    `requested_model` is what we ASK for; it is never treated as resolved identity. Where an agent's
+    adapter can only report a routing tag (`agy:`, `cursor:`, `vibe:`), the attempt completes
+    UNRESOLVED and that agent's work stays unminable -- correctly. Registering the profile anyway is
+    deliberate: an unresolved worker attempt is a visible, attributable gap, whereas no profile at
+    all is silence, and silence is what hid a dead miner for 43 days. `mining_coverage` names which
+    agents are in which state on every periodic report.
+    """
     return {
         "schema_version": PROFILE_SCHEMA_VERSION,
         "profile_id": profile_id,
-        "agent": "codex",
-        "provider": "openai",
+        "agent": agent,
+        "provider": provider,
         "requested_model": model,
         "reasoning_effort": reasoning,
         "permission_mode": "workspace-write",
         "transport_support": ["local", "offload", "experiment"],
         "legacy_adapter_mode": "full",
-        "adapter_version": "codex-cli-profile-v1",
+        "adapter_version": adapter_version,
         "prompt_version": "orchestrator-prompt-v1",
-        "capacity_pool_ids": ["codex-subscription"],
+        "capacity_pool_ids": [pool],
         "lifecycle_status": "active",
         "successor_profile_id": None,
         "prior_offset": prior_offset,
@@ -67,6 +120,27 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile("codex-5.6-sol-high", "gpt-5.6-sol", "high", prior_offset=0.05),
         _profile("codex-5.6-terra-high", "gpt-5.6-terra", "high"),
         _profile("codex-5.6-luna-high", "gpt-5.6-luna", "high", prior_offset=-0.02),
+        # One profile per agent so every seat can record a worker attempt. Models are the identities
+        # `adapters.model_identity(agent, "full")` reports; `test_registry_models_match_adapters`
+        # fails if they drift, because a registry that disagrees with the adapter would request a
+        # model the seat never runs.
+        _profile("claude-sonnet-5-high", "claude-sonnet-5", "high",
+                 agent="claude", provider="anthropic", pool="claude-subscription",
+                 adapter_version="claude-cli-profile-v1"),
+        _profile("aider-codestral-high", "mistral/codestral-latest", "high",
+                 agent="aider", provider="mistral", pool="aider-paygo",
+                 adapter_version="aider-cli-profile-v1"),
+        # These three can only report a routing tag, so their attempts complete UNRESOLVED and their
+        # work stays unminable. Registered so the gap is attributable rather than silent.
+        _profile("gemini-3.1-pro-high", "agy:gemini-3.1-pro-high", "high",
+                 agent="gemini", provider="google", pool="gemini-prepaid",
+                 adapter_version="agy-cli-profile-v1"),
+        _profile("cursor-composer-2.5", "cursor:composer-2.5", "high",
+                 agent="cursor", provider="cursor", pool="cursor-subscription",
+                 adapter_version="cursor-cli-profile-v1"),
+        _profile("vibe-default", "vibe:default", "high",
+                 agent="vibe", provider="mistral", pool="vibe-subscription",
+                 adapter_version="vibe-cli-profile-v1"),
     )
 }
 

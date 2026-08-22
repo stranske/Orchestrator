@@ -1807,10 +1807,15 @@ def _selftest() -> None:
             stdout = ""
             stderr = ""
 
-        def fake_build_command(agent, prompt, mode, cwd=None):
+        def fake_build_command(agent, prompt, mode, cwd=None, **kwargs):
+            # `**kwargs` is load-bearing, not defensive slack: every agent now has a registered
+            # execution profile, so offload passes `profile=` for any seat. A stub with a narrower
+            # signature raises TypeError inside offload() and the failure looks like a dispatch bug
+            # rather than a stale test double. Captured so the profile stays assertable.
             captured["prompt"] = prompt
             captured["mode"] = mode
             captured["build_cwd"] = cwd
+            captured["profile"] = kwargs.get("profile")
             return ["printf", "OFFLOAD RESULT"]
 
         def fake_run(cmd, cwd=None, **_kwargs):
@@ -1850,13 +1855,8 @@ def _selftest() -> None:
         # using it -- a mechanism asserted against itself. This asserts the wiring: a profiled
         # agent must leave a worker execution attempt behind, because that row is the only thing
         # that can ever resolve model provenance, and without it no episode can complete.
-        def fake_build_any(agent, prompt, mode, cwd=None, **_kw):
-            # Accepts `profile=`: a profiled offload passes it, which is itself the wiring.
-            captured["profile_kw"] = _kw.get("profile")
-            return ["printf", "OFFLOAD RESULT"]
-
         try:
-            adapters.build_command = fake_build_any
+            adapters.build_command = fake_build_command
             subprocess.run = fake_run
             codex_off = offload("codex", "Summarize this file.", cwd=str(nongit), timeout=1)
         finally:
@@ -1866,24 +1866,31 @@ def _selftest() -> None:
             worker = c.execute(
                 "SELECT profile_id, operation_role FROM execution_attempts "
                 "WHERE run_id=? AND operation_role='worker'", (codex_off["run_id"],)).fetchone()
-        assert captured.get("profile_kw"), "the selected profile must reach build_command"
+        assert captured.get("profile"), "the selected profile must reach build_command"
         assert worker and worker[0], (
             "a profiled offload must record a worker execution attempt; without it "
             "resolved_worker_identity_for_run can never return a row", codex_off)
 
-        # And an UNPROFILED agent must still record none -- the selection may not invent identity.
+        # A ROUTING-TAG agent (gemini reports `agy:...`) now has a profile too, so it DOES record a
+        # worker attempt -- but that attempt must stay UNRESOLVED, because a routing tag is not a
+        # provider-resolved model. This is the invariant that keeps such a seat honestly unminable
+        # instead of appearing to have provenance it does not have.
         try:
-            adapters.build_command = fake_build_any
+            adapters.build_command = fake_build_command
             subprocess.run = fake_run
             gem_off = offload("gemini", "Summarize this file.", cwd=str(nongit), timeout=1)
         finally:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
         with feedback._conn() as c:
-            none_worker = c.execute(
-                "SELECT COUNT(*) FROM execution_attempts WHERE run_id=? AND operation_role='worker'",
-                (gem_off["run_id"],)).fetchone()[0]
-        assert none_worker == 0, "unprofiled agent must not get a fabricated worker attempt"
+            gem_rows = c.execute(
+                "SELECT resolved_model FROM execution_attempts "
+                "WHERE run_id=? AND operation_role='worker'", (gem_off["run_id"],)).fetchall()
+        assert gem_rows, "a profiled seat must record a worker attempt"
+        assert all(row[0] is None for row in gem_rows), (
+            "a routing tag must never become a resolved worker model", gem_rows)
+        assert feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None, (
+            "unresolved attempts must not satisfy worker identity")
         import ledger_reconcile
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
         cost_by_run = {row["run_id"]: row for row in dry_cost["costs"]}
@@ -1892,7 +1899,8 @@ def _selftest() -> None:
 
         captured.clear()
 
-        def fake_gemini_build_command(agent, prompt, mode, cwd=None):
+        def fake_gemini_build_command(agent, prompt, mode, cwd=None, **_kwargs):
+            # `**_kwargs`: gemini has a registered profile now, so offload passes `profile=`.
             captured["prompt"] = prompt
             captured["mode"] = mode
             captured["build_cwd"] = cwd
@@ -2083,9 +2091,12 @@ def _selftest() -> None:
         # Deterministic: the same agent must resolve to the SAME profile every time, or worker
         # attempts smear across three identities instead of accumulating against one.
         assert _select_offload_profile("codex", "mid")["profile_id"] == codex_profile["profile_id"]
-        # Agents with no profile for this transport are UNCHANGED -- selection must not invent one.
-        for unprofiled in ("gemini", "cursor", "claude", "vibe", "aider"):
-            assert _select_offload_profile(unprofiled, "mid") is None, unprofiled
+        # Every real seat now has a registered profile, so every seat can record a worker attempt.
+        # (Before this, only codex could, which is why provenance covered one agent of six.)
+        for seat in ("claude", "gemini", "cursor", "vibe", "aider"):
+            assert _select_offload_profile(seat, "mid"), f"{seat} must select a profile"
+        # An agent with NO registered profile still selects nothing -- selection may not invent one.
+        assert _select_offload_profile("definitely-not-an-agent", "mid") is None
 
         print("dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
               "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
