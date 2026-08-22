@@ -79,6 +79,69 @@ def _success_offload(output: dict, index: int) -> dict:
     }
 
 
+def _codex_event_stream(output: dict) -> str:
+    return "\n".join(
+        json.dumps(event)
+        for event in (
+            {"type": "thread.started", "thread_id": "test-thread"},
+            {
+                "type": "item.started",
+                "item": {"type": "agent_message", "text": ""},
+            },
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "Reviewing the partition."},
+            },
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": json.dumps(output)},
+            },
+            {"type": "turn.completed", "usage": {"input_tokens": 10}},
+        )
+    )
+
+
+def test_strict_json_parser_extracts_final_codex_event_message() -> None:
+    expected = {"schema_version": 1, "status": "complete"}
+
+    assert review._parse_json_object(_codex_event_stream(expected)) == expected
+
+    single_event = json.dumps(
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": json.dumps(expected)},
+        }
+    )
+    assert review._parse_json_object(single_event) == expected
+
+    with pytest.raises(json.JSONDecodeError):
+        review._parse_json_object('{"status":"complete"}\nnot-an-event')
+    with pytest.raises(json.JSONDecodeError):
+        review._parse_json_object(_codex_event_stream(expected) + "\ntrailing prose")
+    with pytest.raises(json.JSONDecodeError):
+        review._parse_json_object(_codex_event_stream(expected) + "\n{")
+    with pytest.raises(json.JSONDecodeError):
+        review._parse_json_object(_codex_event_stream(expected) + "\n[]")
+
+    non_object_message = json.dumps(
+        {"type": "agent_message", "text": json.dumps(["not", "an", "object"])}
+    )
+    with pytest.raises(ValueError, match="one strict JSON object"):
+        review._parse_json_object(non_object_message)
+
+
+def test_partition_prompt_explains_category_disposition_constraints() -> None:
+    plan = review.partition_corpus(
+        _corpus([_item("CW-1", "source-pr-61")]), max_prompt_chars=12_000
+    )
+
+    prompt = review.build_partition_prompt(plan, plan["partitions"][0])
+
+    assert "intentional_adapters item uses disposition intentional" in prompt
+    assert "unresolved_design_dispositions item uses disposition unresolved" in prompt
+    assert "stale or incomplete ledger" in prompt
+
+
 def test_source_pr_groups_are_bounded_by_item_and_prompt_limits() -> None:
     corpus = _corpus(
         [
