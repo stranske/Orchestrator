@@ -278,6 +278,20 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     # capability that cannot run yet is still high-confidence advice to not bother.
     top = candidates[0]["score"]
     confidence = "high" if top >= 2 else "low"
+    # RANK BY MEASURED USEFULNESS. This is the edge that makes "recommend the useful ones more
+    # often" mechanical rather than aspirational: `capability_propensity` reads the
+    # candidate->trigger->outcome trail this module's own `match` events start, and returns a
+    # propensity that rises with the share of trials where triggering actually helped. Order only --
+    # the SET is unchanged, so a bad propensity can misorder a list and nothing else. Never-tried
+    # capabilities carry an optimistic prior and an unconditional floor, so ranking cannot starve
+    # the capabilities that have no evidence yet; that would be a gate blocking its own drain.
+    try:
+        import capability_propensity
+        matched = capability_propensity.rank(matched, path=path)
+    except Exception:                                              # noqa: BLE001
+        # Ranking is an enhancement, never a dependency: advice must still be given when the
+        # propensity store is unreadable.
+        pass
     usable = [m for m in matched if m["dispatch_ready"]]
     # A capability that matched for ANY classified task type is not "not applicable".
     for entry in matched:

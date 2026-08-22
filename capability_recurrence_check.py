@@ -689,6 +689,15 @@ PREDICATE_FIXTURES = (
                "Registered 2026-08-22 — it merged in PR #2 with no ledger record, no heartbeat and "
                "a CLI-only caller, so the firing monitor could only ever have reported it as "
                "never-fired no matter how often it ran."},
+    {"capability": "capability-propensity",
+     "check": lambda: _predicate_heartbeat("capability-propensity"),
+     "source": "every capability_advisor.advise call ranks its candidates by propensity, plus the "
+               "CLI. Registered 2026-08-22 to close the loop the advisor left open: it recorded a "
+               "`match` for each candidate and nothing recorded whether the candidate was then "
+               "TRIGGERED or whether triggering HELPED, so 'recommend the useful ones more often' "
+               "had no signal. First live read: 13 natural experiments already in the ledger, 0 "
+               "resolved, 0 of 41 capabilities carrying usefulness evidence — the propensities are "
+               "all prior, and the report says so rather than looking informative."},
     {"capability": "capability-firing-monitor",
      "check": lambda: _predicate_heartbeat("capability-firing-monitor"),
      "source": "weekly cadence step. Its first live run flagged range-lane-rollout silent 29.9d "
