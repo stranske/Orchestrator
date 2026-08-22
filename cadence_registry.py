@@ -88,6 +88,19 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
                            "the Stage-2 deficits close",
     },
     {
+        "key": "capability-propensity",
+        "success_stamp": ".last-capability-propensity",
+        "cadence_days": 6,
+        "artifact": "capability-propensity.json",
+        "log": "capability-propensity.log",
+        "gate": "none; pure read of the capability ledger. "
+                "ORCH_CAPABILITY_PROPENSITY_DISABLED=1 stops the advisor ranking",
+        "next_transition": "while capabilities_with_evidence is 0 every propensity is the PRIOR, "
+                           "not a measurement, and the step says so on every run. It becomes a "
+                           "measurement when callers record trigger/usefulness against the "
+                           "advice:<digest> they were given",
+    },
+    {
         "key": "capability-firing-monitor",
         "success_stamp": ".last-capability-firing-monitor",
         "cadence_days": 6,

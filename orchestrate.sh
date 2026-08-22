@@ -483,6 +483,31 @@ if _cadence_due capability-firing-monitor && _attempt_ok capability-firing-monit
     _mark_fail capability-firing-monitor "see $STAMP_DIR/capability-firing-monitor.log"
   fi
 fi
+# Does triggering a capability actually help, and should the front door recommend it more? The
+# advisor recorded a `match` per candidate and nothing recorded what happened next, so "recommend the
+# useful ones more often" had no signal. Pure read of the ledger.
+#
+# BOTH QUANTITIES ON EVERY RUN. A propensity report with no resolved outcomes looks identical to one
+# built on evidence, which is how the pattern miner reported success for 43 days while accepting
+# zero events. So the evidence count is echoed next to the experiment count, and a run with no
+# evidence says PRIOR-ONLY rather than passing quietly.
+if _cadence_due capability-propensity && _attempt_ok capability-propensity; then
+  echo "  [cadence] capability propensity (usefulness-weighted recommendation)"
+  if python3 "$ORCH/capability_propensity.py" report --json \
+       > "$STAMP_DIR/capability-propensity.json" 2>> "$STAMP_DIR/capability-propensity.log"; then
+    _prop_ev=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["capabilities_with_evidence"],d["capability_count"],d["experiment_count"],d["resolved_experiment_count"])' \
+                 "$STAMP_DIR/capability-propensity.json" 2>/dev/null || echo "? ? ? ?")
+    set -- $_prop_ev
+    if [[ "${1:-0}" == "0" ]]; then
+      echo "    PRIOR-ONLY: 0 of ${2:-?} capabilities have usefulness evidence; ${3:-?} experiments, ${4:-?} resolved — the loop is not learning yet"
+    else
+      echo "    evidence: ${1} of ${2} capabilities; ${3} experiments, ${4} resolved"
+    fi
+    _mark_success capability-propensity
+  else
+    _mark_fail capability-propensity "see $STAMP_DIR/capability-propensity.log"
+  fi
+fi
 if _cadence_due feature-scan && _attempt_ok feature-scan; then
   # The missing caller for features.py (RULE OF THREE). Its registry held 20 entries, all already
   # `hardened`, so the capability looked idle when it was actually BLIND — nothing ever called it.
