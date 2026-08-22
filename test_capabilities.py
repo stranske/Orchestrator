@@ -297,9 +297,19 @@ def test_gate_blocks_execution_is_opt_in_and_narrow():
     # vanished on re-run. See capabilities.load_declared.
     ledger = capabilities.load_declared(capabilities.REG)
     # The two capabilities whose gate blocks the delivering path, and nothing else.
+    #
+    # `issue-readiness` is DELIBERATELY NOT in this set, and was removed from the expectation on
+    # 2026-08-22 after it had been failing against the live ledger. capabilities.py's own comment at
+    # the gate_blocks_execution check is explicit about why: its gate "covers only its LABEL WRITES
+    # while the assessment runs every day and really does influence what the opener picks". Marking
+    # it gate-blocking would reclassify a capability that genuinely delivers, which is the opposite
+    # of what the flag is for. The test asserted the mechanism's inverse; the ledger was right.
+    #
+    # Membership is pinned on purpose. `gate_blocks_execution` suppresses the
+    # `invoked_without_outcomes` measurement question, so a capability acquiring it silently stops
+    # being asked whether its outcomes link — that must require a visible test change.
     declared = {k for k, v in ledger.items() if v.get("gate_blocks_execution")}
-    assert declared == {"thompson-hybrid-routing", "range-lane-rollout",
-                        "issue-readiness"}, declared
+    assert declared == {"thompson-hybrid-routing", "range-lane-rollout"}, declared
     for cid in declared:
         assert capabilities.classify_liveness(ledger[cid]) == "deliberately_gated", cid
     # NARROWNESS: `role-triage` is gated too and must not be swept up — it runs constantly and

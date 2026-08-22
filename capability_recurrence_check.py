@@ -599,6 +599,13 @@ PREDICATE_FIXTURES = (
     {"capability": "capability-activation-audit",
      "check": lambda: _predicate_heartbeat("capability-activation-audit"),
      "source": "daily cadence step; it flagged ITSELF no_heartbeat on its first run."},
+    {"capability": "partitioned-review",
+     "check": lambda: _predicate_heartbeat("partitioned-review"),
+     "source": "the recurring shape behind it: a corpus too large for one prompt, where a "
+               "timeout or a truncated answer is indistinguishable from a successful review. "
+               "Registered 2026-08-22 — it merged in PR #2 with no ledger record, no heartbeat and "
+               "a CLI-only caller, so the firing monitor could only ever have reported it as "
+               "never-fired no matter how often it ran."},
     {"capability": "capability-firing-monitor",
      "check": lambda: _predicate_heartbeat("capability-firing-monitor"),
      "source": "weekly cadence step. Its first live run flagged range-lane-rollout silent 29.9d "
