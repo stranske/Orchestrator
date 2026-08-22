@@ -608,6 +608,34 @@ def _normalize_arm_members(arms: list[dict[str, Any]]) -> tuple[list[dict], list
     return normalized_arms, members
 
 
+def research_v2_arms(agents: list[str], profiles=None) -> list[dict]:
+    """Turn a plain agent list into v2 arm/member descriptors. Pure; selftested.
+
+    `prepare` writes only `meta["agents"]`, so `experiment_members()` takes its legacy fallback and
+    every member comes back `legacy=True` -- which is why `record_evaluation_v2` never fires and
+    `evaluations_v2` sat empty while `evaluations` accumulated thousands of
+    `agent_parent_projection` rows. `prepare_arms` already persists the exact v2 manifest; the
+    launchers simply never called it.
+
+    One arm per agent, which is exactly what the legacy path meant: each agent is its own
+    experimental condition. `profile_id` is carried through when the plan knows it and left None
+    when it does not -- an honest unknown, never a fabricated identity.
+
+    Lives HERE, not in a launcher, because two launchers need it (`tick.research_tick` and
+    `exploration_backfill`) and a second copy would let one drift back to the legacy shape.
+    """
+    lookup = profiles if isinstance(profiles, dict) else {}
+    arms: list[dict] = []
+    for agent in dict.fromkeys(str(a).strip() for a in agents if str(a).strip()):
+        arms.append({
+            "arm_id": f"agent-{agent}",
+            "agents": [agent],
+            "strategy": "single",
+            "profile_id": lookup.get(agent) or None,
+        })
+    return arms
+
+
 def prepare_arms(
     repo: str,
     spec_file: str,

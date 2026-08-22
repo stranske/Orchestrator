@@ -497,8 +497,20 @@ def schedule_backfill(
         spec_file = spec_dir / "spec.md"
         spec_file.write_text(spec, encoding="utf-8")
         exp_id = f"{job.get('exp_id_template')}-{int(time.time())}"
-        prepare = prepare_fn or exp_abcd.prepare
-        launched = prepare(repo, str(spec_file), exp_id, job["agents"], job.get("task_type") or "implement")
+        # prepare_arms, not prepare -- the SECOND launcher that had this bug. `prepare` writes only
+        # `meta["agents"]`, so `experiment_members()` falls back to `legacy=True`,
+        # `record_evaluation_v2` never fires, and the arm/member/profile identity §2 requires is
+        # replaced by an `agent_parent_projection`. All 21 on-disk manifests have
+        # `schema_version: None` and no `members[]` for exactly this reason. `tick` was fixed;
+        # this path was not, so the legacy shape would have kept being produced.
+        prepare = prepare_fn or exp_abcd.prepare_arms
+        launched = prepare(
+            repo,
+            str(spec_file),
+            exp_id,
+            exp_abcd.research_v2_arms(job["agents"], job.get("profiles")),
+            job.get("task_type") or "implement",
+        )
         meta_file = exp_abcd.exp_paths(exp_id) / "meta.json"
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -633,16 +645,25 @@ def _selftest() -> None:
 
         calls: list[dict] = []
 
-        def fake_prepare(repo: str, spec_file: str, exp_id: str, agents: list[str], task_type: str = "implement") -> dict:
+        def fake_prepare(repo: str, spec_file: str, exp_id: str, arms: list[dict], task_type: str = "implement") -> dict:
+            # ASSERT THE SHAPE, not just that something was called. This double took a plain agent
+            # list and kept passing after the launcher switched to v2 arms -- a fake that accepts
+            # anything cannot tell `prepare` from `prepare_arms`, which is precisely the confusion
+            # that left `evaluations_v2` empty for 2,556 evaluations.
+            assert isinstance(arms, list) and arms, arms
+            for arm in arms:
+                assert isinstance(arm, dict), f"legacy agent list reached prepare_arms: {arms!r}"
+                assert arm.get("arm_id") and arm.get("agents"), arm
             calls.append({
                 "repo": repo,
                 "spec_file": spec_file,
                 "exp_id": exp_id,
-                "agents": agents,
+                "agents": [a for arm in arms for a in arm["agents"]],
+                "arms": arms,
                 "task_type": task_type,
             })
             assert "Do the fixture work." in Path(spec_file).read_text(), spec_file
-            return {"repo": repo, "exp_id": exp_id, "agents": agents}
+            return {"repo": repo, "exp_id": exp_id, "agents": [a for arm in arms for a in arm["agents"]]}
 
         original_backlog_items = exploration_evidence_plan._backlog_items
         exploration_evidence_plan._backlog_items = lambda *args, **kwargs: backlog_payload["items"]  # type: ignore
