@@ -97,7 +97,13 @@ def _producer_counts(rejections: Iterable["Rejection"]) -> dict[str, int]:
 
 
 def _mining_health(
-    raw: int, accepted: int, rejected: int, excluded: int, episodes: int, candidates: int
+    raw: int,
+    accepted: int,
+    rejected: int,
+    excluded: int,
+    episodes: int,
+    candidates: int,
+    reasons: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """One machine-readable verdict a cadence step can branch on, instead of an exit code.
 
@@ -111,10 +117,27 @@ def _mining_health(
     * ``rejecting``      - real defects in the stream. Actionable.
     * ``mining``         - episodes assembled.
     """
+    ranked = sorted((reasons or {}).items(), key=lambda kv: (-kv[1], kv[0]))
+    top = ranked[0] if ranked else None
+    # A TIE AT THE TOP IS THE WHOLE STORY. Reporting a single "top blocker" when four reasons each
+    # affect 100% of the population invites the reader to fix one and expect the queue to drain --
+    # it will not move at all, because the other three still block every event. Report the tied
+    # set, so the line states how many independent fixes stand between here and one episode.
+    tied = [code for code, count in ranked if top and count == top[1]][:4] if top else []
     if raw == 0:
         state, detail = "no_input", "exporter produced no events"
     elif rejected:
-        state, detail = "rejecting", f"{rejected} of {raw} events rejected as malformed"
+        # NAME THE BLOCKER, not just the count. "203 of 12805 rejected as malformed" tells an
+        # operator that something is wrong and nothing about what to fix; they have to open a JSON
+        # to discover that 200 of those 203 share ONE cause. When the dominant reason accounts for
+        # most of the population, one fix drains nearly all of it -- so the count and the cause
+        # belong on the same line, which is the drainable-quantity rule applied to a reason code.
+        state = "rejecting"
+        detail = f"{rejected} of {raw} events rejected as malformed"
+        if top and len(tied) > 1:
+            detail += f"; {len(tied)} blockers each hit {top[1]} of {rejected}: " + ", ".join(tied)
+        elif top:
+            detail += f"; top blocker {top[0]} ({top[1]} of {rejected})"
     elif accepted == 0:
         state, detail = "all_out_of_scope", f"all {raw} events have no research subject"
     elif episodes == 0:
@@ -134,6 +157,11 @@ def _mining_health(
         # the miner did its job on the input it was given.
         "actionable": state in {"rejecting", "no_input"},
         "summary": f"accepted {accepted} / rejected {rejected} / excluded {excluded} of {raw}",
+        # Machine-readable twin of the `detail` suffix, so a consumer branches on the code
+        # instead of parsing prose.
+        "top_blocker": top[0] if top else None,
+        "top_blocker_count": top[1] if top else 0,
+        "top_blockers": tied,
     }
 
 
@@ -984,6 +1012,10 @@ class PatternMiner:
                 len(self.exclusions),
                 len(episodes),
                 len(self.candidates),
+                _reason_counts(
+                    rejection for rejection in self.rejections
+                    if rejection.phase == "envelope"
+                ),
             ),
             "rejected_event_reasons": _reason_counts(
                 rejection for rejection in self.rejections

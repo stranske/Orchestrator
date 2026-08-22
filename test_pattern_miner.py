@@ -12,6 +12,7 @@ from completion_event_adapter import (
     SUBJECTLESS_PRODUCERS,
     adapt_completion_event_envelope,
 )
+import pattern_miner
 from pattern_miner import MAX_REPORTED_REJECTIONS, PHASES, PatternMiner, main
 import research_subjects
 
@@ -555,6 +556,48 @@ def test_mining_health_distinguishes_ran_from_mined():
     bad["identity"]["subject_id"] = "subject:forged"
     rejecting = PatternMiner().mine([*good, bad], now=200).status["mining_health"]
     assert rejecting["state"] == "rejecting" and rejecting["actionable"] is True
+
+
+def test_rejecting_health_names_its_blockers_and_never_implies_a_false_drain():
+    """`203 rejected as malformed` said something was wrong and nothing about what to fix.
+
+    On the live corpus FOUR reason codes each hit 203 of 203 events. Naming only the
+    alphabetically-first one would invite fixing it and expecting the queue to drain, when in
+    fact it would not move by a single event. So a tie at the top must be reported as a tie.
+    """
+    bad = completion_episode(5)[0]
+    bad["identity"]["subject_id"] = "subject:forged"
+    health = PatternMiner().mine([bad], now=200).status["mining_health"]
+    assert health["state"] == "rejecting"
+    reasons = PatternMiner().mine([bad], now=200).status["rejected_event_reasons"]
+    assert reasons, "a rejecting run with no reason codes cannot be diagnosed"
+
+    # The blocker is NAMED in the operator-visible detail, not only in the JSON.
+    assert health["top_blocker"] in reasons, health
+    assert health["top_blocker"] in health["detail"], health["detail"]
+    assert str(health["top_blocker_count"]) in health["detail"], health["detail"]
+
+    # A tie is reported as a tie: every code sharing the top count is listed, and the phrasing
+    # says how many independent fixes stand in the way.
+    top = max(reasons.values())
+    tied = sorted(code for code, count in reasons.items() if count == top)
+    assert health["top_blockers"] == tied[:4], (health["top_blockers"], tied)
+    if len(tied) > 1:
+        assert f"{len(health['top_blockers'])} blockers" in health["detail"], health["detail"]
+        for code in health["top_blockers"]:
+            assert code in health["detail"], (code, health["detail"])
+
+    # DELIBERATE BREAK -> REVERT. Drop the reason counts the caller passes in, which is exactly
+    # what the pre-fix code did, and the detail line loses the diagnosis while still claiming
+    # the run is actionable -- actionable with nothing named is the silence this repo was built
+    # to prevent.
+    blind = pattern_miner._mining_health(1, 0, 1, 0, 0, 0, None)
+    assert blind["top_blocker"] is None and blind["top_blockers"] == []
+    assert "blocker" not in blind["detail"], blind["detail"]
+    assert blind["actionable"] is True, "the break keeps the alarm and loses the cause"
+    # REVERTED: pass the counts and the cause comes back.
+    seeing = pattern_miner._mining_health(1, 0, 1, 0, 0, 0, reasons)
+    assert seeing["top_blocker"] in seeing["detail"], seeing["detail"]
 
 
 def test_every_declared_subjectless_producer_has_a_stated_reason():
