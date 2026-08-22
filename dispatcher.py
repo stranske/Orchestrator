@@ -1169,6 +1169,9 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         # Agents with no profile registered for this transport are UNCHANGED: the selection is
         # skipped entirely, so nothing that worked before starts behaving differently.
         profile = _select_offload_profile(agent, mode)
+    # One name for the profile that is ACTUALLY in force, so the ledger, the routing metadata and
+    # the worker attempt cannot disagree about which profile ran.
+    effective_profile_id = profile["profile_id"] if profile else None
     argv = (
         adapters.build_command(
             agent, prepared_prompt, mode, cwd=run_cwd, profile=profile,
@@ -1202,7 +1205,14 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         task_type=task_type,
         log_file=str(logf),
         started_ts=started_ts,
-        selected_profile_id=profile_id,
+        # THE EFFECTIVE profile, not the caller's argument. `profile_id` is the parameter, which is
+        # None whenever the profile was chosen internally -- i.e. always, since no caller passes
+        # one. So the ledger recorded `selected_profile_id: null` beside `propensity: 1.0` and a
+        # policy version, describing a decision with no subject, and `reconcile` builds its
+        # `profile_ids` set from exactly this field: that is why the branch which resolves a worker
+        # attempt could never fire (250 marker backfills, 0 resolved, every run). The attempt row
+        # below always used `profile["profile_id"]`, so the run disagreed with itself.
+        selected_profile_id=effective_profile_id,
         requested_model=profile.get("requested_model") if profile else None,
         policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
         propensity=1.0 if profile else None,
@@ -1213,7 +1223,7 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             experiment_id=research_round or None,
             reasoning_level=(profile.get("reasoning_effort") if profile else mode), model=model,
             routing_metadata={
-                "selected_profile_id": profile_id,
+                "selected_profile_id": effective_profile_id,
                 "requested_model": profile.get("requested_model"),
                 "transport": "offload",
                 "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
@@ -1870,6 +1880,32 @@ def _selftest() -> None:
         assert worker and worker[0], (
             "a profiled offload must record a worker execution attempt; without it "
             "resolved_worker_identity_for_run can never return a row", codex_off)
+
+        # THE RUN MUST NOT DISAGREE WITH ITSELF. The attempt row always carried
+        # `profile["profile_id"]`, but the ledger and the routing metadata were handed the caller's
+        # `profile_id` argument -- None whenever the profile was chosen internally, which is always.
+        # `reconcile` builds its `profile_ids` set from the LEDGER field, so a null there is why the
+        # branch that resolves a worker attempt could never fire. Assert all three agree.
+        with feedback._conn() as c:
+            meta_json = c.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (codex_off["run_id"],)
+            ).fetchone()
+        routed = json.loads(meta_json[0]) if meta_json and meta_json[0] else {}
+        assert routed.get("selected_profile_id") == worker[0], (
+            "routing metadata must name the profile that actually ran", routed, worker)
+        # Read the ledger the way reconcile does, through its own reader -- a `hasattr` fallback
+        # here would make this assertion pass when the field is absent, which is the vacuous-test
+        # shape this file has already been burned by three times.
+        import ledger_reconcile as _lr
+
+        ledger_rows, _ = _lr._read_ledger(_lr._ledger_path())
+        ledger_ids = {
+            row.get("selected_profile_id")
+            for row in ledger_rows
+            if row.get("run_id") == codex_off["run_id"] and row.get("event") == "start"
+        }
+        assert ledger_ids == {worker[0]}, (
+            "the ledger start row must name the profile reconcile will look for", ledger_ids)
 
         # A ROUTING-TAG agent (gemini reports `agy:...`) now has a profile too, so it DOES record a
         # worker attempt -- but that attempt must stay UNRESOLVED, because a routing tag is not a
