@@ -1060,6 +1060,39 @@ def _capability_heartbeat(event_type: str, *, agent: str, mode: str | None) -> N
         pass
 
 
+def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
+    """Deterministically pick an execution profile for an offload, or None if none applies.
+
+    Uses the same `select_profile` contract the router uses, so the choice is replayable and the
+    routing decision is recorded rather than implicit. Returns None -- leaving behaviour exactly as
+    it was -- when the agent has no profile supporting the offload transport, so this cannot change
+    how an unprofiled seat runs.
+
+    Deliberately NOT exploration: an offload is a read, and its profile choice should be stable for
+    the same agent so the resulting worker attempts accumulate against one identity instead of
+    smearing across three.
+    """
+    try:
+        profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+        if not profiles:
+            return None
+        candidate_ids = sorted(profile["profile_id"] for profile in profiles)
+        envelope = execution_profiles.select_profile(
+            "offload",
+            None,
+            candidate_ids,
+            rng_seed=0,
+            scores={pid: 0.0 for pid in candidate_ids},
+            exploration=False,
+            exploration_policy="deterministic-offload-profile",
+        )
+        selected = envelope.get("selected_profile_id")
+        return execution_profiles.get_profile(selected) if selected else None
+    except Exception as exc:  # provenance must never prevent the work
+        print(f"warn: offload profile selection failed for {agent}: {exc}", file=sys.stderr)
+        return None
+
+
 def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             timeout: int | None = None, isolate: bool = False,
             profile_id: str | None = None, research_round: str | None = None) -> dict:
@@ -1126,6 +1159,16 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         )
     prepared_prompt = _offload_prompt(prompt, run_cwd, agent)
     profile = execution_profiles.get_profile(profile_id) if profile_id else None
+    if profile is None:
+        # SELECT one when the caller did not name it. This single line is why no worker execution
+        # attempt had ever been recorded: the worker-attempt write below is guarded on `profile`,
+        # `profile` came only from an explicit `profile_id`, and no caller passed one -- so 1,488
+        # offload runs produced zero provenance, every completion event failed
+        # `unresolved_model_provenance`, and no episode could ever be complete.
+        #
+        # Agents with no profile registered for this transport are UNCHANGED: the selection is
+        # skipped entirely, so nothing that worked before starts behaving differently.
+        profile = _select_offload_profile(agent, mode)
     argv = (
         adapters.build_command(
             agent, prepared_prompt, mode, cwd=run_cwd, profile=profile,
@@ -1801,6 +1844,46 @@ def _selftest() -> None:
             off_run = c.execute("SELECT task_type, agent, mode FROM runs WHERE run_id=?",
                                 (off["run_id"],)).fetchone()
         assert off_run == ("offload", "cursor", "offload"), off_run
+
+        # WORKER PROVENANCE, asserted BEHAVIOURALLY through offload() rather than by calling the
+        # selector directly. Testing `_select_offload_profile` alone passes even if offload stops
+        # using it -- a mechanism asserted against itself. This asserts the wiring: a profiled
+        # agent must leave a worker execution attempt behind, because that row is the only thing
+        # that can ever resolve model provenance, and without it no episode can complete.
+        def fake_build_any(agent, prompt, mode, cwd=None, **_kw):
+            # Accepts `profile=`: a profiled offload passes it, which is itself the wiring.
+            captured["profile_kw"] = _kw.get("profile")
+            return ["printf", "OFFLOAD RESULT"]
+
+        try:
+            adapters.build_command = fake_build_any
+            subprocess.run = fake_run
+            codex_off = offload("codex", "Summarize this file.", cwd=str(nongit), timeout=1)
+        finally:
+            adapters.build_command = old_build_command
+            subprocess.run = old_subprocess_run
+        with feedback._conn() as c:
+            worker = c.execute(
+                "SELECT profile_id, operation_role FROM execution_attempts "
+                "WHERE run_id=? AND operation_role='worker'", (codex_off["run_id"],)).fetchone()
+        assert captured.get("profile_kw"), "the selected profile must reach build_command"
+        assert worker and worker[0], (
+            "a profiled offload must record a worker execution attempt; without it "
+            "resolved_worker_identity_for_run can never return a row", codex_off)
+
+        # And an UNPROFILED agent must still record none -- the selection may not invent identity.
+        try:
+            adapters.build_command = fake_build_any
+            subprocess.run = fake_run
+            gem_off = offload("gemini", "Summarize this file.", cwd=str(nongit), timeout=1)
+        finally:
+            adapters.build_command = old_build_command
+            subprocess.run = old_subprocess_run
+        with feedback._conn() as c:
+            none_worker = c.execute(
+                "SELECT COUNT(*) FROM execution_attempts WHERE run_id=? AND operation_role='worker'",
+                (gem_off["run_id"],)).fetchone()[0]
+        assert none_worker == 0, "unprofiled agent must not get a fabricated worker attempt"
         import ledger_reconcile
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
         cost_by_run = {row["run_id"]: row for row in dry_cost["costs"]}
@@ -1990,10 +2073,25 @@ def _selftest() -> None:
         assert _exercised_capability_ids(thompson, "gemini") == [
             "agy-runtime-isolation", "thompson-hybrid-routing"]
 
+        # --- offload profile selection: the line that unblocked worker provenance ---
+        # No worker execution attempt had ever been recorded, because the attempt write is guarded
+        # on `profile` and `profile` came only from an explicit profile_id no caller passed.
+        codex_profile = _select_offload_profile("codex", "mid")
+        assert codex_profile and codex_profile["agent"] == "codex", codex_profile
+        assert codex_profile["profile_id"] in {
+            "codex-5.6-sol-high", "codex-5.6-terra-high", "codex-5.6-luna-high"}, codex_profile
+        # Deterministic: the same agent must resolve to the SAME profile every time, or worker
+        # attempts smear across three identities instead of accumulating against one.
+        assert _select_offload_profile("codex", "mid")["profile_id"] == codex_profile["profile_id"]
+        # Agents with no profile for this transport are UNCHANGED -- selection must not invent one.
+        for unprofiled in ("gemini", "cursor", "claude", "vibe", "aider"):
+            assert _select_offload_profile(unprofiled, "mid") is None, unprofiled
+
         print("dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
               "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
               "offload run_id ledger reconciliation + Gemini progress-only/log-tail fail-closed, heartbeat, bogus-agent skip, "
-              "delegate_remote label + guards, proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL)")
+              "delegate_remote label + guards, proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL, "
+              "offload profile selection)")
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

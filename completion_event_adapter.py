@@ -63,7 +63,12 @@ PHASES = (
     "outcome",
     "durability",
 )
+# `runtime_ac_gate` admitted 2026-08-22: it is the acceptance gate's own structured verdict
+# (gate_status, terminal_reason, materialization/verifier outcomes) and is exactly the evidence a
+# verification-phase event should carry. Its `spec_path` is a local temp path -- incidental, not
+# sensitive, and the secret/raw-prompt key walk below still applies to every nested key.
 PAYLOAD_ALLOWLIST = {
+    "runtime_ac_gate",
     "adjudication_id",
     "acceptance_gate_ids",
     "artifact_refs",
@@ -87,8 +92,37 @@ PAYLOAD_ALLOWLIST = {
 RAW_PROMPT_KEYS = {"prompt", "prompt_text", "raw_prompt", "system_prompt", "user_prompt"}
 SECRET_KEYS = {"access_token", "api_key", "password", "private_key", "secret", "token"}
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-TARGET_RE = re.compile(r"^([^/\s]+)/([^#\s]+)#(\d+)$")
+# Target grammar. An issue number is OPTIONAL, because most research is not done on a GitHub issue:
+# a UX panel reviews an app, an audit round covers a repo, a domain study has no repo at all.
+# Requiring `owner/repo#N` rejected every one of them as `invalid_canonical_target` -- 2,204 events
+# -- so the identity work upstream could never matter.
+#
+# Issue-scoped targets are UNCHANGED, deliberately: keepalive addresses `owner/repo#N` and its
+# canonical form, including `#007` -> `#7` normalisation, must round-trip exactly as before.
+# `test_issue_scoped_targets_are_unchanged` pins that.
+#
+# What must still be rejected is transport noise, not research scope: `offload:/private/tmp`,
+# `triage:20-items` (colons), `owner/repo [ux_review]` (spaces). Hence explicit character classes
+# rather than the old `[^/\s]+`, which admitted colons.
+TARGET_RE = re.compile(
+    r"^(?:(?P<owner>[A-Za-z0-9_.-]+)/)?(?P<name>[A-Za-z0-9_.-]+)(?:#(?P<issue>\d+))?$"
+)
+
+# A target that names nothing. These reach the exporter as placeholders, and admitting them would
+# let unrelated work collapse into one "subject" whose only shared property is having no target.
+SENTINEL_TARGETS = frozenset({"unknown", "none", "null", "n/a", "na", "-", "tbd"})
+# Extended 2026-08-22 after measuring every value the `roles` producer actually emits: booleans,
+# None, and bounded enum-like ids (`bounded_backlog_snapshot`, `no_matching_work`,
+# `matched_not_invoked`). No free text, no paths, no secrets -- so admitting them is a deliberate
+# contract decision, not a relaxation. Before this, 1,911 role events were rejected for carrying
+# their own selector telemetry, which drowned out the real defects.
 RESULT_ALLOWLIST = {
+    "accepted",
+    "disagreement",
+    "invoked",
+    "matched",
+    "selector_reason_id",
+    "selector_status",
     "action_id",
     "backend_run_id",
     "decision_source_id",
@@ -147,6 +181,72 @@ class EnvelopeError(ValueError):
         self.event_id = event_id
         self.reasons = tuple(dict.fromkeys(reasons))
         super().__init__(", ".join(self.reasons))
+
+
+class OutOfScopeError(EnvelopeError):
+    """The event legitimately has no research subject, so it is EXCLUDED, not failed.
+
+    A subclass so every existing ``except EnvelopeError`` keeps working; callers that care about
+    the difference test for this type first. The distinction is not cosmetic: counting production
+    delivery as a mining failure is what made "accepted 0 of 1784" indistinguishable from a fault,
+    and inventing a subject to make the accepted count move would corrupt mining outright.
+    """
+
+
+# Per-producer identity scope. Decided 2026-08-22 --
+# see Code/Audits/Orchestrator/2026-08-22-producer-identity-scope.md.
+#
+# SUBJECTLESS: structurally cannot carry a research subject. There is no spec, no base commit and
+# no arm/profile design set to hash, so an event from one of these is excluded from mining with a
+# counted reason. This is a decision, not an observation -- if one of these ever starts carrying an
+# experiment_id the contract has changed and the adapter says so rather than quietly admitting it.
+SUBJECTLESS_PRODUCERS = {
+    "keepalive": "delivery mechanism: drives an existing PR forward; no spec, no arm set",
+    "langsmith": "evaluator/observability trace; non-worker traces must not carry provenance (CLAUDE.md §2)",
+    "roles": "advisory role proposal; deterministic rails keep apply authority, no delivering arm",
+    "feedback.record_role_run": "role execution under deterministic rails; no arm/profile design set",
+    "runtime_ac_gate": "acceptance-gate verdict; a gate result is not an experimental arm",
+    "ledger_reconcile": "bookkeeping reconciliation; no work and no design set",
+    "local_verify": "local verification pass; not an experimental arm",
+}
+
+# SUBJECT-CAPABLE: these MAY belong to a research subject. Whether a given event does is decided by
+# its research context (an experiment_id that resolves to a registered subject), never by the
+# producer alone -- an outcome row for ordinary production work has no design set and is excluded,
+# while the same producer inside a registered experiment must arrive fully identified.
+SUBJECT_CAPABLE_PRODUCERS = {
+    "feedback.record_outcome",
+    "feedback.record_run",
+    "orchestrator_local",
+    "orchestrator_remote",
+    "exp_abcd",
+    "feedback.record_skill_invocation",
+    "runtime_ac",
+}
+
+# Reasons that mean ONLY "this event has no research design set". If an event's problems are
+# entirely within this set AND it has no research context, it is out of scope rather than broken.
+# Anything outside this set (a bad payload, a secret, a redaction, a target mismatch) is a real
+# defect and keeps the event a rejection no matter what its scope is.
+NO_SUBJECT_REASONS = frozenset({
+    # A non-repo target (an offload path, a triage batch) is not malformed -- it simply is not a
+    # repo-scoped research observation. Same for an event with no task type: there is nothing to
+    # form a subject from. Both stay REJECTIONS when the event carries an experiment_id, because
+    # then it claims to be research and failed to identify itself.
+    "invalid_canonical_target",
+    "missing_task_type",
+    "invalid_normalized_spec_hash",
+    "missing_base_sha",
+    "missing_subject_id",
+    "missing_observation_id",
+    "missing_subject_design_set",
+    "missing_joined_attempt_id",
+    "invalid_subject_arm_set",
+    "invalid_subject_profile_set",
+    "unresolved_model_provenance",
+    "worker_attempt_not_resolved",
+    "identity_derivation_failed",
+})
 
 
 @dataclass(frozen=True)
@@ -243,11 +343,23 @@ def _string(value: Any) -> str:
 
 
 def _canonical_target(value: Any) -> tuple[str, str] | None:
-    match = TARGET_RE.fullmatch(_string(value))
+    """Return (canonical_target, repository), or None when the value names no real scope.
+
+    Three accepted shapes, one canonical form each:
+      * ``owner/repo#12``        -> ``("owner/repo#12", "owner/repo")``   issue-scoped (keepalive)
+      * ``owner/repo``           -> ``("owner/repo", "owner/repo")``      repo-scoped (audit, panel)
+      * ``Reader``               -> ``("reader", "reader")``              un-namespaced local app
+    """
+    text = _string(value)
+    if text.lower() in SENTINEL_TARGETS:
+        return None
+    match = TARGET_RE.fullmatch(text)
     if not match:
         return None
-    owner, repo, issue = match.groups()
-    repository = f"{owner.lower()}/{repo.lower()}"
+    owner, name, issue = match.group("owner"), match.group("name"), match.group("issue")
+    repository = f"{owner.lower()}/{name.lower()}" if owner else name.lower()
+    if issue is None:
+        return repository, repository
     return f"{repository}#{int(issue)}", repository
 
 
@@ -408,7 +520,11 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     else:
         canonical_target, derived_repo = target
     repository = _string(identity_raw.get("repository")).lower()
-    if repository != derived_repo:
+    # Only judgeable when a target WAS derived. With an invalid target `derived_repo` is empty, so
+    # comparing it fired a second, spurious reason on every such event -- 3,010 of them -- which
+    # inflated the defect count with a cascade of one root cause and made the real defects
+    # (payload/result allowlist violations) hard to see.
+    if target and repository != derived_repo:
         reasons.append("repository_target_mismatch")
     task_type = _string(identity_raw.get("task_type")).lower()
     if not task_type:
@@ -425,6 +541,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     model = _string(identity_raw.get("resolved_model")).lower()
     if not (profile_id or arm_id) or not provider or not model:
         reasons.append("unresolved_model_provenance")
+    experiment_id = _string(identity_raw.get("experiment_id"))
     supplied_subject_id = _string(identity_raw.get("subject_id"))
     supplied_observation_id = _string(identity_raw.get("observation_id"))
     supplied_family_id = _string(identity_raw.get("family_id")) or None
@@ -498,7 +615,36 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     raw_attempt_id = _string(event_raw.get("attempt_id"))
     if raw_attempt_id and joined_attempt_id and raw_attempt_id != joined_attempt_id:
         reasons.append("event_attempt_join_mismatch")
+    producer = _string(event_raw.get("producer")).lower()
+    if producer in SUBJECTLESS_PRODUCERS and experiment_id:
+        # The declaration above says this producer has no subject. If it suddenly carries a
+        # research context the contract changed, and admitting it silently would let an
+        # undeclared identity path grow. Say so instead.
+        reasons.append("subjectless_producer_carries_experiment")
     if reasons:
+        codes = {reason.split(":", 1)[0] for reason in reasons}
+        # Out of scope when NOTHING is wrong except the absence of a research design set, and the
+        # event has no research context to have identified itself against. Declared-subjectless
+        # producers are out of scope by decision; everything else by observed context. An event
+        # WITH an experiment_id that still lacks identity is a registration gap, not out of scope,
+        # and stays a rejection -- that distinction is the whole point.
+        # "Presents nothing" vs "presents something broken". An event that supplies a subject id,
+        # an arm set or a base commit is CLAIMING research identity; if that claim is incomplete
+        # it is a defect, not a scope question -- otherwise the accepted count could be moved by
+        # corrupting one identity field instead of supplying it. Out of scope means the event
+        # offers no design set at all, which is the honest shape of production delivery.
+        presents_identity = bool(
+            experiment_id or supplied_subject_id or supplied_family_id
+            or subject_arms or subject_profiles or base_sha
+        )
+        no_research_context = (
+            producer in SUBJECTLESS_PRODUCERS or not presents_identity
+        )
+        if no_research_context and codes <= NO_SUBJECT_REASONS:
+            raise OutOfScopeError(
+                event_id,
+                [f"no_research_subject:{producer or 'unknown'}", *reasons],
+            )
         raise EnvelopeError(event_id, reasons)
     if expected_ids is None:  # pragma: no cover - unreachable, guards a regression
         # A failed derivation always appends a reason, so the raise above fired.

@@ -2429,6 +2429,21 @@ def _record_outcome_in_conn(
                 },
             )
         if vv is not None or av is not None:
+            # NAME THE GATE. The miner refuses an episode whose verification does not say WHAT
+            # passed (`unnamed_verification`) -- correctly, because "it passed" is precisely the
+            # gameable label the evidence contract exists to reject. This payload carried the
+            # verdicts but never the gate, so every otherwise-complete episode was ineligible.
+            #
+            # `acceptance_gate_ids` is the top-level field `normalize_episode` falls back to, and
+            # it is named ONLY when a gate actually ran: CI is a real, checkable gate whose status
+            # travels in `delivery.ci_status` in this same payload, so the claim is substantiated.
+            # With no CI there is nothing to point at, so the verification stays unnamed and the
+            # episode stays ineligible -- the honest outcome, not a gap to paper over with a
+            # constant. (A caller-supplied gate id would be better still; this uses evidence
+            # record_outcome already holds rather than inventing a parameter.)
+            verification_payload = dict(payload)
+            if stored_ci:
+                verification_payload["acceptance_gate_ids"] = ["ci"]
             _record_completion_event_in_conn(
                 c,
                 run_id,
@@ -2436,7 +2451,7 @@ def _record_outcome_in_conn(
                 phase="verification",
                 producer="feedback.record_outcome",
                 status=av or vv,
-                payload=payload,
+                payload=verification_payload,
             )
         if stored_merged is not None or stored_ci is not None:
             _record_completion_event_in_conn(
@@ -5836,13 +5851,38 @@ def _selftest():
             and snap["rows"]["execution_attempts"] >= 5
             and "evidence_types" in snap["rows"]
         ), snap
+        # --- the verification event must NAME the gate, and only when one ran ---
+        # An episode whose verification does not say WHAT passed is refused as
+        # `unnamed_verification`, which is why no otherwise-complete episode was ever eligible.
+        record_run("gate-named", "o/r#1", "implement", "codex", pr_number=41)
+        record_outcome("gate-named", verifier_verdict="PASS", adjudicated_verdict="PASS",
+                       merged=1, ci_status="success", durability="durable")
+        named = _conn().execute(
+            "SELECT payload_json FROM completion_events WHERE run_id='gate-named' "
+            "AND phase='verification'").fetchone()
+        assert named, "verification event missing"
+        assert json.loads(named[0]).get("acceptance_gate_ids") == ["ci"], named[0]
+        # And it must stay UNNAMED when no gate ran -- naming it unconditionally would restore
+        # exactly the ungameable-label failure this check exists to prevent.
+        record_run("gate-unnamed", "o/r#2", "implement", "codex", pr_number=42)
+        record_outcome("gate-unnamed", verifier_verdict="PASS", adjudicated_verdict="PASS",
+                       merged=1, durability="durable")
+        unnamed = _conn().execute(
+            "SELECT payload_json FROM completion_events WHERE run_id='gate-unnamed' "
+            "AND phase='verification'").fetchone()
+        assert unnamed and "acceptance_gate_ids" not in json.loads(unnamed[0]), unnamed[0]
+        # Both events must survive payload validation -- a nested key would have been rejected.
+        assert all(row[0] == "accepted" for row in _conn().execute(
+            "SELECT validation_status FROM completion_events WHERE run_id IN "
+            "('gate-named','gate-unnamed') AND phase='verification'")), "verification rejected"
+
         env_prereq.report_gaps("feedback.py", gaps)
         print(
             "feedback.py selftest: OK (prior→posterior learning, durability/verifier-as-success, late updates, "
             "versioned weights, eval matrix, human calibration, evidence-gap growth+prune+approval, "
             "trace retention, test_evaluator_trace_cannot_resolve_worker_model, conservative legacy migration, "
             "quality-magnitude/outcome learner + effort reward, safe completion lineage + "
-            "rejected-edge non-inheritance, json snapshot)"
+            "rejected-edge non-inheritance, named verification gate, json snapshot)"
             + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
         )
     finally:

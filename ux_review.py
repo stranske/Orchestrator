@@ -29,6 +29,7 @@ from pathlib import Path
 import adapters
 import dispatcher
 import feedback
+import provision
 import research_subjects
 from exp_abcd import (
     AGENT_MODE,
@@ -441,6 +442,39 @@ def aggregate_panel(
     }
 
 
+def resolve_panel_base_sha(bundle: dict) -> str | None:
+    """The commit the reviewed app was running, or None when it genuinely cannot be known.
+
+    A UX review is of a running app at a specific commit, and that commit was never captured, so
+    every panel subject registered with `base_sha=None` -- which is one of the two fields
+    `identity_complete` requires. The bundle wins if the caller supplied it; otherwise the app's
+    canonical checkout is asked, since the panel already knows which app it reviewed.
+
+    Returns None rather than a placeholder when the app is not a repository (a local tool, a
+    domain study). An invented base commit would make two different states of the same app look
+    like one subject, which is worse than an honest gap.
+    """
+    supplied = str(bundle.get("base_sha") or "").strip()
+    if supplied:
+        return supplied
+    app = str(bundle.get("app") or "").strip()
+    if "/" not in app:
+        return None
+    try:
+        canon = provision.canonical_path(app)
+        if not canon or not Path(canon).is_dir():
+            return None
+        out = subprocess.run(
+            ["git", "-C", str(canon), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        sha = (out.stdout or "").strip()
+        return sha or None
+    except Exception as exc:  # never fail a panel over provenance
+        print(f"warn: ux_review base_sha unresolved for {app}: {exc}", file=sys.stderr)
+        return None
+
+
 def register_panel_subject(
     bundle: dict,
     evaluators: list[str],
@@ -463,7 +497,7 @@ def register_panel_subject(
     review_id = bundle["review_id"]
     try:
         identity = research_subjects.subject_identity(
-            bundle["app"], "ux_review", spec, bundle.get("base_sha"), evaluators
+            bundle["app"], "ux_review", spec, resolve_panel_base_sha(bundle), evaluators
         )
         research_subjects.record_subject(
             identity,

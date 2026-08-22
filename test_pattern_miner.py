@@ -5,7 +5,13 @@ import json
 
 import pytest
 
-from completion_event_adapter import adapt_completion_event_envelope
+from completion_event_adapter import (
+    EnvelopeError,
+    _canonical_target,
+    OutOfScopeError,
+    SUBJECTLESS_PRODUCERS,
+    adapt_completion_event_envelope,
+)
 from pattern_miner import MAX_REPORTED_REJECTIONS, PHASES, PatternMiner, main
 import research_subjects
 
@@ -458,6 +464,132 @@ def test_valid_spec_hash_still_derives_identity_and_is_not_skipped():
     assert result.status["rejected_event_count"] == 0
     assert result.status["rejected_event_reasons"] == {}
     assert len(result.candidates) == 1
+
+
+def _strip_identity(row: dict) -> dict:
+    """Make a row look like ordinary production delivery: no research design set at all."""
+    row = json.loads(json.dumps(row))
+    row["identity"].update({
+        "normalized_spec_hash": None, "base_sha": None, "subject_id": None,
+        "family_id": None, "observation_id": None, "attempt_id": None,
+        "attempt_resolution": "unresolved", "subject_arms": [], "subject_profiles": [],
+        "resolved_provider": None, "resolved_model": None, "profile_id": None,
+        "arm_id": None, "experiment_id": None,
+    })
+    row["event"]["attempt_id"] = None
+    return row
+
+
+def test_production_delivery_is_excluded_not_failed():
+    """~70% of the stream has no research subject. Counting that as failure hid a real fault."""
+    row = _strip_identity(completion_episode(1)[0])
+    row["event"]["producer"] = "keepalive"
+    with pytest.raises(OutOfScopeError) as caught:
+        adapt_completion_event_envelope(row)
+    assert any(r.startswith("no_research_subject:keepalive") for r in caught.value.reasons)
+
+    result = PatternMiner().mine([row], now=200)
+    assert result.status["excluded_event_count"] == 1
+    assert result.status["rejected_event_count"] == 0, "an exclusion must not read as a defect"
+    assert result.status["accepted_event_count"] == 0
+    assert result.status["excluded_producers"] == {"keepalive": 1}
+
+
+def test_research_claiming_event_without_identity_stays_a_rejection():
+    """THE ANTI-RELAXATION GUARD. An event that claims research must identify itself.
+
+    If this ever becomes an exclusion, the accepted count can be moved by dropping identity
+    instead of supplying it -- which is exactly how mined candidates come to rest on identities
+    that distinguish nothing.
+    """
+    row = _strip_identity(completion_episode(1)[0])
+    row["event"]["producer"] = "orchestrator_local"
+    row["identity"]["experiment_id"] = "tick-1-owner-repo-1"
+    with pytest.raises(EnvelopeError) as caught:
+        adapt_completion_event_envelope(row)
+    assert not isinstance(caught.value, OutOfScopeError), "research context must not be excused"
+    result = PatternMiner().mine([row], now=200)
+    assert result.status["rejected_event_count"] == 1
+    assert result.status["excluded_event_count"] == 0
+
+
+def test_declared_subjectless_producer_carrying_research_is_flagged():
+    """The declaration is load-bearing: a contract change must be said, not silently admitted."""
+    row = _strip_identity(completion_episode(1)[0])
+    row["event"]["producer"] = "keepalive"
+    row["identity"]["experiment_id"] = "tick-9-owner-repo-9"
+    with pytest.raises(EnvelopeError) as caught:
+        adapt_completion_event_envelope(row)
+    assert "subjectless_producer_carries_experiment" in caught.value.reasons
+
+
+def test_contract_violation_is_a_defect_even_out_of_scope():
+    """A bad payload is a defect regardless of scope; scope must not launder it."""
+    row = _strip_identity(completion_episode(1)[0])
+    row["event"]["producer"] = "keepalive"
+    row["event"]["payload"] = {"result": {"status": "ok"}, "not_allowlisted_field": 1}
+    with pytest.raises(EnvelopeError) as caught:
+        adapt_completion_event_envelope(row)
+    assert not isinstance(caught.value, OutOfScopeError)
+    assert any(r.startswith("payload_field_not_allowlisted") for r in caught.value.reasons)
+
+
+def test_mining_health_distinguishes_ran_from_mined():
+    """`orchestrate.sh` read only the exit code, so accepting 0 of 1784 looked healthy."""
+    empty = PatternMiner().mine([], now=200).status["mining_health"]
+    assert empty["state"] == "no_input" and empty["actionable"] is True
+
+    scoped = [_strip_identity(r) for r in completion_episode(2)]
+    for r in scoped:
+        r["event"]["producer"] = "keepalive"
+    out = PatternMiner().mine(scoped, now=200).status["mining_health"]
+    assert out["state"] == "all_out_of_scope", out
+    assert out["actionable"] is False, "a clean production-only stream is not a fault"
+    assert out["summary"].startswith("accepted 0 /"), out
+
+    good = [row for index in range(1, 4) for row in completion_episode(index)]
+    mining = PatternMiner().mine(good, now=200).status["mining_health"]
+    assert mining["state"] == "mining" and mining["candidate_count"] >= 1
+
+    bad = completion_episode(5)[0]
+    bad["identity"]["subject_id"] = "subject:forged"
+    rejecting = PatternMiner().mine([*good, bad], now=200).status["mining_health"]
+    assert rejecting["state"] == "rejecting" and rejecting["actionable"] is True
+
+
+def test_every_declared_subjectless_producer_has_a_stated_reason():
+    """A declaration without a reason is an assertion nobody can audit later."""
+    for producer, reason in SUBJECTLESS_PRODUCERS.items():
+        assert producer == producer.lower(), producer
+        assert len(reason) > 20, f"{producer} needs a real justification, got {reason!r}"
+
+
+def test_issue_scoped_targets_are_unchanged():
+    """KEEPALIVE GUARD. Extending the grammar must not move `owner/repo#N` by one character."""
+    assert _canonical_target("stranske/trip-planner#12") == (
+        "stranske/trip-planner#12", "stranske/trip-planner")
+    # Numeric normalisation is part of the old contract and must survive.
+    assert _canonical_target("stranske/trip-planner#007") == (
+        "stranske/trip-planner#7", "stranske/trip-planner")
+    assert _canonical_target("Stranske/Trip-Planner#3") == (
+        "stranske/trip-planner#3", "stranske/trip-planner")
+
+
+def test_research_scopes_without_an_issue_now_parse():
+    """Most research is not done on a GitHub issue; requiring one rejected all of it."""
+    assert _canonical_target("stranske/trip-planner") == (
+        "stranske/trip-planner", "stranske/trip-planner")
+    assert _canonical_target("domain/luminar-editing") == (
+        "domain/luminar-editing", "domain/luminar-editing")
+    assert _canonical_target("local/Reader") == ("local/reader", "local/reader")
+    assert _canonical_target("JobSearch.2026") == ("jobsearch.2026", "jobsearch.2026")
+
+
+def test_transport_noise_and_sentinels_are_still_rejected():
+    """Widening scope must not admit things that name no scope at all."""
+    for bad in ("offload:/private/tmp", "triage:20-items",
+                "stranske/trip-planner [ux_review]", "unknown", "none", "-", "", "   "):
+        assert _canonical_target(bad) is None, bad
 
 
 def test_status_command_is_machine_readable_and_queue_free(tmp_path, capsys):
