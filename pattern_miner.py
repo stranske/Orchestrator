@@ -46,6 +46,7 @@ from capability_ir import (
 from completion_event_adapter import (
     CompletionEvent,
     EnvelopeError,
+    OutOfScopeError,
     PHASES,
     adapt_completion_event_envelope,
 )
@@ -78,6 +79,62 @@ class Rejection:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _producer_counts(rejections: Iterable["Rejection"]) -> dict[str, int]:
+    """Count excluded events per producer, read off the `no_research_subject:<producer>` reason.
+
+    Names WHICH producers the stream is made of, so "excluded 1784" is attributable instead of
+    anonymous. An exclusion count that suddenly moves to a producer declared subject-capable is a
+    registration gap worth chasing; one that stays on the declared-subjectless producers is normal.
+    """
+    counts: Counter[str] = Counter()
+    for rejection in rejections:
+        for reason in rejection.reasons:
+            if reason.startswith("no_research_subject:"):
+                counts[reason.split(":", 1)[1] or "unknown"] += 1
+    return dict(sorted(counts.items()))
+
+
+def _mining_health(
+    raw: int, accepted: int, rejected: int, excluded: int, episodes: int, candidates: int
+) -> dict[str, Any]:
+    """One machine-readable verdict a cadence step can branch on, instead of an exit code.
+
+    Four states, deliberately distinguishable:
+
+    * ``no_input``       - nothing was exported. The 2026-07-10 "success" was this, and the stamp
+                           recorded it as healthy, which is why the miner looked fine having never
+                           mined anything.
+    * ``all_out_of_scope`` - the stream ran clean but carried no research subject at all. Expected
+                           for a production-only corpus; NOT a fault, and not success either.
+    * ``rejecting``      - real defects in the stream. Actionable.
+    * ``mining``         - episodes assembled.
+    """
+    if raw == 0:
+        state, detail = "no_input", "exporter produced no events"
+    elif rejected:
+        state, detail = "rejecting", f"{rejected} of {raw} events rejected as malformed"
+    elif accepted == 0:
+        state, detail = "all_out_of_scope", f"all {raw} events have no research subject"
+    elif episodes == 0:
+        state, detail = "accepted_no_episodes", f"{accepted} events accepted, no complete episode"
+    else:
+        state, detail = "mining", f"{episodes} episodes, {candidates} candidates"
+    return {
+        "state": state,
+        "detail": detail,
+        "raw_event_count": raw,
+        "accepted_event_count": accepted,
+        "rejected_event_count": rejected,
+        "excluded_event_count": excluded,
+        "complete_episode_count": episodes,
+        "candidate_count": candidates,
+        # A cadence step should treat only `rejecting` and `no_input` as unhealthy: the others mean
+        # the miner did its job on the input it was given.
+        "actionable": state in {"rejecting", "no_input"},
+        "summary": f"accepted {accepted} / rejected {rejected} / excluded {excluded} of {raw}",
+    }
 
 
 def _reason_counts(rejections: Iterable["Rejection"]) -> dict[str, int]:
@@ -433,6 +490,7 @@ class PatternMiner:
         self.candidates: list[CapabilityIR] = []
         self.tombstones: list[CandidateTombstone] = []
         self.rejections: list[Rejection] = []
+        self.exclusions: list[Rejection] = []
         self._status: dict[str, Any] = {}
         self.state_loaded = False
 
@@ -475,11 +533,19 @@ class PatternMiner:
     ) -> tuple[list[NormalizedEpisode], int]:
         accepted_events: list[CompletionEvent] = []
         self.rejections = []
+        self.exclusions = []
         raw_count = 0
         for raw in raw_events:
             raw_count += 1
             try:
                 accepted_events.append(adapt_completion_event_envelope(raw))
+            except OutOfScopeError as exc:
+                # Production delivery with no research design set. Counted, never a failure --
+                # calling this a rejection is what made a healthy-but-empty run look like a fault
+                # and a faulty run look ordinary. Subclass check MUST precede EnvelopeError.
+                self.exclusions.append(
+                    Rejection(exc.event_id, "out_of_scope", tuple(exc.reasons))
+                )
             except EnvelopeError as exc:
                 self.rejections.append(
                     Rejection(exc.event_id, "envelope", tuple(exc.reasons))
@@ -877,10 +943,16 @@ class PatternMiner:
             },
             "state_loaded": self.state_loaded,
             "accepted_event_count": raw_count
-            - sum(1 for rejection in self.rejections if rejection.phase == "envelope"),
+            - sum(1 for rejection in self.rejections if rejection.phase == "envelope")
+            - len(self.exclusions),
             "rejected_event_count": sum(
                 1 for rejection in self.rejections if rejection.phase == "envelope"
             ),
+            # Excluded != rejected. These events legitimately have no research subject, so a large
+            # exclusion count is the NORMAL shape of a production stream, not a defect signal.
+            "excluded_event_count": len(self.exclusions),
+            "excluded_event_reasons": _reason_counts(self.exclusions),
+            "excluded_producers": _producer_counts(self.exclusions),
             "raw_event_count": raw_count,
             "complete_episode_count": len(episodes),
             "terminal_episode_count": len(terminal_episodes),
@@ -899,6 +971,20 @@ class PatternMiner:
                 1 for item in self.candidates if item.lifecycle.state == "retired"
             ),
             "rejection_count": len(self.rejections),
+            # The single line a cadence step can act on. `orchestrate.sh` inspected only the exit
+            # code, so a run that accepted 0 of 1784 called _mark_success and looked healthy --
+            # which is how this stayed invisible for 43 days while ALERTing into an unread log.
+            # Blocking quantity and drainable quantity in the same place (CLAUDE.md runtime rule).
+            "mining_health": _mining_health(
+                raw_count,
+                raw_count
+                - sum(1 for r in self.rejections if r.phase == "envelope")
+                - len(self.exclusions),
+                sum(1 for r in self.rejections if r.phase == "envelope"),
+                len(self.exclusions),
+                len(episodes),
+                len(self.candidates),
+            ),
             "rejected_event_reasons": _reason_counts(
                 rejection for rejection in self.rejections
                 if rejection.phase == "envelope"

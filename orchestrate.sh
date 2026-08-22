@@ -324,6 +324,27 @@ if _cadence_due pattern-miner && _attempt_ok pattern-miner; then
      python3 "$ORCH/pattern_miner.py" run --events "$pattern_events_tmp" --state "$pattern_state" \
        --status-out "$pattern_status" --inventory-out "$pattern_inventory" > "$STAMP_DIR/pattern-miner.log" 2>&1; then
     mv "$pattern_events_tmp" "$STAMP_DIR/completion-events.jsonl"
+    # LEGIBILITY. Exit code alone said "ran"; it could not say "mined". A run that accepted 0 of
+    # 1784 events called _mark_success and printed a checkmark, which is how a dead miner looked
+    # healthy for 43 days while ALERTing every 6h into an unread log. The step still succeeds when
+    # it RAN -- conflating "the miner is broken" with "the input carries no research subject" is
+    # the same mistake in the other direction -- but the line now carries the numbers, so the log
+    # is a diagnosis instead of a checkmark. Blocking and drainable quantity in one place.
+    python3 - "$pattern_status" <<'MINING_HEALTH' || true
+import json, sys
+try:
+    health = (json.load(open(sys.argv[1])) or {}).get("mining_health") or {}
+except Exception as exc:
+    print(f"  MINING: status unreadable ({exc})"); raise SystemExit(0)
+state = health.get("state", "unknown")
+print(f"  MINING: {state} — {health.get('summary', 'no summary')}"
+      f" | episodes={health.get('complete_episode_count', '?')}"
+      f" candidates={health.get('candidate_count', '?')}")
+if health.get("actionable"):
+    # Named, not silent: `rejecting` means real defects in the stream, `no_input` means the
+    # exporter produced nothing. Neither is drained by waiting.
+    print(f"  MINING-ACTIONABLE: {health.get('detail', state)}")
+MINING_HEALTH
     _mark_success pattern-miner
   else
     rm -f "$pattern_events_tmp"
