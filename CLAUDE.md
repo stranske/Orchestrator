@@ -207,6 +207,20 @@ Do not create a second event log, model registry, or capability inventory.
   real pytest, reads the COUNTS rather than the exit status, enforces a collection floor so tests
   silently ceasing to run cannot look like tests passing, treats a silent zero-exit selftest as a
   failure, and runs the five capability gates. CI runs the same command on a clean machine.
+- **The collection floor is an EQUALITY, so adding tests means bumping it in the same PR.**
+  `collected` in `.verify-floor.json` must EQUAL what pytest collects: too few fails (tests
+  stopped running), and since 2026-08-23 too many fails as well. A floor BEHIND reality is
+  permissive by exactly the gap, and that direction was silent for as long as it existed — four
+  drifts (21 low at the worst, then 8, then 1, then 2) each caught only because somebody happened
+  to look, because nothing required a test-adding PR to touch the file at all. CI prints the two
+  integers to write. **If a branch merged under you, REBASE before re-measuring** — the number is
+  a property of the merge result, not of your branch. You will rarely have to remember that: once
+  every test-adding branch edits these same two lines, two concurrent branches conflict in git,
+  and the second cannot merge without rebasing onto the first. `passed` stays a MINIMUM on
+  `passed + skipped`, because only collection is machine-invariant — a skipped test is still a
+  collected one, so a bare runner and the owner's machine collect the same number while their
+  pass/skip split differs. `--update-floor` is not blocked by drift (that would be a gate
+  forbidding its own drain) and now APPENDS to the note rather than replacing it.
 - **A check whose PREREQUISITE is absent skips with the missing thing NAMED, and skipping is
   bounded.** Some checks need what only a running instance has: the populated capability ledger,
   an installed agent CLI, `~/.codex/skills`, the version-capable Codex binary. Those gates live in
