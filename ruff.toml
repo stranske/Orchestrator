@@ -1,0 +1,66 @@
+# Ruff configuration — and the reason it exists is not style, it is agreement.
+#
+# THE DEFECT THIS FILE FIXES. Two CI surfaces run Ruff on this repo and, with no config present,
+# they resolved "no config" DIFFERENTLY:
+#
+#   * the Gate (`reusable-10-ci-python.yml`) deliberately pins the pre-0.16 family,
+#     `ruff check --select E4,E7,E9,F` — 37 findings on today's main;
+#   * Autofix (`reusable-18-autofix.yml`) runs `ruff check --select I --fix` and then a bare
+#     `ruff check --fix` — Ruff 0.16's own default, which is far WIDER: 733 findings there.
+#     (Before PR #42's Autofix commits landed on main these read 79 and 915. The GAP is the
+#     point, not its size on any given day.)
+#
+# So Autofix rewrote the tree to satisfy a rule set the Gate never checked, on every Gate failure,
+# and the Gate stayed red regardless. Two windows that could never agree — this workspace's
+# signature latched-gate shape. Declaring `select` here collapses them to ONE set: Ruff picks up
+# this file from either surface, so what Autofix fixes is exactly what the Gate checks.
+#
+# Because this file declares `select`, the Gate takes its "consumer has an explicit selection"
+# branch and runs `ruff check` under these rules instead of its own fallback. That is deliberate:
+# the rule set is now pinned by this repo, so a Ruff release cannot silently widen it from 37 to
+# 733 again behind the recorded baseline.
+#
+# Deferred rules, their measured counts, and what would drain each: docs/CI_LINT_BASELINE.md.
+# Re-measure with `python3 scripts/ci_lint_baseline.py`.
+
+# 100, not 88. The Gate's format check and Autofix's formatter BOTH invoke `black --line-length
+# 100`, hardcoded on their command lines. This repo's aligned multi-line strings carry ledger prose
+# that reads at ~100 columns. At 88 Black rewrites 184 of 196 files here; at 100 it rewrites 2.
+# Reformatting at 88 is what produced the 142-file / +20,562 -11,089 churn commits on PR #42.
+# test_ci_gate_config.py asserts this number still equals the one those two workflows pass, so
+# the three cannot drift apart silently.
+line-length = 100
+
+# Matches `primary-python-version: '3.12'` in pr-00-gate.yml. Stated rather than inferred: with no
+# pyproject.toml there is no `requires-python` for Ruff to read, so the default would apply.
+target-version = "py312"
+
+# The Gate passes `--extend-exclude .workflows-lib` on its command line; Autofix does not. Naming
+# it here means both surfaces skip it. It is a CI-time checkout of stranske/Workflows with its own
+# Ruff configuration, never part of this repo.
+extend-exclude = [".workflows-lib"]
+
+# This repo's modules are flat and top-level (`import capabilities`), so first-party detection has
+# to resolve them from the repo root rather than from a `src/` layout. Stated explicitly instead of
+# relying on Ruff's default, and NOT as a hand-maintained `known-first-party` list: 129 root modules
+# would mean a list that silently goes stale every time a module is added or renamed — the drift
+# this file exists to prevent. Both surfaces read it, since Autofix's `--select I` on the command
+# line overrides `select` but never the isort settings.
+src = ["."]
+
+[lint]
+# E4/E7/E9/F is exactly the set the Gate was already applying, now owned here. `I` is added because
+# Autofix applies import sorting UNCONDITIONALLY (`--select I` on its command line overrides any
+# config), so leaving `I` unchecked would leave Autofix able to rewrite imports the Gate never
+# looked at — the same disagreement in miniature.
+#
+# NOT selected, deliberately, with counts measured 2026-08-23:
+#   E501 (line too long)  — 1068 lines still exceed 100 columns AFTER `black -l 100`, because they
+#                           are long strings, URLs and comment prose that no formatter can break.
+#                           Drainable only by rewriting load-bearing text; drainable 0 mechanically.
+#   the rest of Ruff 0.16's default set (B, BLE, EXE, ISC, S, SIM, TRY, UP, FURB, PL, RUF, DTZ,
+#                           PIE) — 742 findings, while the set selected below sits at 0. Each is
+#                           a real code change, not a reformat.
+# Both are recorded with their drains in docs/CI_LINT_BASELINE.md. Widening this list is a
+# deliberate act: measure first, drain to zero in the same change, then add the code here.
+select = ["E4", "E7", "E9", "F", "I"]

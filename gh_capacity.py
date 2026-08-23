@@ -357,7 +357,10 @@ def _selftest():
 
         # 3. throttle: SHED long-reset defers (no sleep); SHED short-reset waits; LOW paces.
         slept = []
-        sl = lambda s: slept.append(s)
+
+        def sl(s):
+            return slept.append(s)
+
         # craft via the ledger so throttle()'s internal state() read picks it up
         _append_ledger([row("search", 1, 30, 1800)])  # SHED, long reset
         assert throttle("search", sleeper=sl)["action"] == "defer" and not slept

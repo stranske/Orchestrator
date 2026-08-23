@@ -208,7 +208,7 @@ def labels_producing(task_type: str) -> list[str]:
         "RUNTIME_AC_LABELS",
     ):
         vocab |= set(getattr(backlog, name, ()) or ())
-    return sorted(l for l in vocab if backlog.classify([l]) == task_type)
+    return sorted(lab for lab in vocab if backlog.classify([lab]) == task_type)
 
 
 # A basename that could actually BE a module in this tree. `exp_abcd.py:followup ->
@@ -1114,7 +1114,7 @@ def _fleet_label_index(*, use_cache: bool = True) -> dict:
 
 def label_coverage(task_type: str, index: dict) -> dict:
     """In how many repos does a label that produces this task_type actually exist?"""
-    wanted = {l.lower() for l in labels_producing(task_type)}
+    wanted = {lab.lower() for lab in labels_producing(task_type)}
     repos = index.get("repos") or {}
     if not wanted or not repos:
         return {"labels": sorted(wanted), "repos_with": None, "repos_total": len(repos)}

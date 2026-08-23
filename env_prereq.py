@@ -50,10 +50,9 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
+import tomllib
 import unittest
 from pathlib import Path
-
-import tomllib
 
 # The single token verify.py greps for in a selftest's or gate's output to classify it as
 # SKIPPED rather than passed. Defined once here and consumed by both sides, so the writer and
@@ -194,6 +193,34 @@ def skill_resource_absent() -> str | None:
     return (
         f"reference skill resource not installed: {resource} — the skill compiler is "
         f"deliberately exercised against a real installed skill, not a fixture"
+    )
+
+
+def repo_files_absent(*relative_paths: str) -> str | None:
+    """Reason string when committed repo files a check asserts against are not in THIS tree.
+
+    The exec mirror is not a checkout. `orch-sync-mirror.sh` copies root-level `*.py`,
+    `orchestrate.sh`, `.verify-floor.json` and a few JSON registries to `~/.codex/orchestrator-mirror`
+    — because launchd cannot read the CloudStorage volume — and nothing else. So `.github/`,
+    `docs/`, `scripts/`, `ruff.toml` and `mypy.ini` simply do not exist there, while the `test_*.py`
+    files that assert against them are copied and DO run.
+
+    That asymmetry needs a detector rather than a `Path.is_file()` guard at each call site, for the
+    reason the module header gives: a check that quietly passes because its subject was missing is
+    the founding defect wearing a different hat. On a real checkout — the owner's tree, a GitHub
+    runner, a second instance — every path resolves and every assertion runs, so this never masks a
+    finding in the place the finding would matter.
+
+    Detects the FILE, never the context: no `$CI`, no "am I in the mirror" heuristic.
+    """
+    here = Path(__file__).resolve().parent
+    missing = [rel for rel in relative_paths if not (here / rel).exists()]
+    if not missing:
+        return None
+    return (
+        f"not present in this tree: {', '.join(sorted(missing))} — the exec mirror carries "
+        f"root-level modules only (orch-sync-mirror.sh), so repository configuration is asserted "
+        f"from a checkout. Run this check from the repo, where it is not skipped."
     )
 
 
@@ -396,6 +423,7 @@ def _selftest() -> None:
         ("agent_cli_absent", lambda: agent_cli_absent("codex")),
         ("credential_file_absent", lambda: credential_file_absent("vibe")),
         ("seat_has_no_free_signal", seat_has_no_free_signal),
+        ("repo_files_absent", lambda: repo_files_absent("definitely-not-a-file-here")),
     ]
     for name, fn in detectors:
         got = fn()
@@ -405,6 +433,15 @@ def _selftest() -> None:
     for name, fn in detectors[:3]:
         got = fn()
         assert got and "definitely-not-a-capability" in got, (name, got)
+
+    # Same rule for the file detector: handed a path that cannot exist it MUST report absence and
+    # NAME it, and handed one that does exist it must report nothing. Both directions, because a
+    # detector that always reports absence would skip every check on every machine — a silent
+    # green, which is worse than the red it replaced.
+    absent = repo_files_absent("definitely-not-a-file-here")
+    assert absent and "definitely-not-a-file-here" in absent, absent
+    assert repo_files_absent("env_prereq.py") is None, "a file that IS here must not skip"
+    assert repo_files_absent("env_prereq.py", "definitely-not-a-file-here"), "one missing is enough"
 
     # A skipped selftest must SPEAK, and its line must carry the shared mark verify.py greps
     # for. A skip that prints nothing is a silent zero-exit by another name.
