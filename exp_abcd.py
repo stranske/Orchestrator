@@ -1430,9 +1430,10 @@ def followup(
         launch_fn = None
         if phase_before == "evaluated" and launch_available and not promotion_inflight:
             meta = json.loads((edir / "meta.json").read_text())
-            launch_fn = lambda repo=meta["repo"], exp_id=edir.name: (
-                (synthesize_fn or synthesize)(repo, exp_id)
-            )
+
+            def launch_fn(repo=meta["repo"], exp_id=edir.name):
+                return (synthesize_fn or synthesize)(repo, exp_id)
+
         try:
             promotion = promotion_reconcile(
                 edir,
@@ -1631,7 +1632,7 @@ def _winner_and_harvest(
     for agent in agents:
         scs, ns = [], []
         for j in judges:
-            L = next((l for l, a in maps.get(j, {}).items() if a == agent), None)
+            L = next((lab for lab, a in maps.get(j, {}).items() if a == agent), None)
             if L and L in verdicts[j].get("scores", {}):
                 scs.append((float(verdicts[j]["scores"][L]), weights.get(j, 1.0)))
                 note = (verdicts[j].get("notes") or {}).get(L)
