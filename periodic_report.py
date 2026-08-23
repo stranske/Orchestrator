@@ -2737,14 +2737,20 @@ def _selftest() -> None:
             assert built["cannot_report_reason"] is None, built
             # THE OTHER HALF: an identical row for a seat with no reader is PERMANENT, not
             # pending, and says so. These two must never collapse into one verdict.
-            feedback.record_run("cov-never", "offload:/tmp/y", "offload", "cursor")
+            #
+            # Uses gemini, NOT cursor. This assertion named cursor when cursor was believed
+            # incapable of reporting; cursor keeps `providerOptions.cursor.modelName` in its own
+            # chat store, so pinning it here enforced a false declaration -- the third test in this
+            # session to lock in a wrong belief about a seat. gemini is the verified case: its index
+            # gives a workspace join but its conversations record no served model.
+            feedback.record_run("cov-never", "offload:/tmp/y", "offload", "gemini")
             feedback.record_execution_attempt(
                 "cov-never", attempt_id="attempt:profile:cov-never", operation_role="worker",
-                profile_id="cursor-composer-2.5", requested_provider="cursor",
-                requested_model="composer-2.5", status="unresolved",
+                profile_id="gemini-3.1-pro-high", requested_provider="google",
+                requested_model="gemini-3.1-pro-high", status="unresolved",
                 source="orchestrator-profile-decision", started_ts=int(_t.time()),
             )
-            never = mining_coverage(30)["agents"]["cursor"]
+            never = mining_coverage(30)["agents"]["gemini"]
             assert never["verdict"] == "model_not_reportable", never
             assert never["cannot_report_reason"], never
             assert never["verdict"] != built["verdict"], (never, built)
