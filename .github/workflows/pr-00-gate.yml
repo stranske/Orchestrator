@@ -144,23 +144,28 @@ jobs:
           #              be unverifiable prose instead of a number anyone can regenerate.
           typecheck = False
 
-          # coverage (and the soft gate that reads its artifacts) -- OFF.
-          #   blocking:  1 hard error, and it is not about this repo's tests. When coverage is on,
-          #              `reusable-10-ci-python.yml` appends `--cov-config=pyproject.toml`
-          #              unconditionally; this repo has no pyproject.toml, so pytest dies at
-          #              startup with `coverage.exceptions.ConfigError: Couldn't read
-          #              'pyproject.toml' as a config file` -- every test, both runtimes.
-          #   drainable: 0 from inside this repo. Adding a pyproject.toml to satisfy it makes the
-          #              same workflow append `-e '.[app,dev]'` to its install, and 129 flat root
-          #              modules with no build backend cannot be installed that way. The two
-          #              upstream assumptions are mutually exclusive here.
-          #   drains by: an upstream fix -- pass `--cov-config` only when the file exists -- or a
-          #              real packaging pyproject.toml for this repo. Either one, then flip this.
-          #   cost:      low and bounded. `coverage-min` was already '' (informational only), and
-          #              `maint-coverage-guard.yml`, the one consumer of the artifacts, has never
-          #              executed here: its only run is `action_required`, held by GitHub's
-          #              suspicious-workflow review, so no coverage trend was being read.
-          coverage = False
+          # coverage (and the soft gate that reads its artifacts) -- ON since 2026-08-23.
+          #   was:       OFF until 2026-08-23. `reusable-10-ci-python.yml` appended
+          #              `--cov-config=pyproject.toml` unconditionally; this repo has no
+          #              pyproject.toml, so pytest died at startup with
+          #              `coverage.exceptions.ConfigError: Couldn't read
+          #              'pyproject.toml' as a config file` -- every test, both runtimes. That was
+          #              drainable 0 FROM HERE: adding a pyproject.toml to satisfy it made the same
+          #              workflow append `-e '.[app,dev]'`, which 129 flat root modules with no
+          #              build backend cannot satisfy. The two upstream assumptions were mutually
+          #              exclusive, which is why the drain had to be upstream.
+          #   drained by: stranske/Workflows#3202, merged 2026-08-23. `--cov-config` is now passed
+          #              only when the file exists, so coverage falls back to its own
+          #              .coveragerc/setup.cfg/tox.ini discovery; and the editable install is gated
+          #              on real packaging metadata ([project]/[build-system]/[tool.poetry]) rather
+          #              than on the filename, so a config-only pyproject.toml would no longer force
+          #              an install either. The `python ci` job below pins that workflow `@main`, so
+          #              this repo consumes the fix with no version bump.
+          #   note:      this repo still has no pyproject.toml and no .coveragerc, so coverage runs
+          #              on its built-in defaults, and `coverage-min` stays '' (informational only).
+          #              `scripts/ci_lint_baseline.py` re-measures this by probing collection, so a
+          #              regression upstream reappears as a number here rather than as silence.
+          coverage = RUN_CORE
 
           def to_str(flag: bool) -> str:
               return 'true' if flag else 'false'

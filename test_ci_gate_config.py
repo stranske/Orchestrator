@@ -259,15 +259,18 @@ def test_mypy_config_silences_nothing():
 
 @pytest.mark.parametrize("name", ["pyproject.toml", "setup.cfg", "setup.py"])
 def test_no_packaging_file_appears_without_making_this_repo_installable(name):
-    """These three filenames each make the reusable workflow try `pip install -e '.[app,dev]'`."""
+    """A packaging file here must mean a REAL installable package, not a config parking spot."""
     require_checkout()
     assert not (HERE / name).is_file(), (
         f"{name} exists at the repo root. reusable-10-ci-python.yml appends `-e '.[app,dev]'` to "
-        f"its install whenever it sees one of pyproject.toml / setup.cfg / setup.py, and 129 flat "
-        "root modules with no build backend cannot be installed that way — the tests job fails for "
-        "both runtimes. This is why the Ruff and mypy configuration lives in ruff.toml and "
-        "mypy.ini instead. Adding one is fine, but it has to be a REAL installable package with "
-        "`app` and `dev` extras, and the same change should re-enable `coverage` in the Gate "
-        "(it is off only because `--cov-config=pyproject.toml` is appended unconditionally). "
-        "Then delete this expectation."
+        "its install when it sees setup.cfg / setup.py, or a pyproject.toml that declares a "
+        "distribution ([project], [build-system] or [tool.poetry] — stranske/Workflows#3202 made "
+        "that gate metadata-based rather than filename-based). 129 flat root modules with no build "
+        "backend cannot be installed that way, so the tests job would fail for both runtimes. That "
+        "is why the Ruff and mypy configuration lives in ruff.toml and mypy.ini instead. Adding one "
+        "is fine, but it has to be a REAL installable package with `app` and `dev` extras. Then "
+        "delete this expectation.\n\n"
+        "Note: since #3202 a pyproject.toml carrying ONLY tool configuration no longer triggers the "
+        "install, so relaxing this for that case is a legitimate change — but make it deliberately, "
+        "and keep setup.cfg / setup.py forbidden, because those still do."
     )

@@ -649,6 +649,7 @@ def register_review_round(
     arms: list[str],
     *,
     date: str | None = None,
+    executing_agent: str | None = None,
     conn=None,
 ) -> dict[str, Any]:
     """Register one corpus review as ONE research subject, and return what happened.
@@ -664,9 +665,26 @@ def register_review_round(
     `plan_sha256` -- so two reviews asking the same question of different corpora are different
     subjects, and a resumed run of the same plan is the same subject.
 
-    NEVER PADS THE ARM SET. `arms` is the agents that actually did the work; a one-agent review is
-    one arm. A forged arm set manufactures independence the evidence does not have, and would make
-    a single agent's opinion look like a panel's agreement.
+    NEVER PADS THE ARM SET, AND A DECLARATION IS NOT EVIDENCE. `run_plan` dispatches every
+    partition to ONE agent -- `--agent` -- so `--round-agents gemini,cursor` used to register a
+    two-arm subject in which cursor had no round-bound attempt at all. That is false comparative
+    evidence: it makes one agent's opinion look like a panel's agreement, and
+    `resolve_round_durability` would later hand an issue's durability to an agent that never
+    reviewed anything.
+
+    So an arm is admitted only on a RECORD, of which there are exactly three:
+
+    * it is the agent this invocation is about to dispatch (`executing_agent`), or
+    * it already has a run bound to this round by `experiment_id` -- which is how a round genuinely
+      worked by several seats is registered: one `run` invocation per agent, each landing on the
+      same round id, each admitting the seats that came before it, or
+    * it was already registered on this round, so the set can only GROW. A resumed single-seat run
+      must not shrink the set back and orphan the other seats' findings -- `record_finding_issue`
+      validates against exactly this set, so a shrink would start refusing real attributions.
+
+    Declared arms with none of those three are DROPPED and named in `arms_unproven`. Dropping beats
+    refusing: refusing would lose the round binding for the work actually being done, which is the
+    real signal, over a caller's optimism about seats that had not started.
 
     Returns a dict, never raises for a Brain problem: capture is subordinate to the review itself,
     so a registration failure is REPORTED in the summary rather than losing the review. It is never
@@ -677,11 +695,30 @@ def register_review_round(
     review_id = str(plan.get("review_id") or "").strip()
     if not review_id:
         return {"registered": False, "reason": "plan has no review_id"}
-    arm_list = [str(a).strip() for a in arms if str(a).strip()]
-    if not arm_list:
+    declared = [str(a).strip() for a in arms if str(a).strip()]
+    executing = str(executing_agent or "").strip()
+    if not declared and not executing:
         return {"registered": False, "reason": "no agent actually did the work"}
     spec = f"{plan.get('objective') or ''}\n\nplan_sha256:{plan.get('plan_sha256') or ''}"
     try:
+        round_id = research_subjects.research_round_id(
+            research_subjects.domain_target(review_id),
+            "review-corpus",
+            date or time.strftime("%Y-%m-%d"),
+        )
+        # The round id is PURE, so the evidence for who is already in this round can be read
+        # before anything is written. Registration then never has to guess.
+        evidence = research_subjects.round_arm_evidence(round_id, conn=conn)
+        proven = {str(a).strip().lower() for a in evidence["arms"]}
+        arm_list = [a for a in declared if a.lower() in proven or a.lower() == executing.lower()]
+        if executing and executing.lower() not in {a.lower() for a in arm_list}:
+            arm_list.append(executing)
+        for extra in evidence["arms"]:
+            if extra not in {a.lower() for a in arm_list}:
+                arm_list.append(extra)
+        unproven = [a for a in declared if a.lower() not in {b.lower() for b in arm_list}]
+        if not arm_list:
+            return {"registered": False, "reason": "no agent actually did the work"}
         round_id, identity = research_subjects.record_research_round(
             research_subjects.domain_target(review_id),
             "review-corpus",
@@ -698,6 +735,10 @@ def register_review_round(
         "round_id": round_id,
         "subject_id": identity["subject_id"],
         "arms": arm_list,
+        # NAMED, NEVER SILENT: a declared arm that no record supports is reported here and in the
+        # run summary, so a mis-typed `--round-agents` is visible rather than absorbed.
+        "arms_unproven": unproven,
+        "executing_agent": executing or None,
     }
 
 
@@ -724,7 +765,9 @@ def run_plan(
         offload_fn = dispatcher.offload
     results_root = Path(results_dir)
     # Register BEFORE the first offload: the round id has to exist to be stamped onto the attempts.
-    round_info = register_review_round(plan, round_agents or [agent], date=round_date)
+    round_info = register_review_round(
+        plan, round_agents or [agent], date=round_date, executing_agent=agent
+    )
     research_round = round_info.get("round_id")
     statuses: list[dict[str, Any]] = []
     for partition in plan["partitions"]:
@@ -1202,12 +1245,15 @@ def main(
     run.add_argument("--cwd", default=".")
     run.add_argument("--timeout", type=int, default=DEFAULT_PARTITION_TIMEOUT)
     run.add_argument("--no-resume", action="store_true")
-    # A round fanned out to several seats is several ARMS of one subject. Default is this
-    # invocation's own agent -- one arm, never padded, because a forged arm set would make one
-    # agent's opinion look like a panel's agreement.
+    # A round fanned out to several seats is several ARMS of one subject, reached by running this
+    # command once per seat against the same `--round-date`. The list is a DECLARATION and is
+    # corroborated, not believed: this invocation dispatches only `--agent`, so any other name is
+    # admitted only once it has a run bound to the round, and is otherwise dropped and reported as
+    # `arms_unproven`. A forged arm set would make one agent's opinion look like a panel's.
     run.add_argument(
         "--round-agents",
-        help="comma-separated agents that actually work this round (default: --agent alone)",
+        help="comma-separated agents working this round; only those with a round-bound run (plus "
+        "--agent) are registered as arms (default: --agent alone)",
     )
     # Given explicitly when resuming a round started on an earlier day, so the resumed run lands
     # on the SAME subject rather than creating a second one.

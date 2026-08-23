@@ -127,12 +127,26 @@ def subject_of(exp_id: str) -> str:
     return str(exp_id)
 
 
-def arm_diff(repo: str, exp_id: str, agent: str, base: str = DEFAULT_BASE) -> str | None:
-    """The arm's real delta, anchored at its merge-base. None means the branch is gone."""
+def arm_diff(
+    repo: str,
+    exp_id: str,
+    agent: str,
+    base: str = DEFAULT_BASE,
+    *,
+    member_id: str | None = None,
+) -> str | None:
+    """The arm's real delta, anchored at its merge-base. None means the branch is gone.
+
+    `member_id` is REQUIRED FOR A v2 ARM and must be omitted for a legacy one, because the member
+    id is part of the branch name (`exp/<exp_id>-<member_id>` against `exp/<exp_id>-<agent>`).
+    Passing an agent where a member ran resolves a branch that does not exist, and this function
+    reports a missing branch as "the evidence is gone" -- which is how a recoverable v2 arm gets
+    stamped `followup-skip.json` while its commits sit intact in the store.
+    """
     store = repo_store(repo)
     if not store.exists():
         return None
-    branch = exp_abcd.exp_branch(exp_id, agent)
+    branch = exp_abcd.exp_branch(exp_id, agent, member_id)
     if not _git(store, "rev-parse", "--verify", "--quiet", branch).strip():
         return None
     base_ref = f"origin/{base}"
