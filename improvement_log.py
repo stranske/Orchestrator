@@ -52,6 +52,7 @@ CLI
     python3 improvement_log.py append <item-ref> <note>
     python3 improvement_log.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -72,9 +73,9 @@ LOG_NAME = "IMPROVEMENT_BACKLOG.md"
 
 # Exit codes, so a caller can distinguish the two kinds of nothing.
 EXIT_OK = 0
-EXIT_NO_MATCH = 1        # ran, read the whole log, found nothing — an HONEST empty
-EXIT_ABSENT = 2          # the log itself is not on this machine — a NAMED absence
-EXIT_REFUSED = 3         # the caller's item-ref matched zero or many items; nothing was written
+EXIT_NO_MATCH = 1  # ran, read the whole log, found nothing — an HONEST empty
+EXIT_ABSENT = 2  # the log itself is not on this machine — a NAMED absence
+EXIT_REFUSED = 3  # the caller's item-ref matched zero or many items; nothing was written
 
 HEADING_RE = re.compile(r"^(#{2,3})\s+(.*?)\s*$")
 # `## 🟢 8. GitHub API rate-limit awareness` -> item number 8. The status emoji and any other leading
@@ -109,6 +110,7 @@ def absence_note(path: Path) -> str:
 # Parsing: sections, so a hit can be reported under the item that owns it.
 # --------------------------------------------------------------------------------------------
 
+
 def parse_sections(text: str) -> list[dict]:
     """Every `##`/`###` heading with its line span and item number, in file order.
 
@@ -122,12 +124,18 @@ def parse_sections(text: str) -> list[dict]:
             continue
         level, title = len(m.group(1)), m.group(2)
         num_m = ITEM_NUM_RE.match(title)
-        heads.append({"level": level, "title": title, "line": idx + 1,
-                      "item": num_m.group(1) if num_m and level == 2 else None,
-                      "end": len(lines)})
+        heads.append(
+            {
+                "level": level,
+                "title": title,
+                "line": idx + 1,
+                "item": num_m.group(1) if num_m and level == 2 else None,
+                "end": len(lines),
+            }
+        )
     # A section ends where the next heading of the same-or-shallower level begins.
     for i, head in enumerate(heads):
-        for nxt in heads[i + 1:]:
+        for nxt in heads[i + 1 :]:
             if nxt["level"] <= head["level"]:
                 head["end"] = nxt["line"] - 1
                 break
@@ -148,8 +156,8 @@ def _owning(heads: list[dict], line_no: int) -> dict | None:
 # search — CLAUDE.md §0 step 3, in one command.
 # --------------------------------------------------------------------------------------------
 
-def search(term: str, *, path: Path | None = None, limit: int = 40,
-           context: int = 0) -> dict:
+
+def search(term: str, *, path: Path | None = None, limit: int = 40, context: int = 0) -> dict:
     """Case-insensitive hits, each reported under the item heading that owns it.
 
     Returns the DENOMINATOR too (lines and sections searched), because "no matches" only means
@@ -157,9 +165,15 @@ def search(term: str, *, path: Path | None = None, limit: int = 40,
     """
     path = path or log_path()
     if not path.is_file():
-        return {"present": False, "path": str(path), "term": term,
-                "absent_reason": absence_note(path), "matches": [],
-                "lines": 0, "sections": 0}
+        return {
+            "present": False,
+            "path": str(path),
+            "term": term,
+            "absent_reason": absence_note(path),
+            "matches": [],
+            "lines": 0,
+            "sections": 0,
+        }
     text = path.read_text(encoding="utf-8", errors="ignore")
     lines = text.splitlines()
     heads = parse_sections(text)
@@ -169,37 +183,58 @@ def search(term: str, *, path: Path | None = None, limit: int = 40,
         if needle not in line.lower():
             continue
         own = _owning(heads, idx + 1)
-        row = {"line": idx + 1, "text": line.strip(),
-               "section": own["title"] if own else "(before the first heading)",
-               "section_line": own["line"] if own else 0,
-               "item": (own or {}).get("item")}
+        row = {
+            "line": idx + 1,
+            "text": line.strip(),
+            "section": own["title"] if own else "(before the first heading)",
+            "section_line": own["line"] if own else 0,
+            "item": (own or {}).get("item"),
+        }
         if context:
             lo, hi = max(0, idx - context), min(len(lines), idx + context + 1)
             row["context"] = [ln.rstrip() for ln in lines[lo:hi]]
         matches.append(row)
     truncated = len(matches) > limit
-    return {"present": True, "path": str(path), "term": term, "absent_reason": None,
-            "matches": matches[:limit], "total_matches": len(matches),
-            "truncated": truncated, "lines": len(lines), "sections": len(heads)}
+    return {
+        "present": True,
+        "path": str(path),
+        "term": term,
+        "absent_reason": None,
+        "matches": matches[:limit],
+        "total_matches": len(matches),
+        "truncated": truncated,
+        "lines": len(lines),
+        "sections": len(heads),
+    }
 
 
 def render_search(rep: dict) -> str:
     if not rep["present"]:
         return rep["absent_reason"]
-    head = (f"improvement log: {rep['path']}\n"
-            f"searched {rep['lines']} lines / {rep['sections']} sections for {rep['term']!r}")
+    head = (
+        f"improvement log: {rep['path']}\n"
+        f"searched {rep['lines']} lines / {rep['sections']} sections for {rep['term']!r}"
+    )
     if not rep["matches"]:
         # An honest empty, and it says so in words as well as in the exit code.
-        return (f"{head}\nNO MATCHING ITEMS. The log was read in full and nothing mentions "
-                f"{rep['term']!r} — this is a real absence of matches, not a missing file.")
-    out = [head, f"{rep['total_matches']} match(es)"
-                 + (f", showing the first {len(rep['matches'])}" if rep["truncated"] else "")]
+        return (
+            f"{head}\nNO MATCHING ITEMS. The log was read in full and nothing mentions "
+            f"{rep['term']!r} — this is a real absence of matches, not a missing file."
+        )
+    out = [
+        head,
+        f"{rep['total_matches']} match(es)"
+        + (f", showing the first {len(rep['matches'])}" if rep["truncated"] else ""),
+    ]
     last = None
     for m in rep["matches"]:
         if m["section"] != last:
             out.append("")
-            out.append(f"## {m['section']}   (line {m['section_line']}"
-                       + (f", item {m['item']}" if m["item"] else "") + ")")
+            out.append(
+                f"## {m['section']}   (line {m['section_line']}"
+                + (f", item {m['item']}" if m["item"] else "")
+                + ")"
+            )
             last = m["section"]
         out.append(f"  {m['line']}: {m['text']}")
         for ctx in m.get("context") or []:
@@ -210,6 +245,7 @@ def render_search(rep: dict) -> str:
 # --------------------------------------------------------------------------------------------
 # append — CLAUDE.md §5, in one command.
 # --------------------------------------------------------------------------------------------
+
 
 def find_section(ref: str, heads: list[dict]) -> dict:
     """Resolve an item-ref to exactly ONE section, or refuse and say which candidates it saw.
@@ -229,29 +265,46 @@ def find_section(ref: str, heads: list[dict]) -> dict:
         kind = f"heading containing {ref!r}"
     if len(hits) == 1:
         return {"ok": True, "section": hits[0]}
-    return {"ok": False, "section": None, "candidates": hits, "kind": kind,
-            "reason": ("no section matches" if not hits
-                       else f"{len(hits)} sections match — the ref is ambiguous")}
+    return {
+        "ok": False,
+        "section": None,
+        "candidates": hits,
+        "kind": kind,
+        "reason": (
+            "no section matches"
+            if not hits
+            else f"{len(hits)} sections match — the ref is ambiguous"
+        ),
+    }
 
 
-def append_note(ref: str, note: str, *, path: Path | None = None,
-                today: str | None = None) -> dict:
+def append_note(ref: str, note: str, *, path: Path | None = None, today: str | None = None) -> dict:
     """Append one dated status note at the END of the matched section. Atomic, with one backup."""
     path = path or log_path()
     if not path.is_file():
-        return {"ok": False, "absent": True, "path": str(path),
-                "reason": absence_note(path)}
+        return {"ok": False, "absent": True, "path": str(path), "reason": absence_note(path)}
     if not note.strip():
-        return {"ok": False, "absent": False, "path": str(path),
-                "reason": "refusing to append an empty note"}
+        return {
+            "ok": False,
+            "absent": False,
+            "path": str(path),
+            "reason": "refusing to append an empty note",
+        }
     text = path.read_text(encoding="utf-8")
     heads = parse_sections(text)
     found = find_section(ref, heads)
     if not found["ok"]:
-        return {"ok": False, "absent": False, "path": str(path), "ref": ref,
-                "candidates": [{"title": h["title"], "line": h["line"], "item": h["item"]}
-                               for h in found["candidates"]],
-                "reason": f"{found['reason']} for {found['kind']}"}
+        return {
+            "ok": False,
+            "absent": False,
+            "path": str(path),
+            "ref": ref,
+            "candidates": [
+                {"title": h["title"], "line": h["line"], "item": h["item"]}
+                for h in found["candidates"]
+            ],
+            "reason": f"{found['reason']} for {found['kind']}",
+        }
     sec = found["section"]
     lines = text.splitlines()
     stamp = today or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -264,7 +317,7 @@ def append_note(ref: str, note: str, *, path: Path | None = None,
     new = lines[:at] + ["", entry] + lines[at:]
     body = "\n".join(new) + "\n"
     backup = path.with_suffix(path.suffix + ".prev")
-    shutil.copy2(path, backup)                 # ONE rolling backup: this history is unversioned.
+    shutil.copy2(path, backup)  # ONE rolling backup: this history is unversioned.
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".improvement-log-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -273,9 +326,16 @@ def append_note(ref: str, note: str, *, path: Path | None = None,
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-    return {"ok": True, "absent": False, "path": str(path), "section": sec["title"],
-            "section_line": sec["line"], "inserted_at": at + 2, "entry": entry,
-            "backup": str(backup)}
+    return {
+        "ok": True,
+        "absent": False,
+        "path": str(path),
+        "section": sec["title"],
+        "section_line": sec["line"],
+        "inserted_at": at + 2,
+        "entry": entry,
+        "backup": str(backup),
+    }
 
 
 def render_append(rep: dict) -> str:
@@ -288,11 +348,15 @@ def render_append(rep: dict) -> str:
             out.append("candidates (give a longer, unambiguous ref):")
             out += [f"  line {c['line']}: {c['title']}" for c in cands[:10]]
         else:
-            out.append(f"run `improvement_log.py search <term>` against {rep['path']} to find the "
-                       f"item, then use its number or a distinctive phrase from its heading.")
+            out.append(
+                f"run `improvement_log.py search <term>` against {rep['path']} to find the "
+                f"item, then use its number or a distinctive phrase from its heading."
+            )
         return "\n".join(out)
-    return (f"appended to {rep['path']}\n  section: {rep['section']} (line {rep['section_line']})\n"
-            f"  line {rep['inserted_at']}: {rep['entry']}\n  backup: {rep['backup']}")
+    return (
+        f"appended to {rep['path']}\n  section: {rep['section']} (line {rep['section_line']})\n"
+        f"  line {rep['inserted_at']}: {rep['entry']}\n  backup: {rep['backup']}"
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -338,8 +402,12 @@ def _selftest() -> int:
         # A SUBPROCESS on purpose: the assertions below are about what a CALLER receives from the
         # CLI — text and exit code — not about what an internal helper returns.
         env = dict(os.environ, **{ENV_DIRECT: log})
-        return subprocess.run([sys.executable, str(Path(__file__).resolve()), *argv],
-                              capture_output=True, text=True, env=env)
+        return subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), *argv],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
 
     with tempfile.TemporaryDirectory() as td:
         log = Path(td) / LOG_NAME
@@ -351,10 +419,12 @@ def _selftest() -> int:
         # 1. search finds a term and reports the ITEM that owns it.
         p = run(["search", "thompson"], str(log))
         check("search exits 0 on a hit", p.returncode == EXIT_OK, f"rc={p.returncode}")
-        check("search names the owning section", "7a. Cost-aware scoring" in p.stdout,
-              p.stdout[-200:])
-        check("search reports the denominator", "sections for 'thompson'" in p.stdout,
-              p.stdout[:200])
+        check(
+            "search names the owning section", "7a. Cost-aware scoring" in p.stdout, p.stdout[-200:]
+        )
+        check(
+            "search reports the denominator", "sections for 'thompson'" in p.stdout, p.stdout[:200]
+        )
         check("search finds every occurrence", "3 match(es)" in p.stdout, p.stdout[:200])
 
         # 2. An HONEST empty: different exit code, and it says the file WAS read.
@@ -367,8 +437,11 @@ def _selftest() -> int:
         p = run(["search", "thompson"], str(missing))
         check("absent log exits 2", p.returncode == EXIT_ABSENT, f"rc={p.returncode}")
         check("absence names the path", str(missing) in p.stdout, p.stdout[:300])
-        check("absence names both env vars",
-              ENV_DIRECT in p.stdout and ENV_RUNTIME in p.stdout, p.stdout[:300])
+        check(
+            "absence names both env vars",
+            ENV_DIRECT in p.stdout and ENV_RUNTIME in p.stdout,
+            p.stdout[:300],
+        )
         check("absence is not an empty result", p.stdout.strip() != "", "empty stdout")
 
         # 4. append lands the note INSIDE the referenced item, dated. The target is item 4, which
@@ -378,14 +451,23 @@ def _selftest() -> int:
         p = run(["append", "4", "wired and verified"], str(log))
         check("append exits 0", p.returncode == EXIT_OK, f"rc={p.returncode}\n{p.stderr[-300:]}")
         after = log.read_text(encoding="utf-8")
-        check("append wrote a dated note", "**STATUS " in after and "wired and verified" in after,
-              after[-200:])
+        check(
+            "append wrote a dated note",
+            "**STATUS " in after and "wired and verified" in after,
+            after[-200:],
+        )
         head, _, rest = after.partition("## ✅ 7. Telemetry integrity")
-        check("note is INSIDE item 4, above the next heading", "wired and verified" in head,
-              f"landed after item 4: {rest[-160:]!r}")
+        check(
+            "note is INSIDE item 4, above the next heading",
+            "wired and verified" in head,
+            f"landed after item 4: {rest[-160:]!r}",
+        )
         check("note did not land at end of file", "wired and verified" not in rest, rest[-160:])
-        check("append did not touch other items",
-              after.count("Thompson sampling was wired here and is DONE.") == 1, "duplicated")
+        check(
+            "append did not touch other items",
+            after.count("Thompson sampling was wired here and is DONE.") == 1,
+            "duplicated",
+        )
         check("append left one backup", (Path(td) / f"{LOG_NAME}.prev").is_file(), "no .prev")
 
         # 5. A ref that matches many REFUSES and changes nothing.
@@ -399,8 +481,9 @@ def _selftest() -> int:
         p = run(["append", "99", "no such item"], str(log))
         check("unknown ref refuses", p.returncode == EXIT_REFUSED, f"rc={p.returncode}")
         check("unknown ref suggests search", "search" in p.stdout, p.stdout[:300])
-        check("unknown ref wrote nothing", log.read_text(encoding="utf-8") == before,
-              "file changed")
+        check(
+            "unknown ref wrote nothing", log.read_text(encoding="utf-8") == before, "file changed"
+        )
 
         # 7. append to an absent log names the absence and does NOT create the file.
         p = run(["append", "9", "note"], str(missing))
@@ -412,10 +495,13 @@ def _selftest() -> int:
         check("path exits 2 when absent", p.returncode == EXIT_ABSENT, f"rc={p.returncode}")
         try:
             doc = json.loads(p.stdout)
-        except Exception:                                          # noqa: BLE001
+        except Exception:  # noqa: BLE001
             doc = {}
-        check("path reports resolved + present", doc.get("path") == str(missing)
-              and doc.get("present") is False, p.stdout[:200])
+        check(
+            "path reports resolved + present",
+            doc.get("path") == str(missing) and doc.get("present") is False,
+            p.stdout[:200],
+        )
 
     print(f"improvement_log selftest: {len(failures)} failure(s)")
     for f in failures:
@@ -427,9 +513,11 @@ def _selftest() -> int:
 # CLI
 # --------------------------------------------------------------------------------------------
 
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Search and append this instance's improvement log (machine-local evidence).")
+        description="Search and append this instance's improvement log (machine-local evidence)."
+    )
     ap.add_argument("--selftest", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
 
@@ -459,9 +547,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "path":
         target = log_path()
         present = target.is_file()
-        doc = {"path": str(target), "present": present,
-               "env": {ENV_DIRECT: os.environ.get(ENV_DIRECT),
-                       ENV_RUNTIME: os.environ.get(ENV_RUNTIME)}}
+        doc = {
+            "path": str(target),
+            "present": present,
+            "env": {
+                ENV_DIRECT: os.environ.get(ENV_DIRECT),
+                ENV_RUNTIME: os.environ.get(ENV_RUNTIME),
+            },
+        }
         if args.json:
             print(json.dumps(doc, indent=2))
         else:
