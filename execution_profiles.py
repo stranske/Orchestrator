@@ -134,6 +134,19 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         # tier research, vibe from its CLI config, aider from its floating alias, gemini from agy's
         # advertised-models probe, cursor from its known default. None is a routing tag, so no seat
         # is unidentifiable -- what they all still need is worker TRACING to confirm what served.
+        # GEMINI HAS TWO LINES, AND THEY ARE NOT A VERSION SEQUENCE. Flash (3.7/3.6/3.5, each with
+        # high/medium/low effort) is the fast mid-tier; Pro (3.1) is the higher-end reasoning tier.
+        # `3.7 > 3.1` is newer FLASH, not better than PRO -- reading those numbers as one ladder is
+        # the trap, and both lines are legitimately used depending on the task.
+        #
+        # Registering only the Pro profile was a real regression: `_select_offload_profile` then
+        # pinned every gemini offload to Pro, silently overriding `DEFAULT_OFFLOAD_TIER = "mid"` and
+        # the comment beside it which had ALREADY diagnosed this exact waste ("a gemini offload
+        # burned Pro"). A profile that pins one rung of a three-rung ladder removes the choice the
+        # ladder exists to make.
+        _profile("gemini-3.6-flash-high", "gemini-3.6-flash-high", "high",
+                 agent="gemini", provider="google", pool="gemini-prepaid",
+                 adapter_version="agy-cli-profile-v1"),
         _profile("gemini-3.1-pro-high", "gemini-3.1-pro-high", "high",
                  agent="gemini", provider="google", pool="gemini-prepaid",
                  adapter_version="agy-cli-profile-v1"),

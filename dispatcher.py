@@ -1088,7 +1088,21 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
         if not profiles:
             return None
-        candidate_ids = sorted(profile["profile_id"] for profile in profiles)
+        # HONOUR THE TIER THE CODEBASE ALREADY CHOSE. `DEFAULT_OFFLOAD_TIER` is "mid" with a comment
+        # that had already diagnosed this exact waste -- "a codex offload burned Sol and a gemini
+        # offload burned Pro" -- and selecting from ALL offload-capable profiles silently overrode
+        # it: with only a Pro profile registered, every gemini read was routed to the reasoning
+        # tier, and with three codex profiles it picked whichever sorted first.
+        #
+        # An offload is an advisory READ. Where the seat has a tier ladder, take the rung the ladder
+        # names for that tier; a single-lane seat (cursor, vibe, aider) has no ladder and keeps its
+        # one profile. Falling back to the full candidate set means a seat whose tier model has no
+        # registered profile behaves exactly as before rather than losing its profile entirely.
+        tier_model = adapters.resolve_model(agent, adapters.DEFAULT_OFFLOAD_TIER)
+        tiered = [p for p in profiles if tier_model and p["requested_model"] == tier_model]
+        candidate_ids = sorted(
+            profile["profile_id"] for profile in (tiered or profiles)
+        )
         envelope = execution_profiles.select_profile(
             "offload",
             None,
@@ -2347,6 +2361,33 @@ def _selftest() -> None:
             assert _select_offload_profile(seat, "mid"), f"{seat} must select a profile"
         # An agent with NO registered profile still selects nothing -- selection may not invent one.
         assert _select_offload_profile("definitely-not-an-agent", "mid") is None
+
+        # AN OFFLOAD IS A READ, SO IT TAKES THE MID RUNG -- never the reasoning tier just because a
+        # profile happens to exist there. `DEFAULT_OFFLOAD_TIER` and the comment beside it had
+        # already diagnosed this ("a codex offload burned Sol and a gemini offload burned Pro"), and
+        # registering one top-tier profile per seat silently overrode it: every gemini read was
+        # routed to Pro.
+        #
+        # gemini is the case that matters, because its two lines are NOT one version ladder: Flash
+        # (3.7/3.6/3.5) is the fast mid tier and Pro (3.1) is the higher-end reasoning tier, so
+        # `3.7 > 3.1` is newer Flash rather than better than Pro. Both are legitimate; the task
+        # decides, and an advisory read is not the task for Pro.
+        for seat in ("codex", "claude", "gemini"):
+            wanted = adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER)
+            chosen = _select_offload_profile(seat, "offload")
+            assert wanted, f"{seat} must have a tier ladder"
+            assert chosen and chosen["requested_model"] == wanted, (seat, wanted, chosen)
+        # And the reasoning tier is still REGISTERED, so full-tier work can still ask for it -- the
+        # fix is choosing per task, not deleting the expensive rung.
+        gemini_ids = {
+            p["profile_id"] for p in execution_profiles.profiles_for_agent("gemini")
+        }
+        assert "gemini-3.1-pro-high" in gemini_ids, gemini_ids
+        assert "gemini-3.6-flash-high" in gemini_ids, gemini_ids
+        # A single-lane seat has no ladder and must keep its one profile rather than losing it.
+        for seat in ("cursor", "vibe"):
+            assert adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER) is None, seat
+            assert _select_offload_profile(seat, "offload"), seat
 
         print("dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
               "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
