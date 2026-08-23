@@ -24,7 +24,7 @@ from pathlib import Path
 ORCH = Path(__file__).resolve().parent
 sys.path.insert(0, str(ORCH))
 
-import feedback
+import feedback  # noqa: E402 — resolvable only after the sys.path.insert above
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
 STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
@@ -652,7 +652,7 @@ def _selftest() -> None:
         env=env,
         timeout=60,
     )
-    lines = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
+    lines = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
     by_id = {m.get("id"): m for m in lines}
     assert by_id[1]["result"]["serverInfo"]["name"] == "orchestrator", by_id[1]
     names = {t["name"] for t in by_id[2]["result"]["tools"]}

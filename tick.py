@@ -648,7 +648,9 @@ def _selftest():
     def cap(states):
         return {"agents": {a: {"state": s} for a, s in states.items()}}
 
-    no_research = lambda *args, **kwargs: {"status": "skipped", "planned": [], "active": False}
+    def no_research(*args, **kwargs):
+        return {"status": "skipped", "planned": [], "active": False}
+
     try:
         all_keep = cap({"cursor": "ok", "codex": "ok", "claude": "ok", "gemini": "ok"})
         items = [

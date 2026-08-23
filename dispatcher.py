@@ -1850,7 +1850,7 @@ def _remote_skip_reason(labels: set, agent: str) -> str | None:
     top of an existing agent:claude — that double-assignment is what this guards against."""
     if "agents:paused" in labels:
         return "agents:paused (lane paused — respect it)"
-    assigned = sorted(l for l in labels if l.startswith("agent:"))
+    assigned = sorted(lab for lab in labels if lab.startswith("agent:"))
     if assigned:
         return f"already in agent pipeline ({','.join(assigned)}) — not re-delegating"
     return None
