@@ -382,6 +382,84 @@ def test_evidence_gate_kind_is_not_blanket_observer():
     assert "MEASUREMENT gap" in advice["action"], advice
 
 
+def test_matched_not_invoked_yields_to_observers_and_declared_gates():
+    """`matched_not_invoked` must not capture the two classes that can never leave it.
+
+    It used to be the FIRST check in `classify_liveness`, above both `observing` and the declared
+    `deliberately_gated`, which made it the fourth instance of the unescapable label the comments in
+    that function exist to fix. Two classes were captured structurally, not by bad luck:
+
+    * **Observers** are matched by a tick phase, so `last_match` advances every cadence tick while
+      `last_invocation` advances only when the phase fires. `last_match > last_invocation` is the
+      NORMAL resting state of a healthy observer.
+    * **Declared-gated** capabilities cannot be invoked while the switch is off, so every match after
+      the gate closed widens the gap permanently — and the row already records why.
+
+    Measured on the live ledger when the order was corrected: **12 of 43 rows** moved, ten observers
+    to `observing` and two declared gates to `deliberately_gated`, and NOTHING moved for any other
+    reason. So 28% of the ledger held a label whose attached advice ("find out why it did not run")
+    described work that could not be done.
+
+    THIS TEST IS SYNTHETIC ON PURPOSE. The two tests that caught the bug in the wild read the live
+    ledger, so they skip with a named reason on the empty ledger `ci.yml` bootstraps — which is why
+    this was red on every populated machine and green on CI for as long as it existed. A synthetic
+    row asks the same question everywhere, and that is the half of the fix that keeps CI honest.
+
+    DELIBERATE BREAK -> REVERT, 2026-08-23: moving the `matched_not_invoked` block back above
+    `observing` in capabilities.classify_liveness failed the observer case here, and moving it above
+    the declared gate failed the gated case. Reverting restored a byte-identical file.
+    """
+    # An observer whose tick phase matched more recently than it last fired.
+    observer = {
+        "status": "wired",
+        "matcher": {"kind": "tick_phase", "name": "keepalive-stage2-plan"},
+        "last_invocation": 100,
+        "last_match": 200,
+        "event_history": [],
+    }
+    assert capabilities.is_observer(observer)
+    assert capabilities.classify_liveness(observer, now=300) == "observing", (
+        "an observer matched more recently than invoked is at rest, not stuck. tick_phase matching "
+        "advances on every cadence tick; demanding an invocation per match is a category error."
+    )
+
+    # A declared gate, matching while it cannot possibly run.
+    gated = {
+        "status": "canary",
+        "gate_blocks_execution": True,
+        "gate_reason": "bounded live canary auto-reverts after its review date",
+        "last_invocation": 100,
+        "last_match": 200,
+        "event_history": [],
+    }
+    assert capabilities.classify_liveness(gated, now=300) == "deliberately_gated", (
+        "a capability that declared its delivering path is gated cannot be invoked, so a widening "
+        "match/invocation gap is the gate working — not a dispatch defect to chase."
+    )
+
+    # The real meaning survives: something that SHOULD have been dispatched and was not.
+    dispatchable = {
+        "status": "wired",
+        "matcher": {"kind": "task_type", "name": "implement"},
+        "last_invocation": 100,
+        "last_match": 200,
+        "event_history": [],
+    }
+    assert not capabilities.is_observer(dispatchable)
+    assert capabilities.classify_liveness(dispatchable, now=300) == "matched_not_invoked", (
+        "narrowing the check must not empty it: a non-observer, non-gated capability that matched "
+        "and did not run is still a real dispatch gap."
+    )
+
+    # An undeclared gate is still unchanged — the reorder must not reclassify by inference.
+    undeclared = {**gated, "gate_blocks_execution": None}
+    assert capabilities.classify_liveness(undeclared, now=300) == "matched_not_invoked", (
+        "gate_reason ALONE must not win here. 16 of 39 rows carry one, including issue-readiness "
+        "whose gate covers only its label writes while the assessment runs daily — reordering on "
+        "the weaker signal would silently excuse all of them."
+    )
+
+
 def test_observers_are_not_a_measurement_gap():
     """A report cannot merge a PR, so demanding a delivery outcome from one is a category error.
 
