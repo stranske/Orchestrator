@@ -621,6 +621,37 @@ if _step_disabled tick-capability-evidence; then :; else
     echo "  warn: tick capability evidence failed (continuing; see $STAMP_DIR/tick-capability-evidence.log)"
   fi
 fi   # end: _step_disabled tick-capability-evidence
+# ORCH-ANCHOR: tick-phase-consult ----------------------------------------------------------------
+# AND THE SAME THING FOR THE TICK'S PHASES. The step above consults the BARE `tick` surface, which
+# binds four capabilities and grades them. Fourteen more are bound to the tick's PHASES
+# (`tick:capacity`, `tick:dispatch`, `tick:experiments`, `tick:redirect`, `tick:learning` -- the
+# names come from this script's own first line, "capacity -> discover -> plan -> dispatch", and from
+# its `--- Learning cadence ---` / `[cadence] redirect ...` / `[cadence] experiment follow-up`
+# blocks). The tick is sub-surfaced because 18 capabilities in ONE reasoning context is the measured
+# 13.62% selection condition; each phase resolves to 6-8, inside the 10-20 safe zone.
+#
+# EXTENDS THE #37 PATTERN, adds no second mechanism: same `capability_advisor.advise()` call, same
+# `match` heartbeat, same placement rule (BELOW `ORCH-ANCHOR: heartbeat-export`, so the heartbeat it
+# writes is actually enabled -- `test_capabilities.test_no_tick_producer_runs_above_the_heartbeat_export`
+# fails the suite if this moves up), same fail-open discipline.
+#
+# IT DOES NOT MULTIPLY VERDICTS. `capability_propensity.tick_evidence` is the only writer of
+# usefulness verdicts and it reads `binding_for("tick")`, which sub-surfacing does not touch: its
+# ceiling stays ~1.3/day. This step writes ONLY advisory `match` events, and `_record_matches` keys
+# idempotency on a digest of the consult text, which is stable per (surface, UTC day) -- so the
+# whole added volume is 34 events on the first tick of each day and zero on the other 23.
+#
+# IT CANNOT STALL THE TICK. Read-only apart from those events: no gh, no network, no subprocess, no
+# dispatch. `consult_phases_guarded` arms a SIGALRM budget over the one blocking wait (the ledger
+# flock), fails open PER PHASE so one broken phase cannot silence the others, and the CLI always
+# exits 0. Kill switch: ORCH_DISABLE_STEPS=tick-phase-consult (registered in cadence_registry.py,
+# so the switch is real rather than a no-op that WARNs).
+if _step_disabled tick-phase-consult; then :; else
+  if python3 "$ORCH/capability_advisor.py" --consult-tick-phases \
+       2>> "$STAMP_DIR/tick-phase-consult.log"; then :; else
+    echo "  warn: tick phase consult failed (continuing; see $STAMP_DIR/tick-phase-consult.log)"
+  fi
+fi   # end: _step_disabled tick-phase-consult
 if _cadence_due issue-readiness && _attempt_ok issue-readiness; then
   # Decide which open issues the fleet may work, WITHOUT routing that decision through the owner.
   # `backlog._is_ready` reads a label only a human ever applied, so the ready queue tracked one

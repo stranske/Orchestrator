@@ -128,6 +128,27 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "deadlock rather than patience",
     },
     {
+        # EVERY TICK, deliberately stampless for the same reason as `tick-capability-evidence`
+        # above: the step is a cheap advisory consult, and its bounding comes from the per-(surface,
+        # UTC day) consult digest that makes the match heartbeat idempotent, not from a stamp. It
+        # exists because the tick's FOURTEEN phase-bound capabilities had a declared binding and no
+        # caller -- a binding nothing consults can never be selected, so it can never earn the
+        # evidence that would rank it. Registered here (rather than special-cased in the shell) so
+        # `ORCH_DISABLE_STEPS=tick-phase-consult` is a control that actually works: an unregistered
+        # key WARNs "nothing was disabled by it" while silently disabling the step, which is a
+        # control that lies.
+        "key": "tick-phase-consult",
+        "success_stamp": None,
+        "cadence_days": 0,
+        "artifact": None,
+        "log": "tick-phase-consult.log",
+        "gate": "ORCH_DISABLE_STEPS=tick-phase-consult makes it inert; it records no verdict of any "
+        "kind, so the tick-capability-evidence verdict ceiling is unaffected",
+        "next_transition": "writes at most one advisory `match` event per bound capability per "
+        "phase per UTC day (first tick of the day; nothing on the other 23). A "
+        "phase reporting `offered 0` is a broken binding, not a quiet one",
+    },
+    {
         "key": "capability-firing-monitor",
         "success_stamp": ".last-capability-firing-monitor",
         "cadence_days": 6,

@@ -36,6 +36,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 
 import capabilities
 import env_prereq
@@ -397,6 +398,7 @@ def advise(
                 "by_entry_mode": {},
             },
             "precondition": _annotate_preconditions([], repository, repo_path),
+            "surface_template": unsubstituted_surface(surface) or None,
             "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
         }
 
@@ -457,6 +459,7 @@ def advise(
                 "bound_capabilities": sorted(c for c, _ in live),
                 "not_applicable": [],
                 "precondition": precondition,
+                "surface_template": unsubstituted_surface(surface or skill) or None,
                 "coverage": {
                     "ledger_count": len(caps),
                     "matched": len(entries),
@@ -480,7 +483,16 @@ def advise(
                 # no attributable skill. Found 2026-08-22 while wiring the tick: the trial existed
                 # and was unreadable. Same call as the classified branch, same idempotency, so a
                 # repeated identical question still does not inflate anything.
-                result["recorded_matches"] = _record_matches(result, skill=skill, path=path)
+                #
+                # AND IT MUST CARRY THE SURFACE. This branch passed `skill` only, so a caller that
+                # supplied `--surface` and no skill -- which is every CLI caller, since there is no
+                # `--skill` flag -- wrote `skill: null, surface: null` and its whole candidate set
+                # was unattributable to the surface that produced it. That is the same
+                # "recorded but unusable" defect the classified branch below already fixed, still
+                # live on the branch an unclassifiable cadence consult ALWAYS takes.
+                result["recorded_matches"] = _record_matches(
+                    result, skill=skill, surface=surface or skill, path=path
+                )
             return result
         return {
             "task": text,
@@ -498,6 +510,7 @@ def advise(
             "bound_count": 0,
             "bound_capabilities": [],
             "precondition": _annotate_preconditions([], repository, repo_path),
+            "surface_template": unsubstituted_surface(surface or skill) or None,
             "coverage": {
                 "ledger_count": len(caps),
                 "matched": 0,
@@ -663,6 +676,7 @@ def advise(
         # paid. `unevaluated` names what could not be checked AND the input that was missing, so
         # "nothing failed" and "nothing was checked" can never read alike.
         "precondition": precondition,
+        "surface_template": unsubstituted_surface(surface or skill) or None,
         "coverage": {
             "ledger_count": len(caps),
             "matched": len(matched),
@@ -793,6 +807,17 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "cross-repo-coordination": "the batch sweep is cross-repo by construction; 312 rounds",
         "offload": "13 repos x 10 candidate classes every round is the largest read in the system, "
         "and the lanes account for ~0 of offload's 63 invocations",
+        # THE TWO `lane_event` CAPABILITIES LAND HERE AND NOT ON THE OPENER, deliberately. Both
+        # matchers are lane events about a target that has STOPPED moving, and draining a stalled
+        # target is the closer's job by construction: the opener's own TOML raises `drain_needed`
+        # and relays a stalled PR to the closer rather than recovering it in place, so binding a
+        # stall capability to the opener would offer it at the surface that hands the work away.
+        "redirect-policy": "its matcher IS `{kind: lane_event, name: stall_detected}` -- the "
+        "closer's fleet discovery already classifies capacity-stuck and "
+        "no-commits-for-4-hours targets by hand every round",
+        "redirect-plan": "`{kind: lane_event, name: redirect_decision}` -- once a stall is "
+        "classified this is the only module that turns it into a corrected "
+        "prompt/switch plan instead of a fresh guess",
     },
     "opener-lane": {
         "deliberate-break-verifier": "the lane performs this exact break-then-revert proof in 271 of "
@@ -828,11 +853,18 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "deliberate-break-verifier": "it checks the named test gate is present AND passing, which is "
         "the break-then-revert proof",
         "offload": "reading real squash diffs across many merged PRs is a large read",
+        "role-adjudicator": "the skill's step 6 is the owner-decision check — a 'do not merge as-is' "
+        "comment is a hard blocker even on a green PR — and this role's whole "
+        "contract is weighing ONE blocker/veto against cited ground truth",
     },
     "file-agent-issue": {
         "deliberate-break-verifier": "AGENT_ISSUE_FORMAT requires a named test gate with a "
         "deliberate-break→revert demonstration in every filed issue",
         "runtime-ac-checks": "the issue's acceptance criteria are what a runtime-AC plan is built from",
+        "role-prompt": "the role's `validate()` requires exactly what this format requires — a "
+        "standalone scoped prompt, definition_of_done, acceptance criteria, "
+        "validation, expected paths and out-of-scope boundaries — because an "
+        "AGENT_ISSUE_FORMAT issue IS a cold-start prompt",
     },
     "cross-env-test-doctor": {
         "deliberate-break-verifier": "prescribing the canonical fix per failure class needs the fix "
@@ -849,6 +881,14 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "windowed-capacity-policy": "it assesses capacity before routing each sub-task",
         "role-decomposer": "decomposing the request across agents is the skill's core move",
         "role-triage": "choosing which piece goes to which agent is triage",
+        "role-redirect": "the skill's own description ends 'then coordinate, monitor, and redirect' — "
+        "redirect under an open action space is precisely this role",
+        "role-prompt": "it hands each sub-task to a cheaper agent, and the generic delegation "
+        "template this role replaces is exactly what that hand-off uses today",
+        "agy-runtime-isolation": "its matcher is `{kind: adapter, name: gemini}` and fires on every "
+        "gemini dispatch — this skill is the surface that dispatches to "
+        "gemini/cursor/vibe/codex, so it is the one that can be told the "
+        "runtime is isolated",
     },
     # SUPPRESSED, each with the reason — these are verdicts, not gaps.
     "human-involvement-check": {
@@ -874,6 +914,25 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "confidence:none, and that is the correct answer.",
     },
     # ---- non-skill surfaces
+    #
+    # THE TICK IS FIVE PHASES, not one context, and it is sub-surfaced for the same measured reason
+    # `repo-audit` is: 18 of the 43 capabilities live on this tick, and binding all 18 to `tick`
+    # would recreate the too-many-tools problem INSIDE the tick. The phase names below are the
+    # tick's OWN, not a taxonomy invented here -- `orchestrate.sh`'s first line reads "one
+    # orchestrator tick: capacity -> discover -> plan -> dispatch", line 236 heads its second half
+    # "--- Learning cadence ---", and the redirect/experiment blocks announce themselves as
+    # `[cadence] redirect watch sweep` / `[cadence] redirect apply/link` and `[cadence] experiment
+    # follow-up`. Several of the capabilities below carry a `{"kind": "tick_phase", "name": ...}`
+    # matcher naming the very phase they are bound to, which is where the triage came from.
+    #
+    # THE BARE `tick` SET DOES NOT MOVE, and that is a constraint rather than a preference.
+    # `capability_propensity.TICK_SURFACE` is `"tick"`, `tick_evidence()` grades exactly
+    # `binding_for("tick")`, and `_selftest_tick_evidence` asserts every capability with a
+    # `TICK_FINDING_FIELDS` projection is in that set. Moving these four down into a phase would
+    # silently zero the only producer of layer-2 usefulness evidence in the system. They are also
+    # genuinely surface-wide: "can it fire / does it fire / was it worth firing / is its switch
+    # held" are questions about ANY phase of a self-observing cadence, which is the same reason
+    # `offload` is declared surface-wide for `repo-audit`.
     "tick": {
         "switch-review": "already a weekly tick cadence step; bound so the tick can consult rather "
         "than only be scheduled",
@@ -887,6 +946,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "because the findability requirement blocked it: registered after that cutoff and bound "
         "nowhere, it is the first row the new gate actually drained",
     },
+    # RESOLVED 2026-08-23: two sessions disagreed about `ci`. #68's verdict is kept (below); the
+    # tick sub-surfaces from the binding work are kept too — they do not overlap. A `verify.py`
+    # consult was NOT added: verify.py does not CHOOSE to run the admission gate, so a consult
+    # there would change nothing. That correction came from the findability requirement itself.
     # `ci` WAS A BINDING TO A SURFACE NOTHING CONSULTS, which is the first finding the findability
     # requirement produced about the tree it was added to (2026-08-23). Both former entries were
     # right about the mechanism and wrong about the axis: neither capability is ever OFFERED to a
@@ -902,6 +965,59 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "capabilities that used to sit here are invoked UNCONDITIONALLY by a rail and "
         "declare `findability_category: no_surface` instead. If a CI-side consult is "
         "ever added, this is the entry to restore.",
+    },
+    "tick:capacity": {
+        "issue-readiness": "the phase asks what the tick may work on at all -- `issue_readiness` is "
+        "the rail that answers it, and its own `{kind: issue_readiness}` matcher "
+        "fires nowhere else",
+        "thompson-hybrid-routing": "the exploration policy read once capacity is known, per route "
+        "decision; its matcher is the ORCH_EXPLORATION_MODE switch this "
+        "phase consults",
+    },
+    "tick:dispatch": {
+        "live-keepalive-supervisor": "its matcher IS `{kind: tick_phase, name: keepalive-stage2-plan}` "
+        "-- the remote keepalive that `tick.py --active`'s label apply "
+        "drives is this phase's whole output",
+        "range-lane-rollout": "the daily range-lane slot is the one dispatch decision this phase "
+        "makes outside the label path; gated by the switch its matcher names",
+    },
+    "tick:experiments": {
+        "abcd-experiment": "its matcher is `{kind: experiment_phase, name: abcd}` and the phase IS "
+        "`[cadence] experiment follow-up (collect+evaluate finished A/B/C runs)`",
+        "synthesis-promotion": "`{kind: experiment_phase, equals: evaluated}` -- the promotion step "
+        "that reads what the followup above just evaluated",
+        "research-scheduler": "`{kind: tick_phase, name: research}`; the research arm fires on spare "
+        "capacity inside this same block",
+        "strategy-experiments": "campaign-scale experiments share the phase's arm/member identity "
+        "and its capacity reservation, so they are the same reasoning context",
+    },
+    "tick:redirect": {
+        "stall-watcher": "`{kind: tick_phase, name: watch}` -- `redirect_sweep.py` runs "
+        "unconditionally every tick and stall classification is its input",
+        "redirect-apply-bootstrap": "the `[cadence] redirect apply/link` step is the only consumer "
+        "of a redirect plan, and the bootstrap is what authorises one",
+    },
+    "tick:learning": {
+        "feedback-store": "the `--- Learning cadence ---` block exists to write it; every ingest "
+        "step in the phase ends in `feedback.record_*`",
+        "completion-event-lineage": "the pattern-miner step's first half is "
+        "`feedback.py completion-events`, which is this capability's producer",
+        "evidence-acquisition": "`{kind: tick_phase, name: evidence-acquisition}` names its own "
+        "cadence step in this block",
+        "feature-reflection-cli": "`{kind: tick_phase, name: reflection}`; the daily `feature-scan` "
+        "step is the reflection pass over reusable structures",
+    },
+    # DELIBERATELY UNBOUND, DECLARED RATHER THAN ABSENT. `local-model-profile-trial` is the one
+    # ledger row no surface may offer, and silence would be indistinguishable from an oversight --
+    # this repo's founding defect. Expressed as a suppressed surface (the trial's own quarantine
+    # context) so the reason is DATA that `binding_suppressed()` returns, not a comment.
+    "local-model-profile-trial": {
+        NO_BINDING: "quarantine-only by design (CLAUDE.md 2): the model-profile trial transport runs "
+        "only through model_profile_trial_bridge.py on the pinned read-only Workflows "
+        "runner, normal keepalive must REJECT a trial profile, and Brain ingestion is off "
+        "until its multi-row write is atomic. Offering it at any surface would invite "
+        "routing learning through unquarantined execution, so no surface binds the "
+        "`local-model-profile-trial` capability and this states that as the verdict.",
     },
     "repo-audit": {
         "offload": "whole-repo reads are the canonical offload case, and the audit is the biggest "
@@ -1121,6 +1237,23 @@ CONSULT_SITES: dict[str, dict] = {
         "how": "`tick-evidence` consults on every tick with surface=TICK_SURFACE. IN-TREE, so this "
         "site is verified on every machine, CI included",
     },
+    # A DERIVED FAMILY, declared once. `tick_phase_surfaces()` enumerates these from
+    # TICK_PHASE_PREFIX, so no caller names them literally and a per-surface entry could never be
+    # verified. `instances` is the mechanism for exactly that: the family is the claim, the instances
+    # are what it covers, and orchestrate.sh's `ORCH-ANCHOR: tick-phase-consult` iterates the same
+    # function below the heartbeat export. IN-TREE, so verified on every machine including CI.
+    "tick:*": {
+        "caller": "capability_advisor.py",
+        "literal": "TICK_PHASE_PREFIX",
+        "instances": [
+            "tick:capacity",
+            "tick:dispatch",
+            "tick:experiments",
+            "tick:learning",
+            "tick:redirect",
+        ],
+        "how": "orchestrate.sh iterates tick_phase_surfaces() and consults each phase",
+    },
     "orchestrate": {
         "caller": "~/.claude/skills/orchestrate/SKILL.md",
         "how": "task-initiation consult naming its own surface",
@@ -1182,13 +1315,30 @@ CONSULT_SITES: dict[str, dict] = {
 # the difference between an acknowledged defect and an oversight is legible. When a consult is added,
 # MOVE the entry into `CONSULT_SITES` — the selftest will tell you if you forget.
 KNOWN_UNCONSULTED: dict[str, str] = {
-    "opener-lane": "the lane prompt DOES consult "
-    "(`capability_advisor.py --json --lane opener --repository <r> '<work>'`) but passes no "
-    "--surface, so `binding_for('')` returns {} and these five bindings have never reached it. "
-    "FIX: add `--surface opener-lane` to the lane TOML, which is outside this repository — "
-    "CLAUDE.md forbids a loop that edits lane prompts, so this is recorded, not patched here.",
-    "closer-lane": "same defect, same lane family: the closer TOML consults with --lane and "
-    "--context and no --surface. FIX: add `--surface closer-lane` to the lane TOML.",
+    # THE DEFECT IS FIXED; THE ENTRIES STAY, AND THE REASON IS DIFFERENT NOW. #68 recorded these
+    # because the lane TOMLs consulted with `--lane` and no `--surface`, so `binding_for("")`
+    # returned {} and eleven bindings never reached the two highest-volume surfaces in the system.
+    # The TOMLs now pass `--surface`, re-rendered and verified: bound_count 0 -> 5 (opener) and
+    # 0 -> 6 (closer).
+    #
+    # They remain here because `consulting_surfaces()` verifies a caller by READING THE FILE THAT
+    # NAMES THE SURFACE, and these callers are `~/.codex/automations/*/automation.toml` — machine-
+    # local, outside this repository, unreadable from any checkout. That is not a defect the tree can
+    # ever clear, so an unqualified in-tree assertion would fail forever. Retiring the entries on the
+    # grounds that the defect was fixed was attempted on 2026-08-23 and correctly rejected by this
+    # module's own findability selftest.
+    "opener-lane": "consults with `--surface opener-lane` as of 2026-08-23 (verified: bound_count 5, "
+    "survives render-claude-prompts.sh). Unverifiable in-tree: the caller is "
+    "~/.codex/automations/pd-workloop-resume/automation.toml, outside this repository. "
+    "FIX: none needed in-tree — the TOML already carries the flag. Re-verify by hand: run "
+    "~/.codex/bin/render-claude-prompts.sh and grep the rendered prompt for "
+    "`--surface opener-lane`; a missing flag means the TOML was overwritten.",
+    "closer-lane": "consults with `--surface closer-lane` as of 2026-08-23 (verified: bound_count 6, "
+    "survives render-claude-prompts.sh). Unverifiable in-tree: the caller is "
+    "~/.codex/automations/imi-merge-verify-closer/automation.toml, outside this repository. "
+    "FIX: none needed in-tree — the TOML already carries the flag. Re-verify by hand: run "
+    "~/.codex/bin/render-claude-prompts.sh and grep the rendered prompt for "
+    "`--surface closer-lane`; a missing flag means the TOML was overwritten.",
 }
 
 
@@ -1272,6 +1422,211 @@ def surfaces_binding(capability_ids, *, path=None) -> dict[str, list[str]]:
             if cap_id in wanted:
                 out[cap_id].append(surface)
     return {cap_id: sorted(surfaces) for cap_id, surfaces in out.items()}
+
+
+# ---------------------------------------------------------------------------
+# THE PHASE CONSULT — a caller for every sub-surface of an unattended cadence.
+#
+# WHY. A binding with no caller cannot be selected, and a capability that cannot be selected cannot
+# earn the evidence that would rank it: the gate starves its own drain. PR #37 gave the BARE `tick`
+# surface a caller (`capability_propensity.tick_evidence`, at `ORCH-ANCHOR:
+# tick-capability-evidence`) and that closed the loop for four capabilities. The fourteen bound to
+# the tick's PHASES below had the same problem one level down — declared, and consulted by nothing.
+#
+# THIS IS THE SAME MECHANISM, NOT A SECOND ONE. It calls `advise()` per surface exactly as #37 does,
+# writes to the same `match` heartbeat, and records no verdict of its own: usefulness verdicts stay
+# the single responsibility of `capability_propensity.tick_evidence`, whose ~1.3/day ceiling
+# therefore survives sub-surfacing untouched (it reads `binding_for("tick")`, which does not move).
+#
+# BOUNDED BY CONSTRUCTION. The consult text is stable per (surface, UTC day) and `_record_matches`
+# is idempotent per (capability, task digest), so the whole added write volume is one `match` event
+# per bound capability per phase per day — landing on the first tick of each day and costing nothing
+# on the other 23. Nothing here dispatches, opens a network connection, spawns a subprocess or
+# writes outside the ledger.
+# ---------------------------------------------------------------------------
+
+TICK_PHASE_PREFIX = "tick:"
+# Wall-clock budget for a whole phase-consult run, mirroring `capability_propensity`'s: the only
+# unbounded wait in the path is the ledger flock, and the tick drives real dispatch.
+CONSULT_BUDGET_S = 30
+
+
+# AN UNSUBSTITUTED TEMPLATE IN A SURFACE NAME FAILS SILENTLY, AND THAT IS THE WORST CASE.
+# `binding_for` resolves by PREFIX, so a caller that sends the literal `repo-audit:phase-N` (the
+# string a skill's instructions used to print) resolves to `repo-audit`'s surface-wide set alone --
+# one capability instead of the phase's four -- and gets a plausible non-empty answer with no
+# indication anything went wrong. Measured 2026-08-23: three audit runs under identical instructions
+# consulted 13, 9 and 2 distinct surfaces. Naming it is the fix; it must NOT change the set or the
+# order, for the same reason the precondition axis does not.
+SURFACE_TEMPLATE = re.compile(r"-N\b|<[^>]*>|\{[^}]*\}|%s|\$\{?\w+|\bN\b")
+
+
+def unsubstituted_surface(surface: str) -> str:
+    """The unsubstituted placeholder in this surface name, or '' if it looks like a real one."""
+    match = SURFACE_TEMPLATE.search(str(surface or ""))
+    return match.group(0) if match else ""
+
+
+def tick_phase_surfaces() -> list[str]:
+    """Every declared phase of the tick. DERIVED from the table, never a second list.
+
+    A hand-maintained list of phase names would be free to drift from the bindings it consults, and
+    a phase missing from it would be silently unreachable — the exact defect this consult exists to
+    remove, one level up.
+    """
+    return sorted(k for k in SURFACE_BINDINGS if k.startswith(TICK_PHASE_PREFIX))
+
+
+def consult_text(surface: str, day: str) -> str:
+    """The advisory question a cadence surface asks, stable per (surface, UTC day).
+
+    TWO PROPERTIES, both load-bearing:
+
+    * STABLE PER DAY, so the `match` heartbeat's idempotency key (a digest of this text) coalesces 24
+      ticks into one observation instead of inflating frequency 24-fold.
+    * DISTINCT PER SURFACE, so each phase gets its own experiment id and its own control arm. A
+      shared digest would merge five phases into one trial whose candidate set is the union — which
+      is precisely the too-many-tools condition sub-surfacing exists to avoid, recreated in the
+      evidence.
+
+    It must ALSO stay unclassifiable by `classify_task`, for the same reason
+    `capability_propensity.tick_task` does: a cadence is not one free-text task, so the DECLARED
+    binding must be the whole answer and a stray keyword would silently widen it.
+    `_selftest_phase_consult` asserts that for every declared phase, so a phase renamed to something
+    the classifier hits fails a test instead of drifting.
+    """
+    phase = surface.split(":", 1)[1] if ":" in surface else "cadence"
+    return f"orchestrator tick {phase} pass {day}"
+
+
+def consult_phases(
+    *,
+    day: str | None = None,
+    surfaces: list[str] | None = None,
+    record: bool = True,
+    path=None,
+) -> dict:
+    """Consult every declared tick phase. Advisory, read-only apart from the `match` heartbeat.
+
+    FAILS PER SURFACE, so one broken phase cannot silence the other four: an exception becomes an
+    `error` field on that row and the loop continues. The report always names both quantities — how
+    many phases were consulted and how many capabilities were offered — because "0 offered" and "0
+    consulted" are opposite readings that would otherwise print the same.
+    """
+    day = time.strftime("%Y-%m-%d", time.gmtime()) if day is None else day
+    phases = tick_phase_surfaces() if surfaces is None else list(surfaces)
+    started = time.monotonic()
+    rows: list[dict] = []
+    for surface in phases:
+        if time.monotonic() - started > CONSULT_BUDGET_S:
+            rows.append(
+                {
+                    "surface": surface,
+                    "error": f"consult budget of {CONSULT_BUDGET_S}s exhausted before this phase",
+                    "offered": 0,
+                    "recorded": 0,
+                }
+            )
+            continue
+        try:
+            advice = advise(
+                consult_text(surface, day),
+                surface=surface,
+                skill=surface,
+                lane="tick",
+                record=record,
+                path=path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            rows.append(
+                {
+                    "surface": surface,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "offered": 0,
+                    "recorded": 0,
+                }
+            )
+            continue
+        rows.append(
+            {
+                "surface": surface,
+                "experiment_id": advice.get("experiment_id"),
+                "offered": len(advice.get("capabilities") or []),
+                "bound": sorted(advice.get("bound_capabilities") or []),
+                "recorded": int(advice.get("recorded_matches") or 0),
+                "suppressed": bool(binding_suppressed(surface)),
+            }
+        )
+    return {
+        "day": day,
+        "phases": len(rows),
+        "rows": rows,
+        "offered": sum(int(r.get("offered") or 0) for r in rows),
+        "recorded": sum(int(r.get("recorded") or 0) for r in rows),
+        "errors": [r["surface"] for r in rows if r.get("error")],
+    }
+
+
+def consult_phases_guarded(**kwargs) -> dict:
+    """`consult_phases` that cannot take the tick down. THE ONLY entry point the shell calls.
+
+    Same shape and same reason as `capability_propensity.tick_evidence_guarded`: a SIGALRM backstop
+    over the one syscall that can block indefinitely (the ledger flock), and any exception at all
+    becomes a reported field rather than a non-zero exit.
+    """
+    import signal
+
+    try:
+        previous = signal.signal(signal.SIGALRM, _consult_expired)
+        signal.alarm(CONSULT_BUDGET_S + 5)
+        armed = True
+    except (ValueError, AttributeError, OSError):
+        armed, previous = False, None
+    try:
+        return consult_phases(**kwargs)
+    except BaseException as exc:  # noqa: BLE001
+        return {
+            "day": kwargs.get("day") or time.strftime("%Y-%m-%d", time.gmtime()),
+            "phases": 0,
+            "rows": [],
+            "offered": 0,
+            "recorded": 0,
+            "errors": ["*"],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    finally:
+        if armed:
+            try:
+                signal.alarm(0)
+                if previous is not None:
+                    signal.signal(signal.SIGALRM, previous)
+            except (ValueError, OSError):
+                pass
+
+
+def _consult_expired(_signum, _frame):
+    raise TimeoutError(f"capability phase consult exceeded {CONSULT_BUDGET_S}s")
+
+
+def format_phase_consult(rep: dict) -> str:
+    """One line per run plus one per phase. BOTH quantities, never just the reassuring one."""
+    head = (
+        f"  PHASE-CONSULT: {rep.get('phases', 0)} phase(s), "
+        f"{rep.get('offered', 0)} capability offer(s), "
+        f"{rep.get('recorded', 0)} new match event(s) [{rep.get('day')}]"
+    )
+    if rep.get("error"):
+        head += f" — FAILED: {rep['error']} (the tick is unaffected)"
+    lines = [head]
+    for row in rep.get("rows") or []:
+        if row.get("error"):
+            lines.append(f"    {row['surface']}: ERROR {row['error']}")
+        else:
+            lines.append(
+                f"    {row['surface']}: offered {row['offered']} "
+                f"(bound {len(row.get('bound') or [])}), recorded {row['recorded']}"
+            )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1823,6 +2178,16 @@ HOW_TO_USE = {
 def format_advice(a: dict) -> str:
     verdict = "USE THE ORCHESTRATOR" if a["useful"] else "NO ORCHESTRATOR CAPABILITY APPLIES"
     lines = [f"{verdict} — {a['reason']}", ""]
+    if a.get("surface_template"):
+        # LOUD, because the alternative is a plausible wrong answer. `repo-audit:phase-N` resolves
+        # by prefix to `repo-audit` alone -- one capability where the phase declares four -- and
+        # nothing about the response would otherwise say so.
+        lines += [
+            f"!! SURFACE LOOKS LIKE AN UNSUBSTITUTED TEMPLATE ({a['surface_template']!r}) in "
+            f"{a.get('surface')!r}. It resolved by PREFIX, so you got the surface-wide set, not "
+            f"the phase's. Substitute the real value (e.g. `repo-audit:phase-3`) and re-ask.",
+            "",
+        ]
     if a["task_types"]:
         lines.append(f"classified as: {', '.join(a['task_types'])} (confidence: {a['confidence']})")
         for tt, hits in (a.get("classification_evidence") or {}).items():
@@ -2215,6 +2580,28 @@ def _selftest_bindings() -> None:
             )
             assert sorted(trial["candidates"]) == ["bound-a", "bound-b"], trial
             assert trial["skills"] == ["t-surface"], trial
+            # 1c. SURFACE-ONLY IS STILL ATTRIBUTABLE. The CLI has no `--skill` flag, so every
+            # `--surface` consult that misses the classifier lands here with `skill=""` -- and this
+            # branch used to pass only `skill` to `_record_matches`, writing `surface: null` too.
+            # The candidate set then existed in the ledger and belonged to nobody, so
+            # `propose_demotions` and `missed_selection` could never drain the surface that produced
+            # it. Asserted through `experiments()`, which reads BOTH keys as one attribution axis.
+            surf_only = advise(
+                "plugh xyzzy surface only no skill given",
+                surface="t-surface",
+                path=ledger,
+            )
+            assert surf_only["confidence"] == "binding_only", surf_only["confidence"]
+            assert surf_only.get("recorded_matches") == 2, surf_only.get("recorded_matches")
+            so_trial = next(
+                t
+                for t in _prop.experiments(path=ledger)
+                if t["experiment_id"] == surf_only["experiment_id"]
+            )
+            assert so_trial["skills"] == ["t-surface"], (
+                f"a surface-only binding-only consult is unattributable: {so_trial['skills']} -- "
+                f"the candidate set is recorded and no drain can locate it"
+            )
             # ...and the same question again must not inflate the count.
             again = advise(
                 "plugh xyzzy nothing classifies here",
@@ -2335,6 +2722,36 @@ def _selftest_bindings() -> None:
             assert "offload" in binding_for(
                 "repo-audit:dimension-5"
             ), "the playbook names offload outright for the public-field research dimension"
+
+            # 6. THE TICK'S PHASES, and the ONE thing that must not move. `tick_evidence` grades
+            #    `binding_for("tick")` and `_selftest_tick_evidence` requires every capability with
+            #    a finding projection to be in it, so sub-surfacing the tick must ADD phase keys
+            #    without draining the bare one. Asserted through a SYNTHETIC ledger path so a
+            #    machine-local `binding_promotion` cannot make this pass or fail by accident.
+            bare = binding_for("tick", path=ledger)
+            assert bare, "the bare tick surface went empty; tick_evidence would grade nothing"
+            for cap_id in (
+                "switch-review",
+                "capability-firing-monitor",
+                "capability-activation-audit",
+                "capability-propensity",
+            ):
+                assert cap_id in bare, (
+                    f"{cap_id} left the bare `tick` binding. `capability_propensity.TICK_SURFACE` "
+                    f"is 'tick' and grades exactly that set, so moving it into a phase silently "
+                    f"stops the only producer of layer-2 usefulness evidence: {sorted(bare)}"
+                )
+            phases = tick_phase_surfaces()
+            assert len(phases) >= 2, phases
+            for phase in phases:
+                ctx = binding_for(phase, path=ledger)
+                # A phase must ADD to the surface-wide set, never merely restate it.
+                own = {k for k in SURFACE_BINDINGS[phase] if k != NO_BINDING}
+                assert own - set(bare), (
+                    f"{phase} declares nothing the bare tick surface does not already bind, so it "
+                    f"is a context with no reason to exist"
+                )
+                assert 1 <= len(ctx) <= 10, (phase, len(ctx), sorted(ctx))
         finally:
             if real is None:
                 SURFACE_BINDINGS.pop("t-surface", None)
@@ -2343,6 +2760,157 @@ def _selftest_bindings() -> None:
     print(
         "capability_advisor binding selftest: OK (survives a classification miss, never conceals "
         "an unbound match, filters retired, bound sets stay small)"
+    )
+
+
+def _selftest_phase_consult() -> None:
+    """The phase consult: a real caller for every sub-surface, bounded, and never a verdict.
+
+    ASSERTS ON WHAT A CALLER RECEIVES, not on `SURFACE_BINDINGS` or on an internal helper. A prior
+    binding bug in this module passed a table-shaped assertion while the answer a caller got was
+    wrong, and an audit found it rather than the test.
+
+    SYNTHETIC LEDGER THROUGHOUT. This machine's ledger holds 43 rows and a clean runner holds ~14,
+    so nothing below names a real capability id or asserts that one comes back.
+    """
+    import tempfile
+    from pathlib import Path
+
+    # ---- PART 1: code vs code. Runs anywhere: no ledger, no state directory.
+    #
+    # THE CONSULT TEXT MUST STAY UNCLASSIFIABLE for every declared phase. A cadence is not one
+    # free-text task, so the declared binding has to be the whole answer; a phase renamed to a word
+    # in TASK_SIGNALS ("review", "audit", "test", "phase 4"...) would silently widen both the offer
+    # and the recorded candidate set to whatever the keyword classifier happened to hit.
+    for surface in tick_phase_surfaces():
+        text = consult_text(surface, "2026-01-02")
+        assert classify_task(text) == [], (
+            f"the consult text for {surface} now hits the keyword classifier "
+            f"({classify_task(text)}); rename the phase or the phrase, or the declared binding "
+            f"stops being the whole answer"
+        )
+    # DISTINCT PER SURFACE. A shared digest would merge every phase into ONE trial whose candidate
+    # set is the union of all of them -- the too-many-tools condition recreated inside the evidence,
+    # with no per-phase control arm left.
+    ids = [experiment_id(consult_text(s, "2026-01-02")) for s in tick_phase_surfaces()]
+    assert len(set(ids)) == len(ids), f"phase consult ids collide: {ids}"
+    # ...and STABLE PER DAY, distinct across days: that pairing is what bounds the write volume to
+    # one match per capability per phase per day rather than one per tick.
+    assert consult_text("tick:x", "2026-01-02") == consult_text("tick:x", "2026-01-02")
+    assert consult_text("tick:x", "2026-01-02") != consult_text("tick:x", "2026-01-03")
+    # AN UNSUBSTITUTED TEMPLATE MUST BE NAMED, on every answer path. `binding_for` resolves by
+    # prefix, so `repo-audit:phase-N` silently returns the surface-wide set -- a plausible, wrong,
+    # SMALLER answer with nothing to distinguish it from a correct one. Three audit runs under
+    # identical instructions consulted 13, 9 and 2 distinct surfaces; this is what that looks like
+    # from the inside. It reports and changes nothing else: same set, same order.
+    for bad in ("repo-audit:phase-N", "repo-audit:dimension-N", "<surface>", "tick:{phase}"):
+        assert unsubstituted_surface(bad), bad
+        answer = advise("xyzzy plugh frobnicate", surface=bad, record=False)
+        assert answer["surface_template"], (bad, answer.get("surface_template"))
+        assert "UNSUBSTITUTED TEMPLATE" in format_advice(answer), bad
+    for good in ("repo-audit:phase-3", "repo-audit:dimension-4", "closer-lane", "ci", "tick"):
+        assert not unsubstituted_surface(good), good
+        answer = advise("xyzzy plugh frobnicate", surface=good, record=False)
+        assert answer["surface_template"] is None, (good, answer.get("surface_template"))
+        assert "UNSUBSTITUTED TEMPLATE" not in format_advice(answer), good
+    for phase in tick_phase_surfaces():
+        assert not unsubstituted_surface(phase), f"a declared phase reads as a template: {phase}"
+    # ...and the SUPPRESSED path reports it too: `repo-audit:phase-1` returns early, so a template
+    # arriving there used to skip the check entirely.
+    assert advise("x", surface="repo-audit:phase-1", record=False)["surface_template"] is None
+
+    # DERIVED FROM THE TABLE, never a second list: a phase absent from the caller's list is exactly
+    # the unreachable-binding defect this consult exists to remove, one level up.
+    SURFACE_BINDINGS["tick:selftest-probe"] = {"probe-a": "temporary, selftest only"}
+    try:
+        assert "tick:selftest-probe" in tick_phase_surfaces(), tick_phase_surfaces()
+    finally:
+        SURFACE_BINDINGS.pop("tick:selftest-probe", None)
+    assert "tick:selftest-probe" not in tick_phase_surfaces()
+
+    # ---- PART 2: what a CALLER receives, on a synthetic ledger and synthetic phases.
+    with tempfile.TemporaryDirectory(prefix="phase-consult-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("wide-1", "own-a", "own-b"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"kind": "tick_phase", "name": "probe"}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        saved = {k: SURFACE_BINDINGS.get(k) for k in ("tick", "tick:p-one", "tick:p-two")}
+        try:
+            SURFACE_BINDINGS["tick"] = {"wide-1": "surface-wide for the probe"}
+            SURFACE_BINDINGS["tick:p-one"] = {"own-a": "phase one only"}
+            SURFACE_BINDINGS["tick:p-two"] = {"own-b": "phase two only"}
+            phases = ["tick:p-one", "tick:p-two"]
+
+            rep = consult_phases(day="2026-01-02", surfaces=phases, path=ledger)
+            assert rep["phases"] == 2, rep
+            assert not rep["errors"], rep
+            by_surface = {r["surface"]: r for r in rep["rows"]}
+            # EACH PHASE GETS ITS OWN SET: its own declaration plus the surface-wide one, and NOT
+            # the sibling phase's. That separation is the whole point of sub-surfacing.
+            assert sorted(by_surface["tick:p-one"]["bound"]) == ["own-a", "wide-1"], by_surface
+            assert sorted(by_surface["tick:p-two"]["bound"]) == ["own-b", "wide-1"], by_surface
+            assert rep["recorded"] == 4, rep  # 2 capabilities x 2 phases, first run of the day
+            # ...and the same day again records NOTHING. The idempotency key is a digest of the
+            # consult text, so 24 ticks a day cost one write set, not 24.
+            again = consult_phases(day="2026-01-02", surfaces=phases, path=ledger)
+            assert again["recorded"] == 0, again
+            assert again["offered"] == rep["offered"], "the OFFER must not shrink with the writes"
+            # A NEW DAY IS A NEW OBSERVATION. If the day ever left the consult text this would drop
+            # to 0 and the surface would be measured once, forever.
+            tomorrow = consult_phases(day="2026-01-03", surfaces=phases, path=ledger)
+            assert tomorrow["recorded"] == 4, tomorrow
+
+            # THE VERDICT CEILING SURVIVES SUB-SURFACING. `capability_propensity.tick_evidence` is
+            # the ONLY writer of usefulness verdicts and it reads `binding_for("tick")`, which this
+            # change does not touch; the phase consult must add none of its own, or the ~1.3/day
+            # bound #37 established would become 5x that overnight.
+            import capability_propensity as _prop
+
+            rows_after = _prop.usefulness(path=ledger)["rows"]
+            resolved = {c: r["resolved"] for c, r in rows_after.items() if r["resolved"]}
+            assert not resolved, f"the phase consult recorded usefulness verdicts: {resolved}"
+
+            # record=False is a pure query: an offer, and no trial at all.
+            pure = consult_phases(day="2026-01-04", surfaces=phases, path=ledger, record=False)
+            assert pure["offered"] == rep["offered"], pure
+            assert pure["recorded"] == 0, pure
+            trials = {t["experiment_id"] for t in _prop.experiments(path=ledger)}
+            for surface in phases:
+                assert experiment_id(consult_text(surface, "2026-01-04")) not in trials, surface
+
+            # ONE BROKEN PHASE MUST NOT SILENCE THE OTHERS. A surface whose name is not a string
+            # blows up inside `advise`; the row carries the error and the loop continues.
+            mixed = consult_phases(
+                day="2026-01-05", surfaces=["tick:p-one", 42, "tick:p-two"], path=ledger
+            )
+            assert mixed["errors"] == [42] or 42 in mixed["errors"], mixed
+            assert sum(1 for r in mixed["rows"] if not r.get("error")) == 2, mixed
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    SURFACE_BINDINGS.pop(key, None)
+                else:
+                    SURFACE_BINDINGS[key] = value
+
+    # ---- PART 3: THE GUARD. A capability consult must never be able to fail the tick, so the
+    # OUTER handler has to catch what the per-phase one cannot -- a bad call shape, an import
+    # failure, a signal. Exercised with a kwarg `consult_phases` does not accept, which raises
+    # before any phase loop runs.
+    broken = consult_phases_guarded(day="2026-01-02", not_a_real_kwarg=True)
+    assert broken.get("error"), broken
+    assert broken["errors"] == ["*"], broken
+    assert broken["recorded"] == 0 and broken["offered"] == 0, broken
+    assert "FAILED" in format_phase_consult(broken), format_phase_consult(broken)
+    # ...and a healthy run must NOT claim failure, or the marker above means nothing.
+    assert "FAILED" not in format_phase_consult({"phases": 0, "rows": [], "day": "d"})
+    print(
+        "capability_advisor phase-consult selftest: OK (every declared phase is consulted, one "
+        "match per capability per phase per day, no verdicts, fails open per phase)"
     )
 
 
@@ -3009,18 +3577,33 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument(
+        "--consult-tick-phases",
+        action="store_true",
+        help="consult every declared `tick:<phase>` surface once for today (the tick's caller for "
+        "its own sub-surfaces). Advisory and read-only apart from the match heartbeat; always "
+        "exits 0 so it cannot stall the tick",
+    )
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
         _selftest_front_door()
         _selftest_bindings()
+        _selftest_phase_consult()
         _selftest_contraindications()
         _selftest_preconditions()
         _selftest_findability()
         _selftest_reach()
         return 0
+    if args.consult_tick_phases:
+        # ALWAYS 0. This is called from the hourly tick, which drives real dispatch; a capability
+        # consult must never be able to fail it. `consult_phases_guarded` turns every error into a
+        # reported field, and the line printed below always states what happened.
+        report = consult_phases_guarded()
+        print(json.dumps(report, indent=2) if args.json else format_phase_consult(report))
+        return 0
     if not args.task:
-        ap.error("give the task in plain words, or use --selftest")
+        ap.error("give the task in plain words, use --consult-tick-phases, or use --selftest")
     result = advise(
         " ".join(args.task),
         repository=args.repository,
