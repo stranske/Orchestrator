@@ -178,6 +178,20 @@ committed table is the seed (tool); instance promotions live in the ledger (evid
 bound set and flagged `bound: false`. A concealed capability could never be selected, so it could
 never earn the evidence that would bind it — the gate would starve its own drain.
 
+**And a fourth input, orthogonal to all three: the per-repo contraindication.** The three layers above
+rank a capability by how well it fits the SURFACE. None of them can say *this tool does not work
+against this particular repository* — a fact that lives in the repo's own record, not in the ledger.
+A real audit run was offered `frontend-verifier` and `repo-playbook` in the same response for a repo
+whose audit history says `frontend_verify.py` snapshots its Streamlit SPA before the websocket render
+completes; the two bound capabilities contradicted each other and the reconciliation existed only in
+the auditor's head. `repo_knowledge`'s `contraindications` section now carries `{capability, reason,
+instead, evidence}` per repo, and `capability_advisor.advise(repository=…)` annotates matching
+candidates on both answer paths — the classified one and the classification-miss one a free-text
+consult actually lands on. It follows the same two rules as binding: it **annotates, never removes**
+(a concealed candidate can never earn the evidence that would clear it), and it is **data, not prose**.
+It is deliberately **repo-scoped rather than surface-scoped**: a demotion learned here would unbind
+the capability for every other repo, which is the wrong granularity for "broken against this one app".
+
 **And the binding is DATA, not prose, deliberately.** The recursive loop below must be able to change
 what a surface reaches for without rewriting that surface's prompt. `CLAUDE.md` §1 makes the manual
 mirror sync "the only circuit breaker between an agent's change and the dispatcher that dispatches
