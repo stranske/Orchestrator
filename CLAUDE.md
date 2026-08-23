@@ -2,11 +2,19 @@
 
 > **Local vs public.** This repository is the TOOL: generic capabilities, gates and tests. This
 > instance's EVIDENCE is not committed — the failure history, spend calibration and attention-budget
-> figures live in `LOCAL_POLICY.md`, `IMPROVEMENT_BACKLOG.md`, `CAPABILITY_USEFULNESS.md`,
-> `*.local.md` and `Code/Audits/Orchestrator/`, all gitignored. Where a rule below cites a figure,
-> read it from `LOCAL_POLICY.md`. Runtime state (Brain, ledger, stamps, worktrees) lives outside the
-> tree at `$ORCH_STATE_DIR`, default `~/.codex/orchestrator`, so a second instance needs a different
-> `ORCH_STATE_DIR` and no code change.
+> figures live in `LOCAL_POLICY.md`, `CAPABILITY_USEFULNESS.md`, `*.local.md` and
+> `Code/Audits/Orchestrator/`, all gitignored. Where a rule below cites a figure, read it from
+> `LOCAL_POLICY.md`. Runtime state and durable evidence live OUTSIDE the tree, behind two variables:
+> `$ORCH_LOCAL_RUNTIME` (the Brain, the capability ledger, and the **improvement log** — reached with
+> `improvement_log.py`, never by path) and `$ORCH_STATE_DIR` (the audit cache, cadence stamps,
+> monitors, worktrees). Both default to `~/.codex/orchestrator`, so a second instance needs different
+> values and no code change.
+>
+> **Gitignored is not the same as machine-local, and confusing the two hid a rule from its own
+> workers.** A gitignored file does not exist in a git WORKTREE, and agents work in worktrees — so
+> the improvement log, which §0 and §5 both require, was unreachable by every worker those rules
+> bind. Evidence that agents must READ belongs outside the tree behind an accessor, not gitignored
+> inside it. When you add such a thing, leave a tracked pointer naming the accessor.
 
 Read `README.md` first for what this project is and its important functionality. This file is the
 rules for anyone (human or agent) *changing* it.
@@ -143,7 +151,12 @@ back. Adding a "new" feature that already exists is the easy mistake here.
 2. Read the historical dormancy inventory:
    `Code/Audits/Orchestrator/2026-07-08-dormancy-rescan.md`, then generate current activation truth
    with `python3 capabilities.py inventory`. Feature maturity is not activation evidence.
-3. Check `IMPROVEMENT_BACKLOG.md` — items carry status notes; many "ideas" are already DONE.
+3. Search the improvement log — `python3 improvement_log.py search <term>`. Items carry status
+   notes and many "ideas" are already DONE. The log is machine-local evidence living outside the
+   tree, so **use the accessor, never a path**: it resolves `$ORCH_LOCAL_RUNTIME` for you, prints
+   each hit under the item that owns it, and — when the log is not on this machine — names what is
+   missing and exits 2 instead of looking like "no matches". `IMPROVEMENT_BACKLOG.md` in the tree is
+   a pointer, not the log.
 4. If the capability EXISTS: the task is to **wire/activate/extend or un-gate it** (and say so),
    not rebuild it. If it exists but is deliberately gated, treat flipping the gate as the change and
    justify it. Only build new if the concept genuinely isn't present.
@@ -223,11 +236,16 @@ Do not create a second event log, model registry, or capability inventory.
   `capability_activation_audit.entrypoint_presence` / `absent_entrypoint_note`, which name the
   sibling checkout the code was found in — but read the message rather than the missing-parts list.
 - **The split is TOOL vs EVIDENCE.** Generic capabilities, gates and tests are committed. This
-  instance's evidence is not: `IMPROVEMENT_BACKLOG.md`, `CAPABILITY_USEFULNESS.md`,
-  `LOCAL_POLICY.md`, `*.local.md`, `experiments/`, `ux_reviews/`, `data/`, `Audits/`. When adding a
+  instance's evidence is not: `CAPABILITY_USEFULNESS.md`, `LOCAL_POLICY.md`, `*.local.md`,
+  `experiments/`, `ux_reviews/`, `data/`, `Audits/` — gitignored in the tree — plus the ledger, the
+  Brain and the **improvement log**, which live outside it under `$ORCH_LOCAL_RUNTIME`. When adding a
   personal figure — spend, availability, a habit — it goes in `LOCAL_POLICY.md`; the code refers to
   it. The boundary is file location, not recall. Published VENDOR list prices are fine and are kept
   deliberately: they are public and they are the model-tier rationale.
+  **Evidence an agent is REQUIRED to read must go outside the tree behind an accessor, not
+  gitignored inside it** — a gitignored path is absent from every worktree, which is how §0 step 3
+  became unfollowable. `improvement_log.py` is the pattern: a tracked pointer of the same name, an
+  accessor that resolves the path, and a named absence when the file is not on this machine.
 - A live fleet tick runs hourly and writes only to worktrees/state, never to this canonical tree —
   but if another interactive/headless session is editing here too, coordinate (the fleet-checkout
   hazard is real; see the user's memory). Look before overwriting a file you didn't create.
@@ -282,5 +300,9 @@ and update the gated-features list in README.md + the dormancy inventory.
 
 When you activate a dormant feature, un-gate a flag, or add a subsystem: update its lifecycle
 record, regenerate the capability inventory, update README.md's functionality section if the
-topology changed, and append a status note to the relevant IMPROVEMENT_BACKLOG.md item. Do not
-duplicate lifecycle verdicts in prose; stale parallel inventories are how features get forgotten.
+topology changed, and record a status note on the relevant improvement-log item with
+`python3 improvement_log.py append <item-ref> "<note>"`. Use the accessor rather than editing a
+file: the log is machine-local (outside the tree), the accessor finds the item and places the dated
+note inside it, and it REFUSES on an ambiguous or unknown ref rather than guessing — a note filed
+against the wrong item corrupts the record it exists to improve. Do not duplicate lifecycle verdicts
+in prose; stale parallel inventories are how features get forgotten.
