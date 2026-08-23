@@ -216,6 +216,27 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     call a pure query (used by tests and by dry inspection).
     """
     caps = capabilities.load(path or capabilities.REG)
+
+    # A SUPPRESSED SURFACE MUST BE ACTUALLY QUIET. `NO_BINDING` used to suppress only the DECLARED
+    # half, so `repo-audit:phase-1` — whose whole point is that the playbook says "Orient (bash only,
+    # NO agents)" — still offered `deliberate-break-verifier` and `testgen-lane` from the keyword
+    # classifier. Found by the first real audit run against this system: "an empty-by-design surface
+    # is not actually quiet". The selftest missed it because it asserted `binding_for(...) == {}` —
+    # the binding — and never what a CALLER receives. Suppression now covers the whole answer,
+    # because "no agents here" is a statement about the context, not about one code path.
+    suppressed = binding_suppressed(surface) if surface else ""
+    if suppressed:
+        return {
+            "task": text, "experiment_id": experiment_id(text),
+            "useful": False, "confidence": "suppressed", "skill": skill or None,
+            "surface": surface, "repository": repository,
+            "task_types": [], "capabilities": [], "dispatch_ready_count": 0,
+            "bound_count": 0, "bound_capabilities": [], "not_applicable": [],
+            "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
+                         "by_entry_mode": {}},
+            "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
+        }
+
     candidates = classify_task(text)
     if not candidates:
         # A DECLARED BINDING MUST SURVIVE A CLASSIFICATION MISS. This early return used to drop
@@ -714,6 +735,11 @@ def binding_for(surface: str, *, path=None) -> dict[str, str]:
     return out
 
 
+def suppressed_reason_in(advice: dict) -> bool:
+    """Does this advice explain that its surface is deliberately empty?"""
+    return "deliberately takes no capabilities" in str(advice.get("reason") or "")
+
+
 def binding_suppressed(surface: str) -> str:
     """Why this surface deliberately binds nothing, or '' if it is not suppressed.
 
@@ -1101,6 +1127,13 @@ def _selftest_bindings() -> None:
             try:
                 assert sorted(binding_for("t-proc:p2")) == ["bound-a", "bound-b"], "phase must merge"
                 assert binding_for("t-proc:p1") == {}, "NO_BINDING must suppress inheritance"
+                # AND THE WHOLE ANSWER, not just the declared half. Asserting only the binding is
+                # what let phase-1 keep offering classifier matches at a bash-only phase.
+                quiet = advise("add unit tests for the retry helper", surface="t-proc:p1",
+                               path=ledger, record=False)
+                assert quiet["capabilities"] == [], quiet["capabilities"]
+                assert quiet["confidence"] == "suppressed", quiet["confidence"]
+                assert quiet["useful"] is False and suppressed_reason_in(quiet), quiet["reason"]
                 assert binding_suppressed("t-proc:p1"), "and must SAY why it is empty"
                 assert not binding_suppressed("t-proc:p2")
                 # An unknown phase of a known surface still gets the surface-wide set.
