@@ -36,6 +36,16 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "next_transition": "retry mining after backoff; candidates expire automatically",
     },
     {
+        "key": "evidence-acquisition",
+        "success_stamp": ".last-evidence-acquisition",
+        "cadence_days": 1,
+        "artifact": "evidence-acquisition-plan.json",
+        "log": "evidence-acquisition.log",
+        "gate": "a capability unblock() marks feedable; a documented default-off switch is never fed",
+        "next_transition": "stays shadow-only until ORCH_EVIDENCE_ACQUISITION=1; feedable 0 is the "
+                           "honest state while every starved capability is held by a default-off gate",
+    },
+    {
         "key": "keepalive-stage2-plan",
         "success_stamp": ".last-keepalive-stage2-plan",
         "cadence_days": 0,
