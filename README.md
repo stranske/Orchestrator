@@ -363,18 +363,28 @@ Remote CI: `docs/CI_LINT_BASELINE.md` (what the Gate checks, what is deferred, a
 
 `capability_admission.py` is the admission gate, and unlike the other capability tooling it is
 PROSPECTIVE: everything else checks the capabilities that already exist. A capability must arrive
-with eight parts — a recorded dedup finding, a caller, a heartbeat on the executed path, a
+with nine parts — a recorded dedup finding, a caller, a heartbeat on the executed path, a
 recurrence fixture, an outcome path (declared consumer **and** learning sink), a kill switch, a
-rollback, and an expiry-or-cadence. `--preflight '<spec json>'` answers this before the code is
-written, returning caller/heartbeat/fixture as explicit obligations rather than skipping them.
+rollback, an expiry-or-cadence, and **a surface that can offer it**. `--preflight '<spec json>'`
+answers six of them before the code is written, returning caller/heartbeat/fixture as explicit
+obligations rather than skipping them.
+
+The ninth (`findable`, 2026-08-23) exists because the first eight make a capability invocable and
+observable and none of them makes it findable: 22 of 43 capabilities were bound to no surface at all,
+so nothing could offer them and no amount of running could produce evidence for them. It distinguishes
+`bound_nowhere` from `bound_to_unconsulted_surface` — `capability_advisor.CONSULT_SITES` declares
+which surfaces a caller actually names — because the fixes differ, and it states what it does not
+check (a surface invoking the entrypoint with no surface attribution needs that surface's own prompt,
+which is outside this repo).
 
 It also tracks **commitments**: a citation to a dated record that does not exist, or a deadline that
 passed with no record naming its subject, fails `test_capability_admission.py`. That check exists
 because a scheduled trial review fired on time, wrote nothing, and let a flag revert by timeout for
 36 days while live code cited the record nobody wrote.
 
-Enforcement binds on capabilities registered from 2026-08-21; the pre-gate set is reported as legacy
-debt on every run and does not fail the suite. Rationale and the nine failure modes:
+Enforcement binds on capabilities registered from 2026-08-21, and each requirement carries its own
+date (findability from 2026-08-23); the pre-cutoff set is reported as drainable debt on every run,
+with its causes and its drainable count, and does not fail the suite. Rationale and the failure modes:
 `ADDING_CAPABILITIES.md`.
 
 ## Capability activation inventory
