@@ -1237,6 +1237,18 @@ CONSULT_SITES: dict[str, dict] = {
         "how": "`tick-evidence` consults on every tick with surface=TICK_SURFACE. IN-TREE, so this "
         "site is verified on every machine, CI included",
     },
+    # A DERIVED FAMILY, declared once. `tick_phase_surfaces()` enumerates these from
+    # TICK_PHASE_PREFIX, so no caller names them literally and a per-surface entry could never be
+    # verified. `instances` is the mechanism for exactly that: the family is the claim, the instances
+    # are what it covers, and orchestrate.sh's `ORCH-ANCHOR: tick-phase-consult` iterates the same
+    # function below the heartbeat export. IN-TREE, so verified on every machine including CI.
+    "tick:*": {
+        "caller": "capability_advisor.py",
+        "literal": "TICK_PHASE_PREFIX",
+        "instances": ["tick:capacity", "tick:dispatch", "tick:experiments",
+                      "tick:learning", "tick:redirect"],
+        "how": "orchestrate.sh iterates tick_phase_surfaces() and consults each phase",
+    },
     "orchestrate": {
         "caller": "~/.claude/skills/orchestrate/SKILL.md",
         "how": "task-initiation consult naming its own surface",
@@ -1298,13 +1310,30 @@ CONSULT_SITES: dict[str, dict] = {
 # the difference between an acknowledged defect and an oversight is legible. When a consult is added,
 # MOVE the entry into `CONSULT_SITES` — the selftest will tell you if you forget.
 KNOWN_UNCONSULTED: dict[str, str] = {
-    "opener-lane": "the lane prompt DOES consult "
-    "(`capability_advisor.py --json --lane opener --repository <r> '<work>'`) but passes no "
-    "--surface, so `binding_for('')` returns {} and these five bindings have never reached it. "
-    "FIX: add `--surface opener-lane` to the lane TOML, which is outside this repository — "
-    "CLAUDE.md forbids a loop that edits lane prompts, so this is recorded, not patched here.",
-    "closer-lane": "same defect, same lane family: the closer TOML consults with --lane and "
-    "--context and no --surface. FIX: add `--surface closer-lane` to the lane TOML.",
+    # THE DEFECT IS FIXED; THE ENTRIES STAY, AND THE REASON IS DIFFERENT NOW. #68 recorded these
+    # because the lane TOMLs consulted with `--lane` and no `--surface`, so `binding_for("")`
+    # returned {} and eleven bindings never reached the two highest-volume surfaces in the system.
+    # The TOMLs now pass `--surface`, re-rendered and verified: bound_count 0 -> 5 (opener) and
+    # 0 -> 6 (closer).
+    #
+    # They remain here because `consulting_surfaces()` verifies a caller by READING THE FILE THAT
+    # NAMES THE SURFACE, and these callers are `~/.codex/automations/*/automation.toml` — machine-
+    # local, outside this repository, unreadable from any checkout. That is not a defect the tree can
+    # ever clear, so an unqualified in-tree assertion would fail forever. Retiring the entries on the
+    # grounds that the defect was fixed was attempted on 2026-08-23 and correctly rejected by this
+    # module's own findability selftest.
+    "opener-lane": "consults with `--surface opener-lane` as of 2026-08-23 (verified: bound_count 5, "
+    "survives render-claude-prompts.sh). Unverifiable in-tree: the caller is "
+    "~/.codex/automations/pd-workloop-resume/automation.toml, outside this repository. "
+    "FIX: none needed in-tree — the TOML already carries the flag. Re-verify by hand: run "
+    "~/.codex/bin/render-claude-prompts.sh and grep the rendered prompt for "
+    "`--surface opener-lane`; a missing flag means the TOML was overwritten.",
+    "closer-lane": "consults with `--surface closer-lane` as of 2026-08-23 (verified: bound_count 6, "
+    "survives render-claude-prompts.sh). Unverifiable in-tree: the caller is "
+    "~/.codex/automations/imi-merge-verify-closer/automation.toml, outside this repository. "
+    "FIX: none needed in-tree — the TOML already carries the flag. Re-verify by hand: run "
+    "~/.codex/bin/render-claude-prompts.sh and grep the rendered prompt for "
+    "`--surface closer-lane`; a missing flag means the TOML was overwritten.",
 }
 
 
