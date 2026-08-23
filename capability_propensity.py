@@ -55,8 +55,57 @@ WHAT THIS DELIBERATELY DOES NOT DO. It does not dispatch, does not trigger anyth
 not write to the Brain. It ranks advice. Triggering stays with the caller that already had the
 authority to trigger, so a bad propensity can misorder a recommendation list and nothing else.
 
+DECLINES ARE A THIRD STATE, NOT A NEGATIVE OUTCOME (2026-08-23). Two independent audit rounds the
+same day reached the same conclusion: propensity carried information exactly once because 11 of 13
+candidates sat at the uninformative 0.5 floor, and the missing input was not more consults but
+DECLINES. Four of nine decisions in one round and 20 of 22 candidate-offers in the other were
+reasoned rejections, and none was learnable, because a capability declined on repo-specific grounds
+looked IDENTICAL in the ledger to one nobody ever considered (`trig 0, use 0, no 0`).
+
+THE TRAP, and it is the whole difficulty. A decline means the capability was NOT TRIGGERED. Recording
+it as an `outcome` would land it in `not_useful` — a false statement that we tried it and it did not
+help, about something that never ran, corrupting the exact signal this module exists to sharpen. So a
+decline is carried on a `match` event (it WAS offered; that part is true) tagged
+`source=capability_decline`, and `experiments()` buckets useful/not_useful from `outcome` events
+ONLY. The separation is structural, not conventional: there is no code path by which a decline can
+reach the posterior. `propensity()` reports the decline count beside the posterior precisely so the
+two can be read together without being mixed.
+
+WHAT A DECLINE FEEDS, exhaustively:
+  1. THE DISTINCTION between `declined` (offered, rejected, reason stated) and
+     `not_triggered_silently` (offered, ignored) — the reported defect above. The three states
+     partition `candidates`, and the selftest asserts that partition.
+  2. `propose_demotions` — a binding declined at a surface across `DEMOTION_MIN_DECLINES` runs is a
+     demotion candidate. This is far better evidence than silent non-use, so its floor is much lower
+     than `DEMOTION_MIN_TRIALS`, and the reasons travel with the proposal.
+  3. NOTHING ELSE. It must not, and structurally cannot, move `propensity`.
+
+AND A DECLINE HAS A KIND, because one undifferentiated count licenses the wrong correction. A third
+audit round the same day declined 25 offers across six reason classes, and the classes imply OPPOSITE
+fixes:
+
+  * `testgen-lane` matched CORRECTLY three times and was structurally impossible each time -- a
+    read-only audit has no commit target. Fix: NOTHING.
+  * `offload` was declined at nine surfaces, always structurally, because it is declared
+    surface-wide and a one-subsystem audit has nothing big enough to hand off. Fix: a precondition,
+    or a narrower declaration.
+  * `frontend-verifier` was declined on two frontend-less repos and then, on a repo that DOES have a
+    display surface, produced the second-strongest finding of that audit -- one the code-reading path
+    had missed. Fix: EVALUATE THE CONDITION, do not weaken the binding. Down-weighting it on the two
+    negatives alone would have cost that finding.
+
+So `demotable` is a property of the KIND (`DECLINE_KINDS`), declared once and read nowhere else.
+Exactly two kinds indict a binding; the rest are counted, reported, and cannot clear the demotion
+floor. An unknown kind is refused rather than coerced, because a typo silently becoming
+`unspecified` would discard the classification the caller believed it had made.
+
+NO NEW STORE, AGAIN. `capabilities.EVENT_FIELDS` already has `match`; `record_promotion` already
+carries a non-match fact on it distinguished by `metadata.source`. A decline follows that precedent
+rather than adding an eighth event type or a second table.
+
     python3 capability_propensity.py report
     python3 capability_propensity.py experiments
+    python3 capability_propensity.py decline --capability X --experiment advice:abc --reason "..."
     python3 capability_propensity.py --json report
     python3 capability_propensity.py --selftest
 """
@@ -89,6 +138,64 @@ PRIOR_USEFUL, PRIOR_TOTAL = 1.0, 2.0
 # An outcome heartbeat carries the verdict in metadata under this key.
 USEFUL_KEY = "useful"
 ADVICE_REF_PREFIX = "advice:"
+# A DECLINE rides on a `match` event, tagged by source. `match` is the honest carrier: the capability
+# genuinely WAS offered, which is the only claim the event type itself makes. Everything that
+# distinguishes a decline lives in metadata, and no reader of `outcome` events can see it -- which is
+# why a decline cannot reach the usefulness posterior even by accident.
+DECLINE_SOURCE = "capability_decline"
+DECLINE_REASON_KEY = "reason"
+DECLINE_KIND_KEY = "decline_kind"
+
+# THE KIND OF DECLINE, because the kinds imply OPPOSITE corrections and one undifferentiated
+# "declined" column would license the wrong one. Measured, not theorised: a third audit round on
+# 2026-08-23 declined 22 offers across six reason classes, and only some are the binding's fault.
+# `demotable` is therefore a property OF THE KIND, declared here once, and read by nothing else.
+DECLINE_KINDS: dict[str, dict] = {
+    # It does not fit this work. The binding or the matcher is wrong.
+    "wrong_match": {"demotable": True, "fix": "the matcher or the binding"},
+    # A CORRECT match declared too broadly. `offload` was offered at 9 of 12 surfaces in one run and
+    # declined at all 9, always structurally, because a one-subsystem audit has no read big enough
+    # to pay for a dispatch. Narrowing the declaration IS a demotion, so this counts -- and the
+    # proposal carries the fix text, because "add a precondition" is the other valid answer.
+    "scope_too_small": {"demotable": True,
+                        "fix": "a precondition or a narrower declaration, not a lower rank"},
+    # A CORRECT match whose declared PRECONDITION does not hold here: the instrument is aimed at
+    # another system (`switch-review` audits THIS repo's switches; the gate under audit was in
+    # another), or at a surface this repo does not have (`frontend-verifier` on a repo with no UI).
+    # NOT DEMOTABLE, and this is the most important row in the table. `frontend-verifier` was
+    # declined on two frontend-less repos and then, on a repo that DOES have a display surface,
+    # produced the second-strongest finding of that audit -- one the code-reading path had missed.
+    # Down-weighting it on the two negatives alone would have cost that finding. THE FIX IS TO
+    # EVALUATE THE CONDITION, NOT TO WEAKEN THE BINDING.
+    "precondition_unmet": {"demotable": False,
+                           "fix": "declare and EVALUATE the capability's precondition (applies_to, "
+                                  "an observable surface); the binding is right where it holds"},
+    # A CORRECT match the deliverable shape made impossible: `testgen-lane` matched correctly three
+    # times in a read-only audit with no commit target. THE FIX IS NOTHING, so this must never
+    # demote -- down-weighting here would punish a capability for being right.
+    "no_landing_zone": {"demotable": False,
+                        "fix": "nothing — the match was correct and the deliverable had nowhere to "
+                               "put the result"},
+    # Correct match held behind a deliberate default-OFF switch or a shadow status. The gate is the
+    # subject, and it moves on its own evidence, not on this.
+    "gated_off": {"demotable": False, "fix": "the capability's own gate, on its own evidence"},
+    # Wanted and not affordable this run ("the one I most regret declining").
+    "deferred": {"demotable": False, "fix": "nothing — wanted, not affordable this run"},
+    # The caller did not classify it. Recorded, so offered-vs-never-considered still works, and NOT
+    # demotable: an unclassified decline that could demote is precisely the wrong correction arriving
+    # by default, which is the failure this vocabulary exists to prevent.
+    "unspecified": {"demotable": False, "fix": "unknown — the caller did not classify it"},
+}
+DECLINE_KIND_DEFAULT = "unspecified"
+
+
+def decline_kind_demotable(kind: str) -> bool:
+    """Whether a decline of this kind may drive a demotion. One lookup, so it cannot drift."""
+    return bool((DECLINE_KINDS.get(str(kind)) or DECLINE_KINDS[DECLINE_KIND_DEFAULT])["demotable"])
+# The surface a decline (or a match) was recorded for. Attribution has to be on the EVENT: the
+# advisor's own consults recorded `skill=None` for every `--surface` call, so the control arm of the
+# two 2026-08-23 audit rounds was unattributable to `repo-audit:*` at all.
+SURFACE_KEY = "surface"
 
 
 def _events(cap: dict) -> list[dict]:
@@ -123,13 +230,32 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
             if not exp or not _within_window(event, now=now, window_days=window_days):
                 continue
             trial = trials.setdefault(exp, {"experiment_id": exp, "candidates": [], "triggered": [],
-                                            "useful": [], "not_useful": [], "skills": set()})
+                                            "useful": [], "not_useful": [], "declined": [],
+                                            "decline_reasons": {}, "decline_kinds": {},
+                                            "skills": set()})
             meta = event.get("metadata") or {}
-            if meta.get("skill"):
-                trial["skills"].add(str(meta["skill"]))
+            # SURFACE and SKILL are the same attribution axis read from two keys. `--surface` calls
+            # recorded no `skill` at all, so a surface-attributed run was invisible to
+            # `propose_demotions` and `missed_selection` -- the control arm existed and could not be
+            # located. Reading both keys fixes that without a second attribution field.
+            for key in ("skill", SURFACE_KEY):
+                if meta.get(key):
+                    trial["skills"].add(str(meta[key]))
             etype = event.get("type") or event.get("event_type")
-            if etype == "match" and cap_id not in trial["candidates"]:
-                trial["candidates"].append(cap_id)
+            if etype == "match":
+                if cap_id not in trial["candidates"]:
+                    trial["candidates"].append(cap_id)
+                # A DECLINE. It is a candidate (it was offered) and it is NOT an outcome. This branch
+                # is the only place a decline is read, and it sits inside `match` on purpose: the
+                # `outcome` branch below cannot see it, so `useful`/`not_useful` cannot absorb it.
+                if meta.get("source") == DECLINE_SOURCE:
+                    if cap_id not in trial["declined"]:
+                        trial["declined"].append(cap_id)
+                    reason = str(meta.get(DECLINE_REASON_KEY) or "").strip()
+                    if reason:
+                        trial["decline_reasons"].setdefault(cap_id, reason)
+                    trial["decline_kinds"].setdefault(
+                        cap_id, str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT))
             elif etype == "invocation" and cap_id not in trial["triggered"]:
                 trial["triggered"].append(cap_id)
             elif etype == "outcome":
@@ -143,6 +269,24 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
         # named for this exact task and NOT triggered. Reporting it is not optional -- an experiment
         # with an unreported control arm is a testimonial.
         trial["not_triggered"] = sorted(set(trial["candidates"]) - set(trial["triggered"]))
+        # A capability that was declined and LATER triggered in the same trial ran; the trigger
+        # wins. Otherwise a change of mind would be counted as a rejection forever.
+        trial["declined"] = sorted(set(trial["declined"]) - set(trial["triggered"]))
+        trial["decline_reasons"] = {c: r for c, r in sorted(trial["decline_reasons"].items())
+                                    if c in trial["declined"]}
+        trial["decline_kinds"] = {c: k for c, k in sorted(trial["decline_kinds"].items())
+                                  if c in trial["declined"]}
+        # THE DEMOTABLE SUBSET, separated here so no downstream reader has to remember which kinds
+        # are the binding's fault. `no_landing_zone` was a CORRECT match; it belongs in `declined`
+        # and must never appear here.
+        trial["declined_demotable"] = sorted(
+            c for c in trial["declined"] if decline_kind_demotable(trial["decline_kinds"].get(c)))
+        # THE THIRD STATE, named. `triggered` + `declined` + `not_triggered_silently` partition
+        # `candidates` exactly, which is the property that makes "rejected on stated grounds"
+        # distinguishable from "offered and ignored" from "never considered" (not a candidate).
+        trial["not_triggered_silently"] = sorted(set(trial["not_triggered"]) - set(trial["declined"]))
+        # RESOLVED means an OUTCOME landed. A decline resolves nothing -- the capability never ran,
+        # so there is nothing to have been useful or useless about.
         trial["resolved"] = bool(trial["useful"] or trial["not_useful"])
         out.append(trial)
     return sorted(out, key=lambda t: t["experiment_id"])
@@ -157,7 +301,8 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
     caps = capabilities.load_declared(path or capabilities.REG)
     rows: dict[str, dict] = {
         cap_id: {"capability_id": cap_id, "candidates": 0, "triggered": 0,
-                 "useful": 0, "not_useful": 0, "status": cap.get("status")}
+                 "useful": 0, "not_useful": 0, "declined": 0, "declined_demotable": 0,
+                 "declines_by_kind": {}, "status": cap.get("status")}
         for cap_id, cap in sorted(caps.items())
     }
     for trial in experiments(path=path, window_days=window_days, now=now):
@@ -167,11 +312,23 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
         for cap_id in trial["triggered"]:
             if cap_id in rows:
                 rows[cap_id]["triggered"] += 1
+        # DECLINES ARE COUNTED AND KEPT OUT OF EVERY RATE BELOW. `resolved` is deliberately
+        # `useful + not_useful` and nothing else, so this column can never leak into the posterior.
+        for cap_id in trial["declined"]:
+            if cap_id in rows:
+                rows[cap_id]["declined"] += 1
+                kind = trial["decline_kinds"].get(cap_id, DECLINE_KIND_DEFAULT)
+                rows[cap_id]["declines_by_kind"][kind] = \
+                    rows[cap_id]["declines_by_kind"].get(kind, 0) + 1
+        for cap_id in trial["declined_demotable"]:
+            if cap_id in rows:
+                rows[cap_id]["declined_demotable"] += 1
         for key in ("useful", "not_useful"):
             for cap_id in trial[key]:
                 if cap_id in rows:
                     rows[cap_id][key] += 1
     for row in rows.values():
+        row["declines_by_kind"] = dict(sorted(row["declines_by_kind"].items()))
         resolved = row["useful"] + row["not_useful"]
         row["resolved"] = resolved
         row["trigger_rate"] = (row["triggered"] / row["candidates"]) if row["candidates"] else None
@@ -202,6 +359,18 @@ def propensity(capability_id: str, *, path=None, window_days: int = WINDOW_DAYS,
         "floored": value > posterior,
         # BLOCKING quantity and DRAINABLE quantity, together, always.
         "evidence_count": resolved,
+        # REPORTED, NEVER MIXED. "0.5 with 0 evidence" and "0.5 with 0 evidence and 4 reasoned
+        # rejections" are opposite findings that were indistinguishable until declines existed.
+        # Printing them side by side is the point; the posterior above is computed from `resolved`,
+        # which is `useful + not_useful` and cannot include this number.
+        "declines": row["declined"],
+        # THE KIND SPLIT, not just the count. "9 declines" invites narrowing a binding; "9 declines,
+        # 0 of them the binding's fault" forbids it. A third audit round found two of its three
+        # decline classes were CORRECT matches, so a bare number licenses the wrong fix two times
+        # in three.
+        "declines_by_kind": dict(row["declines_by_kind"]),
+        "declines_demotable": row["declined_demotable"],
+        "declines_excluded_from_posterior": True,
         # DERIVED, never asserted. This field was a hardcoded True until a break-test removed the
         # floor and it still claimed the gate was drainable -- a predicate that cannot fail is
         # decoration, and decoration is exactly what this repo's prose rules turned out to be.
@@ -210,7 +379,10 @@ def propensity(capability_id: str, *, path=None, window_days: int = WINDOW_DAYS,
         "basis": ("no resolved outcomes yet — optimistic prior plus an unconditional floor, so this "
                   "can still be sampled and can therefore still earn evidence"
                   if not resolved else
-                  f"{row['useful']} of {resolved} resolved trials were useful"),
+                  f"{row['useful']} of {resolved} resolved trials were useful")
+                 + (f"; declined with a stated reason {row['declined']} time(s) "
+                    f"({row['declined_demotable']} of them attributable to the binding), which is "
+                    f"recorded but never scored — it never ran" if row["declined"] else ""),
         "window_days": window_days,
     }
 
@@ -276,6 +448,18 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # dashboard that looks informative while reporting nothing.
         "capabilities_with_evidence": len(resolved_caps),
         "capabilities_without_evidence": stats["capability_count"] - len(resolved_caps),
+        # THE POPULATION THE 0.5 FLOOR USED TO HIDE. A capability with no outcome evidence but
+        # several reasoned rejections is not "unmeasured"; it is measured on a different axis. This
+        # count says how much of the un-evidenced population is actually of that kind.
+        "capabilities_declined_with_reason": sum(1 for r in ranked if r["declined"]),
+        "decline_count": sum(len(t["declined"]) for t in trials),
+        # Both quantities again: how many declines exist, and how many of them are actually a
+        # statement about the binding rather than about the work's shape.
+        "decline_demotable_count": sum(len(t["declined_demotable"]) for t in trials),
+        "declines_by_kind": {k: sum(v for r in ranked
+                                    for kk, v in r["declines_by_kind"].items() if kk == k)
+                             for k in sorted(DECLINE_KINDS)
+                             if any(k in r["declines_by_kind"] for r in ranked)},
         "ranked": ranked,
         "experiments": trials,
     }
@@ -1238,6 +1422,353 @@ def _selftest_tick_evidence() -> None:
           "shape change reported not scored, one verdict per capability per day, kill switch inert)")
 
 
+def record_decline(capability_id: str, experiment_id: str, *, reason: str, surface: str = "",
+                   kind: str = DECLINE_KIND_DEFAULT, path=None,
+                   metadata: dict | None = None) -> bool:
+    """This candidate was OFFERED and deliberately NOT used, for a stated reason.
+
+    THE THIRD STATE. `record_trigger` says it ran; `record_usefulness` says whether running helped.
+    Neither can express "it was the wrong tool here, and here is why" — and until this existed a
+    reasoned rejection was byte-identical in the ledger to a capability nobody ever considered.
+
+    WHAT THIS MUST NOT DO, and structurally cannot. It writes a `match`, never an `outcome`, so it
+    can never enter the `useful`/`not_useful` buckets `propensity()` is computed from. Recording a
+    decline as a negative outcome would assert that we tried it and it did not help — a false
+    statement about something that never ran, and it would corrupt the one signal declines exist to
+    sharpen.
+
+    `reason` is REQUIRED and refused when blank, exactly as `record_usefulness` refuses an
+    unevidenced verdict: an unexplained decline is indistinguishable from inattention, which is the
+    state this replaces. `surface` is optional but load-bearing — without it the decline is recorded
+    and readable but cannot be attributed to a surface, so it cannot feed `propose_demotions`.
+
+    `kind` says WHAT KIND of decline, from `DECLINE_KINDS`, because the kinds imply opposite fixes:
+    `wrong_match` indicts the binding, while `no_landing_zone` says the match was correct and the
+    deliverable had nowhere to put the result. An unknown kind is refused rather than coerced — a
+    typo silently becoming `unspecified` would hide the classification the caller thought it made.
+    Omitting it yields `unspecified`, which is recorded and can never demote.
+
+    Idempotent per (capability, experiment), so replaying a backfill cannot inflate the count.
+    """
+    if not str(reason).strip():
+        raise ValueError("a decline requires a reason naming why this capability was not the right "
+                         "tool here; an unexplained decline is indistinguishable from inattention")
+    if str(kind) not in DECLINE_KINDS:
+        raise ValueError(f"unknown decline kind {kind!r}; expected one of {sorted(DECLINE_KINDS)}")
+    if not experiment_id.startswith(ADVICE_REF_PREFIX):
+        raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
+    return capabilities.heartbeat(
+        capability_id, "match", ref=experiment_id, path=path or capabilities.REG,
+        idempotency_key=f"decline:{capability_id}:{experiment_id}",
+        metadata={"source": DECLINE_SOURCE, DECLINE_REASON_KEY: str(reason)[:400],
+                  DECLINE_KIND_KEY: str(kind), SURFACE_KEY: surface or None,
+                  **(metadata or {})})
+
+
+def _selftest_declines() -> None:
+    """A DECLINE IS A THIRD STATE. It must be visible, attributable, and inert on the posterior.
+
+    The last property is the whole difficulty and the reason this function exists. Bucketing a
+    decline as a negative outcome would assert "we tried it and it did not help" about a capability
+    that never ran — a false statement, and it would corrupt the exact signal declines were added to
+    sharpen. Every assertion below was written by breaking it first:
+
+      * routing `record_decline` through an `outcome` heartbeat moves the posterior -> caught here;
+      * dropping the blank-reason guard -> caught here;
+      * dropping the decline rule from `propose_demotions` -> caught here;
+      * dropping the `triggered` guard so a used capability is still demoted -> caught here;
+      * dropping the surface key from `experiments()` -> the demotion loses its attribution and is
+        caught here.
+    """
+    import tempfile
+    from pathlib import Path
+    import capability_advisor
+
+    with tempfile.TemporaryDirectory(prefix="decline-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("helper", "wrong-tool", "used-here"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        exp = "advice:decline000001"
+        for cid in ("helper", "wrong-tool"):
+            capabilities.heartbeat(cid, "match", ref=exp, path=ledger,
+                                   idempotency_key=f"m:{cid}", metadata={"skill": "t-dec"})
+        record_trigger("helper", exp, path=ledger)
+        record_usefulness("helper", exp, useful=True, evidence="found a real defect", path=ledger)
+
+        # ---- 1. THE POSTERIOR MUST NOT MOVE. Measured on a capability that HAS evidence, so a
+        # decline leaking in as `not_useful` would visibly drag a real number down rather than
+        # merely appearing beside a prior.
+        before = propensity("helper", path=ledger)
+        assert before["evidence_count"] == 1 and before["propensity"] == 0.6667, before
+        for i in range(3):
+            e = f"advice:helperdecl{i:03d}"
+            assert record_decline("helper", e, reason=f"wrong phase for this work ({i})",
+                                  surface="t-dec", kind="wrong_match", path=ledger)
+        after = propensity("helper", path=ledger)
+        assert after["propensity"] == before["propensity"], (before, after)
+        assert after["posterior_mean"] == before["posterior_mean"], (before, after)
+        assert after["evidence_count"] == before["evidence_count"], (before, after)
+        # ...and it is nonetheless VISIBLE. Inert must not mean invisible: "0.5, no evidence" and
+        # "0.5, no evidence, three reasoned rejections" are the two readings the audits could not
+        # tell apart.
+        assert after["declines"] == 3, after
+        assert after["declines_excluded_from_posterior"] is True, after
+        assert "never scored" in after["basis"], after["basis"]
+        u = usefulness(path=ledger)["rows"]["helper"]
+        assert u["declined"] == 3 and u["useful"] == 1 and u["not_useful"] == 0, u
+        assert u["usefulness_rate"] == 1.0, u        # not 0.25 — declines are not failures
+
+        # ---- 2. THE THREE STATES PARTITION THE CANDIDATE SET. This is what makes "declined with a
+        # reason", "offered and ignored" and "never considered" three different findings.
+        d_exp = "advice:decline000002"
+        for cid in ("helper", "wrong-tool", "used-here"):
+            capabilities.heartbeat(cid, "match", ref=d_exp, path=ledger,
+                                   idempotency_key=f"m2:{cid}", metadata={"surface": "t-dec"})
+        record_trigger("used-here", d_exp, path=ledger)
+        record_decline("wrong-tool", d_exp, reason="this repo has no front end", surface="t-dec",
+                       kind="wrong_match", path=ledger)
+        trial = next(t for t in experiments(path=ledger) if t["experiment_id"] == d_exp)
+        assert trial["declined"] == ["wrong-tool"], trial
+        assert trial["decline_reasons"]["wrong-tool"] == "this repo has no front end", trial
+        assert trial["decline_kinds"]["wrong-tool"] == "wrong_match", trial
+        assert trial["declined_demotable"] == ["wrong-tool"], trial
+        assert trial["triggered"] == ["used-here"], trial
+        assert trial["not_triggered_silently"] == ["helper"], trial
+        assert (set(trial["triggered"]) | set(trial["declined"])
+                | set(trial["not_triggered_silently"])) == set(trial["candidates"]), trial
+        assert not (set(trial["triggered"]) & set(trial["declined"])), trial
+        assert not (set(trial["declined"]) & set(trial["not_triggered_silently"])), trial
+        # A DECLINE RESOLVES NOTHING. `resolved` gates the usefulness population, so a decline that
+        # resolved a trial would make the denominator lie in the other direction.
+        assert trial["resolved"] is False, trial
+        assert trial["useful"] == [] and trial["not_useful"] == [], trial
+        # It IS a candidate: a decline is evidence the capability was offered.
+        assert "wrong-tool" in trial["candidates"], trial
+        # ...and it is NOT an invocation.
+        assert "wrong-tool" not in trial["triggered"], trial
+
+        # ---- 3. THE TRIGGER WINS. Declining and then using it is a change of mind, not a rejection.
+        both = "advice:decline000003"
+        capabilities.heartbeat("helper", "match", ref=both, path=ledger,
+                               idempotency_key="m3:helper", metadata={"surface": "t-dec"})
+        record_decline("helper", both, reason="looked wrong at first", surface="t-dec",
+                       kind="wrong_match", path=ledger)
+        record_trigger("helper", both, path=ledger)
+        t3 = next(t for t in experiments(path=ledger) if t["experiment_id"] == both)
+        assert t3["declined"] == [] and t3["triggered"] == ["helper"], t3
+        assert t3["decline_reasons"] == {} and t3["decline_kinds"] == {}, t3
+        assert t3["declined_demotable"] == [], t3
+
+        # ---- 4. A REASON IS MANDATORY, exactly as an evidenced verdict is.
+        for bad in ("", "   ", "\n"):
+            try:
+                record_decline("helper", "advice:decline000004", reason=bad, path=ledger)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("an unexplained decline must be refused")
+        # And the experiment must be a real advisory digest, or declines accrue against no trial.
+        try:
+            record_decline("helper", "not-an-advice-ref", reason="x", path=ledger)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("a non-advisory experiment id must be refused")
+        # AN UNKNOWN KIND IS REFUSED, never coerced. A typo silently becoming `unspecified` would
+        # hide the classification the caller believed it had made, and `unspecified` cannot demote —
+        # so the coercion would quietly discard the one signal the taxonomy exists to carry.
+        try:
+            record_decline("helper", "advice:decline0000ff", reason="x", kind="wrong-match",
+                           path=ledger)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an unknown decline kind must be refused, not coerced")
+        # Omitting the kind is allowed and yields the non-demotable default: no silence, no wrong
+        # correction. Failing toward motion, not toward a demotion nobody classified.
+        assert record_decline("helper", "advice:decline0000aa", reason="did not classify it",
+                              surface="t-dec", path=ledger)
+        assert decline_kind_demotable(DECLINE_KIND_DEFAULT) is False
+        # IDEMPOTENT per (capability, experiment): replaying a backfill cannot inflate the count.
+        assert record_decline("wrong-tool", d_exp, reason="repeat", surface="t-dec",
+                              path=ledger) is False
+        assert usefulness(path=ledger)["rows"]["wrong-tool"]["declined"] == 1
+
+        # ---- 5. DEMOTION CONSUMES DECLINES. A binding rejected repeatedly at one surface is the
+        # drain the binding table needs, and it must carry the caller's own words.
+        real = capability_advisor.SURFACE_BINDINGS.get("t-dec")
+        capability_advisor.SURFACE_BINDINGS["t-dec"] = {"wrong-tool": "bound for now",
+                                                       "used-here": "bound and used",
+                                                       "helper": "bound and used"}
+        try:
+            # LITERAL boundary, deliberately not `DEMOTION_MIN_DECLINES - 1`: an assertion written
+            # in terms of the constant it guards moves with the constant and can never fail.
+            assert DEMOTION_MIN_DECLINES == 2, "boundary cases below assume the floor is 2"
+            # One decline so far for wrong-tool -> below the floor, no proposal, and the accumulating
+            # count must still be REPORTED. "no proposal" beside "1/2 accumulating" reads completely
+            # differently from "no proposal" beside nothing.
+            assert propose_demotions("t-dec", path=ledger) == [], "1 decline must not demote"
+            counts = surface_decline_counts("t-dec", path=ledger)
+            assert counts["declined"]["wrong-tool"] == 1, counts
+            record_decline("wrong-tool", "advice:decline000005",
+                           reason="code-mutating tool offered inside a read-only audit",
+                           surface="t-dec", kind="wrong_match", path=ledger)
+            dem = propose_demotions("t-dec", path=ledger)
+            assert [d["capability_id"] for d in dem] == ["wrong-tool"], dem
+            assert dem[0]["basis"] == "declined_with_reason", dem[0]
+            assert dem[0]["declined"] == 2 and dem[0]["triggered"] == 0, dem[0]
+            assert dem[0]["declined_demotable"] == 2, dem[0]
+            assert dem[0]["declines_by_kind"] == {"wrong_match": 2}, dem[0]
+            assert dem[0]["implied_fixes"] == ["the matcher or the binding"], dem[0]
+            assert len(dem[0]["decline_reasons"]) == 2, dem[0]
+            assert "read-only audit" in dem[0]["reason"], dem[0]
+            # BOTH QUANTITIES on the proposal, so the floor it cleared is legible.
+            assert dem[0]["declines_floor"] == DEMOTION_MIN_DECLINES, dem[0]
+
+            # A CAPABILITY THAT IS ACTUALLY USED HERE IS NEVER DEMOTED, however often it is passed
+            # over. Enough declines to clear the floor on its own, or removing the trigger guard
+            # would leave this below the floor and the assertion could not discriminate.
+            for i in range(DEMOTION_MIN_DECLINES + 1):
+                record_decline("used-here", f"advice:usedheredec{i:02d}",
+                               reason="not this time", surface="t-dec", kind="wrong_match",
+                               path=ledger)
+            assert surface_decline_counts("t-dec", path=ledger)["declined"]["used-here"] > \
+                DEMOTION_MIN_DECLINES
+            assert "used-here" not in [d["capability_id"] for d in
+                                       propose_demotions("t-dec", path=ledger)], \
+                "a capability triggered at this surface is not a demotion candidate"
+
+            # ATTRIBUTION IS ON THE EVENT. A decline with no surface is still recorded and still
+            # readable, and it must not feed a demotion for a surface it never named.
+            record_decline("helper", "advice:decline000006", reason="no surface given",
+                           kind="wrong_match", path=ledger)
+            assert usefulness(path=ledger)["rows"]["helper"]["declined"] >= 4
+            assert "helper" not in [d["capability_id"] for d in
+                                    propose_demotions("t-dec", path=ledger)], \
+                "an unattributed decline must not demote a surface it never named"
+
+            # ---- THE TAXONOMY'S WHOLE POINT: A CORRECT MATCH MUST NOT BE PUNISHED FOR BEING
+            # RIGHT. `testgen-lane` matched correctly three times in one read-only audit and was
+            # structurally impossible every time (no commit target). Its fix is NOTHING, so however
+            # many times it is declined that way it can never clear the demotion floor.
+            #
+            # DELIBERATELY MANY TIMES OVER THE FLOOR, and asserted against `wrong_match` in the same
+            # ledger: if `demotable` were ignored, this capability would demote and the assertion
+            # would fire. A count merely equal to the floor could not tell "the kind was honoured"
+            # apart from "the floor was not reached".
+            right_but_impossible = capabilities._blank_capability("right-but-impossible")
+            right_but_impossible["status"] = "generated"
+            right_but_impossible["matcher"] = {"field": "task_type", "operator": "in",
+                                               "value": ["testgen"]}
+            all_rows = capabilities.load_declared(ledger)
+            all_rows["right-but-impossible"] = right_but_impossible
+            capabilities.save(all_rows, ledger)
+            capability_advisor.SURFACE_BINDINGS["t-dec"]["right-but-impossible"] = "bound, correct"
+            for i in range(DEMOTION_MIN_DECLINES * 4):
+                record_decline("right-but-impossible", f"advice:nolanding{i:04d}",
+                               reason="correct match, read-only run has no commit target",
+                               surface="t-dec", kind="no_landing_zone", path=ledger)
+            counts = surface_decline_counts("t-dec", path=ledger)
+            # The decline IS recorded and IS visible -- inert must not mean invisible.
+            assert counts["declined"]["right-but-impossible"] == DEMOTION_MIN_DECLINES * 4, counts
+            assert counts["declined_demotable"].get("right-but-impossible", 0) == 0, counts
+            # THE TWO RULES READ DISJOINT POPULATIONS. This probe deliberately exceeds the SILENT
+            # floor as well, so it proves the never-triggered rule cannot be reached through
+            # declines. Without that, eight honest declines demote a correct match via the other
+            # rule -- which is what the first draft of this function actually did.
+            assert DEMOTION_MIN_DECLINES * 4 >= DEMOTION_MIN_TRIALS, (
+                "this probe must exceed the silent-offer floor too, or it cannot discriminate")
+            assert counts["silent"].get("right-but-impossible", 0) == 0, counts
+            assert counts["declines_by_kind"]["right-but-impossible"] == \
+                {"no_landing_zone": DEMOTION_MIN_DECLINES * 4}, counts
+            assert "right-but-impossible" not in [
+                d["capability_id"] for d in propose_demotions("t-dec", path=ledger)], \
+                ("a CORRECT match blocked by the deliverable's shape must never be demoted — the "
+                 "fix for no_landing_zone is nothing")
+            # ...and it must not reach the posterior either, on any kind.
+            prop = propensity("right-but-impossible", path=ledger)
+            assert prop["evidence_count"] == 0 and prop["declines"] == DEMOTION_MIN_DECLINES * 4
+            assert prop["declines_demotable"] == 0, prop
+            assert prop["propensity"] >= EXPLORATION_FLOOR and prop["explorable"] is True, prop
+
+            # THE frontend-verifier STORY, asserted. Declined at two surfaces because its
+            # precondition did not hold, then USEFUL at a third on a repo that has the surface. The
+            # two negatives must not demote it anywhere -- "evaluate the condition, do not weaken
+            # the binding". Exactly at the floor, so a demotable `precondition_unmet` would fire.
+            precond = capabilities._blank_capability("surface-gated")
+            precond["status"] = "generated"
+            precond["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            rows2 = capabilities.load_declared(ledger)
+            rows2["surface-gated"] = precond
+            capabilities.save(rows2, ledger)
+            capability_advisor.SURFACE_BINDINGS["t-dec"]["surface-gated"] = "bound, conditional"
+            for i in range(DEMOTION_MIN_DECLINES):
+                record_decline("surface-gated", f"advice:precond{i:05d}",
+                               reason="this repository has no observable surface at all",
+                               surface="t-dec", kind="precondition_unmet", path=ledger)
+            pc = surface_decline_counts("t-dec", path=ledger)
+            assert pc["declined"]["surface-gated"] == DEMOTION_MIN_DECLINES, pc
+            assert pc["declined_demotable"].get("surface-gated", 0) == 0, pc
+            dem_ids = [d["capability_id"] for d in propose_demotions("t-dec", path=ledger)]
+            assert "surface-gated" not in dem_ids, (
+                "an unmet PRECONDITION must never demote the binding — the fix is to evaluate the "
+                "condition, and two negatives are not a verdict on a binding that fires elsewhere")
+            assert DECLINE_KINDS["precondition_unmet"]["demotable"] is False
+
+            # EVERY non-demotable kind behaves the same way, so the guarantee is a property of the
+            # table rather than of one branch. Iterating the table also means a NEW kind cannot be
+            # added as demotable-by-accident without this failing.
+            for kind, spec in sorted(DECLINE_KINDS.items()):
+                if spec["demotable"]:
+                    continue
+                cid = f"nd-{kind}"
+                rows_now = capabilities.load_declared(ledger)
+                blank = capabilities._blank_capability(cid)
+                blank["status"] = "generated"
+                blank["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+                rows_now[cid] = blank
+                capabilities.save(rows_now, ledger)
+                capability_advisor.SURFACE_BINDINGS["t-dec"][cid] = f"bound to probe {kind}"
+                for i in range(DEMOTION_MIN_DECLINES * 3):
+                    record_decline(cid, f"advice:{kind[:6]}nd{i:04d}",
+                                   reason=f"declined as {kind}", surface="t-dec", kind=kind,
+                                   path=ledger)
+                assert cid not in [d["capability_id"]
+                                   for d in propose_demotions("t-dec", path=ledger)], \
+                    f"a non-demotable kind ({kind}) demoted a binding"
+
+            # `detect()` prints the drainable quantity for the surface even when nothing fires.
+            rep = detect(path=ledger)
+            assert "t-dec" in rep["surfaces"], sorted(rep["surfaces"])
+            assert rep["surfaces"]["t-dec"]["declines"]["wrong-tool"] == 2, rep["surfaces"]["t-dec"]
+            assert rep["surfaces"]["t-dec"]["declines_floor"] == DEMOTION_MIN_DECLINES
+            assert "wrong-tool" in [d["capability_id"] for d in rep["demotions"]], rep["demotions"]
+        finally:
+            if real is None:
+                capability_advisor.SURFACE_BINDINGS.pop("t-dec", None)
+            else:
+                capability_advisor.SURFACE_BINDINGS["t-dec"] = real
+
+        # ---- 6. ONE WINDOW. Declines age out with the trials they belong to, so the measuring and
+        # the draining window cannot drift apart into permanent debt.
+        old = capabilities._now() + (WINDOW_DAYS + 2) * 86400
+        assert usefulness(path=ledger, now=old)["rows"]["wrong-tool"]["declined"] == 0
+        rep_old = report(path=ledger, now=old)
+        assert rep_old["decline_count"] == 0, rep_old
+        rep_now = report(path=ledger)
+        assert rep_now["decline_count"] >= 6, rep_now
+        assert rep_now["capabilities_declined_with_reason"] >= 3, rep_now
+
+    print("capability_propensity decline selftest: OK (a decline is a candidate, never an outcome, "
+          "never moves the posterior, partitions the third state, and drains a binding)")
+
+
 def _selftest_detection() -> None:
     """The recursive loop: detect a pass-over, propose, promote — and never ratchet.
 
@@ -1441,23 +1972,29 @@ def _fmt(rep: dict) -> str:
              f"  experiments: {rep['experiment_count']} "
              f"({rep['resolved_experiment_count']} resolved)",
              f"  capabilities with usefulness evidence: {rep['capabilities_with_evidence']} "
-             f"of {rep['capability_count']}"]
+             f"of {rep['capability_count']}",
+             f"  reasoned declines recorded: {rep['decline_count']} across "
+             f"{rep['capabilities_declined_with_reason']} capability(ies) — counted, never scored; "
+             f"{rep['decline_demotable_count']} attributable to a binding",
+             f"  decline kinds: {rep['declines_by_kind'] or '(none)'}"]
     if not rep["capabilities_with_evidence"]:
         lines.append("  NOTE: no resolved outcomes yet — every propensity below is the PRIOR, "
                      "not a measurement")
     lines.append("")
-    lines.append(f"  {'capability':34s} {'prop':>6s} {'cand':>5s} {'trig':>5s} {'use':>4s} {'no':>3s}")
+    lines.append(f"  {'capability':34s} {'prop':>6s} {'cand':>5s} {'trig':>5s} {'use':>4s} {'no':>3s}"
+                 f" {'decl':>5s}")
     for row in rep["ranked"][:60]:
         lines.append(f"  {row['capability_id']:34s} {row['propensity']:6.3f} "
                      f"{row['candidates']:5d} {row['triggered']:5d} {row['useful']:4d} "
-                     f"{row['not_useful']:3d}" + ("  (floored)" if row["floored"] else ""))
+                     f"{row['not_useful']:3d} {row['declined']:5d}"
+                     + ("  (floored)" if row["floored"] else ""))
     return "\n".join(lines) + "\n"
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("command", nargs="?", default="report",
-                    choices=["report", "experiments", "trigger", "useful", "detect",
+                    choices=["report", "experiments", "trigger", "useful", "decline", "detect",
                              "tick-evidence"])
     # A loop that can only be closed from Python cannot be closed by a lane, which runs bash. These
     # two subcommands are the whole reason the recording edges are reachable from an automation.
@@ -1466,6 +2003,16 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--evidence", default="", help="what the capability CHANGED (required by useful)")
     ap.add_argument("--not-useful", action="store_true",
                     help="record that triggering it did NOT help")
+    # THE CALLERS ARE BASH. Both lane automations and every skill reach this module from a shell, so
+    # a verb that exists only in Python is a verb the surfaces that make these decisions cannot use.
+    ap.add_argument("--reason", default="",
+                    help="decline: why this capability was NOT the right tool here (required)")
+    ap.add_argument("--surface", default="",
+                    help="decline: the surface that declined (e.g. repo-audit:phase-2). Optional, "
+                         "but a decline without it cannot feed propose_demotions")
+    ap.add_argument("--kind", default=DECLINE_KIND_DEFAULT, choices=sorted(DECLINE_KINDS),
+                    help="decline: WHICH KIND of decline. The kinds imply opposite fixes, and only "
+                         "wrong_match/scope_too_small can ever demote a binding")
     # ISOLATION FOR PROOFS. Wiring this up, I recorded a trial into the LIVE ledger whose evidence
     # described the wiring rather than the capability's review value -- a mislabeled trial, and the
     # system's first data point. A proof belongs on a throwaway ledger; without this flag the only
@@ -1484,6 +2031,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        _selftest_declines()
         _selftest_detection()
         _selftest_tick_evidence()
         return 0
@@ -1515,10 +2063,28 @@ def main(argv: list[str]) -> int:
             if rep["applied"]:
                 print(f"  APPLIED: {rep['applied']}")
         return 0
-    if args.command in {"trigger", "useful"}:
+    if args.command in {"trigger", "useful", "decline"}:
         if not args.capability or not args.experiment:
             ap.error("--capability and --experiment are required")
         ledger = pathlib.Path(args.ledger) if args.ledger else None
+        if args.command == "decline":
+            if not args.reason.strip():
+                ap.error("--reason is required: an unexplained decline is indistinguishable from "
+                         "inattention, which is the state this verb exists to replace")
+            ok = record_decline(args.capability, args.experiment, reason=args.reason,
+                                surface=args.surface, kind=args.kind, path=ledger)
+            print(json.dumps({"recorded": bool(ok), "command": "decline",
+                              "ledger": str(ledger) if ledger else "live",
+                              "capability": args.capability, "experiment": args.experiment,
+                              "surface": args.surface or None,
+                              "kind": args.kind,
+                              "kind_implies_fix": DECLINE_KINDS[args.kind]["fix"],
+                              "can_demote_the_binding": decline_kind_demotable(args.kind),
+                              # SAY WHAT THIS DID NOT DO. A decline is not a verdict, and a caller
+                              # that thinks it scored the capability has been misled.
+                              "affects_propensity": False,
+                              "attributable_to_surface": bool(args.surface)}))
+            return 0
         if args.command == "trigger":
             ok = record_trigger(args.capability, args.experiment, path=ledger)
         else:
@@ -1595,6 +2161,21 @@ HAND_WORK_SIGNATURES: dict[str, str] = {
 }
 PROMOTION_MIN_HAND_WORK = 3        # below this, one anecdote could widen a bound set
 DEMOTION_MIN_TRIALS = 8            # resolved experiments a binding gets before non-use counts
+# A REASONED DECLINE IS MUCH STRONGER EVIDENCE THAN SILENT NON-USE, so its floor is much lower. A
+# phase surface is consulted at most ONCE per run, so two declines are two independent runs by
+# construction, where `DEMOTION_MIN_TRIALS` trials can all come from one high-volume lane.
+#
+# LATCHED-GATE ANSWERS (it is a threshold, so it needs all three in writing):
+#   1. WHAT DECREMENTS IT? A single TRIGGER at that surface removes the proposal outright, and the
+#      binding keeps offering the capability while the count sits below the floor. So the gate fails
+#      toward motion: the capability stays selectable either way.
+#   2. CAN THE DRAIN RUN WHILE CLOSED? Yes. Demotion is itself the drain on the binding table, and
+#      recording a decline requires nothing the proposal forbids -- the capability is still offered
+#      on every consult, so it can always be either declined again or used.
+#   3. SAME WINDOW BOTH WAYS? Yes: `WINDOW_DAYS`, the one constant, drives the decline count and the
+#      trial count alike. And `detect()` reports each bound capability's decline count even when it
+#      is BELOW the floor, so "no proposal" can never read as "nothing is accumulating".
+DEMOTION_MIN_DECLINES = 2
 
 
 # Where a surface's own records live. INSTANCE paths, so they are resolved at runtime and
@@ -1641,9 +2222,20 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
         recs = surface_records(surface)
         proms = propose_bindings(surface, recs, path=path) if recs else []
         dems = propose_demotions(surface, path=path)
-        if recs or proms or dems:
-            out["surfaces"][surface] = {"records": len(recs),
-                                        "bound": sorted(capability_advisor.binding_for(surface, path=path))}
+        counts = surface_decline_counts(surface, path=path)
+        if recs or proms or dems or counts["declined"]:
+            out["surfaces"][surface] = {
+                "records": len(recs),
+                "bound": sorted(capability_advisor.binding_for(surface, path=path)),
+                # THE DRAINABLE QUANTITY, printed whether or not the floor was reached. "0 proposals"
+                # beside "3 declines accumulating, floor 2" reads completely differently from "0
+                # proposals" beside nothing at all, and only one of those is a healthy silence.
+                "declines": dict(sorted(counts["declined"].items())),
+                "declines_demotable": dict(sorted(counts["declined_demotable"].items())),
+                "declines_by_kind": {c: dict(sorted(k.items()))
+                                     for c, k in sorted(counts["declines_by_kind"].items())},
+                "declines_floor": DEMOTION_MIN_DECLINES,
+            }
         out["promotions"].extend(proms)
         out["demotions"].extend(dems)
     if apply_promotions:
@@ -1737,27 +2329,116 @@ def propose_bindings(surface: str, records: list, *, path=None) -> list[dict]:
     return sorted(out, key=lambda r: -r["hand_work"])
 
 
-def propose_demotions(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> list[dict]:
-    """Bound capabilities this surface never triggers. The drain, without which bindings only grow."""
-    import capability_advisor
-    bound = capability_advisor.binding_for(surface, path=path)
+def surface_decline_counts(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> dict:
+    """Per capability at this surface: offered / triggered / declined, plus the stated reasons.
+
+    Split out of `propose_demotions` so the DRAINABLE quantity is reportable on its own. A threshold
+    that only speaks when it fires cannot be told apart from one that will never fire.
+    """
     seen: dict[str, int] = {}
     used: dict[str, int] = {}
+    silent: dict[str, int] = {}
+    declined: dict[str, int] = {}
+    demotable: dict[str, int] = {}
+    kinds: dict[str, dict[str, int]] = {}
+    reasons: dict[str, list[str]] = {}
     for trial in experiments(path=path, window_days=window_days):
         if surface not in (trial.get("skills") or []):
             continue
-        for cap_id in bound:
-            if cap_id in (trial.get("candidates") or []):
-                seen[cap_id] = seen.get(cap_id, 0) + 1
-            if cap_id in (trial.get("triggered") or []):
-                used[cap_id] = used.get(cap_id, 0) + 1
-    return sorted(
-        ({"capability_id": c, "surface": surface, "offered": seen[c], "triggered": used.get(c, 0),
-          "action": "demote",
-          "reason": (f"bound and offered in {seen[c]} resolved experiments for this surface, "
-                     f"triggered {used.get(c, 0)} times")}
-         for c in bound if seen.get(c, 0) >= DEMOTION_MIN_TRIALS and not used.get(c)),
-        key=lambda r: -r["offered"])
+        for cap_id in trial.get("candidates") or []:
+            seen[cap_id] = seen.get(cap_id, 0) + 1
+        for cap_id in trial.get("triggered") or []:
+            used[cap_id] = used.get(cap_id, 0) + 1
+        # SILENT is the population the never-triggered rule is ABOUT: offered, and nothing said. It
+        # must exclude declines, or a capability declined honestly enough times trips a rule meant
+        # for capabilities nobody spoke about -- which is how a `no_landing_zone` decline would have
+        # demoted a correct match through the back door. (It did, in the first draft of this.)
+        for cap_id in trial.get("not_triggered_silently") or []:
+            silent[cap_id] = silent.get(cap_id, 0) + 1
+        for cap_id in trial.get("declined") or []:
+            declined[cap_id] = declined.get(cap_id, 0) + 1
+            kind = (trial.get("decline_kinds") or {}).get(cap_id, DECLINE_KIND_DEFAULT)
+            bucket = kinds.setdefault(cap_id, {})
+            bucket[kind] = bucket.get(kind, 0) + 1
+            why = (trial.get("decline_reasons") or {}).get(cap_id)
+            if why and why not in reasons.setdefault(cap_id, []):
+                reasons[cap_id].append(why)
+        for cap_id in trial.get("declined_demotable") or []:
+            demotable[cap_id] = demotable.get(cap_id, 0) + 1
+    return {"surface": surface, "offered": seen, "triggered": used, "silent": silent,
+            "declined": declined,
+            # BOTH QUANTITIES. `declined` is how often it was turned down; `demotable` is how much of
+            # that is a statement about the BINDING. Reporting only the first is what would license
+            # unbinding `testgen-lane` for matching correctly three times.
+            "declined_demotable": demotable, "declines_by_kind": kinds,
+            "decline_reasons": reasons}
+
+
+def propose_demotions(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> list[dict]:
+    """Bound capabilities this surface rejects or never triggers. The drain on the binding table.
+
+    TWO RULES, and the decline rule is the sharper one. Silent non-use across `DEMOTION_MIN_TRIALS`
+    offers says only that nobody reached for it, which has two causes with opposite fixes. A
+    REASONED DECLINE says which one it is, in the caller's own words, so it clears at
+    `DEMOTION_MIN_DECLINES` and carries its evidence into the proposal.
+
+    THE TWO RULES READ DISJOINT POPULATIONS, and that is load-bearing. `never_triggered` counts
+    only offers where NOTHING WAS SAID (`not_triggered_silently`), never declines. The first draft
+    counted every offer, so eight honest `no_landing_zone` declines tripped the silent-non-use rule
+    and demoted a correct match through the back door — the exact wrong correction the taxonomy
+    exists to prevent, arriving via the other rule.
+
+    ONLY DEMOTABLE KINDS COUNT, and that qualifier is the whole point of the taxonomy.
+    `testgen-lane` matched CORRECTLY three times in one audit and was structurally impossible
+    (`no_landing_zone`, read-only run, no commit target); demoting it would punish a capability for
+    being right. So a non-demotable decline is counted, reported on the row, and cannot clear the
+    floor. `frontend-verifier`, declined on two frontend-less repos and then producing the
+    second-strongest finding of a third audit on a repo that has a display surface, is the same
+    lesson from the other side: two negatives are not a verdict on a binding.
+
+    A single trigger at this surface disqualifies the capability from both rules: something that
+    actually gets used here is not a demotion candidate however often it is passed over.
+    """
+    import capability_advisor
+    bound = capability_advisor.binding_for(surface, path=path)
+    counts = surface_decline_counts(surface, path=path, window_days=window_days)
+    seen, used, silent = counts["offered"], counts["triggered"], counts["silent"]
+    declined, reasons = counts["declined"], counts["decline_reasons"]
+    demotable, by_kind = counts["declined_demotable"], counts["declines_by_kind"]
+    out = []
+    for c in bound:
+        if used.get(c):
+            continue
+        n_dec, n_seen = declined.get(c, 0), seen.get(c, 0)
+        n_dem, n_silent = demotable.get(c, 0), silent.get(c, 0)
+        kinds = dict(sorted((by_kind.get(c) or {}).items()))
+        fixes = sorted({DECLINE_KINDS[k]["fix"] for k in kinds if k in DECLINE_KINDS})
+        if n_dem >= DEMOTION_MIN_DECLINES:
+            basis = "declined_with_reason"
+            why = (f"declined with a stated reason in {n_dec} of {n_seen} offers at this surface, "
+                   f"{n_dem} of them attributable to the binding (floor "
+                   f"{DEMOTION_MIN_DECLINES}), never triggered: "
+                   + " | ".join(reasons.get(c, [])[:3]))
+        elif n_silent >= DEMOTION_MIN_TRIALS:
+            basis = "never_triggered"
+            why = (f"bound and offered in {n_seen} experiments for this surface, "
+                   f"{n_silent} of them passed over with nothing said, triggered "
+                   f"{used.get(c, 0)} times")
+        else:
+            continue
+        out.append({"capability_id": c, "surface": surface, "offered": n_seen,
+                    "triggered": used.get(c, 0), "silent": n_silent, "declined": n_dec,
+                    # THE QUALIFIED COUNT, beside the raw one, plus the fix each kind implies -- so
+                    # a reader can choose "add a precondition" over "unbind" where that is the
+                    # correct answer, instead of inferring one action from one number.
+                    "declined_demotable": n_dem, "declines_by_kind": kinds,
+                    "implied_fixes": fixes,
+                    "decline_reasons": reasons.get(c, []), "basis": basis,
+                    # BLOCKING quantity and the floor it is measured against, together.
+                    "declines_floor": DEMOTION_MIN_DECLINES,
+                    "silent_offers_floor": DEMOTION_MIN_TRIALS,
+                    "action": "demote", "reason": why})
+    return sorted(out, key=lambda r: (-r["declined_demotable"], -r["offered"], r["capability_id"]))
 
 
 def record_promotion(capability_id: str, surface: str, reason: str, *, path=None) -> bool:
