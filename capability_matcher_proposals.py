@@ -313,7 +313,7 @@ def _selftest() -> None:
         infra = next(r for r in rep["rows"] if r["capability_id"] == "feedback-store")
         assert infra["should_have_been_used"] is None, "infrastructure is not a should-have gap"
 
-        dry = apply_matchers(rep, path=ledger, dry_run=True)
+        apply_matchers(rep, path=ledger, dry_run=True)
         assert capabilities.load(ledger)["codemod-campaign"]["matcher"] is None, "dry-run wrote!"
         out = apply_matchers(rep, path=ledger)
         assert out["written"] == ["codemod-campaign"], out

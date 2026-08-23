@@ -87,7 +87,6 @@ def _minimal_report() -> dict:
                 ],
             },
         },
-        "route_weights": {"tasks": []},
         "execution_profiles": {"profiles": [], "shared_pool_burn": {}},
         "role_activation": {"roles": {}},
         "experiments": {"implementation_arms": [], "missing_arm_outcomes": []},
