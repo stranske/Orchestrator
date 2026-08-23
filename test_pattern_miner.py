@@ -724,6 +724,38 @@ def test_a_resolved_model_alone_does_not_make_a_production_event_a_defect():
     assert "selected_profile_not_in_subject_set" in reasons, reasons
 
 
+def test_rejections_report_how_many_could_ever_be_repaired():
+    """`184 malformed` reads as work somebody should do. All 184 were history.
+
+    `missing_joined_attempt_id` means the event carries no attempt row to join, and the export
+    builds that join FROM the attempt row -- so a run that finished without one can never gain it.
+    Verified on the live population: 25 UX-panel subjects, 0 with a base commit, 0 execution
+    attempts, every run before provenance existed. A blocked count without its drainable twin is
+    the same silence this repo keeps rediscovering.
+    """
+    unrepairable = completion_episode(51)
+    for row in unrepairable:
+        row["identity"]["attempt_id"] = ""          # no attempt row was ever written
+        row["identity"]["attempt_resolution"] = "unresolved"
+    health = PatternMiner().mine(unrepairable, now=200).status["mining_health"]
+    assert health["state"] == "rejecting", health
+    assert health["unrecoverable_rejections"] == health["rejected_event_count"], health
+    assert health["drainable_rejections"] == 0, health
+    assert "can never be repaired" in health["detail"], health["detail"]
+    assert "0 drainable" in health["detail"], health["detail"]
+
+    # THE OTHER HALF: a rejection that DOES have an attempt row is drainable, and must not be
+    # written off as history -- otherwise this becomes a way to make a real defect count vanish.
+    repairable = completion_episode(52)
+    for row in repairable:
+        row["identity"]["subject_id"] = "subject:0000000000000000000000ff"
+    health2 = PatternMiner().mine(repairable, now=200).status["mining_health"]
+    assert health2["state"] == "rejecting", health2
+    assert health2["unrecoverable_rejections"] == 0, health2
+    assert health2["drainable_rejections"] == health2["rejected_event_count"], health2
+    assert "can never be repaired" not in health2["detail"], health2["detail"]
+
+
 def test_every_declared_subjectless_producer_has_a_stated_reason():
     """A declaration without a reason is an assertion nobody can audit later."""
     for producer, reason in SUBJECTLESS_PRODUCERS.items():

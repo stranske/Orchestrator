@@ -2738,19 +2738,25 @@ def _selftest() -> None:
             # THE OTHER HALF: an identical row for a seat with no reader is PERMANENT, not
             # pending, and says so. These two must never collapse into one verdict.
             #
-            # Uses gemini, NOT cursor. This assertion named cursor when cursor was believed
-            # incapable of reporting; cursor keeps `providerOptions.cursor.modelName` in its own
-            # chat store, so pinning it here enforced a false declaration -- the third test in this
-            # session to lock in a wrong belief about a seat. gemini is the verified case: its index
-            # gives a workspace join but its conversations record no served model.
-            feedback.record_run("cov-never", "offload:/tmp/y", "offload", "gemini")
+            # DERIVED FROM THE AUTHORITY, because naming a seat here went stale twice: first
+            # cursor (its chat store names the model), then gemini (its per-run CLI log does).
+            # Ask which seat actually has no reader, and use whichever profile it owns.
+            import adapters as _ad2
+            import execution_profiles as _ep2
+
+            mute = next(
+                (a for a in _ad2.NO_SESSION_LOG_AGENTS if _ep2.profiles_for_agent(a)), None)
+            assert mute, "no seat lacks a reader -- delete this case rather than faking one"
+            mute_profile = _ep2.profiles_for_agent(mute)[0]
+            feedback.record_run("cov-never", "offload:/tmp/y", "offload", mute)
             feedback.record_execution_attempt(
                 "cov-never", attempt_id="attempt:profile:cov-never", operation_role="worker",
-                profile_id="gemini-3.1-pro-high", requested_provider="google",
-                requested_model="gemini-3.1-pro-high", status="unresolved",
+                profile_id=mute_profile["profile_id"],
+                requested_provider=mute_profile["provider"],
+                requested_model=mute_profile["requested_model"], status="unresolved",
                 source="orchestrator-profile-decision", started_ts=int(_t.time()),
             )
-            never = mining_coverage(30)["agents"]["gemini"]
+            never = mining_coverage(30)["agents"][mute]
             assert never["verdict"] == "model_not_reportable", never
             assert never["cannot_report_reason"], never
             assert never["verdict"] != built["verdict"], (never, built)

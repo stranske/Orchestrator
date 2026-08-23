@@ -117,6 +117,14 @@ def _mining_health(
     * ``rejecting``      - real defects in the stream. Actionable.
     * ``mining``         - episodes assembled.
     """
+    # HOW MANY OF THESE COULD EVER BE FIXED. `missing_joined_attempt_id` means the event carries no
+    # attempt row to join, and the export builds that join FROM the attempt row -- so if the run
+    # finished without one, nothing downstream can ever supply it. Those rejections are history, not
+    # a queue. Verified for the live population: 25 UX-panel subjects, 0 with a base commit, 0
+    # execution attempts, all runs 2026-07-16..08-16, i.e. before provenance existed. Reporting the
+    # count keeps `rejecting` honest -- "184 malformed" reads as work somebody should do, and a
+    # rejection nobody can act on is the same silence a bare count of blocked items always is.
+    unrecoverable = int((reasons or {}).get("missing_joined_attempt_id") or 0)
     ranked = sorted((reasons or {}).items(), key=lambda kv: (-kv[1], kv[0]))
     top = ranked[0] if ranked else None
     # A TIE AT THE TOP IS THE WHOLE STORY. Reporting a single "top blocker" when four reasons each
@@ -138,6 +146,12 @@ def _mining_health(
             detail += f"; {len(tied)} blockers each hit {top[1]} of {rejected}: " + ", ".join(tied)
         elif top:
             detail += f"; top blocker {top[0]} ({top[1]} of {rejected})"
+        if unrecoverable:
+            drainable = rejected - unrecoverable
+            detail += (
+                f"; {unrecoverable} have no attempt row to join and can never be repaired, "
+                f"{drainable} drainable"
+            )
     elif accepted == 0:
         state, detail = "all_out_of_scope", f"all {raw} events have no research subject"
     elif episodes == 0:
@@ -162,6 +176,9 @@ def _mining_health(
         "top_blocker": top[0] if top else None,
         "top_blocker_count": top[1] if top else 0,
         "top_blockers": tied,
+        # The pair, machine-readable: what is blocked, and how much of it is actually actionable.
+        "unrecoverable_rejections": unrecoverable,
+        "drainable_rejections": max(0, rejected - unrecoverable),
     }
 
 

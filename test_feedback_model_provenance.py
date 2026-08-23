@@ -532,12 +532,14 @@ def test_cli_reported_identity_resolves_only_seats_that_actually_report(tmp_path
     # A seat with NO reader says so by name. This list was once ("cursor", "gemini", "vibe") --
     # wrong for two of the three, because cursor and vibe both keep per-session model records and
     # the claim they did not was asserted from a truncated directory listing.
-    for agent in ("gemini", "aider"):
+    # DERIVED, not hardcoded. This list read ("cursor","gemini","vibe") and then ("gemini","aider"),
+    # and each time a seat left it once its store or log was actually read. Ask the authority.
+    for agent in adapters.NO_SESSION_LOG_AGENTS:
         reason = adapters.cli_reported_model(agent, workspace)["reason"]
         assert reason.startswith("no_cli_session_log:"), (agent, reason)
         assert len(reason) > 30, f"{agent} needs a real justification, got {reason!r}"
-    # And a seat WITH a reader reports a miss against its own store, not an incapacity.
-    for agent in ("cursor", "vibe"):
+    # And a seat WITH a store reader reports a miss against its own store, not an incapacity.
+    for agent in ("cursor", "vibe", "gemini"):
         reason = adapters.cli_reported_model(agent, workspace)["reason"]
         assert reason == f"no_{agent}_session_matched_workspace", (agent, reason)
 
@@ -772,4 +774,11 @@ def test_every_seat_with_a_session_store_can_report_and_is_read_from_its_own_sto
     for seat in adapters.NO_SESSION_LOG_AGENTS:
         capable, why = adapters.can_report_cli_identity(seat)
         assert capable is False and why, seat
-    assert "gemini" in adapters.NO_SESSION_LOG_AGENTS, "agy records no served model; keep it named"
+    # gemini is NOT here any more: its conversation store records no model, but its per-run CLI log
+    # does (`Propagating selected model override to backend: label="..."`), so the dispatcher gives
+    # each gemini run its own log and resolves from it.
+    assert "gemini" not in adapters.NO_SESSION_LOG_AGENTS, adapters.NO_SESSION_LOG_AGENTS
+    assert adapters.model_label_from_agy_log(
+        'model_config_manager.go:311] Propagating selected model override to backend: '
+        'label="Gemini 3.6 Flash (High)"'
+    ) == "Gemini 3.6 Flash (High)"

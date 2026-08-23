@@ -301,6 +301,28 @@ def model_id_for_label(agent: str, label: str) -> str | None:
     return None
 
 
+AGY_MODEL_LABEL_RE = re.compile(
+    r"Propagating selected model override to backend:\s*label=\"([^\"]+)\""
+)
+
+
+def model_label_from_agy_log(text: str) -> str | None:
+    """The model agy told its backend to use, from agy's own CLI log.
+
+    agy's structured output does NOT carry the model -- `--output-format json` and `stream-json`
+    both give only conversation_id, cwd and usage -- but its log does:
+
+        model_config_manager.go:311] Propagating selected model override to backend:
+            label="Gemini 3.7 Flash (High)"
+
+    That is a LABEL, not an id; `model_id_for_label` maps it through `agy models`. Last occurrence
+    wins, because the line is emitted repeatedly as the session settles and the final one is what
+    the turn actually ran with.
+    """
+    found = AGY_MODEL_LABEL_RE.findall(text or "")
+    return found[-1].strip() if found else None
+
+
 def observed_model_from_stream(text: str) -> dict[str, Any]:
     """Model, session id and final text from a `stream-json` transcript the run itself printed.
 
@@ -691,7 +713,7 @@ CLAUDE_PROJECTS = Path(os.environ.get("ORCH_CLAUDE_PROJECTS_DIR", HOME / ".claud
 # The seats a reader exists for. ONE list, consumed by both `can_report_cli_identity` and
 # `cli_reported_model`, so "we have a reader" and "we will look" can never disagree -- they did,
 # and the answer was False for three seats whose readers were already written.
-CLI_IDENTITY_READERS = ("codex", "claude", "cursor", "vibe")
+CLI_IDENTITY_READERS = ("codex", "claude", "cursor", "vibe", "gemini")
 CURSOR_CHATS = Path(os.environ.get("ORCH_CURSOR_CHATS_DIR", HOME / ".cursor" / "chats"))
 VIBE_SESSIONS = Path(
     os.environ.get("ORCH_VIBE_SESSIONS_DIR", HOME / ".vibe" / "logs" / "session")
@@ -699,19 +721,23 @@ VIBE_SESSIONS = Path(
 AGY_HOME = Path(os.environ.get("ORCH_AGY_HOME", HOME / ".gemini" / "antigravity-cli"))
 # Only aider is left, and only because nothing has been found for it yet -- stated as an absence of
 # evidence, not as a property of the tool.
+# GEMINI IS NO LONGER HERE. Its conversation STORE genuinely records no model -- that part was
+# verified -- but its CLI LOG does:
+#   `model_config_manager.go:311] Propagating selected model override to backend: label="..."`
+# and `--log-file` lets the dispatcher give each run its own log, so the join is direct rather than
+# a workspace-and-window guess. `_agy_model_for` stays as a store fallback; the per-run log is the
+# primary path. The lesson is the recurring one: "the tool does not record it" needed to mean "I
+# read every place it could record it", and the first pass had only read the store.
 NO_SESSION_LOG_AGENTS = {
-    # VERIFIED ABSENT, not assumed. agy's `conversation_summaries` DOES give a workspace join, and
-    # `_agy_model_for` uses it -- but the conversations it points at record no model anywhere in the
-    # brain directory (checked every file of two Orchestrator conversations: zero vendor ids). One
-    # unrelated conversation mentioned `claude-sonnet-4-6` in prose, which is what first suggested
-    # agy knows; its own store does not persist it per session.
-    #
-    # This is the seat where it matters MOST and the only one still open: agy is a multi-provider
-    # router, so unlike cursor or vibe its requested model genuinely may not be what served. Until
-    # agy records the served model (or is asked for it at completion), rotation on this seat cannot
-    # be measured -- and recording the request would be a fabrication, not a stopgap.
-    "gemini": "agy records a workspace join but no served model in its conversation store",
-    "aider": "no per-session model store located for aider yet (not confirmed absent)",
+    # PROBED, and the finding is specific rather than "nothing found". aider's `--analytics-log`
+    # records `launched` / `repo` / `auto_commits` / `exit` with NO model in any properties, and its
+    # stdout prints `Model: mistral/codestral-latest`, which is the requested alias echoed back --
+    # and that alias FLOATS, so writing it as resolved identity is precisely the `--model` copy §2
+    # forbids. `--llm-history-file` might carry the provider's own response metadata, but settling
+    # that needs a real paid call on a seat with zero runs in the last week, which is not worth
+    # spending to learn. Named so the next reader starts from the finding, not from scratch.
+    "aider": "analytics log carries no model; stdout echoes the floating `codestral-latest` alias, "
+             "which is the request. Unsettled: --llm-history-file (needs a paid call)",
 }
 # A real vendor model id, used to pick the model out of a transcript that also mentions filenames,
 # branch names and prose. Deliberately an ALLOWLIST of vendor families: `_first_real_model` would

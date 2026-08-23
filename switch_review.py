@@ -33,8 +33,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 import capabilities
 
@@ -70,6 +72,84 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
         _caps.production_heartbeat("switch-review", event_type, ref="switch_review.review")
     except Exception:
         pass
+
+
+MIRROR_DIR = Path(
+    os.environ.get("ORCH_MIRROR", Path.home() / ".codex" / "orchestrator-mirror")
+)
+
+
+def stale_runners(*, now: int | None = None, mirror: Path | None = None) -> list[dict]:
+    """Long-lived processes running mirror code OLDER than the mirror on disk.
+
+    WHY THIS IS THE SAME DEFECT CLASS AS A HELD SWITCH. `orch-sync-mirror.sh` is treated as the
+    deploy step, but Python caches modules at import: a process started before the sync keeps
+    running the previous code for as long as it lives. Observed 2026-08-22 -- a cursor offload one
+    minute AFTER a sync still used the pre-sync dispatcher, because four `mcp_server.py` processes
+    (oldest 7h19m) each held their own copy. The fix looked broken and the code was fine.
+
+    Silence is the symptom, exactly as with a switch nobody revisits: nothing errors, the run simply
+    behaves like last week. FYI-only -- this NEVER kills anything, because a live process may be
+    serving a session and a sweep that can restart the fleet is a worse hazard than stale code.
+    """
+    mirror = Path(mirror or MIRROR_DIR)
+    try:
+        newest = max(
+            (f.stat().st_mtime for f in mirror.glob("*.py")), default=0.0
+        )
+    except OSError:
+        return []
+    if not newest:
+        return []
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,etime=,command="],
+            capture_output=True, text=True, timeout=20, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    now = float(now if now is not None else time.time())
+    stale: list[dict] = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3 or str(mirror) not in parts[2]:
+            continue
+        pid, etime, command = parts
+        age = _etime_seconds(etime)
+        if age is None:
+            continue
+        started = now - age
+        if started >= newest:
+            continue
+        stale.append({
+            "pid": pid,
+            "age_hours": round(age / 3600, 1),
+            "stale_by_hours": round((newest - started) / 3600, 1),
+            "command": command[:120],
+            "reason": ("started before the current mirror was written, so it is still running the "
+                       "previous code; a sync does not reach a process that has already imported"),
+        })
+    return stale
+
+
+def _etime_seconds(etime: str) -> int | None:
+    """`ps` etime (`[[dd-]hh:]mm:ss`) as seconds."""
+    text = etime.strip()
+    days = 0
+    if "-" in text:
+        head, _, text = text.partition("-")
+        try:
+            days = int(head)
+        except ValueError:
+            return None
+    bits = text.split(":")
+    try:
+        nums = [int(b) for b in bits]
+    except ValueError:
+        return None
+    while len(nums) < 3:
+        nums.insert(0, 0)
+    return days * 86400 + nums[0] * 3600 + nums[1] * 60 + nums[2]
 
 
 def review(*, now: int | None = None, env: dict | None = None, path=None) -> dict:
@@ -113,9 +193,13 @@ def review(*, now: int | None = None, env: dict | None = None, path=None) -> dic
                            "one left off"),
             })
 
+    runners = stale_runners(now=now)
     return {"generated_at": now, "review_days": REVIEW_DAYS,
             "held_off": due, "on_but_idle": quiet,
             "unconditioned": [d["flag"] for d in due if not d["has_criterion"]],
+            # Reported here rather than in a second auditor, per the standing rule: a stale runner
+            # is a switch-shaped problem -- something was decided and the decision never landed.
+            "stale_runners": runners,
             "raise_count": len(due) + len(quiet)}
 
 
@@ -168,15 +252,57 @@ def format_report(rep: dict) -> str:
         lines += ["## Held with NO recorded criterion (a documentation gap, fix in "
                   "SWITCH_ON_CRITERIA)", ""]
         lines += [f"  {f}" for f in rep["unconditioned"]] + [""]
-    if not rep["raise_count"]:
+    if rep.get("stale_runners"):
+        lines += ["## Running code older than the mirror — a sync does not reach a live process", ""]
+        for row in rep["stale_runners"]:
+            lines.append(f"  pid {row['pid']}  up {row['age_hours']}h  "
+                         f"stale by {row['stale_by_hours']}h")
+            lines.append(f"      {row['command']}")
+            lines.append("")
+        lines += ["  FYI only: restart these to pick up the current mirror. Nothing is killed "
+                  "automatically -- a live process may be serving a session.", ""]
+    if not rep["raise_count"] and not rep.get("stale_runners"):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
+
+
+def _selftest_stale_runners() -> None:
+    """A sync does not reach a process that has already imported the code."""
+    import tempfile
+
+    # `ps` etime, all four shapes, including the one that must refuse rather than guess.
+    assert _etime_seconds("07:19:52") == 26392
+    assert _etime_seconds("04:30") == 270
+    assert _etime_seconds("1-02:03:04") == 93784
+    assert _etime_seconds("bogus") is None
+
+    # An empty mirror yields nothing: no mtime means no claim, never "everything is stale".
+    with tempfile.TemporaryDirectory(prefix="switch-review-mirror-") as td:
+        assert stale_runners(mirror=Path(td)) == []
+
+    live = stale_runners()
+    if not live:
+        # Prerequisite absent (nothing is running from the mirror), NAMED rather than silently
+        # passing -- the comparison below needs a real process to compare against.
+        print("switch_review: stale-runner comparison skipped (no process running mirror code)",
+              file=sys.stderr)
+        return
+    # THE COMPARISON, exercised in both directions against the real process table: shift `now`
+    # forward far enough that every process appears to have started AFTER the mirror was written,
+    # and nothing may be reported stale. Without this the check could report every process forever
+    # and still look correct.
+    assert stale_runners(now=time.time() + 20 * 365 * 86400) == [], (
+        "a process started after the mirror was written is not stale")
+    for row in live:
+        assert row["stale_by_hours"] >= 0 and row["pid"].isdigit(), row
+        assert row["reason"], "a stale runner must say why it is stale"
 
 
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
 
+    _selftest_stale_runners()
     now = 1_700_000_000
     with tempfile.TemporaryDirectory(prefix="switch-review-") as td:
         reg = Path(td) / "capabilities.json"

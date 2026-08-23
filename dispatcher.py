@@ -1234,6 +1234,22 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
         _align_gemini_print_timeout(argv, timeout)
+    # A PER-RUN agy LOG, because agy reports its model there and nowhere else. Its structured output
+    # carries only conversation_id/cwd/usage, but its log says
+    # `Propagating selected model override to backend: label="..."`. The default `--log-file` is one
+    # SHARED path for every gemini run, which is unattributable for exactly the reason cursor's
+    # reused `/private/tmp` was: a line in a shared file belongs to no particular run. Rewriting the
+    # value here follows the `--add-dir` precedent directly above and needs no signature change.
+    # Both of these must be settled BEFORE `wrapped` is composed, because `wrapped` freezes argv
+    # into a shell string: an argv edit after that point changes nothing that runs. The first
+    # version of this rewrite sat below and was therefore inert -- the run still wrote to the shared
+    # log, and the only symptom was a model that never resolved.
+    DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logf = DISPATCH_LOG_DIR / f"offload.{agent}.{time.time_ns()}.log"
+    agy_log: Path | None = None
+    if agent == "gemini" and "--log-file" in argv:
+        agy_log = logf.with_suffix(".agy.log")
+        argv[argv.index("--log-file") + 1] = str(agy_log)
     auth_prelude = _auth_prelude(agent)
     agent_prelude = _agent_runtime_prelude(agent)
     wrapped = f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
@@ -1242,8 +1258,6 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     task_type = "offload"
     model = adapters.model_identity(agent, mode, profile)
     started_ts = int(time.time())
-    DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    logf = DISPATCH_LOG_DIR / f"offload.{agent}.{time.time_ns()}.log"
     adapters.record_ledger(
         agent,
         count=1,
@@ -1477,6 +1491,15 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         #
         # The stream is then reduced to its final result text before anyone sees it, so every
         # existing caller keeps the plain-text contract it already expects.
+        # agy reports in its LOG, not its stdout, so read the per-run log this run was given.
+        if agy_log is not None and observed_model is None:
+            try:
+                agy_text = agy_log.read_text(errors="replace")
+            except OSError:
+                agy_text = ""
+            agy_label = adapters.model_label_from_agy_log(agy_text)
+            if agy_label:
+                observed_model = adapters.model_id_for_label(agent, agy_label)
         if proc.stdout and '"subtype":"init"' in proc.stdout:
             stream = adapters.observed_model_from_stream(proc.stdout)
             label = stream.get("model_label")
@@ -2041,10 +2064,22 @@ def _selftest() -> None:
         #
         # The profile still applies and the ledger still names it, so the REQUEST stays auditable.
         # Only the unbackable claim is withheld.
+        # DERIVED FROM THE AUTHORITY, not a hardcoded seat. Four times now an assertion here named a
+        # specific agent as unable to report, and four times that stopped being true once its store
+        # or log was actually read -- so the test enforced a stale belief instead of catching it.
+        # Ask `NO_SESSION_LOG_AGENTS` who cannot report, and if the answer is nobody, say so and
+        # skip rather than inventing a case.
+        mute_seat = next(
+            (a for a in adapters.NO_SESSION_LOG_AGENTS
+             if execution_profiles.profiles_for_agent(a, transport="offload")),
+            None,
+        )
+        assert mute_seat, (
+            "no seat lacks a reader any more -- delete this case rather than faking one")
         try:
             adapters.build_command = fake_build_command
             subprocess.run = fake_run
-            gem_off = offload("gemini", "Summarize this file.", cwd=str(nongit), timeout=1)
+            gem_off = offload(mute_seat, "Summarize this file.", cwd=str(nongit), timeout=1)
         finally:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
@@ -2053,7 +2088,8 @@ def _selftest() -> None:
                 "SELECT resolved_model FROM execution_attempts "
                 "WHERE run_id=? AND operation_role='worker'", (gem_off["run_id"],)).fetchall()
         assert gem_rows == [], (
-            "a seat that can never resolve a model must not write a worker attempt", gem_rows)
+            "a seat that can never resolve a model must not write a worker attempt",
+            mute_seat, gem_rows)
         assert feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None, (
             "no attempt means no worker identity, which is the honest answer here")
         # The profile is still in force and still recorded, so withholding the claim has not cost
@@ -2067,9 +2103,10 @@ def _selftest() -> None:
             "the profile must still be recorded even when no worker attempt is", gem_routed)
         # And the reason is a STATIC property of the seat, from one authority -- never prose
         # re-cached on thousands of rows.
-        ok, why = adapters.can_report_cli_identity("gemini")
-        assert ok is False and why and "no_cli_session_log" in why, (ok, why)
-        assert adapters.can_report_cli_identity("codex")[0] is True
+        ok, why = adapters.can_report_cli_identity(mute_seat)
+        assert ok is False and why and "no_cli_session_log" in why, (mute_seat, ok, why)
+        for seat in adapters.CLI_IDENTITY_READERS:
+            assert adapters.can_report_cli_identity(seat)[0] is True, seat
 
         # ALL FOUR CELLS OF THE PREDICATE. Keying on either half alone was wrong in both
         # directions: `can_report` alone silenced the gemini-armed audit round this exists to make
@@ -2090,12 +2127,19 @@ def _selftest() -> None:
                     "SELECT profile_id FROM execution_attempts WHERE run_id=? "
                     "AND operation_role='worker'", (res["run_id"],)).fetchall()
 
+        # The unreportable seat comes from the AUTHORITY, never a hardcoded name: gemini sat here
+        # until its per-run CLI log turned out to name the model, and then this cell was asserting
+        # something false.
+        mute = next(
+            (a for a in adapters.NO_SESSION_LOG_AGENTS
+             if execution_profiles.profiles_for_agent(a, transport="offload")), None)
+        assert mute, "no seat lacks a reader any more -- delete this case rather than faking one"
         # unreportable + evidence -> RECORDED, because the round needs the join to mine at all.
-        assert _attempts_for("gemini", round_id="domain/audit-x:review-corpus:2026-08-22"), (
-            "a round-bound offload must record the attempt its episode joins on")
+        assert _attempts_for(mute, round_id="domain/audit-x:review-corpus:2026-08-22"), (
+            "a round-bound offload must record the attempt its episode joins on", mute)
         # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
         # where the row could never be used for anything.
-        assert _attempts_for("gemini", round_id=None) == [], "the junk case must stay silent"
+        assert _attempts_for(mute, round_id=None) == [], ("the junk case must stay silent", mute)
         # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
         assert _attempts_for("codex", round_id=None), (
             "a resolvable seat's attempt is real provenance even unbound")
@@ -2163,6 +2207,24 @@ def _selftest() -> None:
 
         captured.clear()
 
+        def _write_agy_log(cmd, cwd, text):
+            """Write where the COMMAND says, as the real CLI does.
+
+            These doubles used to write a fixed `agy.log` beside the workspace. That silently
+            stopped being the path once offload began giving each run its own agy log -- and a
+            double writing somewhere the code no longer reads proves nothing, which is how the
+            retry and log-tail assertions both went quiet at once.
+            """
+            wrapped_cmd = cmd[-1] if isinstance(cmd, list) else str(cmd)
+            parts = shlex.split(wrapped_cmd)
+            if "--log-file" not in parts:
+                return
+            target = Path(parts[parts.index("--log-file") + 1])
+            if not target.is_absolute():
+                target = Path(cwd or ".") / target
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+
         def fake_gemini_build_command(agent, prompt, mode, cwd=None, **_kwargs):
             # `**_kwargs`: gemini has a registered profile now, so offload passes `profile=`.
             captured["prompt"] = prompt
@@ -2208,14 +2270,19 @@ def _selftest() -> None:
         assert "offload marked failed" in Path(bad_gem["log"]).read_text(), bad_gem
 
         captured.clear()
-        (nongit / "agy.log").write_text(
-            "failed to construct executor: neither PlanModel nor RequestedModel specified\n"
-        )
 
         def fake_empty_run(cmd, cwd=None, **_kwargs):
             captured["cmd"] = cmd
             captured["cwd"] = cwd
             captured["kwargs"] = _kwargs
+            # WRITE WHERE THE COMMAND SAYS, as the real CLI does. This used to write a fixed
+            # `agy.log` beside the workspace, which silently stopped being the path once offload
+            # started giving each run its OWN agy log -- a double that writes somewhere the code
+            # no longer reads proves nothing.
+            _write_agy_log(
+                cmd, cwd,
+                "failed to construct executor: neither PlanModel nor RequestedModel specified\n",
+            )
             return EmptyCompleted()
 
         try:
@@ -2243,7 +2310,7 @@ def _selftest() -> None:
                 return Completed()
             retry_calls["count"] += 1
             if retry_calls["count"] == 1:
-                (Path(cwd) / "agy.log").write_text("rpc failed: connection reset by peer\n")
+                _write_agy_log(cmd, cwd, "rpc failed: connection reset by peer\n")
                 return EmptyCompleted()
             return Completed()
 
@@ -2384,6 +2451,44 @@ def _selftest() -> None:
         }
         assert "gemini-3.1-pro-high" in gemini_ids, gemini_ids
         assert "gemini-3.6-flash-high" in gemini_ids, gemini_ids
+        # AGY REPORTS IN ITS LOG, and the log must be PER RUN. agy's structured output carries only
+        # conversation_id/cwd/usage; its log carries
+        # `Propagating selected model override to backend: label="..."`. The default `--log-file` is
+        # one shared path for every gemini run, so a line in it belongs to no particular run -- the
+        # same non-attributability that made cursor's reused `/private/tmp` useless.
+        def fake_agy_run(cmd, cwd=None, **_kwargs):
+            captured["cmd"] = cmd     # asserted below; a stale `captured` proves the wrong command
+            captured["cwd"] = cwd
+            _write_agy_log(
+                cmd, cwd,
+                "I0822 20:08:19.863873 1 model_config_manager.go:311] Propagating selected "
+                'model override to backend: label="Gemini 3.6 Flash (High)"\n',
+            )
+            return Completed()
+
+        try:
+            adapters.build_command = fake_gemini_build_command
+            subprocess.run = fake_agy_run
+            agy_off = offload("gemini", "Summarize.", cwd=str(nongit), timeout=1)
+        finally:
+            adapters.build_command = old_build_command
+            subprocess.run = old_subprocess_run
+        with feedback._conn() as c:
+            agy_row = c.execute(
+                "SELECT resolved_provider, resolved_model, status, fallback_reason "
+                "FROM execution_attempts WHERE run_id=? AND operation_role='worker'",
+                (agy_off["run_id"],)).fetchone()
+        assert agy_row is not None, "gemini can report, so the attempt must be recorded"
+        assert agy_row[1] == "gemini-3.6-flash-high", ("agy's own log names the model", agy_row)
+        assert agy_row[2] == "complete" and agy_row[3] is None, agy_row
+        # The log path handed to agy must be THIS run's, never the shared default.
+        assert "--log-file" in " ".join(captured["cmd"]), captured["cmd"]
+        assert "agent-runtime/gemini/logs/agy.log" not in " ".join(captured["cmd"]), (
+            "a shared agy log cannot attribute a model to one run", captured["cmd"])
+        # And a label that is not a model never becomes one.
+        assert adapters.model_label_from_agy_log("nothing to see") is None
+        assert adapters.model_id_for_label("gemini", "some prose") is None
+
         # A single-lane seat has no ladder and must keep its one profile rather than losing it.
         for seat in ("cursor", "vibe"):
             assert adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER) is None, seat
