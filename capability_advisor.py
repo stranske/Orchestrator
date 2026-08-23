@@ -689,8 +689,13 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     "repo-audit:phase-2": {
         "role-decomposer": "phase 2 splits the work across 8 named dimensions — that split IS "
                            "decomposition, currently done by hand in the prompt",
-        "partitioned-review": "8 dimensions analysed by bounded agents is a partition over review "
-                              "dimensions",
+        # `partitioned-review` USED TO BE BOUND HERE, on the word "partition". It moved to phase 3
+        # (2026-08-23) after a real audit run declined it as "wrong phase, not wrong tool". The
+        # binding matched a NAME, not a SHAPE: `partitioned_review.validate_corpus` takes a list of
+        # `assertion` items with `source_refs` and disposes each one
+        # `satisfied|remaining|partial|intentional|historical_only|unresolved|not_applicable`
+        # against `current_code`. That is a corpus of prior CLAIMS being reconciled, and phase 2
+        # discovers defects in source — there is no claim list yet for it to dispose.
         "repo-playbook": "the audit runs against 13 repos with different conventions; "
                          "repo_knowledge.py is exactly that per-repo context",
         "frontend-verifier": "dimension 4 uses the ux-review-overlay when observable surfaces "
@@ -741,6 +746,13 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     "repo-audit:phase-3": {
         "adversarial-review": "the phase IS 'adversarially verify each finding against the live "
                               "tip'; appears in 25 of 177 audit documents, done by hand",
+        "partitioned-review": "the phase takes N candidate findings and disposes each against the "
+                              "live tip, which IS this module's corpus shape — `assertion` items "
+                              "with `source_refs`, dispositions satisfied/remaining/partial/"
+                              "intentional/historical_only/unresolved/not_applicable, evidence "
+                              "typed `current_code`, and a `confirmed_defects` category. Moved "
+                              "here from phase-2, where it matched the word 'partition' and not "
+                              "the shape; the 2026-08-22 audit of Trend used it for exactly this",
     },
     "repo-audit:phase-4": {
         "deliberate-break-verifier": "phase 4 REQUIRES 'a named test gate + deliberate-break→revert' "
@@ -1334,6 +1346,16 @@ def _selftest_bindings() -> None:
                 "phase 4 requires a named test gate with a deliberate-break proof"
             assert "adversarial-review" in binding_for("repo-audit:phase-3"), \
                 "phase 3 IS adversarial verification"
+            # A BINDING MUST MATCH THE SHAPE, NOT THE WORD. `partitioned-review` sat at phase 2 on
+            # the token "partition" while its corpus is a list of prior ASSERTIONS disposed against
+            # current code -- so it was offered where no claim list exists yet and withheld from the
+            # phase that produces one. Pinned in BOTH directions: dropping the phase-3 half would
+            # silently restore the useless offer, and dropping the phase-2 half would let it come
+            # back as a duplicate.
+            assert "partitioned-review" in binding_for("repo-audit:phase-3"), \
+                "phase 3 disposes N candidate findings against the live tip -- the corpus shape"
+            assert "partitioned-review" not in binding_for("repo-audit:phase-2"), \
+                "phase 2 discovers defects in source; there is no claim corpus to reconcile yet"
             # Dimensions are SIBLINGS of the phase, so a worker context must NOT inherit the
             # splitter's capabilities -- that inheritance is what would push a worker to 9-10.
             for d in range(1, 9):
