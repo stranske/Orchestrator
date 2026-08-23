@@ -311,6 +311,97 @@ def record_usefulness(capability_id: str, experiment_id: str, *, useful: bool, e
                   "evidence": str(evidence)[:400]})
 
 
+def _selftest_detection() -> None:
+    """The recursive loop: detect a pass-over, propose, promote — and never ratchet.
+
+    The anti-ratchet assertion is the important one. "Should have been chosen" derived from the
+    advisor's own naming, fed back into more naming, drives selection pressure up regardless of
+    usefulness. That is the trap the learning rules forbid ("loosening a matcher TO MOVE THIS NUMBER
+    is forbidden"), so the control arm reports and may never promote.
+    """
+    import tempfile
+    from pathlib import Path
+    import capability_advisor
+
+    with tempfile.TemporaryDirectory(prefix="detect-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("deliberate-break-verifier", "adversarial-review", "bound-idle"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        real = capability_advisor.SURFACE_BINDINGS.get("t-surf")
+        capability_advisor.SURFACE_BINDINGS["t-surf"] = {"bound-idle": "already bound"}
+        try:
+            # HAND WORK is counted per record, from the declared signature.
+            recs = ["we performed a deliberate break and reverted it"] * 5 + ["nothing here"] * 3
+            hw = hand_work("t-surf", recs)
+            assert hw.get("deliberate-break-verifier") == 5, hw
+
+            # PROMOTION on hand work above the floor, and not below it.
+            props = propose_bindings("t-surf", recs, path=ledger)
+            assert [p["capability_id"] for p in props] == ["deliberate-break-verifier"], props
+            assert props[0]["action"] == "promote" and props[0]["reason"], props
+            # LITERAL boundary, deliberately not `PROMOTION_MIN_HAND_WORK - 1`: an assertion
+            # written in terms of the constant it guards moves with the constant and can never fail.
+            assert PROMOTION_MIN_HAND_WORK == 3, "boundary cases below assume the floor is 3"
+            assert propose_bindings("t-surf", recs[:2], path=ledger) == [], "2 records must not promote"
+            assert propose_bindings("t-surf", recs[:3], path=ledger), "3 records must promote"
+
+            # ALREADY BOUND is never re-proposed.
+            capability_advisor.SURFACE_BINDINGS["t-surf"]["deliberate-break-verifier"] = "bound now"
+            assert propose_bindings("t-surf", recs, path=ledger) == [], "no re-promotion"
+            del capability_advisor.SURFACE_BINDINGS["t-surf"]["deliberate-break-verifier"]
+
+            # THE ANTI-RATCHET. A capability named by the advisor and skipped, with NO hand-work
+            # evidence, must be REPORTED and must NOT be promoted.
+            # ENOUGH of them to clear the promotion floor on their own, or a break that counted the
+            # control arm would stay under the floor and the assertion could not discriminate.
+            for i in range(PROMOTION_MIN_HAND_WORK + 2):
+                capabilities.heartbeat("adversarial-review", "match", ref=f"advice:ratchet{i:07d}",
+                                       path=ledger, idempotency_key=f"m:ar{i}",
+                                       metadata={"skill": "t-surf"})
+            ms = missed_selection("t-surf", ["nothing here"] * 9, path=ledger)
+            ar = next(r for r in ms["rows"] if r["capability_id"] == "adversarial-review")
+            assert ar["named_not_triggered"] >= PROMOTION_MIN_HAND_WORK, ar
+            assert ar["hand_work"] == 0, ar
+            promoted = [p["capability_id"] for p in
+                        propose_bindings("t-surf", ["nothing here"] * 9, path=ledger)]
+            assert "adversarial-review" not in promoted, (
+                "the control arm must never promote on its own — that is the ratchet")
+
+            # DEMOTION is the drain: bindings that could only grow end at 43 per surface.
+            for i in range(DEMOTION_MIN_TRIALS):
+                capabilities.heartbeat("bound-idle", "match", ref=f"advice:idle{i:08d}", path=ledger,
+                                       idempotency_key=f"m:idle{i}", metadata={"skill": "t-surf"})
+                capabilities.heartbeat("bound-idle", "outcome", ref=f"advice:idle{i:08d}",
+                                       path=ledger, idempotency_key=f"o:idle{i}",
+                                       metadata={"skill": "t-surf", USEFUL_KEY: False,
+                                                 "evidence": "resolved so the trial counts"})
+            dem = propose_demotions("t-surf", path=ledger)
+            assert [d["capability_id"] for d in dem] == ["bound-idle"], dem
+            assert dem[0]["triggered"] == 0 and dem[0]["offered"] >= DEMOTION_MIN_TRIALS, dem[0]
+
+            # A promotion must record WHY.
+            for bad in ("", "  "):
+                try:
+                    record_promotion("adversarial-review", "t-surf", bad, path=ledger)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("an unexplained binding promotion must be refused")
+        finally:
+            if real is None:
+                capability_advisor.SURFACE_BINDINGS.pop("t-surf", None)
+            else:
+                capability_advisor.SURFACE_BINDINGS["t-surf"] = real
+    print("capability_propensity detection selftest: OK (hand work promotes above a floor, the "
+          "control arm never promotes, demotion drains, promotions must state why)")
+
+
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
@@ -439,7 +530,7 @@ def _fmt(rep: dict) -> str:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("command", nargs="?", default="report",
-                    choices=["report", "experiments", "trigger", "useful"])
+                    choices=["report", "experiments", "trigger", "useful", "detect"])
     # A loop that can only be closed from Python cannot be closed by a lane, which runs bash. These
     # two subcommands are the whole reason the recording edges are reachable from an automation.
     ap.add_argument("--capability", default="", help="capability id, for trigger/useful")
@@ -451,6 +542,8 @@ def main(argv: list[str]) -> int:
     # described the wiring rather than the capability's review value -- a mislabeled trial, and the
     # system's first data point. A proof belongs on a throwaway ledger; without this flag the only
     # way to demonstrate the path was to pollute the thing being demonstrated.
+    ap.add_argument("--apply", action="store_true",
+                    help="detect: write the proposed promotions (default is report-only)")
     ap.add_argument("--ledger", default="",
                     help="write to this ledger instead of the live one (use for demos and proofs)")
     ap.add_argument("--json", action="store_true")
@@ -459,6 +552,27 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        _selftest_detection()
+        return 0
+    if args.command == "detect":
+        rep = detect(apply_promotions=args.apply)
+        _capability_heartbeat("invocation", f"detect:{len(rep['promotions'])}")
+        if args.json:
+            print(json.dumps(rep, indent=2))
+        else:
+            print(f"capability selection detection — {len(rep['surfaces'])} surface(s) with records")
+            for s_, info in rep["surfaces"].items():
+                print(f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])}")
+            print(f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
+                  + ("  (report-only; pass --apply to write them)" if rep["promotions"]
+                     and not args.apply else ""))
+            for pr in rep["promotions"]:
+                print(f"    + {pr['surface']} -> {pr['capability_id']}: {pr['reason'][:88]}")
+            print(f"  DEMOTIONS proposed: {len(rep['demotions'])} (never auto-applied)")
+            for de in rep["demotions"]:
+                print(f"    - {de['surface']} -> {de['capability_id']}: {de['reason'][:88]}")
+            if rep["applied"]:
+                print(f"  APPLIED: {rep['applied']}")
         return 0
     if args.command in {"trigger", "useful"}:
         if not args.capability or not args.experiment:
@@ -489,6 +603,235 @@ def main(argv: list[str]) -> int:
     print(json.dumps(rep, indent=2) if args.json else _fmt(rep), end="")
     return 0
 
+
+
+
+# ---------------------------------------------------------------------------
+# DETECTION — was a capability passed over when it should have been chosen?
+#
+# DEDUP FINDING (2026-08-23, before writing this). `capability_matcher_proposals.py` ALREADY answers
+# the adjacent question — "should work have been ROUTED here", scored against the Brain's run
+# history — and it reports 6 capabilities across 379 runs of matching work that were never invoked
+# (deliberate-break-verifier 111, frontend-verifier 131, testgen-lane 86, codemod-campaign 38,
+# cross-repo-coordination 7, epic-decomposition 6). It is itself a built-and-forgotten feature: it
+# runs, it produces that report, and it has NO caller and NO ledger registration. This module
+# CONSUMES it rather than recomputing, because a second implementation of the same evidence is the
+# parallel-inventory defect.
+#
+# WHAT IT CANNOT TELL US, and why signal 1 exists. `runs` has no surface column — `runs.source` holds
+# only keepalive / orchestrator_local / orchestrator_remote / None. So run history says a capability
+# is under-used OVERALL; it cannot say WHICH SURFACE passed it over. Attribution has to come from the
+# surface's own records, so a binding proposal is never derived from run history alone.
+#
+# THREE SIGNALS, and only two may promote:
+#   1. HAND-WORK (external, surface-attributed) — the surface's own records show it doing the
+#      capability's work manually. This is the strongest signal and the measured one: the opener
+#      performed deliberate-break-verifier's contract in 271 of 2,445 rounds while never invoking it.
+#   2. CONTROL ARM (internal, surface-attributed) — the advisor named it, the surface did not trigger
+#      it. MAY NOT PROMOTE ALONE. "Should have been chosen" derived from the advisor's own naming,
+#      feeding back into more naming, is a ratchet: it would drive selection pressure up regardless
+#      of usefulness, which is the trap the learning rules forbid.
+#   3. UNDER-USE (external, unattributed) — the matcher-proposals evidence above. Corroborates a
+#      promotion; cannot locate it.
+#
+# So: promote on 1, corroborated by 3. Report 2 as context, never as cause.
+#
+# THE DEMOTION PATH IS THE DRAIN. Bindings that could only grow would end at every surface holding
+# 43 capabilities — the exact condition binding exists to prevent. A capability bound to a surface
+# that never triggers it across DEMOTION_MIN_TRIALS resolved experiments is proposed for removal.
+# ---------------------------------------------------------------------------
+
+# What a surface's own record looks like when it did the capability's work BY HAND. Declared, not
+# inferred: the mapping from a capability to the trace it leaves is a judgement that belongs in one
+# reviewable place. Patterns are deliberately narrow — a loose pattern manufactures false positives,
+# and a false promotion costs more than a missed one because it widens the very set we are narrowing.
+HAND_WORK_SIGNATURES: dict[str, str] = {
+    "deliberate-break-verifier": r"deliberate(ly)?[ -](break|widen|forc)|deliberate break",
+    "adversarial-review": r"adversarial(ly)? (verif|review|critic)",
+    "runtime-ac-checks": r"acceptance criteri\w* (unmet|not met|unverified)|stale checkbox",
+    "partitioned-review": r"partition(ed)? (the )?review|split the review",
+    "offload": r"offload(ed)? (to|the)|hand(ed)? off the read",
+}
+PROMOTION_MIN_HAND_WORK = 3        # below this, one anecdote could widen a bound set
+DEMOTION_MIN_TRIALS = 8            # resolved experiments a binding gets before non-use counts
+
+
+# Where a surface's own records live. INSTANCE paths, so they are resolved at runtime and
+# overridable — the tool must not hardcode one machine's layout. A surface with no resolvable
+# records simply yields no hand-work evidence, which is the safe direction: no evidence, no promotion.
+SURFACE_RECORD_GLOBS: dict[str, str] = {
+    "opener-lane": "~/.codex/automations/pd-workloop-resume/memory-*.md",
+    "closer-lane": "~/.codex/automations/imi-merge-verify-closer/memory-*.md",
+}
+RECORD_SPLIT = r"^## \d{4}-\d{2}-\d{2}T[\d:]+Z?\s*$"
+
+
+def surface_records(surface: str) -> list[str]:
+    """This surface's own records, split into rounds. Empty when the layout is not present here."""
+    import os
+    import re
+    from pathlib import Path
+    pattern = os.environ.get(f"ORCH_RECORDS_{surface.replace('-', '_').upper()}") \
+        or SURFACE_RECORD_GLOBS.get(surface)
+    if not pattern:
+        return []
+    root = Path(pattern).expanduser()
+    text = ""
+    for f in sorted(root.parent.glob(root.name)):
+        try:
+            text += f.read_text(errors="ignore")
+        except OSError:
+            continue
+    if not text:
+        return []
+    return [r for r in re.split(RECORD_SPLIT, text, flags=re.M) if r.strip()]
+
+
+def detect(*, path=None, apply_promotions: bool = False) -> dict:
+    """Run detection across every surface whose records are resolvable here.
+
+    REPORT-ONLY BY DEFAULT, matching how `feature_scan` is wired into the tick: `--apply` exists and
+    is deliberately not passed by the cadence step. A promotion widens a bound set, and widening it
+    without a diff anyone saw is how a narrowing mechanism quietly stops narrowing.
+    """
+    import capability_advisor
+    out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": []}
+    for surface in sorted(set(SURFACE_RECORD_GLOBS) | set(capability_advisor.SURFACE_BINDINGS)):
+        recs = surface_records(surface)
+        proms = propose_bindings(surface, recs, path=path) if recs else []
+        dems = propose_demotions(surface, path=path)
+        if recs or proms or dems:
+            out["surfaces"][surface] = {"records": len(recs),
+                                        "bound": sorted(capability_advisor.binding_for(surface, path=path))}
+        out["promotions"].extend(proms)
+        out["demotions"].extend(dems)
+    if apply_promotions:
+        for prom in out["promotions"]:
+            # Respect the ceiling the binding exists to enforce; a promotion that pushes a context
+            # past the safe zone defeats the purpose of promoting into it.
+            current = capability_advisor.binding_for(prom["surface"], path=path)
+            if len(current) >= 10:
+                prom["skipped"] = "surface already at the safe-zone ceiling"
+                continue
+            if record_promotion(prom["capability_id"], prom["surface"], prom["reason"], path=path):
+                out["applied"].append({"capability_id": prom["capability_id"],
+                                       "surface": prom["surface"]})
+    return out
+
+
+def _under_use() -> dict[str, int]:
+    """Capabilities the Brain says work existed for and which never ran. Consumed, not recomputed."""
+    try:
+        import capability_matcher_proposals as proposals
+        rep = proposals.evaluate()
+    except Exception:                                              # noqa: BLE001
+        return {}
+    out: dict[str, int] = {}
+    for row in rep.get("rows") or []:
+        if row.get("should_have_been_used"):
+            out[str(row["capability_id"])] = int(row.get("historical_matches") or 0)
+    return out
+
+
+def hand_work(surface: str, records: list, *, capability_ids=None) -> dict[str, int]:
+    """How many of this surface's own records show it doing a capability's work by hand.
+
+    `records` are text blobs (a lane's memory rounds, an audit's documents). Passed in rather than
+    discovered, because their locations are instance evidence and this module is tool.
+    """
+    import re
+    wanted = set(capability_ids or HAND_WORK_SIGNATURES)
+    out: dict[str, int] = {}
+    for cap_id in sorted(wanted & set(HAND_WORK_SIGNATURES)):
+        rx = re.compile(HAND_WORK_SIGNATURES[cap_id], re.I)
+        n = sum(1 for text in records if rx.search(str(text)))
+        if n:
+            out[cap_id] = n
+    return out
+
+
+def missed_selection(surface: str, records: list, *, path=None,
+                     window_days: int = WINDOW_DAYS) -> dict:
+    """Evidence that this surface passed over a capability it should have chosen."""
+    import capability_advisor
+    bound = set(capability_advisor.binding_for(surface, path=path))
+    hands = hand_work(surface, records)
+    under = _under_use()
+
+    # Signal 2, reported and never promoting: candidates this surface was offered and skipped.
+    control: dict[str, int] = {}
+    for trial in experiments(path=path, window_days=window_days):
+        if surface not in (trial.get("skills") or []):
+            continue
+        for cap_id in trial.get("not_triggered") or []:
+            control[cap_id] = control.get(cap_id, 0) + 1
+
+    rows = []
+    for cap_id in sorted(set(hands) | set(control)):
+        rows.append({
+            "capability_id": cap_id,
+            "surface": surface,
+            "hand_work": hands.get(cap_id, 0),
+            "named_not_triggered": control.get(cap_id, 0),
+            "under_use_runs": under.get(cap_id, 0),
+            "already_bound": cap_id in bound,
+        })
+    return {"surface": surface, "record_count": len(records), "bound": sorted(bound), "rows": rows}
+
+
+def propose_bindings(surface: str, records: list, *, path=None) -> list[dict]:
+    """Promotions warranted for this surface. External signal only — never the control arm alone."""
+    out = []
+    for row in missed_selection(surface, records, path=path)["rows"]:
+        if row["already_bound"] or row["hand_work"] < PROMOTION_MIN_HAND_WORK:
+            continue
+        out.append({
+            **row,
+            "action": "promote",
+            "reason": (f"{row['hand_work']} of {len(records)} records show this surface doing the "
+                       f"capability's work by hand"
+                       + (f"; the Brain shows {row['under_use_runs']} runs of matching work that "
+                          f"never invoked it" if row["under_use_runs"] else "")),
+        })
+    return sorted(out, key=lambda r: -r["hand_work"])
+
+
+def propose_demotions(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> list[dict]:
+    """Bound capabilities this surface never triggers. The drain, without which bindings only grow."""
+    import capability_advisor
+    bound = capability_advisor.binding_for(surface, path=path)
+    seen: dict[str, int] = {}
+    used: dict[str, int] = {}
+    for trial in experiments(path=path, window_days=window_days):
+        if surface not in (trial.get("skills") or []):
+            continue
+        for cap_id in bound:
+            if cap_id in (trial.get("candidates") or []):
+                seen[cap_id] = seen.get(cap_id, 0) + 1
+            if cap_id in (trial.get("triggered") or []):
+                used[cap_id] = used.get(cap_id, 0) + 1
+    return sorted(
+        ({"capability_id": c, "surface": surface, "offered": seen[c], "triggered": used.get(c, 0),
+          "action": "demote",
+          "reason": (f"bound and offered in {seen[c]} resolved experiments for this surface, "
+                     f"triggered {used.get(c, 0)} times")}
+         for c in bound if seen.get(c, 0) >= DEMOTION_MIN_TRIALS and not used.get(c)),
+        key=lambda r: -r["offered"])
+
+
+def record_promotion(capability_id: str, surface: str, reason: str, *, path=None) -> bool:
+    """Write the binding promotion `capability_advisor.binding_for()` reads. DATA, never a prompt.
+
+    This is the whole reason the binding is a table: the loop changes what a surface reaches for
+    without rewriting that surface's instructions. A loop that edited an automation's prompt would
+    be a self-modifying dispatch path, and the manual mirror sync is the only circuit breaker there.
+    """
+    if not reason.strip():
+        raise ValueError("a binding promotion must record why")
+    return capabilities.heartbeat(
+        capability_id, "match", ref=f"{ADVICE_REF_PREFIX}promotion", path=path or capabilities.REG,
+        idempotency_key=f"binding_promotion:{surface}:{capability_id}",
+        metadata={"source": "binding_promotion", "surface": surface, "reason": reason})
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
