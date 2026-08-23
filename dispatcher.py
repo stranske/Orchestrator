@@ -1184,9 +1184,26 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     # One name for the profile that is ACTUALLY in force, so the ledger, the routing metadata and
     # the worker attempt cannot disagree about which profile ran.
     effective_profile_id = profile["profile_id"] if profile else None
-    # And one name for whether this seat can ever substantiate a worker claim, resolved ONCE per
-    # offload rather than re-derived at each site that would otherwise disagree.
+    # WHY THIS ROW WOULD EXIST, resolved once per offload. Two different reasons justify a worker
+    # attempt, and keying on only one of them was wrong in both directions:
+    #
+    #   * the run is EVIDENCE -- bound to a registered research round, where the attempt is the
+    #     join that lets the round become a minable episode. True for any seat, because the round's
+    #     arms are whichever agents actually did the work.
+    #   * the seat can RESOLVE -- its CLI records what served the run, so the row carries real model
+    #     provenance and feeds drift detection. True for any run, round-bound or not.
+    #
+    # Gating on `can_report` alone (as first written) silenced exactly the case this is for: a
+    # gemini- or cursor-armed audit round could no longer produce an episode at all, which broke the
+    # round-registration path built for it hours earlier. Gating on nothing produced the junk: an
+    # unbound production offload by a seat that can never resolve leaves a row asserting the one
+    # thing it cannot establish, 230 times per two days, with nothing to decrement it.
+    #
+    # The pair is the predicate. An unbound offload by an unreportable seat is the only case that
+    # writes nothing, and it is the only case where the row could never be used for anything.
     can_report, no_report_reason = adapters.can_report_cli_identity(agent)
+    is_evidence = bool(research_round)
+    record_worker_attempt = can_report or is_evidence
     argv = (
         adapters.build_command(
             agent, prepared_prompt, mode, cwd=run_cwd, profile=profile,
@@ -1261,7 +1278,7 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         # (`adapters.can_report_cli_identity`), reported by `mining_coverage` per seat, so adding a
         # reader for a seat flips it on and the attempts begin -- that is the drain, and it needs
         # none of the existing rows cleared first.
-        if profile and can_report:
+        if profile and record_worker_attempt:
             feedback.record_execution_attempt(
                 run_id,
                 attempt_id=f"attempt:profile:{run_id}",
@@ -1276,7 +1293,7 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         elif profile:
             print(
                 f"note: {agent} offload keeps its profile but records no worker attempt "
-                f"({no_report_reason})",
+                f"({no_report_reason}; not bound to a research round)",
                 file=sys.stderr,
             )
 
@@ -1317,10 +1334,9 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
         )
-        # Only close what was opened. A seat that cannot report provenance never had a worker
-        # attempt written above, so completing one would raise -- and reaching for the row that was
-        # deliberately not created is how a "stop recording this" change quietly becomes a crash.
-        if profile and can_report:
+        # Only close what was opened -- reaching for a row deliberately not created is how a
+        # "stop recording this" change quietly becomes a crash.
+        if profile and record_worker_attempt:
             # The Codex CLI's bounded completion output does not currently carry
             # a provider-resolved model identity. Close the selected attempt as
             # explicitly unresolved instead of leaving a permanent `started`
@@ -1987,6 +2003,35 @@ def _selftest() -> None:
         ok, why = adapters.can_report_cli_identity("gemini")
         assert ok is False and why and "no_cli_session_log" in why, (ok, why)
         assert adapters.can_report_cli_identity("codex")[0] is True
+
+        # ALL FOUR CELLS OF THE PREDICATE. Keying on either half alone was wrong in both
+        # directions: `can_report` alone silenced the gemini-armed audit round this exists to make
+        # minable, and no gate at all produced 23 permanently-dead rows in five hours. A row is
+        # justified when the run is EVIDENCE (bound to a registered round, any seat) or when the
+        # seat can RESOLVE (any run). Only unbound-and-unreportable writes nothing.
+        def _attempts_for(seat: str, *, round_id: str | None) -> list:
+            try:
+                adapters.build_command = fake_build_command
+                subprocess.run = fake_run
+                res = offload(seat, "Summarize.", cwd=str(nongit), timeout=1,
+                              research_round=round_id)
+            finally:
+                adapters.build_command = old_build_command
+                subprocess.run = old_subprocess_run
+            with feedback._conn() as c:
+                return c.execute(
+                    "SELECT profile_id FROM execution_attempts WHERE run_id=? "
+                    "AND operation_role='worker'", (res["run_id"],)).fetchall()
+
+        # unreportable + evidence -> RECORDED, because the round needs the join to mine at all.
+        assert _attempts_for("gemini", round_id="domain/audit-x:review-corpus:2026-08-22"), (
+            "a round-bound offload must record the attempt its episode joins on")
+        # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
+        # where the row could never be used for anything.
+        assert _attempts_for("gemini", round_id=None) == [], "the junk case must stay silent"
+        # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
+        assert _attempts_for("codex", round_id=None), (
+            "a resolvable seat's attempt is real provenance even unbound")
         import ledger_reconcile
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
         cost_by_run = {row["run_id"]: row for row in dry_cost["costs"]}
