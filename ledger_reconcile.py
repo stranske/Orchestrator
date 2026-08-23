@@ -266,6 +266,22 @@ def resolve_unresolved_worker_attempts(*, apply: bool = False, limit: int = 5000
     resolved: dict[str, int] = {}
     blocked: dict[str, int] = {}
     failed: dict[str, str] = {}
+    # STRUCTURALLY UNRESOLVABLE ROWS ARE NOT A BACKLOG. As first written this swept every unresolved
+    # worker attempt, and 23 of 23 candidates belonged to seats whose CLI keeps no per-session log:
+    # a candidate set that grows with every offload and can never drain, re-probing the filesystem
+    # for each one on every run. The gate's own drain was the capability the seat lacks. Excluding
+    # them is what makes the remaining count mean "not yet resolved" instead of "never will be",
+    # and it is reported separately below rather than silently dropped.
+    unreportable: dict[str, int] = {}
+    live_rows = []
+    for row in rows:
+        capable, reason = adapters.can_report_cli_identity(str(row[2] or ""))
+        if capable:
+            live_rows.append(row)
+        else:
+            key = f"{str(row[2] or '').lower()}:{str(reason or 'unknown').split(':')[0]}"
+            unreportable[key] = unreportable.get(key, 0) + 1
+    rows = live_rows
     for run_id, profile_id, agent, target, ts in rows:
         agent = str(agent or "").lower()
         workspace = (
@@ -290,12 +306,33 @@ def resolve_unresolved_worker_attempts(*, apply: bool = False, limit: int = 5000
             failed[run_id] = f"{type(exc).__name__}: {exc}"
             continue
         resolved[agent] = resolved.get(agent, 0) + 1
+    # A ROW CANNOT BE BOTH RESOLVED AND FALLEN BACK. `complete_profile_attempt` did not clear
+    # `fallback_reason`, so an attempt closed unresolved and later resolved kept the stale string --
+    # and `resolved_model_coverage` counts `fallback_reason IS NOT NULL`, so codex-5.6-terra-high
+    # reported coverage 1.00 AND fallback_rate 1.00 at the same time. A metric that contradicts
+    # itself is not a small blemish here: fallback_rate is how a profile's health is read.
+    contradictions = 0
+    with feedback._conn() as c:
+        stale = c.execute(
+            "SELECT COUNT(*) FROM execution_attempts "
+            "WHERE resolved_model IS NOT NULL AND fallback_reason IS NOT NULL"
+        ).fetchone()[0]
+        if stale and apply:
+            c.execute(
+                "UPDATE execution_attempts SET fallback_reason=NULL "
+                "WHERE resolved_model IS NOT NULL AND fallback_reason IS NOT NULL"
+            )
+        contradictions = int(stale or 0)
     return {
         "applied": apply,
+        # DRAINABLE candidates only -- rows a reader could still resolve. This number can reach 0.
         "candidates": len(rows),
+        "resolved_rows_with_stale_fallback": contradictions,
         "resolved_by_agent": resolved,
-        # The drainable count's twin: a seat that structurally cannot report is not a backlog.
         "blocked_by_reason": blocked,
+        # Reported beside it, never inside it: rows excluded because the seat can never report.
+        # Naming them keeps the exclusion auditable, and keeps `candidates` an honest backlog.
+        "excluded_unreportable": unreportable,
         "failed": failed,
     }
 

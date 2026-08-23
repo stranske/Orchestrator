@@ -1272,8 +1272,16 @@ def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
     for agent in agents:
         profiles = execution_profiles.profiles_for_agent(agent)
         total, resolved = attempts.get(agent, (0, 0))
-        # A routing tag can never become resolved identity, so the profile cannot help this seat.
-        reportable = bool(profiles) and not any(
+        # CAN THIS SEAT REPORT AT ALL -- not "is its requested model a bare vendor id". The earlier
+        # test only asked whether the profile's `requested_model` looked like an adapter tag, so
+        # giving every seat a bare vendor id flipped all six to `model_reportable: True` while four
+        # of them still keep no per-session log to read a model FROM. That is a metric improved by
+        # renaming its input, which is worse than the red it replaced: it hid the real limit behind
+        # a green field. The authority is the reader, in one place.
+        import adapters as _adapters
+
+        can_report, cannot_reason = _adapters.can_report_cli_identity(agent)
+        reportable = bool(profiles) and can_report and not any(
             feedback.SYNTHETIC_ADAPTER_MODEL_RE.match(str(p["requested_model"]))
             for p in profiles)
         if resolved:
@@ -1281,6 +1289,8 @@ def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
         elif not profiles:
             verdict = "no_profile"
         elif not reportable:
+            # PERMANENT, not pending. This seat has no reader, so no number of runs changes it --
+            # which is exactly why it must not be lumped in with "waiting for an attempt".
             verdict = "model_not_reportable"
         elif not runs.get(agent):
             verdict = "no_runs"
@@ -1298,6 +1308,9 @@ def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
         rows[agent] = {
             "runs": int(runs.get(agent, 0)),
             "profiles": len(profiles),
+            # The reason travels WITH the verdict, so a reader never has to guess whether
+            # `model_not_reportable` means "misconfigured" or "no such capability exists".
+            "cannot_report_reason": cannot_reason,
             "model_reportable": reportable,
             "worker_attempts": total,
             "resolved_worker_attempts": resolved,
@@ -1305,14 +1318,28 @@ def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
         }
     working = [a for a in agents if runs.get(a)]
     blocked = {a: r["verdict"] for a, r in rows.items() if r["verdict"] not in ("minable", "no_runs")}
+    # THE CEILING, not just the count. "1 of 5 working agents minable" reads as a four-seat gap
+    # someone should go and close; three of those seats have no per-session log to read a model from
+    # and never will, so the real shortfall is one seat, not four. A fraction whose denominator
+    # includes the impossible manufactures a backlog out of a physical limit -- and invites exactly
+    # the fix that produced 23 permanently-unresolvable worker rows in the first place.
+    reachable = [a for a in working if rows[a]["model_reportable"]]
+    unreachable = [a for a in working if not rows[a]["model_reportable"]]
+    coverage = f"{len(minable)} of {len(reachable)} reportable seats minable"
+    if unreachable:
+        coverage += (
+            f" ({len(unreachable)} of {len(working)} working seats can never report: "
+            + ", ".join(sorted(unreachable)) + ")"
+        )
     return {
         "window_days": int(window_days),
         "agents": rows,
         "minable_agents": sorted(minable),
         "working_agents": sorted(working),
-        # The pair that makes a subset visible: how many seats CAN be mined out of how many are
-        # actually doing work. "1 of 6" is a coverage problem; "it ran" hides it.
-        "coverage": f"{len(minable)} of {len(working)} working agents minable",
+        # Separated so a consumer can branch on the achievable set instead of re-deriving it.
+        "reportable_agents": sorted(reachable),
+        "unreportable_agents": sorted(unreachable),
+        "coverage": coverage,
         "blocked": blocked,
     }
 
@@ -2651,14 +2678,30 @@ def _selftest() -> None:
         # Every registered agent appears, so a seat can never be silently uncovered.
         for agent in {p["agent"] for p in execution_profiles.PROFILE_REGISTRY.values()}:
             assert agent in cov["agents"], (agent, sorted(cov["agents"]))
-        # Every seat's model is now named from the seat's own authority, so NONE may be reported as
-        # an unidentifiable routing tag. If a seat regresses to a tag this fails, because that would
-        # silently reclassify "needs tracing" as "can never be identified" -- the exact conflation
-        # that made a one-seat miner look like a fleet-wide impossibility.
+        # REPORTABILITY IS THE READER, NOT THE MODEL STRING. This block used to assert
+        # `model_reportable is True` for all six seats, which is how a metric got "fixed" by giving
+        # every seat a bare vendor id while four of them still had no per-session log to read a
+        # model FROM. Enforcing that made the green field mandatory and hid the real limit -- and it
+        # is what licensed 23 permanently-unresolvable worker rows. Assert the honest split instead.
+        import adapters as _ad
+
         for agent in ("codex", "claude", "gemini", "cursor", "vibe", "aider"):
             row = cov["agents"][agent]
-            assert row["model_reportable"] is True, (agent, row)
-            assert row["verdict"] != "model_not_reportable", (agent, row)
+            capable, why = _ad.can_report_cli_identity(agent)
+            assert row["model_reportable"] is (capable and row["profiles"] > 0), (agent, row, capable)
+            if not capable:
+                assert row["verdict"] == "model_not_reportable", (agent, row)
+                # PERMANENT must never masquerade as PENDING, and must carry its reason.
+                assert row["cannot_report_reason"], (agent, row)
+                assert row["cannot_report_reason"] == why, (agent, row, why)
+            else:
+                assert row["verdict"] != "model_not_reportable", (agent, row)
+                assert row["cannot_report_reason"] is None, (agent, row)
+        # The headline states the ACHIEVABLE ceiling. A denominator that includes seats which can
+        # never report manufactures a backlog out of a physical limit.
+        assert "reportable seats minable" in cov["coverage"], cov["coverage"]
+        assert set(cov["reportable_agents"]) & set(cov["unreportable_agents"]) == set(), cov
+        assert all(a not in cov["reportable_agents"] for a in cov["unreportable_agents"]), cov
         # The headline must state a FRACTION. "it ran" is what hid a dead miner for 43 days.
         assert " of " in cov["coverage"] and "minable" in cov["coverage"], cov["coverage"]
         assert len(cov["minable_agents"]) <= len(cov["working_agents"]), cov
@@ -2674,21 +2717,37 @@ def _selftest() -> None:
         try:
             _tmpdir = _tf.mkdtemp(prefix="orch-cov-verdict-")
             feedback.DB_PATH = Path(_tmpdir) / "coverage-verdicts.db"
-            feedback.record_run("cov-unres", "offload:/tmp/x", "offload", "cursor")
+            # A REPORTABLE seat whose attempt has not resolved yet. Cursor cannot be used for
+            # this case any more -- it can never report, which is a different and permanent
+            # verdict; conflating the two is what made "22 attempts" print as
+            # "no_worker_attempt".
+            feedback.record_run("cov-unres", "offload:/tmp/x", "offload", "codex")
             feedback.record_execution_attempt(
                 "cov-unres", attempt_id="attempt:profile:cov-unres", operation_role="worker",
+                profile_id="codex-5.6-terra-high", requested_provider="openai",
+                requested_model="gpt-5.6-terra", status="unresolved",
+                source="orchestrator-profile-decision", started_ts=int(_t.time()),
+            )
+            built = mining_coverage(30)["agents"]["codex"]
+            # 22 worker attempts once reported as `no_worker_attempt` -- a verdict contradicting
+            # its own counts, confidently actionable in the wrong direction.
+            assert built["worker_attempts"] == 1, built
+            assert built["resolved_worker_attempts"] == 0, built
+            assert built["verdict"] == "attempts_unresolved", built
+            assert built["cannot_report_reason"] is None, built
+            # THE OTHER HALF: an identical row for a seat with no reader is PERMANENT, not
+            # pending, and says so. These two must never collapse into one verdict.
+            feedback.record_run("cov-never", "offload:/tmp/y", "offload", "cursor")
+            feedback.record_execution_attempt(
+                "cov-never", attempt_id="attempt:profile:cov-never", operation_role="worker",
                 profile_id="cursor-composer-2.5", requested_provider="cursor",
                 requested_model="composer-2.5", status="unresolved",
                 source="orchestrator-profile-decision", started_ts=int(_t.time()),
             )
-            built = mining_coverage(30)["agents"]["cursor"]
-            # 22 worker attempts once reported as `no_worker_attempt`, sending the reader after a
-            # dispatch bug when the real answer is the seat's CLI keeps no log to read a model from.
-            # A wrong verdict is worse than a missing one: confidently actionable, in the wrong
-            # direction.
-            assert built["worker_attempts"] == 1, built
-            assert built["resolved_worker_attempts"] == 0, built
-            assert built["verdict"] == "attempts_unresolved", built
+            never = mining_coverage(30)["agents"]["cursor"]
+            assert never["verdict"] == "model_not_reportable", never
+            assert never["cannot_report_reason"], never
+            assert never["verdict"] != built["verdict"], (never, built)
         finally:
             feedback.DB_PATH = _probe
 

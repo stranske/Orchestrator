@@ -588,6 +588,28 @@ NO_SESSION_LOG_AGENTS = {
 ROLLOUT_TS_RE = re.compile(r"rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})")
 
 
+def can_report_cli_identity(agent: str) -> tuple[bool, str | None]:
+    """Can this seat's CLI ever establish a resolved model? (capable, reason_it_cannot).
+
+    THE SINGLE AUTHORITY, because the answer decides whether it is honest to write a
+    `operation_role='worker'` execution attempt at all. A worker attempt exists to carry model
+    provenance; recording one for a seat that can never supply it produces a row asserting the one
+    thing it cannot establish, and those rows accumulate forever -- cursor alone offloads ~230 times
+    every two days.
+
+    This is a STATIC property of the seat, so it belongs in one place and must never be re-derived
+    per run as a prose `fallback_reason` on thousands of rows. Adding a reader for a seat (a session
+    log, a transcript) flips this to True and the attempts start being worth recording -- that is
+    the drain, and it does not require any of the dead rows to be cleared first.
+    """
+    key = str(agent or "").strip().lower()
+    if key in NO_SESSION_LOG_AGENTS:
+        return False, f"no_cli_session_log:{NO_SESSION_LOG_AGENTS[key]}"
+    if key in {"codex", "claude"}:
+        return True, None
+    return False, f"no_cli_identity_reader_for_agent:{key or 'unknown'}"
+
+
 def _claude_project_dir(workspace: str | Path) -> Path:
     """Claude mangles a cwd into a directory name by replacing `/` and `.` with `-`."""
     resolved = str(Path(workspace).expanduser().resolve())

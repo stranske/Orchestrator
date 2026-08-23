@@ -648,3 +648,47 @@ def test_reconcile_finds_the_profile_when_the_ledger_never_carried_one(tmp_path,
         assert ledger_reconcile._profile_id_from_attempt("r-attempt") is None
     finally:
         feedback.DB_PATH = old_db
+
+
+def test_a_resolved_attempt_cannot_also_have_fallen_back(tmp_path):
+    """`resolved_model_coverage` counts `fallback_reason IS NOT NULL`, so a stale reason made a
+    fully-resolved profile report coverage 1.00 AND fallback_rate 1.00 at the same time.
+
+    That is not cosmetic: fallback_rate is how a profile's health is read, and it appeared the
+    moment a late sweep began resolving attempts that had already been closed unresolved.
+    """
+    import execution_profiles
+
+    old_db = feedback.DB_PATH
+    feedback.DB_PATH = tmp_path / "feedback.db"
+    try:
+        feedback.record_run("fb-1", "offload:/tmp/ws", "offload", "codex")
+        feedback.record_execution_attempt(
+            "fb-1", attempt_id="attempt:profile:fb-1", operation_role="worker",
+            profile_id="codex-5.6-terra-high", requested_provider="openai",
+            requested_model="gpt-5.6-terra", status="started", started_ts=int(time.time()),
+            source="orchestrator-profile-decision",
+        )
+        # Closed unresolved first -- which is what every pre-reader attempt did.
+        feedback.complete_profile_attempt_unresolved(
+            "fb-1", selected_profile_id="codex-5.6-terra-high",
+            fallback_reason="resolved_model_not_reported_by_offload",
+        )
+        # Then resolved later by the sweep.
+        feedback.complete_profile_attempt(
+            "fb-1", selected_profile_id="codex-5.6-terra-high",
+            resolved_provider="openai", resolved_model="gpt-5.6-terra",
+        )
+        row = sqlite3.connect(feedback.DB_PATH).execute(
+            "SELECT resolved_model, fallback_reason FROM execution_attempts WHERE run_id='fb-1'"
+        ).fetchone()
+        assert row[0] == "gpt-5.6-terra", row
+        assert row[1] is None, ("a resolved attempt did not fall back", row)
+
+        with sqlite3.connect(feedback.DB_PATH) as conn:
+            cov = execution_profiles.resolved_model_coverage(conn, "codex-5.6-terra-high")
+        assert cov["coverage"] == 1.0, cov
+        # THE CONTRADICTION: 100% coverage with 100% fallback is what the stale field produced.
+        assert cov["fallback_rate"] == 0.0, cov
+    finally:
+        feedback.DB_PATH = old_db

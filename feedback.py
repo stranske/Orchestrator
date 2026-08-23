@@ -3652,7 +3652,15 @@ def complete_profile_attempt(
         if row[0] != selected_profile_id:
             raise ValueError(f"selected profile changed for {run_id}")
         c.execute(
-            "UPDATE execution_attempts SET resolved_provider=?,resolved_model=?,status=?,completed_ts=? "
+            # CLEAR THE FALLBACK REASON. An attempt that resolves did not fall back, but this UPDATE
+            # left the earlier `resolved_model_not_reported_*` string in place -- so
+            # `resolved_model_coverage` reported codex-5.6-terra-high at coverage 1.00 AND
+            # fallback_rate 1.00 simultaneously, because the fallback SUM counts
+            # `fallback_reason IS NOT NULL`. A fully-resolved profile reading as 100% fallback is a
+            # metric that contradicts itself, and it appeared the moment a late sweep started
+            # resolving attempts that had already been closed unresolved.
+            "UPDATE execution_attempts SET resolved_provider=?,resolved_model=?,status=?,"
+            "completed_ts=?,fallback_reason=NULL "
             "WHERE attempt_id=?",
             (
                 resolved_provider,

@@ -787,7 +787,18 @@ def _spawn(d: dict) -> int:
         # Profile telemetry is causal routing evidence, not best-effort logging.
         # Refuse to start if the replayable envelope cannot be retained.
         feedback.record_profile_decision(d["profile_decision"])
-    if selected_profile:
+    # SAME INVARIANT AS THE OFFLOAD PATH, applied here before this path can grow the same defect.
+    # It is latent today (no caller supplies `selected_profile_id`, so there are 0 worker attempts
+    # on non-offload runs) -- but the shape is identical, and gemini, cursor and vibe all dispatch
+    # through here, so the first caller to assign them a profile would start writing rows that can
+    # never resolve. Fixing one path and leaving its twin is how this defect comes back.
+    if selected_profile and not adapters.can_report_cli_identity(d["agent"])[0]:
+        print(
+            f"note: {d['agent']} keeps profile {selected_profile['profile_id']} but records no "
+            f"worker attempt ({adapters.can_report_cli_identity(d['agent'])[1]})",
+            file=sys.stderr,
+        )
+    elif selected_profile:
         feedback.record_execution_attempt(
             run_id,
             attempt_id=profile_attempt_id,
@@ -847,7 +858,8 @@ def _spawn(d: dict) -> int:
                                     stdout=fh, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, start_new_session=True)
         except Exception as exc:
-            if selected_profile:
+            # Only close what was opened -- an unreportable seat has no attempt row to complete.
+            if selected_profile and adapters.can_report_cli_identity(d["agent"])[0]:
                 feedback.complete_profile_attempt_unresolved(
                     run_id,
                     selected_profile_id=selected_profile["profile_id"],
@@ -1172,6 +1184,9 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     # One name for the profile that is ACTUALLY in force, so the ledger, the routing metadata and
     # the worker attempt cannot disagree about which profile ran.
     effective_profile_id = profile["profile_id"] if profile else None
+    # And one name for whether this seat can ever substantiate a worker claim, resolved ONCE per
+    # offload rather than re-derived at each site that would otherwise disagree.
+    can_report, no_report_reason = adapters.can_report_cli_identity(agent)
     argv = (
         adapters.build_command(
             agent, prepared_prompt, mode, cwd=run_cwd, profile=profile,
@@ -1230,7 +1245,23 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
                 "profile_assignment_probability": 1.0,
             } if profile else None,
         )
-        if profile:
+        # A WORKER ATTEMPT IS A PROVENANCE RECORD, so only a seat that can supply provenance may
+        # write one. Recording it for every profiled seat produced rows asserting the single thing
+        # they can never establish: cursor wrote 23 in five hours, each completed `unresolved` with
+        # the same prose reason re-cached per row, and at ~230 offloads every two days it never
+        # stops. Nothing decrements that -- it is an unbounded backlog whose drain is the very
+        # capability the seat lacks, and it dragged `resolved_model_coverage` for the profile to a
+        # permanent 0.00 over a denominator that only grows.
+        #
+        # The profile still applies: it is what puts the bare vendor id on the command line, and the
+        # ledger row and routing metadata still record which profile was in force, so the request
+        # stays fully auditable. What is withheld is only the claim we cannot back.
+        #
+        # Not a silent skip. The reason is a static property of the seat held in ONE place
+        # (`adapters.can_report_cli_identity`), reported by `mining_coverage` per seat, so adding a
+        # reader for a seat flips it on and the attempts begin -- that is the drain, and it needs
+        # none of the existing rows cleared first.
+        if profile and can_report:
             feedback.record_execution_attempt(
                 run_id,
                 attempt_id=f"attempt:profile:{run_id}",
@@ -1241,6 +1272,12 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
                 status="started",
                 source="orchestrator-profile-decision",
                 started_ts=started_ts,
+            )
+        elif profile:
+            print(
+                f"note: {agent} offload keeps its profile but records no worker attempt "
+                f"({no_report_reason})",
+                file=sys.stderr,
             )
 
     if profile:
@@ -1280,7 +1317,10 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
         )
-        if profile:
+        # Only close what was opened. A seat that cannot report provenance never had a worker
+        # attempt written above, so completing one would raise -- and reaching for the row that was
+        # deliberately not created is how a "stop recording this" change quietly becomes a crash.
+        if profile and can_report:
             # The Codex CLI's bounded completion output does not currently carry
             # a provider-resolved model identity. Close the selected attempt as
             # explicitly unresolved instead of leaving a permanent `started`
@@ -1907,10 +1947,17 @@ def _selftest() -> None:
         assert ledger_ids == {worker[0]}, (
             "the ledger start row must name the profile reconcile will look for", ledger_ids)
 
-        # A ROUTING-TAG agent (gemini reports `agy:...`) now has a profile too, so it DOES record a
-        # worker attempt -- but that attempt must stay UNRESOLVED, because a routing tag is not a
-        # provider-resolved model. This is the invariant that keeps such a seat honestly unminable
-        # instead of appearing to have provenance it does not have.
+        # A SEAT THAT CANNOT REPORT PROVENANCE RECORDS NO WORKER ATTEMPT. This assertion used to
+        # demand the opposite -- "a profiled seat must record a worker attempt" -- and that was the
+        # bug: gemini, cursor, vibe and aider keep no per-session model log, so every attempt they
+        # wrote completed `unresolved` and could never become anything else. Cursor produced 23 in
+        # five hours at ~230 offloads per two days, each re-caching the same prose reason, dragging
+        # the profile's resolved-model coverage to a permanent 0.00 over a denominator that only
+        # grows. Nothing decrements that; the only thing that would is the capability the seat
+        # lacks. A row asserting the one fact it cannot establish is worse than no row.
+        #
+        # The profile still applies and the ledger still names it, so the REQUEST stays auditable.
+        # Only the unbackable claim is withheld.
         try:
             adapters.build_command = fake_build_command
             subprocess.run = fake_run
@@ -1922,11 +1969,24 @@ def _selftest() -> None:
             gem_rows = c.execute(
                 "SELECT resolved_model FROM execution_attempts "
                 "WHERE run_id=? AND operation_role='worker'", (gem_off["run_id"],)).fetchall()
-        assert gem_rows, "a profiled seat must record a worker attempt"
-        assert all(row[0] is None for row in gem_rows), (
-            "a routing tag must never become a resolved worker model", gem_rows)
+        assert gem_rows == [], (
+            "a seat that can never resolve a model must not write a worker attempt", gem_rows)
         assert feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None, (
-            "unresolved attempts must not satisfy worker identity")
+            "no attempt means no worker identity, which is the honest answer here")
+        # The profile is still in force and still recorded, so withholding the claim has not cost
+        # the audit trail: the run still says which profile ran.
+        with feedback._conn() as c:
+            gem_meta = c.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (gem_off["run_id"],)
+            ).fetchone()
+        gem_routed = json.loads(gem_meta[0]) if gem_meta and gem_meta[0] else {}
+        assert gem_routed.get("selected_profile_id"), (
+            "the profile must still be recorded even when no worker attempt is", gem_routed)
+        # And the reason is a STATIC property of the seat, from one authority -- never prose
+        # re-cached on thousands of rows.
+        ok, why = adapters.can_report_cli_identity("gemini")
+        assert ok is False and why and "no_cli_session_log" in why, (ok, why)
+        assert adapters.can_report_cli_identity("codex")[0] is True
         import ledger_reconcile
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
         cost_by_run = {row["run_id"]: row for row in dry_cost["costs"]}
