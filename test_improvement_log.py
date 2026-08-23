@@ -19,6 +19,7 @@ one rots silently:
 
 These are cheap, and they are the only thing that survives the next session.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -40,22 +41,28 @@ POINTER_MAX_SECTIONS = 4
 
 def test_tracked_pointer_stays_a_pointer_and_never_becomes_the_log():
     """The 481 KB of machine-local evidence must never arrive at this tracked path."""
-    assert POINTER.is_file(), f"{POINTER.name} must be tracked in the tree — it is what makes the " \
-                              f"machine-local log discoverable from a worktree"
+    assert POINTER.is_file(), (
+        f"{POINTER.name} must be tracked in the tree — it is what makes the "
+        f"machine-local log discoverable from a worktree"
+    )
     size = POINTER.stat().st_size
     assert size <= POINTER_MAX_BYTES, (
         f"{POINTER.name} is {size} bytes, over the {POINTER_MAX_BYTES}-byte pointer limit. This file "
         f"is a POINTER; the log itself is machine-local evidence and must not be committed. Append "
-        f"with `python3 {ACCESSOR} append <item-ref> \"<note>\"` instead.")
+        f'with `python3 {ACCESSOR} append <item-ref> "<note>"` instead.'
+    )
     sections = len(re.findall(r"(?m)^##\s", POINTER.read_text(encoding="utf-8")))
-    assert sections <= POINTER_MAX_SECTIONS, (
-        f"{POINTER.name} has {sections} `##` sections — it is turning into the log it points at.")
+    assert (
+        sections <= POINTER_MAX_SECTIONS
+    ), f"{POINTER.name} has {sections} `##` sections — it is turning into the log it points at."
 
 
 def test_tracked_pointer_names_the_accessor_and_both_rules():
     """A pointer that does not name the accessor leaves a worktree as blind as before."""
     text = POINTER.read_text(encoding="utf-8")
-    assert ACCESSOR in text, f"the pointer must name {ACCESSOR} — it is the only way to reach the log"
+    assert (
+        ACCESSOR in text
+    ), f"the pointer must name {ACCESSOR} — it is the only way to reach the log"
     for cmd in ("search", "append"):
         assert f"{ACCESSOR} {cmd}" in text, f"the pointer must show `{ACCESSOR} {cmd}`"
     assert "ORCH_LOCAL_RUNTIME" in text, "the pointer must say WHERE the log lives"
@@ -65,17 +72,22 @@ def test_claude_md_rules_name_the_accessor_not_a_bare_path():
     """§0 step 3 and §5 are the two rules the accessor exists to make followable."""
     text = CLAUDE_MD.read_text(encoding="utf-8")
     # §0 step 3 — the dedup check.
-    step3 = [ln for ln in text.splitlines() if ln.lstrip().startswith("3. ")
-             and "improvement log" in ln.lower()]
+    step3 = [
+        ln
+        for ln in text.splitlines()
+        if ln.lstrip().startswith("3. ") and "improvement log" in ln.lower()
+    ]
     assert step3, "CLAUDE.md §0 step 3 must tell the reader to search the improvement log"
     dedup = text.split("## 0. Dedup-before-develop", 1)[-1].split("## 1. Editing", 1)[0]
     assert f"{ACCESSOR} search" in dedup, (
         f"CLAUDE.md §0 must name `{ACCESSOR} search` — a bare path is unreadable from a worktree, "
-        f"which is what made this mandatory step unfollowable")
+        f"which is what made this mandatory step unfollowable"
+    )
     # §5 — the status note.
     keep_true = text.split("## 5. Keep the docs true", 1)[-1]
-    assert f"{ACCESSOR} append" in keep_true, (
-        f"CLAUDE.md §5 must name `{ACCESSOR} append` rather than telling the reader to edit a file")
+    assert (
+        f"{ACCESSOR} append" in keep_true
+    ), f"CLAUDE.md §5 must name `{ACCESSOR} append` rather than telling the reader to edit a file"
 
 
 def test_accessor_reports_a_named_absence_to_a_caller():
@@ -88,10 +100,13 @@ def test_accessor_reports_a_named_absence_to_a_caller():
     """
     missing = HERE / "no-such-dir-for-tests" / "IMPROVEMENT_BACKLOG.md"
     assert not missing.exists()
-    proc = subprocess.run([sys.executable, str(HERE / ACCESSOR), "search", "anything"],
-                          capture_output=True, text=True, cwd=str(HERE),
-                          env={"PATH": "/usr/bin:/bin", "HOME": str(HERE),
-                               "ORCH_IMPROVEMENT_LOG": str(missing)})
+    proc = subprocess.run(
+        [sys.executable, str(HERE / ACCESSOR), "search", "anything"],
+        capture_output=True,
+        text=True,
+        cwd=str(HERE),
+        env={"PATH": "/usr/bin:/bin", "HOME": str(HERE), "ORCH_IMPROVEMENT_LOG": str(missing)},
+    )
     out = proc.stdout + proc.stderr
     assert proc.returncode == 2, f"an absent log must exit 2, not {proc.returncode}: {out[:300]}"
     assert str(missing) in out, "the absence must name the path it looked for"

@@ -228,13 +228,15 @@ def _selftest() -> None:
         "--auto",
     ]
 
-    open_meta = lambda target: {
-        "target": target,
-        "labels": [],
-        "title": "ready",
-        "state": "OPEN",
-        "is_draft": False,
-    }
+    def open_meta(target):
+        return {
+            "target": target,
+            "labels": [],
+            "title": "ready",
+            "state": "OPEN",
+            "is_draft": False,
+        }
+
     dry = guarded_merge("o/r#5", metadata_fn=open_meta)
     assert dry["merge_cmd"] and dry["merge_executed"] is False and dry["blocked"] is False, dry
     meta_fail = guarded_merge(
@@ -255,13 +257,16 @@ def _selftest() -> None:
     assert missing_state["blocked"] is True and "not OPEN" in missing_state["reason"], missing_state
 
     with tempfile.TemporaryDirectory(prefix="merge-guard-") as tmp:
-        runtime_meta = lambda target: {
-            "target": target,
-            "labels": ["runtime-ac"],
-            "title": "runtime",
-            "state": "OPEN",
-            "is_draft": False,
-        }
+
+        def runtime_meta(target):
+            return {
+                "target": target,
+                "labels": ["runtime-ac"],
+                "title": "runtime",
+                "state": "OPEN",
+                "is_draft": False,
+            }
+
         missing = guarded_merge(
             "o/r#5",
             confirm_merge=True,

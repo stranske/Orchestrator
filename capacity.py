@@ -771,7 +771,9 @@ def build(ccusage_block=None) -> dict:
 
 
 def _selftest():
-    blk = lambda toks: {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
+    def blk(toks):
+        return {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
+
     # ccusage seat with NO ceiling => OK regardless of token volume (429-shed is the limiter)
     assert compute("codex", AGENTS["codex"], blk(50_000_000))[0] == OK
     # ccusage unavailable => OK (NOT unknown) — the fix that keeps the premium seats usable

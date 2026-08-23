@@ -694,7 +694,6 @@ def _selftest() -> None:
 
     # COMMITMENTS: the real historical failure must be detected, not hypothetically detectable.
     com = commitments()
-    cited = {d["record"] for d in com["dangling_citations"]}
     assert isinstance(com["clean"], bool)
     # orchestrate.sh cites the range-lane review record that was never written. If someone fixes
     # that line, this assertion should be updated — but it must never be quietly dropped, so the
