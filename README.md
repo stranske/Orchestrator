@@ -126,6 +126,16 @@ safety switch, not dead code.
    active, cooldown, per-subject, and global unevaluated duplicates; repeated runs on one subject
    sum to one effective learner observation.
 
+11. **evidence_acquisition.py** — daily lane that acts on `capabilities.unblock()`, which named the
+   capabilities whose only blocker is missing evidence while nothing consumed the list. Bounded by
+   construction: one feed per cycle and three items per capability
+   (`ORCH_EVIDENCE_ACQUISITION_MAX_FEEDS` / `_MAX_ITEMS`). SHADOW by default — it computes the plan
+   and routes nothing; live routing is behind `ORCH_EVIDENCE_ACQUISITION`. A capability held by a
+   documented default-off switch is never fed: feeding one manufactures work it cannot execute, so
+   the durable reuse its own gate needs could never be produced and it would be fed again every
+   cycle forever. Reports the blocking AND drainable quantities on one line
+   (`feedable 0 / capped 1 / candidates 0 / fed 0`), so "nothing to feed" and "blocked from feeding"
+   are distinguishable instead of a shared silence.
 ### The Brain (feedback.py, SQLite at ~/.codex/orchestrator/feedback/orchestrator.db)
 - **Capability attribution at dispatch** — a run is tagged with the infrastructure capabilities it
   actually exercises (`dispatcher._exercised_capability_ids`: the gemini adapter path for

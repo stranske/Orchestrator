@@ -280,26 +280,81 @@ def parse_model_catalog_pairs(text: str) -> dict[str, str]:
     return pairs
 
 
+# Catalog entries that are ROUTING TAGS, not model identities. cursor advertises `auto` in the same
+# list as its 200-odd real ids, and recording `auto` as provider-resolved identity is precisely the
+# "generic trace model is not provider resolution" CLAUDE.md section 2 forbids.
+CATALOG_ROUTING_TAGS = frozenset({"auto", "default", "cli-default"})
+
+
+def _catalog_model_id(candidate: str | None) -> str | None:
+    """A catalog-sourced model id, or None when it is a routing tag rather than an identity.
+
+    THE CATALOG IS ITS OWN VALIDATION. The id came out of the CLI's advertised list, so it exists by
+    construction; what it still needs is the identity/tag distinction and the placeholder check the
+    rest of the provenance path already applies (`_first_real_model` -> `feedback`).
+
+    NOT `VENDOR_MODEL_RE`, and this is measured rather than argued: that regex is an allowlist of
+    vendor families for guarding strings we did NOT get from an authority (a slug we formed, a
+    transcript we grepped), and against the live `cursor-agent --list-models` on 2026-08-23 it
+    rejects 42 of 204 REAL ids -- every `claude-fable-*`, `cursor-grok-*`, `kimi-*` and `glm-*`,
+    plus the version-first `claude-4.6-opus-*` spelling. Using it as the catalog's validator would
+    trade fabricated ids for lost ones and re-break on the next vendor family -- the same
+    maintenance-treadmill shape as the bug above. `auto` is the ONE rejection it got right, and that
+    one is nameable.
+    """
+    value = str(candidate or "").strip()
+    if not value or value.lower() in CATALOG_ROUTING_TAGS:
+        return None
+    return _first_real_model([value])
+
+
 def model_id_for_label(agent: str, label: str) -> str | None:
     """Turn a CLI's human model label into its model id, or None if it cannot be trusted.
 
-    Prefers the CLI's OWN catalog, because that is the authority on its own ids. Falls back to the
-    obvious slug (`Gemini 3.7 Flash (High)` -> `gemini-3.7-flash-high`, `Composer 2.5` ->
-    `composer-2.5`), which happens to be exactly how both vendors form them -- but the result is
-    only returned if it looks like a real vendor model, so a chatty log line cannot become an id.
+    THE CATALOG IS THE AUTHORITY, and it has to be the CLI's RAW catalog to be one. This built its
+    lookup as `parse_model_catalog_pairs("\\n".join(f"{mid}\\t{mid}" for mid in
+    advertised_models(agent)))` -- a map of id->id, because `advertised_models` returns only ids.
+    `catalog.get(text.lower())` was then handed a human LABEL, which can never be an id key, so the
+    catalog branch was DEAD for every real label, the "prefers the CLI's own catalog" claim was
+    inoperative, and every call fell through to the slug heuristic. Measured against the live
+    `cursor-agent --list-models` on 2026-08-23, 4 of 5 real labels resolved wrongly: `Codex 5.3
+    High` and `Claude Fable 5 1M Thinking (NO ZDR)` resolved to None (provenance simply lost), and
+    `Claude Opus 5 1M Thinking` / `GPT-5.6 Sol 1M High` resolved to `claude-opus-5-1m-thinking` /
+    `gpt-5.6-sol-1m-high` -- ids that DO NOT EXIST, written into
+    `execution_attempts.resolved_model` as provider-resolved identity. Only `Composer 2.5`, whose
+    label happens to slug into its own id, worked.
+
+    Precedence, and the last two rungs are the point:
+      1. the catalog's own `label -> id` pair (`advertised_catalog`);
+      2. the label IS an advertised id -- some CLIs report the id, and the catalog confirms it;
+      3. REFUSE, when the catalog was readable and lists neither. The slug would then be a guess
+         the authority contradicts, and `VENDOR_MODEL_RE` cannot catch it --
+         `claude-opus-5-1m-thinking` is perfectly vendor-shaped and perfectly fictional. CLAUDE.md
+         section 2 forbids exactly this: a fabricated identity is worse than a skipped event.
+      4. the vendor slug (`Gemini 3.7 Flash (High)` -> `gemini-3.7-flash-high`), ONLY while the
+         catalog is UNKNOWN (probe off, CLI missing, auth failed), because an unreadable catalog
+         must not cost us provenance we can still name. Still regex-guarded, so a chatty log line
+         cannot become an id.
+
+    Rungs 1-2 are validated by `_catalog_model_id`, NOT by `VENDOR_MODEL_RE`. See the note there:
+    shape-matching an id the CLI itself advertised is both redundant and wrong.
     """
     text = str(label or "").strip()
     if not text:
         return None
     try:
-        catalog = parse_model_catalog_pairs(
-            "\n".join(f"{mid}\t{mid}" for mid in advertised_models(agent))
-        )
+        catalog = advertised_catalog(agent)
     except Exception:  # noqa: BLE001 - a probe failure must not block resolution
-        catalog = {}
-    direct = catalog.get(text.lower())
-    if direct and VENDOR_MODEL_RE.fullmatch(direct):
+        catalog = {"models": [], "pairs": {}}
+    direct = _catalog_model_id(catalog["pairs"].get(text.lower()))
+    if direct:
         return direct
+    if catalog["models"]:
+        # The catalog ANSWERED. Accept the label only if it is itself an advertised id, then stop --
+        # rung 3. `models` is the readability test, not `pairs`: both come from one probe, and
+        # non-empty ids mean the CLI was read.
+        exact = {mid.lower(): mid for mid in catalog["models"]}.get(text.lower())
+        return _catalog_model_id(exact)
     slug = re.sub(r"[^a-z0-9.]+", "-", re.sub(r"\s*\([^)]*\)\s*$", "", text).lower()).strip("-")
     stripped = re.sub(r"\s*\(([^)]*)\)\s*$", r"-\1", text).lower()
     stripped = re.sub(r"[^a-z0-9.]+", "-", stripped).strip("-")
@@ -312,6 +367,28 @@ def model_id_for_label(agent: str, label: str) -> str | None:
 AGY_MODEL_LABEL_RE = re.compile(
     r"Propagating selected model override to backend:\s*label=\"([^\"]+)\""
 )
+# The per-run agy log's suffix, defined ONCE and consumed by both ends: `dispatcher` rewrites agy's
+# `--log-file` to it, `cli_reported_model` reads it back. A reader that spells the writer's filename
+# itself silently stops resolving the day the writer changes it, and the symptom is a model that
+# never resolves -- which is exactly how the first version of that rewrite sat inert.
+AGY_LOG_SUFFIX = ".agy.log"
+
+
+def agy_log_for(log_file: str | Path | None) -> Path | None:
+    """The per-run agy log for a dispatch log, or None when there is no log to derive it from.
+
+    Accepts the agy log itself, so a caller that already holds it is not made to derive it twice and
+    cannot accidentally produce `...agy.agy.log`.
+    """
+    if not log_file:
+        return None
+    path = Path(str(log_file)).expanduser()
+    if path.name.endswith(AGY_LOG_SUFFIX):
+        return path
+    try:
+        return path.with_suffix(AGY_LOG_SUFFIX)
+    except ValueError:  # a name `with_suffix` refuses (empty, or a trailing dot)
+        return path.with_name(path.name + AGY_LOG_SUFFIX)
 
 
 def model_label_from_agy_log(text: str) -> str | None:
@@ -402,32 +479,66 @@ def _probe_env(agent: str) -> dict | None:
     return env
 
 
-def advertised_models(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> list[str]:
-    """Model ids the installed CLI for `agent` actually offers, or [] when it can't be read.
+def _cached_catalog(agent: str, now: float, cache_path: Path, *, need_pairs: bool) -> dict | None:
+    """A fresh cached catalog, or None when the cache cannot answer THIS question.
 
-    Catalog probes are ~3s network calls, so results are cached on disk per agent (TTL) and shared
-    by the dispatcher and capacity's preflight. An EMPTY list means UNKNOWN, never "nothing is
-    advertised" — callers must not read it as evidence that a model is missing. Agents with no
-    probe registered always return [] and are therefore never judged unresolvable.
+    Hydrates the memo from disk BEFORE deciding, so an id-only caller still warms the memo for the
+    next one, and so a legacy blob's absent `pairs` key survives into the memo rather than being
+    flattened to an empty dict that would then look like a real answer.
+    """
+    memo = _ADVERTISED_MEMO.get(agent) or {}
+    if memo.get("models") and now - float(memo.get("ts") or 0) <= GEMINI_MODEL_CACHE_TTL_S:
+        if not need_pairs or "pairs" in memo:
+            return {"models": list(memo["models"]), "pairs": dict(memo.get("pairs") or {})}
+        return None  # memo predates the pairs migration; re-probe rather than answer blind
+    try:
+        cached = json.loads(cache_path.read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    try:
+        if now - float(cached.get("ts") or 0) > GEMINI_MODEL_CACHE_TTL_S:
+            return None
+    except (TypeError, ValueError):
+        return None
+    models = [str(m) for m in (cached.get("models") or [])]
+    if not models:
+        return None
+    entry: dict = {"ts": cached.get("ts"), "models": models}
+    if "pairs" in cached:
+        entry["pairs"] = {str(k): str(v) for k, v in (cached.get("pairs") or {}).items()}
+    _ADVERTISED_MEMO[agent] = entry
+    if need_pairs and "pairs" not in entry:
+        return None
+    return {"models": models, "pairs": dict(entry.get("pairs") or {})}
+
+
+def _advertised_catalog(agent: str, *, refresh: bool, timeout_s: int, need_pairs: bool) -> dict:
+    """The installed CLI's own model catalog: `{"models": [ids], "pairs": {label: id}}`.
+
+    ONE probe and ONE cache behind both projections, because "which ids exist" and "which label
+    means which id" are the same question asked twice and must never disagree — they did, and the
+    label half was answered with `id -> id` (see `model_id_for_label`).
+
+    Both empty means UNKNOWN, never "nothing is advertised".
+
+    CACHE MIGRATION, STATED RATHER THAN SILENT (this file is on the provenance path). The on-disk
+    blob gains a `pairs` key ALONGSIDE the unchanged `models` list, so every existing reader of
+    `models` — including `capacity`'s preflight and the `test_capacity_profiles` prerequisite
+    check — is unaffected. A blob written before this carries no `pairs` KEY (presence, not
+    truthiness, so a label-less catalog still caches and cannot cause a probe per call): it serves
+    id requests from cache, while a PAIRS request treats it as a miss and re-probes, rewriting it in
+    the new shape. The migration therefore self-heals within one TTL per agent, and until it does
+    `model_id_for_label` degrades to the slug heuristic it already used — never to a wrong id.
     """
     probe = MODEL_CATALOG_PROBES.get(agent)
     if not probe or not _model_probe_enabled():
-        return []
+        return {"models": [], "pairs": {}}
     now = time.time()
     cache_path = _catalog_cache_path(agent)
     if not refresh:
-        memo = _ADVERTISED_MEMO.get(agent) or {}
-        if memo.get("models") and now - float(memo.get("ts") or 0) <= GEMINI_MODEL_CACHE_TTL_S:
-            return list(memo["models"])
-        try:
-            cached = json.loads(cache_path.read_text())
-            if now - float(cached.get("ts") or 0) <= GEMINI_MODEL_CACHE_TTL_S:
-                models = [str(m) for m in (cached.get("models") or [])]
-                if models:
-                    _ADVERTISED_MEMO[agent] = {"ts": cached.get("ts"), "models": models}
-                    return models
-        except (OSError, ValueError, TypeError):
-            pass
+        hit = _cached_catalog(agent, now, cache_path, need_pairs=need_pairs)
+        if hit is not None:
+            return hit
     try:
         proc = subprocess.run(
             probe,
@@ -438,19 +549,48 @@ def advertised_models(agent: str, *, refresh: bool = False, timeout_s: int = 30)
             stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
-        return []  # CLI missing/hung => unknown, not "unavailable"
+        return {"models": [], "pairs": {}}  # CLI missing/hung => unknown, not "unavailable"
     if proc.returncode != 0:
-        return []  # includes 'Authentication required' => unknown
+        return {"models": [], "pairs": {}}  # includes 'Authentication required' => unknown
     models = parse_agy_models(proc.stdout)
     if not models:
-        return []
-    _ADVERTISED_MEMO[agent] = {"ts": int(now), "models": models}
+        return {"models": [], "pairs": {}}
+    # THE RAW TEXT, parsed twice. Rebuilding pairs from `models` is what broke the resolver: the
+    # labels only exist in the CLI's own output, so they have to be kept while it is in hand.
+    pairs = parse_model_catalog_pairs(proc.stdout)
+    _ADVERTISED_MEMO[agent] = {"ts": int(now), "models": models, "pairs": pairs}
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps({"ts": int(now), "models": models}))
+        cache_path.write_text(json.dumps({"ts": int(now), "models": models, "pairs": pairs}))
     except OSError:
         pass  # cache is an optimization, never a hard dependency
-    return models
+    return {"models": list(models), "pairs": dict(pairs)}
+
+
+def advertised_catalog(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> dict:
+    """`{"models": [ids], "pairs": {label: id}}` the installed CLI advertises.
+
+    Both empty means UNKNOWN. The `pairs` half is what `model_id_for_label` always needed and never
+    had: the CLIs report a LABEL at runtime (`"model":"Composer 2.5"`,
+    `label="Gemini 3.7 Flash (High)"`) and the id only in their catalog.
+    """
+    return _advertised_catalog(agent, refresh=refresh, timeout_s=timeout_s, need_pairs=True)
+
+
+def advertised_models(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> list[str]:
+    """Model ids the installed CLI for `agent` actually offers, or [] when it can't be read.
+
+    Catalog probes are ~3s network calls, so results are cached on disk per agent (TTL) and shared
+    by the dispatcher and capacity's preflight. An EMPTY list means UNKNOWN, never "nothing is
+    advertised" — callers must not read it as evidence that a model is missing. Agents with no
+    probe registered always return [] and are therefore never judged unresolvable.
+
+    Ids ONLY. For label resolution use `advertised_catalog` — building pairs out of this list
+    yields `id -> id`, which is the bug `model_id_for_label` documents.
+    """
+    return _advertised_catalog(agent, refresh=refresh, timeout_s=timeout_s, need_pairs=False)[
+        "models"
+    ]
 
 
 def agy_advertised_models(*, refresh: bool = False, timeout_s: int = 30) -> list[str]:
@@ -1057,6 +1197,7 @@ def cli_reported_model(
     *,
     started_ts: int | None = None,
     window_s: int = 7200,
+    log_file: str | Path | None = None,
 ) -> dict:
     """Identity the agent's own CLI recorded for the run in `workspace`.
 
@@ -1064,6 +1205,9 @@ def cli_reported_model(
     ``{"model": str | None, "cli_version": str | None, "source": str | None, "reason": str | None}``.
     An unresolved answer with a named reason is the whole point -- silence here was indistinguishable
     from "no such run".
+
+    `log_file` is THIS run's dispatch log. It is what makes the gemini answer per-run rather than a
+    workspace-and-window guess (see that branch); callers without one still get the store fallback.
     """
     blank = {"model": None, "cli_version": None, "source": None, "reason": None}
     if agent in NO_SESSION_LOG_AGENTS:
@@ -1084,12 +1228,50 @@ def cli_reported_model(
         except (OSError, json.JSONDecodeError):
             version = None
         return {"model": model, "cli_version": version, "source": str(path), "reason": None}
-    if agent in ("cursor", "vibe", "gemini"):
-        reader = {
-            "cursor": _cursor_model_for,
-            "vibe": _vibe_model_for,
-            "gemini": _agy_model_for,
-        }[agent]
+    if agent == "gemini":
+        # PER-RUN LOG FIRST, STORE SECOND -- the precedence the comment above
+        # `NO_SESSION_LOG_AGENTS` has always claimed while this function did the opposite: `gemini`
+        # mapped only to `_agy_model_for` and `model_label_from_agy_log` was never called from here,
+        # so a gemini run resolved from the conversation store ONLY. Commit fe59bc7 ("the run
+        # reports its own model") settles which way to fix it: agy's log line belongs to THIS run,
+        # because the
+        # dispatcher gives each run its own `--log-file`, where the store has to be matched by
+        # workspace AND time window and can pick up a neighbour's session.
+        agy_log = agy_log_for(log_file)
+        if agy_log is not None:
+            label = model_label_from_agy_log(_read_head(agy_log))
+            # `model_id_for_label` resolves against agy's OWN catalog. That resolver had to be fixed
+            # FIRST: while it built an id->id map it always fell through to a slug guess, so routing
+            # gemini provenance through it would have persisted a heuristic as provider-resolved
+            # identity -- CLAUDE.md section 2's exact prohibition.
+            model = model_id_for_label("gemini", label) if label else None
+            if model:
+                return {
+                    "model": model,
+                    "cli_version": None,
+                    "source": str(agy_log),
+                    "reason": None,
+                }
+        model = _agy_model_for(str(workspace), started_ts, window_s)
+        if model:
+            return {
+                "model": model,
+                "cli_version": None,
+                "source": "gemini-session-store",
+                "reason": None,
+            }
+        # The reason names what was actually SEARCHED, so a run dispatched without a log is
+        # distinguishable from one whose log named nothing.
+        return {
+            **blank,
+            "reason": (
+                "no_gemini_model_in_run_log_or_session_store"
+                if agy_log is not None
+                else "no_gemini_session_matched_workspace"
+            ),
+        }
+    if agent in ("cursor", "vibe"):
+        reader = {"cursor": _cursor_model_for, "vibe": _vibe_model_for}[agent]
         model = reader(str(workspace), started_ts, window_s)
         if not model:
             return {**blank, "reason": f"no_{agent}_session_matched_workspace"}
@@ -1597,6 +1779,160 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         "gemini-3.6-flash-low\tGemini 3.6 Flash (Low)\n"
     )
     assert parsed == ["gemini-3.1-pro-high", "gemini-3.6-flash-low"], parsed
+    # LABEL -> ID, AGAINST THE CLI'S RAW CATALOG. The resolver used to build its lookup from
+    # `advertised_models()`, which returns only ids, so the map was `id -> id` and a human LABEL
+    # could never key it: the catalog branch was dead and every call fell through to the slug.
+    # Fixtures are verbatim `cursor-agent --list-models` / `agy models` lines, because the whole
+    # point is that the real catalog's labels do NOT slug into their ids.
+    cursor_catalog = (
+        "Fetching available models...\n"
+        "auto - Auto (default)\n"
+        "composer-2.5 - Composer 2.5 (current)\n"
+        "gpt-5.3-codex-high - Codex 5.3 High\n"
+        "claude-opus-5-thinking-high - Claude Opus 5 1M Thinking\n"
+        "claude-fable-5-thinking-high - Claude Fable 5 1M Thinking (NO ZDR)\n"
+    )
+    import shutil as _probe_shutil
+    import tempfile as _probe_tmp
+
+    old_memo_pairs = dict(_ADVERTISED_MEMO)
+    old_probe_flag = os.environ.pop("ORCH_MODEL_PROBE", None)
+    try:
+        # ISOLATION, NOT A SKIP: a memo entry means `_advertised_catalog` answers from memory, so
+        # nothing here shells out to `cursor-agent` (the probe-leak this file has already been
+        # bitten by twice). The memo needs the probe flag ON: the kill-switch short-circuits first.
+        _ADVERTISED_MEMO["cursor"] = {
+            "ts": time.time(),
+            "models": parse_model_catalog(cursor_catalog),
+            "pairs": parse_model_catalog_pairs(cursor_catalog),
+        }
+        # Every one of these was WRONG before the fix, verified against the live catalog on
+        # 2026-08-23: two resolved to None and two to vendor-shaped ids that do not exist.
+        for label, expected in (
+            ("Composer 2.5", "composer-2.5"),
+            ("Codex 5.3 High", "gpt-5.3-codex-high"),
+            ("Claude Opus 5 1M Thinking", "claude-opus-5-thinking-high"),
+            ("Claude Fable 5 1M Thinking (NO ZDR)", "claude-fable-5-thinking-high"),
+            ("composer-2.5", "composer-2.5"),  # the CLI may report the id; the catalog confirms it
+        ):
+            assert model_id_for_label("cursor", label) == expected, (label, expected)
+        # A ROUTING TAG IS NOT AN IDENTITY. cursor advertises `auto` beside its real ids.
+        assert model_id_for_label("cursor", "Auto (default)") is None
+        assert model_id_for_label("cursor", "auto") is None
+        # THE ACCEPTANCE CASE. A vendor-renamed LABEL against an unchanged id: the slug
+        # (`composer-pro-2.5`) is not advertised, so only the catalog can answer.
+        _ADVERTISED_MEMO["cursor"] = {
+            "ts": time.time(),
+            "models": ["composer-2.5"],
+            "pairs": parse_model_catalog_pairs("composer-2.5 - Composer Pro 2.5 (current)"),
+        }
+        assert model_id_for_label("cursor", "Composer Pro 2.5") == "composer-2.5"
+        # DELIBERATE BREAK: the old id->id construction, which is what made the branch dead.
+        _broken = {"models": ["composer-2.5"], "pairs": {"composer-2.5": "composer-2.5"}}
+        _real_catalog = advertised_catalog
+        try:
+            globals()["advertised_catalog"] = lambda *_a, **_k: dict(_broken)
+            assert (
+                model_id_for_label("cursor", "Composer Pro 2.5") is None
+            ), "the break must restore the pre-fix behaviour: a label cannot key an id->id map"
+        finally:
+            globals()["advertised_catalog"] = _real_catalog  # REVERTED
+        assert model_id_for_label("cursor", "Composer Pro 2.5") == "composer-2.5"
+        # A READABLE CATALOG THAT LISTS NEITHER REFUSES, rather than persisting a guess it
+        # contradicts -- `VENDOR_MODEL_RE` cannot catch a fictional-but-vendor-shaped id.
+        assert model_id_for_label("cursor", "Composer Ultra 9.9") is None
+        assert (
+            VENDOR_MODEL_RE.fullmatch("claude-opus-5-1m-thinking") is not None
+        ), "the shape guard genuinely cannot do the catalog's job"
+    finally:
+        _ADVERTISED_MEMO.clear()
+        _ADVERTISED_MEMO.update(old_memo_pairs)
+        if old_probe_flag is not None:
+            os.environ["ORCH_MODEL_PROBE"] = old_probe_flag
+    # THE PROBE MUST KEEP THE LABELS. The cases above seed the memo, so they exercise the
+    # RESOLVER but not the wiring the finding was actually about -- and with only those, rebuilding
+    # `pairs` from `models` (the pre-fix construction) leaves the selftest green. Drive the real
+    # `subprocess.run` seam with a verbatim catalog and assert on the pairs it stored.
+    _probed_cache = Path(_probe_tmp.mkdtemp(prefix="adapters-catalog-probe-"))
+    _old_runtime, _old_run = AGENT_RUNTIME, subprocess.run
+    try:
+        globals()["AGENT_RUNTIME"] = _probed_cache
+
+        class _CatalogCompleted:
+            returncode = 0
+            stdout = cursor_catalog
+            stderr = ""
+
+        globals()["subprocess"].run = lambda *_a, **_k: _CatalogCompleted()
+        _ADVERTISED_MEMO.pop("cursor", None)
+        probed = advertised_catalog("cursor", refresh=True)
+        assert probed["models"][:2] == ["auto", "composer-2.5"], probed["models"]
+        assert probed["pairs"]["composer 2.5"] == "composer-2.5", probed["pairs"]
+        assert probed["pairs"]["codex 5.3 high"] == "gpt-5.3-codex-high", probed["pairs"]
+        # THE REGRESSION GUARD: an id->id map has ids for keys and no label keys at all.
+        assert "composer-2.5" not in probed["pairs"], (
+            "pairs must be keyed by LABEL; an id key means the id->id construction is back",
+            probed["pairs"],
+        )
+        assert model_id_for_label("cursor", "Codex 5.3 High") == "gpt-5.3-codex-high"
+        # And the pairs reach DISK, so the next process resolves labels without re-probing.
+        _on_disk = json.loads(_catalog_cache_path("cursor").read_text())
+        assert _on_disk["models"] == probed["models"], _on_disk
+        assert _on_disk["pairs"]["claude opus 5 1m thinking"] == "claude-opus-5-thinking-high"
+        # `models` is byte-compatible with the pre-migration blob every other reader still uses.
+        assert set(_on_disk) == {"ts", "models", "pairs"}, _on_disk
+    finally:
+        globals()["AGENT_RUNTIME"] = _old_runtime
+        globals()["subprocess"].run = _old_run
+        _ADVERTISED_MEMO.pop("cursor", None)
+        _ADVERTISED_MEMO.update(old_memo_pairs)
+        _probe_shutil.rmtree(_probed_cache, ignore_errors=True)
+    # AN UNKNOWN CATALOG KEEPS THE SLUG, so an unreadable CLI costs no provenance we can still
+    # name. Removing the probe entry is how "UNKNOWN" is expressed without a subprocess.
+    old_probes = dict(MODEL_CATALOG_PROBES)
+    try:
+        MODEL_CATALOG_PROBES.pop("cursor", None)
+        assert model_id_for_label("cursor", "Composer 2.5") == "composer-2.5"
+        assert model_id_for_label("cursor", "Gemini 3.7 Flash (High)") == "gemini-3.7-flash-high"
+        assert model_id_for_label("cursor", "some log prose") is None
+    finally:
+        MODEL_CATALOG_PROBES.clear()
+        MODEL_CATALOG_PROBES.update(old_probes)
+    # THE CACHE MIGRATION IS EXPLICIT. A blob written before `pairs` existed still answers id
+    # questions from cache, and is a MISS for label questions rather than answering blind.
+    _cache_dir = Path(_probe_tmp.mkdtemp(prefix="adapters-catalog-cache-"))
+    try:
+        legacy = _cache_dir / "legacy.json"
+        legacy.write_text(json.dumps({"ts": int(time.time()), "models": ["composer-2.5"]}))
+        _ADVERTISED_MEMO.pop("cursor", None)
+        assert _cached_catalog("cursor", time.time(), legacy, need_pairs=False) == {
+            "models": ["composer-2.5"],
+            "pairs": {},
+        }
+        _ADVERTISED_MEMO.pop("cursor", None)
+        assert _cached_catalog("cursor", time.time(), legacy, need_pairs=True) is None
+        # And the memo hydrated from that legacy blob must not then LOOK like a pairs answer.
+        assert "pairs" not in (_ADVERTISED_MEMO.get("cursor") or {}), _ADVERTISED_MEMO.get("cursor")
+        assert _cached_catalog("cursor", time.time(), legacy, need_pairs=True) is None
+        migrated = _cache_dir / "migrated.json"
+        migrated.write_text(
+            json.dumps(
+                {
+                    "ts": int(time.time()),
+                    "models": ["composer-2.5"],
+                    "pairs": {"composer 2.5": "composer-2.5"},
+                }
+            )
+        )
+        _ADVERTISED_MEMO.pop("cursor", None)
+        assert _cached_catalog("cursor", time.time(), migrated, need_pairs=True) == {
+            "models": ["composer-2.5"],
+            "pairs": {"composer 2.5": "composer-2.5"},
+        }
+    finally:
+        _ADVERTISED_MEMO.pop("cursor", None)
+        _ADVERTISED_MEMO.update(old_memo_pairs)
+        _probe_shutil.rmtree(_cache_dir, ignore_errors=True)
     # Rename survival: pinned model gone => auto-pick the newest Pro/high seat, never die.
     old_memo = dict(_ADVERTISED_MEMO)
     try:

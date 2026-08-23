@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import time
 
@@ -993,3 +994,124 @@ def test_late_sweep_completes_terminal_attempts_never_one_in_flight(tmp_path, mo
         # REVERTED by monkeypatch teardown; the filtered assertions above are the guard.
     finally:
         feedback.DB_PATH = old_db
+
+
+def test_gemini_provenance_reads_the_per_run_log_before_the_conversation_store(
+    tmp_path, monkeypatch
+):
+    """The precedence the code claimed in a comment but did not implement.
+
+    `cli_reported_model` mapped `gemini` to `_agy_model_for` alone -- a conversation-store scrape
+    joined by workspace and time window -- while the comment above `NO_SESSION_LOG_AGENTS` said the
+    per-run agy log was primary and the store only a fallback. `model_label_from_agy_log` was never
+    called from here at all. Commit fe59bc7 ("the run reports its own model") settles the direction:
+    the per-run log wins, because the dispatcher gives each run its own `--log-file`, so that line
+    belongs to exactly one run where a store match can pick up a neighbour's session.
+
+    Ordering matters and is asserted here: resolution runs through `model_id_for_label`, which until
+    the catalog fix returned a slug guess for every label. This test pins that the label resolves to
+    the id agy ADVERTISES, not to the slug of the label.
+    """
+    import adapters
+
+    workspace = tmp_path / "offloads" / "20260823T000000Z-issue-9-1"
+    workspace.mkdir(parents=True)
+
+    # agy's OWN catalog, verbatim `agy models` shape. Seeding the memo is isolation, not a skip:
+    # `advertised_catalog` shells out to `agy models` on a cold cache, and that probe has already
+    # leaked into two monkeypatched-`subprocess.run` selftests in this branch.
+    catalog = (
+        "Fetching available models...\n"
+        "gemini-3.6-flash-high\tGemini 3.6 Flash (High)\n"
+        "gemini-3.1-pro-high\tGemini 3.1 Pro (High)\n"
+    )
+    monkeypatch.setitem(
+        adapters._ADVERTISED_MEMO,
+        "gemini",
+        {
+            "ts": time.time(),
+            "models": adapters.parse_model_catalog(catalog),
+            "pairs": adapters.parse_model_catalog_pairs(catalog),
+        },
+    )
+    # An EMPTY store, so a passing assertion can only have come from the log.
+    monkeypatch.setattr(adapters, "AGY_HOME", tmp_path / "agy-empty")
+
+    dispatch_log = tmp_path / "offload.gemini.1787500000000000000.log"
+    agy_log = adapters.agy_log_for(dispatch_log)
+    # ONE name, both ends: the dispatcher derives the same path when it rewrites agy's --log-file.
+    assert agy_log == tmp_path / "offload.gemini.1787500000000000000.agy.log", agy_log
+    assert adapters.agy_log_for(agy_log) == agy_log, "already-an-agy-log must not double-suffix"
+    assert adapters.agy_log_for(None) is None
+    agy_log.write_text(
+        "I0823 20:08:19.863873 1 model_config_manager.go:311] Propagating selected "
+        'model override to backend: label="Gemini 3.1 Pro (High)"\n'
+        "I0823 20:08:41.101010 1 model_config_manager.go:311] Propagating selected "
+        'model override to backend: label="Gemini 3.6 Flash (High)"\n'
+    )
+
+    got = adapters.cli_reported_model("gemini", workspace, log_file=str(dispatch_log))
+    # LAST OCCURRENCE WINS -- the line is re-emitted as the session settles.
+    assert got["model"] == "gemini-3.6-flash-high", got
+    assert got["source"] == str(agy_log), got
+    assert got["reason"] is None, got
+
+    # THE LOG BEATS THE STORE. With a store that names a DIFFERENT model, the per-run log still
+    # wins -- which is the whole claim, and the reason a store-only mapping was wrong.
+    store_home = tmp_path / "agy"
+    brain = store_home / "brain" / "conv-1" / ".system_generated" / "logs"
+    brain.mkdir(parents=True)
+    (brain / "transcript_full.jsonl").write_text(json.dumps({"model": "claude-sonnet-4-6"}) + "\n")
+    index = store_home / "conversation_summaries.db"
+    conn = sqlite3.connect(index)
+    conn.execute(
+        "CREATE TABLE conversation_summaries "
+        "(conversation_id TEXT, workspace_uris TEXT, last_modified_time INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO conversation_summaries VALUES (?, ?, ?)",
+        ("conv-1", f"file://{workspace.resolve()}", 1_787_500_000),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(adapters, "AGY_HOME", store_home)
+    both = adapters.cli_reported_model("gemini", workspace, log_file=str(dispatch_log))
+    assert both["model"] == "gemini-3.6-flash-high", ("the per-run log is primary", both)
+
+    # THE STORE IS STILL THE FALLBACK, so removing the log does not lose the seat's provenance.
+    no_log = adapters.cli_reported_model("gemini", workspace)
+    assert no_log["model"] == "claude-sonnet-4-6", no_log
+    assert no_log["source"] == "gemini-session-store", no_log
+
+    # NEITHER PATH ANSWERS => a reason naming what was searched, distinguishable from a run that
+    # never had a log at all.
+    monkeypatch.setattr(adapters, "AGY_HOME", tmp_path / "agy-empty")
+    agy_log.write_text("nothing a model could be read from\n")
+    silent = adapters.cli_reported_model("gemini", workspace, log_file=str(dispatch_log))
+    assert silent["model"] is None
+    assert silent["reason"] == "no_gemini_model_in_run_log_or_session_store", silent
+    assert (
+        adapters.cli_reported_model("gemini", workspace)["reason"]
+        == "no_gemini_session_matched_workspace"
+    )
+
+    # DELIBERATE BREAK: gemini mapped to the store scrape only, as before the fix. The per-run log
+    # is then unreachable and the run resolves to the store's model -- or to nothing.
+    agy_log.write_text(
+        "model_config_manager.go:311] Propagating selected model override to backend: "
+        'label="Gemini 3.6 Flash (High)"\n'
+    )
+    monkeypatch.setattr(adapters, "AGY_HOME", store_home)
+    real_label_reader = adapters.model_label_from_agy_log
+    monkeypatch.setattr(adapters, "model_label_from_agy_log", lambda _text: None)
+    broken = adapters.cli_reported_model("gemini", workspace, log_file=str(dispatch_log))
+    assert broken["model"] == "claude-sonnet-4-6", (
+        "the break must restore the old behaviour: the store answers and the log is never read",
+        broken,
+    )
+    # REVERTED, and the per-run log is primary again.
+    monkeypatch.setattr(adapters, "model_label_from_agy_log", real_label_reader)
+    assert (
+        adapters.cli_reported_model("gemini", workspace, log_file=str(dispatch_log))["model"]
+        == "gemini-3.6-flash-high"
+    )

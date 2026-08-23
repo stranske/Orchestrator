@@ -435,17 +435,22 @@ def _workspace_from_rows(run_rows) -> str | None:
     return None
 
 
-def _cli_identity_for_run(run_rows, started_ts: int | None = None) -> dict:
+def _cli_identity_for_run(run_rows, started_ts: int | None = None, log_file=None) -> dict:
     """CLI-reported identity for a run, or a NAMED reason there is none.
 
     Never guesses. A seat whose CLI leaves no per-session log returns the reason and the attempt
     stays unresolved -- `fallback_reason` then says which seat and why, instead of the single
     undifferentiated `resolved_model_not_reported_by_completion` that every seat used to get.
+
+    `log_file` is the run's own dispatch log, which is what lets the gemini seat read the model from
+    THIS run's agy log instead of matching a conversation store by workspace and window.
     """
     agent = next((str(row.get("agent")) for row in run_rows if row.get("agent")), "")
     if not agent:
         return {"model": None, "cli_version": None, "source": None, "reason": "no_agent_on_run"}
-    return adapters.cli_reported_model(agent, _workspace_from_rows(run_rows), started_ts=started_ts)
+    return adapters.cli_reported_model(
+        agent, _workspace_from_rows(run_rows), started_ts=started_ts, log_file=log_file
+    )
 
 
 def record_completion(
@@ -473,7 +478,7 @@ def record_completion(
             # caller left EMPTY -- an explicitly supplied resolved_model always wins, because the
             # caller may have provenance this reader cannot see.
             probed = adapters.cli_reported_model(
-                agent, target[len("offload:") :], started_ts=started_ts
+                agent, target[len("offload:") :], started_ts=started_ts, log_file=log_file
             )
             probe_reason = probed.get("reason")
             if probed.get("model"):
@@ -680,7 +685,7 @@ def reconcile(
                     ),
                     default=None,
                 )
-                identity = _cli_identity_for_run(run_rows, started_ts=started)
+                identity = _cli_identity_for_run(run_rows, started_ts=started, log_file=log_file)
                 selected = next(iter(profile_ids))
                 if identity.get("model"):
                     feedback.complete_profile_attempt(
