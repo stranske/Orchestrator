@@ -1245,8 +1245,13 @@ CONSULT_SITES: dict[str, dict] = {
     "tick:*": {
         "caller": "capability_advisor.py",
         "literal": "TICK_PHASE_PREFIX",
-        "instances": ["tick:capacity", "tick:dispatch", "tick:experiments",
-                      "tick:learning", "tick:redirect"],
+        "instances": [
+            "tick:capacity",
+            "tick:dispatch",
+            "tick:experiments",
+            "tick:learning",
+            "tick:redirect",
+        ],
         "how": "orchestrate.sh iterates tick_phase_surfaces() and consults each phase",
     },
     "orchestrate": {
