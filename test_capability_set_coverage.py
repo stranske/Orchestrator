@@ -207,12 +207,12 @@ GATE_CALL_SITES = {
 def _calls_absent_entrypoint_note(path, func_name: str) -> bool:
     """Does THIS function's body really call `audit.absent_entrypoint_note(...)`? AST, not text.
 
-    Matching source text cannot answer this. `audit.absent_entrypoint_note(` appears SIX times in
-    this very file — in the mapping above, in a docstring, and in sibling tests — so a substring
-    search over the whole file passes no matter what the gate at `func_name` actually does. An AST
-    walk scoped to one function body cannot be satisfied by a string literal or a comment at all.
-  Nested defs and non-`audit` receivers are ignored so an unused inner helper cannot keep the gate
-  green after the named function stops calling the real helper.
+      Matching source text cannot answer this. `audit.absent_entrypoint_note(` appears SIX times in
+      this very file — in the mapping above, in a docstring, and in sibling tests — so a substring
+      search over the whole file passes no matter what the gate at `func_name` actually does. An AST
+      walk scoped to one function body cannot be satisfied by a string literal or a comment at all.
+    Nested defs and non-`audit` receivers are ignored so an unused inner helper cannot keep the gate
+    green after the named function stops calling the real helper.
     """
     import ast
 
