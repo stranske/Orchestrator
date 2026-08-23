@@ -526,7 +526,6 @@ def _selftest() -> None:
         ]
         rows = [row if len(row) == 7 else (*row, None) for row in rows]
         for run_id, target, agent, pr_number, durability, work_type, notes in rows:
-            repo = target.split("#", 1)[0]
             feedback.record_run(
                 run_id,
                 target,
