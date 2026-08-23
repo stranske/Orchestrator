@@ -612,6 +612,48 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "frontend-verifier": "dimension 4 uses the ux-review-overlay when observable surfaces "
                              "exist, which is what this gate checks",
     },
+    # THE 8 DIMENSIONS OF PHASE 2, bound individually — and modeled as SIBLINGS of `phase-2`, not
+    # children of it. The playbook splits phase 2 into "subsystem agents + cross-cutting agents, each
+    # path-scoped": one ORCHESTRATING context that does the splitting (that is `phase-2`, which binds
+    # role-decomposer and partitioned-review) and EIGHT WORKER contexts that each analyse one
+    # dimension. A worker has no business inheriting the splitter's capabilities, and making
+    # dimensions children of `phase-2` would push every worker's context to 9-10 entries — back
+    # toward the problem the binding removes.
+    #
+    # Dimensions with no entry here inherit only the surface-wide `offload`, which is the right
+    # answer for them: d1 (code quality) finds defects rather than proving fixes — the proof is
+    # phase 4 — and d7 (tools worth integrating) is cost/benefit research, which offload already
+    # covers. Absent is a verdict here, not an omission.
+    "repo-audit:dimension-2": {
+        "codemod-campaign": "the dimension IS 'duplication & consolidation ... root-vs-template "
+                            "drift'; consolidating a duplicated shape across a repo is codemod work",
+    },
+    "repo-audit:dimension-3": {
+        "runtime-ac-checks": "'trace config key -> loader -> consumer' with direction checks "
+                             "('tighter limit => more breaches') is behavioural verification of "
+                             "wiring, which is what a runtime-AC plan encodes",
+    },
+    "repo-audit:dimension-4": {
+        "frontend-verifier": "the dimension requires rendered evidence and driven scenarios on any "
+                             "observable surface — Gate 1's assert-click-assert pass",
+        "adversarial-review": "the ux-review overlay's panel includes an adversarial critic",
+    },
+    "repo-audit:dimension-5": {
+        "offload": "the playbook names the mechanism outright: 'research briefs (offload to web "
+                   "agents; good ROI)'",
+    },
+    "repo-audit:dimension-6": {
+        "feature-scan": "'adjacent problems the existing machinery almost solves' is exactly what "
+                        "feature_scan.py reports — reusable structures the registry has never seen",
+    },
+    "repo-audit:dimension-8": {
+        "capability-activation-audit": "the dimension audits 'local skills/automations — efficiency, "
+                                       "token-sinks, human-touchpoints', which is can-it-fire",
+        "capability-firing-monitor": "and did-it-fire",
+        "capability-propensity": "and was-it-worth-firing; this dimension is where a surface's own "
+                                 "false negatives surface",
+        "switch-review": "held switches are the canonical automation token-sink and human-touchpoint",
+    },
     "repo-audit:phase-3": {
         "adversarial-review": "the phase IS 'adversarially verify each finding against the live "
                               "tip'; appears in 25 of 177 audit documents, done by hand",
@@ -652,7 +694,10 @@ def binding_for(surface: str, *, path=None) -> dict[str, str]:
     """
     if not surface:
         return {}
-    keys = [surface.split(":", 1)[0], surface] if ":" in surface else [surface]
+    # EVERY prefix, least specific first. `split(":", 1)` skipped the middle level, so a
+    # three-part key like `a:b:c` inherited from `a` and silently missed `a:b`.
+    parts = surface.split(":")
+    keys = [":".join(parts[:i + 1]) for i in range(len(parts))]
     # A phase declaring NO_BINDING suppresses inheritance entirely, so "deliberately empty" can
     # actually be expressed. Checked before merging, or the surface-wide entries would leak in.
     if NO_BINDING in (SURFACE_BINDINGS.get(keys[-1]) or {}):
@@ -1060,11 +1105,17 @@ def _selftest_bindings() -> None:
                 assert not binding_suppressed("t-proc:p2")
                 # An unknown phase of a known surface still gets the surface-wide set.
                 assert sorted(binding_for("t-proc:p9")) == ["bound-a"], binding_for("t-proc:p9")
+                # EVERY PREFIX, not just the first split. `split(":", 1)` inherited from `a` and
+                # silently skipped `a:b` for a three-part key -- a middle level that resolved to
+                # nothing while looking like it resolved.
+                SURFACE_BINDINGS["t-proc:p2:sub"] = {"bound-c": "deepest"}
+                deep = binding_for("t-proc:p2:sub")
+                assert sorted(deep) == ["bound-a", "bound-b", "bound-c"], deep
                 # A phase-scoped advise() call must actually reach the phase's binding.
                 ph = advise("xyzzy plugh", surface="t-proc:p2", path=ledger, record=False)
                 assert ph["surface"] == "t-proc:p2", ph["surface"]
             finally:
-                for k in ("t-proc", "t-proc:p1", "t-proc:p2"):
+                for k in ("t-proc", "t-proc:p1", "t-proc:p2", "t-proc:p2:sub"):
                     SURFACE_BINDINGS.pop(k, None)
 
             # 5. THE REAL TABLE, pinned where it is load-bearing.
@@ -1073,6 +1124,15 @@ def _selftest_bindings() -> None:
                 "phase 4 requires a named test gate with a deliberate-break proof"
             assert "adversarial-review" in binding_for("repo-audit:phase-3"), \
                 "phase 3 IS adversarial verification"
+            # Dimensions are SIBLINGS of the phase, so a worker context must NOT inherit the
+            # splitter's capabilities -- that inheritance is what would push a worker to 9-10.
+            for d in range(1, 9):
+                ctx = binding_for(f"repo-audit:dimension-{d}")
+                assert "role-decomposer" not in ctx, (d, sorted(ctx))
+                assert "partitioned-review" not in ctx, (d, sorted(ctx))
+                assert 1 <= len(ctx) <= 6, (d, len(ctx))
+            assert "offload" in binding_for("repo-audit:dimension-5"), \
+                "the playbook names offload outright for the public-field research dimension"
         finally:
             if real is None:
                 SURFACE_BINDINGS.pop("t-surface", None)
