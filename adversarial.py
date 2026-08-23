@@ -141,16 +141,78 @@ def _first_json(text: str) -> dict | None:
     return None
 
 
-def aggregate_veto(verdicts: list[dict], veto_threshold: int = 2) -> dict:
+# A shortfall is neither a pass nor a block: the panel was too small for the threshold to be
+# reachable, so NO adjudication is supportable in either direction. See aggregate_veto's docstring.
+INCONCLUSIVE = "INCONCLUSIVE"
+
+
+def _threshold_reachable(n_reviewers: int, veto_threshold: int) -> bool:
+    """Could `veto_threshold` vetoes have been cast AT ALL by the reviewers that actually returned?
+
+    A named function rather than an inline comparison so the selftest can BREAK it and prove the
+    shortfall branch is load-bearing rather than vacuous.
+    """
+    return n_reviewers >= veto_threshold
+
+
+def aggregate_veto(verdicts: list[dict], veto_threshold: int = 2,
+                   reviewers_requested: int | None = None) -> dict:
     """Minority-veto: count SUBSTANTIATED blockers (blocker=true AND severity in VETO_SEVERITIES). If at
-    least `veto_threshold` reviewers veto, the verdict is BLOCKED. Pure + testable — the heart of the feature."""
+    least `veto_threshold` reviewers veto, the verdict is BLOCKED. Pure + testable — the heart of the feature.
+
+    LATCHED GATE, fixed 2026-08-23. Observed live in a real audit run (experiment
+    `advice:a6cc531b8010`; full provenance in this capability's ledger `notes`, since the evidence
+    itself is instance-local and not committed): with `reviewers=["codex","vibe"]` and
+    `veto_threshold=2`, vibe returned null and this function reported
+    `{"verdict": "PASS", "n_reviewers": 1, "n_vetoes": 1}` while CARRYING a high-severity
+    0.99-confidence blocker. Once the reviewer population shrinks below the threshold, the threshold
+    is unreachable BY CONSTRUCTION — and the failure presented as PASS, i.e. as silence.
+    `aggregate_veto([])` was the same bug at its worst: zero reviewers returning read as a clean
+    pass. This module's own docstring says "Adjudicate, don't obey", which is exactly why the
+    aggregate must refuse to say PASS when PASS is the only thing it could have said.
+
+    The three latched-gate questions, answered (~/.claude/skills/latched-gate-check):
+    1. WHAT DECREMENTS THIS? Reviewers returning a parseable verdict — re-run the panel, repair the
+       reviewer that failed, or lower the threshold. Not "time passes", not "someone notices".
+    2. CAN THAT RUN WHILE THE GATE IS CLOSED? Yes; nothing here forbids re-running reviewers, which
+       makes this a mis-report rather than a deadlock. The harm was that PASS gave no reason to.
+    3. DOES THE MEASURING WINDOW EQUAL THE DRAINING WINDOW? No, and that mismatch IS the defect: the
+       threshold is chosen against the reviewers REQUESTED while the vetoes are counted over the
+       reviewers that RETURNED. Both populations are now reported in the same place and the shortfall
+       between them is named, instead of being silently absorbed into PASS.
+
+    Fails toward motion, not silence: a shortfall returns INCONCLUSIVE and still carries whatever
+    blockers were found. PASS now means what it says — the panel WAS large enough to block and
+    declined to, which is the no-single-voice-tyranny property the minority-veto design is for.
+    """
     valid = [v for v in verdicts if v]
     vetoes = [v for v in valid if v.get("blocker") and str(v.get("severity", "")).lower() in VETO_SEVERITIES]
-    verdict = "BLOCKED" if len(vetoes) >= veto_threshold else "PASS"
-    return {"verdict": verdict, "n_reviewers": len(valid), "n_vetoes": len(vetoes),
-            "veto_threshold": veto_threshold,
-            "blockers": [{"severity": v.get("severity"), "finding": v.get("finding"),
-                          "confidence": v.get("confidence")} for v in vetoes]}
+    # `requested` defaults to the list as passed, because review() records a None per reviewer that
+    # failed to return parseable JSON — so len(verdicts) already counts the absentees. Never below
+    # the number that returned; a caller understating it must not produce "returned 2 of 1".
+    requested = max(len(verdicts) if reviewers_requested is None else int(reviewers_requested), len(valid))
+    reachable = _threshold_reachable(len(valid), veto_threshold)
+    if len(vetoes) >= veto_threshold:
+        verdict = "BLOCKED"
+    elif not reachable:
+        verdict = INCONCLUSIVE
+    else:
+        verdict = "PASS"
+    # BLOCKING quantity and DRAINABLE quantity in ONE string, per the workspace runtime rule:
+    # "1 veto / threshold 2" alone reads as a near-miss you should be patient about; appending
+    # "reviewers returned 1 of 2" makes the shortfall unmissable at a glance.
+    summary = (f"{len(vetoes)} veto{'' if len(vetoes) == 1 else 'es'} / threshold {veto_threshold}, "
+               f"reviewers returned {len(valid)} of {requested}")
+    out = {"verdict": verdict, "n_reviewers": len(valid), "reviewers_requested": requested,
+           "reviewers_missing": requested - len(valid), "n_vetoes": len(vetoes),
+           "veto_threshold": veto_threshold, "threshold_reachable": reachable, "summary": summary,
+           "blockers": [{"severity": v.get("severity"), "finding": v.get("finding"),
+                         "confidence": v.get("confidence")} for v in vetoes]}
+    if verdict == INCONCLUSIVE:
+        out["inconclusive_reason"] = (
+            f"only {len(valid)} of {requested} reviewers returned a verdict, so the veto threshold of "
+            f"{veto_threshold} was unreachable — this is NOT a pass; re-run the missing reviewers")
+    return out
 
 
 def review(worktree: str, reviewers: list[str], context: str, veto_threshold: int = 2,
@@ -170,7 +232,9 @@ def review(worktree: str, reviewers: list[str], context: str, veto_threshold: in
         raw[r] = v
         if v:
             verdicts.append(v)
-    agg = aggregate_veto(verdicts, veto_threshold)
+    # reviewers_requested is the drainable population: without it the aggregate cannot tell a
+    # 1-of-1 panel from a 1-of-3 panel, which is how the shortfall used to read as PASS.
+    agg = aggregate_veto(verdicts, veto_threshold, reviewers_requested=len(reviewers))
     agg["by_reviewer"] = raw
     return agg
 
@@ -188,8 +252,42 @@ def _selftest():
     a2 = aggregate_veto([{"blocker": True, "severity": "low", "finding": "nit"},
                          {"blocker": False, "severity": "none"}], veto_threshold=2)
     assert a2["verdict"] == "PASS" and a2["n_vetoes"] == 0, a2
-    # one high veto below threshold 2 -> still PASS (needs corroboration)
-    assert aggregate_veto([{"blocker": True, "severity": "high", "finding": "x"}], 2)["verdict"] == "PASS"
+    # SHORTFALL IS NOT A PASS. Regression pin for the live 2026-08-23 observation: one reviewer
+    # returning of two requested cannot reach threshold 2, so the verdict must NOT be PASS.
+    lone = [{"blocker": True, "severity": "high", "finding": "x", "confidence": 0.99}]
+    short = aggregate_veto(lone, 2, reviewers_requested=2)
+    assert short["verdict"] == INCONCLUSIVE, short
+    assert short["n_reviewers"] == 1 and short["reviewers_requested"] == 2, short
+    assert short["reviewers_missing"] == 1 and short["threshold_reachable"] is False, short
+    # blocking quantity and drainable quantity in the same place, so a reader cannot mistake a
+    # shortfall for a clean pass.
+    assert short["summary"] == "1 veto / threshold 2, reviewers returned 1 of 2", short
+    assert "NOT a pass" in short["inconclusive_reason"], short
+    assert len(short["blockers"]) == 1, short          # the blocker is CARRIED, never swallowed
+    # a None placeholder is a reviewer that was asked and did not answer -> counts as requested
+    assert aggregate_veto(lone + [None], 2)["verdict"] == INCONCLUSIVE
+    # total reviewer failure is the same bug at its worst: it used to read as a clean PASS
+    empty = aggregate_veto([], 2, reviewers_requested=3)
+    assert empty["verdict"] == INCONCLUSIVE and empty["reviewers_missing"] == 3, empty
+    assert empty["summary"] == "0 vetoes / threshold 2, reviewers returned 0 of 3", empty
+    # ...but a REACHABLE threshold the panel declines to meet is STILL a genuine PASS — no
+    # single-voice tyranny. 3 of 3 returned, one high veto, threshold 2.
+    minority = aggregate_veto(lone + [{"blocker": False, "severity": "none"},
+                                      {"blocker": False, "severity": "low"}], 2)
+    assert minority["verdict"] == "PASS" and minority["threshold_reachable"] is True, minority
+    assert minority["summary"] == "1 veto / threshold 2, reviewers returned 3 of 3", minority
+
+    # DELIBERATE BREAK -> REVERT on the shortfall check, the correctness-critical half of the fix:
+    # pretend the panel is always big enough and the 1-of-2 case reverts to the latched PASS.
+    _saved_reachable = _threshold_reachable
+    try:
+        globals()["_threshold_reachable"] = lambda n, t: True
+        broken = aggregate_veto(lone, 2, reviewers_requested=2)
+        assert broken["verdict"] == "PASS", "break did not change behaviour — test is vacuous"
+    finally:
+        globals()["_threshold_reachable"] = _saved_reachable
+    assert aggregate_veto(lone, 2, reviewers_requested=2)["verdict"] == INCONCLUSIVE, \
+        "revert did not restore the shortfall guard"
     assert _first_json('noise {"blocker":true,"severity":"high","finding":"f"} tail')["severity"] == "high"
     # high-stakes detection: closer-only and explicit risk metadata only.
     assert not is_high_stakes({"lane": "opener", "labels": ["high-risk"], "title": "auth migration"})
@@ -200,8 +298,8 @@ def _selftest():
     assert reviewers_from_env({"ORCH_ADVERSARIAL_REVIEWERS": "vibe, gemini"}) == ["vibe", "gemini"]
     assert review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "1"})
     assert not review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "0"})
-    print("adversarial.py selftest: OK (refute prompt, minority-veto aggregation, json extract, "
-          "high-stakes detection, env helpers)")
+    print("adversarial.py selftest: OK (refute prompt, minority-veto aggregation, reviewer-shortfall "
+          "guard w/ break->revert, json extract, high-stakes detection, env helpers)")
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
