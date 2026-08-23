@@ -49,10 +49,11 @@ from __future__ import annotations
 
 import os
 import pathlib
-import tomllib
 import shutil
 import unittest
 from pathlib import Path
+
+import tomllib
 
 # The single token verify.py greps for in a selftest's or gate's output to classify it as
 # SKIPPED rather than passed. Defined once here and consumed by both sides, so the writer and

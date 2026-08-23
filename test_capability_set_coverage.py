@@ -146,17 +146,25 @@ def roster() -> str:
     except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
         replay_error = f"{type(exc).__name__}: {exc}"
 
-    out = [
-        f"# Capability set roster — all {len(ledger)} capabilities",
-        "",
-    ] + ([
-        f"> RECURRENCE REPLAY DID NOT RUN — {replay_error}. Every 'Recurrence' cell below is "
-        f"UNKNOWN, not empty.",
-        "",
-    ] if replay_error else []) + [
-        "| Capability | Fixture | Can fire | Recurrence | Blocker |",
-        "|---|---|---|---|---|",
-    ]
+    out = (
+        [
+            f"# Capability set roster — all {len(ledger)} capabilities",
+            "",
+        ]
+        + (
+            [
+                f"> RECURRENCE REPLAY DID NOT RUN — {replay_error}. Every 'Recurrence' cell below is "
+                f"UNKNOWN, not empty.",
+                "",
+            ]
+            if replay_error
+            else []
+        )
+        + [
+            "| Capability | Fixture | Can fire | Recurrence | Blocker |",
+            "|---|---|---|---|---|",
+        ]
+    )
     for cap_id in sorted(ledger):
         row = rows.get(cap_id) or {}
         fx = "yes" if cap_id in covered else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")

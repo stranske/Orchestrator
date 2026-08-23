@@ -605,7 +605,9 @@ def test_registry_models_match_adapters():
         if os.environ.get(v)
     ]
     if overrides:
-        pytest.skip(f"seat model override(s) set, so registry-vs-adapter drift is unmeasurable: {', '.join(overrides)}")
+        pytest.skip(
+            f"seat model override(s) set, so registry-vs-adapter drift is unmeasurable: {', '.join(overrides)}"
+        )
 
     old_probe = os.environ.get("ORCH_MODEL_PROBE")
     os.environ["ORCH_MODEL_PROBE"] = "0"
