@@ -160,6 +160,40 @@ def test_the_fetch_command_names_every_absent_module_not_just_the_found_ones():
             audit.HERE = saved
 
 
+def test_the_fetch_command_truncates_after_six_modules_and_counts_the_rest():
+    """Seven or more absent modules must show six paths and report how many were omitted."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="cap-set-trunc-") as td:
+        root = Path(td)
+        mine = root / ".claude" / "worktrees" / "mine"
+        mine.mkdir(parents=True, exist_ok=True)
+        (mine / "capabilities.py").write_text("# a checkout is recognised by this file\n")
+        saved = audit.HERE
+        try:
+            audit.HERE = mine
+            led = {
+                f"cap-{i}": {
+                    "capability_id": f"cap-{i}",
+                    "entrypoint": f"mod{i:02d}.py:run",
+                }
+                for i in range(7)
+            }
+            note = audit.absent_entrypoint_note(sorted(led), ledger=led)
+            cmd = [ln for ln in note.splitlines() if "git log --all" in ln]
+            assert len(cmd) == 1, note
+            shown = [f"mod{i:02d}.py" for i in range(6)]
+            hidden = ["mod06.py"]
+            for name in shown:
+                assert name in cmd[0], cmd[0]
+            for name in hidden:
+                assert name not in cmd[0], cmd[0]
+            assert "(+1 more module(s) not shown)" in cmd[0], cmd[0]
+        finally:
+            audit.HERE = saved
+
+
 # The gate whose message must carry the diagnosis, per file. An explicit mapping, because "some
 # call somewhere in the file" is exactly the weakness that made the first version of the check
 # below vacuous.
@@ -177,6 +211,8 @@ def _calls_absent_entrypoint_note(path, func_name: str) -> bool:
     this very file — in the mapping above, in a docstring, and in sibling tests — so a substring
     search over the whole file passes no matter what the gate at `func_name` actually does. An AST
     walk scoped to one function body cannot be satisfied by a string literal or a comment at all.
+  Nested defs and non-`audit` receivers are ignored so an unused inner helper cannot keep the gate
+  green after the named function stops calling the real helper.
     """
     import ast
 
@@ -184,7 +220,7 @@ def _calls_absent_entrypoint_note(path, func_name: str) -> bool:
     target = next(
         (
             n
-            for n in ast.walk(tree)
+            for n in tree.body
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func_name
         ),
         None,
@@ -193,12 +229,27 @@ def _calls_absent_entrypoint_note(path, func_name: str) -> bool:
         f"{path.name} has no function {func_name!r} — the gate was renamed or removed, which this "
         f"check must not silently pass. Update GATE_CALL_SITES deliberately."
     )
-    return any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "absent_entrypoint_note"
-        for node in ast.walk(target)
-    )
+
+    def _is_audit_absent_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "absent_entrypoint_note"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "audit"
+        )
+
+    def _body_contains_call(node: ast.AST) -> bool:
+        if _is_audit_absent_call(node):
+            return True
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if _body_contains_call(child):
+                return True
+        return False
+
+    return any(_body_contains_call(stmt) for stmt in target.body)
 
 
 def test_the_capability_gates_all_consult_the_entrypoint_diagnosis():
