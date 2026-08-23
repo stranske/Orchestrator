@@ -866,7 +866,11 @@ def collect(repo: str, exp_id: str) -> dict:
             try:
                 import experiment_recovery
 
-                recovered = experiment_recovery.arm_diff(repo, exp_id, agent, base=base)
+                # THE MEMBER ID IS PART OF THE BRANCH NAME (`exp/<exp_id>-<member_id>`), so a v2
+                # arm's branch is unreachable without it and recovery reported the evidence gone.
+                recovered = experiment_recovery.arm_diff(
+                    repo, exp_id, agent, base=base, member_id=artifact_member
+                )
             except Exception:
                 recovered = None
             if recovered is not None:
@@ -1480,8 +1484,20 @@ def followup(
             meta = json.loads(meta_p.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        agents = meta.get("agents") or []
-        logs = [edir / f"{a}.log" for a in agents]
+        # ELIGIBILITY IS PER MEMBER, NOT PER AGENT. `prepare_arms` writes one log per MEMBER
+        # (`<member_id>.log`), so reading `meta["agents"]` looked for `<agent>.log`, never found it,
+        # and every v2 experiment fell out of this loop before it could be collected -- producing
+        # zero `evaluations_v2` rows, which is the exact gap the v2 identity work set out to close.
+        # `experiment_members` keeps the legacy shape too: a legacy member's id IS its agent, so
+        # `exp_log_path(agent, None)` still resolves to `<agent>.log` for recovered experiments.
+        try:
+            members = experiment_members(meta)
+        except ValueError:
+            continue  # malformed member metadata: skip the experiment, never guess its identity
+        logs = [
+            edir / exp_log_path(m["agent"], None if m["legacy"] else m["member_id"])
+            for m in members
+        ]
         if not logs or not all(log.exists() for log in logs):
             continue
         if any(now - log.stat().st_mtime < min_idle_s for log in logs):
