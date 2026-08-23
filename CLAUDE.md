@@ -212,6 +212,19 @@ Do not create a second event log, model registry, or capability inventory.
   and the Brain. Pointing only the first at an empty directory and concluding "the suite is
   state-independent" is exactly the mistake that made the first CI run red — the ledger never
   moved. Set both when testing a fresh-machine claim.
+- **The LEDGER is shared across branches; the CODE is not — so a sibling branch reds your gates.**
+  `$ORCH_LOCAL_RUNTIME/capabilities.json` is one file per machine, while every branch has its own
+  tree. Any branch that registers a capability therefore makes every OTHER branch's `verify.py`
+  red on three gates (admission / recurrence fixture / heartbeat call site), for a capability that
+  is perfectly well implemented somewhere you cannot see. **That red is not evidence of a
+  badly-declared capability, and the two remedies it invites — retiring the ledger row, or masking
+  it with a WAIVER — are both wrong and have both been proposed for a live capability.** The gates
+  now say which case they are in (`capability_activation_audit.entrypoint_diagnosis`): an entrypoint
+  absent from the tree is reported as such, with the branch check to run. Two rules that follow:
+  an empty `git log --all --oneline -- <file>` proves nothing until the refs are fetched — that
+  false negative is what produced the wrong verdict; and the honest verdict on a branch carrying
+  someone else's ledger row comes from a fresh-state run (`ORCH_STATE_DIR` **and**
+  `ORCH_LOCAL_RUNTIME` pointed at empty directories, per the bullet above), which is what CI does.
 - **The split is TOOL vs EVIDENCE.** Generic capabilities, gates and tests are committed. This
   instance's evidence is not: `IMPROVEMENT_BACKLOG.md`, `CAPABILITY_USEFULNESS.md`,
   `LOCAL_POLICY.md`, `*.local.md`, `experiments/`, `ux_reviews/`, `data/`, `Audits/`. When adding a

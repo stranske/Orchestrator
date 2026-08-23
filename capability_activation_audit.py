@@ -182,35 +182,180 @@ def labels_producing(task_type: str) -> list[str]:
     return sorted(l for l in vocab if backlog.classify([l]) == task_type)
 
 
-def _entrypoint_files(cap: dict) -> list[Path]:
-    """Local .py files named by the entrypoint declaration.
+# The separators WITHIN one entrypoint declaration: whitespace (which is what splits the ` -> `
+# form the ledger uses), `,`, `;`, and a `/` that follows a `.py` (the `a.py/b.py` form naming two
+# modules). Defined once because the resolver below and the presence diagnosis further down must
+# read the SAME declaration — a second, independent parse would eventually diagnose a file the
+# resolver never looked for, and a fabricated finding is exactly what this module prevents.
+ENTRYPOINT_SEP_RE = re.compile(r"[\s,;]+|(?<=\.py)/")
+# A token only NAMES a module when its candidate is a plausible module filename. This is what
+# keeps the `->` in `a.py:f -> b.py:g` out of the diagnosis: it splits off as its own token, and
+# `->.py` is not a module name.
+_MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.py$")
 
-    Entrypoints come in three shapes and all three must resolve, or the audit invents defects:
-    `watch.py`, `roles.py:run_triage_agent`, and `dispatcher.offload` (module.function, no `.py`).
-    The third form produced a false `entrypoint_missing` for `offload` — a capability running
-    196x/week — which is precisely the kind of fabricated finding this module exists to prevent.
+
+def _entrypoint_declarations(cap: dict) -> list[dict]:
+    """One record per module the entrypoint declaration names.
+
+    Entrypoints come in shapes that ALL must resolve, or the audit invents defects: `watch.py`,
+    `roles.py:run_triage_agent`, `dispatcher.offload` (module.function, no `.py`), `a.py/b.py`,
+    `a.py:f -> b.py:g`, and `Workflows/scripts/x.py` (another repository). The `module.function`
+    form produced a false `entrypoint_missing` for `offload` — a capability running 196x/week —
+    which is precisely the kind of fabricated finding this module exists to prevent.
+
+    Keys: `token` as written; `candidates`, the filenames to probe, most specific first; `module`,
+    the reportable filename, or None when the token names no module at all; and `external`, set
+    when the token carries a directory component, so the file is declared to live outside this
+    flat module tree — a cross-repo entrypoint is NOT a locally missing file.
     """
-    raw = str(cap.get("entrypoint") or "")
-    out: list[Path] = []
-    for token in re.split(r"[\s,;]+|(?<=\.py)/", raw):
+    out: list[dict] = []
+    for token in ENTRYPOINT_SEP_RE.split(str(cap.get("entrypoint") or "")):
         token = token.strip()
         if not token:
             continue
         stem = token.split(":")[0]
-        candidates = []
         if stem.endswith(".py"):
-            candidates.append(Path(stem).name)
+            candidates = [Path(stem).name]
         else:
             # `dispatcher.offload` -> dispatcher.py ; `a.b.c` -> try each dotted prefix
             parts = stem.split(".")
-            for i in range(len(parts), 0, -1):
-                candidates.append(".".join(parts[:i]) + ".py")
-        for name in candidates:
+            candidates = [".".join(parts[:i]) + ".py" for i in range(len(parts), 0, -1)]
+        named = [c for c in candidates if _MODULE_NAME_RE.match(c)]
+        out.append({"token": token, "candidates": candidates,
+                    "module": named[-1] if named else None,
+                    "external": "/" in stem and not stem.startswith(("./", "/"))})
+    return out
+
+
+def _entrypoint_files(cap: dict) -> list[Path]:
+    """Local .py files named by the entrypoint declaration (shapes: `_entrypoint_declarations`)."""
+    out: list[Path] = []
+    for decl in _entrypoint_declarations(cap):
+        for name in decl["candidates"]:
             path = HERE / name
             if path.exists() and path not in out:
                 out.append(path)
                 break
     return out
+
+
+# --------------------------------------------------------------------------- tree presence
+#
+# WHY THIS EXISTS. The capability ledger is SHARED machine-local state (`$ORCH_LOCAL_RUNTIME`),
+# while code is branch-isolated. So any branch that registers a capability turns every SIBLING
+# branch's `python3 verify.py` red — and the three capability gates named that failure with a
+# bare capability id:
+#
+#     test_capability_admission.py  -> {'X': ['caller_exists', 'heartbeat', 'fixture']}
+#     test_capability_set_coverage.py -> ['X']
+#     test_model_tier_resolution.py   -> ['X']
+#
+# which is indistinguishable from the genuine defect those gates exist to catch: a row registered
+# with no implementation at all. On 2026-08-22 that ambiguity cost a full misdiagnosed session.
+# The verdict was "registered without its implementation", and the proposed remedies were to
+# RETIRE a live capability's ledger row or to mask it with a WAIVER. The module existed the whole
+# time on an unmerged branch, and it carried a hard dependency on a `capabilities.unblock()` guard
+# from that branch's parent commit — so the waiver would have hidden a latched-gate bug.
+#
+# Note what the misdiagnosis rested on: `git log --all --oneline -- <file>` came back EMPTY, and
+# emptiness was read as proof. It was empty because the branch's ref had not been fetched. So the
+# pointer below says to fetch first and says that silence proves nothing.
+#
+# The facts needed to tell the two cases apart were ALREADY here — `_entrypoint_files` above, and
+# the `entrypoint_missing` / `entrypoint_external` defect classes. They just never reached the
+# failure text. This is the wiring, and it NEVER converts a failure into a skip: the gate still
+# fails, it just says WHICH failure it is.
+
+ENTRYPOINT_PRESENT = "present_in_tree"
+ENTRYPOINT_ABSENT = "absent_from_tree"
+ENTRYPOINT_EXTERNAL = "declared_in_another_repo"
+ENTRYPOINT_UNDECLARED = "no_entrypoint_declared"
+
+
+def entrypoint_presence(cap: dict) -> dict:
+    """Is the code this ledger row NAMES actually in this working tree?
+
+    Four states, because three of them demand different actions: fetch and check a branch
+    (`absent_from_tree`), change another repository (`declared_in_another_repo`), fix the row
+    (`no_entrypoint_declared`), or fix the capability (`present_in_tree` — a genuine defect).
+    """
+    decls = [d for d in _entrypoint_declarations(cap) if d["module"]]
+    present = [d["module"] for d in decls if (HERE / d["module"]).exists()]
+    absent = [d for d in decls if d["module"] not in present]
+    row = {"capability_id": cap.get("capability_id"),
+           "entrypoint": str(cap.get("entrypoint") or ""),
+           "present": present,
+           "absent": [d["module"] for d in absent if not d["external"]],
+           "external": [d["token"] for d in absent if d["external"]]}
+    if not decls:
+        row["state"] = ENTRYPOINT_UNDECLARED
+    elif row["absent"]:
+        row["state"] = ENTRYPOINT_ABSENT
+    elif row["external"]:
+        row["state"] = ENTRYPOINT_EXTERNAL
+    else:
+        row["state"] = ENTRYPOINT_PRESENT
+    return row
+
+
+def entrypoint_diagnosis(capability_ids, *, missing: dict | None = None,
+                         ledger: dict | None = None) -> str:
+    """Is this gate red about THIS TREE, or about the capability? Text for the failure message.
+
+    Callers PREPEND it to their own assertion text, so the tree-level explanation is read first
+    and survives the 400-character truncation the hand-rolled gate runners in
+    `test_capability_admission.py` / `test_capability_set_coverage.py` apply.
+
+    `missing` maps capability_id -> the parts the caller found absent, so the message can say the
+    thing that would have ended the misdiagnosis in one line: those parts are DOWNSTREAM of the
+    absent file, not independent evidence of a badly-declared capability.
+
+    Deliberately pure — it never shells out to git. A `git log --all` executed here would report
+    an unfetched branch as "nothing found", which is the precise mistake that produced the wrong
+    verdict; printing the command with its caveat cannot make that mistake for the reader.
+    """
+    ids = [str(c) for c in (capability_ids or [])]
+    if not ids:
+        return ""
+    try:
+        # load_declared, NEVER load: `load()` defaults to create=True, which reconciles AND
+        # PERSISTS. A diagnosis printed inside a failing assertion must not mutate the shared
+        # ledger it is describing. `test_capabilities.py` enforces that rule for every file
+        # carrying a selftest, and it caught exactly this line.
+        rows = ledger if ledger is not None else capabilities.load_declared(capabilities.REG)
+    except Exception:                                              # noqa: BLE001
+        # The diagnosis must never break the failure it is explaining.
+        return ("could not read the capability ledger, so entrypoint presence is unknown for "
+                f"{ids}.\n")
+    out: list[str] = []
+    for cap_id in ids:
+        cap = dict((rows or {}).get(cap_id) or {})
+        cap.setdefault("capability_id", cap_id)
+        pres = entrypoint_presence(cap)
+        parts = ", ".join((missing or {}).get(cap_id) or [])
+        if pres["state"] == ENTRYPOINT_ABSENT:
+            named = ", ".join(pres["absent"])
+            out.append(f"{cap_id}: entrypoint {named} is NOT in this tree.")
+            out.append("  The ledger is shared machine-local state; the code may live on an "
+                       "unmerged branch.")
+            out.append(f"  Check: git log --all --oneline -- {pres['absent'][0]}"
+                       "   (fetch first: an unfetched branch reads as empty)")
+            if parts:
+                out.append(f"  Its missing parts ({parts}) follow from that absent file, not "
+                           "from a defect in it.")
+        elif pres["state"] == ENTRYPOINT_EXTERNAL:
+            out.append(f"{cap_id}: entrypoint {', '.join(pres['external'])} is declared in "
+                       "ANOTHER repository, not this tree.")
+            out.append("  Activation needs a change there; `git log --all` here will never "
+                       "find it.")
+        elif pres["state"] == ENTRYPOINT_UNDECLARED:
+            out.append(f"{cap_id}: the ledger row declares no entrypoint, so there is no file "
+                       "to look for.")
+        else:
+            out.append(f"{cap_id}: entrypoint {', '.join(pres['present'])} IS in this tree"
+                       + (f" — a genuine admission defect (missing: {parts})."
+                          if parts else " — a genuine admission defect."))
+    return "\n".join(out) + "\n"
 
 
 # --------------------------------------------------------------------------- static analysis
@@ -809,8 +954,11 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
         elif hb["status"] == "no_local_entrypoint":
             # A cross-repo entrypoint is not a MISSING file — reporting it as missing implies a
             # local defect and hides the real blocker, which is a change in another repository.
+            # The external test comes from `entrypoint_presence` so this branch and the failure
+            # text the capability gates print cannot drift into disagreeing about which case a
+            # capability is in — that disagreement IS the misdiagnosis they exist to prevent.
             detail = str(hb.get("detail") or "")
-            external = "/" in detail and not detail.startswith(("./", "/"))
+            external = entrypoint_presence(cap)["state"] == ENTRYPOINT_EXTERNAL
             caller = external_caller(cap)
             row["external_caller"] = caller
             if caller and caller.get("exists"):
@@ -1348,6 +1496,80 @@ def _selftest() -> None:
     assert [p.name for p in _entrypoint_files({"entrypoint": "roles.py:run_triage_agent"})] \
         == ["roles.py"]
     assert _entrypoint_files({"entrypoint": "Workflows/scripts/nope.py"}) == []
+
+    # ENTRYPOINT PRESENCE — the two cases a bare capability id cannot tell apart. The ledger is
+    # shared machine-local state while code is branch-isolated, so a SIBLING branch's registration
+    # produces the same red as a row declared with no implementation at all. Reading the first as
+    # the second cost a full session on 2026-08-22, and the remedies proposed for a live
+    # capability were to retire its ledger row or mask it with a waiver.
+    with tempfile.TemporaryDirectory(prefix="cap-entrypoint-") as td3:
+        saved_here = HERE
+        try:
+            globals()["HERE"] = Path(td3)
+            (Path(td3) / "present_lane.py").write_text("# in the tree\n")
+            here_cap = {"capability_id": "here-cap", "entrypoint": "present_lane.py:run"}
+            gone_cap = {"capability_id": "gone-cap", "entrypoint": "absent_lane.py:run"}
+            away_cap = {"capability_id": "away-cap", "entrypoint": "Elsewhere/away_lane.py"}
+            bare_cap = {"capability_id": "bare-cap", "entrypoint": None}
+            assert entrypoint_presence(here_cap)["state"] == ENTRYPOINT_PRESENT
+            assert entrypoint_presence(gone_cap)["state"] == ENTRYPOINT_ABSENT
+            assert entrypoint_presence(gone_cap)["absent"] == ["absent_lane.py"]
+            assert entrypoint_presence(away_cap)["state"] == ENTRYPOINT_EXTERNAL
+            assert entrypoint_presence(bare_cap)["state"] == ENTRYPOINT_UNDECLARED
+            # A part-resolving declaration is a TREE problem, not a pass: `a.py/b.py` with only
+            # one half present must still name the missing half.
+            half = {"capability_id": "half-cap", "entrypoint": "present_lane.py/absent_lane.py"}
+            assert entrypoint_presence(half)["state"] == ENTRYPOINT_ABSENT
+            assert entrypoint_presence(half)["absent"] == ["absent_lane.py"], entrypoint_presence(half)
+            # The `->` between two declarations names no module and must not be diagnosed as one.
+            arrow = {"capability_id": "arrow", "entrypoint": "present_lane.py:a -> present_lane.py:b"}
+            assert entrypoint_presence(arrow)["state"] == ENTRYPOINT_PRESENT, entrypoint_presence(arrow)
+
+            led = {"here-cap": here_cap, "gone-cap": gone_cap, "away-cap": away_cap}
+            miss = {"here-cap": ["fixture"], "gone-cap": ["caller_exists", "heartbeat", "fixture"]}
+
+            # BRANCH 1 — the file is absent: say so, and point at the branch check WITH its caveat.
+            # The caveat is the load-bearing half: the wrong verdict rested on `git log --all`
+            # returning nothing for a branch whose ref had never been fetched.
+            gone = entrypoint_diagnosis(["gone-cap"], missing=miss, ledger=led)
+            assert "absent_lane.py is NOT in this tree" in gone, gone
+            assert "unmerged branch" in gone, gone
+            assert "git log --all --oneline -- absent_lane.py" in gone, gone
+            assert "fetch first" in gone, gone
+            # ...and the missing parts are named as a CONSEQUENCE, not as independent evidence.
+            assert "follow from that absent file" in gone, gone
+            # The hand-rolled gate runners print only `str(exc)[:400]`, which is WHY the diagnosis
+            # is prepended rather than appended. Pin that one capability's diagnosis fits inside
+            # that budget, or the fix is invisible in the harness verify.py runs these gates in.
+            assert len(gone) <= 400, len(gone)
+
+            # BRANCH 2 — the file is present: same gate, opposite conclusion, and it must NOT
+            # mention a branch, or the text sends a reader hunting for code in front of them.
+            here = entrypoint_diagnosis(["here-cap"], missing=miss, ledger=led)
+            assert "present_lane.py IS in this tree" in here, here
+            assert "genuine admission defect (missing: fixture)" in here, here
+            assert "branch" not in here and "NOT in this tree" not in here, here
+
+            # A cross-repo entrypoint is neither case: `git log --all` here can never find it.
+            away = entrypoint_diagnosis(["away-cap"], ledger=led)
+            assert "ANOTHER repository" in away and "never find it" in away, away
+
+            # NOTHING HERE SKIPS, and nothing is swallowed. An id the ledger does not hold still
+            # produces text naming it, and a passing caller gets nothing prepended.
+            assert entrypoint_diagnosis([]) == ""
+            assert "gone-cap" in entrypoint_diagnosis(["gone-cap"], ledger={})
+            # A diagnosis must never break the failure it is explaining.
+            saved_load = capabilities.load_declared
+            try:
+                def _boom(*a, **k):
+                    raise OSError("ledger unreadable")
+                capabilities.load_declared = _boom
+                broke = entrypoint_diagnosis(["gone-cap"])
+                assert "could not read the capability ledger" in broke, broke
+            finally:
+                capabilities.load_declared = saved_load
+        finally:
+            globals()["HERE"] = saved_here
     # (b) a mention inside a shell COMMENT is not a caller — matching it reported a
     # main()-stranded heartbeat as reachable, which is a false PASS.
     with tempfile.TemporaryDirectory(prefix="cap-cmt-") as td2:
@@ -1391,7 +1613,8 @@ def _selftest() -> None:
 
     print("capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
           "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
-          "directions, advisor reach + narrowing, progress + regression tracking)")
+          "directions, entrypoint present vs absent-from-tree vs another-repo, "
+          "advisor reach + narrowing, progress + regression tracking)")
 
 
 def main(argv: list[str]) -> int:

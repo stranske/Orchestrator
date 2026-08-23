@@ -50,10 +50,75 @@ def test_every_capability_has_a_recurrence_fixture():
     ledger = set(capabilities.load_declared(capabilities.REG))
     covered = _fixture_capabilities()
     missing = sorted(ledger - covered - set(FIXTURE_EXEMPT))
+    # Diagnosis first — see `audit.entrypoint_diagnosis`. A capability whose entrypoint is not in
+    # this tree cannot have a fixture here either, and reading that as "no fixture was written" is
+    # the misdiagnosis this text prevents.
     assert not missing, (
-        f"{len(missing)} capability(ies) have NO recurrence fixture. Add one that replays a real "
+        audit.entrypoint_diagnosis(missing)
+        + f"{len(missing)} capability(ies) have NO recurrence fixture. Add one that replays a real "
         f"historical condition, or add an explicit FIXTURE_EXEMPT entry with a reason: {missing}"
     )
+
+
+def test_an_absent_entrypoint_diagnoses_itself_differently_from_a_real_defect():
+    """The two reds this file's own message could not tell apart.
+
+    The capability ledger is SHARED machine-local state (`$ORCH_LOCAL_RUNTIME`) while code is
+    branch-isolated, so a sibling branch that registers a capability makes every other branch's
+    `verify.py` red with a bare capability id — the same text a row registered with no
+    implementation produces. On 2026-08-22 that ambiguity was read the wrong way for a whole
+    session, and the remedies proposed for a LIVE capability were to retire its ledger row or
+    mask it with a waiver, which would have hidden a latched-gate bug in its real module.
+
+    This is not a skip. Both cases still FAIL; the text now says which one it is.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="cap-set-entrypoint-") as td:
+        saved = audit.HERE
+        try:
+            audit.HERE = Path(td)
+            (Path(td) / "here_lane.py").write_text("# in the tree\n")
+            led = {"here-cap": {"capability_id": "here-cap", "entrypoint": "here_lane.py:run"},
+                   "gone-cap": {"capability_id": "gone-cap", "entrypoint": "gone_lane.py:run"}}
+            miss = {"here-cap": ["fixture"], "gone-cap": ["caller_exists", "heartbeat", "fixture"]}
+
+            gone = audit.entrypoint_diagnosis(["gone-cap"], missing=miss, ledger=led)
+            assert "gone_lane.py is NOT in this tree" in gone, gone
+            assert "unmerged branch" in gone, gone
+            # The pointer, and the caveat that makes it honest: the wrong verdict rested on
+            # `git log --all` coming back empty for a branch whose ref was never fetched.
+            assert "git log --all --oneline -- gone_lane.py" in gone, gone
+            assert "fetch first" in gone, gone
+
+            here = audit.entrypoint_diagnosis(["here-cap"], missing=miss, ledger=led)
+            assert "here_lane.py IS in this tree" in here, here
+            assert "genuine admission defect" in here, here
+            # The opposite case must not mention a branch at all, or the diagnosis sends a reader
+            # looking for code that is already in front of them.
+            assert "branch" not in here, here
+        finally:
+            audit.HERE = saved
+
+
+def test_the_capability_gates_all_consult_the_entrypoint_diagnosis():
+    """One shared helper, three call sites — checked, because three copies is how they drift.
+
+    Matches the CALL (`audit.entrypoint_diagnosis(`), never the bare name: every one of these
+    files also MENTIONS the helper in a comment, so a name-only grep would keep passing after
+    someone deleted the call and left the comment behind.
+    """
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    for name in ("test_capability_admission.py", "test_capability_set_coverage.py",
+                 "test_model_tier_resolution.py"):
+        text = (here / name).read_text(encoding="utf-8")
+        assert "audit.entrypoint_diagnosis(" in text, (
+            f"{name} no longer calls audit.entrypoint_diagnosis(), so its capability gate is back "
+            f"to reporting a bare capability id — indistinguishable from the defect it guards"
+        )
 
 
 def test_no_fixture_names_an_unknown_capability():

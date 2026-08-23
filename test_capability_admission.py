@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 
 import capabilities
+import capability_activation_audit as audit
 import capability_admission as admission
 import env_prereq
 
@@ -35,8 +36,13 @@ def test_new_capabilities_carry_all_required_parts():
     failing = rep["enforced_failing"]
     rows = {r["capability_id"]: r for r in rep["rows"]}
     detail = {cid: rows[cid]["missing"] for cid in failing}
+    # THE DIAGNOSIS LEADS. A bare id here is indistinguishable from the defect this gate exists to
+    # catch, and on 2026-08-22 that ambiguity cost a whole session: the ledger is shared
+    # machine-local state while code is branch-isolated, so a sibling branch's registration reads
+    # exactly like a row declared with no implementation. `entrypoint_diagnosis` says which it is.
     assert not failing, (
-        f"{len(failing)} capability(ies) added since the admission gate are missing required "
+        audit.entrypoint_diagnosis(failing, missing=detail)
+        + f"{len(failing)} capability(ies) added since the admission gate are missing required "
         f"parts: {detail}. Declare them in the ledger, or add an expiring WAIVERS entry with a "
         f"reason — never leave it undeclared."
     )
