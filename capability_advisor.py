@@ -42,7 +42,9 @@ import env_prereq
 # a model call here would make the same task classify differently on different days, which would
 # make the historical match counts meaningless.
 TASK_SIGNALS: dict[str, tuple[str, ...]] = {
-    "testgen": ("test", "tests", "unit test", "coverage", "pytest", "test case"),
+    # "testgen" is spelled out because the trailing word boundary stops `test` matching it, and
+    # the lane's own name is exactly how the work gets described ("run the testgen lane").
+    "testgen": ("test", "tests", "unit test", "coverage", "pytest", "test case", "testgen"),
     # `offload` was ABSENT until 2026-08-19 while being the fleet's most-used capability by 20x
     # (196 runs/week vs 2 for the next). So the front door could never recommend the one thing the
     # Orchestrator is used for most: spending a cheap agent's context instead of this seat's.
@@ -57,16 +59,47 @@ TASK_SIGNALS: dict[str, tuple[str, ...]] = {
                 "across the whole repo", "phase 2", "phase 3", "phase 4", "phase 5", "phase 6",
                 "phase 7", "phase 8"),
     "review": ("review", "critique", "assess", "evaluate", "audit", "check quality"),
-    "ux_review": ("ux", "usability", "frontend", "ui", "screen", "user interface"),
+    # "screenshot" spelled out for the same reason as "testgen". The boundary plus the
+    # no-inflection rule for initialisms is what stops `ui` matching "uid" and `ux` "uxbridge".
+    "ux_review": ("ux", "usability", "frontend", "ui", "screen", "user interface", "screenshot"),
     "epic": ("epic", "break down", "decompose", "roadmap", "plan out", "vague goal"),
     "cross_repo": ("cross-repo", "across repos", "consumer repos", "fleet-wide", "both repos"),
     "runtime_ac": ("acceptance criteria", "runtime check", "verify behaviour", "verify behavior"),
     "docs": ("docs", "documentation", "readme", "changelog", "docstring"),
-    "mechanical": ("lint", "format", "dependency bump", "bump version", "typo"),
+    # "formatting" doubles the final consonant, so `format` + an inflection cannot reach it.
+    "mechanical": ("lint", "format", "formatting", "dependency bump", "bump version", "typo"),
     "implement": ("implement", "add feature", "build", "fix bug", "fix the", "write code"),
 }
 # A task must clear this to be treated as classified at all.
 MIN_SIGNAL_HITS = 1
+
+# Inflections that keep a signal's INTENT, so they still count as a hit: plurals, participles and
+# agent/result nouns. What is deliberately EXCLUDED is derivational drift — above all `-ation`,
+# which turns a verb into the name of a thing that already exists. That distinction is the whole
+# point: "implement the exporter" is work to do, "the implementation of the loader" is a noun in a
+# READ-ONLY audit, and with MIN_SIGNAL_HITS = 1 the substring was enough to bind a code-mutating
+# lane to an audit that must not touch code. Observed in a real run: experiment advice:a6cc531b8010
+# classified "a read-only audit of the implementation ..." as task_type `implement`.
+SIGNAL_INFLECTIONS = ("s", "es", "ing", "ed", "d", "er", "ers", "ment", "ments")
+
+
+def _signal_pattern(signal: str) -> str:
+    """Whole-word-with-intent match for one signal.
+
+    Bounded on BOTH sides. The leading `(?<![a-z])` was already here; the trailing boundary is what
+    was missing, so every signal matched as a bare prefix — `ui` hit "uid", `test` hit "testgen",
+    and `implement` hit "implementation". Inflections listed in SIGNAL_INFLECTIONS still count,
+    because they preserve intent; anything else does not. Where tightening would have lost a form
+    that genuinely IS a signal, the form is spelled out in TASK_SIGNALS instead of loosened here —
+    the same way that table already lists "tests" beside "test" and "documentation" beside "docs".
+
+    Two-letter signals take NO inflection, because they are initialisms and initialisms do not
+    inflect. Without that carve-out `ui` still matched "uid" through the bare `d` ending (which is
+    there for the -e verbs: dedupe -> deduped), so the trailing boundary would have LOOKED like it
+    fixed a false positive it had not fixed.
+    """
+    endings = "" if len(signal) <= 2 else rf"(?:{'|'.join(SIGNAL_INFLECTIONS)})?"
+    return rf"(?<![a-z]){re.escape(signal)}{endings}(?![a-z])"
 
 
 def classify_task(text: str) -> list[dict]:
@@ -74,7 +107,7 @@ def classify_task(text: str) -> list[dict]:
     low = f" {(text or '').lower()} "
     found = []
     for task_type, signals in TASK_SIGNALS.items():
-        hits = [s for s in signals if re.search(rf"(?<![a-z]){re.escape(s)}", low)]
+        hits = [s for s in signals if re.search(_signal_pattern(s), low)]
         if len(hits) >= MIN_SIGNAL_HITS:
             found.append({"task_type": task_type, "hits": hits, "score": len(hits)})
     return sorted(found, key=lambda c: (-c["score"], c["task_type"]))
@@ -1391,6 +1424,38 @@ def _selftest() -> None:
     assert c and c[0]["task_type"] == "testgen", c
     assert c[0]["hits"], "classification must report WHY it classified"
     assert classify_task("please add unit tests for the retry helper") == c, "must be deterministic"
+
+    # WHOLE-WORD WITH INTENT, not substring. Observed in a real run (experiment
+    # advice:a6cc531b8010): a READ-ONLY audit classified as `implement` because the noun
+    # "implementation" contains the verb. With MIN_SIGNAL_HITS = 1 that one substring was enough to
+    # offer a code-mutating lane to work that must not touch code.
+    audit_text = "a read-only audit of the implementation of the config loader; do not change code"
+    types = [d["task_type"] for d in classify_task(audit_text)]
+    assert "implement" not in types, types
+    assert "review" in types, types                     # ...and the RIGHT one still fires
+    # Inflections preserve intent, so they must still hit.
+    for verb_form in ("implement the exporter", "implementing the exporter",
+                      "this implements the spec", "implemented the exporter"):
+        assert "implement" in [d["task_type"] for d in classify_task(verb_form)], verb_form
+    # Forms the boundary would otherwise drop are spelled out in TASK_SIGNALS, so they still hit.
+    assert "testgen" in [d["task_type"] for d in classify_task("run the testgen lane")]
+    assert "ux_review" in [d["task_type"] for d in classify_task("screenshot the output")]
+    assert "mechanical" in [d["task_type"] for d in classify_task("formatting only")]
+    # Initialisms do not inflect, so `ui` must not reach "uid" via the bare -d ending.
+    assert classify_task("check the uid field") == [], classify_task("check the uid field")
+    assert "ux_review" in [d["task_type"] for d in classify_task("the ui is broken")]
+    assert "codemod" in [d["task_type"] for d in classify_task("deduped the rows")]  # -e verb keeps -d
+
+    # DELIBERATE BREAK -> REVERT on the trailing boundary — the half that was missing.
+    _saved_pattern = _signal_pattern
+    try:
+        globals()["_signal_pattern"] = lambda s: rf"(?<![a-z]){re.escape(s)}"   # the old prefix rule
+        broken = [d["task_type"] for d in classify_task(audit_text)]
+        assert "implement" in broken, "break did not change behaviour — test is vacuous"
+    finally:
+        globals()["_signal_pattern"] = _saved_pattern
+    assert "implement" not in [d["task_type"] for d in classify_task(audit_text)], \
+        "revert did not restore the whole-word boundary"
 
     # IT MUST BE ABLE TO SAY NO — both when unclassifiable and when nothing declares a trigger.
     with tempfile.TemporaryDirectory(prefix="advisor-selftest-") as td:
