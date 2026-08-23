@@ -207,7 +207,8 @@ def reachable_set(*, path=None) -> dict:
 
 
 def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str = "",
-           record: bool = True, path=None, context: dict | None = None) -> dict:
+           record: bool = True, path=None, context: dict | None = None,
+           surface: str = "") -> dict:
     """Should the Orchestrator be used for this task, and which capabilities apply?
 
     `skill` names the skill that surfaced this work, if any; it is recorded with each match so the
@@ -217,12 +218,46 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     caps = capabilities.load(path or capabilities.REG)
     candidates = classify_task(text)
     if not candidates:
+        # A DECLARED BINDING MUST SURVIVE A CLASSIFICATION MISS. This early return used to drop
+        # straight out with an empty answer, so a surface with five declared capabilities got NOTHING
+        # whenever its own words did not hit the keyword vocabulary -- the binding depending on the
+        # classifier, which is the single thing it exists not to do. Free text that classifies badly
+        # is the common case, not the edge case.
+        declared = binding_for(surface or skill, path=path)
+        live = [(cid, why) for cid, why in sorted(declared.items())
+                if cid in caps and caps[cid].get("status") not in {"retired", "superseded"}]
+        if live:
+            entries = [{"capability_id": cid, "matched_task_type": None, "bound": True,
+                        "bound_only": True, "binding_reason": why,
+                        "entrypoint": caps[cid].get("entrypoint"), **_usability(caps[cid])}
+                       for cid, why in live]
+            try:
+                import capability_propensity
+                entries = capability_propensity.rank(entries, path=path)
+            except Exception:                                          # noqa: BLE001
+                pass
+            return {
+                "task": text, "experiment_id": experiment_id(text),
+                "useful": True, "confidence": "binding_only", "skill": skill or None,
+                "surface": (surface or skill) or None, "repository": repository,
+                "task_types": [], "capabilities": entries,
+                "dispatch_ready_count": sum(1 for e in entries if e["dispatch_ready"]),
+                "bound_count": len(live), "bound_capabilities": sorted(c for c, _ in live),
+                "not_applicable": [],
+                "coverage": {"ledger_count": len(caps), "matched": len(entries),
+                             "not_applicable": 0, "by_entry_mode": {}},
+                "reason": (f"could not classify this task, but {len(live)} capability(ies) are "
+                           f"DECLARED for surface {surface or skill!r} and apply regardless of "
+                           f"classification"),
+            }
         return {
             "task": text, "experiment_id": experiment_id(text),
             "useful": False, "confidence": "none", "skill": skill or None,
             "repository": repository, "task_types": [], "capabilities": [],
             "dispatch_ready_count": 0,
             "not_applicable": [],
+            "surface": (surface or skill) or None,
+            "bound_count": 0, "bound_capabilities": [],
             "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
                          "by_entry_mode": {}},
             "reason": ("could not classify this task into any work type the fleet records; "
@@ -286,6 +321,26 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     # the SET is unchanged, so a bad propensity can misorder a list and nothing else. Never-tried
     # capabilities carry an optimistic prior and an unconditional floor, so ranking cannot starve
     # the capabilities that have no evidence yet; that would be a gate blocking its own drain.
+    # DECLARED BINDING FIRST. A bound capability is added even if the keyword classifier missed it --
+    # that is the whole point: the binding must not depend on classification working. Unbound matches
+    # are kept and ranked after, never dropped, or the binding becomes a gate that starves its own
+    # promotion path.
+    bound = binding_for(surface or skill, path=path)
+    if bound:
+        present = {m["capability_id"] for m in matched}
+        for cap_id, reason in bound.items():
+            cap = caps.get(cap_id)
+            if cap is None or cap.get("status") in {"retired", "superseded"}:
+                continue
+            if cap_id not in present:
+                matched.append({"capability_id": cap_id, "matched_task_type": None,
+                                "entrypoint": cap.get("entrypoint"), "bound_only": True,
+                                **_usability(cap)})
+                unmatched.pop(cap_id, None)
+        for entry in matched:
+            entry["bound"] = entry["capability_id"] in bound
+            if entry["bound"]:
+                entry["binding_reason"] = bound[entry["capability_id"]]
     try:
         import capability_propensity
         matched = capability_propensity.rank(matched, path=path)
@@ -293,6 +348,10 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         # Ranking is an enhancement, never a dependency: advice must still be given when the
         # propensity store is unreadable.
         pass
+    if bound:
+        # Stable partition: bound set first in propensity order, then the rest in propensity order.
+        # Small-and-specific beats long-and-general -- that is the measured effect this implements.
+        matched.sort(key=lambda m: 0 if m.get("bound") else 1)
     usable = [m for m in matched if m["dispatch_ready"]]
     # A capability that matched for ANY classified task type is not "not applicable".
     for entry in matched:
@@ -316,6 +375,9 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         "classification_evidence": {c["task_type"]: c["hits"] for c in candidates},
         "capabilities": matched,
         "dispatch_ready_count": len(usable),
+        "surface": (surface or skill) or None,
+        "bound_count": len(bound),
+        "bound_capabilities": sorted(bound),
         "not_applicable": not_applicable,
         "coverage": {
             "ledger_count": len(caps),
@@ -379,6 +441,105 @@ def should_reask(previous: dict | None, current_context: dict) -> dict:
         reasons.append("capability_became_dispatch_ready")
 
     return {"reask": bool(reasons), "reasons": reasons}
+
+
+# ---------------------------------------------------------------------------
+# DECLARED SURFACE BINDINGS — layer 1 of three, and the one that works on day one.
+#
+# WHY THIS EXISTS, from the published measurements rather than taste. Tool-selection accuracy falls
+# with catalog size: ~84-95% at 50 tools, 41-83% at 200, near zero at 740, with a practical safe zone
+# of 10-20 per reasoning context, plus a "lost in the middle" effect that drops mid-list selection to
+# 22-52%. RAG-MCP measured the fix directly: exposing the FULL catalog gave 13.62% selection accuracy
+# and showing only the top-3 of 15 gave 43.13% -- triple, at half the tokens. Anthropic's own
+# subagent guidance names the failure too: "auto-selection is unreliable, and Claude frequently
+# handles tasks in the main session even when a sub-agent's description matches the work cleanly."
+#
+# So a 43-capability catalog queried generically is the 13.62% condition. `learned_associations()`
+# fixes it eventually but needs volume it does not have (11 observations). A DECLARED binding fixes
+# it immediately, with no classifier and no history, which is why it is layer 1.
+#
+# THE THREE LAYERS, in order of when they start working:
+#   1. this table            -- declared, per surface, 3-7 entries. Works on day one.
+#   2. capability_propensity -- orders WITHIN the bound set by measured usefulness.
+#   3. learned_associations  -- corrects the table over time from what a surface actually reaches for.
+#
+# LATCHED-GATE ANSWERS (a binding is a gate on selection, so it needs all three in writing):
+#   1. WHAT DECREMENTS IT? Unbound capabilities are still RETURNED, ranked after the bound ones and
+#      flagged `bound: false`. Binding is prioritisation, never concealment -- a hidden capability
+#      could never be selected, so it could never earn the evidence that would bind it.
+#   2. CAN THE DRAIN RUN WHILE CLOSED? Yes: an unbound capability can be selected on any round, and
+#      `learned_associations()` reads what was actually used, so the promotion path runs continuously.
+#   3. SAME WINDOW BOTH WAYS? Promotion and demotion both read `learned_associations()` over the same
+#      history. One source, so the two directions cannot drift apart.
+#
+# NOT PROSE, DELIBERATELY. The recursive loop must be able to change a binding without rewriting an
+# automation's prompt: `CLAUDE.md` §1 makes the manual mirror sync "the only circuit breaker between
+# an agent's change and the dispatcher that dispatches those agents", and a loop that edits lane
+# prompts is a self-modifying dispatch path. A surface's prompt says "consult your bound set"; the
+# bound set is data. Seed lives here (committed, diffable, generalises); instance promotions live in
+# the ledger (machine-local evidence), per the tool-vs-evidence split.
+#
+# Every entry carries WHY, because a binding with no rationale cannot be argued with later. The
+# reasons below are the lane audit's findings over 4,211 recorded rounds.
+# ---------------------------------------------------------------------------
+
+SURFACE_BINDINGS: dict[str, dict[str, str]] = {
+    "closer-lane": {
+        "adversarial-review": "its matcher IS {kind: closer_gate, name: high_stakes_review} -- built "
+                              "for this lane's complex-target selection, 0 invocations in 1,766 rounds",
+        "partitioned-review": "the ten-class batch sweep (a-j) is a partition adjudicated in prose; "
+                              "review-thread work in 1,022 of 1,766 rounds",
+        "runtime-ac-checks": "sweep classes (b)(c)(d) are merged-but-unverified, verifier non-PASS, "
+                             "and PASS-with-issue-open -- 30 fleet issues exist because merged work "
+                             "missed its own criteria",
+        "cross-repo-coordination": "the batch sweep is cross-repo by construction; 312 rounds",
+        "offload": "13 repos x 10 candidate classes every round is the largest read in the system, "
+                   "and the lanes account for ~0 of offload's 63 invocations",
+    },
+    "opener-lane": {
+        "deliberate-break-verifier": "the lane performs this exact break-then-revert proof in 271 of "
+                                     "2,445 rounds, instructed nowhere -- 0 hits in its TOML, its "
+                                     "rendered prompt and ~/.codex/bin, 10 in its rolling memory",
+        "testgen-lane": "writes regression coverage by hand in 339 rounds",
+        "codemod-campaign": "materialises phase series one issue at a time with no campaign identity "
+                            "(Trend #5935-#5942 is eight issues)",
+        "runtime-ac-checks": "stale-checkbox defects on its own PRs are unverified acceptance criteria",
+        "offload": "scans 40 durable holders and full review-thread sets per round",
+    },
+    "repo-audit": {
+        "adversarial-review": "the audit skill's findings are meant to be adversarially verified "
+                              "before filing; this is that step",
+        "offload": "whole-repo reads are the canonical offload case",
+        "partitioned-review": "a multi-dimension audit is a partition over review dimensions",
+        "testgen-lane": "audit findings about missing coverage become testgen work",
+    },
+}
+
+
+def binding_for(surface: str, *, path=None) -> dict[str, str]:
+    """The declared bound set for a surface, plus any promotions this instance has learned.
+
+    Seed comes from the committed table; promotions are read from the ledger, so an instance can
+    grow its own bindings without a code change and without touching any prompt.
+    """
+    if not surface:
+        return {}
+    out = dict(SURFACE_BINDINGS.get(surface) or {})
+    for cap_id, reason in _promoted_bindings(surface, path=path).items():
+        out.setdefault(cap_id, reason)
+    return out
+
+
+def _promoted_bindings(surface: str, *, path=None) -> dict[str, str]:
+    """Bindings this instance promoted from observed use. Machine-local evidence, never committed."""
+    caps = capabilities.load_declared(path or capabilities.REG)
+    out: dict[str, str] = {}
+    for cap_id, cap in caps.items():
+        for event in cap.get("event_history") or []:
+            meta = event.get("metadata") or {}
+            if meta.get("source") == "binding_promotion" and meta.get("surface") == surface:
+                out[cap_id] = str(meta.get("reason") or "promoted from observed use")
+    return out
 
 
 def experiment_id(task: str) -> str:
@@ -670,6 +831,74 @@ def _selftest_reach() -> None:
     # on a clean runner, spending a skip ceiling to check nothing where it matters.
 
 
+def _selftest_bindings() -> None:
+    """The declared binding must work where the classifier does not, and must never conceal.
+
+    Both halves are failures this implementation actually had. The first version returned NOTHING for
+    a surface with five declared capabilities whenever the task text missed the keyword vocabulary --
+    the binding depending on the classifier, which is the one thing it exists not to do.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="binding-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid, matcher in (("bound-a", {"kind": "closer_gate", "name": "g"}),
+                             ("bound-b", {"kind": "closer_gate", "name": "g"}),
+                             ("unbound-testgen", {"field": "task_type", "operator": "in",
+                                                  "value": ["testgen"]}),
+                             ("gone", {"kind": "closer_gate", "name": "g"})):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "retired" if cid == "gone" else "generated"
+            cap["matcher"] = matcher
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        real = SURFACE_BINDINGS.get("t-surface")
+        SURFACE_BINDINGS["t-surface"] = {"bound-a": "because a", "bound-b": "because b",
+                                        "gone": "retired, must be filtered"}
+        try:
+            # 1. CLASSIFICATION MISS: the binding still answers. This is the whole point.
+            miss = advise("xyzzy plugh frobnicate", surface="t-surface", path=ledger, record=False)
+            ids = [m["capability_id"] for m in miss["capabilities"]]
+            assert sorted(ids) == ["bound-a", "bound-b"], ids
+            assert miss["confidence"] == "binding_only", miss["confidence"]
+            assert miss["bound_count"] == 2, miss
+            assert all(m["binding_reason"] for m in miss["capabilities"]), miss["capabilities"]
+            # A retired capability must never be bound in.
+            assert "gone" not in ids, ids
+            # ...and with NO surface the same text still answers nothing, so the binding is what
+            # made the difference rather than a loosened classifier.
+            bare = advise("xyzzy plugh frobnicate", path=ledger, record=False)
+            assert bare["capabilities"] == [], bare
+
+            # 2. NEVER CONCEAL. A classifying task must still return the unbound match, ranked after
+            # the bound ones -- a hidden capability can never earn the evidence that would bind it.
+            hit = advise("add unit tests for the retry helper", surface="t-surface", path=ledger,
+                         record=False)
+            hid = [m["capability_id"] for m in hit["capabilities"]]
+            assert "unbound-testgen" in hid, hid
+            assert set(hid) >= {"bound-a", "bound-b", "unbound-testgen"}, hid
+            first_unbound = next(i for i, m in enumerate(hit["capabilities"]) if not m.get("bound"))
+            assert all(hit["capabilities"][i].get("bound") for i in range(first_unbound)), hid
+            assert not any(hit["capabilities"][i].get("bound")
+                           for i in range(first_unbound, len(hid))), hid
+
+            # 3. SIZE. The measured safe zone is 10-20 per context; a binding that grew past it would
+            # reintroduce the problem it was built to remove.
+            for surface, entries in SURFACE_BINDINGS.items():
+                assert 1 <= len(entries) <= 10, (surface, len(entries))
+                assert all(str(why).strip() for why in entries.values()), surface
+        finally:
+            if real is None:
+                SURFACE_BINDINGS.pop("t-surface", None)
+            else:
+                SURFACE_BINDINGS["t-surface"] = real
+    print("capability_advisor binding selftest: OK (survives a classification miss, never conceals "
+          "an unbound match, filters retired, bound sets stay small)")
+
+
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
@@ -798,6 +1027,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("task", nargs="*", help="the task, in plain words")
     ap.add_argument("--repository", default="")
     ap.add_argument("--lane", default="opener")
+    ap.add_argument("--surface", default="",
+                    help="the skill or automation asking (e.g. closer-lane); selects its declared binding")
     ap.add_argument("--context", default="",
                     help='JSON of trigger context you actually know, e.g. '
                          '\'{"closer_gate":"high_stakes_review"}\'')
@@ -807,12 +1038,14 @@ def main(argv: list[str]) -> int:
     if args.selftest:
         _selftest()
         _selftest_front_door()
+        _selftest_bindings()
         _selftest_reach()
         return 0
     if not args.task:
         ap.error("give the task in plain words, or use --selftest")
     result = advise(" ".join(args.task), repository=args.repository, lane=args.lane,
-                    context=json.loads(args.context) if args.context else None)
+                    context=json.loads(args.context) if args.context else None,
+                    surface=args.surface)
     print(json.dumps(result, indent=2) if args.json else format_advice(result), end="")
     return 0
 

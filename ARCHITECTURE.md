@@ -130,6 +130,79 @@ Attribution is to the ACTING run: only an `accepted=1` edge back-propagates, so 
 rejected records the disagreement and inherits no PASS. This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery.
 
+## The capability layer — what the tool can do, and how a surface finds it
+
+This doc described rails and roles and never once said "capability", which let a whole session treat
+the two axes as one. They are orthogonal:
+
+- **rail vs. role** is *how a thing is implemented* — deterministic code, or LLM judgment behind a
+  typed contract with a swappable backend.
+- **capability** is *what a tool in the Orchestrator does*. It is the unit of accounting, and one
+  capability routinely spans both (`adversarial-review` is role judgment, invoked by a rail gate,
+  recorded over a deterministic acceptance edge).
+
+The eight admission parts (`ADDING_CAPABILITIES.md`) are **not** the definition of a capability. They
+are what must be present for one to work with this system — invocable, observable, improvable.
+
+**Two kinds, and their measurement stories differ.** *Workflow* capabilities run implementation code
+and have a definable success condition, so effectiveness is a pass/fail rate. *Sub-agent* capabilities
+spin out a bounded, goal-scoped agent whose backend is router-chosen, so effectiveness is **backend
+fit** and needs arm + member identity. Never average across the two kinds.
+
+### Selection: three layers, because offering is all you can do
+
+A capability is *offered*, never mandated — the calling agent may have a better way to do the work,
+and constraining it to use a tool because we built it would be worse than it choosing otherwise. So
+the design problem is not compulsion, it is **raising the probability the right capability is chosen**.
+
+The published measurements say catalogue size is the dominant factor. Selection accuracy runs
+84–95% at ~50 tools, 41–83% at 200, and near zero at 740, with a practical safe zone of **10–20 per
+reasoning context** and a "lost in the middle" effect dropping mid-list selection to 22–52%. RAG-MCP
+measured the fix: full catalogue exposed gave **13.62%**, top-3-of-15 gave **43.13%**. Anthropic's own
+subagent guidance names the same failure — auto-selection is unreliable, and a session often does the
+work itself even when a subagent's description matches cleanly.
+
+So a 40-plus capability catalogue queried generically is the 13.62% condition, and the three layers
+are ordered by when each starts working:
+
+| Layer | Mechanism | Works from |
+|---|---|---|
+| 1 | `capability_advisor.SURFACE_BINDINGS` — declared, per surface, 3–7 entries, each with its reason | day one; no classifier, no history |
+| 2 | `capability_propensity.rank` — orders *within* the bound set by measured usefulness | first resolved trials |
+| 3 | `capability_advisor.learned_associations` — corrects the table from what a surface actually reaches for | once observations accumulate |
+
+Layer 1 is a **rail**: a declared table plus a deterministic keyword classifier, no model call. The
+committed table is the seed (tool); instance promotions live in the ledger (evidence).
+
+**Binding prioritises, it never conceals.** Unbound capabilities are still returned, ranked after the
+bound set and flagged `bound: false`. A concealed capability could never be selected, so it could
+never earn the evidence that would bind it — the gate would starve its own drain.
+
+**And the binding is DATA, not prose, deliberately.** The recursive loop below must be able to change
+what a surface reaches for without rewriting that surface's prompt. `CLAUDE.md` §1 makes the manual
+mirror sync "the only circuit breaker between an agent's change and the dispatcher that dispatches
+those agents"; a loop that edits lane prompts is a self-modifying dispatch path. A surface's prompt
+says *consult your bound set*; the bound set is a table.
+
+### The recursive loop (detection built, promotion is the next step)
+
+Selection should improve where it should have been chosen and was not. Three detectable signals,
+strongest first:
+
+1. **The surface did the capability's work by hand.** Measured, not hypothetical: the opener performed
+   `deliberate-break-verifier`'s exact break-then-revert contract in 271 of 2,445 rounds while never
+   invoking it — and that practice appears nowhere in its instructions, only in its rolling memory.
+2. **Named but not triggered, and the round went badly.** The control arm of every propensity
+   experiment is exactly this candidate set; `influence_edges.counterfactual` already carries the column.
+3. **Post-hoc failure attribution.** A verifier follow-up exists because merged work missed its own
+   criteria → `runtime-ac-checks` should have run.
+
+Promotion writes a `binding_promotion` event, which `binding_for()` reads — so the loop closes as a
+data change. **It must not ratchet:** raising selection pressure whenever a capability was not chosen,
+while "should have been chosen" is partly derived from that capability's own advocacy, optimises the
+measured number rather than usefulness. Promotion is therefore gated on an *external* signal (1 or 3
+above), never on the advisor's own naming.
+
 ## Gate 2 — the usability review panel (`ux_review.py`, built 2026-06-22)
 
 Frontend work has two gates. **Gate 1** is `frontend_verify` (a deterministic rail: assert→click→assert
