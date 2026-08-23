@@ -340,6 +340,48 @@ def _selftest_stale_runners() -> None:
     with tempfile.TemporaryDirectory(prefix="switch-review-mirror-") as td:
         assert stale_runners(mirror=Path(td)) == []
 
+    # DETERMINISTIC CLASSIFICATION, exercised with no dependence on the real process table. Until
+    # 2026-08-23 the only coverage of the compare-and-classify path needed a live process running
+    # mirror code, so on any CI runner this selftest returned early and the logic below could
+    # regress unseen -- the normal case going unchecked, which is the exact hole verify.py exists
+    # to close. A fabricated `ps` line plus a controlled mirror mtime pins both directions.
+    with tempfile.TemporaryDirectory(prefix="switch-review-fake-") as td:
+        fake_mirror = Path(td)
+        stamp = fake_mirror / "dispatcher.py"
+        stamp.write_text("# mirror code\n", encoding="utf-8")
+        mtime = 1_800_000_000.0
+        os.utime(stamp, (mtime, mtime))
+        real_run = subprocess.run
+
+        def fake_ps(*_a, **_k):
+            class R:
+                stdout = f"  4242    07:19:52 python3 {fake_mirror}/dispatcher.py --tick\n"
+
+            return R()
+
+        subprocess.run = fake_ps
+        try:
+            age = 7 * 3600 + 19 * 60 + 52          # the etime above, in seconds
+            # STALE: the process started one hour BEFORE the mirror was written.
+            rows = stale_runners(now=mtime + age - 3600, mirror=fake_mirror)
+            assert len(rows) == 1, rows
+            assert rows[0]["pid"] == "4242", rows
+            assert rows[0]["stale_by_hours"] == 1.0, rows
+            assert rows[0]["reason"], "a stale runner must say why it is stale"
+            # NOT STALE: the same process started one hour AFTER the mirror was written.
+            assert stale_runners(now=mtime + age + 3600, mirror=fake_mirror) == []
+            # An unparseable etime must be skipped, never guessed at.
+            def fake_ps_bogus(*_a, **_k):
+                class R:
+                    stdout = f"  4242    bogus python3 {fake_mirror}/dispatcher.py\n"
+
+                return R()
+
+            subprocess.run = fake_ps_bogus
+            assert stale_runners(now=mtime + age, mirror=fake_mirror) == []
+        finally:
+            subprocess.run = real_run
+
     live = stale_runners()
     if not live:
         # Prerequisite absent (nothing is running from the mirror), NAMED rather than silently

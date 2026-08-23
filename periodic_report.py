@@ -1213,16 +1213,27 @@ def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
     model identity can ever be RESOLVED (an `agy:`/`cursor:`/`vibe:` routing tag cannot), and how
     many of its worker attempts actually resolved.
 
-    Verdicts, in the order they block:
-      * ``no_runs``              - the seat did no work in the window; nothing to mine either way.
+    Verdicts, in the order the code EVALUATES them -- which is not the order they were listed in
+    until 2026-08-23. The list claimed to be "the order they block" while putting ``no_runs`` first
+    (it is checked fourth, after both profile checks), ``no_worker_attempt`` before
+    ``attempts_unresolved`` (it is the final else), and ``minable`` last (it is checked first). For a
+    verdict ladder the precedence IS the meaning, so a mis-ordered list misdescribes which fault a
+    seat is reported as having:
+      * ``minable``              - at least one resolved worker attempt exists. Checked first, so it
+                                   outranks every fault below.
       * ``no_profile``           - no registered profile, so no worker attempt can ever be written.
       * ``model_not_reportable`` - profile exists, but the adapter reports a routing tag, so the
                                    attempt completes unresolved and the work stays unminable.
-      * ``no_worker_attempt``    - profile and a reportable model, but nothing recorded an attempt.
+                                   PERMANENT, not pending -- no number of runs changes it, which is
+                                   why it outranks ``no_runs``.
+      * ``no_runs``              - the seat did no work in the window; nothing to mine either way.
       * ``attempts_unresolved``  - worker attempts exist, none carry a resolved model. Usually the
                                    seat's CLI keeps no per-session log; see
                                    `adapters.NO_SESSION_LOG_AGENTS` for the named reason.
-      * ``minable``              - at least one resolved worker attempt exists.
+      * ``no_worker_attempt``    - profile and a reportable model, but nothing recorded an attempt.
+                                   The final else, so it is only reached when no attempt exists at
+                                   all -- reporting it while attempts DO exist is the confidently
+                                   wrong direction the comment below guards against.
     """
     close = conn is None
     c = conn or feedback._conn()
