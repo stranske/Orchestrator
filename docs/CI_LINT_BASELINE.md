@@ -45,8 +45,8 @@ Why the file was missing is documented upstream, in the two places that disagree
 So the sync delivered a Gate that hard-requires a file the sync deliberately never delivers, and the
 repo never performed the documented copy step. The fix is that copy.
 
-A second blocker was hidden behind the first, and only became visible once the pins landed: see
-**coverage** below.
+A second blocker was hidden behind the first, and only became visible once the pins landed:
+**coverage**. It was drained upstream on 2026-08-23 and is now ON — see below.
 
 ## Current state
 
@@ -56,12 +56,13 @@ Measured 2026-08-23 with the pinned versions, after the drain described below.
 | --- | --- | --- | --- | --- |
 | `lint-ruff` | `ruff check --extend-exclude .workflows-lib .` | **0 findings** | 0 | **ON, green** |
 | `lint-format` | `black --check --line-length 100 --exclude '(\.venv\|\.workflows-lib\|node_modules)' .` | **0 files** | 0 | **ON, green** |
-| `typecheck-mypy` | `mypy --exclude .workflows-lib .` | **601 errors in 89 of 189 files** | **0 per PR** | OFF |
-| `coverage` | `pytest --cov --cov-config=pyproject.toml` | **1 startup error** | **0 from inside this repo** | OFF |
+| `typecheck-mypy` | `mypy --exclude .workflows-lib .` | **604 errors in 89 of 189 files** | **0 per PR** | OFF |
+| `coverage` | `pytest --cov` | **0 startup errors** | 0 | **ON, green** |
 | `python 3.12` / `python 3.13` | `pytest -m 'not quarantine and not slow' -n auto --dist=loadgroup` | **0 failures** (393 passed, 9 skipped) | 0 | **ON, green** |
 
-The two OFF rows are the ones that matter, and each states both quantities on purpose. `601 errors`
-alone reads as *be patient*; `601 errors, drainable 0 per PR` reads as what it is. The authoritative
+One OFF row remains, and it states both quantities on purpose. `604 errors` alone reads as
+*be patient*; `604 errors, drainable 0 per PR` reads as what it is. (`coverage` was the second such
+row until 2026-08-23; the entry below records how it drained rather than deleting the history.) The authoritative
 copy of each of those annotations lives beside the toggle itself, in the `Compute Python CI toggles`
 step of `.github/workflows/pr-00-gate.yml` — one place, so the call site and the `summary` job's
 coverage branch cannot drift apart.
@@ -140,25 +141,34 @@ so hoisting it would break the module. The rule stays on for every other file.
   `explicit_package_bases = True` the 601 above is a number anyone can regenerate rather than prose.
   It must be `mypy.ini` and not `pyproject.toml` or `setup.cfg` — see the next section.
 
-## Deferred: coverage
+## Drained 2026-08-23: coverage
 
-* **Blocking:** 1 startup error, and it is not about this repo's tests. With `coverage: true` the
-  reusable workflow appends `--cov-config=pyproject.toml` unconditionally
-  (`reusable-10-ci-python.yml:1975`). This repo has no `pyproject.toml`, so pytest dies before
-  collecting anything: `coverage.exceptions.ConfigError: Couldn't read 'pyproject.toml' as a config
-  file` — both runtimes, every test.
-* **Drainable:** 0 from inside this repo. **The two upstream assumptions are mutually exclusive
-  here.** Adding a `pyproject.toml` to satisfy the coverage flag makes the *same* workflow append
-  `-e '.[app,dev]'` to its install (`reusable-10-ci-python.yml:1683`), and 129 flat root modules with
-  no build backend cannot be installed that way. This is also why `ruff.toml` and `mypy.ini` are
-  separate files rather than one `pyproject.toml`, and `test_ci_gate_config.py` fails if one of those
-  three filenames appears without that being dealt with.
-* **Drains by:** an upstream fix — append `--cov-config` only when the file exists — or a real
-  packaging `pyproject.toml` for this repo. Either one, then flip the toggle.
-* **Cost of deferring, measured:** low and bounded. `coverage-min` was already `''`
-  (informational only), and `maint-coverage-guard.yml`, the sole consumer of the coverage artifacts,
-  has never executed here — its only run is `action_required`, held by GitHub's suspicious-workflow
-  review. No coverage trend was being read, so none is being lost.
+Kept rather than deleted, because the shape of this one is the lesson: a gate whose only exit lay
+outside the repo that hosted it.
+
+* **What blocked it:** 1 startup error, and it was never about this repo's tests. With
+  `coverage: true` the reusable workflow appended `--cov-config=pyproject.toml` unconditionally.
+  This repo has no `pyproject.toml`, so pytest died before collecting anything:
+  `coverage.exceptions.ConfigError: Couldn't read 'pyproject.toml' as a config file` — both
+  runtimes, every test.
+* **Why drainable was 0 *from here*:** the two upstream assumptions were mutually exclusive.
+  Adding a `pyproject.toml` to satisfy the coverage flag made the *same* workflow append
+  `-e '.[app,dev]'` to its install, and 129 flat root modules with no build backend cannot be
+  installed that way. No change inside this repository could satisfy both — which is precisely why
+  the annotation named an **upstream** drain instead of asking anyone here to be patient.
+* **How it drained:** `stranske/Workflows#3202`, merged 2026-08-23. `--cov-config` is now passed
+  only when the file exists (coverage otherwise uses its own `.coveragerc` / `setup.cfg` / `tox.ini`
+  discovery), and the editable install is gated on real packaging metadata — `[project]`,
+  `[build-system]` or `[tool.poetry]` — rather than on the filename. The `python ci` job pins that
+  workflow `@main`, so this repo picked the fix up with no version bump.
+* **Verified here, not assumed:** `pytest --cov --collect-only` now collects 402 tests in this tree
+  and emits a coverage report, with no `ConfigError`. `scripts/ci_lint_baseline.py` no longer
+  *asserts* this number — `measure_coverage()` runs that probe, so an upstream regression comes back
+  as a `1` in the table above instead of as silence.
+* **Still true:** this repo has no `pyproject.toml` and no `.coveragerc`, so coverage runs on its
+  built-in defaults, and `coverage-min` stays `''` (informational only). `test_ci_gate_config.py`
+  still fails if `setup.cfg` or `setup.py` appears, or a `pyproject.toml` that declares a
+  distribution; a config-only `pyproject.toml` would no longer force an install.
 
 ## The pins and the numbers move together
 

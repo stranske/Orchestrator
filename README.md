@@ -47,13 +47,15 @@ HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lan
   missing thing named — see `env_prereq.py` — and the floor file caps how many such skips are
   allowed, so quietly checking less is a red. Every skip and its reason is printed, so a green run
   always states what it did not check. On a machine with all prerequisites nothing skips at all.
-- **The remote Gate checks two of four python-ci legs, and says so.** `pr-00-gate.yml` calls the
-  fleet's shared Python CI. Ruff lint, Black format and the pytest matrix are ON and green;
-  `typecheck-mypy` and `coverage` are OFF, each annotated at the single place the toggles are
-  computed with its BLOCKING and its DRAINABLE quantity — 604 mypy errors, drainable 0 per PR, and
-  one coverage startup error that no change inside this repo can remove. `ruff.toml` pins the rule
-  set so the Gate and Autofix apply the same one; before that they disagreed and Autofix rewrote the
-  tree on every Gate failure. Recorded baseline, measurement commands and per-rule drains:
+- **The remote Gate checks three of four python-ci legs, and says so.** `pr-00-gate.yml` calls the
+  fleet's shared Python CI. Ruff lint, Black format, coverage and the pytest matrix are ON and
+  green; `typecheck-mypy` is OFF, annotated at the single place the toggles are computed with its
+  BLOCKING and its DRAINABLE quantity — 604 mypy errors, drainable 0 per PR. `coverage` was the
+  second OFF leg until 2026-08-23: its one startup error was not drainable from inside this repo at
+  all, and it cleared when the named UPSTREAM drain landed (`stranske/Workflows#3202` made
+  `--cov-config` conditional on the file existing). The annotation records how it drained rather
+  than being deleted. `ruff.toml` pins the rule set so the Gate and Autofix apply the same one;
+  before that they disagreed and Autofix rewrote the tree on every Gate failure. Recorded baseline, measurement commands and per-rule drains:
   `docs/CI_LINT_BASELINE.md`, regenerated with `python3 scripts/ci_lint_baseline.py`.
 - **Activation is evidence-backed.** `features.py` describes reusable code maturity;
   `capabilities.py` is the activation authority. An `active` declaration must prove its matcher,
