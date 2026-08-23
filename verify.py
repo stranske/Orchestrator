@@ -58,6 +58,72 @@ import sys
 HERE = pathlib.Path(__file__).resolve().parent
 FLOOR = HERE / ".verify-floor.json"
 
+# --- coverage instrumentation, OFF unless asked for -------------------------------------------
+# Every runner below spawns a SUBPROCESS. That is deliberate (a selftest must be exercised the way
+# it actually ships, and one module's crash must not take the harness with it), but it means a
+# coverage run wrapped around verify.py itself sees none of the work. Since a per-module
+# `--selftest` is this project's primary test mechanism -- 78 modules have no test_*.py at all,
+# ~79.6% of non-test root Python -- "coverage" measured over pytest alone reports a blind spot and
+# calls it a score. The measured gap on 2026-08-23: outcomes.py reported 9.0% and is 62% under its
+# own selftest; adversarial.py 14.1% vs 88%; gh_capacity.py 14.6% vs 86%; keepalive_outcomes.py
+# 14.0% vs 78%. All four selftests exit 0. Twelve of the twelve modules the report named as worst
+# were selftest-only.
+#
+# So `--coverage` prefixes each child with `-m coverage run --parallel-mode` and combines the data
+# files afterwards. It is OFF by default and MUST stay off: instrumenting ~90 subprocesses is much
+# slower, and the default path is the one that produces the verdict. Turning it on changes what is
+# MEASURED, never what is asserted -- every count, floor check and gate behaves identically.
+COVERAGE = False
+
+
+def child_argv(argv: list[str]) -> list[str]:
+    """Wrap a child command in `coverage run --parallel-mode`, or return it unchanged.
+
+    argv always starts with sys.executable. Coverage is inserted after it, so `-m pytest ...` and
+    `module.py --selftest` are both handled without the caller knowing which form it passed.
+    """
+    if not COVERAGE:
+        return argv
+    return [argv[0], "-m", "coverage", "run", "--parallel-mode", *argv[1:]]
+
+
+def coverage_reset() -> None:
+    """Delete stale parallel data files so a combine cannot mix runs."""
+    for stale in list(HERE.glob(".coverage.*")) + [HERE / ".coverage"]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
+def coverage_combine_and_report() -> str:
+    """Combine the per-process data files and return the report, or say why there is none.
+
+    An absent or empty data set is reported as such rather than as 0% or as silence: a coverage
+    number nobody produced must not be mistaken for a coverage number that is bad, and neither may
+    look like success. That is the same rule the selftest three-way split follows.
+    """
+    files = sorted(HERE.glob(".coverage.*"))
+    if not files:
+        return "coverage: NO DATA — no instrumented child wrote a data file (did any test run?)\n"
+    subprocess.run(
+        [sys.executable, "-m", "coverage", "combine", "--quiet"],
+        cwd=HERE,
+        capture_output=True,
+        text=True,
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "report"],
+        cwd=HERE,
+        capture_output=True,
+        text=True,
+    )
+    body = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0 and not body.strip():
+        return "coverage: FAILED to report and said nothing — treat as no measurement\n"
+    return f"coverage: combined {len(files)} instrumented process(es)\n{body}"
+
+
 # The token a selftest or gate prints to say "I did not run this, and here is what is missing".
 # Imported from env_prereq rather than duplicated: a shared literal in two files is a pair that
 # drifts, and a mark that drifts turns a skip back into a silent pass.
@@ -79,7 +145,9 @@ def run_pytest(*, extra: list[str] | None = None) -> dict:
     # a run with 1 real failure printed "pytest failures (0)", from the very code added here to
     # stop failures going unlisted. An instrument that reports less, introduced by the change that
     # was meant to make it report more.
-    cmd = [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "--no-header"]
+    cmd = child_argv(
+        [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "--no-header"]
+    )
     cmd += extra or []
     proc = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True)
     tail = (proc.stdout or "") + (proc.stderr or "")
@@ -145,7 +213,10 @@ def run_selftests(modules: list[str]) -> dict:
     ok, bad, skipped = [], {}, {}
     for mod in modules:
         proc = subprocess.run(
-            [sys.executable, f"{mod}.py", "--selftest"], cwd=HERE, capture_output=True, text=True
+            child_argv([sys.executable, f"{mod}.py", "--selftest"]),
+            cwd=HERE,
+            capture_output=True,
+            text=True,
         )
         out = (proc.stdout or "") + (proc.stderr or "")
         # A selftest must both exit 0 AND say something. A silent zero-exit is the very failure
@@ -180,7 +251,9 @@ GATES = (
 def run_gates() -> dict:
     out = {}
     for name, argv in GATES:
-        proc = subprocess.run([sys.executable, *argv], cwd=HERE, capture_output=True, text=True)
+        proc = subprocess.run(
+            child_argv([sys.executable, *argv]), cwd=HERE, capture_output=True, text=True
+        )
         text = (proc.stdout or "") + (proc.stderr or "")
         # Same three-way split as the selftests: a gate that could not judge here says so with
         # the shared mark, and is reported as SKIP rather than folded into `ok`.
@@ -795,12 +868,30 @@ def main() -> int:
         action="store_true",
         help="record the current counts as the floor (only when everything passes)",
     )
+    ap.add_argument(
+        "--coverage",
+        action="store_true",
+        help=(
+            "also measure coverage, by running each child under `coverage run --parallel-mode` "
+            "and combining. Much slower; OFF by default. Needed because the per-module "
+            "--selftest is a SUBPROCESS, so a pytest-only coverage run cannot see ~80%% of this "
+            "codebase and reports the blind spot as a score."
+        ),
+    )
     args = ap.parse_args()
     if args.selftest:
         _selftest()
         return 0
+    if args.coverage:
+        globals()["COVERAGE"] = True
+        coverage_reset()
     code, text = verify(update_floor=args.update_floor)
     print(text, end="")
+    if args.coverage:
+        # Printed AFTER the verdict, and it never alters the exit code. Coverage is a measurement,
+        # not a gate: making it one here would be a threshold nobody agreed to, against a number
+        # that has been wrong until this run.
+        print("\n" + coverage_combine_and_report(), end="")
     return code
 
 
