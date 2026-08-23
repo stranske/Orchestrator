@@ -936,14 +936,36 @@ def test_late_sweep_completes_terminal_attempts_never_one_in_flight(tmp_path, mo
         assert report["excluded_not_terminal"] == {"started": 1, "failed": 1}
 
         # DELIBERATE BREAK: drop the status clause, restoring the pre-fix query exactly.
+        #
+        # This is keyed on an EXACT substring, trailing space included, so it has to fail loudly
+        # when that substring stops matching. A reformatted query would make `replace` a silent
+        # no-op: the filter would keep protecting the row, and the corruption assertion below would
+        # fail while blaming the fix rather than this fixture. Two guards, because there are two
+        # ways to go stale -- the clause moves within a query still recognisable (caught per
+        # statement), or the query itself becomes unrecognisable so nothing is ever stripped
+        # (caught by `stripped` after the run). Only the second covers an aliased or re-ordered
+        # rewrite, which is why the per-statement assert alone is not enough.
         real_conn = feedback._conn
+        clause = "AND ea.status='unresolved' "
+        stripped = []
 
         class _Unfiltered:
             def __init__(self, c):
                 self._c = c
 
             def execute(self, sql, *a):
-                return self._c.execute(sql.replace("AND ea.status='unresolved' ", ""), *a)
+                # The candidate query is the only statement carrying the clause. Identify it by
+                # the FROM/JOIN and ORDER BY fragments -- the not-terminal count query shares the
+                # FROM/JOIN but ends in GROUP BY, so it is not mistaken for the candidate.
+                if "FROM execution_attempts ea JOIN runs r" in sql and "ORDER BY r.ts DESC" in sql:
+                    assert clause in sql, (
+                        f"deliberate break is STALE: the candidate query no longer contains "
+                        f"{clause!r}, so stripping it does nothing and the corruption assertion "
+                        f"below would blame the fix. Update this fixture. SQL: {sql!r}"
+                    )
+                    stripped.append(sql)
+                    return self._c.execute(sql.replace(clause, ""), *a)
+                return self._c.execute(sql, *a)
 
             def __getattr__(self, name):
                 return getattr(self._c, name)
@@ -957,6 +979,11 @@ def test_late_sweep_completes_terminal_attempts_never_one_in_flight(tmp_path, mo
 
         monkeypatch.setattr(feedback, "_conn", lambda: _Unfiltered(real_conn()))
         ledger_reconcile.resolve_unresolved_worker_attempts(apply=True)
+        assert stripped, (
+            "deliberate break never fired: nothing matched the candidate query's FROM/JOIN + "
+            "ORDER BY signature, so no clause was stripped and the assertions below prove "
+            "nothing. Update this fixture to match the current query."
+        )
         broken_status, broken_model, broken_completed = _row("sweep-inflight")
         assert (broken_status, broken_model) == ("complete", "gpt-5.6-terra"), (
             "the break must reproduce the corruption: a running worker stamped with an "
