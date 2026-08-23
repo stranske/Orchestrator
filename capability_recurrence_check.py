@@ -1033,7 +1033,7 @@ def _labels_of(fixture: dict, *, offline: bool) -> tuple[list[str], str, str]:
         got = _fetch_issue(fixture["repo"], fixture["issue"])
         if got:
             return (
-                [l["name"] for l in got.get("labels", [])],
+                [lab["name"] for lab in got.get("labels", [])],
                 got.get("title") or "",
                 f"live {fixture['repo']}#{fixture['issue']}",
             )
@@ -1072,7 +1072,7 @@ def replay(*, offline: bool = False) -> dict:
                     import issue_readiness
 
                     repaired = issue_readiness.task_label_for(
-                        {"labels": [{"name": l} for l in labels], "title": title}
+                        {"labels": [{"name": lab} for lab in labels], "title": title}
                     )
                 except Exception:
                     repaired = None

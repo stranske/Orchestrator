@@ -341,7 +341,7 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
         problems.append("pytest collected ZERO tests — the suite did not run")
     if py["failed"]:
         problems.append(f"{py['failed']} pytest failure(s)/error(s)")
-    fc, fp = int(floor.get("collected", 0)), int(floor.get("passed", 0))
+    fc = int(floor.get("collected", 0))
     problems += _floor_problems(floor, py)
     if st["failed"]:
         problems.append(
