@@ -182,16 +182,23 @@ def labels_producing(task_type: str) -> list[str]:
     return sorted(l for l in vocab if backlog.classify([l]) == task_type)
 
 
-def _entrypoint_files(cap: dict) -> list[Path]:
-    """Local .py files named by the entrypoint declaration.
+# A basename that could actually BE a module in this tree. `exp_abcd.py:followup ->
+# synthesis_promotion.py:reconcile` tokenises the arrow as a token of its own, which probes for a
+# file called `->.py`; harmless while only existence was asked, but reporting it as a MISSING module
+# would fabricate a gap out of punctuation — the exact class of finding this module exists to avoid.
+_MODULE_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*\.py\Z")
 
-    Entrypoints come in three shapes and all three must resolve, or the audit invents defects:
-    `watch.py`, `roles.py:run_triage_agent`, and `dispatcher.offload` (module.function, no `.py`).
-    The third form produced a false `entrypoint_missing` for `offload` — a capability running
-    196x/week — which is precisely the kind of fabricated finding this module exists to prevent.
+
+def _declared_modules(cap: dict) -> list[tuple[str, list[str]]]:
+    """Per entrypoint token, the .py basenames it could name. Existence is NOT consulted.
+
+    Split out of `_entrypoint_files` so the same parse answers two different questions: "which
+    files ARE here" (below) and "which files did this row CLAIM" (`entrypoint_presence`). Two
+    parses would drift, and the drift would be invisible — the second one would quietly disagree
+    with the first about what a row even declared.
     """
     raw = str(cap.get("entrypoint") or "")
-    out: list[Path] = []
+    out: list[tuple[str, list[str]]] = []
     for token in re.split(r"[\s,;]+|(?<=\.py)/", raw):
         token = token.strip()
         if not token:
@@ -205,12 +212,240 @@ def _entrypoint_files(cap: dict) -> list[Path]:
             parts = stem.split(".")
             for i in range(len(parts), 0, -1):
                 candidates.append(".".join(parts[:i]) + ".py")
+        candidates = [c for c in candidates if _MODULE_NAME_RE.match(c)]
+        if candidates:
+            out.append((token, candidates))
+    return out
+
+
+def _entrypoint_files(cap: dict) -> list[Path]:
+    """Local .py files named by the entrypoint declaration.
+
+    Entrypoints come in three shapes and all three must resolve, or the audit invents defects:
+    `watch.py`, `roles.py:run_triage_agent`, and `dispatcher.offload` (module.function, no `.py`).
+    The third form produced a false `entrypoint_missing` for `offload` — a capability running
+    196x/week — which is precisely the kind of fabricated finding this module exists to prevent.
+    """
+    out: list[Path] = []
+    for _token, candidates in _declared_modules(cap):
         for name in candidates:
             path = HERE / name
             if path.exists() and path not in out:
                 out.append(path)
                 break
     return out
+
+
+# --------------------------------------------------------- is the declared code even in this tree?
+#
+# THE DEFECT (observed 2026-08-22). The ledger row `evidence-acquisition` (entrypoint
+# `evidence_acquisition.py:run`) sat in the SHARED machine-local ledger while its module existed
+# only on an unmerged branch, in a sibling worktree. `verify.py` therefore went red in every OTHER
+# worktree with three failures that named only the missing admission parts:
+#
+#     test_capability_admission  -> {'evidence-acquisition': ['caller_exists','heartbeat','fixture']}
+#     test_capability_set_coverage::test_every_capability_has_a_recurrence_fixture
+#     test_model_tier_resolution::test_every_capability_has_a_heartbeat_call_site
+#
+# All three read as "a row registered with no implementation — retire it, or waive it". Both of
+# those actions would have DISCARDED finished, CI-green work. And CI cannot catch the confusion:
+# `ci.yml` points ORCH_LOCAL_RUNTIME at an empty temp dir, so the ledger bootstraps to the rows the
+# code declares and the extra row never exists there — main was green while local verify was red.
+#
+# The two situations look identical in that output and their fixes are OPPOSITE:
+#   * module ABSENT from this tree -> WAIT OR MERGE. The declaration is fine; the code is elsewhere.
+#   * module PRESENT but its caller/heartbeat/fixture missing -> FIX THE DECLARATION.
+#
+# This is structural, not a one-off: the ledger is shared per MACHINE ($ORCH_LOCAL_RUNTIME) while
+# code is branch-isolated per WORKTREE, so any two concurrent sessions can produce it.
+#
+# DIAGNOSTIC ONLY, deliberately. Nothing here waives, retires, suppresses or skips anything — the
+# three checks still fail, exactly as loudly. What changes is that the failure names which of the
+# two situations it is, and where the code actually is.
+ENTRYPOINT_PRESENT = "present"
+ENTRYPOINT_ABSENT = "absent_here"
+ENTRYPOINT_EXTERNAL = "external_repo"
+ENTRYPOINT_UNDECLARED = "undeclared"
+
+
+def _repo_root() -> Path:
+    """The checkout that `.claude/worktrees/*` hangs off, whether we are IN it or in a worktree."""
+    if HERE.parent.name == "worktrees" and HERE.parent.parent.name == ".claude":
+        return HERE.parent.parent.parent
+    return HERE
+
+
+def sibling_checkouts() -> list[tuple[Path, str]]:
+    """Other checkouts of THIS repo, where a module absent here may legitimately live.
+
+    Filesystem only, on purpose. `git worktree list` would be authoritative, but git on this
+    workspace's cloud-sync volume is the documented slow/corruption hazard, this runs inside a test
+    assertion message, and a directory that git has forgotten about still holds the code we are
+    trying to account for. A checkout is recognised by carrying `capabilities.py`, so an unrelated
+    directory under `.claude/worktrees/` cannot masquerade as one.
+    """
+    root = _repo_root()
+    here = HERE.resolve()
+    out: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+
+    def _add(path: Path, label: str) -> None:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        if resolved == here or str(resolved) in seen:
+            return
+        if not (path / "capabilities.py").is_file():
+            return
+        seen.add(str(resolved))
+        out.append((path, label))
+
+    _add(root, "repo root")
+    worktrees = root / ".claude" / "worktrees"
+    if worktrees.is_dir():
+        try:
+            children = sorted(p for p in worktrees.iterdir() if p.is_dir())
+        except OSError:
+            children = []
+        for child in children:
+            _add(child, f".claude/worktrees/{child.name}")
+    return out
+
+
+def entrypoint_presence(cap: dict) -> dict:
+    """Is the code this row DECLARES actually in this tree, and if not, where is it?
+
+    Four states, because collapsing any two of them puts a reader on the wrong fix:
+      * `present`       — at least one declared module resolves here. Missing admission parts are
+                          then a DECLARATION problem, and the row is the thing to change.
+      * `absent_here`   — the declaration names local modules and none of them exist here. The row
+                          was registered by another checkout; this is wait-or-merge.
+      * `external_repo` — the declaration names a path in a SIBLING REPOSITORY
+                          (`Workflows/scripts/...`). Deliberate and long-standing; not a worktree
+                          gap. Uses the same rule as the `entrypoint_external` defect below, which
+                          now calls this function so the two cannot disagree.
+      * `undeclared`    — the row names no module at all.
+
+    `missing` is per TOKEN, not per candidate name: `dispatcher.offload` legitimately probes
+    `dispatcher.offload.py` before `dispatcher.py`, so calling the first one "missing" would
+    manufacture a gap out of the probe order. A row where SOME tokens resolve stays `present` —
+    its code runs here, so its fix is still the declaration — but the unresolved tokens are
+    reported in `missing` for a caller that wants them.
+    """
+    raw = str(cap.get("entrypoint") or "").strip()
+    declared = _declared_modules(cap)
+    if not raw or not declared:
+        return {"state": ENTRYPOINT_UNDECLARED, "entrypoint": raw, "present": [],
+                "missing": [], "found_in": [], "searched": [],
+                "detail": "the row declares no entrypoint module at all"}
+
+    present = [p.name for p in _entrypoint_files(cap)]
+    missing = [{"token": token, "candidates": candidates}
+               for token, candidates in declared
+               if not any((HERE / name).exists() for name in candidates)]
+    if present:
+        return {"state": ENTRYPOINT_PRESENT, "entrypoint": raw, "present": present,
+                "missing": missing, "found_in": [], "searched": [],
+                "detail": f"{', '.join(present)} present in this tree"}
+
+    # A path with directory components names another REPOSITORY, not a module we failed to find.
+    external = any("/" in token and not token.startswith(("./", "/"))
+                   for token, _candidates in declared)
+    if external:
+        return {"state": ENTRYPOINT_EXTERNAL, "entrypoint": raw, "present": [],
+                "missing": missing, "found_in": [], "searched": [],
+                "detail": f"{raw} names a path in another repository"}
+
+    wanted = [c for _token, candidates in declared for c in candidates]
+    searched, found_in = [], []
+    for path, label in sibling_checkouts():
+        searched.append(label)
+        hits = sorted({name for name in wanted if (path / name).is_file()})
+        if hits:
+            found_in.append({"checkout": label, "path": str(path), "modules": hits})
+    names = ", ".join(dict.fromkeys(
+        c for _token, candidates in declared for c in candidates[-1:]))
+    return {"state": ENTRYPOINT_ABSENT, "entrypoint": raw, "present": [], "missing": missing,
+            "found_in": found_in, "searched": searched,
+            "detail": f"{names} is not in this tree"}
+
+
+def absent_entrypoint_report(capability_ids, *, path: Path | None = None) -> dict:
+    """Which of these rows declare code that is NOT in this tree, and where that code was found.
+
+    `total` travels with `absent` on purpose: the runtime rule in CLAUDE.md is that a count must
+    arrive next to what bounds it. "1 absent" reads as an emergency; "1 of 43 rows absent" reads
+    as one session's in-flight branch, which is what it is.
+    """
+    # `load_declared`, NOT `load`: the writing loader bootstraps and RECONCILES ONTO DISK, and a
+    # diagnostic printed inside an assertion message must never mutate shared machine-local state
+    # as a side effect of explaining a failure. `load_declared` reconciles an in-memory copy and
+    # writes nothing, and both sibling checks already read the ledger through it.
+    ledger = capabilities.load_declared(path or capabilities.REG)
+    wanted = [cid for cid in capability_ids if cid in ledger]
+    absent = []
+    for cid in wanted:
+        verdict = entrypoint_presence(ledger[cid])
+        if verdict["state"] == ENTRYPOINT_ABSENT:
+            absent.append({"capability_id": cid, **verdict})
+    return {"absent": absent, "checked": len(wanted), "total": len(ledger)}
+
+
+def absent_entrypoint_note(capability_ids, *, path: Path | None = None,
+                           indent: str = "  ") -> str:
+    """The diagnostic block, or '' when every row's code is here. Appended to a FAILURE, never a skip.
+
+    One formatter for all three checks so they cannot tell three different stories about the same
+    row — which is how "retire it" and "wait for the merge" ended up looking like the same finding.
+    Returning '' when there is nothing to say keeps the ordinary declaration failure unchanged.
+    """
+    try:
+        rep = absent_entrypoint_report(capability_ids, path=path)
+    except Exception as exc:                                       # noqa: BLE001
+        # A diagnostic must never convert the real assertion into an error about the diagnostic.
+        return (f"\n{indent}[entrypoint-presence diagnostic unavailable: "
+                f"{type(exc).__name__}: {exc}]")
+    if not rep["absent"]:
+        return ""
+    n = len(rep["absent"])
+    # Both numbers in the same place, per the runtime rule in CLAUDE.md: "1 absent" reads as an
+    # emergency, "1 of 43 ledger rows" reads as one session's in-flight branch, which is what it is.
+    # Counted against the LEDGER rather than against the failing set, so the sentence reads the
+    # same whether one row failed or twenty.
+    verb, pronoun = ("declares", "Its") if n == 1 else ("declare", "Their")
+    out = [
+        "",
+        f"{indent}MODULE ABSENT FROM THIS TREE — {n} of the {rep['total']} ledger rows {verb} an "
+        f"entrypoint whose code",
+        f"{indent}is not in this checkout, and is named above. {pronoun} "
+        f"caller/heartbeat/fixture CANNOT be here either:",
+    ]
+    for row in rep["absent"]:
+        out.append(f"{indent}  {row['capability_id']}  declares {row['entrypoint']} — "
+                   f"{row['detail']}")
+        if row["found_in"]:
+            for hit in row["found_in"]:
+                out.append(f"{indent}      but {', '.join(hit['modules'])} IS present in "
+                           f"{hit['checkout']}")
+        elif row["searched"]:
+            out.append(f"{indent}      not found in {len(row['searched'])} sibling checkout(s) "
+                       f"either ({', '.join(row['searched'][:4])})")
+        else:
+            out.append(f"{indent}      no sibling checkout to search from here")
+    out += [
+        f"{indent}This is WAIT-OR-MERGE, not fix-the-declaration. The capability ledger is SHARED "
+        f"machine-local",
+        f"{indent}state while code is branch-isolated per worktree, so a row another session "
+        f"registered reads",
+        f"{indent}exactly like a row with no implementation. Check the checkouts named above and "
+        f"the repo's open",
+        f"{indent}PRs BEFORE retiring the row or adding a WAIVERS entry — either one discards "
+        f"finished work.",
+        f"{indent}Any row NOT listed here has its module present, and for those the fix is the "
+        f"declaration.",
+    ]
+    return "\n".join(out)
 
 
 # --------------------------------------------------------------------------- static analysis
@@ -809,8 +1044,13 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
         elif hb["status"] == "no_local_entrypoint":
             # A cross-repo entrypoint is not a MISSING file — reporting it as missing implies a
             # local defect and hides the real blocker, which is a change in another repository.
+            # The external/missing split comes from `entrypoint_presence` rather than a second
+            # inline `"/" in detail` test, so this row and the diagnostic the failing checks print
+            # cannot classify the same declaration two different ways.
+            presence = entrypoint_presence(cap)
+            row["entrypoint_presence"] = presence
             detail = str(hb.get("detail") or "")
-            external = "/" in detail and not detail.startswith(("./", "/"))
+            external = presence["state"] == ENTRYPOINT_EXTERNAL
             caller = external_caller(cap)
             row["external_caller"] = caller
             if caller and caller.get("exists"):
@@ -823,6 +1063,17 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
                 if caller:
                     notes.append(f"awaiting caller {caller.get('workflow')} in "
                                  f"{caller.get('repo')}")
+                # WHERE the code actually is, when it is somewhere. `entrypoint_missing` alone
+                # reads as "registered with no implementation"; a named sibling checkout turns the
+                # same row into "another session's in-flight branch", which is the opposite action.
+                # ONE note, capped: worktrees come and go on an active fleet, and a row that grows
+                # a note per checkout buries the defect it is explaining.
+                hits = presence.get("found_in") or []
+                if hits:
+                    shown = ", ".join(h["checkout"] for h in hits[:3])
+                    more = f" (+{len(hits) - 3} more)" if len(hits) > 3 else ""
+                    notes.append(f"module absent HERE but present in {shown}{more} — "
+                                 f"wait-or-merge, not retire")
         # A kind-matcher is correct for this class, but the INVENTORY must not ask it a
         # task_type question — that is what produced years of meaningless `no_matching_work`.
         notes.append("kind-matched: judge by whether its code path runs, not by work matching")
@@ -1348,6 +1599,105 @@ def _selftest() -> None:
     assert [p.name for p in _entrypoint_files({"entrypoint": "roles.py:run_triage_agent"})] \
         == ["roles.py"]
     assert _entrypoint_files({"entrypoint": "Workflows/scripts/nope.py"}) == []
+    # The split-out parse must not fabricate a module out of punctuation: the `->` in
+    # `exp_abcd.py:followup -> synthesis_promotion.py:reconcile` is a separator, and reporting it
+    # as a MISSING module would be a defect invented by the diagnostic itself.
+    assert [t for t, _c in _declared_modules(
+        {"entrypoint": "exp_abcd.py:followup -> synthesis_promotion.py:reconcile"})] \
+        == ["exp_abcd.py:followup", "synthesis_promotion.py:reconcile"]
+
+    # ---- MODULE ABSENT FROM THIS TREE vs. PRESENT-BUT-INCOMPLETE (2026-08-22) ----------------
+    # The two have OPPOSITE fixes — wait-or-merge versus fix-the-declaration — and until this
+    # existed they produced byte-identical output. So the test is the flip itself: create the
+    # module and the verdict must become `present` with an EMPTY note; delete it and the verdict
+    # must return to `absent_here` with a note that names where the code actually is. A verdict
+    # that cannot be made to change is not measuring anything.
+    with tempfile.TemporaryDirectory(prefix="cap-absent-") as td3:
+        droot = Path(td3)
+        wt = droot / ".claude" / "worktrees"
+        here_tree, other = wt / "mine", wt / "theirs"
+        for tree in (droot, here_tree, other):
+            tree.mkdir(parents=True, exist_ok=True)
+            (tree / "capabilities.py").write_text("# a checkout is recognised by this file\n")
+        (other / "brand_new.py").write_text("def run():\n    pass\n")
+        ledger_path = droot / "capabilities.json"
+        rows = {
+            "absent-row": {**capabilities._blank_capability("absent-row"),
+                           "entrypoint": "brand_new.py:run"},
+            "present-row": {**capabilities._blank_capability("present-row"),
+                            "entrypoint": "capabilities.py"},
+            "external-row": {**capabilities._blank_capability("external-row"),
+                             "entrypoint": "Workflows/scripts/elsewhere.py"},
+            "undeclared-row": {**capabilities._blank_capability("undeclared-row"),
+                               "entrypoint": None},
+        }
+        capabilities.save(rows, ledger_path)
+        saved_here = HERE
+        try:
+            globals()["HERE"] = here_tree
+
+            # Each state is distinct, and the two that mean "not here" are NOT merged: a sibling
+            # repo's path is a deliberate cross-repo declaration, not a worktree gap.
+            assert entrypoint_presence(rows["absent-row"])["state"] == ENTRYPOINT_ABSENT
+            assert entrypoint_presence(rows["present-row"])["state"] == ENTRYPOINT_PRESENT
+            assert entrypoint_presence(rows["external-row"])["state"] == ENTRYPOINT_EXTERNAL
+            assert entrypoint_presence(rows["undeclared-row"])["state"] == ENTRYPOINT_UNDECLARED
+
+            # The sibling checkout is FOUND and NAMED — a bare "absent" would still read as
+            # "retire it", which is the wrong action and the whole reason this exists.
+            v = entrypoint_presence(rows["absent-row"])
+            assert [h["checkout"] for h in v["found_in"]] == [".claude/worktrees/theirs"], v
+            assert v["found_in"][0]["modules"] == ["brand_new.py"], v
+            # And this tree is never offered as the place the code might be.
+            assert ".claude/worktrees/mine" not in v["searched"], v
+
+            # The report scopes to the rows it was ASKED about, and carries the denominator.
+            rep = absent_entrypoint_report(sorted(rows), path=ledger_path)
+            assert [r["capability_id"] for r in rep["absent"]] == ["absent-row"], rep
+            assert rep["checked"] == 4 and rep["total"] == 4, rep
+            assert absent_entrypoint_report(["present-row"], path=ledger_path)["absent"] == []
+
+            # The note must say WHICH situation this is, WHERE the code is, and what NOT to do.
+            note = absent_entrypoint_note(sorted(rows), path=ledger_path)
+            for phrase in ("ABSENT FROM THIS TREE", "absent-row", ".claude/worktrees/theirs",
+                           "WAIT-OR-MERGE", "WAIVERS"):
+                assert phrase in note, (phrase, note)
+            # It must NOT accuse a row whose module is right here.
+            assert "present-row" not in note and "external-row" not in note, note
+            # Silence when there is nothing to say, so an ordinary declaration failure reads
+            # exactly as it did before.
+            assert absent_entrypoint_note(["present-row"], path=ledger_path) == ""
+
+            # ---- DELIBERATE BREAK -> REVERT ---------------------------------------------------
+            # BREAK: land the module in this tree. The verdict must flip to `present` and the
+            # note must fall silent, because the fix is now the declaration, not a merge.
+            (here_tree / "brand_new.py").write_text("def run():\n    pass\n")
+            assert entrypoint_presence(rows["absent-row"])["state"] == ENTRYPOINT_PRESENT, \
+                "a module that IS in this tree must not be reported absent"
+            assert absent_entrypoint_note(sorted(rows), path=ledger_path) == "", \
+                "the note must go quiet once the code is here — otherwise it sends a reader to " \
+                "wait for a merge that already happened"
+            # REVERT: take it away again and the original verdict must come back exactly.
+            (here_tree / "brand_new.py").unlink()
+            assert entrypoint_presence(rows["absent-row"])["state"] == ENTRYPOINT_ABSENT
+            assert absent_entrypoint_note(sorted(rows), path=ledger_path) == note, \
+                "the diagnostic must be a function of the tree, not of call order"
+
+            # DIAGNOSTIC ONLY. It reports; it must not be able to shrink a failing set or turn a
+            # red into a skip. Proven on the real shape: the note is APPENDED to a message about
+            # a non-empty `missing` list, and that list is untouched by the append.
+            missing = sorted(rows)
+            message = f"{len(missing)} capability(ies) have NO recurrence fixture: {missing}"
+            assert sorted(rows) == missing, "the note's inputs must not be mutated"
+            assert not isinstance(absent_entrypoint_note(missing, path=ledger_path), bool)
+            assert message in (message + absent_entrypoint_note(missing, path=ledger_path))
+
+            # An UNREADABLE ledger must degrade to a visible note, never to an exception that
+            # replaces the real assertion with a complaint about the diagnostic.
+            broken = absent_entrypoint_note(sorted(rows), path=droot / "not-a-ledger-dir")
+            assert broken == "" or "diagnostic unavailable" in broken, broken
+        finally:
+            globals()["HERE"] = saved_here
     # (b) a mention inside a shell COMMENT is not a caller — matching it reported a
     # main()-stranded heartbeat as reachable, which is a false PASS.
     with tempfile.TemporaryDirectory(prefix="cap-cmt-") as td2:
@@ -1391,7 +1741,9 @@ def _selftest() -> None:
 
     print("capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
           "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
-          "directions, advisor reach + narrowing, progress + regression tracking)")
+          "directions, advisor reach + narrowing, progress + regression tracking, "
+          "entrypoint absent-here vs present vs external-repo vs undeclared with the "
+          "create/delete flip and a diagnostic that cannot suppress a failure)")
 
 
 def main(argv: list[str]) -> int:

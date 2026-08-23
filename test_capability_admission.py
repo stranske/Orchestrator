@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 
 import capabilities
+import capability_activation_audit as audit
 import capability_admission as admission
 import env_prereq
 
@@ -35,10 +36,16 @@ def test_new_capabilities_carry_all_required_parts():
     failing = rep["enforced_failing"]
     rows = {r["capability_id"]: r for r in rep["rows"]}
     detail = {cid: rows[cid]["missing"] for cid in failing}
+    # A row whose MODULE is not in this checkout cannot have its caller, heartbeat or fixture here
+    # either, and `['caller_exists','heartbeat','fixture']` on its own reads as "registered with no
+    # implementation — retire it". `evidence-acquisition` was exactly that on 2026-08-22 and
+    # retiring it would have discarded merged-ready work. Same helper as the two sibling checks, so
+    # all three tell one story.
     assert not failing, (
         f"{len(failing)} capability(ies) added since the admission gate are missing required "
         f"parts: {detail}. Declare them in the ledger, or add an expiring WAIVERS entry with a "
         f"reason — never leave it undeclared."
+        + audit.absent_entrypoint_note(failing)
     )
 
 
@@ -219,7 +226,10 @@ def main() -> int:
         except AssertionError as exc:
             failures.append(fn.__name__)
             print(f"  FAIL {fn.__name__}")
-            print(f"       {str(exc)[:400]}")
+            # 400 chars cut the absent-module diagnostic in half — a truncated explanation of WHY
+            # a row looks unimplemented is the same defect as no explanation, so the cap is set
+            # above the longest message any check here produces rather than at a round number.
+            print(f"       {str(exc)[:2000]}")
     if failures:
         print(f"\n{len(failures)} of {len(tests)} admission checks FAILED")
         return 1

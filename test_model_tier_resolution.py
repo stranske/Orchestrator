@@ -685,6 +685,7 @@ def test_every_capability_has_a_heartbeat_call_site():
     docs-drift-fix-agent lives in the Workflows repo, not this tree."""
     import subprocess
     import capabilities as C
+    import capability_activation_audit as audit
     EXTERNAL = {"docs-drift-fix-agent"}          # lives in Workflows/scripts, wired there or not at all
     VARIABLE_ID = {"capability:reference-sync-hygiene-test-gate"}   # id passed as a variable
     src = subprocess.run(["grep", "-rn", "-A5", "heartbeat(", "--include=*.py", "."],
@@ -695,7 +696,14 @@ def test_every_capability_has_a_heartbeat_call_site():
             continue
         if f'"{cap_id}"' not in src:
             missing.append(cap_id)
-    assert not missing, f"capabilities with no heartbeat call site: {missing}"
+    # A row whose MODULE is not in this checkout has no heartbeat call site because it has no code
+    # here at all. That is wait-or-merge, not "the declaration is wrong" — the opposite action from
+    # every other way this check goes red. EXTERNAL above is the DELIBERATE version of the same
+    # shape, hand-listed; the note names the accidental ones, which nobody can hand-list because
+    # they depend on which branch each sibling worktree is on. Same helper as the admission and
+    # fixture-coverage checks, so all three agree.
+    assert not missing, (f"capabilities with no heartbeat call site: {missing}"
+                         + audit.absent_entrypoint_note(missing))
 
 
 # ---------------------------------------------------------------------------
