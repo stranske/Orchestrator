@@ -1845,10 +1845,6 @@ def classify_liveness(
         ),
         default=0,
     )
-    if (last_match or matching_work) and (
-        not last_invocation or (last_match and int(last_match) > int(last_invocation))
-    ):
-        return "matched_not_invoked"
     # OBSERVERS CANNOT HAVE DELIVERY OUTCOMES, so calling them a measurement gap is a category
     # error — the same shape as asking a `{"kind": "transport"}` capability a task_type question.
     # A cadence report or a feedback-event recorder never merges a PR and never earns a durability
@@ -1886,6 +1882,34 @@ def classify_liveness(
         and status in {"generated", "validated", "wired", "shadow", "exercised", "canary"}
     ):
         return "deliberately_gated"
+    # MATCHED-BUT-NOT-INVOKED IS A DISPATCH GAP, WHICH MEANS IT ONLY APPLIES TO SOMETHING THAT WAS
+    # SUPPOSED TO BE DISPATCHED. This check used to run FIRST, above both `observing` and
+    # `deliberately_gated`, and that made it the fourth instance of the unescapable label the three
+    # comments above exist to fix — with the same signature: a class of capability that can never
+    # leave the bucket, and advice ("find out why it did not run") whose answer is already recorded
+    # on the row.
+    #
+    # Two whole classes were captured, and both are structural rather than unlucky:
+    #
+    #   OBSERVERS are matched by a tick phase, so `last_match` advances every cadence tick while
+    #   `last_invocation` advances only when the phase actually fires. last_match > last_invocation
+    #   is therefore the NORMAL resting state of a healthy observer, not a symptom.
+    #   `live-keepalive-supervisor` sat here with matcher tick_phase/keepalive-stage2-plan.
+    #
+    #   DECLARED-GATED capabilities cannot be invoked at all while the switch is off, so every match
+    #   after the gate closed widens the gap permanently. `range-lane-rollout` sat here with
+    #   `gate_blocks_execution` set and its reason recorded, which is the row saying in advance
+    #   exactly why it did not run.
+    #
+    # Both were red on main for anyone with a populated ledger and INVISIBLE to CI, which bootstraps
+    # an empty one: with no rows, the two tests skipped with a named reason and the suite went green.
+    # Moving the check below `observing` and the DECLARED gate leaves its real meaning intact — a
+    # capability that should have been dispatched and was not — and does not touch the weaker
+    # gate_reason-only branch further down, so nothing is reclassified by inference.
+    if (last_match or matching_work) and (
+        not last_invocation or (last_match and int(last_match) > int(last_invocation))
+    ):
+        return "matched_not_invoked"
     if last_invocation and not has_outcome_evidence:
         return "invoked_without_outcomes"
     current = _now() if now is None else now
