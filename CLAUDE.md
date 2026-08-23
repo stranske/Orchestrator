@@ -212,6 +212,16 @@ Do not create a second event log, model registry, or capability inventory.
   and the Brain. Pointing only the first at an empty directory and concluding "the suite is
   state-independent" is exactly the mistake that made the first CI run red — the ledger never
   moved. Set both when testing a fresh-machine claim.
+- **The LEDGER is shared per MACHINE; CODE is branch-isolated per WORKTREE — so a row can outrun
+  its module.** A capability registered by another session sits in `$ORCH_LOCAL_RUNTIME` for every
+  worktree, while its module exists only on that session's branch. `verify.py` then goes red HERE
+  with three checks naming only the missing admission parts (`caller_exists`, `heartbeat`,
+  `fixture`), which reads as "registered with no implementation — retire it". Retiring the row or
+  waiving it DISCARDS finished work, and CI cannot catch the confusion because `ci.yml` bootstraps
+  an empty ledger. **Never retire or waive a row before checking whether its module is simply
+  elsewhere.** The three checks and the `verify.py` summary now say so themselves, from
+  `capability_activation_audit.entrypoint_presence` / `absent_entrypoint_note`, which name the
+  sibling checkout the code was found in — but read the message rather than the missing-parts list.
 - **The split is TOOL vs EVIDENCE.** Generic capabilities, gates and tests are committed. This
   instance's evidence is not: `IMPROVEMENT_BACKLOG.md`, `CAPABILITY_USEFULNESS.md`,
   `LOCAL_POLICY.md`, `*.local.md`, `experiments/`, `ux_reviews/`, `data/`, `Audits/`. When adding a

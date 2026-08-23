@@ -50,9 +50,13 @@ def test_every_capability_has_a_recurrence_fixture():
     ledger = set(capabilities.load_declared(capabilities.REG))
     covered = _fixture_capabilities()
     missing = sorted(ledger - covered - set(FIXTURE_EXEMPT))
+    # A row whose MODULE is not in this checkout has no fixture here because it has no CODE here,
+    # and the two fixes are opposite: wait-or-merge versus write the fixture. Same helper as the
+    # admission and heartbeat-call-site checks, so all three name the same rows the same way.
     assert not missing, (
         f"{len(missing)} capability(ies) have NO recurrence fixture. Add one that replays a real "
         f"historical condition, or add an explicit FIXTURE_EXEMPT entry with a reason: {missing}"
+        + audit.absent_entrypoint_note(missing)
     )
 
 
@@ -168,7 +172,10 @@ def main() -> int:
         except AssertionError as exc:
             failures.append((fn.__name__, str(exc)))
             print(f"  FAIL {fn.__name__}")
-            print(f"       {str(exc)[:400]}")
+            # 400 chars cut the absent-module diagnostic in half, and a half-explanation of why a
+            # row looks uncovered is as misleading as none. Capped above the longest message any
+            # check here produces rather than at a round number.
+            print(f"       {str(exc)[:2000]}")
     if failures:
         print(f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED")
         return 1

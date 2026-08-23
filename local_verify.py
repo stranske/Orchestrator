@@ -8,6 +8,14 @@ The gate is intentionally simple:
    likely hollow or not coupled to the implementation.
 
 The live worktree is never mutated.
+
+PRECONDITION: THE FIX MUST ALREADY BE IN THE WORKTREE. This is a phase-4 tool — it proves a test
+gate is coupled to an implementation, so it needs both to be present. Pointing it at a bare finding
+(the fix not yet applied) makes step 1 fail, and a step-1 failure means "your test command does not
+pass here", NOT "the finding is unreal" — the two read identically if you were expecting a verdict
+on the finding. An auditor holding a candidate defect must apply the patch first, then run this;
+without a patch there is nothing for step 2 to remove and the run cannot say anything about the
+finding. Recorded because a real audit run reached for it one phase early.
 """
 from __future__ import annotations
 

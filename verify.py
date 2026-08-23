@@ -184,6 +184,59 @@ def _headline(name: str, text: str) -> str:
     return (text.strip().splitlines() or ["(no output)"])[-1][:100]
 
 
+def absent_entrypoint_line() -> str | None:
+    """One line naming ledger rows whose declared module is NOT in this tree, or None.
+
+    WHY IT IS IN THE SUMMARY. The capability ledger is shared per MACHINE while code is
+    branch-isolated per WORKTREE, so a row another session registered makes three checks go red
+    here with messages that read "registered with no implementation — retire it". On 2026-08-22 that
+    row was `evidence-acquisition`, its module sat on an unmerged branch, and retiring or waiving it
+    would have discarded finished work. Naming the condition once, at the top level, means the
+    reader learns it from the SUMMARY rather than from three separate failures.
+
+    DIAGNOSTIC, NOT A VERDICT. It never enters `problems`, never suppresses a failure, and never
+    counts as a skip — the three checks still fail exactly as loudly. An import failure is REPORTED
+    rather than swallowed, because a diagnostic that silently stops appearing is indistinguishable
+    from one that has nothing to say.
+    """
+    try:
+        import capabilities
+        import capability_activation_audit as audit
+        # load_declared: read-only. verify.py must not mutate the ledger it is reporting on.
+        rep = audit.absent_entrypoint_report(
+            sorted(capabilities.load_declared(capabilities.REG)))
+    except Exception as exc:                                       # noqa: BLE001
+        return f"  entrypoints: NOT CHECKED ({type(exc).__name__}: {exc})"
+    return _format_absent_line(rep)
+
+
+def _format_absent_line(rep: dict) -> str | None:
+    """Render the report as one summary line, or None when nothing is absent. PURE.
+
+    Split out so the selftest exercises the real rule on synthetic reports, the same reason
+    `_floor_problems` and `_ceiling_problems` are pure: the interesting cases here are a machine
+    with an absent row and a machine without one, and no single machine is both.
+
+    It deliberately does NOT carry `PREREQ_ABSENT_MARK`. That token is how a skip is counted
+    against the ceiling, and nothing was skipped — miscounting this line as a skip would consume
+    ceiling headroom that belongs to a real missing prerequisite.
+    """
+    if not rep.get("absent"):
+        return None
+    where = []
+    for row in rep["absent"]:
+        found = row.get("found_in") or []
+        seen = (f"found in {found[0]['checkout']}"
+                + (f" +{len(found) - 1} more" if len(found) > 1 else "")
+                if found else "not found in any sibling checkout")
+        where.append(f"{row['capability_id']} -> {row['entrypoint']} ({seen})")
+    # Both numbers in the same place, per the house rule: "1" reads as an emergency, "1 of 43"
+    # reads as one session's in-flight branch, which is what it is.
+    return (f"  entrypoints: {len(rep['absent'])} of {rep.get('total', '?')} ledger row(s) declare "
+            f"code ABSENT from this tree — {'; '.join(where)}. "
+            f"WAIT-OR-MERGE, not retire/waive.")
+
+
 def load_floor() -> dict:
     if FLOOR.exists():
         try:
@@ -291,6 +344,12 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
         lines.append(f"  {name:<18} {state} {res['line']}")
     if actual["gate_skipped_max"]:
         lines.append(f"  gates:      {_cap('gate_skipped_max')} skipped")
+
+    # Printed under a GREEN verdict as much as a red one: a row registered by another checkout can
+    # be present while every check still passes, and the reader wants to know before the next merge.
+    entrypoints = absent_entrypoint_line()
+    if entrypoints:
+        lines.append(entrypoints)
 
     # WHAT DID NOT RUN, always — under a green verdict as much as a red one. A number of skips
     # with no reasons beside it is how "green" quietly stops meaning "checked".
@@ -453,9 +512,33 @@ def _selftest() -> None:
                              {"collected": 320, "passed": 320, "skipped": 0})
     assert any("collection DROPPED" in p for p in shrank), shrank
 
+    # ---- the absent-module summary line -------------------------------------------------------
+    # A row registered by another checkout makes three checks fail with messages that read
+    # "registered with no implementation — retire it", and retiring it discards finished work. The
+    # line exists so the reader meets that fact in the SUMMARY. Two properties are load-bearing:
+    # it stays silent when there is nothing to say, and it is NOT a skip.
+    assert _format_absent_line({"absent": [], "checked": 43, "total": 43}) is None
+    assert _format_absent_line({}) is None
+    one = _format_absent_line({"total": 43, "checked": 43, "absent": [
+        {"capability_id": "evidence-acquisition", "entrypoint": "evidence_acquisition.py:run",
+         "found_in": [{"checkout": ".claude/worktrees/other", "modules": ["x.py"]},
+                      {"checkout": "repo root", "modules": ["x.py"]}]}]})
+    for phrase in ("1 of 43", "evidence-acquisition", ".claude/worktrees/other", "+1 more",
+                   "WAIT-OR-MERGE"):
+        assert phrase in one, (phrase, one)
+    # `PREREQ_ABSENT_MARK` is how verify.py counts a SKIP against the ceiling. Nothing was
+    # skipped here, so carrying the mark would spend ceiling headroom that belongs to a real
+    # missing prerequisite — and would make a diagnostic look like a narrowing of the suite.
+    assert PREREQ_ABSENT_MARK not in one, one
+    # A row whose module is nowhere at all must say so rather than implying a sibling has it.
+    nowhere = _format_absent_line({"total": 43, "checked": 1, "absent": [
+        {"capability_id": "ghost", "entrypoint": "ghost.py", "found_in": []}]})
+    assert "not found in any sibling checkout" in nowhere, nowhere
+
     print("verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
           "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
-          "not, floor counts passed+skipped)")
+          "not, floor counts passed+skipped, absent-module line is silent when clean and is "
+          "never counted as a skip)")
 
 
 def main() -> int:
