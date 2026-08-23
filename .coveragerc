@@ -1,0 +1,33 @@
+# Coverage configuration for the Orchestrator.
+#
+# WHY parallel mode is the whole point. This project's primary test mechanism is a per-module
+# `--selftest`, and verify.py runs each one as a SUBPROCESS
+# (`subprocess.run([sys.executable, f"{mod}.py", "--selftest"])`). A coverage run that instruments
+# only the pytest process therefore cannot see any of it — and that is most of the codebase: 78
+# modules' sole test is a selftest, ~85,500 lines, 79.6% of non-test root Python (measured
+# 2026-08-23). The reported 48.45% was that blind spot, not missing tests: sampling four of the
+# modules the report named as worst showed outcomes.py at 62%, adversarial.py 88%,
+# gh_capacity.py 86%, keepalive_outcomes.py 78% under their own selftests, all exiting 0.
+#
+# `parallel = true` makes every instrumented process write its own `.coverage.<host>.<pid>.<rand>`
+# file; `coverage combine` merges them. verify.py --coverage does both.
+[run]
+parallel = true
+source = .
+branch = false
+omit =
+    .venv/*
+    venv/*
+    */site-packages/*
+    test_*.py
+    conftest.py
+    verify.py
+
+[report]
+# A missing data file means the run did not happen, which must not read as 0% or as success.
+skip_empty = false
+precision = 1
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError
