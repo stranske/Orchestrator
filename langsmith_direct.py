@@ -25,7 +25,6 @@ import argparse
 import json
 import os
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from itertools import islice
 from pathlib import Path

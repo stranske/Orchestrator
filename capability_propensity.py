@@ -121,7 +121,6 @@ import sys
 import time
 
 import capabilities
-import env_prereq
 
 # KILL SWITCH. Off means the advisor stops ranking by propensity and falls back to its previous
 # order; the recording edges still work, so turning this off never destroys evidence -- it only

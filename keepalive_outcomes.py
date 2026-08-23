@@ -238,7 +238,7 @@ def _agents_from_labels(labels: list[str]) -> list[str]:
 
 
 def _task_type_from_labels(labels: list[str]) -> str:
-    lowered = {l.lower() for l in labels}
+    lowered = {lb.lower() for lb in labels}
     for label in labels:
         low = label.lower()
         for prefix in ("task:", "type:"):
@@ -416,7 +416,10 @@ def ingest_keepalive_outcomes(
     closure_context_fn = _closure_context_fn or _fetch_pr_context
     revert_fn = _revert_fn
     if dry_run and revert_fn is None:
-        revert_fn = lambda _pr: (None, "dry-run skips live revert scan")
+
+        def revert_fn(_pr):
+            return (None, "dry-run skips live revert scan")
+
     revert_cache: dict = {}  # repo -> cached revert search; 1 search/repo across the ingest
     summary = {
         "repos": len(repos),

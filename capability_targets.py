@@ -14,11 +14,10 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 import capability_compiler
 import local_verify
-import repo_knowledge
 import roles
 import runtime_ac
 

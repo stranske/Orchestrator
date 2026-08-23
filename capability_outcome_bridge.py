@@ -735,7 +735,7 @@ def _selftest() -> None:
         },
     ]
     mapped = attribute(rows, known=known)
-    assert [l["capability_id"] for l in mapped["links"]] == ["role-triage"], mapped
+    assert [link["capability_id"] for link in mapped["links"]] == ["role-triage"], mapped
     assert {u["run_id"] for u in mapped["unattributed"]} == {"r2", "r4"}, mapped
     assert all(r["run_id"] != "r3" for r in mapped["unattributed"]), "non-terminal must be skipped"
 
@@ -755,7 +755,7 @@ def _selftest() -> None:
         ],
         known={"role-triage", "role-prompt"},
     )
-    got = sorted(l["capability_id"] for l in multi["links"])
+    got = sorted(link["capability_id"] for link in multi["links"])
     assert got == ["role-prompt", "role-triage"], got
     assert len(multi["links"]) == 2, "a capability named twice must not double-count"
 
@@ -833,7 +833,7 @@ def _selftest() -> None:
         finally:
             feedback.DB_PATH = saved_db
 
-    targets = {l["target_run_id"] for l in got["links"]}
+    targets = {link["target_run_id"] for link in got["links"]}
     # EXPLICIT LINK ONLY. "The rail ran on repo R and later a durable PR landed in R" is correlation;
     # manufacturing an edge from it would fake the un-gameable durability label. Deleting the
     # `claimed != cap_id` guard makes `unlinked` appear here and fails this assertion.
@@ -914,7 +914,7 @@ def _selftest() -> None:
                 row = [r for r in rows if r["run_id"] == "tagged:run"][0]
                 assert row["capability_ids"] == ["agy-runtime-isolation"], row
                 mapped = attribute(rows, known={"agy-runtime-isolation"})
-                assert [l["capability_id"] for l in mapped["links"]] == [
+                assert [link["capability_id"] for link in mapped["links"]] == [
                     "agy-runtime-isolation"
                 ], mapped
                 assert mapped["links"][0]["resolver"] == "run_tagged", mapped

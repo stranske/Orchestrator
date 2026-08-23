@@ -323,7 +323,7 @@ def gather_signals(target: str, *, runner=subprocess.run) -> dict:
     if meta.returncode != 0:
         raise RuntimeError(f"gh pr view failed: {(meta.stderr or '').strip()[-300:]}")
     mdoc = json.loads(meta.stdout or "{}")
-    labels = [l.get("name") for l in (mdoc.get("labels") or []) if isinstance(l, dict)]
+    labels = [lb.get("name") for lb in (mdoc.get("labels") or []) if isinstance(lb, dict)]
     comments = runner(
         ["gh", "pr", "view", num, "-R", repo, "--json", "comments", "-q", ".comments[].body"],
         capture_output=True,

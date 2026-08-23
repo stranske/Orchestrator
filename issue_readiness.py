@@ -650,7 +650,7 @@ def task_label_for(issue: dict) -> str | None:
     title = str(issue.get("title") or "")
     if EPIC_CHILD_TITLE_RE.search(title):
         return None  # an already-decomposed subtask is ordinary implement work
-    low = {l.strip().lower() for l in labels}
+    low = {lb.strip().lower() for lb in labels}
     if DURABLE_LABEL in low:
         return None
     for label, pattern in TASK_LABEL_RULES:
@@ -985,7 +985,7 @@ def _selftest() -> None:
             "number": num,
             "title": title,
             "body": body,
-            "labels": [{"name": l} for l in labels],
+            "labels": [{"name": lb} for lb in labels],
             "author": {"login": author},
             "repository": {"name": repo},
         }
@@ -1184,7 +1184,7 @@ def main(argv: list[str]) -> int:
         if args.json:
             print(json.dumps(out, indent=2))
         else:
-            print(f"# Task-label gaps — titles naming work the labels do not\n")
+            print("# Task-label gaps — titles naming work the labels do not\n")
             print(f"  {len(gaps)} issue(s) would re-route once labelled\n")
             for g in gaps:
                 print(

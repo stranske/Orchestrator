@@ -650,7 +650,7 @@ def _selftest() -> None:
         env=env,
         timeout=60,
     )
-    lines = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
+    lines = [json.loads(ln) for ln in proc.stdout.splitlines() if ln.strip()]
     by_id = {m.get("id"): m for m in lines}
     assert by_id[1]["result"]["serverInfo"]["name"] == "orchestrator", by_id[1]
     names = {t["name"] for t in by_id[2]["result"]["tools"]}

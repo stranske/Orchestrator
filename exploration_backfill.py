@@ -21,7 +21,6 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
 
 import claims
 import exp_abcd
@@ -359,7 +358,7 @@ def _build_jobs(
                         f"--agents {shlex.quote(','.join(agents))}"
                     ),
                     "follow_up_commands": [
-                        f"python3 Orchestrator/exp_abcd.py status <exp_id>",
+                        "python3 Orchestrator/exp_abcd.py status <exp_id>",
                         f"python3 Orchestrator/exp_abcd.py collect {_target_repo(target) or '<repo>'} <exp_id>",
                         f"python3 Orchestrator/exp_abcd.py evaluate {_target_repo(target) or '<repo>'} <spec_file> <exp_id>",
                     ],

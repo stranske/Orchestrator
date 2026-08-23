@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import exp_abcd
 import feedback
-import human_calibration
 import judge_reliability
 import objective_anchor
 import periodic_report

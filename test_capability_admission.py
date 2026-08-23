@@ -14,7 +14,6 @@ next mistake, keep the old debt visible.
 
 from __future__ import annotations
 
-import sys
 
 import capabilities
 import capability_activation_audit as audit

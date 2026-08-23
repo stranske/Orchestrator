@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -4363,9 +4364,6 @@ def profile_routing_summary() -> dict:
         return execution_profiles.report(c)
 
 
-import math
-
-
 def record_evidence_gap(ref: str, evaluator: str, gap: str):
     """An evaluator declares what it lacked to judge better. The raw material for schema growth."""
     with _conn() as c:
@@ -5395,7 +5393,7 @@ def _selftest():
         assert (
             dec and dec[0]["decision"] == "no, make it opt-in" and dec[0]["source"] == "owner"
         ), dec
-        q2 = record_owner_question(
+        record_owner_question(
             "Drop legacy endpoint?", "keep it for now", repo="o/r", expires_days=-1
         )
         assert expire_owner_questions() == 1

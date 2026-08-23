@@ -222,7 +222,6 @@ def _dedupe_candidate(
     for issue in issues or []:
         issue_number = issue.get("number")
         issue_title = str(issue.get("title") or "")
-        haystack = f"#{issue_number} {issue_title}"
         if _contains_pr_ref(issue_title, pr_number) or _contains_pr_ref(
             candidate["seed"], issue_number
         ):
@@ -517,7 +516,6 @@ def _selftest() -> None:
         ]
         rows = [row if len(row) == 7 else (*row, None) for row in rows]
         for run_id, target, agent, pr_number, durability, work_type, notes in rows:
-            repo = target.split("#", 1)[0]
             feedback.record_run(
                 run_id,
                 target,

@@ -19,7 +19,6 @@ target live (clone + worktree) to verify the normal-fs path works, then cleans u
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess

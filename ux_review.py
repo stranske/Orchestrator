@@ -34,8 +34,6 @@ import provision
 import research_subjects
 from exp_abcd import (
     AGENT_MODE,
-    EVALUATOR_TOPUP_ORDER,
-    MIN_EVALUATORS,
     _ensure_min_evaluators,
     _eval_command,
     _extract_json,

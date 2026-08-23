@@ -22,7 +22,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
