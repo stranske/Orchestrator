@@ -198,6 +198,28 @@ safety switch, not dead code.
   `artifact` are both required (a claimed find with no artifact is worth nothing), and the
   correlated-arm discount is the real guard: ten artifact-backed finds from one judge arm are still
   one observation, so volume cannot inflate a capability and only an independent arm moves it.
+- **The tick is sub-surfaced by phase, and every phase has a caller**
+  (`capability_advisor.py --consult-tick-phases`, every tick, immediately below the step above at
+  `ORCH-ANCHOR: tick-phase-consult`). 18 of the 43 capabilities live on this tick, and binding all
+  18 to one `tick` surface would recreate inside the tick the too-many-tools problem the binding
+  exists to remove. So the tick declares five phases — `tick:capacity`, `tick:dispatch`,
+  `tick:experiments`, `tick:redirect`, `tick:learning`, named from `orchestrate.sh`'s own
+  "capacity -> discover -> plan -> dispatch" line and its `--- Learning cadence ---` /
+  `[cadence] redirect ...` / `[cadence] experiment follow-up` blocks — and each resolves to 6-8
+  capabilities instead of 18. Fourteen capabilities that no surface could offer are now offered
+  where they actually run. The step writes ONLY advisory `match` events and no verdict of any kind,
+  so the ~1.3 verdicts/day above is unchanged: the consult text is stable per (surface, UTC day) and
+  the match heartbeat is idempotent on its digest, which bounds the whole addition to 34 events on
+  the first tick of each day and zero on the other 23. Fails open per phase, always exits 0. Kill
+  switch: `ORCH_DISABLE_STEPS=tick-phase-consult`.
+- **`verify.py` is the `ci` surface and now consults as one.** Three capabilities were declared for
+  a `ci` surface no caller ever reached — the same defect as no binding at all. `verify.py` runs on
+  every PR and already executes the admission gate, so it consults with `surface: "ci"` and prints
+  one summary line carrying both quantities: what the table DECLARES (identical on every machine)
+  beside what this machine's ledger could OFFER, plus the findability pair (rows bound to some
+  surface / rows bound to none). Read-only (`record=False` — a verifier must not write to the
+  ledger its own gates read), never a skip, and it can never enter `problems`, so exit semantics and
+  every reported count are untouched.
 - **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
   the code path that would produce an outcome (Thompson never chooses while the mode is
   epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label

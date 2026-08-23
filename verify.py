@@ -267,6 +267,97 @@ def _format_absent_line(rep: dict) -> str | None:
     )
 
 
+# ---------------------------------------------------------------------------
+# THE `ci` SURFACE CONSULT. `capability_advisor.SURFACE_BINDINGS` declares a `ci` surface, and
+# nothing consulted it: `capability-admission-gate`, `docs-drift-fix-agent` and
+# `capability:reference-sync-hygiene-test-gate` were bound to a surface with no caller, which is the
+# same defect as no binding at all -- a capability nothing can offer can never earn the evidence
+# that would rank it. verify.py IS that surface: it runs on every PR and already EXECUTES the
+# admission gate as one of its five gates.
+#
+# NO NEW MACHINERY, and three hard constraints because this file is the project's verdict and its
+# output is read by CI:
+#   1. IT CANNOT CHANGE THE VERDICT. The line never enters `problems`, so exit semantics are
+#      untouched, exactly like `absent_entrypoint_line` above.
+#   2. IT CANNOT CHANGE THE COUNTS, and it is NOT a skip: it deliberately does not carry
+#      `PREREQ_ABSENT_MARK`, because that token is how a skip is counted against the ceiling and
+#      the ceilings have zero headroom (26/26 tests, 7/7 selftests on a bare runner).
+#   3. IT NEVER MUTATES THE LEDGER IT REPORTS ON. `record=False`, for the same reason
+#      `absent_entrypoint_line` uses `load_declared`: this run's own gates read that ledger, and a
+#      verifier that writes to its subject is not a verifier. A CI runner's ledger is thrown away
+#      anyway, so a write there would buy nothing and cost the flock.
+# It also asserts NOTHING about which capability comes back -- the ledger is machine-local (43 rows
+# here, ~14 on a clean runner) and that exact mistake has shipped twice.
+# ---------------------------------------------------------------------------
+
+CI_SURFACE = "ci"
+
+
+def _format_ci_consult_line(declared: int, offered: int, bound_rows: int, total_rows: int) -> str:
+    """Render the consult as one summary line. PURE, so the selftest exercises the real rule.
+
+    BOTH QUANTITIES, ALWAYS. `declared` comes from the committed table and is the same on every
+    machine; `offered` comes from the machine-local ledger and is not. Printing only the second
+    makes "this runner has no rows for them" indistinguishable from "nothing is bound to CI", and
+    printing only the first hides that the offer was empty. The findability pair is the same rule one
+    level up: a bound count with no unbound count reads as "fine" however many rows nothing can
+    offer.
+    """
+    unbound = max(0, total_rows - bound_rows)
+    tail = (
+        f"; findability {bound_rows}/{total_rows} ledger row(s) bound to some surface, "
+        f"{unbound} bound to none"
+    )
+    if declared and not offered:
+        return (
+            f"  ci consult:  surface {CI_SURFACE!r} declares {declared} capability(ies), "
+            f"0 present in this machine's ledger (nothing offered here){tail}"
+        )
+    return (
+        f"  ci consult:  surface {CI_SURFACE!r} declares {declared} capability(ies), "
+        f"{offered} offered (bound first; an unbound keyword match is ranked after, never "
+        f"dropped){tail}"
+    )
+
+
+def ci_consult_line() -> str:
+    """Consult the advisor as the CI surface and report it in one line. Never a verdict.
+
+    An import or advisor failure is REPORTED rather than swallowed, for the same reason as
+    `absent_entrypoint_line`: a diagnostic that silently stops appearing is indistinguishable from
+    one that has nothing to say.
+    """
+    try:
+        import capabilities
+        import capability_advisor as advisor
+
+        declared = len(
+            [k for k in advisor.SURFACE_BINDINGS.get(CI_SURFACE, {}) if k != advisor.NO_BINDING]
+        )
+        # Free text describing THIS run, not the surface's own name: a fixed phrase would make any
+        # learned association an artifact of this string rather than of the work.
+        advice = advisor.advise(
+            "verify this tree before merging: real pytest counts, module selftests and the "
+            "capability gates",
+            surface=CI_SURFACE,
+            skill=CI_SURFACE,
+            record=False,
+        )
+        offered = len(advice.get("capabilities") or [])
+        rows = sorted(capabilities.load_declared(capabilities.REG))
+        bound = sum(
+            1
+            for cap_id in rows
+            if any(
+                cap_id in advisor.binding_for(surface)
+                for surface in advisor.SURFACE_BINDINGS
+            )
+        )
+        return _format_ci_consult_line(declared, offered, bound, len(rows))
+    except Exception as exc:  # noqa: BLE001
+        return f"  ci consult:  NOT CHECKED ({type(exc).__name__}: {exc})"
+
+
 def load_floor() -> dict:
     if FLOOR.exists():
         try:
@@ -484,6 +575,11 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
     entrypoints = absent_entrypoint_line()
     if entrypoints:
         lines.append(entrypoints)
+
+    # THE `ci` SURFACE'S CONSULT, printed under a green verdict as much as a red one. Computed
+    # AFTER the gates above have already run, so even a future recording variant could not change
+    # what this run reported on. Never appended to `problems`.
+    lines.append(ci_consult_line())
 
     # WHAT DID NOT RUN, always — under a green verdict as much as a red one. A number of skips
     # with no reasons beside it is how "green" quietly stops meaning "checked".
@@ -777,13 +873,39 @@ def _selftest() -> None:
     )
     assert "not found in any sibling checkout" in nowhere, nowhere
 
+    # ---- the `ci` surface consult ---------------------------------------------------------------
+    # verify.py IS the CI surface, and the capabilities bound to it had no caller. The consult must
+    # be a REPORT and nothing else. Asserted on synthetic counts, never on which capability came
+    # back: the ledger holds 43 rows here and ~14 on a runner, and a machine-local assertion in
+    # exactly this position has shipped green-locally/red-on-CI twice.
+    empty_ledger = _format_ci_consult_line(3, 0, 0, 0)
+    populated = _format_ci_consult_line(3, 3, 42, 43)
+    # BOTH NUMBERS IN BOTH CASES. A runner with no rows for the bound set must not read the same as
+    # a surface that binds nothing, so the DECLARED count (identical on every machine) is always
+    # printed beside the offered one.
+    assert "declares 3" in empty_ledger and "0 present" in empty_ledger, empty_ledger
+    assert "declares 3" in populated and "3 offered" in populated, populated
+    # ...and the findability pair: bound count with the unbound count beside it, always. A bound
+    # count alone reads as "fine" however many rows nothing can offer.
+    assert "42/43" in populated and "1 bound to none" in populated, populated
+    assert "0 bound to none" in _format_ci_consult_line(2, 2, 14, 14)
+    # NOT A SKIP, in every branch. The mark is how a skip is counted against a ceiling that has
+    # zero headroom on a bare runner, so carrying it would turn a report into an automatic red.
+    for line in (empty_ledger, populated, ci_consult_line()):
+        assert PREREQ_ABSENT_MARK not in line, line
+        assert line.startswith("  ci consult:"), line
+    # A BROKEN CONSULT IS REPORTED AND STILL NOT A VERDICT. `problems` is built only from pytest,
+    # selftests, gates, the floor and the ceilings; this line is appended to `lines` afterwards and
+    # can never reach it. Pinned by construction: the renderer returns a string, never a problem.
+    assert isinstance(ci_consult_line(), str)
+
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
         "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
         "not, floor counts passed+skipped, floor fails BEHIND reality as loudly as below "
         "it and names the integers to write, --update-floor appends to the note instead of "
         "clobbering the ceiling rationale, absent-module line is silent when clean and is "
-        "never counted as a skip)"
+        "never counted as a skip, ci consult reports both numbers and is never a skip)"
     )
 
 

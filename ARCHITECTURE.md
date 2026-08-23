@@ -168,7 +168,7 @@ are ordered by when each starts working:
 
 | Layer | Mechanism | Works from |
 |---|---|---|
-| 1 | `capability_advisor.SURFACE_BINDINGS` — declared, per surface, 3–7 entries, each with its reason; `CONSULT_SITES`, which declares who actually ASKS at each surface; plus `CAPABILITY_PRECONDITIONS`, which explains an offer without changing it | day one; no classifier, no history |
+| 1 | `capability_advisor.SURFACE_BINDINGS` — declared, per surface and per PHASE of a long surface, 3–7 entries each with its reason; `CONSULT_SITES`, which declares who actually ASKS at each surface; plus `CAPABILITY_PRECONDITIONS`, which explains an offer without changing it | day one; no classifier, no history |
 | 2 | `capability_propensity.rank` — orders *within* the bound set by measured usefulness | first resolved trials |
 | 3 | `capability_advisor.learned_associations` — corrects the table from what a surface actually reaches for | once observations accumulate |
 
@@ -493,6 +493,45 @@ evaluation, which ties one verdict to one production and bounds the graded rate 
 finding projection keeps identity and verdict fields only, because `overdue`'s `silent_days` rises
 daily on its own and hashing a row whole would score the monitor useful on every run it will ever
 make.
+
+### A DECLARED BINDING WITH NO CALLER IS THE SAME DEFECT AS NO BINDING
+
+Layer 1 is offered to a surface *by that surface's own consult*. So a surface nothing consults is a
+table entry that can never be selected, can never earn evidence, and can never be ranked — the gate
+starving its own drain, one level down from the concealment rule above. Measured 2026-08-23: **22 of
+43 capabilities were bound to NO surface at all**, and two whole surfaces (`ci`, and every phase of
+the tick) had bindings with no caller.
+
+Three callers close that, and the last two are the same mechanism as the first — `advise()` plus the
+`match` heartbeat, never a second one:
+
+| Surface | Caller | What bounds it |
+|---|---|---|
+| `tick` (4 capabilities) | `capability_propensity.tick_evidence` (PR #37) | one verdict per capability per UTC day, gated on artifact regeneration → ~1.3/day |
+| `tick:<phase>` (14 capabilities) | `capability_advisor.py --consult-tick-phases`, at `ORCH-ANCHOR: tick-phase-consult` | consult text stable per (surface, UTC day); the match heartbeat is idempotent on its digest → 34 events on the first tick of a day, 0 on the other 23. **No verdicts at all**, so #37's ceiling is untouched |
+| `ci` (3 capabilities) | `verify.py`'s `ci_consult_line()` — it runs on every PR and already executes the admission gate | `record=False`: a verifier must not write to the ledger its own gates read |
+
+**The tick is sub-surfaced for exactly the reason `repo-audit` is.** 18 of the 43 capabilities live
+on the tick; binding all 18 to `tick` would rebuild the too-many-tools condition inside the tick.
+The five phases — `tick:capacity`, `tick:dispatch`, `tick:experiments`, `tick:redirect`,
+`tick:learning` — are the tick's OWN names, taken from `orchestrate.sh`'s first line ("capacity ->
+discover -> plan -> dispatch"), its `--- Learning cadence ---` heading and its `[cadence] redirect
+…` / `[cadence] experiment follow-up` blocks; most of the capabilities bound below carry a
+`{"kind": "tick_phase", "name": …}` matcher naming the very phase they land in. Each phase resolves
+to 6–8 rather than 18.
+
+**The bare `tick` set does not move, and that is a constraint rather than a preference.**
+`capability_propensity.TICK_SURFACE` is `"tick"`, `tick_evidence()` grades exactly
+`binding_for("tick")`, and its selftest requires every capability with a `TICK_FINDING_FIELDS`
+projection to be in that set. Moving those four into a phase would silently zero the only producer
+of layer-2 evidence in the system — so the phases ADD, and the phase contexts inherit the four
+surface-wide observers for the same reason `repo-audit` declares `offload` surface-wide.
+
+**And a capability no surface may offer says so.** `local-model-profile-trial` is the one ledger row
+that is deliberately unbound — the quarantine-only trial transport — and it is declared with
+`NO_BINDING` and its reason rather than left absent, because silent absence and deliberate emptiness
+must not look alike. The `ci` consult line reports the pair on every PR: rows bound to some surface,
+beside rows bound to none.
 
 **Demotion is the drain.** Bindings that could only grow end with every surface holding all 43 —
 the exact condition binding prevents. Two rules propose removal, and they read **disjoint
