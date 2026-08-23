@@ -101,6 +101,24 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
                            "advice:<digest> they were given",
     },
     {
+        # EVERY TICK, and deliberately stampless (like capability-lifecycle): the step is a cheap
+        # advisory consult plus an idempotent verdict, and its own bounding comes from the artifact
+        # freshness of the capabilities it grades, not from a cadence stamp. A stamp here would only
+        # add a second, drifting notion of "due".
+        "key": "tick-capability-evidence",
+        "success_stamp": None,
+        "cadence_days": 0,
+        "artifact": "tick-capability-evidence.json",
+        "log": "tick-capability-evidence.log",
+        "gate": "ORCH_TICK_EVIDENCE_DISABLED=1 or ORCH_DISABLE_STEPS=tick-capability-evidence "
+                "makes it inert; a verdict additionally requires the graded capability's own "
+                "cadence artifact to have been regenerated since the last evaluation",
+        "next_transition": "records at most one verdict per bound capability per UTC day; while "
+                           "`gradable` is non-zero and `verdicts_recorded` is 0 the step is waiting "
+                           "on those capabilities' own cadences, and a `gradable` of 0 is a "
+                           "deadlock rather than patience",
+    },
+    {
         "key": "capability-firing-monitor",
         "success_stamp": ".last-capability-firing-monitor",
         "cadence_days": 6,
