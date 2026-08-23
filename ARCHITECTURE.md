@@ -314,6 +314,66 @@ per-verdict comparison here. This module's counterfactual is `experiments()`'s c
 candidates named for the exact same task and not triggered. `propensity()` now reports that arm
 beside the posterior and never mixes it in.
 
+### The REPAIR channel — the loop's third action
+
+Promote and demote were the only two actions, so the loop **could not represent "this capability is
+worth having and is broken."** The only available response to a broken capability was to stop
+offering it, which silences the thing that should be fixed and loses a capability worth keeping.
+
+**The live case.** `repo-playbook` sits at one useful and one not-useful verdict, and the
+Fine-Art-Archive audit documented *why*: its useful content is gated behind
+`task_type: implement/testgen/mechanical`, so a `review` consult receives 308 characters, one clause
+of which is factually wrong — it tells auditors a repository's default branch is something it is not.
+Demotion silences that. A repair proposal names it, with the words attached.
+
+`capability_propensity.propose_repair` reads two inputs:
+
+1. **`not_useful` verdicts, with their evidence carried forward.** That is the whole difference
+   between a flag and a repair: *"0.5, one bad verdict"* is a number, *"308 characters, one clause
+   factually wrong about the default branch"* is an action.
+2. **Declines whose KIND indicates a defect** — `decline_kind_repairable`: `wrong_match` (the matcher
+   may be wrong) and `precondition_unmet`. Explicitly **not** `no_landing_zone`: nobody's fault, the
+   match was correct, the capability is working; proposing a repair there asserts a defect that does
+   not exist. `scope_too_small` is also excluded, and for an arithmetic reason rather than a
+   judgement — its fix is narrowing the *declaration*, which **is** the demotion path, and one
+   decline must not argue for unbinding and rebuilding at once.
+
+**`repairable` is a second property of the kind**, declared once beside `demotable` and read by one
+lookup. They are independent questions, and the pair that proves it is `precondition_unmet`: **not
+demotable, is repairable.** Before this channel existed it therefore had *no action at all* — 11 of
+them on the live ledger, recorded and inert forever.
+
+**Report-only, and it queues nothing for anyone** (`CLAUDE.md` §3). Proposals are a field in a report
+the cadence step already writes: nothing waits on a human, nothing expires against a human, and no
+human action can fall behind. Attention cost: 13 rows in an existing report, zero actions required,
+expiring on their own with `WINDOW_DAYS` — **0 minutes/week**.
+
+#### Latched-gate answers (a proposal set is a gate, so it owes all three)
+
+1. **What decrements it?** `record_repair` — a named mechanism writing a durable marker with the fix
+   and its artifact, after which a proposal counts only defect evidence **newer than that marker**.
+   Not "time passes", not "someone notices". Window expiry is a *second* drain on the same
+   `WINDOW_DAYS` constant. *The first draft had no marker at all: defect evidence stayed in the
+   90-day window, so fixing the capability did not clear its proposal for three months. That is the
+   latch, and asking question 1 — not testing — is what caught it.*
+2. **Can that mechanism run while the gate is non-empty?** Yes, unconditionally. `record_repair`
+   requires nothing a standing proposal forbids, and a proposal is report-only on both sides: it
+   never withholds the capability from `rank()`, never lowers its propensity, never blocks a consult.
+   The capability keeps being offered and keeps earning verdicts while the proposal stands.
+3. **Does the measuring window equal the draining window?** Yes, by construction — `WINDOW_DAYS`,
+   the one constant `usefulness()`, `propensity()` and `surface_decline_counts()` already share,
+   bounds both the defect evidence counted and the repair markers that clear it.
+
+Runtime rule: every proposal carries `defect_evidence_total` (measuring),
+`defect_evidence_since_repair` (blocking) and `repairs_recorded` (drainable), and `report()` carries
+`repairs_recorded` **even when the proposal list is empty** — an empty list cannot say whether
+anything is accumulating, and "0 proposals, 0 repairs ever recorded" reads nothing like "0 proposals,
+6 repairs recorded".
+
+And the tie-break **fails toward motion**: ledger timestamps are second-granular, so the freshness
+test is `>=`, not `>`. A defect recorded in the same second as a repair is unorderable and must
+*re-open* the proposal (one report line) rather than vanish (the finding).
+
 ### A FIND has a finder, and the finder may be a capability OR a surface
 
 The strongest signal this loop produced on 2026-08-23 was not in the dataset. Instrumented work
@@ -428,8 +488,9 @@ declaration. And `frontend-verifier` — declined on two frontend-less repos, th
 second-strongest finding of an audit on a repo that *does* have a display surface — is the same
 lesson from the other side: two negatives are not a verdict on a binding.
 
-So `demotable` is a property of the **kind**, declared once in `DECLINE_KINDS` and read nowhere
-else. `wrong_match` and `scope_too_small` may demote; `precondition_unmet`, `no_landing_zone`,
+So `demotable` is a property of the **kind**, declared once in `DECLINE_KINDS` and read by exactly
+one lookup — as is `repairable`, its independent twin (see the repair channel below).
+`wrong_match` and `scope_too_small` may demote; `precondition_unmet`, `no_landing_zone`,
 `gated_off`, `deferred` and the `unspecified` default may not — they are counted and reported, and
 cannot clear the floor. `precondition_unmet` is the load-bearing one: the correct response to a
 capability whose condition does not hold here is to **evaluate the condition, not to weaken the

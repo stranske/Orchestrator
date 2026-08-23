@@ -159,6 +159,21 @@ safety switch, not dead code.
   hand the caller the provenance mix, independent-arm count and self-reported share beside the
   number, and the report headline now reads *12 verdicts, 12 self_reported, 0 outcome-derived*, with
   the three capabilities that had shown 0.800 showing 0.556.
+- **The repair channel — the loop's third action** (`capability_propensity.propose_repair`,
+  `record_repair`, 2026-08-23). Promote and demote were the only two actions, so the loop could not
+  represent *"this capability is worth having and is broken"* — and demoting such a capability
+  silences the thing that should be fixed. Live case: `repo-playbook` at one useful and one
+  not-useful verdict, where the audit documented that its useful content is gated behind
+  `task_type: implement/testgen/mechanical`, so a `review` consult gets 308 characters with one
+  factually wrong clause. Fed by `not_useful` verdicts **with their evidence carried forward** (a
+  proposal without the words is a flag) and by the declines whose kind indicates a defect —
+  `repairable` is a second property of `DECLINE_KINDS`, declared once beside `demotable`:
+  `wrong_match` and `precondition_unmet` yes, `no_landing_zone` explicitly no (nobody's fault, the
+  capability is working), `scope_too_small` no (its fix *is* the demotion path). `precondition_unmet`
+  is the pair that proves the two properties are independent: not demotable, so before this it had no
+  action at all. **Report-only, never applied, and it queues nothing for anyone** — 13 rows in a
+  report the cadence step already writes, 0 minutes/week. The drain is `record_repair` (an action,
+  not the calendar), and every proposal prints its measuring, blocking and drainable counts together.
 - **A defect found is recordable, and the finder may be a capability OR a surface**
   (`capability_propensity.record_find`, `binding_quality`, 2026-08-23). Instrumented work found seven
   defects in this system's own code; two were attributable to a capability and recorded, and the

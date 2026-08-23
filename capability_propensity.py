@@ -126,6 +126,21 @@ records, per trial, the candidates named for that exact task and NOT triggered
 (`not_triggered` / `not_triggered_silently`), which is the same task, same context, divergent
 treatment. `propensity()` now reports that arm beside the posterior. Nothing new was added for it.
 
+AND THERE IS A THIRD ACTION, because "worth having AND broken" was unrepresentable (2026-08-23).
+The loop had exactly promote and demote, so the only response to a broken capability was to stop
+offering it -- which silences the thing that should be fixed. The live case: `repo-playbook` sits at
+one useful and one not-useful verdict, and the Fine-Art-Archive audit documented WHY -- its useful
+content is gated behind `task_type: implement/testgen/mechanical`, so a `review` consult receives 308
+characters, one clause of which is factually wrong (it tells auditors a repo's default branch is
+something it is not). `propose_repair` reads `not_useful` verdicts WITH THEIR EVIDENCE CARRIED
+FORWARD, plus the declines whose KIND indicates a DEFECT (`decline_kind_repairable`: `wrong_match`
+and `precondition_unmet`, explicitly NOT `no_landing_zone`, which is nobody's fault and whose
+capability is working correctly). `repairable` is a SECOND PROPERTY OF THE KIND, declared once beside
+`demotable` and read by one lookup -- and the pair that proves they must be separate is
+`precondition_unmet`, which is NOT demotable and IS repairable, so before this it was recorded and
+inert forever. Report-only, never applied, and it queues nothing for anyone. The drain is
+`record_repair`, an ACTION, not the calendar.
+
 AND A DEFECT FOUND IS THE STRONGEST SIGNAL THERE IS, so it must be recordable (2026-08-23).
 Instrumented work found SEVEN defects in this system's own code that its author had not. Two were
 attributable to a capability and were recorded; the other FIVE were found by the PROCESS -- an audit
@@ -147,6 +162,8 @@ still one observation and only an independent arm moves the number.
     python3 capability_propensity.py find --defect "..." --artifact "issue #77" \
         --surface repo-audit:phase-1 [--capability X --experiment advice:abc]
     python3 capability_propensity.py binding-quality --surface repo-audit:phase-1
+    python3 capability_propensity.py repair
+    python3 capability_propensity.py record-repair --capability X --fix "..." --artifact "PR #1"
     python3 capability_propensity.py --json report
     python3 capability_propensity.py --selftest
 """
@@ -303,16 +320,37 @@ def verdict_judge(metadata: dict | None) -> str:
 # THE KIND OF DECLINE, because the kinds imply OPPOSITE corrections and one undifferentiated
 # "declined" column would license the wrong one. Measured, not theorised: a third audit round on
 # 2026-08-23 declined 22 offers across six reason classes, and only some are the binding's fault.
-# `demotable` is therefore a property OF THE KIND, declared here once, and read by nothing else.
+#
+# TWO PROPERTIES OF THE KIND, each declared here once and read by exactly one lookup:
+#
+#   `demotable`  — may this decline weaken the BINDING? (the drain on the binding table)
+#   `repairable` — does this decline indicate a DEFECT IN THE CAPABILITY? (the repair channel)
+#
+# They are deliberately NOT the same question, and neither implies the other. The loop had exactly
+# two actions, promote and demote, so it could not represent "this capability is worth having and is
+# BROKEN" — and demoting such a capability silences the thing that should be fixed.
+# `precondition_unmet` is the case that proves the pair must be separate: it is NOT demotable (the
+# fix is to evaluate the condition, not weaken the binding) and IS repairable (an undeclared or
+# unevaluated precondition is a defect in the capability), so before `repairable` existed it was
+# recorded and INERT FOREVER — 11 of them on the live ledger with no channel that could act on any.
 DECLINE_KINDS: dict[str, dict] = {
-    # It does not fit this work. The binding or the matcher is wrong.
-    "wrong_match": {"demotable": True, "fix": "the matcher or the binding"},
+    # It does not fit this work. The binding or the matcher is wrong -- and "the matcher is wrong" is
+    # a defect in the capability, so this is the one kind that is BOTH.
+    "wrong_match": {
+        "demotable": True,
+        "repairable": True,
+        "fix": "the matcher or the binding",
+    },
     # A CORRECT match declared too broadly. `offload` was offered at 9 of 12 surfaces in one run and
     # declined at all 9, always structurally, because a one-subsystem audit has no read big enough
     # to pay for a dispatch. Narrowing the declaration IS a demotion, so this counts -- and the
     # proposal carries the fix text, because "add a precondition" is the other valid answer.
+    # NOT REPAIRABLE, and the reason is arithmetic rather than taste: the fix is to narrow the
+    # DECLARATION, which IS the demotion path above. Routing one decline into two opposite actions
+    # would double-count it and let the same evidence argue for unbinding and for rebuilding at once.
     "scope_too_small": {
         "demotable": True,
+        "repairable": False,
         "fix": "a precondition or a narrower declaration, not a lower rank",
     },
     # A CORRECT match whose declared PRECONDITION does not hold here: the instrument is aimed at
@@ -323,28 +361,52 @@ DECLINE_KINDS: dict[str, dict] = {
     # produced the second-strongest finding of that audit -- one the code-reading path had missed.
     # Down-weighting it on the two negatives alone would have cost that finding. THE FIX IS TO
     # EVALUATE THE CONDITION, NOT TO WEAKEN THE BINDING.
+    # REPAIRABLE, and this is the load-bearing pair in the table: NOT demotable, so before the
+    # repair channel existed there was no action this kind could ever produce. An undeclared or
+    # unevaluated precondition is a defect IN THE CAPABILITY -- fixable, and worth fixing precisely
+    # because the match itself was correct.
     "precondition_unmet": {
         "demotable": False,
+        "repairable": True,
         "fix": "declare and EVALUATE the capability's precondition (applies_to, "
         "an observable surface); the binding is right where it holds",
     },
     # A CORRECT match the deliverable shape made impossible: `testgen-lane` matched correctly three
     # times in a read-only audit with no commit target. THE FIX IS NOTHING, so this must never
     # demote -- down-weighting here would punish a capability for being right.
+    # NEITHER demotable NOR repairable. NOBODY'S FAULT: the match was correct and the capability
+    # is working correctly; there was simply nowhere to put the result. Proposing a repair here
+    # would be as wrong as demoting -- it asserts a defect that does not exist.
     "no_landing_zone": {
         "demotable": False,
+        "repairable": False,
         "fix": "nothing — the match was correct and the deliverable had nowhere to "
         "put the result",
     },
     # Correct match held behind a deliberate default-OFF switch or a shadow status. The gate is the
     # subject, and it moves on its own evidence, not on this.
-    "gated_off": {"demotable": False, "fix": "the capability's own gate, on its own evidence"},
-    # Wanted and not affordable this run ("the one I most regret declining").
-    "deferred": {"demotable": False, "fix": "nothing — wanted, not affordable this run"},
+    "gated_off": {
+        "demotable": False,
+        # Not a defect: the gate is the subject and it moves on its own evidence.
+        "repairable": False,
+        "fix": "the capability's own gate, on its own evidence",
+    },
+    # Wanted and not affordable this run ("the one I most regret declining"). Nothing is broken.
+    "deferred": {
+        "demotable": False,
+        "repairable": False,
+        "fix": "nothing — wanted, not affordable this run",
+    },
     # The caller did not classify it. Recorded, so offered-vs-never-considered still works, and NOT
     # demotable: an unclassified decline that could demote is precisely the wrong correction arriving
     # by default, which is the failure this vocabulary exists to prevent.
-    "unspecified": {"demotable": False, "fix": "unknown — the caller did not classify it"},
+    # ...and NOT repairable either, for the identical reason: a repair proposed by DEFAULT, from a
+    # decline nobody classified, is the wrong correction arriving unasked.
+    "unspecified": {
+        "demotable": False,
+        "repairable": False,
+        "fix": "unknown — the caller did not classify it",
+    },
 }
 DECLINE_KIND_DEFAULT = "unspecified"
 
@@ -352,6 +414,16 @@ DECLINE_KIND_DEFAULT = "unspecified"
 def decline_kind_demotable(kind: str) -> bool:
     """Whether a decline of this kind may drive a demotion. One lookup, so it cannot drift."""
     return bool((DECLINE_KINDS.get(str(kind)) or DECLINE_KINDS[DECLINE_KIND_DEFAULT])["demotable"])
+
+
+def decline_kind_repairable(kind: str) -> bool:
+    """Whether a decline of this kind indicates a DEFECT IN THE CAPABILITY. One lookup, one place.
+
+    A second property of the kind, declared once in `DECLINE_KINDS` and read only here — the same
+    discipline `demotable` follows, for the same reason: a predicate spelled out at each call site
+    drifts, and the two answers here are opposite corrections.
+    """
+    return bool((DECLINE_KINDS.get(str(kind)) or DECLINE_KINDS[DECLINE_KIND_DEFAULT])["repairable"])
 
 
 # The surface a decline (or a match) was recorded for. Attribution has to be on the EVENT: the
@@ -846,6 +918,8 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
     verdict_total = sum(corpus_mix.values())
     self_total = sum(n for p, n in corpus_mix.items() if provenance_self_assessed(p))
     recorded_finds = finds(path=path, window_days=window_days, now=now)
+    repairs = propose_repair(path=path, window_days=window_days, now=now)
+    markers = repair_markers(path=path, window_days=window_days, now=now)
     return {
         "window_days": window_days,
         "capability_count": stats["capability_count"],
@@ -891,6 +965,14 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
             for k in sorted({f["finder_kind"] for f in recorded_finds})
         },
         "find_subjects": sorted({f["subject"] for f in recorded_finds if f["subject"]}),
+        # THE THIRD ACTION. Report-only, never applied, never queued for anyone.
+        "repair_proposals": repairs,
+        "repair_proposal_count": len(repairs),
+        "repair_proposals_worth_having": sum(1 for r in repairs if r["worth_having"]),
+        # THE DRAINABLE QUANTITY, carried even when the proposal list is EMPTY -- an empty list
+        # cannot say whether anything is accumulating, and "0 proposals, 0 repairs ever recorded"
+        # reads completely differently from "0 proposals, 6 repairs recorded".
+        "repairs_recorded": sum(m["count"] for m in markers.values()),
         "declines_by_kind": {
             k: sum(v for r in ranked for kk, v in r["declines_by_kind"].items() if kk == k)
             for k in sorted(DECLINE_KINDS)
@@ -931,6 +1013,7 @@ def record_usefulness(
     judge: str = "",
     corroboration: str = "",
     path=None,
+    timestamp: int | None = None,
     metadata: dict | None = None,
 ) -> bool:
     """Did triggering it help? `evidence` is required: an unevidenced verdict is an opinion.
@@ -986,6 +1069,14 @@ def record_usefulness(
         ref=experiment_id,
         path=path or capabilities.REG,
         idempotency_key=f"useful:{capability_id}:{experiment_id}",
+        # A TEST SEAM, not a caller-facing field: ledger timestamps are second-granular, and a
+        # selftest that records a defect, its repair and the re-opening evidence inside one second
+        # cannot distinguish "the action drained it" from "the tie-break happened to go this way".
+        # Deliberately NOT added to `record_decline`: `mcp_server`'s contract selftest asserts that
+        # every keyword-only parameter of that function is advertised by the `capability_decline`
+        # MCP tool, and an MCP caller must never be able to backdate a decline. CI caught exactly
+        # that when the seam was put there first.
+        timestamp=timestamp,
         metadata={
             "source": "capability_propensity",
             USEFUL_KEY: bool(useful),
@@ -2439,6 +2530,548 @@ def binding_quality(surface: str, *, path=None, window_days: int = WINDOW_DAYS) 
     }
 
 
+# ---------------------------------------------------------------------------
+# THE REPAIR CHANNEL — because "worth having AND broken" was unrepresentable.
+#
+# The loop had exactly two actions: PROMOTE (widen a binding) and DEMOTE (narrow one). Neither can
+# say "this capability should exist and does not work", so the only available response to a broken
+# capability was to stop offering it — which silences the thing that should be fixed and loses a
+# capability that was worth having.
+#
+# THE LIVE CASE, and it is why this exists. `repo-playbook` sits at one useful verdict and one
+# not-useful verdict, and the Fine-Art-Archive audit documented exactly WHY: its useful content is
+# gated behind `task_type: implement/testgen/mechanical`, so a `review` consult receives 308
+# characters, one clause of which is factually wrong — it tells auditors a repository's default
+# branch is something it is not. Demotion silences that. A repair proposal names it.
+#
+# TWO INPUTS, and the second is the one the taxonomy was missing an action for:
+#   1. `not_useful` verdicts, WITH THEIR EVIDENCE CARRIED FORWARD, so the proposal is actionable
+#      rather than a flag. "0.5, one bad verdict" is a number; "308 characters, one clause factually
+#      wrong about the default branch" is a repair.
+#   2. Declines whose KIND indicates a DEFECT — `decline_kind_repairable`, i.e. `wrong_match` (the
+#      matcher may be wrong) and `precondition_unmet` (an undeclared or unevaluated precondition is
+#      a defect in the capability, and it is NOT demotable, so this channel is the only one that can
+#      act on it at all). Explicitly NOT `no_landing_zone`: nobody's fault, the match was correct,
+#      the capability is working. Proposing a repair there asserts a defect that does not exist.
+#
+# REPORT-ONLY, NEVER AUTO-APPLIED, and it never queues anything for the owner (`CLAUDE.md` §3). It
+# is a field in a report the cadence step already writes; nothing waits on a human, nothing expires
+# against a human, and no human action can be behind on it. ATTENTION COST: the live ledger produces
+# 13 proposal rows inside an existing hourly/6-daily report, requiring zero actions and expiring on
+# their own with `WINDOW_DAYS`. 0 minutes/week.
+#
+# LATCHED-GATE ANSWERS (a proposal set is a gate, so it owes all three in writing):
+#
+#   1. WHAT DECREMENTS IT? `record_repair` — a named mechanism that writes a durable marker with the
+#      fix and its artifact, after which a proposal counts only defect evidence NEWER than that
+#      marker. Not "time passes" and not "someone notices". Window expiry is a SECOND drain and uses
+#      the same `WINDOW_DAYS` constant, so it cannot drift from the measurement.
+#      The first draft of this had NO marker: defect evidence stayed in the 90-day window, so fixing
+#      the capability did not clear its proposal for three months. That is the latch, and it was
+#      caught by asking question 1 rather than by testing.
+#   2. CAN THE DRAIN RUN WHILE THE GATE IS NON-EMPTY? Yes, unconditionally. `record_repair` requires
+#      nothing a standing proposal forbids, and a proposal is report-only on both sides: it never
+#      withholds the capability from `rank()`, never lowers its propensity, and never blocks a
+#      consult. So the capability keeps being offered, keeps being able to earn useful verdicts, and
+#      the repair can be recorded at any moment — including while the proposal stands.
+#   3. DOES THE MEASURING WINDOW EQUAL THE DRAINING WINDOW? Yes, by construction: `WINDOW_DAYS`, the
+#      one constant `usefulness()`, `propensity()` and `surface_decline_counts()` already share,
+#      bounds the defect evidence counted AND the repair markers that clear it. One name, consumed by
+#      both — a matching pair of literals would drift.
+#
+#   And the runtime rule: every proposal reports `defect_evidence_total` (measuring), and
+#   `defect_evidence_since_repair` (blocking) beside `repairs_recorded` (drainable), so
+#   "13 proposals" can never read as patience when it should read as a repair that was never
+#   recorded. `report()` carries `repairs_recorded` even when the proposal list is EMPTY, because an
+#   empty list cannot say whether anything is accumulating.
+#
+# NO NEW STORE. A repair marker rides a `match` event tagged `source=capability_repair` with a
+# `repair:<digest>` ref — same carrier and same structural exclusion as a find, so a marker can
+# never reach a posterior either.
+REPAIR_SOURCE = "capability_repair"
+REPAIR_REF_PREFIX = "repair:"
+REPAIR_FIX_KEY = "fix"
+REPAIR_ARTIFACT_KEY = "artifact"
+# ONE piece of evidenced defect evidence is enough to PROPOSE, because a proposal costs nothing and
+# is never applied. The floor exists to be stated, not to hold anything shut: raising it would make
+# the channel silent about exactly the single-verdict case (`repo-playbook`) it was built for.
+REPAIR_MIN_DEFECT_EVIDENCE = 1
+
+
+def record_repair(
+    capability_id: str, *, fix: str, artifact: str, path=None, timestamp: int | None = None
+) -> bool:
+    """THE DRAIN. Record that a proposed repair was actually MADE.
+
+    `fix` says what was changed; `artifact` is the PR, commit or file:line a stranger could check.
+    Both are REQUIRED and refused when blank, for the same reason a find and a verdict are: a
+    claimed repair with nothing to check would clear a proposal without fixing anything, which is
+    worse than no drain at all.
+
+    After this, `propose_repair` counts only defect evidence recorded AFTER the marker. That is what
+    makes the gate drainable by an ACTION rather than by the calendar — the first draft had no
+    marker, so a repaired capability kept its proposal for the whole 90-day window.
+    """
+    if not str(fix).strip():
+        raise ValueError("a repair record must say what was FIXED")
+    if not str(artifact).strip():
+        raise ValueError(
+            "a repair record requires an `artifact` — the PR, commit or file:line a stranger "
+            "could check; a claimed repair with nothing to check would clear a proposal without "
+            "fixing anything"
+        )
+    digest = hashlib.sha256(f"{capability_id}|{str(fix).strip().lower()}".encode()).hexdigest()[:12]
+    return capabilities.heartbeat(
+        capability_id,
+        "match",
+        ref=f"{REPAIR_REF_PREFIX}{digest}",
+        path=path or capabilities.REG,
+        idempotency_key=f"repair:{capability_id}:{digest}",
+        # `timestamp` exists so a selftest can lay events out in TIME. Ledger timestamps are
+        # second-granular, and a test that records the defect, the repair and the re-opening
+        # evidence inside one second cannot distinguish "the action drained it" from "the tie-break
+        # happened to go this way" -- which is the whole property under test.
+        timestamp=timestamp,
+        metadata={
+            "source": REPAIR_SOURCE,
+            REPAIR_FIX_KEY: str(fix)[:400],
+            REPAIR_ARTIFACT_KEY: str(artifact)[:400],
+        },
+    )
+
+
+def repair_markers(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> dict:
+    """Per capability: how many repairs were recorded, and when the latest one was.
+
+    Read with the SAME window as the defect evidence it clears -- `WINDOW_DAYS`, the one constant.
+    """
+    caps = capabilities.load_declared(path or capabilities.REG)
+    now = capabilities._now() if now is None else now
+    out: dict[str, dict] = {}
+    for cap_id, cap in sorted(caps.items()):
+        for event in _events(cap):
+            meta = event.get("metadata") or {}
+            if meta.get("source") != REPAIR_SOURCE:
+                continue
+            if not _within_window(event, now=now, window_days=window_days):
+                continue
+            ts = int(event.get("timestamp") or 0)
+            row = out.setdefault(cap_id, {"count": 0, "latest_ts": 0, "records": []})
+            row["count"] += 1
+            row["latest_ts"] = max(row["latest_ts"], ts)
+            row["records"].append(
+                {
+                    "timestamp": ts,
+                    "fix": str(meta.get(REPAIR_FIX_KEY) or ""),
+                    "artifact": str(meta.get(REPAIR_ARTIFACT_KEY) or ""),
+                }
+            )
+    return out
+
+
+def defect_evidence(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> dict:
+    """Per capability: every in-window record saying the capability itself is BROKEN.
+
+    Derived from `experiments()` rather than from a fresh ledger scan, so it inherits every
+    refinement that already exists there — a decline the capability was later TRIGGERED for does not
+    count, and the trial-level window is the same one. Timestamps and evidence text then come from
+    the events those trials were built from, because a proposal without the words is a flag.
+    """
+    trials = {
+        t["experiment_id"]: t for t in experiments(path=path, window_days=window_days, now=now)
+    }
+    caps = capabilities.load_declared(path or capabilities.REG)
+    now = capabilities._now() if now is None else now
+    out: dict[str, list[dict]] = {}
+    for cap_id, cap in sorted(caps.items()):
+        for event in _events(cap):
+            exp = _experiment_id(event)
+            trial = trials.get(exp) if exp else None
+            if trial is None or not _within_window(event, now=now, window_days=window_days):
+                continue
+            meta = event.get("metadata") or {}
+            etype = event.get("type") or event.get("event_type")
+            ts = int(event.get("timestamp") or 0)
+            if etype == "outcome" and cap_id in trial["not_useful"]:
+                out.setdefault(cap_id, []).append(
+                    {
+                        "basis": "not_useful_verdict",
+                        "experiment_id": exp,
+                        "timestamp": ts,
+                        # CARRIED FORWARD, deliberately. The whole difference between a flag and an
+                        # actionable proposal is that the words travel with it.
+                        "evidence": str(meta.get("evidence") or ""),
+                        "provenance": verdict_provenance(meta),
+                        "surface": meta.get(SURFACE_KEY) or meta.get("skill"),
+                        "implied_fix": "the capability's own behaviour on this task",
+                    }
+                )
+            elif etype == "match" and meta.get("source") == DECLINE_SOURCE:
+                if cap_id not in trial["declined"]:
+                    continue
+                kind = str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT)
+                if not decline_kind_repairable(kind):
+                    continue
+                out.setdefault(cap_id, []).append(
+                    {
+                        "basis": "declined_repairable",
+                        "decline_kind": kind,
+                        "experiment_id": exp,
+                        "timestamp": ts,
+                        "evidence": str(meta.get(DECLINE_REASON_KEY) or ""),
+                        "surface": meta.get(SURFACE_KEY),
+                        "implied_fix": DECLINE_KINDS[kind]["fix"],
+                    }
+                )
+    return {c: sorted(v, key=lambda r: r["timestamp"]) for c, v in out.items()}
+
+
+def propose_repair(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> list:
+    """The third action: this capability is worth having and something about it is BROKEN.
+
+    REPORT-ONLY. Nothing here is applied, nothing is queued for anyone, and a proposal changes
+    neither the candidate set nor any propensity — so a wrong proposal costs a line in a report.
+
+    `worth_having` is REPORTED, never a filter. Filtering on it would hide a capability whose only
+    evidence is negative, and that population is the demotion path's business; both readings must
+    stay visible, because "broken and wanted" and "broken and unwanted" imply different work.
+    """
+    evidence = defect_evidence(path=path, window_days=window_days, now=now)
+    markers = repair_markers(path=path, window_days=window_days, now=now)
+    stats = usefulness(path=path, window_days=window_days, now=now)["rows"]
+    out = []
+    for cap_id, records in sorted(evidence.items()):
+        marker = markers.get(cap_id) or {"count": 0, "latest_ts": 0, "records": []}
+        # `>=`, NOT `>`, and the tie-break direction is the point. Ledger timestamps are
+        # second-granular, so a defect recorded in the same second as a repair is UNORDERABLE — and
+        # with a strict `>` it would be excluded forever, which is silence. A gate must fail toward
+        # MOTION: an unorderable defect re-opens the proposal, which costs one report line, rather
+        # than vanishing, which costs the finding. The drain is unaffected, because the evidence a
+        # repair is answering is strictly older than the repair that answers it.
+        fresh = [r for r in records if r["timestamp"] >= marker["latest_ts"]]
+        if len(fresh) < REPAIR_MIN_DEFECT_EVIDENCE:
+            continue
+        row = stats.get(cap_id) or {}
+        bases = sorted({r["basis"] for r in fresh})
+        kinds: dict[str, int] = {}
+        for r in fresh:
+            if r.get("decline_kind"):
+                kinds[r["decline_kind"]] = kinds.get(r["decline_kind"], 0) + 1
+        useful_n = int(row.get("useful") or 0)
+        out.append(
+            {
+                "capability_id": cap_id,
+                "action": "repair",
+                "basis": bases,
+                # WORTH HAVING, reported beside the defect rather than gating it.
+                "worth_having": useful_n > 0,
+                "worth_having_basis": (
+                    f"{useful_n} useful verdict(s) in the window"
+                    if useful_n
+                    else "no useful verdict yet — the defect evidence stands alone, so read this "
+                    "beside the demotion proposals rather than instead of them"
+                ),
+                "useful": useful_n,
+                "not_useful": int(row.get("not_useful") or 0),
+                "propensity": propensity(cap_id, path=path, window_days=window_days, now=now)[
+                    "propensity"
+                ],
+                # THE WORDS, carried forward. This is what makes it a repair and not a flag.
+                "evidence": [r["evidence"] for r in fresh if r["evidence"]][:5],
+                "implied_fixes": sorted({r["implied_fix"] for r in fresh if r["implied_fix"]}),
+                "declines_repairable_by_kind": dict(sorted(kinds.items())),
+                "surfaces": sorted({str(r["surface"]) for r in fresh if r.get("surface")}),
+                # MEASURING quantity, BLOCKING quantity, DRAINABLE quantity — all three, always.
+                "defect_evidence_total": len(records),
+                "defect_evidence_since_repair": len(fresh),
+                "repairs_recorded": marker["count"],
+                "last_repair_at": marker["latest_ts"] or None,
+                "defect_evidence_floor": REPAIR_MIN_DEFECT_EVIDENCE,
+                "window_days": window_days,
+                "auto_applied": False,
+                "queued_for_owner": False,
+            }
+        )
+    # Worth-having first, then most defect evidence: a capability that is wanted AND broken is the
+    # case this channel exists for, and it must not sit below one that is merely broken.
+    return sorted(
+        out,
+        key=lambda r: (
+            not r["worth_having"],
+            -r["defect_evidence_since_repair"],
+            r["capability_id"],
+        ),
+    )
+
+
+def _selftest_repair() -> None:
+    """ "WORTH HAVING AND BROKEN" MUST BE EXPRESSIBLE, and the channel must be drainable BY ACTION.
+
+    Every assertion was written by breaking it first:
+
+      * making `no_landing_zone` repairable -> a CORRECT match is proposed for repair, caught here;
+      * making `precondition_unmet` NON-repairable -> the one kind that has no other channel goes
+        silent again, caught here;
+      * dropping the repair marker from the freshness comparison -> a repaired capability keeps its
+        proposal for the whole 90-day window, which is the latch; caught here;
+      * dropping the artifact guard on `record_repair` -> a claimed repair with nothing to check
+        clears a proposal, caught here;
+      * dropping the carried-forward evidence -> the proposal becomes a flag, caught here;
+      * letting a repair proposal touch the posterior -> caught here.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="repair-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("worth-fixing", "correct-match", "precondition-only", "healthy"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["review"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        # THE LIVE SHAPE: one useful verdict, one evidenced not-useful verdict, one wrong_match
+        # decline. Worth having AND broken -- the state the two-action loop could not express.
+        capabilities.heartbeat(
+            "worth-fixing",
+            "match",
+            ref="advice:wf00000001",
+            path=ledger,
+            idempotency_key="m:wf1",
+            metadata={"surface": "repo-audit:phase-4"},
+        )
+        record_trigger("worth-fixing", "advice:wf00000001", path=ledger)
+        record_usefulness(
+            "worth-fixing",
+            "advice:wf00000001",
+            useful=True,
+            evidence="returned the repo-specific rule that changed the scope boundary",
+            path=ledger,
+        )
+        capabilities.heartbeat(
+            "worth-fixing",
+            "match",
+            ref="advice:wf00000002",
+            path=ledger,
+            idempotency_key="m:wf2",
+            metadata={"surface": "repo-audit:phase-2"},
+        )
+        record_trigger("worth-fixing", "advice:wf00000002", path=ledger)
+        record_usefulness(
+            "worth-fixing",
+            "advice:wf00000002",
+            useful=False,
+            evidence="308 chars that changed no finding, and one clause is factually wrong: it "
+            "names a default branch this repo does not have",
+            path=ledger,
+        )
+        record_decline(
+            "worth-fixing",
+            "advice:wf00000003",
+            reason="the review path receives only the gated summary",
+            kind="wrong_match",
+            surface="repo-audit:phase-2",
+            path=ledger,
+        )
+        # A CORRECT MATCH the deliverable made impossible. Never a repair candidate.
+        for i in range(4):
+            record_decline(
+                "correct-match",
+                f"advice:cm0000000{i}",
+                reason=f"read-only audit, no commit target ({i})",
+                kind="no_landing_zone",
+                surface="repo-audit:phase-4",
+                path=ledger,
+            )
+        # THE KIND WITH NO OTHER CHANNEL: not demotable, so before this it was inert forever.
+        for i in range(3):
+            record_decline(
+                "precondition-only",
+                f"advice:po0000000{i}",
+                reason=f"aimed at another system's runtime ({i})",
+                kind="precondition_unmet",
+                surface="repo-audit:dimension-8",
+                path=ledger,
+            )
+        # ...and one that is simply fine.
+        capabilities.heartbeat(
+            "healthy",
+            "match",
+            ref="advice:hh00000001",
+            path=ledger,
+            idempotency_key="m:hh1",
+            metadata={"surface": "repo-audit:phase-1"},
+        )
+        record_trigger("healthy", "advice:hh00000001", path=ledger)
+        record_usefulness(
+            "healthy", "advice:hh00000001", useful=True, evidence="found two defects", path=ledger
+        )
+
+        props = {p["capability_id"]: p for p in propose_repair(path=ledger)}
+        # ---- 1. THE THIRD ACTION EXISTS, and it is not promote or demote.
+        assert "worth-fixing" in props, props
+        wf = props["worth-fixing"]
+        assert wf["action"] == "repair", wf
+        assert wf["worth_having"] is True and wf["useful"] == 1, wf
+        assert sorted(wf["basis"]) == ["declined_repairable", "not_useful_verdict"], wf
+        # THE WORDS TRAVEL WITH IT. A proposal without the evidence is a flag.
+        assert any("factually wrong" in e for e in wf["evidence"]), wf["evidence"]
+        assert any("gated summary" in e for e in wf["evidence"]), wf["evidence"]
+        assert wf["implied_fixes"], wf
+        assert wf["surfaces"] == ["repo-audit:phase-2"], wf
+        # ---- 2. A CORRECT MATCH IS NEVER PROPOSED FOR REPAIR. `no_landing_zone` is nobody's fault
+        #         and the capability is working; four of them must produce nothing.
+        assert "correct-match" not in props, props
+        # ---- 3. THE KIND WITH NO OTHER CHANNEL IS REACHED. `precondition_unmet` cannot demote, so
+        #         without this it accumulated forever with no action available.
+        assert "precondition-only" in props, props
+        po = props["precondition-only"]
+        assert po["declines_repairable_by_kind"] == {"precondition_unmet": 3}, po
+        assert po["worth_having"] is False, po
+        assert "no useful verdict yet" in po["worth_having_basis"], po
+        # ...and worth-having sorts FIRST, because wanted-and-broken is the case this is for.
+        assert (
+            list(props)[0] == "worth-fixing"
+            or [p["capability_id"] for p in propose_repair(path=ledger)][0] == "worth-fixing"
+        ), list(props)
+        # ---- 4. A HEALTHY CAPABILITY IS NOT PROPOSED.
+        assert "healthy" not in props, props
+        # ---- 5. NEVER APPLIED, NEVER QUEUED. §3 forbids a human touchpoint that can accumulate.
+        for p in propose_repair(path=ledger):
+            assert p["auto_applied"] is False and p["queued_for_owner"] is False, p
+        # ---- 6. BOTH QUANTITIES ON EVERY ROW, per the runtime rule.
+        assert wf["defect_evidence_total"] == 2, wf
+        assert wf["defect_evidence_since_repair"] == 2, wf
+        assert wf["repairs_recorded"] == 0 and wf["last_repair_at"] is None, wf
+        # ---- 7. IT DOES NOT TOUCH THE POSTERIOR. A repair proposal is not a verdict.
+        before = propensity("worth-fixing", path=ledger)
+        propose_repair(path=ledger)
+        after = propensity("worth-fixing", path=ledger)
+        assert after["propensity"] == before["propensity"], (before, after)
+        assert after["evidence_weight"] == before["evidence_weight"], (before, after)
+
+        # ---- 8. THE DRAIN RUNS BY ACTION, NOT BY THE CALENDAR. This is the latched-gate answer,
+        #         asserted: recording the repair clears the proposal immediately, and the same
+        #         defect evidence is still inside the window. Explicit timestamps, because every
+        #         event above landed in the SAME SECOND and a same-second comparison cannot
+        #         distinguish "the action drained it" from "the tie-break went this way".
+        base = capabilities._now()
+        assert record_repair(
+            "worth-fixing",
+            fix="ungate the review path so a review consult receives the repo facts",
+            artifact="PR #999, repo_knowledge.py:812",
+            path=ledger,
+            timestamp=base + 3600,
+        )
+        drained = {p["capability_id"]: p for p in propose_repair(path=ledger)}
+        assert "worth-fixing" not in drained, drained
+        # ...and the evidence really is still there, so this proves an ACTION cleared it and not
+        # the window. A break that dropped the marker comparison would leave the proposal standing.
+        assert len(defect_evidence(path=ledger)["worth-fixing"]) == 2, defect_evidence(path=ledger)
+        # ...and the repair is VISIBLE, so a cleared proposal is not an unexplained silence.
+        assert repair_markers(path=ledger)["worth-fixing"]["count"] == 1
+        # ...and a REPEAT is idempotent: the same fix twice is one repair.
+        assert (
+            record_repair(
+                "worth-fixing",
+                fix="Ungate The Review Path So A Review Consult Receives The Repo Facts",
+                artifact="same PR",
+                path=ledger,
+            )
+            is False
+        )
+        # ---- 9. AND NEW defect evidence after the repair RE-OPENS it, so a recorded repair is not
+        #         a permanent silencer -- the gate fails toward motion in both directions.
+        record_usefulness(
+            "worth-fixing",
+            "advice:wf00000009",
+            useful=False,
+            evidence="still gated for review consults after the fix",
+            path=ledger,
+            timestamp=base + 7200,
+        )
+        reopened = {p["capability_id"]: p for p in propose_repair(path=ledger)}
+        assert "worth-fixing" in reopened, reopened
+        assert reopened["worth-fixing"]["repairs_recorded"] == 1, reopened["worth-fixing"]
+        assert reopened["worth-fixing"]["defect_evidence_since_repair"] == 1, reopened[
+            "worth-fixing"
+        ]
+        assert reopened["worth-fixing"]["defect_evidence_total"] == 3, reopened["worth-fixing"]
+
+        # ---- 9b. THE TIE-BREAK FAILS TOWARD MOTION. A defect recorded in the SAME SECOND as a
+        #          repair is unorderable; it must re-open the proposal (one report line) rather
+        #          than vanish (the finding). Asserted on a fresh capability so the surrounding
+        #          state cannot make it pass for another reason.
+        capabilities.save(
+            {
+                **capabilities.load_declared(ledger),
+                "tie-break": {
+                    **capabilities._blank_capability("tie-break"),
+                    "status": "generated",
+                    "matcher": {"field": "task_type", "operator": "in", "value": ["review"]},
+                },
+            },
+            ledger,
+        )
+        record_usefulness(
+            "tie-break",
+            "advice:tb00000001",
+            useful=False,
+            evidence="the matcher does not fit this work",
+            path=ledger,
+            timestamp=base + 100,
+        )
+        assert record_repair(
+            "tie-break",
+            fix="fixed the matcher",
+            artifact="PR #1000",
+            path=ledger,
+            timestamp=base + 200,
+        )
+        cleared = {p["capability_id"] for p in propose_repair(path=ledger)}
+        assert "tie-break" not in cleared, cleared
+        record_usefulness(
+            "tie-break",
+            "advice:tb00000002",
+            useful=False,
+            evidence="still does not fit",
+            path=ledger,
+            timestamp=base + 200,  # EXACTLY the repair's second
+        )
+        tied = {p["capability_id"] for p in propose_repair(path=ledger)}
+        assert "tie-break" in tied, (
+            "a defect recorded in the same second as a repair must RE-OPEN the proposal, not "
+            "vanish -- a gate must fail toward motion, not silence"
+        )
+
+        # ---- 10. A CLAIMED REPAIR WITH NOTHING TO CHECK MUST NOT CLEAR ANYTHING.
+        for kwargs in ({"fix": "fixed it", "artifact": ""}, {"fix": "", "artifact": "PR #1"}):
+            try:
+                record_repair("worth-fixing", path=ledger, **kwargs)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"an unevidenced repair must be refused: {kwargs}")
+
+    # ---- 11. THE TWO PROPERTIES OF A KIND ARE INDEPENDENT, and the pair that proves it is
+    #          `precondition_unmet`: NOT demotable, IS repairable. If those ever coincide the
+    #          repair channel is redundant with the drain.
+    assert decline_kind_demotable("precondition_unmet") is False
+    assert decline_kind_repairable("precondition_unmet") is True
+    assert decline_kind_repairable("no_landing_zone") is False
+    assert decline_kind_repairable("unspecified") is False, "a default must not propose a repair"
+    for kind, row in DECLINE_KINDS.items():
+        assert "repairable" in row, f"{kind} does not declare `repairable`"
+    print(
+        "capability_propensity repair selftest: OK (worth-having-and-broken is expressible, a "
+        "correct match is never proposed, precondition_unmet finally has an action, the evidence "
+        "travels with the proposal, recording the repair drains it while the evidence is still in "
+        "window, new evidence re-opens it, and nothing is applied or queued)"
+    )
+
+
 def _selftest_finds() -> None:
     """A FIND IS AN ATTRIBUTION RECORD, and the finder may be a capability OR a surface.
 
@@ -3596,6 +4229,9 @@ def _fmt(rep: dict) -> str:
         f"  capabilities with non-self-reported evidence: "
         f"{rep['capabilities_with_outcome_derived_evidence']}; with >1 judge arm: "
         f"{rep['capabilities_with_multiple_judge_arms']}",
+        f"  repair proposals: {rep['repair_proposal_count']} "
+        f"({rep['repair_proposals_worth_having']} worth having and broken); "
+        f"repairs recorded: {rep['repairs_recorded']} — report only, never applied, never queued",
         f"  defect finds: {rep['find_count']} — {rep['finds_by_finder_kind'] or '(none)'} "
         f"(capability-attributed finds also score; surface-attributed ones feed binding quality "
         f"and score nothing)",
@@ -3621,6 +4257,22 @@ def _fmt(rep: dict) -> str:
             f"{row['not_useful']:3d} {row['declined']:5d}"
             + ("  (floored)" if row["floored"] else "")
         )
+    if rep["repair_proposals"]:
+        lines.append("")
+        lines.append(
+            "  REPAIR PROPOSALS (report only; the loop's third action — neither promote nor demote)"
+        )
+        for prop in rep["repair_proposals"][:10]:
+            lines.append(
+                f"    ~ {prop['capability_id']:34s} "
+                f"{'WORTH HAVING' if prop['worth_having'] else 'no useful verdict yet':22s} "
+                f"defect evidence {prop['defect_evidence_since_repair']}"
+                f"/{prop['defect_evidence_total']}, repairs recorded {prop['repairs_recorded']}"
+            )
+            if prop["evidence"]:
+                lines.append(f"        {prop['evidence'][0][:110]}")
+        if len(rep["repair_proposals"]) > 10:
+            lines.append(f"    ... and {len(rep['repair_proposals']) - 10} more")
     return "\n".join(lines) + "\n"
 
 
@@ -3638,6 +4290,8 @@ def main(argv: list[str]) -> int:
             "decline",
             "find",
             "binding-quality",
+            "repair",
+            "record-repair",
             "detect",
             "tick-evidence",
         ],
@@ -3741,12 +4395,18 @@ def main(argv: list[str]) -> int:
         default="",
         help="find: what the defect was IN (module, capability, doc). Recorded, never scored",
     )
+    ap.add_argument(
+        "--fix",
+        default="",
+        help="record-repair: what was CHANGED (required)",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
         _selftest_provenance()
         _selftest_finds()
+        _selftest_repair()
         _selftest_declines()
         _selftest_detection()
         _selftest_tick_evidence()
@@ -3778,6 +4438,53 @@ def main(argv: list[str]) -> int:
             ap.error(str(exc))
         res["ledger"] = str(ledger) if ledger else "live"
         print(json.dumps(res, indent=2 if args.json else None))
+        return 0
+    if args.command == "repair":
+        props = propose_repair(window_days=args.window_days)
+        _capability_heartbeat("invocation", f"repair-proposals:{len(props)}")
+        if args.json:
+            print(json.dumps(props, indent=2))
+        else:
+            worth = sum(1 for p in props if p["worth_having"])
+            print(
+                f"repair proposals — {len(props)} ({worth} worth having and broken). "
+                "REPORT ONLY: never applied, never queued for anyone."
+            )
+            for prop in props:
+                print(
+                    f"  ~ {prop['capability_id']:34s} "
+                    f"{'WORTH HAVING' if prop['worth_having'] else 'no useful verdict yet':22s} "
+                    f"basis={','.join(prop['basis'])} "
+                    f"defect={prop['defect_evidence_since_repair']}"
+                    f"/{prop['defect_evidence_total']} repairs={prop['repairs_recorded']}"
+                )
+                for line in prop["evidence"][:2]:
+                    print(f"      {line[:118]}")
+                for fix in prop["implied_fixes"]:
+                    print(f"      fix: {fix[:118]}")
+        return 0
+    if args.command == "record-repair":
+        if not args.capability:
+            ap.error("--capability is required")
+        ledger = pathlib.Path(args.ledger) if args.ledger else None
+        try:
+            ok = record_repair(args.capability, fix=args.fix, artifact=args.artifact, path=ledger)
+        except ValueError as exc:
+            ap.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "recorded": bool(ok),
+                    "command": "record-repair",
+                    "ledger": str(ledger) if ledger else "live",
+                    "capability": args.capability,
+                    # SAY WHAT THIS DID. It drains the proposal; it is NOT a verdict and moves no
+                    # posterior. New defect evidence after it re-opens the proposal.
+                    "drains_repair_proposal": True,
+                    "affects_propensity": False,
+                }
+            )
+        )
         return 0
     if args.command == "binding-quality":
         if not args.surface:
