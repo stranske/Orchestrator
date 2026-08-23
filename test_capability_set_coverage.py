@@ -116,14 +116,8 @@ def test_an_absent_entrypoint_diagnoses_itself_differently_from_a_real_defect():
             # them. Silence is the assertion: the ordinary declaration failure reads unchanged.
             here = audit.absent_entrypoint_note(["here-cap"], ledger=led)
             assert here == "", here
-            assert (
-                audit.entrypoint_presence(led["here-cap"])["state"]
-                == audit.ENTRYPOINT_PRESENT
-            )
-            assert (
-                audit.entrypoint_presence(led["gone-cap"])["state"]
-                == audit.ENTRYPOINT_ABSENT
-            )
+            assert audit.entrypoint_presence(led["here-cap"])["state"] == audit.ENTRYPOINT_PRESENT
+            assert audit.entrypoint_presence(led["gone-cap"])["state"] == audit.ENTRYPOINT_ABSENT
         finally:
             audit.HERE = saved
 
@@ -203,11 +197,7 @@ def test_every_capability_appears_in_the_activation_audit():
 def test_unreachable_capabilities_state_a_reason():
     """ "Cannot fire" is allowed. "Cannot fire, unexplained" is not."""
     rep = audit.audit(use_cache=True)
-    silent = [
-        r["capability_id"]
-        for r in rep["rows"]
-        if not r["reachable"] and not r["defects"]
-    ]
+    silent = [r["capability_id"] for r in rep["rows"] if not r["reachable"] and not r["defects"]]
     assert not silent, f"capabilities blocked with no named defect: {silent}"
 
 
@@ -225,9 +215,7 @@ def test_exemptions_carry_reasons_and_exist():
     ledger = set(capabilities.load_declared(capabilities.REG))
     for cap_id, reason in FIXTURE_EXEMPT.items():
         assert cap_id in ledger, f"FIXTURE_EXEMPT names unknown capability {cap_id!r}"
-        assert reason and len(reason) > 20, (
-            f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"
-        )
+        assert reason and len(reason) > 20, f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"
 
 
 def roster() -> str:
@@ -282,11 +270,7 @@ def roster() -> str:
     )
     for cap_id in sorted(ledger):
         row = rows.get(cap_id) or {}
-        fx = (
-            "yes"
-            if cap_id in covered
-            else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
-        )
+        fx = "yes" if cap_id in covered else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
         can = "yes" if row.get("reachable") else "NO"
         fire = {True: "fires", False: "miss"}.get(fired.get(cap_id), "—")
         out.append(
@@ -307,9 +291,7 @@ def main() -> int:
     if "--roster" in sys.argv:
         print(roster(), end="")
         return 0
-    tests = [
-        v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)
-    ]
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failures, skipped = [], []
     for fn in tests:
         try:
@@ -331,9 +313,7 @@ def main() -> int:
             # check here produces rather than at a round number.
             print(f"       {str(exc)[:2000]}")
     if failures:
-        print(
-            f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED"
-        )
+        print(f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED")
         return 1
     ledger = capabilities.load_declared(capabilities.REG)
     if skipped:

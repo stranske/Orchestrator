@@ -426,8 +426,9 @@ def entrypoint_presence(cap: dict) -> dict:
     }
 
 
-def absent_entrypoint_report(capability_ids, *, path: Path | None = None,
-                             ledger: dict | None = None) -> dict:
+def absent_entrypoint_report(
+    capability_ids, *, path: Path | None = None, ledger: dict | None = None
+) -> dict:
     """Which of these rows declare code that is NOT in this tree, and where that code was found.
 
     `total` travels with `absent` on purpose: the runtime rule in CLAUDE.md is that a count must
@@ -454,8 +455,9 @@ def absent_entrypoint_report(capability_ids, *, path: Path | None = None,
     return {"absent": absent, "checked": len(wanted), "total": len(ledger)}
 
 
-def absent_entrypoint_note(capability_ids, *, path: Path | None = None,
-                           ledger: dict | None = None, indent: str = "  ") -> str:
+def absent_entrypoint_note(
+    capability_ids, *, path: Path | None = None, ledger: dict | None = None, indent: str = "  "
+) -> str:
     """The diagnostic block, or '' when every row's code is here. Appended to a FAILURE, never a skip.
 
     One formatter for all three checks so they cannot tell three different stories about the same
@@ -516,17 +518,28 @@ def absent_entrypoint_note(capability_ids, *, path: Path | None = None,
     # and on 2026-08-22 it came back EMPTY for a module that existed — because the branch holding
     # it had never been fetched into that checkout. An empty result there is "not fetched", never
     # "does not exist", so the command and its precondition must travel together.
-    modules = sorted({m for row in rep["absent"]
-                      for hit in (row.get("found_in") or []) for m in hit["modules"]}
-                     or {c for row in rep["absent"]
-                         for entry in (row.get("missing") or []) for c in entry["candidates"]})
+    modules = sorted(
+        {m for row in rep["absent"] for hit in (row.get("found_in") or []) for m in hit["modules"]}
+        or {
+            c
+            for row in rep["absent"]
+            for entry in (row.get("missing") or [])
+            for c in entry["candidates"]
+        }
+    )
     if modules:
-        out.append(f"{indent}To check every branch, FETCH FIRST — an unfetched ref makes the log "
-                   f"look empty, which is how this")
-        out.append(f"{indent}was misread once: git fetch --all && "
-                   f"git log --all --oneline -- {' '.join(modules[:3])}")
-    out.append(f"{indent}Any row NOT listed here has its module present, and for those the fix is "
-               f"the declaration.")
+        out.append(
+            f"{indent}To check every branch, FETCH FIRST — an unfetched ref makes the log "
+            f"look empty, which is how this"
+        )
+        out.append(
+            f"{indent}was misread once: git fetch --all && "
+            f"git log --all --oneline -- {' '.join(modules[:3])}"
+        )
+    out.append(
+        f"{indent}Any row NOT listed here has its module present, and for those the fix is "
+        f"the declaration."
+    )
     return "\n".join(out)
 
 

@@ -66,8 +66,7 @@ def _cell_target(
         target = max(target, exploration_review.MIN_TOP_AGENT_OBS)
         reasons.append("top_agent_min_observations")
     if (
-        int(task_row.get("observed_agents") or 0)
-        < exploration_review.MIN_OBSERVED_AGENTS
+        int(task_row.get("observed_agents") or 0) < exploration_review.MIN_OBSERVED_AGENTS
         and observed == 0
     ):
         target = max(target, 1)
@@ -94,9 +93,7 @@ def _missing_cells(coverage: dict, *, route_table: dict) -> list[dict]:
         for index, agent in enumerate(agents):
             if agent in router.BACKUP_AGENTS:
                 continue
-            observed = int(
-                (task_row.get("agent_observations") or {}).get(agent, 0) or 0
-            )
+            observed = int((task_row.get("agent_observations") or {}).get(agent, 0) or 0)
             target, reasons = _cell_target(task_type, agent, task_row, agents)
             if observed >= target or not reasons:
                 continue
@@ -115,12 +112,8 @@ def _missing_cells(coverage: dict, *, route_table: dict) -> list[dict]:
                     "needed_observations": max(0, target - observed),
                     "reasons": reasons,
                     "route_index": index,
-                    "task_needed_total_observations": task_row.get(
-                        "needed_total_observations"
-                    ),
-                    "task_needed_observed_agents": task_row.get(
-                        "needed_observed_agents"
-                    ),
+                    "task_needed_total_observations": task_row.get("needed_total_observations"),
+                    "task_needed_observed_agents": task_row.get("needed_observed_agents"),
                     "task_needed_top_agent_observations": task_row.get(
                         "needed_top_agent_observations"
                     ),
@@ -146,9 +139,7 @@ def _direct_mode_progress(review: dict) -> dict:
         "exploration_runs": exploration_runs,
         "outcome_exploration_runs": outcome_runs,
         "mode_outcome_runs": mode_counts,
-        "ready_for_direct_comparison": bool(
-            recorded.get("ready_for_direct_comparison")
-        ),
+        "ready_for_direct_comparison": bool(recorded.get("ready_for_direct_comparison")),
     }
 
 
@@ -272,9 +263,7 @@ def _build_jobs(
 
     jobs: list[dict] = []
     blocked: list[dict] = []
-    for task_type, task_cells in sorted(
-        cells_by_task.items(), key=lambda item: item[0]
-    ):
+    for task_type, task_cells in sorted(cells_by_task.items(), key=lambda item: item[0]):
         candidates = items_by_task.get(task_type) or []
         if not candidates:
             blocked.append(
@@ -419,9 +408,7 @@ def build_plan(
     route_lagging = _route_lagging(acquisition)
     blockers: list[str] = []
     if require_direct_progress and not progress["progressing"]:
-        blockers.append(
-            "direct exploration mode outcome counts are not progressing yet"
-        )
+        blockers.append("direct exploration mode outcome counts are not progressing yet")
     if not route_lagging:
         blockers.append("route-weight coverage gates are already ready")
     if cells and not jobs:
@@ -430,16 +417,18 @@ def build_plan(
         blockers.append("no missing route cells detected")
 
     active_eligible = (
-        route_lagging
-        and bool(jobs)
-        and (progress["progressing"] or not require_direct_progress)
+        route_lagging and bool(jobs) and (progress["progressing"] or not require_direct_progress)
     )
     if active_eligible:
         status = "ready_to_schedule_backfill"
-        next_action = "run one guarded backfill job, then collect and evaluate it before counting evidence"
+        next_action = (
+            "run one guarded backfill job, then collect and evaluate it before counting evidence"
+        )
     elif cells and not progress["progressing"] and require_direct_progress:
         status = "waiting_for_direct_mode_progress"
-        next_action = "continue Stage 2 supervised collection until direct exploration outcomes start moving"
+        next_action = (
+            "continue Stage 2 supervised collection until direct exploration outcomes start moving"
+        )
     elif cells and not jobs:
         status = "needs_backlog_or_research_subjects"
         next_action = "refresh backlog or author a targeted research subject for the missing cells"
@@ -655,9 +644,7 @@ def format_human(plan: dict) -> str:
         lines.append("blocked task types:")
         for row in plan["blocked_tasks"][:5]:
             lines.append(f"  {row.get('task_type')}: {row.get('reason')}")
-    lines.append(
-        f"active scheduling requires --apply --confirm-backfill and {ENV_FLAG}=1"
-    )
+    lines.append(f"active scheduling requires --apply --confirm-backfill and {ENV_FLAG}=1")
     return "\n".join(lines)
 
 
@@ -749,9 +736,9 @@ def _selftest() -> None:
         )
         assert plan["active_backfill_eligible"] is True, plan
         assert plan["missing_cell_count"] >= 2, plan["missing_cells"]
-        assert plan["planned_jobs"] and plan["planned_jobs"][0]["target"] == "o/r#1", (
-            plan["planned_jobs"]
-        )
+        assert plan["planned_jobs"] and plan["planned_jobs"][0]["target"] == "o/r#1", plan[
+            "planned_jobs"
+        ]
         planned_job = plan["planned_jobs"][0]
         assert {"cursor", "vibe"} <= set(planned_job["agents"]), planned_job
         assert planned_job["exp_id_template"] == "backfill-o-r-1", planned_job
@@ -803,12 +790,8 @@ def _selftest() -> None:
             exploration_evidence_plan._backlog_items = original_backlog_items  # type: ignore
         assert launched["active"] is True and calls, launched
         assert calls[0]["task_type"] == "implement", calls
-        assert calls[0]["exp_id"].startswith(f"{planned_job['exp_id_template']}-"), (
-            calls
-        )
-        assert claims.holder("o/r#1")["agent"] == BACKFILL_CLAIM_AGENT, claims.holder(
-            "o/r#1"
-        )
+        assert calls[0]["exp_id"].startswith(f"{planned_job['exp_id_template']}-"), calls
+        assert claims.holder("o/r#1")["agent"] == BACKFILL_CLAIM_AGENT, claims.holder("o/r#1")
 
         no_progress_db = Path(tmp) / "no-progress.db"
         feedback.DB_PATH = no_progress_db
@@ -823,9 +806,9 @@ def _selftest() -> None:
             trials=5,
         )
         assert blocked["active_backfill_eligible"] is False, blocked
-        assert "direct exploration mode outcome counts" in " ".join(
-            blocked["blockers"]
-        ), blocked["blockers"]
+        assert "direct exploration mode outcome counts" in " ".join(blocked["blockers"]), blocked[
+            "blockers"
+        ]
         print("exploration_backfill.py selftest: OK")
     finally:
         feedback.DB_PATH = old_db
@@ -837,9 +820,7 @@ def _selftest() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Read-only route-coverage backfill planner."
-    )
+    parser = argparse.ArgumentParser(description="Read-only route-coverage backfill planner.")
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--backlog-json", type=Path)
     parser.add_argument("--capacity-json", type=Path)
@@ -865,9 +846,7 @@ def main(argv: list[str] | None = None) -> int:
         require_direct_progress=not args.allow_before_direct_progress,
     )
     if args.apply:
-        requested_agents = [
-            a.strip() for a in (args.agents or "").split(",") if a.strip()
-        ] or None
+        requested_agents = [a.strip() for a in (args.agents or "").split(",") if a.strip()] or None
         result = schedule_backfill(
             plan,
             target=args.target,
@@ -875,15 +854,9 @@ def main(argv: list[str] | None = None) -> int:
             backlog_path=args.backlog_json,
             confirm=args.confirm_backfill,
         )
-        print(
-            json.dumps(result, indent=2, default=str)
-            if args.as_json
-            else format_human(plan)
-        )
+        print(json.dumps(result, indent=2, default=str) if args.as_json else format_human(plan))
         return 0 if result.get("active") else 2
-    print(
-        json.dumps(plan, indent=2, default=str) if args.as_json else format_human(plan)
-    )
+    print(json.dumps(plan, indent=2, default=str) if args.as_json else format_human(plan))
     return 0
 
 
