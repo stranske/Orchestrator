@@ -483,6 +483,12 @@ def should_reask(previous: dict | None, current_context: dict) -> dict:
 # reasons below are the lane audit's findings over 4,211 recorded rounds.
 # ---------------------------------------------------------------------------
 
+# A phase that should bind NOTHING declares it, with the reason. Silent absence and deliberate
+# emptiness must not look alike -- that is this repo's founding defect. `repo-audit:phase-1` is the
+# case: the playbook says "Orient (bash only, NO agents)", so inheriting the surface-wide `offload`
+# would contradict the skill's own instruction.
+NO_BINDING = "__none__"
+
 SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     "closer-lane": {
         "adversarial-review": "its matcher IS {kind: closer_gate, name: high_stakes_review} -- built "
@@ -506,12 +512,125 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "runtime-ac-checks": "stale-checkbox defects on its own PRs are unverified acceptance criteria",
         "offload": "scans 40 durable holders and full review-thread sets per round",
     },
+    # `repo-audit` is SIX PHASES, not one context, so it binds per phase. Phase attribution comes
+    # from the skill's own playbook text; volume from 177 audit documents across the four
+    # substantively-audited non-Orchestrator repos (deliberate-break appears in 56 of them,
+    # adversarial in 25, offload in 21).
+    #
+    # PHASE 1 IS DELIBERATELY ABSENT. The playbook says "Orient (bash only, NO agents)" — binding a
+    # capability there would contradict the skill's own instruction, and an empty binding is the
+    # correct answer, not an oversight.
+    # ---- the remaining surfaces. An empty binding with a REASON is a real verdict here; five of
+    # the twelve skills were excluded from the advisor consult entirely, and two of those were
+    # excluded precisely because a keyword classifier would misfire on them.
+    "ux-review": {
+        "frontend-verifier": "Gate 1 is the deterministic assert-click-assert pass that must precede "
+                             "the panel; the skill drives every primary surface",
+        "adversarial-review": "the panel is >=4 evaluators plus an adversarial critic — the critic "
+                              "role is this capability",
+        "offload": "mining full per-evaluator output is a large read by construction",
+    },
+    "implementation-verification": {
+        "runtime-ac-checks": "the skill's whole job is proving each acceptance criterion landed — "
+                             "that IS the runtime-AC contract",
+        "deliberate-break-verifier": "it checks the named test gate is present AND passing, which is "
+                                     "the break-then-revert proof",
+        "offload": "reading real squash diffs across many merged PRs is a large read",
+    },
+    "file-agent-issue": {
+        "deliberate-break-verifier": "AGENT_ISSUE_FORMAT requires a named test gate with a "
+                                     "deliberate-break→revert demonstration in every filed issue",
+        "runtime-ac-checks": "the issue's acceptance criteria are what a runtime-AC plan is built from",
+    },
+    "cross-env-test-doctor": {
+        "deliberate-break-verifier": "prescribing the canonical fix per failure class needs the fix "
+                                     "proven to fail without it",
+        "testgen-lane": "cross-env failures usually resolve into added or corrected coverage",
+    },
+    "latched-gate-check": {
+        "switch-review": "the repo's own gate sweep already audits the held switches weekly; this "
+                         "skill and that capability are the same question asked two ways",
+    },
+    "orchestrate": {
+        "offload": "the skill's prime directive is 'do the thinking; hand off the typing and the "
+                   "reading' — offload is that mechanism and its most-used capability",
+        "windowed-capacity-policy": "it assesses capacity before routing each sub-task",
+        "role-decomposer": "decomposing the request across agents is the skill's core move",
+        "role-triage": "choosing which piece goes to which agent is triage",
+    },
+    # SUPPRESSED, each with the reason — these are verdicts, not gaps.
+    "human-involvement-check": {
+        NO_BINDING: "produces an attention-cost analysis and never dispatchable work; its "
+                    "Orchestrator mentions cite the owner-question protocol as a reference "
+                    "implementation, not as something to invoke.",
+    },
+    "scheduled-checkin": {
+        NO_BINDING: "the work is ~/.codex/bin/checkin.py, a different subsystem. The Orchestrator is "
+                    "a CONSUMER of this skill, not a provider to it.",
+    },
+    "platform-handoff-brief": {
+        NO_BINDING: "binding anything here would manufacture false positives: 'write a Windows TEST "
+                    "brief' classifies as testgen on the word 'test' alone, seeding a steady stream "
+                    "of associations describing work that never happened.",
+    },
+    "fast-venv": {
+        NO_BINDING: "same failure, worse: 'pytest takes 26 minutes' classifies as testgen every "
+                    "time. The skill diagnoses a filesystem problem, not a coverage problem.",
+    },
+    "deploy-recovery": {
+        NO_BINDING: "Render incident response. The advisor's own probe returns useful:false, "
+                    "confidence:none, and that is the correct answer.",
+    },
+    # ---- non-skill surfaces
+    "tick": {
+        "switch-review": "already a weekly tick cadence step; bound so the tick can consult rather "
+                         "than only be scheduled",
+        "capability-firing-monitor": "the tick is where does-it-fire is observed",
+        "capability-activation-audit": "and where can-it-fire is observed",
+        "capability-propensity": "the tick is the highest-volume unattended surface (~91 writes/day), "
+                                 "so it is where propensity evidence should accrue fastest",
+    },
+    "ci": {
+        "capability-admission-gate": "runs in verify.py on every PR; the gate IS the CI surface",
+        "docs-drift-fix-agent": "a Workflows CI workflow that fires per PR without local invocation",
+    },
     "repo-audit": {
-        "adversarial-review": "the audit skill's findings are meant to be adversarially verified "
-                              "before filing; this is that step",
-        "offload": "whole-repo reads are the canonical offload case",
-        "partitioned-review": "a multi-dimension audit is a partition over review dimensions",
-        "testgen-lane": "audit findings about missing coverage become testgen work",
+        "offload": "whole-repo reads are the canonical offload case, and the audit is the biggest "
+                   "read in the system; applies across phases, so declared surface-wide",
+    },
+    "repo-audit:phase-1": {
+        NO_BINDING: "the playbook says 'Orient (bash only, NO agents)'. Binding anything here would "
+                    "contradict the skill's own instruction; the empty set is the correct answer.",
+    },
+    "repo-audit:phase-2": {
+        "role-decomposer": "phase 2 splits the work across 8 named dimensions — that split IS "
+                           "decomposition, currently done by hand in the prompt",
+        "partitioned-review": "8 dimensions analysed by bounded agents is a partition over review "
+                              "dimensions",
+        "repo-playbook": "the audit runs against 13 repos with different conventions; "
+                         "repo_knowledge.py is exactly that per-repo context",
+        "frontend-verifier": "dimension 4 uses the ux-review-overlay when observable surfaces "
+                             "exist, which is what this gate checks",
+    },
+    "repo-audit:phase-3": {
+        "adversarial-review": "the phase IS 'adversarially verify each finding against the live "
+                              "tip'; appears in 25 of 177 audit documents, done by hand",
+    },
+    "repo-audit:phase-4": {
+        "deliberate-break-verifier": "phase 4 REQUIRES 'a named test gate + deliberate-break→revert' "
+                                     "on every filed issue — it appears in 56 of 177 audit "
+                                     "documents, the dominant pattern, and never as an invocation",
+        "testgen-lane": "the named test gate phase 4 demands is testgen work",
+        "role-triage": "'prioritize + file' is triage over verified findings",
+    },
+    "repo-audit:phase-5": {
+        "capability-propensity": "phase 5 reconciles and proves nothing was silently dropped; "
+                                 "recording which capabilities helped belongs here",
+    },
+    "repo-audit:fix": {
+        "codemod-campaign": "the fix arc is where consolidation findings become sweeping changes",
+        "epic-decomposition": "a large audit finding becomes an epic before it becomes PRs",
+        "testgen-lane": "fixes need the coverage the audit said was missing",
     },
 }
 
@@ -519,15 +638,45 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
 def binding_for(surface: str, *, path=None) -> dict[str, str]:
     """The declared bound set for a surface, plus any promotions this instance has learned.
 
-    Seed comes from the committed table; promotions are read from the ledger, so an instance can
-    grow its own bindings without a code change and without touching any prompt.
+    PHASE-SCOPED. A surface may be a bare name (`closer-lane`) or a phase within a long process
+    (`repo-audit:phase-3`). A phase key resolves to the phase's own entries MERGED with the bare
+    surface's, so a capability needed throughout is declared once.
+
+    Why phases exist at all: `repo-audit` runs six phases and legitimately wants ~12 capabilities
+    across the whole arc. Binding all 12 to `repo-audit` would recreate the too-many-tools problem
+    INSIDE the skill — the measured safe zone is 10-20 per reasoning CONTEXT, and each phase is a
+    context. Binding 2-4 per phase keeps every context small while covering the whole process.
+
+    Seed comes from the committed table; promotions are read from the ledger, so an instance can grow
+    its own bindings without a code change and without touching any prompt.
     """
     if not surface:
         return {}
-    out = dict(SURFACE_BINDINGS.get(surface) or {})
-    for cap_id, reason in _promoted_bindings(surface, path=path).items():
-        out.setdefault(cap_id, reason)
+    keys = [surface.split(":", 1)[0], surface] if ":" in surface else [surface]
+    # A phase declaring NO_BINDING suppresses inheritance entirely, so "deliberately empty" can
+    # actually be expressed. Checked before merging, or the surface-wide entries would leak in.
+    if NO_BINDING in (SURFACE_BINDINGS.get(keys[-1]) or {}):
+        return {}
+    out: dict[str, str] = {}
+    # Phase entries win on conflict: the more specific declaration is the more considered one.
+    for key in keys:
+        for cap_id, reason in (SURFACE_BINDINGS.get(key) or {}).items():
+            if cap_id == NO_BINDING:
+                continue
+            out[cap_id] = reason
+        for cap_id, reason in _promoted_bindings(key, path=path).items():
+            out.setdefault(cap_id, reason)
     return out
+
+
+def binding_suppressed(surface: str) -> str:
+    """Why this surface deliberately binds nothing, or '' if it is not suppressed.
+
+    Exposed so a caller can report "nothing here, on purpose, because X" rather than reporting the
+    same empty answer it would give for a surface nobody has bound yet.
+    """
+    entry = SURFACE_BINDINGS.get(surface) or {}
+    return str(entry.get(NO_BINDING) or "")
 
 
 def _promoted_bindings(surface: str, *, path=None) -> dict[str, str]:
@@ -885,11 +1034,45 @@ def _selftest_bindings() -> None:
             assert not any(hit["capabilities"][i].get("bound")
                            for i in range(first_unbound, len(hid))), hid
 
-            # 3. SIZE. The measured safe zone is 10-20 per context; a binding that grew past it would
-            # reintroduce the problem it was built to remove.
-            for surface, entries in SURFACE_BINDINGS.items():
-                assert 1 <= len(entries) <= 10, (surface, len(entries))
+            # 3. SIZE, on the RESOLVED set. Asserting on the table entries would miss the case that
+            # matters: a phase key merges with its surface, so the context a caller actually sees can
+            # exceed the safe zone even when every table entry is small.
+            for surface in SURFACE_BINDINGS:
+                entries = SURFACE_BINDINGS[surface]
                 assert all(str(why).strip() for why in entries.values()), surface
+                if binding_suppressed(surface):
+                    assert binding_for(surface) == {}, surface
+                    continue
+                resolved = binding_for(surface)
+                assert 1 <= len(resolved) <= 10, (surface, len(resolved))
+
+            # 4. PHASE RESOLUTION. A phase merges with its surface; a phase that declares NO_BINDING
+            # suppresses the merge entirely. Both are real: `repo-audit` binds `offload` surface-wide,
+            # and `repo-audit:phase-1` must still be EMPTY because the playbook says "bash only, NO
+            # agents" -- inheriting into it would contradict the skill's own instruction.
+            SURFACE_BINDINGS["t-proc"] = {"bound-a": "surface-wide"}
+            SURFACE_BINDINGS["t-proc:p2"] = {"bound-b": "phase only"}
+            SURFACE_BINDINGS["t-proc:p1"] = {NO_BINDING: "deliberately empty, for a stated reason"}
+            try:
+                assert sorted(binding_for("t-proc:p2")) == ["bound-a", "bound-b"], "phase must merge"
+                assert binding_for("t-proc:p1") == {}, "NO_BINDING must suppress inheritance"
+                assert binding_suppressed("t-proc:p1"), "and must SAY why it is empty"
+                assert not binding_suppressed("t-proc:p2")
+                # An unknown phase of a known surface still gets the surface-wide set.
+                assert sorted(binding_for("t-proc:p9")) == ["bound-a"], binding_for("t-proc:p9")
+                # A phase-scoped advise() call must actually reach the phase's binding.
+                ph = advise("xyzzy plugh", surface="t-proc:p2", path=ledger, record=False)
+                assert ph["surface"] == "t-proc:p2", ph["surface"]
+            finally:
+                for k in ("t-proc", "t-proc:p1", "t-proc:p2"):
+                    SURFACE_BINDINGS.pop(k, None)
+
+            # 5. THE REAL TABLE, pinned where it is load-bearing.
+            assert binding_for("repo-audit:phase-1") == {}, "phase 1 is bash-only by playbook"
+            assert "deliberate-break-verifier" in binding_for("repo-audit:phase-4"), \
+                "phase 4 requires a named test gate with a deliberate-break proof"
+            assert "adversarial-review" in binding_for("repo-audit:phase-3"), \
+                "phase 3 IS adversarial verification"
         finally:
             if real is None:
                 SURFACE_BINDINGS.pop("t-surface", None)
