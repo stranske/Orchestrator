@@ -63,6 +63,21 @@ gets switched off, and then it protects nothing. Legacy rows still print exactly
 missing; the exemption lives on the row, never inside the predicates, so debt can never read as
 compliance.
 
+### Say which surfaces bind it (or why none does)
+
+The eight parts make a capability *invocable and observable*. They do not make it *findable*. A
+capability nothing binds is offered from a 40-plus catalogue queried generically, which is the
+measured 13.62% selection condition — built, admitted, and still not chosen.
+
+So when adding or reviving one, name its surfaces in `capability_advisor.SURFACE_BINDINGS` — the
+skills or automations for which it should be in the small declared set — with a one-line reason each,
+or state that no surface binds it yet and what would change that. Keep a bound set to 3–7 entries;
+past ~10 it reintroduces the problem the binding removes, and a selftest enforces the ceiling.
+
+Binding is prioritisation, not concealment: an unbound capability is still returned, ranked after the
+bound ones. That is deliberate — a capability that could never be selected could never earn the
+evidence that would bind it.
+
 ### Commitments: a dated promise must leave an artifact
 
 `capability_admission.commitments()` fails on:

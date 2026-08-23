@@ -69,8 +69,12 @@ safety switch, not dead code.
 2. **backlog.py** — discovers actionable issues/PRs across the fleet from GitHub labels.
 3. **router.py** — ranks agents per task: capacity tier → learned route weights → **continuous
    drain urgency** (unused expiring quota reads cheaper). ε-greedy exploration is default; a
-   Thompson-sampling path exists, gated behind `ORCH_EXPLORATION_MODE` pending the weekly
-   evidence gate's recommendation.
+   Thompson-sampling path exists, gated behind `ORCH_EXPLORATION_MODE`. That gate is no longer
+   "pending a review": `exploration_review` was run on 2026-08-22 and returned
+   `keep_epsilon_greedy` / `epsilon_still_preferred` — its evidence gates ARE met, and Thompson-hybrid
+   improves simulated challenger quality and direct exploration outcomes not *both*. So ε-greedy is
+   kept on merit, and `capability_recurrence_check._check_thompson` now runs the review and reports
+   its recommendation, so the switch re-raises itself if that verdict ever flips.
 4. **tick.py → dispatcher.py** — claims a target (claims.py: atomic, live-pid-guarded, reap-grace +
    reap-mutex), spawns the agent in an isolated worktree with a kill-proof done-marker, releases on
    exit. High-stakes closer items pass through the **adversarial.py** refute-mode veto panel.
@@ -123,6 +127,23 @@ safety switch, not dead code.
   into ledger outcome heartbeats, so a capability records not just that it RAN but how the work
   turned out. Its `run_tagged` resolver was dead code until 2026-08-21 (it read a column that does
   not exist), and its edge repairs now run before the heartbeat pass rather than a cycle behind it.
+- **The tick consults the front door, and records whether a capability helped**
+  (`capability_propensity.py tick-evidence`, every tick, below `ORCH-ANCHOR: heartbeat-export` and
+  below the four steps it grades). `capability_advisor.advise()` and the `invocation`/`outcome`
+  recording edges both existed and had no production caller, which is why the propensity report
+  printed PRIOR-ONLY on every run: a measurement with no producer. For the four capabilities bound
+  to the `tick` surface it now consults the advisor and, for the ones
+  `capabilities.is_observer()` confirms, records an **output-change verdict**: an observer HELPED
+  when its report's finding set changed since its own previous run (a defect newly reported, a
+  regression flagged, a switch verdict that moved, a finding resolved) and did NOT help when it
+  re-emitted an identical set — silence is not usefulness. Never a delivery verdict, which a report
+  can never earn. Two independent bounds stop 24 runs/day becoming 96 unearned data points: the
+  experiment id is scoped to the UTC day (so the ledger idempotency keys admit at most one verdict
+  per capability per day), and a verdict additionally requires that capability's own cadence
+  artifact to have been regenerated, which bounds the graded rate to ~1.3/day. The finding
+  projection keeps identity and verdict fields only — `overdue`'s `silent_days` rises daily on its
+  own, and hashing a row whole would score the monitor "useful" on every run it will ever make.
+  Kill switch: `ORCH_TICK_EVIDENCE_DISABLED=1`, or `ORCH_DISABLE_STEPS=tick-capability-evidence`.
 - **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
   the code path that would produce an outcome (Thompson never chooses while the mode is
   epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label
@@ -260,7 +281,9 @@ safety switch, not dead code.
   typo cannot leave a step running while you believe it is off. Unset/empty disables nothing.
 - **Other kill switches** — `ORCH_OFFLOAD_DISABLED=1` refuses at the top of `dispatcher.offload`
   before any spend; `ORCH_REPO_PLAYBOOK=0` stops playbook injection into delegation prompts on the
-  next dispatch without editing the registry.
+  next dispatch without editing the registry; `ORCH_TICK_EVIDENCE_DISABLED=1` makes the tick's
+  capability consult/verdict step inert from any caller (no consult, no ledger event, no state
+  file), which is the module-side twin of `ORCH_DISABLE_STEPS=tick-capability-evidence`.
 - **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
   pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
   result, not a reason to seed synthetic data.

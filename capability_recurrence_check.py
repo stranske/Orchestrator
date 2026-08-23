@@ -377,26 +377,74 @@ SWITCH_ON_CRITERIA = {
         "new. Read the criterion from range-rollout.json, not from a calendar.",
     "ORCH_FRONTEND_VERIFY_START_BROWSER":
         "operator policy, not evidence: this lets cron/launchd start a GUI Chrome for the CDP "
-        "endpoint. Turn it on only if you want a browser process kept alive on this machine. Note "
-        "orchestrate.sh:133 runs the doctor BEFORE the heartbeat flag is exported at line 152, so "
-        "enabling this alone still records nothing — fix the ordering in the same change.",
+        "endpoint. Turn it on only if you want a browser process kept alive on this machine. The "
+        "ordering defect that made flipping it pointless is FIXED (2026-08-22): the doctor used to "
+        "run above the ORCH_CAPABILITY_HEARTBEATS export, so the switch would have recorded "
+        "nothing and read as 'the switch did not help'. See `ORCH-ANCHOR: heartbeat-export` and "
+        "`ORCH-ANCHOR: frontend-verify-doctor` in orchestrate.sh — the doctor now runs below the "
+        "export, so flipping this WILL produce a frontend-verifier invocation. Enforced by "
+        "capability_activation_audit.heartbeat_env_gate, whose `heartbeat_env_suppressed` defect "
+        "re-raises the ordering if it regresses. This criterion used to cite two orchestrate.sh "
+        "line numbers, 133 and 152, and both had rotted to 171 and 190 by the time anyone read "
+        "them — cite anchors, never line numbers.",
     "ORCH_STRATEGY_EXPERIMENT":
         "no demand yet: all 365 recorded experiments were single-agent-per-arm, so there is no "
         "strategy comparison waiting to run. Switch on when a multi-agent strategy question is "
         "actually being asked (e.g. 'is claude+cursor with synthesis better than claude alone' "
         "appears as real work), not before.",
     "ORCH_EXPLORATION_MODE":
-        "the capability's own gate names `exploration_review` as the required observation, and "
-        "epsilon-greedy is the reviewed default. Switch to thompson-hybrid when that review "
-        "recommends it — 5,371 implement runs across 7 agents is already enough evidence for the "
-        "two policies to diverge, so the blocker is the review, not the data.",
+        "REVIEWED 2026-08-22 — this is a DECISION, not a wait. The previous text said the blocker "
+        "was the review rather than the data, which was right; the review was then run. "
+        "`exploration_review` returns status=`epsilon_still_preferred`, "
+        "recommendation=`keep_epsilon_greedy`: the evidence gates ARE met (ready_tasks 5/9, "
+        "zero-cell rate 16.2%, 727 instrumented runs, 65 direct exploration outcomes) and "
+        "Thompson-hybrid still does not improve BOTH simulated challenger quality and direct "
+        "exploration outcomes. So epsilon-greedy is kept on merit, not for lack of data. The "
+        "criterion is no longer prose: `_check_thompson` runs the review and reports its own "
+        "recommendation, so the switch re-raises by itself if that flips to "
+        "`switch_to_thompson_hybrid`. The review already runs weekly inside periodic_report.",
     "ORCH_RUNTIME_AC_ALLOW_COMMANDS":
-        "do NOT flip this as-is: it gates BOTH the template-built deliberate-break command "
-        "(python3 local_verify.py, safe shape) AND fully agent-authored `command`/`non_regression` "
-        "checks (runtime_ac.py:955 shlex.split(check['command'])). The actionable step is to split "
-        "the flag so the deliberate_break kind can execute without enabling arbitrary commands; "
-        "only then is there a switch worth turning on.",
+        "CORRECTED 2026-08-22 after running the code. The previous text said this gated BOTH the "
+        "template-built deliberate-break command AND agent-authored `command`/`non_regression` "
+        "checks, and that the actionable step was to SPLIT the flag. The split already existed: see "
+        "`ORCH-ANCHOR: runtime-ac-command-exec-gate` in runtime_ac.py — COMMAND_EXEC_GATED_TYPES is "
+        "{command, non_regression} and has never included deliberate_break. Measured by executing a "
+        "real deliberate_break spec both ways: identical results with allow_command_checks False "
+        "and True. So this flag holds exactly one thing — an agent-authored argv reaching "
+        "shlex.split — and there is nothing to un-split. It should stay OFF: a spec's "
+        "`command`/`non_regression` string is written by an agent, and the machine gate that "
+        "matters (deliberate_break, the sole producer of FAIL_HOLLOW) already runs without it. "
+        "Flip it only for a bounded supervised run on a specific spec you have read.",
 }
+
+
+def _check_deliberate_break_executable() -> dict:
+    """Would a runtime-AC spec carrying a deliberate_break check actually RUN one?
+
+    Two conditions, both read from the real machinery rather than restated here:
+      * `deliberate_break` is exempt from runtime_ac's command-exec gate (ORCH-ANCHOR:
+        runtime-ac-command-exec-gate), so no flag has to be flipped for it to execute; and
+      * the closer's runtime-AC gate itself is enabled (ORCH_RUN_RUNTIME_AC), which orchestrate.sh
+        exports =1 by default.
+
+    When this fires, non-use means NO MATCHING WORK — no closer item carries a spec with a
+    deliberate_break check. That is a different problem, with a different fix, from a held switch.
+    """
+    try:
+        import runtime_ac
+        exempt = not runtime_ac.command_execution_gated("deliberate_break")
+        gated_types = sorted(runtime_ac.COMMAND_EXEC_GATED_TYPES)
+    except Exception as exc:                                   # noqa: BLE001
+        return {"fires": False, "detail": {"error": str(exc)[:90]}}
+    gate = _predicate_flag("ORCH_RUN_RUNTIME_AC")
+    return {"fires": bool(exempt and gate["fires"]),
+            "detail": {"deliberate_break_exempt_from_command_gate": exempt,
+                       "command_exec_gated_types": gated_types,
+                       "runtime_ac_gate_enabled": gate["fires"],
+                       "runtime_ac_gate_source": gate["detail"].get("value_source"),
+                       "non_use_means": ("no closer item carries a runtime-AC spec with a "
+                                         "deliberate_break check (no matching work), NOT a held "
+                                         "switch")}}
 
 
 def _check_gemini_isolation() -> dict:
@@ -466,15 +514,41 @@ def _check_model_trial_gate() -> dict:
 
 
 def _check_thompson() -> dict:
-    """Thompson routing needs its mode selected; epsilon-greedy is the reviewed default."""
+    """Thompson routing needs its mode selected; epsilon-greedy is the reviewed default.
+
+    The criterion used to be the PROSE string "exploration_review recommends it", which nothing
+    evaluated — so the row said "waiting for a review" indefinitely while the review itself ran
+    weekly inside `periodic_report` and its answer was read by no one. That is a verdict cached as
+    prose outliving its evidence. This now RUNS the review (0.4s, read-only) and reports its actual
+    recommendation, so "held" and "reviewed and decided to keep epsilon" stop looking identical.
+
+    A missing Brain/route_weights is a PREREQUISITE, not a defect: the fallback names what is
+    missing rather than raising, because a fixture that errors reads exactly like a real miss.
+    """
     try:
         import router
         mode = router._exploration_mode()
-        return {"fires": mode == "thompson-hybrid",
-                "detail": {"mode": mode, "needs": "thompson-hybrid",
-                           "switch_on_when": "exploration_review recommends it"}}
     except Exception as exc:                                   # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
+    detail: dict = {"mode": mode, "needs": "thompson-hybrid"}
+    try:
+        import exploration_review
+        review = exploration_review.build_report()
+        detail["review_recommendation"] = review.get("recommendation")
+        detail["review_status"] = review.get("status")
+        detail["review_reason"] = str(review.get("reason") or "")[:200]
+        detail["switch_on_when"] = (
+            "exploration_review's own recommendation turns to `switch_to_thompson_hybrid`; it "
+            f"currently says {review.get('recommendation')!r} "
+            f"({review.get('status')!r}), which is a DECISION, not a wait for data")
+    except Exception as exc:                                   # noqa: BLE001
+        # Named prerequisite, never an `error` key: on a machine with no Brain the review cannot
+        # run, and reporting that as a blocked capability would be a false miss.
+        detail["review_unavailable"] = (
+            f"exploration_review could not run here ({type(exc).__name__}); it needs the local "
+            "route_weights/outcomes store")
+        detail["switch_on_when"] = "exploration_review recommends it (review not runnable here)"
+    return {"fires": mode == "thompson-hybrid", "detail": detail}
 
 
 def _check_reference_sync_gate() -> dict:
@@ -568,14 +642,23 @@ PREDICATE_FIXTURES = (
                "2026-08-21: 143 proposals, 124 historical replays exhausted, 5 hand-made links)."},
     {"capability": "research-scheduler", "check": lambda: _predicate_heartbeat("research-scheduler"),
      "source": "runs every tick via research_scheduler.build_research_plan."},
-    # local_verify.py is NOT independently wireable: runtime_ac.py:536 builds the command that
-    # invokes it, and shell-check execution is gated behind ORCH_RUNTIME_AC_ALLOW_COMMANDS, which is
-    # deliberately OFF so agent-authored commands never execute. It is the sole producer of
-    # FAIL_HOLLOW (9 verdicts), so the capability is real and correctly held by a SAFETY switch —
-    # not by a defect. Testing the flag is testing the actual condition.
+    # REPLACED 2026-08-22 — this fixture asserted a blocker that does not exist. It tested
+    # `_predicate_flag("ORCH_RUNTIME_AC_ALLOW_COMMANDS")`, on the recorded belief that shell-check
+    # execution gated the deliberate-break command too. It does not: `COMMAND_EXEC_GATED_TYPES`
+    # (ORCH-ANCHOR: runtime-ac-command-exec-gate) is {command, non_regression}, and a real
+    # deliberate_break spec was executed both ways with identical results. So this reported the
+    # capability as switch-held for as long as the belief survived — a frozen verdict outliving its
+    # evidence, and the one shape a recurrence fixture must never have.
+    #
+    # The honest predicate is the EXECUTED condition: `deliberate_break` is exempt from the
+    # command-exec gate AND the closer's runtime-AC gate is enabled, so a spec carrying one WOULD
+    # run. It consumes runtime_ac's own name rather than restating the type set, so a regression that
+    # starts gating deliberate_break flips this fixture instead of being invisible. Non-use is then
+    # correctly classified as NO MATCHING WORK — no closer item carries a runtime-AC spec with a
+    # deliberate_break check — which has the opposite fix from a held switch.
     {"capability": "deliberate-break-verifier",
-     "check": lambda: _predicate_flag("ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
-     "source": "9 FAIL_HOLLOW verdicts; downstream of runtime_ac, behind the command-exec switch."},
+     "check": lambda: _check_deliberate_break_executable(),
+     "source": "9 FAIL_HOLLOW verdicts; the sole producer of that verdict, and NOT switch-held."},
     {"capability": "feature-reflection-cli",
      "check": lambda: _predicate_heartbeat("feature-reflection-cli"),
      "source": "4 new reusable structures created 2026-08-19, none logged."},
@@ -616,6 +699,15 @@ PREDICATE_FIXTURES = (
                "Registered 2026-08-22 — it merged in PR #2 with no ledger record, no heartbeat and "
                "a CLI-only caller, so the firing monitor could only ever have reported it as "
                "never-fired no matter how often it ran."},
+    {"capability": "capability-propensity",
+     "check": lambda: _predicate_heartbeat("capability-propensity"),
+     "source": "every capability_advisor.advise call ranks its candidates by propensity, plus the "
+               "CLI. Registered 2026-08-22 to close the loop the advisor left open: it recorded a "
+               "`match` for each candidate and nothing recorded whether the candidate was then "
+               "TRIGGERED or whether triggering HELPED, so 'recommend the useful ones more often' "
+               "had no signal. First live read: 13 natural experiments already in the ledger, 0 "
+               "resolved, 0 of 41 capabilities carrying usefulness evidence — the propensities are "
+               "all prior, and the report says so rather than looking informative."},
     {"capability": "capability-firing-monitor",
      "check": lambda: _predicate_heartbeat("capability-firing-monitor"),
      "source": "weekly cadence step. Its first live run flagged range-lane-rollout silent 29.9d "
@@ -851,6 +943,45 @@ def _selftest() -> None:
         det = row.get("detail") or {}
         if isinstance(det, dict) and det.get("flag") in SWITCH_ON_CRITERIA and not row["fires"]:
             assert det.get("switch_on_when"), f"{det['flag']} is held with no stated criterion"
+
+    # ...AND THAT CRITERION MAY NOT POINT AT A LINE NUMBER. Line citations rot silently: this table
+    # told two readers to look at `orchestrate.sh:133` and `:152` for months after both had moved to
+    # 171/190, and `runtime_ac.py:955` was already off by one. A stored pointer that no longer
+    # resolves is the same defect class as a cached blocker description that outlives the blocker.
+    # Cite a grep-able `ORCH-ANCHOR: <name>` instead, and prove the anchor exists.
+    _line_citation = re.compile(r"\b[A-Za-z0-9_]+\.(?:py|sh|json|md):\d+")
+    _anchor = re.compile(r"ORCH-ANCHOR: ([a-z0-9-]+)")
+    _tree_text = "\n".join(
+        p.read_text(errors="ignore")
+        for p in sorted(pathlib.Path(__file__).resolve().parent.glob("*.py"))
+    ) + "\n".join(
+        p.read_text(errors="ignore")
+        for p in sorted(pathlib.Path(__file__).resolve().parent.glob("*.sh"))
+    )
+    _anchors_cited = 0
+    for flag, criterion in SWITCH_ON_CRITERIA.items():
+        bad = _line_citation.findall(criterion)
+        # A criterion may RECORD that it used to carry a rotted citation; what it may not do is
+        # tell the reader to go there. The distinction is the word "until"/"cited" in the same
+        # clause, so keep the rule blunt instead: no live citation, and the historical note spells
+        # the numbers without a file prefix.
+        assert not bad, (f"{flag}'s criterion cites {bad} by line number; line citations rot — "
+                         f"cite an ORCH-ANCHOR instead")
+        for name in _anchor.findall(criterion):
+            _anchors_cited += 1
+            # THE ANCHOR MUST BE A DEFINING COMMENT LINE, not merely the substring appearing
+            # somewhere. A plain `in _tree_text` test passed a citation to a nonexistent anchor,
+            # because this table's own source is part of the tree — the check satisfied itself,
+            # which is the circular-measurement mode (FM7) in three lines of code. Requiring
+            # `^# ORCH-ANCHOR: <name>` also excludes a "See ORCH-ANCHOR: x" back-reference from
+            # standing in for the definition.
+            assert re.search(rf"^\s*#\s*ORCH-ANCHOR: {re.escape(name)}\b", _tree_text,
+                             re.MULTILINE), (
+                f"{flag}'s criterion cites `ORCH-ANCHOR: {name}`, but no file defines that anchor "
+                f"on its own comment line")
+    assert _anchors_cited >= 3, (
+        f"only {_anchors_cited} anchor citations found; the anchor rule is not being exercised, so "
+        "this assertion would pass on a table full of prose")
 
     # NO FIXTURE MAY ERROR. A check that raises reports `fires=False` with an {"error": ...}
     # detail, which reads like a blocked capability but is actually a broken test — exactly how a

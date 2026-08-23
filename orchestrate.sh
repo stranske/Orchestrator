@@ -93,7 +93,11 @@ export ORCH_ROLE_MAX_PER_CYCLE="${ORCH_ROLE_MAX_PER_CYCLE:-1}"
 # (opt-in per issue, low volume). Required active closer/merge work blocks until the gate executes
 # and returns PASS. The separate adversarial reviewer panel remains advisory. Shell
 # command/non_regression checks stay SEPARATELY gated behind ORCH_RUNTIME_AC_ALLOW_COMMANDS
-# (left OFF here) so this never executes arbitrary agent-authored commands. Aligns with the owner
+# (left OFF here) so this never executes an arbitrary agent-authored `command` STRING. Precise scope,
+# corrected 2026-08-22: that flag covers the `command` and `non_regression` kinds only (see
+# ORCH-ANCHOR: runtime-ac-command-exec-gate). `deliberate_break` runs WITHOUT it — its outer command
+# is template-built, and its agent-authored `test_cmd` reaches local_verify via shlex.split with
+# shell=False after every shell control character has been rejected. Aligns with the owner
 # constraint: prefer machine gates over human review. Export ORCH_RUN_RUNTIME_AC=0 to pause.
 export ORCH_RUN_RUNTIME_AC="${ORCH_RUN_RUNTIME_AC:-1}"
 # Range-lane LIVE dispatch — BOUNDED TRIAL started 2026-07-08 (owner: "turn it on as a bounded
@@ -163,22 +167,25 @@ if [[ "$mode" == "active" ]] && ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-# Capacity + discovery write only orchestrator-owned artifacts (capacity.json/backlog.json);
-# the legacy lanes never read them, so this is safe in either mode.
-python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
-python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
-if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
-  if python3 "$ORCH/frontend_verify.py" --doctor --require-browser-endpoint --start-browser >/dev/null 2>&1; then
-    :
-  else
-    echo "  warn: frontend_verify browser endpoint not ready after start attempt (continuing)"
-  fi
-fi
-
+# ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
+# `capabilities.production_heartbeat` and `daily_heartbeat` are NO-OPS unless
+# ORCH_CAPABILITY_HEARTBEATS=1 is in the CHILD process's environment. So this export must sit above
+# every heartbeat-emitting producer, or the producer runs and records nothing — and "recorded
+# nothing" is indistinguishable from "never ran", which is the silence this whole ledger exists to
+# break. Measured 2026-08-22: the export sat BELOW `capacity.py` and the frontend doctor, so
+#   * `frontend-verifier` could never accrue a single invocation (the doctor is its only tick
+#     caller), making ORCH_FRONTEND_VERIFY_START_BROWSER=1 look like a switch that did not help; and
+#   * `windowed-capacity-policy`'s declared cadence "every tick (capacity.build at the top of the
+#     tick)" was false — its evidence came only from LATER in-process callers.
+# DO NOT cite this block by line number; cite the anchor above. The stored criterion for
+# ORCH_FRONTEND_VERIFY_START_BROWSER cited `orchestrate.sh:133`/`:152` and both had rotted to
+# 171/190 by the time anyone read them. Enforced by test_heartbeat_ordering.py, which fails if any
+# producer that calls production_heartbeat/daily_heartbeat is invoked above this anchor.
+#
+# Ordering INSIDE this block is also load-bearing and unchanged: validate lifecycle truth FIRST,
+# then enable heartbeats. Invalid active declarations are a dispatch blocker — continuing would
+# manufacture evidence outside the declared producer/consumer/outcome contract.
 if [[ "$mode" == "active" ]]; then
-  # Create/migrate and validate lifecycle truth before any producer can emit a heartbeat.
-  # Invalid active declarations are a dispatch blocker: continuing would manufacture
-  # evidence outside the declared producer/consumer/outcome contract.
   if ! python3 "$ORCH/capabilities.py" --json validate > "$STAMP_DIR/capability-validation.json"; then
     echo "  ABORT: capability lifecycle validation failed; see $STAMP_DIR/capability-validation.json" >&2
     exit 1
@@ -188,6 +195,24 @@ if [[ "$mode" == "active" ]]; then
     exit 1
   fi
   export ORCH_CAPABILITY_HEARTBEATS=1
+fi
+
+# ORCH-ANCHOR: heartbeat-producers ---------------------------------------------------------------
+# Everything from here down may emit capability heartbeats. Capacity + discovery write only
+# orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
+# this is safe in either mode.
+python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
+python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
+# ORCH-ANCHOR: frontend-verify-doctor -- the ONLY tick caller of the frontend-verifier capability.
+if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
+  if python3 "$ORCH/frontend_verify.py" --doctor --require-browser-endpoint --start-browser >/dev/null 2>&1; then
+    :
+  else
+    echo "  warn: frontend_verify browser endpoint not ready after start attempt (continuing)"
+  fi
+fi
+
+if [[ "$mode" == "active" ]]; then
   python3 "$ORCH/claims.py" reap     >/dev/null 2>&1 || true
   # Heartbeat so the legacy opener/closer cron lanes YIELD to the orchestrator this tick (stale in 15m).
   printf '{"generated_at": %s, "pid": %s}\n' "$(date +%s)" "$$" > "$HOME/.codex/handoff/orchestrator.json"
@@ -482,6 +507,44 @@ if _cadence_due capability-firing-monitor && _attempt_ok capability-firing-monit
     _mark_fail capability-firing-monitor "see $STAMP_DIR/capability-firing-monitor.log"
   fi
 fi
+# Does triggering a capability actually help, and should the front door recommend it more? The
+# advisor recorded a `match` per candidate and nothing recorded what happened next, so "recommend the
+# useful ones more often" had no signal. Pure read of the ledger.
+#
+# BOTH QUANTITIES ON EVERY RUN. A propensity report with no resolved outcomes looks identical to one
+# built on evidence, which is how the pattern miner reported success for 43 days while accepting
+# zero events. So the evidence count is echoed next to the experiment count, and a run with no
+# evidence says PRIOR-ONLY rather than passing quietly.
+if _cadence_due capability-propensity && _attempt_ok capability-propensity; then
+  echo "  [cadence] capability propensity (usefulness-weighted recommendation)"
+  if python3 "$ORCH/capability_propensity.py" report --json \
+       > "$STAMP_DIR/capability-propensity.json" 2>> "$STAMP_DIR/capability-propensity.log"; then
+    _prop_ev=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["capabilities_with_evidence"],d["capability_count"],d["experiment_count"],d["resolved_experiment_count"])' \
+                 "$STAMP_DIR/capability-propensity.json" 2>/dev/null || echo "? ? ? ?")
+    set -- $_prop_ev
+    if [[ "${1:-0}" == "0" ]]; then
+      echo "    PRIOR-ONLY: 0 of ${2:-?} capabilities have usefulness evidence; ${3:-?} experiments, ${4:-?} resolved — the loop is not learning yet"
+    else
+      echo "    evidence: ${1} of ${2} capabilities; ${3} experiments, ${4} resolved"
+    fi
+    # DETECTION half of the same loop: which surfaces did a capability's work by hand while never
+    # selecting it. REPORT-ONLY here on purpose -- `--apply` exists and is deliberately not passed,
+    # the same way feature_scan is wired, because a promotion widens a bound set and widening the
+    # narrowing mechanism without a diff anyone saw is how it quietly stops narrowing.
+    python3 "$ORCH/capability_propensity.py" detect --json \
+      > "$STAMP_DIR/capability-selection-detect.json" \
+      2>> "$STAMP_DIR/capability-propensity.log" || true
+    _det=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(len(d["promotions"]),len(d["demotions"]))' \
+             "$STAMP_DIR/capability-selection-detect.json" 2>/dev/null || echo "? ?")
+    set -- $_det
+    if [[ "${1:-0}" != "0" || "${2:-0}" != "0" ]]; then
+      echo "    selection gaps: ${1} promotion(s), ${2} demotion(s) proposed — see $STAMP_DIR/capability-selection-detect.json"
+    fi
+    _mark_success capability-propensity
+  else
+    _mark_fail capability-propensity "see $STAMP_DIR/capability-propensity.log"
+  fi
+fi
 if _cadence_due feature-scan && _attempt_ok feature-scan; then
   # The missing caller for features.py (RULE OF THREE). Its registry held 20 entries, all already
   # `hardened`, so the capability looked idle when it was actually BLIND — nothing ever called it.
@@ -507,6 +570,42 @@ if _cadence_due capability-activation-audit && _attempt_ok capability-activation
     _mark_fail capability-activation-audit "see $STAMP_DIR/capability-activation-audit.log"
   fi
 fi
+# ORCH-ANCHOR: tick-capability-evidence ----------------------------------------------------------
+# THE TICK NOW CONSULTS THE FRONT DOOR AND RECORDS WHETHER A CAPABILITY HELPED. 21 of the 43
+# capabilities live on this tick and four of them are bound to the `tick` surface in
+# `capability_advisor.SURFACE_BINDINGS`, yet nothing here had ever called `advise()` and nothing had
+# ever recorded an `invocation`/`outcome` edge against an advisory `match`. That is why the
+# capability-propensity step above prints PRIOR-ONLY every run: the loop had a measurement and no
+# producer. This is the producer, and it accrues hourly with no further human attention.
+#
+# PLACED HERE, BELOW `ORCH-ANCHOR: heartbeat-export` AND BELOW ALL FOUR STEPS IT GRADES
+# (switch-review, capability-firing-monitor, capability-propensity, capability-activation-audit), so
+# a step that ran THIS tick is graded on THIS tick. A producer above the heartbeat export runs and
+# records nothing; `capability_activation_audit.heartbeat_env_gate` plus
+# `test_capabilities.test_no_tick_producer_runs_above_the_heartbeat_export` fail the suite if this
+# ever moves up there.
+#
+# IT CANNOT MANUFACTURE EVIDENCE, which is the real risk at 24 runs/day x 4 capabilities = 96
+# potential data points. Two independent bounds, both in `capability_propensity.tick_evidence`:
+# the experiment id is scoped to the UTC day (so the ledger idempotency keys admit at most ONE
+# verdict per capability per day however many ticks run), and a verdict additionally requires the
+# graded capability's own cadence ARTIFACT to have been regenerated since the last evaluation. Those
+# cadences are daily and 6-daily, so the graded ceiling is ~1.3 verdicts/day, not 96.
+#
+# IT CANNOT STALL THE TICK. Read-only apart from the ledger events it exists to write: no gh, no
+# network, no subprocess, no dispatch. `tick_evidence_guarded` arms a SIGALRM budget over the one
+# blocking wait in the path (the ledger flock) and turns any exception into a reported field, so the
+# subcommand exits 0 on a handled failure and the `if` below covers the rest.
+# Kill switch: ORCH_TICK_EVIDENCE_DISABLED=1 (module-side, works from any caller) or
+# ORCH_DISABLE_STEPS=tick-capability-evidence (shell-side, the repo's one mechanism). Either alone
+# makes the tick behave exactly as it did before this wiring existed.
+if _step_disabled tick-capability-evidence; then :; else
+  if python3 "$ORCH/capability_propensity.py" tick-evidence \
+       --budget-seconds "${ORCH_TICK_EVIDENCE_BUDGET_S:-30}" \
+       2>> "$STAMP_DIR/tick-capability-evidence.log"; then :; else
+    echo "  warn: tick capability evidence failed (continuing; see $STAMP_DIR/tick-capability-evidence.log)"
+  fi
+fi   # end: _step_disabled tick-capability-evidence
 if _cadence_due issue-readiness && _attempt_ok issue-readiness; then
   # Decide which open issues the fleet may work, WITHOUT routing that decision through the owner.
   # `backlog._is_ready` reads a label only a human ever applied, so the ready queue tracked one

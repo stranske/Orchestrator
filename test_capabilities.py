@@ -487,3 +487,41 @@ def test_verifying_the_system_never_writes_the_live_ledger():
     assert not offenders, (
         "verification code takes a writing load of the live ledger; use load_declared():\n  "
         + "\n  ".join(offenders))
+
+
+def test_no_tick_producer_runs_above_the_heartbeat_export():
+    """A heartbeat-emitting module must not be invoked before heartbeats are switched on.
+
+    `capabilities.production_heartbeat` returns False immediately unless ORCH_CAPABILITY_HEARTBEATS=1
+    is in the child's environment, and only orchestrate.sh exports it. Measured 2026-08-22: the
+    export sat 19 lines BELOW `frontend_verify.py --doctor`, the frontend-verifier capability's only
+    tick caller, and below `capacity.py`. Both reached their heartbeat call and recorded nothing, so
+    `frontend-verifier` read `never fired` while working, and `windowed-capacity-policy`'s declared
+    cadence ("capacity.build at the top of the tick") was false.
+
+    Reachability could not see this — `capability_activation_audit.heartbeat_reachable` reported
+    frontend-verifier `reachable`, correctly, because the CALL is reachable. Enablement is a
+    separate question and this is the check that owns it.
+    """
+    import capability_activation_audit as audit
+
+    # POSITIVE CONTROL, on synthetic text, so a parse that finds nothing cannot read as clean.
+    control = audit.shell_heartbeat_gate(
+        'python3 "$ORCH/early.py" --run\n'
+        "export ORCH_CAPABILITY_HEARTBEATS=1\n"
+        'python3 "$ORCH/late.py" --run\n')
+    assert [m for _, m in control["before"]] == ["early.py"], control
+    assert [m for _, m in control["after"]] == ["late.py"], control
+
+    gate = audit.heartbeat_env_gate()
+    assert gate["anchor_present"], (
+        f"orchestrate.sh no longer carries `{audit.HEARTBEAT_EXPORT_ANCHOR}`; the stored switch "
+        "criteria cite that anchor because line numbers rot")
+    # BOTH numbers, per the latched-gate runtime rule: zero suppressed means nothing only if the
+    # parse actually found invocations to classify.
+    assert gate["invocations_after"] > 0, (
+        f"parsed no post-export invocations at all, so `suppressed_modules` proves nothing: {gate}")
+    assert gate["suppressed_modules"] == [], (
+        "these modules emit a capability heartbeat but are invoked above the "
+        f"{audit.HEARTBEAT_ENV_FLAG} export, so they record nothing: "
+        f"{gate['suppressed_by_driver']}")

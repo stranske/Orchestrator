@@ -116,10 +116,54 @@ def _parse_json_object(content: str) -> dict[str, Any]:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
-    value = json.loads(stripped)
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError as direct_error:
+        messages: list[str] = []
+        for line in stripped.splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                raise direct_error
+            if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+                raise direct_error
+            message = _agent_message_text(event)
+            if message is not None:
+                messages.append(message)
+        if not messages:
+            raise direct_error
+        try:
+            return _parse_json_object(messages[-1])
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("final agent_message did not contain one strict JSON object") from exc
     if not isinstance(value, dict):
         raise ValueError("result must decode to one JSON object")
+    message = _agent_message_text(value)
+    if message is not None:
+        try:
+            return _parse_json_object(message)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("agent_message did not contain one strict JSON object") from exc
     return value
+
+
+def _agent_message_text(event: dict[str, Any]) -> str | None:
+    item = event.get("item")
+    if (
+        event.get("type") == "item.completed"
+        and isinstance(item, dict)
+        and item.get("type") == "agent_message"
+    ):
+        message = item.get("text")
+    elif event.get("type") == "agent_message":
+        message = event.get("text")
+    else:
+        return None
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("agent_message text must be a non-empty string")
+    return message
 
 
 def _source_ref_errors(value: Any, path: str) -> list[str]:
@@ -252,7 +296,11 @@ def build_partition_prompt(plan: dict[str, Any], partition: dict[str, Any]) -> s
         "is discovery evidence only and may never be the sole evidence for a finding. Distinguish removed "
         "product surfaces from test-only runtime seams, intentional adapters, historical/negative "
         "assertions, confirmed defects, and unresolved design dispositions. Place every item in exactly "
-        "one category, copy item_id/assertion_key exactly, and return STRICT JSON only. If the partition "
+        "one category, copy item_id/assertion_key exactly, and return STRICT JSON only. Category and "
+        "disposition must agree: every intentional_adapters item uses disposition intentional, and every "
+        "unresolved_design_dispositions item uses disposition unresolved. Choose the category from the "
+        "current implementation; record a stale or incomplete ledger in evidence/recommended_action "
+        "without changing an otherwise intentional implementation disposition to partial. If the partition "
         "cannot be completed, return OFFLOAD_INCOMPLETE instead of a partial JSON verdict.\n\n"
         "Partition payload:\n"
         f"{json.dumps(payload, indent=2, sort_keys=True)}\n\n"

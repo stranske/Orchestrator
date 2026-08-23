@@ -64,6 +64,13 @@ TOOLS = [
                 "skill": {"type": "string",
                           "description": "skill that surfaced this work, if any; recorded so the "
                                          "skill->capability association is learned over time"},
+                "surface": {"type": "string",
+                            "description": "the skill or automation asking, optionally with a phase "
+                                           "(e.g. 'repo-audit:phase-3'). Selects that surface's "
+                                           "DECLARED capability binding — a small named set that "
+                                           "answers even when the task wording does not classify. "
+                                           "A long multi-phase process should pass its phase, "
+                                           "because the capabilities that apply differ per phase."},
                 "previous": {"type": "object",
                              "description": "the prior capability_advice result; when supplied, the "
                                             "response adds reask{} saying whether the work has "
@@ -166,6 +173,9 @@ def _call_tool(name: str, args: dict):
             str(args["task"]),
             repository=str(args.get("repository") or ""),
             skill=str(args.get("skill") or ""),
+            # Without this the declared binding is unreachable from the MCP tool, which is the only
+            # way the skills call the advisor -- the callers would name a surface nothing read.
+            surface=str(args.get("surface") or ""),
         )
         previous = args.get("previous")
         if isinstance(previous, dict):
@@ -174,6 +184,7 @@ def _call_tool(name: str, args: dict):
                 "task": str(args["task"]),
                 "repository": str(args.get("repository") or ""),
                 "skill": str(args.get("skill") or ""),
+                "surface": str(args.get("surface") or ""),
                 "capabilities_ready": result.get("dispatch_ready_count") or 0,
             })
         return result
@@ -246,6 +257,48 @@ def serve() -> int:
     return 0
 
 
+def _selftest_advice_schema_matches_advise() -> None:
+    """Every keyword `advise()` accepts that a CALLER would set must be reachable through this tool.
+
+    Written after shipping the exact opposite: seven skills were edited to pass `surface`, and the
+    tool had no such parameter, so all seven edits were inert. A caller naming a field the callee
+    drops is silent -- the request succeeds and the field vanishes. The MCP tool is the ONLY way the
+    skills reach the advisor, so a gap here makes every skill-side binding unreachable.
+    """
+    import inspect
+    import capability_advisor
+
+    tool = next(t for t in TOOLS if t["name"] == "capability_advice")
+    advertised = set(tool["inputSchema"]["properties"])
+    sig = inspect.signature(capability_advisor.advise)
+    # Caller-settable = keyword-only, minus the internals a remote caller must never drive.
+    internal = {"record", "path", "lane", "context"}
+    callable_kw = {n for n, prm in sig.parameters.items()
+                   if prm.kind is prm.KEYWORD_ONLY and n not in internal}
+    missing = sorted(callable_kw - advertised)
+    assert not missing, (
+        f"capability_advice does not advertise {missing}, so a caller setting them is silently "
+        f"ignored. Add them to the inputSchema AND pass them through in _call_tool.")
+
+    # ...and advertised is not enough: it must actually be FORWARDED. Assert the FORWARDING, never
+    # which capabilities come back -- `advise()` only returns bound capabilities that exist in the
+    # ledger, and the ledger is machine-local (43 rows on the owner's machine, 14 on a clean runner).
+    # The first version of this asserted `adversarial-review` was returned, passed locally and went
+    # red on CI: a machine-local assertion inside the guard written to stop a different recurrence.
+    got = _call_tool("capability_advice", {"task": "xyzzy plugh frobnicate",
+                                           "surface": "repo-audit:phase-3"})
+    assert got.get("surface") == "repo-audit:phase-3", got.get("surface")
+    assert "bound_capabilities" in got, "the tool must report which capabilities were bound"
+    # A phase declared NO_BINDING must come back empty through the tool. This one is ledger-
+    # independent in the safe direction: suppression yields {} regardless of what is registered.
+    empty = _call_tool("capability_advice", {"task": "xyzzy plugh frobnicate",
+                                            "surface": "repo-audit:phase-1"})
+    assert (empty.get("bound_capabilities") or []) == [], empty
+    assert empty.get("surface") == "repo-audit:phase-1", empty.get("surface")
+    print("mcp_server advice-schema selftest: OK (every caller-settable advise() field is advertised "
+          "and forwarded)")
+
+
 def _selftest() -> None:
     import subprocess
     import tempfile
@@ -288,5 +341,6 @@ def _selftest() -> None:
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         _selftest()
+        _selftest_advice_schema_matches_advise()
         raise SystemExit(0)
     raise SystemExit(serve())
