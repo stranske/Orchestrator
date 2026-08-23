@@ -74,6 +74,27 @@ LOCAL_POLICY.md
 CAPABILITY_USEFULNESS.md
 *.local.md
 
+# --- per-run CI provenance: an artifact, not source ---
+# langsmith-fleet-worker-attempt.json is rewritten on EVERY reusable-codex-run
+# invocation (one langsmith-fleet/v1 record for that run's worker model attempt).
+# It was tracked from 2118f57 onward, and gitignore does not apply to an
+# already-tracked path — so the runner's `git add -A` commit step staged it every
+# time regardless of this file. Ten commits across PRs #59/#61/#62/#63 rewrote
+# it, producing one add/add conflict per concurrent PR and silently widening
+# diffs that had nothing to do with their change.
+#
+# Nothing reads it from the tree. This repo's langsmith-fleet/v1 consumers
+# (langsmith_pull.py, langsmith_fetch.py) ingest the NDJSON Actions artifact
+# `langsmith-fleet.ndjson`; neither one names this path. The producer already
+# uploads it as artifact `langsmith-fleet-v1-worker-attempt-<pr>` (30-day
+# retention), so untracking loses no provenance. stranske/Workflows reached the
+# same verdict for its own copy — same filename, same reason, see its .gitignore.
+#
+# Deliberately OUTSIDE the synced block below: that block mirrors Workflows'
+# templates/consumer-repo/.gitignore, which does NOT carry this pattern, so an
+# entry placed inside it would be dropped when the block is next rewritten.
+langsmith-fleet-worker-attempt.json
+
 # =============================================================================
 # Workflows Consumer Repo - Shared Status Files
 # =============================================================================
