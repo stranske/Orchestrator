@@ -117,13 +117,11 @@ def test_three_profiles_create_distinct_worker_attempts(
     )
     with feedback._conn() as conn:
         attempts = conn.execute(
-            "SELECT attempt_id,profile_id,requested_model,selected_model,reported_model," 
+            "SELECT attempt_id,profile_id,requested_model,selected_model,reported_model,"
             "resolved_model,fallback_reason,runner_version,cli_version "
             "FROM execution_attempts WHERE operation_role='worker' ORDER BY profile_id"
         ).fetchall()
-        runs = conn.execute(
-            "SELECT assignment,COUNT(*) FROM runs GROUP BY assignment"
-        ).fetchall()
+        runs = conn.execute("SELECT assignment,COUNT(*) FROM runs GROUP BY assignment").fetchall()
         v1_weights = conn.execute("SELECT COUNT(*) FROM route_weights").fetchone()[0]
         v2_weights = conn.execute("SELECT COUNT(*) FROM route_weights_v2").fetchone()[0]
         profile_report = execution_profiles.report(conn, now=2_000)
@@ -166,11 +164,9 @@ def test_evaluator_trace_stays_separate(
             "SELECT operation_role,profile_id,resolved_model FROM execution_attempts "
             "WHERE operation_role='evaluator'"
         ).fetchall()
-    assert len(worker_rows) == 3 and {
-        row[0] for row in worker_rows
-    } == set(model_profile_trial.EXPECTED_PROFILE_IDS), (
-        "evaluator trace contaminated worker attempt"
-    )
+    assert len(worker_rows) == 3 and {row[0] for row in worker_rows} == set(
+        model_profile_trial.EXPECTED_PROFILE_IDS
+    ), "evaluator trace contaminated worker attempt"
     assert evaluator_rows == [("evaluator", None, "claude-evaluator-only")]
 
 
@@ -205,9 +201,7 @@ def test_feedback_recording_requires_explicit_quarantine_database(
         assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
 
 
-def test_source_manifest_prunes_derived_trees_and_enforces_bounds(
-    tmp_path, monkeypatch
-):
+def test_source_manifest_prunes_derived_trees_and_enforces_bounds(tmp_path, monkeypatch):
     root = tmp_path / "source"
     root.mkdir()
     (root / ".git").mkdir()
@@ -223,9 +217,7 @@ def test_source_manifest_prunes_derived_trees_and_enforces_bounds(
         model_profile_trial.source_manifest(root)
 
 
-def test_workflows_worker_profile_contract_ingests_all_identity_layers(
-    tmp_path, monkeypatch
-):
+def test_workflows_worker_profile_contract_ingests_all_identity_layers(tmp_path, monkeypatch):
     _use_temp_feedback(tmp_path, monkeypatch)
     feedback.record_run(
         "workflow-worker",
@@ -268,7 +260,7 @@ def test_workflows_worker_profile_contract_ingests_all_identity_layers(
     assert summary["worker_profile_records"] == 1
     with feedback._conn() as conn:
         row = conn.execute(
-            "SELECT profile_id,requested_model,selected_model,reported_model," 
+            "SELECT profile_id,requested_model,selected_model,reported_model,"
             "resolved_model,runner_version,cli_version FROM execution_attempts "
             "WHERE run_id='workflow-worker' AND operation_role='worker'"
         ).fetchone()

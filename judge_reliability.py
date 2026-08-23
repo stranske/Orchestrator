@@ -7,6 +7,7 @@ itself into a cautious reliability signal: compare each judge's score to the
 leave-one-out consensus for the same experiment/candidate, optionally add simple
 human score anchors, and only emit non-neutral weights after enough comparisons.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -164,8 +165,7 @@ def compute(
         agreement = _clamp(1.0 - (mae_for_agreement / feedback.QUALITY_MAX), 0.0, 1.0)
         weight = (
             _clamp(
-                MAX_WEIGHT
-                - (MAX_WEIGHT - MIN_WEIGHT) * (mae_for_agreement / USELESS_JUDGE_MAE),
+                MAX_WEIGHT - (MAX_WEIGHT - MIN_WEIGHT) * (mae_for_agreement / USELESS_JUDGE_MAE),
                 MIN_WEIGHT,
                 MAX_WEIGHT,
             )
@@ -182,12 +182,12 @@ def compute(
             "consensus_comparisons": len(consensus_errors),
             "consensus_mean_abs_error": (
                 round(sum(consensus_errors) / len(consensus_errors), 4)
-                if consensus_errors else None
+                if consensus_errors
+                else None
             ),
             "human_comparisons": len(human_errors),
             "human_mean_abs_error": (
-                round(sum(human_errors) / len(human_errors), 4)
-                if human_errors else None
+                round(sum(human_errors) / len(human_errors), 4) if human_errors else None
             ),
             "agreement": round(agreement, 4) if comparisons else None,
         }
@@ -314,16 +314,18 @@ def weights_from_summary(
 def _selftest() -> None:
     eval_rows = []
     for exp in ("exp1", "exp2"):
-        eval_rows.extend([
-            (exp, "impl_a", "good_1", 9.0),
-            (exp, "impl_a", "good_2", 8.5),
-            (exp, "impl_a", "good_3", 9.0),
-            (exp, "impl_a", "noisy", 1.0),
-            (exp, "impl_b", "good_1", 4.0),
-            (exp, "impl_b", "good_2", 4.5),
-            (exp, "impl_b", "good_3", 4.0),
-            (exp, "impl_b", "noisy", 10.0),
-        ])
+        eval_rows.extend(
+            [
+                (exp, "impl_a", "good_1", 9.0),
+                (exp, "impl_a", "good_2", 8.5),
+                (exp, "impl_a", "good_3", 9.0),
+                (exp, "impl_a", "noisy", 1.0),
+                (exp, "impl_b", "good_1", 4.0),
+                (exp, "impl_b", "good_2", 4.5),
+                (exp, "impl_b", "good_3", 4.0),
+                (exp, "impl_b", "noisy", 10.0),
+            ]
+        )
     human_rows = [
         (1, "exp1:impl_a", "9.0", None),
         (1, "exp1:impl_b", "4.0", None),
@@ -338,7 +340,9 @@ def _selftest() -> None:
     )
     assert report["ready"] is True and report["human_anchor_count"] == 4, report
     assert report["judges"]["good_1"]["ready"] is True, report["judges"]["good_1"]
-    assert report["judges"]["noisy"]["weight"] < report["judges"]["good_1"]["weight"], report["judges"]
+    assert report["judges"]["noisy"]["weight"] < report["judges"]["good_1"]["weight"], report[
+        "judges"
+    ]
     perfect = compute(
         [
             ("exp1", "impl_a", "judge_a", 8.0),
@@ -377,7 +381,9 @@ def _selftest() -> None:
     assert band["judges"]["sharp"]["ready"] and band["judges"]["blunt"]["ready"], band
     assert sharp_w < MAX_WEIGHT and blunt_w < MAX_WEIGHT, (sharp_w, blunt_w)
     assert sharp_w - blunt_w > 0.1, (sharp_w, blunt_w)
-    weights = weights_from_summary(report, evaluators=["good_1", "missing", "noisy"], fallback_exclude_judges=["missing"])
+    weights = weights_from_summary(
+        report, evaluators=["good_1", "missing", "noisy"], fallback_exclude_judges=["missing"]
+    )
     assert weights["good_1"] > weights["noisy"] and weights["missing"] == 0.0, weights
     sparse = compute([("exp1", "impl_a", "new_judge", 8.0)], min_comparisons=4, generated_at=1)
     assert sparse["judges"]["new_judge"]["ready"] is False
@@ -386,7 +392,9 @@ def _selftest() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Summarize data-gated evaluator reliability weights.")
+    parser = argparse.ArgumentParser(
+        description="Summarize data-gated evaluator reliability weights."
+    )
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
     parser.add_argument("--min-comparisons", type=int, default=DEFAULT_MIN_COMPARISONS)

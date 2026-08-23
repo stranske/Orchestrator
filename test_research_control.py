@@ -1,5 +1,4 @@
 import os
-import random
 import sqlite3
 
 import claims
@@ -101,9 +100,7 @@ def test_research_tick_preserves_task_type(tmp_path, monkeypatch):
         unevaluated_cap=99,
     )
     assert result["active"], result
-    assert captured["task_type"] == "testgen", (
-        f"expected testgen, got {captured['task_type']}"
-    )
+    assert captured["task_type"] == "testgen", f"expected testgen, got {captured['task_type']}"
     run_task_type = conn.execute(
         "SELECT task_type FROM research_subjects WHERE exp_id=?",
         (captured["exp_id"],),
@@ -181,15 +178,21 @@ def test_correlated_research_arms_have_subject_effective_sample_count():
         conn.execute(
             "INSERT INTO runs (run_id,ts,target,task_type,agent,experiment_id,assignment) "
             "VALUES (?,?,?,?,?,?,?)",
-            (f"independent-{index}", 1, f"o/r#{index}", "testgen", "codex", f"exp-{index}", "experimental"),
+            (
+                f"independent-{index}",
+                1,
+                f"o/r#{index}",
+                "testgen",
+                "codex",
+                f"exp-{index}",
+                "experimental",
+            ),
         )
-    weights = research_subjects.effective_evidence_weights(
-        conn=conn, task_type="testgen"
-    )
+    weights = research_subjects.effective_evidence_weights(conn=conn, task_type="testgen")
     assert len(weights) == 22
-    assert abs(sum(weights.values()) - 3.0) < 1e-9, (
-        f"expected effective sample count 3, got {sum(weights.values())}"
-    )
+    assert (
+        abs(sum(weights.values()) - 3.0) < 1e-9
+    ), f"expected effective sample count 3, got {sum(weights.values())}"
     conn.close()
 
 
@@ -369,16 +372,11 @@ def test_research_plan_reserves_global_unevaluated_slots(monkeypatch):
         }
         for index in (1, 2)
     ]
-    monkeypatch.setattr(
-        research_scheduler, "research_job_candidates", lambda *args, **kwargs: jobs
-    )
+    monkeypatch.setattr(research_scheduler, "research_job_candidates", lambda *args, **kwargs: jobs)
     plan = research_scheduler.build_research_plan(
         [], _capacity(), conn=conn, max_jobs=2, unevaluated_cap=1, budget=2
     )
     assert len(plan["planned"]) == 1
     assert plan["remaining_backlog_slots"] == 1
-    assert any(
-        row.get("reason") == "unevaluated_backlog_batch_reserve"
-        for row in plan["skipped"]
-    )
+    assert any(row.get("reason") == "unevaluated_backlog_batch_reserve" for row in plan["skipped"])
     conn.close()

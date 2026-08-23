@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import exp_abcd
 import feedback
-import human_calibration
 import judge_reliability
 import objective_anchor
 import periodic_report
@@ -294,7 +293,9 @@ def test_objective_anchor_uses_exact_member_and_profile(tmp_path, monkeypatch) -
     edir.mkdir(parents=True)
     (edir / "meta.json").write_text(json.dumps(meta))
     for member in meta["members"]:
-        (edir / exp_abcd.exp_diff_path(member["agent"], member["member_id"])).write_text("+++ b/x.py\n")
+        (edir / exp_abcd.exp_diff_path(member["agent"], member["member_id"])).write_text(
+            "+++ b/x.py\n"
+        )
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
     result = objective_anchor.anchor_experiment(
         exp_id,
@@ -313,7 +314,9 @@ def test_objective_anchor_uses_exact_member_and_profile(tmp_path, monkeypatch) -
     }
     payloads = [json.loads(row[1]) for row in rows]
     assert {row["profile_id"] for row in payloads} == {"sol-profile", "terra-profile"}
-    assert all(row["agent"] == "codex" and row["member_id"] == row["implementer"] for row in payloads)
+    assert all(
+        row["agent"] == "codex" and row["member_id"] == row["implementer"] for row in payloads
+    )
 
 
 def test_judge_reliability_prefers_exact_then_agent_fallback(tmp_path, monkeypatch) -> None:
@@ -417,7 +420,9 @@ def test_feedback_migrates_partial_target_schema_without_losing_row() -> None:
         c.close()
 
 
-def test_periodic_report_distinguishes_arms_shared_agent_and_missing_outcome(tmp_path, monkeypatch) -> None:
+def test_periodic_report_distinguishes_arms_shared_agent_and_missing_outcome(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
     for arm_id, member_id in (("sol", "sol-member"), ("terra", "terra-member")):
         feedback.record_run(

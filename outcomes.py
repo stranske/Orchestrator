@@ -392,9 +392,7 @@ def _pending_durability_detail(run: dict) -> dict:
     }
 
 
-def ingest_outcomes(
-    mode: str = "remote", dry_run: bool = False, _state_fn=None
-) -> dict:
+def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None) -> dict:
     """For each delegated run lacking a resolved outcome, read its PR state and record the outcome.
     Remote runs may target a direct PR or a labeled opener issue whose keepalive PR branch is
     {agent}/issue-N; LOCAL delegate runs target an ISSUE whose agent opened a PR on branch
@@ -450,13 +448,9 @@ def ingest_modes(
     for item in modes:
         state_fn = (_state_fns or {}).get(item)
         results.append(ingest_outcomes(mode=item, dry_run=dry_run, _state_fn=state_fn))
-    skipped_details = [
-        detail for row in results for detail in row.get("skipped_details", [])
-    ]
+    skipped_details = [detail for row in results for detail in row.get("skipped_details", [])]
     pending_durability_details = [
-        detail
-        for row in results
-        for detail in row.get("pending_durability_details", [])
+        detail for row in results for detail in row.get("pending_durability_details", [])
     ]
     return {
         "mode": mode,
@@ -484,9 +478,7 @@ def _selftest():
         state_to_outcome({"state": "CLOSED"})["merged"] is False
         and state_to_outcome({"state": "CLOSED"})["durability"] == "abandoned"
     )
-    assert (
-        state_to_outcome({"state": "OPEN"}) is None and state_to_outcome(None) is None
-    )
+    assert state_to_outcome({"state": "OPEN"}) is None and state_to_outcome(None) is None
     assert _local_candidate_branches(9, "codex") == [
         "orchestrator/issue-9",
         "codex/issue-9",
@@ -496,12 +488,8 @@ def _selftest():
         "claude/issue-9",
     ]
     # end-to-end: two remote runs, one merged one open -> merged recorded, open skipped
-    feedback.record_run(
-        "remote:o/r#1:cursor", "o/r#1", "implement", "cursor", mode="remote"
-    )
-    feedback.record_run(
-        "remote:o/r#2:codex", "o/r#2", "implement", "codex", mode="remote"
-    )
+    feedback.record_run("remote:o/r#1:cursor", "o/r#1", "implement", "cursor", mode="remote")
+    feedback.record_run("remote:o/r#2:codex", "o/r#2", "implement", "codex", mode="remote")
     states = {"o/r#1": {"state": "MERGED"}, "o/r#2": {"state": "OPEN"}}
     res = ingest_outcomes(mode="remote", _state_fn=lambda t: states.get(t))
     assert res["recorded"] == 1 and res["skipped"] == 1, res
@@ -529,9 +517,7 @@ def _selftest():
         row = c.execute(
             "SELECT merged, durability FROM outcomes WHERE run_id='remote:o/r#1:cursor'"
         ).fetchone()
-    assert (
-        row and row[0] == 1 and row[1] == "pending"
-    ), row  # merged recorded, durability pending
+    assert row and row[0] == 1 and row[1] == "pending", row  # merged recorded, durability pending
     # merged-but-pending stays on the work list for the durability sweep; open stays (no outcome)
     still = {r["run_id"] for r in feedback.runs_needing_outcome("remote")}
     assert "remote:o/r#1:cursor" in still and "remote:o/r#2:codex" in still, still
@@ -561,9 +547,7 @@ def _selftest():
         dry_run=True,
         _state_fn=lambda t: {"state": "CLOSED"} if t == "o/r#33" else None,
     )
-    assert any(
-        row["run_id"] == "legacy-local-composer" for row in legacy["details"]
-    ), legacy
+    assert any(row["run_id"] == "legacy-local-composer" for row in legacy["details"]), legacy
     feedback.record_run(
         "legacy-local-cheap",
         "o/r#35",
@@ -576,9 +560,9 @@ def _selftest():
         dry_run=True,
         _state_fn=lambda t: {"state": "MERGED"} if t == "o/r#35" else None,
     )
-    assert any(row["run_id"] == "legacy-local-cheap" for row in legacy_cheap["details"]), (
-        legacy_cheap
-    )
+    assert any(
+        row["run_id"] == "legacy-local-cheap" for row in legacy_cheap["details"]
+    ), legacy_cheap
     feedback.record_run(
         "local-closed-no-branch",
         "o/r#34",
@@ -603,12 +587,8 @@ def _selftest():
             "SELECT merged, durability FROM outcomes WHERE run_id='local-closed-no-branch'"
         ).fetchone()
     assert abandoned and abandoned[0] == 0 and abandoned[1] == "abandoned", abandoned
-    feedback.record_run(
-        "remote:o/r#4:vibe", "o/r#4", "implement", "vibe", mode="remote"
-    )
-    feedback.record_run(
-        "o__r_5-cursor-456", "o/r#5", "implement", "cursor", mode="local"
-    )
+    feedback.record_run("remote:o/r#4:vibe", "o/r#4", "implement", "vibe", mode="remote")
+    feedback.record_run("o__r_5-cursor-456", "o/r#5", "implement", "cursor", mode="local")
     both = ingest_modes(
         mode="both",
         dry_run=True,
@@ -622,9 +602,7 @@ def _selftest():
     assert both["pending_durability"] >= 1, both
     assert both["pending_durability_details"], both
     assert [row["mode"] for row in both["results"]] == ["remote", "local"], both
-    both_skips = [
-        row for result in both["results"] for row in result.get("skipped_details", [])
-    ]
+    both_skips = [row for result in both["results"] for row in result.get("skipped_details", [])]
     assert any(row["reason"] == "open_pr" for row in both_skips), both
     assert any(row["reason"] == "state_unavailable" for row in both_skips), both
     import shutil
@@ -637,9 +615,7 @@ def _selftest():
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(
-        description="Ingest delegated PR outcomes into feedback.py."
-    )
+    parser = argparse.ArgumentParser(description="Ingest delegated PR outcomes into feedback.py.")
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -652,9 +628,7 @@ def main(argv):
     if args.selftest:
         _selftest()
         return 0
-    print(
-        json.dumps(ingest_modes(args.mode, dry_run=args.dry_run), indent=2, default=str)
-    )
+    print(json.dumps(ingest_modes(args.mode, dry_run=args.dry_run), indent=2, default=str))
     return 0
 
 

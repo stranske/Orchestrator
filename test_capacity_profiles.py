@@ -45,7 +45,8 @@ def test_three_profiles_share_one_pool(codex_profile_registry):
     # and registry are scoped to codex. Feeding every seat's profile in would test arithmetic across
     # unrelated accounts, not the shared-subscription invariant.
     codex_only = {
-        pid: profile for pid, profile in codex_profile_registry.items()
+        pid: profile
+        for pid, profile in codex_profile_registry.items()
         if profile["agent"] == "codex"
     }
     assert len(codex_only) == 3, sorted(codex_only)
@@ -72,10 +73,24 @@ def test_capacity_build_reads_shared_pool_burn_once(tmp_path, monkeypatch, codex
     now = int(time.time())
     rows = []
     for profile_id in codex_profile_registry:
-        rows.append({"ts": now, "agent": "codex", "event": "start", "count": 1,
-                     "selected_profile_id": profile_id})
-        rows.append({"ts": now + 1, "agent": "codex", "event": "complete", "count": 0,
-                     "selected_profile_id": profile_id})
+        rows.append(
+            {
+                "ts": now,
+                "agent": "codex",
+                "event": "start",
+                "count": 1,
+                "selected_profile_id": profile_id,
+            }
+        )
+        rows.append(
+            {
+                "ts": now + 1,
+                "agent": "codex",
+                "event": "complete",
+                "count": 0,
+                "selected_profile_id": profile_id,
+            }
+        )
     ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setattr(capacity, "LEDGER", ledger)
     monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "shed")
@@ -84,7 +99,8 @@ def test_capacity_build_reads_shared_pool_burn_once(tmp_path, monkeypatch, codex
     # Only codex burned this pool, and all three of its profiles map to it. Other agents now have
     # their own pools, so filter rather than assert the registry is codex-only.
     codex_rows = {
-        pid: row for pid, row in built["profiles"].items()
+        pid: row
+        for pid, row in built["profiles"].items()
         if codex_profile_registry.get(pid, {}).get("agent") == "codex"
     }
     assert codex_rows, built["profiles"]
@@ -106,8 +122,12 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
         assert command[command.index("--sandbox") + 1] == "workspace-write"
         assert command[command.index("-c") + 1] == 'model_reasoning_effort="high"'
         assess = adapters.build_command(
-            "codex", "assess", mode="assess", profile=profile,
-            transport="offload", permission_mode="read-only",
+            "codex",
+            "assess",
+            mode="assess",
+            profile=profile,
+            transport="offload",
+            permission_mode="read-only",
         )
         assert assess[assess.index("--sandbox") + 1] == "read-only"
         assert "--json" not in assess
@@ -135,16 +155,22 @@ def test_router_profile_envelope_replays_exact_choice():
     cap = capacity.profile_capacity_snapshot(
         {
             "agents": {
-                "codex": {"state": "ok"}, "claude": {"state": "shed"},
-                "cursor": {"state": "shed"}, "gemini": {"state": "shed"},
-                "vibe": {"state": "shed"}, "aider": {"state": "shed"},
+                "codex": {"state": "ok"},
+                "claude": {"state": "shed"},
+                "cursor": {"state": "shed"},
+                "gemini": {"state": "shed"},
+                "vibe": {"state": "shed"},
+                "aider": {"state": "shed"},
             }
         }
     )
     cap["agents"] = {
-        "codex": {"state": "ok"}, "claude": {"state": "shed"},
-        "cursor": {"state": "shed"}, "gemini": {"state": "shed"},
-        "vibe": {"state": "shed"}, "aider": {"state": "shed"},
+        "codex": {"state": "ok"},
+        "claude": {"state": "shed"},
+        "cursor": {"state": "shed"},
+        "gemini": {"state": "shed"},
+        "vibe": {"state": "shed"},
+        "aider": {"state": "shed"},
     }
     assignment = router.plan(
         [{"target": "owner/repo#5", "task_type": "implement", "lane": "opener"}],
@@ -163,32 +189,42 @@ def test_all_profile_shed_returns_no_route():
     cap = {
         "agents": {"codex": {"state": "ok"}},
         "profiles": {
-            profile_id: {"state": "shed"}
-            for profile_id in execution_profiles.PROFILE_REGISTRY
+            profile_id: {"state": "shed"} for profile_id in execution_profiles.PROFILE_REGISTRY
         },
     }
-    assert router.select_agent(
-        "implement",
-        cap,
-        only={"codex"},
-        exploration_rate=0.0,
-        profile_seed=1,
-        causal_context={"target": "owner/repo#5"},
-    ) is None
+    assert (
+        router.select_agent(
+            "implement",
+            cap,
+            only={"codex"},
+            exploration_rate=0.0,
+            profile_seed=1,
+            causal_context={"target": "owner/repo#5"},
+        )
+        is None
+    )
 
 
 def test_profile_schema_is_additive_and_immutable(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     feedback.record_run("legacy", "o/r#1", "implement", "codex", mode="local")
     with feedback._conn() as conn:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"execution_profiles", "capacity_pools", "routing_decisions_v2", "route_weights_v2"} <= tables
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert {
+            "execution_profiles",
+            "capacity_pools",
+            "routing_decisions_v2",
+            "route_weights_v2",
+        } <= tables
         assert conn.execute("SELECT COUNT(*) FROM runs WHERE run_id='legacy'").fetchone()[0] == 1
         execution_profiles.ensure_schema(conn)
         # Every registered profile must persist. Comparing to the registry rather than a literal
         # keeps this a real check when a seat is added, instead of a count to bump.
         assert conn.execute("SELECT COUNT(*) FROM execution_profiles").fetchone()[0] == len(
-            execution_profiles.PROFILE_REGISTRY)
+            execution_profiles.PROFILE_REGISTRY
+        )
 
 
 def _profile_run(run_id, task_type, profile, *, resolved_model, verdict, tmp_ts):
@@ -223,15 +259,25 @@ def test_profile_learner_cold_start_and_resolved_coverage_gate(tmp_path, monkeyp
         cold = execution_profiles.current_profile_weights(conn, "profile-task")
         assert v1 == 1 and all(row["n_obs"] == 0 for row in cold)
         assert all(row["learning_gate_passed"] == 0 for row in cold)
-        assert conn.execute("SELECT COUNT(*) FROM execution_attempts WHERE run_id='legacy'").fetchone()[0] == 0
-        assert all(abs(row["posterior"] - 0.6) <= execution_profiles.MAX_SUCCESSOR_TRANSFER for row in cold)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM execution_attempts WHERE run_id='legacy'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert all(
+            abs(row["posterior"] - 0.6) <= execution_profiles.MAX_SUCCESSOR_TRANSFER for row in cold
+        )
 
     profile = execution_profiles.get_profile("codex-5.6-terra-high")
     for index in range(3):
         _profile_run(
-            f"terra-{index}", "profile-task", profile,
+            f"terra-{index}",
+            "profile-task",
+            profile,
             resolved_model=(profile["requested_model"] if index < 2 else "gpt-fallback"),
-            verdict="PASS", tmp_ts=2_000_000_000 + index,
+            verdict="PASS",
+            tmp_ts=2_000_000_000 + index,
         )
     feedback.relearn_profiles({"profile-task": {"codex": 0.6}})
     with feedback._conn() as conn:
@@ -244,8 +290,12 @@ def test_profile_learner_cold_start_and_resolved_coverage_gate(tmp_path, monkeyp
         assert terra["n_obs"] == 0, "router accepted exact-profile learning below coverage gate"
 
     _profile_run(
-        "terra-3", "profile-task", profile, resolved_model=profile["requested_model"],
-        verdict="FAIL", tmp_ts=2_000_000_004,
+        "terra-3",
+        "profile-task",
+        profile,
+        resolved_model=profile["requested_model"],
+        verdict="FAIL",
+        tmp_ts=2_000_000_004,
     )
     feedback.relearn_profiles({"profile-task": {"codex": 0.6}})
     with feedback._conn() as conn:
@@ -258,8 +308,12 @@ def test_profile_learner_cold_start_and_resolved_coverage_gate(tmp_path, monkeyp
         assert terra["n_obs"] == 0, "router accepted exact-profile learning below coverage gate"
 
     _profile_run(
-        "terra-4", "profile-task", profile, resolved_model=profile["requested_model"],
-        verdict="PASS", tmp_ts=2_000_000_005,
+        "terra-4",
+        "profile-task",
+        profile,
+        resolved_model=profile["requested_model"],
+        verdict="PASS",
+        tmp_ts=2_000_000_005,
     )
     feedback.relearn_profiles({"profile-task": {"codex": 0.6}})
     with feedback._conn() as conn:
@@ -277,18 +331,26 @@ def test_completion_updates_selected_attempt_only_from_reported_resolution(tmp_p
     profile = execution_profiles.get_profile("codex-5.6-luna-high")
     feedback.record_run("completion", "o/r#completion", "implement", "codex")
     feedback.record_execution_attempt(
-        "completion", attempt_id="attempt:profile:completion", operation_role="worker",
-        profile_id=profile["profile_id"], requested_provider=profile["provider"],
-        requested_model=profile["requested_model"], status="started",
+        "completion",
+        attempt_id="attempt:profile:completion",
+        operation_role="worker",
+        profile_id=profile["profile_id"],
+        requested_provider=profile["provider"],
+        requested_model=profile["requested_model"],
+        status="started",
     )
     with pytest.raises(ValueError, match="actually reported"):
         feedback.complete_profile_attempt(
-            "completion", selected_profile_id=profile["profile_id"],
-            resolved_provider="openai", resolved_model="",
+            "completion",
+            selected_profile_id=profile["profile_id"],
+            resolved_provider="openai",
+            resolved_model="",
         )
     feedback.complete_profile_attempt(
-        "completion", selected_profile_id=profile["profile_id"],
-        resolved_provider="openai", resolved_model="gpt-5.6-luna",
+        "completion",
+        selected_profile_id=profile["profile_id"],
+        resolved_provider="openai",
+        resolved_model="gpt-5.6-luna",
     )
     with feedback._conn() as conn:
         rows = conn.execute(
@@ -332,9 +394,7 @@ def test_wrapper_completion_closes_unreported_model_as_unresolved(tmp_path, monk
     )
 
 
-def test_profile_dispatch_fails_before_process_when_run_row_cannot_persist(
-    tmp_path, monkeypatch
-):
+def test_profile_dispatch_fails_before_process_when_run_row_cannot_persist(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
     started = []
     ledger = []
@@ -418,8 +478,8 @@ def test_profile_learning_collapses_same_subject_retries(tmp_path, monkeypatch):
             )
             conn.execute(
                 "INSERT INTO execution_attempts "
-                "(attempt_id,run_id,attempt_ordinal,operation_role,profile_id," 
-                "requested_provider,requested_model,resolved_provider,resolved_model," 
+                "(attempt_id,run_id,attempt_ordinal,operation_role,profile_id,"
+                "requested_provider,requested_model,resolved_provider,resolved_model,"
                 "status,recorded_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     f"attempt-{index}",
@@ -456,13 +516,18 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     # choices and its shared subscription. Passing the whole registry would make 1/N a statement
     # about how many seats exist, which is not the property being checked.
     codex_candidates = sorted(
-        pid for pid, profile in execution_profiles.PROFILE_REGISTRY.items()
+        pid
+        for pid, profile in execution_profiles.PROFILE_REGISTRY.items()
         if profile["agent"] == "codex"
     )
     assert len(codex_candidates) == 3, codex_candidates
     envelope = execution_profiles.select_profile(
-        "implement", "o/r#report", codex_candidates,
-        rng_seed=7, exploration=True, exploration_policy="fixture",
+        "implement",
+        "o/r#report",
+        codex_candidates,
+        rng_seed=7,
+        exploration=True,
+        exploration_policy="fixture",
     )
     feedback.record_profile_decision(envelope)
     summary = feedback.profile_routing_summary()
@@ -475,7 +540,9 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     assert "codex-subscription" in summary["shared_capacity_pools"]
     # The decision itself was scoped to codex, so only codex's models may appear in it.
     assert {row["requested_model"] for row in summary["profiles"]} == {
-        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
     }
 
 
@@ -488,6 +555,7 @@ def test_capacity_pools_match_capacity_agents():
     """
     import capacity
     import execution_profiles
+
     for pool_id, pool in execution_profiles.CAPACITY_POOLS.items():
         agent = pool.get("agent")
         if not agent or agent not in capacity.AGENTS:
@@ -515,7 +583,11 @@ def test_registry_models_match_adapters():
         # Strip a leading `<seat>:` router prefix. Only these seats route through a wrapper; a
         # vendor id containing a slash (`mistral/codestral-latest`) is untouched.
         head, _, tail = str(model).partition(":")
-        return tail if tail and head in {"agy", "cursor", "claude", "codex", "vibe", "aider"} else str(model)
+        return (
+            tail
+            if tail and head in {"agy", "cursor", "claude", "codex", "vibe", "aider"}
+            else str(model)
+        )
 
     by_agent: dict[str, set[str]] = {}
     for profile in execution_profiles.PROFILE_REGISTRY.values():
@@ -524,16 +596,19 @@ def test_registry_models_match_adapters():
         reported = {bare(adapters.model_identity(agent, mode)) for mode in ("mid", "full")}
         assert models & reported, (
             f"{agent}: registry {sorted(models)} matches none of the adapter identities "
-            f"{sorted(reported)}")
+            f"{sorted(reported)}"
+        )
 
 
 def test_every_agent_can_record_a_worker_attempt():
     """One profile per agent -- without it, that seat's work can never carry provenance."""
     import capacity
     import execution_profiles
+
     for agent in capacity.AGENTS:
-        assert execution_profiles.profiles_for_agent(agent, transport="offload"), (
-            f"{agent} has no offload profile, so dispatcher.offload cannot record a worker attempt")
+        assert execution_profiles.profiles_for_agent(
+            agent, transport="offload"
+        ), f"{agent} has no offload profile, so dispatcher.offload cannot record a worker attempt"
 
 
 def test_vibe_model_matches_local_config():
@@ -543,8 +618,9 @@ def test_vibe_model_matches_local_config():
     check reads the real config and SKIPS with the missing file named when vibe is not installed
     (a CI runner). It never guesses.
     """
-    import env_prereq
     import adapters
+    import env_prereq
+
     env_prereq.require(env_prereq.vibe_config_absent())
     configured = env_prereq.vibe_active_model()
     assert configured, "vibe config present but active_model unreadable"
@@ -559,12 +635,16 @@ def test_named_models_are_not_adapter_tags():
     it wrong in either direction misreports coverage: a tag counted as a model claims provenance
     that cannot exist, and a real model counted as a tag hides a seat that only needs tracing.
     """
-    import feedback
     import execution_profiles
+    import feedback
+
     tag_seats, named_seats = set(), set()
     for profile in execution_profiles.PROFILE_REGISTRY.values():
-        target = tag_seats if feedback.SYNTHETIC_ADAPTER_MODEL_RE.match(
-            str(profile["requested_model"])) else named_seats
+        target = (
+            tag_seats
+            if feedback.SYNTHETIC_ADAPTER_MODEL_RE.match(str(profile["requested_model"]))
+            else named_seats
+        )
         target.add(profile["agent"])
     # NO seat may request a routing tag. Each model is named from that seat's own authority --
     # codex/claude from tier research, gemini from agy's advertised-models probe, cursor from its
@@ -573,7 +653,9 @@ def test_named_models_are_not_adapter_tags():
     # No PROFILE may request a routing tag -- that is the field compared against a resolved model.
     # `model_identity` legitimately still carries the router prefix; these are different fields.
     assert tag_seats == set(), sorted(tag_seats)
-    assert {"codex", "claude", "aider", "vibe", "gemini", "cursor"} <= named_seats, sorted(named_seats)
+    assert {"codex", "claude", "aider", "vibe", "gemini", "cursor"} <= named_seats, sorted(
+        named_seats
+    )
 
 
 def test_gemini_model_is_one_the_seat_advertises():
@@ -584,9 +666,11 @@ def test_gemini_model_is_one_the_seat_advertises():
     model the seat cannot route.
     """
     import json
+
     import adapters
     import env_prereq
     import execution_profiles
+
     cache = adapters.GEMINI_MODEL_CACHE
     env_prereq.require(None if cache.is_file() else f"agy advertised-models cache absent: {cache}")
     advertised = set((json.loads(cache.read_text()) or {}).get("models") or [])
@@ -594,4 +678,6 @@ def test_gemini_model_is_one_the_seat_advertises():
     for profile in execution_profiles.PROFILE_REGISTRY.values():
         if profile["agent"] == "gemini":
             assert profile["requested_model"] in advertised, (
-                profile["requested_model"], sorted(advertised))
+                profile["requested_model"],
+                sorted(advertised),
+            )

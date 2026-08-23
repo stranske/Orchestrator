@@ -43,13 +43,13 @@ Selected arm/profile and resolved provider/model remain attempt provenance.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 import research_subjects
-
 
 ENVELOPE_SCHEMA = "orchestrator.completion-event-envelope"
 ENVELOPE_VERSION = 1
@@ -240,25 +240,27 @@ SUBJECT_CAPABLE_PRODUCERS = {
 # entirely within this set AND it has no research context, it is out of scope rather than broken.
 # Anything outside this set (a bad payload, a secret, a redaction, a target mismatch) is a real
 # defect and keeps the event a rejection no matter what its scope is.
-NO_SUBJECT_REASONS = frozenset({
-    # A non-repo target (an offload path, a triage batch) is not malformed -- it simply is not a
-    # repo-scoped research observation. Same for an event with no task type: there is nothing to
-    # form a subject from. Both stay REJECTIONS when the event carries an experiment_id, because
-    # then it claims to be research and failed to identify itself.
-    "invalid_canonical_target",
-    "missing_task_type",
-    "invalid_normalized_spec_hash",
-    "missing_base_sha",
-    "missing_subject_id",
-    "missing_observation_id",
-    "missing_subject_design_set",
-    "missing_joined_attempt_id",
-    "invalid_subject_arm_set",
-    "invalid_subject_profile_set",
-    "unresolved_model_provenance",
-    "worker_attempt_not_resolved",
-    "identity_derivation_failed",
-})
+NO_SUBJECT_REASONS = frozenset(
+    {
+        # A non-repo target (an offload path, a triage batch) is not malformed -- it simply is not a
+        # repo-scoped research observation. Same for an event with no task type: there is nothing to
+        # form a subject from. Both stay REJECTIONS when the event carries an experiment_id, because
+        # then it claims to be research and failed to identify itself.
+        "invalid_canonical_target",
+        "missing_task_type",
+        "invalid_normalized_spec_hash",
+        "missing_base_sha",
+        "missing_subject_id",
+        "missing_observation_id",
+        "missing_subject_design_set",
+        "missing_joined_attempt_id",
+        "invalid_subject_arm_set",
+        "invalid_subject_profile_set",
+        "unresolved_model_provenance",
+        "worker_attempt_not_resolved",
+        "identity_derivation_failed",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -304,12 +306,18 @@ def validate_capability_effect_record(
         raise ValueError("invalid_capability_effect_fields")
     present = set(raw)
     # Required fields exactly; optional fields may be present or absent, nothing else is tolerated.
-    if not (CAPABILITY_EFFECT_FIELDS <= present
-            and present <= CAPABILITY_EFFECT_FIELDS | CAPABILITY_EFFECT_OPTIONAL_FIELDS):
+    if not (
+        CAPABILITY_EFFECT_FIELDS
+        <= present
+        <= CAPABILITY_EFFECT_FIELDS | CAPABILITY_EFFECT_OPTIONAL_FIELDS
+    ):
         raise ValueError("invalid_capability_effect_fields")
     keys = CAPABILITY_EFFECT_FIELDS | (present & CAPABILITY_EFFECT_OPTIONAL_FIELDS)
     record = {key: _string(raw.get(key)) for key in keys}
-    record = {key: value.lower() if key != "evidence_artifact_ref" else value for key, value in record.items()}
+    record = {
+        key: value.lower() if key != "evidence_artifact_ref" else value
+        for key, value in record.items()
+    }
     if record["schema"] not in CAPABILITY_EFFECT_SCHEMAS:
         raise ValueError("unsupported_capability_effect_schema")
     # An empty optional is the same as absent — never a subject called "".
@@ -329,7 +337,9 @@ def validate_capability_effect_record(
     if not EVIDENCE_ARTIFACT_REF_RE.fullmatch(artifact_ref):
         raise ValueError("invalid_capability_effect_artifact_ref")
     lowered_ref = artifact_ref.lower()
-    if any(marker in lowered_ref for marker in ("token", "secret", "password", "api-key", "apikey")):
+    if any(
+        marker in lowered_ref for marker in ("token", "secret", "password", "api-key", "apikey")
+    ):
         raise ValueError("secret_like_capability_effect_artifact_ref")
     if record["supervision_mode"] not in SUPERVISION_MODES:
         raise ValueError("unsupported_capability_effect_supervision_mode")
@@ -479,9 +489,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         else:
             unexpected_result = sorted(set(result) - RESULT_ALLOWLIST)
             if unexpected_result:
-                reasons.append(
-                    "result_field_not_allowlisted:" + ",".join(unexpected_result)
-                )
+                reasons.append("result_field_not_allowlisted:" + ",".join(unexpected_result))
     artifact_refs = payload.get("artifact_refs")
     if artifact_refs is not None:
         if not isinstance(artifact_refs, list):
@@ -495,14 +503,9 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
                     ARTIFACT_REF_REQUIRED_FIELDS | ARTIFACT_REF_OPTIONAL_FIELDS
                 ):
                     reasons.append(f"invalid_artifact_ref_fields:{index}")
-                if not all(
-                    _string(artifact.get(field))
-                    for field in ARTIFACT_REF_REQUIRED_FIELDS
-                ):
+                if not all(_string(artifact.get(field)) for field in ARTIFACT_REF_REQUIRED_FIELDS):
                     reasons.append(f"incomplete_artifact_ref:{index}")
-                if not SHA256_RE.fullmatch(
-                    _string(artifact.get("content_hash")).lower()
-                ):
+                if not SHA256_RE.fullmatch(_string(artifact.get("content_hash")).lower()):
                     reasons.append(f"invalid_artifact_content_hash:{index}")
     capability_effects = payload.get("capability_effects")
     if capability_effects is not None:
@@ -513,9 +516,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
             linked_ids = capability_ids if isinstance(capability_ids, list) else []
             for index, effect in enumerate(capability_effects):
                 try:
-                    validate_capability_effect_record(
-                        effect, expected_capability_ids=linked_ids
-                    )
+                    validate_capability_effect_record(effect, expected_capability_ids=linked_ids)
                 except ValueError as exc:
                     reasons.append(f"{exc}:{index}")
     if _string(event_raw.get("event_type")).lower() in {
@@ -593,11 +594,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     # saying so is a cascade of one root cause, not a second defect: 111 events reported this on
     # top of missing_subject_id, and because this code is not one of NO_SUBJECT_REASONS it dragged
     # all 111 out of correctly-excluded and into the rejection count.
-    if (
-        isinstance(subject_profiles, list)
-        and profile_id
-        and (supplied_subject_id or subject_arms)
-    ):
+    if isinstance(subject_profiles, list) and profile_id and (supplied_subject_id or subject_arms):
         profile_set = {_string(value).lower() for value in subject_profiles}
         if profile_id not in profile_set:
             reasons.append("selected_profile_not_in_subject_set")
@@ -633,10 +630,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     if expected_ids is not None:
         if supplied_subject_id and supplied_subject_id != expected_ids["subject_id"]:
             reasons.append("subject_identity_mismatch")
-        if (
-            supplied_observation_id
-            and supplied_observation_id != expected_ids["observation_id"]
-        ):
+        if supplied_observation_id and supplied_observation_id != expected_ids["observation_id"]:
             reasons.append("observation_identity_mismatch")
         if supplied_family_id and supplied_family_id != expected_ids["family_id"]:
             reasons.append("family_identity_mismatch")
@@ -697,12 +691,9 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         # count with non-defects, which is the same cascade the repository_target_mismatch comment
         # above describes -- one root cause wearing 111 hats and hiding the real rejections.
         presents_identity = bool(
-            experiment_id or supplied_subject_id or supplied_family_id
-            or subject_arms or base_sha
+            experiment_id or supplied_subject_id or supplied_family_id or subject_arms or base_sha
         )
-        no_research_context = (
-            producer in SUBJECTLESS_PRODUCERS or not presents_identity
-        )
+        no_research_context = producer in SUBJECTLESS_PRODUCERS or not presents_identity
         if no_research_context and codes <= NO_SUBJECT_REASONS:
             raise OutOfScopeError(
                 event_id,

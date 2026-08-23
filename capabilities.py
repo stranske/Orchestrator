@@ -6,10 +6,10 @@ stronger claim that a capability is matched, invoked, consumed, and connected to
 an outcome. Mutable state lives on local disk so launchd and the canonical source
 tree share one truth.
 """
+
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
@@ -17,19 +17,17 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import feedback
 
 ORCH = Path(__file__).resolve().parent
-LOCAL_RUNTIME = Path(
-    os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator")
-)
+LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
 REG = Path(os.environ.get("ORCH_CAPABILITIES_PATH", LOCAL_RUNTIME / "capabilities.json"))
-FEATURES_REG = Path(
-    os.environ.get("ORCH_FEATURES_PATH", ORCH / "experiments" / "features.json")
-)
+FEATURES_REG = Path(os.environ.get("ORCH_FEATURES_PATH", ORCH / "experiments" / "features.json"))
 SCHEMA_VERSION = 1
 GATED_TTL_DAYS = 90
 # Kinds the COMPILER emits and `capability_targets` can bind/roll back at runtime. This set is a
@@ -267,30 +265,30 @@ KNOWN_GATES = {
         "kill_switch": "ORCH_REDIRECT_APPLY_BOOTSTRAP=0",
         "rollback": {"transition": "retired"},
         "gate_reason": "armed 2026-08-21 by owner decision; bounded to one already-dead lane per "
-                       "day and self-disabling once the Stage-2 deficits close",
+        "day and self-disabling once the Stage-2 deficits close",
         "gate_evidence": "ORCH_REDIRECT_APPLY_BOOTSTRAP=1 in orchestrate.sh; apply refuses a live "
-                         "pid, a foreign claim, an un-stamped plan, a repeat target",
+        "pid, a foreign claim, an un-stamped plan, a repeat target",
         "evidence_threshold": "synced_role_outcomes reaches LINKED_OUTCOME_TARGET and "
-                              "linked_disagreements reaches DISAGREEMENT_OUTCOME_TARGET, at which "
-                              "point bootstrap_needed goes false and the capability self-disables",
+        "linked_disagreements reaches DISAGREEMENT_OUTCOME_TARGET, at which "
+        "point bootstrap_needed goes false and the capability self-disables",
         "notes": "dedup 2026-08-21: searched by concept for apply/supervised/autonomous/"
-                 "confirm_target/auto_apply across the tree before writing anything. "
-                 "redirect_plan.apply_plan EXISTS and is complete (exact confirm_target, "
-                 "prompt-written-first, pid-dead skip, non-fatal claim release, abort on delegate "
-                 "failure) but had ZERO callers — the only reference was this ledger's own "
-                 "downstream_consumer string, so the record asserted a consumer that did not "
-                 "exist. redirect_shadow.summarize already computes ready_for_supervised_apply; "
-                 "keepalive_supervisor already computes the deficits and writes the per-target "
-                 "redirect reports. Nothing was rebuilt: this adds the missing CALLER over those "
-                 "reports plus the automatic outcome linker. It exists because the gate is a "
-                 "STRUCTURAL DEADLOCK — synced_role_outcomes counts only accepted/applied advice "
-                 "(join_role_to_outcome returns synced=False when accepted=False, and historical "
-                 "links are deliberately synced=False/not_role_learning=True), so the gate that "
-                 "authorises applying requires 10 applied outcomes. Measured 2026-08-21: 143 "
-                 "proposals, 119 valid, 124 historical replays (that route EXHAUSTED), "
-                 "synced_role_outcomes=5 and linked_disagreements=0, the 5 created by hand. The "
-                 "owner-review design produced 5 links in ~2 months, which CLAUDE.md §3 forbids "
-                 "as a per-item approval queue.",
+        "confirm_target/auto_apply across the tree before writing anything. "
+        "redirect_plan.apply_plan EXISTS and is complete (exact confirm_target, "
+        "prompt-written-first, pid-dead skip, non-fatal claim release, abort on delegate "
+        "failure) but had ZERO callers — the only reference was this ledger's own "
+        "downstream_consumer string, so the record asserted a consumer that did not "
+        "exist. redirect_shadow.summarize already computes ready_for_supervised_apply; "
+        "keepalive_supervisor already computes the deficits and writes the per-target "
+        "redirect reports. Nothing was rebuilt: this adds the missing CALLER over those "
+        "reports plus the automatic outcome linker. It exists because the gate is a "
+        "STRUCTURAL DEADLOCK — synced_role_outcomes counts only accepted/applied advice "
+        "(join_role_to_outcome returns synced=False when accepted=False, and historical "
+        "links are deliberately synced=False/not_role_learning=True), so the gate that "
+        "authorises applying requires 10 applied outcomes. Measured 2026-08-21: 143 "
+        "proposals, 119 valid, 124 historical replays (that route EXHAUSTED), "
+        "synced_role_outcomes=5 and linked_disagreements=0, the 5 created by hand. The "
+        "owner-review design produced 5 links in ~2 months, which CLAUDE.md §3 forbids "
+        "as a per-item approval queue.",
     },
     "role-redirect": {
         "status": "shadow",
@@ -405,9 +403,9 @@ def _blank_capability(capability_id: str) -> dict[str, Any]:
 
 
 def _stable_hash(namespace: str, value: Any) -> str:
-    encoded = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
+    )
     return "sha256:" + hashlib.sha256(namespace.encode() + b"\0" + encoded).hexdigest()
 
 
@@ -443,10 +441,13 @@ def compiled_version_identity(
     policy["policy_version"] = CAPABILITY_POLICY_VERSION
     artifact_hash = _stable_hash("capability-artifact", artifact)
     policy_hash = _stable_hash("capability-lifecycle-policy", policy)
-    version_id = "capability-version:" + _stable_hash(
-        "capability-version",
-        {"capability_id": capability_id, "artifact_hash": artifact_hash},
-    ).split(":", 1)[1][:32]
+    version_id = (
+        "capability-version:"
+        + _stable_hash(
+            "capability-version",
+            {"capability_id": capability_id, "artifact_hash": artifact_hash},
+        ).split(":", 1)[1][:32]
+    )
     return {
         "capability_id": capability_id,
         "capability_version_id": version_id,
@@ -471,7 +472,7 @@ def resolve_entrypoint_sources(entrypoint: str, *, root: Path | None = None) -> 
         if not part:
             continue
         if not part.endswith(".py") and "." in part:
-            part = part.split(".", 1)[0] + ".py"      # `dispatcher.offload` -> dispatcher.py
+            part = part.split(".", 1)[0] + ".py"  # `dispatcher.offload` -> dispatcher.py
         if not part.endswith(".py"):
             continue
         candidate = base / part
@@ -515,54 +516,80 @@ def adopt_module_version(
             raise ValueError(f"unknown capability: {capability_id}")
         sources = resolve_entrypoint_sources(cap.get("entrypoint") or "", root=root)
         if not sources:
-            return {"capability_id": capability_id, "adopted": False,
-                    "reason": f"entrypoint does not resolve to readable source: {cap.get('entrypoint')!r}"}
+            return {
+                "capability_id": capability_id,
+                "adopted": False,
+                "reason": f"entrypoint does not resolve to readable source: {cap.get('entrypoint')!r}",
+            }
         artifact = {
             "target_kind": "module",
             "entrypoint": cap.get("entrypoint"),
             "sources": [
-                {"path": str(src.name),
-                 "sha256": hashlib.sha256(src.read_bytes()).hexdigest()}
+                {"path": str(src.name), "sha256": hashlib.sha256(src.read_bytes()).hexdigest()}
                 for src in sources
             ],
         }
         identity = compiled_version_identity(
-            capability_id, artifact=artifact,
+            capability_id,
+            artifact=artifact,
             lifecycle_policy=lifecycle_policy or cap.get("lifecycle_policy") or {},
         )
-        current = (cap.get("capability_version_id"), cap.get("artifact_hash"),
-                   cap.get("lifecycle_policy_hash"))
-        proposed = (identity["capability_version_id"], identity["artifact_hash"],
-                    identity["lifecycle_policy_hash"])
+        current = (
+            cap.get("capability_version_id"),
+            cap.get("artifact_hash"),
+            cap.get("lifecycle_policy_hash"),
+        )
+        proposed = (
+            identity["capability_version_id"],
+            identity["artifact_hash"],
+            identity["lifecycle_policy_hash"],
+        )
         if any(current):
             if current == proposed:
-                return {"capability_id": capability_id, "adopted": False, "reason": "already current",
-                        "capability_version_id": current[0]}
-            return {"capability_id": capability_id, "adopted": False, "reason": "version_drift",
-                    "detail": "source changed since lineage was established; this is a new-version "
-                              "decision, not an in-place rewrite",
-                    "current_version_id": current[0], "source_version_id": proposed[0]}
+                return {
+                    "capability_id": capability_id,
+                    "adopted": False,
+                    "reason": "already current",
+                    "capability_version_id": current[0],
+                }
+            return {
+                "capability_id": capability_id,
+                "adopted": False,
+                "reason": "version_drift",
+                "detail": "source changed since lineage was established; this is a new-version "
+                "decision, not an in-place rewrite",
+                "current_version_id": current[0],
+                "source_version_id": proposed[0],
+            }
         cap["target_kind"] = "module"
         cap["capability_version_id"] = identity["capability_version_id"]
         cap["artifact_hash"] = identity["artifact_hash"]
         cap["lifecycle_policy_hash"] = identity["lifecycle_policy_hash"]
         cap["lifecycle_policy"] = identity["lifecycle_policy"]
-        cap.setdefault("event_history", []).append({
-            "timestamp": now, "type": "module_version_adopted",
-            "capability_version_id": identity["capability_version_id"],
-            "sources": [s["path"] for s in artifact["sources"]],
-        })
+        cap.setdefault("event_history", []).append(
+            {
+                "timestamp": now,
+                "type": "module_version_adopted",
+                "capability_version_id": identity["capability_version_id"],
+                "sources": [s["path"] for s in artifact["sources"]],
+            }
+        )
         validate_capability(cap, now=now)
         _write_ledger_unlocked(path, capabilities)
-        return {"capability_id": capability_id, "adopted": True,
-                "capability_version_id": identity["capability_version_id"],
-                "sources": [s["path"] for s in artifact["sources"]]}
+        return {
+            "capability_id": capability_id,
+            "adopted": True,
+            "capability_version_id": identity["capability_version_id"],
+            "sources": [s["path"] for s in artifact["sources"]],
+        }
 
 
 def adopt_all_module_versions(*, path: Path = REG, root: Path | None = None) -> dict[str, Any]:
     """Adopt lineage for every capability that lacks it. Idempotent; reports refusals by reason."""
-    results = [adopt_module_version(cid, path=path, root=root)
-               for cid in sorted(_read_ledger_unlocked(path)["capabilities"])]
+    results = [
+        adopt_module_version(cid, path=path, root=root)
+        for cid in sorted(_read_ledger_unlocked(path)["capabilities"])
+    ]
     return {
         "adopted": [r["capability_id"] for r in results if r.get("adopted")],
         "skipped": {r["capability_id"]: r.get("reason") for r in results if not r.get("adopted")},
@@ -630,9 +657,7 @@ def register_compiled_version(
 def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[str, Any]:
     policy = {**DEFAULT_PROMOTION_POLICY, **(cap.get("lifecycle_policy") or {})}
     accepted = [row for row in rows if row["accepted_consumption"]]
-    durable_subjects = sorted(
-        {row["subject_id"] for row in accepted if row["durable_success"]}
-    )
+    durable_subjects = sorted({row["subject_id"] for row in accepted if row["durable_success"]})
     terminal = [row for row in accepted if row["terminal_outcome"]]
     failures = sum(1 for row in terminal if not row["durable_success"])
     rework = sum(1 for row in terminal if row["rework"])
@@ -730,7 +755,8 @@ def _matches_trigger(cap: dict[str, Any], trigger: dict[str, Any]) -> tuple[bool
             # The orchestrator did not supply this context, so we cannot claim a match.
             return False, [f"{kind}_not_in_trigger"]
         return (str(actual) == str(expected)), (
-            [] if str(actual) == str(expected) else [f"{kind}_mismatch"])
+            [] if str(actual) == str(expected) else [f"{kind}_mismatch"]
+        )
 
     # Shape C (legacy): bare {key: value} over the recognised trigger fields.
     for key, expected in matcher.items():
@@ -763,9 +789,7 @@ def capability_routing_decision(
             continue
         if not all(
             cap.get(field)
-            for field in (
-                "capability_version_id", "artifact_hash", "lifecycle_policy_hash"
-            )
+            for field in ("capability_version_id", "artifact_hash", "lifecycle_policy_hash")
         ):
             rejected[capability_id] = ["immutable_lineage_missing"]
             continue
@@ -782,20 +806,19 @@ def capability_routing_decision(
         "policy_version": CAPABILITY_POLICY_VERSION,
         "seed": int(seed),
         "eligible_capability_ids": [cap["capability_id"] for cap in eligible],
-        "eligible_capability_version_ids": [
-            cap["capability_version_id"] for cap in eligible
-        ],
+        "eligible_capability_version_ids": [cap["capability_version_id"] for cap in eligible],
         "rejection_reasons": rejected,
         "selected_capability_id": selected["capability_id"] if selected else None,
-        "selected_capability_version_id": (
-            selected["capability_version_id"] if selected else None
-        ),
+        "selected_capability_version_id": (selected["capability_version_id"] if selected else None),
         "propensity": 1.0 if selected else 0.0,
         "fallback": None if selected else "baseline",
     }
-    body["decision_id"] = "capability-decision:" + _stable_hash(
-        "capability-routing-decision", {"trigger": trigger, **body}
-    ).split(":", 1)[1][:24]
+    body["decision_id"] = (
+        "capability-decision:"
+        + _stable_hash("capability-routing-decision", {"trigger": trigger, **body}).split(":", 1)[
+            1
+        ][:24]
+    )
     return body
 
 
@@ -859,20 +882,24 @@ def reconcile_causal_lifecycle(
         if accepted:
             cap["last_invocation"] = max(int(row["observed_ts"] or 0) for row in accepted)
             cap.setdefault("activation_evidence", {})["consumer_probe"] = {
-                "passed": True, "checked_at": now, "ref": accepted[-1]["target_event_id"],
+                "passed": True,
+                "checked_at": now,
+                "ref": accepted[-1]["target_event_id"],
             }
             cap.setdefault("activation_evidence", {})["producer_probe"] = {
-                "passed": True, "checked_at": now, "ref": accepted[-1]["source_event_id"],
+                "passed": True,
+                "checked_at": now,
+                "ref": accepted[-1]["source_event_id"],
             }
         durable = [row for row in terminal if row["durable_success"]]
         if durable:
             cap["last_success"] = max(int(row["observed_ts"] or 0) for row in durable)
             cap.setdefault("activation_evidence", {})["outcome_probe"] = {
-                "passed": True, "checked_at": now, "ref": durable[-1]["target_run_id"],
+                "passed": True,
+                "checked_at": now,
+                "ref": durable[-1]["target_run_id"],
             }
-        cap["outcome_links"] = sorted(
-            {row["target_run_id"] for row in terminal}
-        )
+        cap["outcome_links"] = sorted({row["target_run_id"] for row in terminal})
         regressions = [row for row in terminal if row["regression"]]
         if regressions:
             cap["rollback_pending"] = {
@@ -883,23 +910,34 @@ def reconcile_causal_lifecycle(
             }
         if cap.get("predecessor"):
             cap.setdefault("activation_evidence", {})["rollback_probe"] = {
-                "passed": True, "checked_at": now, "ref": cap["predecessor"],
+                "passed": True,
+                "checked_at": now,
+                "ref": cap["predecessor"],
             }
         if not regressions:
             if cap.get("status") == "wired" and terminal:
                 _transition_in_place(
-                    cap, "shadow", reason="version-exact producer/consumer edge observed",
-                    timestamp=now, evidence_ref=evidence_hash,
+                    cap,
+                    "shadow",
+                    reason="version-exact producer/consumer edge observed",
+                    timestamp=now,
+                    evidence_ref=evidence_hash,
                 )
             if cap.get("status") == "shadow" and terminal:
                 _transition_in_place(
-                    cap, "exercised", reason="joined consumed outcome observed",
-                    timestamp=now, evidence_ref=evidence_hash,
+                    cap,
+                    "exercised",
+                    reason="joined consumed outcome observed",
+                    timestamp=now,
+                    evidence_ref=evidence_hash,
                 )
             if cap.get("status") == "canary" and readiness["ready"]:
                 _transition_in_place(
-                    cap, "active", reason="causal promotion thresholds satisfied",
-                    timestamp=now, evidence_ref=evidence_hash,
+                    cap,
+                    "active",
+                    reason="causal promotion thresholds satisfied",
+                    timestamp=now,
+                    evidence_ref=evidence_hash,
                 )
                 cap["next_transition"] = None
         if previous_hash != evidence_hash:
@@ -1028,7 +1066,11 @@ def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[
     retired: list[str] = []
     for name, cap in capabilities.items():
         expiry = cap.get("expiry")
-        if cap.get("status") not in {"retired", "superseded"} and expiry is not None and now >= int(expiry):
+        if (
+            cap.get("status") not in {"retired", "superseded"}
+            and expiry is not None
+            and now >= int(expiry)
+        ):
             previous = cap["status"]
             cap["status"] = "retired"
             cap["next_transition"] = None
@@ -1054,11 +1096,20 @@ def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[
 # been applied straight to the running instance's ledger, which made them machine-local: green where
 # someone typed them, absent on a fresh checkout, and invisible to review.
 DECLARATION_FIELDS: tuple[str, ...] = (
-    "entrypoint", "matcher", "trigger_cadence", "flags_defaults",
-    "output_artifact", "downstream_consumer", "learning_sink",
-    "gate_reason", "gate_evidence", "evidence_threshold",
+    "entrypoint",
+    "matcher",
+    "trigger_cadence",
+    "flags_defaults",
+    "output_artifact",
+    "downstream_consumer",
+    "learning_sink",
+    "gate_reason",
+    "gate_evidence",
+    "evidence_threshold",
     "gate_blocks_execution",
-    "kill_switch_category", "control_point", "kill_switch_rationale",
+    "kill_switch_category",
+    "control_point",
+    "kill_switch_rationale",
 )
 
 
@@ -1081,7 +1132,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "This capability IS the confinement: adapters.build_command adds an absolute "
             "`--add-dir <cwd>` so gemini writes only inside the target worktree (without it AGY "
             "falls back to an internal dir). Turning it OFF is strictly more dangerous than leaving "
-            "it ON, so a kill switch would be an anti-feature rather than a control."),
+            "it ON, so a kill switch would be an anti-feature rather than a control."
+        ),
     },
     "windowed-capacity-policy": {
         "kill_switch_category": "compute_only",
@@ -1090,7 +1142,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "Computes seat state; takes no action. Disabling it would not stop a dispatch — it would "
             "blind the router and make selection WORSE, the opposite of what a kill switch is for. "
             "The real control is at the consumers that act: the tick steps, each honouring "
-            "ORCH_DISABLE_STEPS, plus ORCH_OFFLOAD_DISABLED on the transport."),
+            "ORCH_DISABLE_STEPS, plus ORCH_OFFLOAD_DISABLED on the transport."
+        ),
     },
     "redirect-policy": {
         "kill_switch_category": "compute_only",
@@ -1098,7 +1151,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "kill_switch_rationale": (
             "Produces an advisory wait/collect/inspect/redirect/decompose DECISION and nothing else. "
             "Every mutating step downstream is separately gated. The control is at the sweep that "
-            "invokes it, ORCH_DISABLE_STEPS=redirect-sweep."),
+            "invokes it, ORCH_DISABLE_STEPS=redirect-sweep."
+        ),
     },
     "feedback-store": {
         "kill_switch_category": "compute_only",
@@ -1107,14 +1161,13 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "The Brain's append-only write path — it RECORDS what other capabilities did and takes "
             "no action of its own. A switch that stops it does not stop any work; it destroys the "
             "telemetry for work that happens anyway, which is strictly worse than the failure it "
-            "would be reached for. Controls belong at the producers."),
+            "would be reached for. Controls belong at the producers."
+        ),
     },
 }
 
 
-def _reconcile_known_declarations(
-    capabilities: dict[str, dict[str, Any]], now: int
-) -> bool:
+def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: int) -> bool:
     """Refresh contract fields when code declarations evolve.
 
     The ledger must preserve accumulated evidence, but leaving old matcher,
@@ -1195,7 +1248,10 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
                         "activation_deadline": expiry,
                         "next_transition": "retired",
                         "kill_switch": "restore documented default-off gate",
-                        "rollback": {"transition": "retired", "reason": "gate evidence expired or regressed"},
+                        "rollback": {
+                            "transition": "retired",
+                            "reason": "gate evidence expired or regressed",
+                        },
                     }
                 )
                 cap["event_history"].append(
@@ -1306,7 +1362,8 @@ def validate_capability(cap: dict[str, Any], *, now: int | None = None) -> None:
         raise AssertionError(
             f"gate_criteria must be a dict of machine-checkable bounds "
             f"({sorted(GATE_BOUND_KEYS)} and/or 'requires'), got {type(criteria).__name__}; "
-            f"put prose in gate_criteria_prose")
+            f"put prose in gate_criteria_prose"
+        )
     if cap.get("gate_reason") and status not in {"retired", "superseded"}:
         for field in ("gate_evidence", "evidence_threshold", "expiry", "next_transition"):
             if not cap.get(field):
@@ -1486,7 +1543,11 @@ def daily_heartbeat(
         return False
     day = time.strftime("%Y-%m-%d", time.gmtime(_now()))
     return heartbeat(
-        capability_id, event_type, ref=ref, metadata=metadata, path=path,
+        capability_id,
+        event_type,
+        ref=ref,
+        metadata=metadata,
+        path=path,
         idempotency_key=f"daily:{capability_id}:{event_type}:{day}",
     )
 
@@ -1549,9 +1610,7 @@ def reconcile_all(path: Path = REG, *, now: int | None = None) -> dict[str, Any]
         if not cap.get("capability_version_id"):
             continue
         try:
-            results.append(
-                reconcile_causal_lifecycle(capability_id, path=path, timestamp=now)
-            )
+            results.append(reconcile_causal_lifecycle(capability_id, path=path, timestamp=now))
         except (AssertionError, OSError, ValueError) as exc:
             errors.append({"capability_id": capability_id, "error": str(exc)})
     return {"reconciled": results, "errors": errors, "valid": not errors}
@@ -1613,7 +1672,9 @@ def attach_owner_question(
 ) -> dict[str, Any]:
     """Persist the bounded Brain question on the lifecycle record."""
     if not question.get("question_id") or question.get("status") not in {
-        "open", "answered", "expired_default"
+        "open",
+        "answered",
+        "expired_default",
     }:
         raise ValueError("invalid owner-question reference")
     now = _now() if timestamp is None else int(timestamp)
@@ -1719,12 +1780,14 @@ def summary(path: Path = REG, *, create: bool = True) -> dict[str, Any]:
 # than stored: `matcher.kind` already carries this, and adding a parallel field would be a second
 # inventory of the same fact. Anything not listed here influences a run that can terminate, so it
 # is expected to carry an outcome edge and a missing one is a real linkage gap.
-OBSERVER_MATCHER_KINDS = frozenset({
-    "tick_phase",       # cadence steps that emit a report
-    "feedback_event",   # the Brain recording its own events
-    "test_gate",        # suite checks
-    "tick_preflight",   # pre-tick guards
-})
+OBSERVER_MATCHER_KINDS = frozenset(
+    {
+        "tick_phase",  # cadence steps that emit a report
+        "feedback_event",  # the Brain recording its own events
+        "test_gate",  # suite checks
+        "tick_preflight",  # pre-tick guards
+    }
+)
 
 
 def is_observer(cap: dict[str, Any]) -> bool:
@@ -1789,9 +1852,11 @@ def classify_liveness(
     # including `issue-readiness`, whose gate covers only its LABEL WRITES while the assessment runs
     # every day and really does influence what the opener picks. So a capability must say so, and
     # absent the flag the behaviour is unchanged.
-    if (cap.get("gate_blocks_execution")
-            and cap.get("gate_reason")
-            and status in {"generated", "validated", "wired", "shadow", "exercised", "canary"}):
+    if (
+        cap.get("gate_blocks_execution")
+        and cap.get("gate_reason")
+        and status in {"generated", "validated", "wired", "shadow", "exercised", "canary"}
+    ):
         return "deliberately_gated"
     if last_invocation and not has_outcome_evidence:
         return "invoked_without_outcomes"
@@ -1801,7 +1866,12 @@ def classify_liveness(
     ):
         return "stale_active"
     if cap.get("gate_reason") and status in {
-        "generated", "validated", "wired", "shadow", "exercised", "canary"
+        "generated",
+        "validated",
+        "wired",
+        "shadow",
+        "exercised",
+        "canary",
     }:
         return "deliberately_gated"
     if status in {"generated", "validated", "wired", "shadow"} and cap.get("outcome_links"):
@@ -1825,7 +1895,7 @@ def classify_liveness(
 # event_history + persisted causal_evidence.readiness) — no second inventory, no Brain query.
 # ---------------------------------------------------------------------------
 
-RETIRE_CANDIDATE_DAYS = 90          # never matched this long => retire, don't manufacture work for it
+RETIRE_CANDIDATE_DAYS = 90  # never matched this long => retire, don't manufacture work for it
 
 
 def _capability_age_ts(cap: dict[str, Any]) -> int:
@@ -1840,7 +1910,9 @@ def _capability_age_ts(cap: dict[str, Any]) -> int:
     return min((s for s in stamps if s), default=0)
 
 
-def usage_rate(cap: dict[str, Any], *, now: int | None = None, window_days: int = 28) -> dict[str, Any]:
+def usage_rate(
+    cap: dict[str, Any], *, now: int | None = None, window_days: int = 28
+) -> dict[str, Any]:
     """How often this capability is ACTUALLY used, not just when it was last seen.
 
     A last-seen timestamp cannot distinguish "runs constantly" from "ran once in March", which is
@@ -1895,7 +1967,7 @@ def evidence_debt(cap: dict[str, Any]) -> dict[str, Any]:
         "required": need,
         "remaining": max(0, need - have),
         "ready": bool(readiness.get("ready")),
-        "blocked_by": blocked_by,          # non-empty => more volume alone will NOT lift the gate
+        "blocked_by": blocked_by,  # non-empty => more volume alone will NOT lift the gate
         "has_evidence": bool(readiness),
     }
 
@@ -1917,13 +1989,15 @@ def evidence_debt(cap: dict[str, Any]) -> dict[str, Any]:
 # separate, larger decision (CLAUDE.md §4) and stays a deliberate act.
 # ---------------------------------------------------------------------------
 
-GATE_BOUND_KEYS = frozenset({
-    "min_linked_outcomes",              # terminal outcomes joined to this capability
-    "min_independent_durable_reuse",    # distinct durably-successful subjects
-    "max_failures",
-    "max_rework",
-    "max_evidence_age_days",
-})
+GATE_BOUND_KEYS = frozenset(
+    {
+        "min_linked_outcomes",  # terminal outcomes joined to this capability
+        "min_independent_durable_reuse",  # distinct durably-successful subjects
+        "max_failures",
+        "max_rework",
+        "max_evidence_age_days",
+    }
+)
 
 
 def gate_policy(cap: dict[str, Any]) -> dict[str, Any]:
@@ -1942,7 +2016,7 @@ def gate_policy(cap: dict[str, Any]) -> dict[str, Any]:
     return {
         "policy": policy,
         "requires": requires,
-        "unknown_criteria": unknown,          # named but not understood => treated as unevaluated
+        "unknown_criteria": unknown,  # named but not understood => treated as unevaluated
         "encoded": bool(bounds or requires),  # False => the threshold is still only prose
     }
 
@@ -1956,17 +2030,25 @@ def gate_readiness(cap: dict[str, Any], *, now: int | None = None) -> dict[str, 
     """
     current = _now() if now is None else now
     if not cap.get("gate_reason"):
-        return {"gated": False, "ready": False, "criteria": {}, "unevaluated": [],
-                "reason": "not gated"}
+        return {
+            "gated": False,
+            "ready": False,
+            "criteria": {},
+            "unevaluated": [],
+            "reason": "not gated",
+        }
     spec = gate_policy(cap)
     policy = spec["policy"]
     readiness = (cap.get("causal_evidence") or {}).get("readiness") or {}
     unevaluated: list[str] = []
     if not spec["encoded"]:
         unevaluated.append(
-            f"threshold is prose only, not encoded: {cap.get('evidence_threshold') or 'unstated'}")
-    unevaluated += [f"requires an observation the causal record cannot supply: {name}"
-                    for name in spec["requires"]]
+            f"threshold is prose only, not encoded: {cap.get('evidence_threshold') or 'unstated'}"
+        )
+    unevaluated += [
+        f"requires an observation the causal record cannot supply: {name}"
+        for name in spec["requires"]
+    ]
     unevaluated += [f"unrecognised gate criterion: {name}" for name in spec["unknown_criteria"]]
     if not readiness:
         unevaluated.append("no causal evidence recorded yet")
@@ -1985,7 +2067,8 @@ def gate_readiness(cap: dict[str, Any], *, now: int | None = None) -> dict[str, 
         criteria["linked_outcomes"] = linked >= int(policy["min_linked_outcomes"])
     if readiness:
         criteria["evidence_age"] = bool(
-            latest and current - latest <= int(policy["max_evidence_age_days"]) * 86400)
+            latest and current - latest <= int(policy["max_evidence_age_days"]) * 86400
+        )
 
     unmet = sorted(k for k, ok in criteria.items() if not ok)
     ready = bool(criteria) and not unmet and not unevaluated
@@ -1996,10 +2079,19 @@ def gate_readiness(cap: dict[str, Any], *, now: int | None = None) -> dict[str, 
     else:
         reason = "unmet: " + ", ".join(unmet)
     return {
-        "gated": True, "ready": ready, "criteria": criteria, "unmet": unmet,
-        "unevaluated": unevaluated, "encoded": spec["encoded"], "reason": reason,
-        "observed": {"durable_reuses": durable, "linked_outcomes": linked,
-                     "failures": failures, "rework": rework},
+        "gated": True,
+        "ready": ready,
+        "criteria": criteria,
+        "unmet": unmet,
+        "unevaluated": unevaluated,
+        "encoded": spec["encoded"],
+        "reason": reason,
+        "observed": {
+            "durable_reuses": durable,
+            "linked_outcomes": linked,
+            "failures": failures,
+            "rework": rework,
+        },
         "required": {k: policy[k] for k in sorted(GATE_BOUND_KEYS & set(policy))},
     }
 
@@ -2018,7 +2110,9 @@ def _has_default_off_switch(cap: dict[str, Any]) -> bool:
     return "default-off" in text or "default off" in text
 
 
-def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None = None) -> dict[str, Any]:
+def unblock(
+    cap: dict[str, Any], *, liveness: str | None = None, now: int | None = None
+) -> dict[str, Any]:
     """The single next action that would move this capability, and whether it is worth feeding.
 
     `feed` is the field Layer 3's acquisition lane must respect: routing real capacity at a
@@ -2033,7 +2127,13 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
     stale_enough = age is not None and age >= RETIRE_CANDIDATE_DAYS
 
     if live in {"retired", "superseded"}:
-        return {"blocker": live, "action": "none", "feed": False, "needs_trigger": False, "retire_candidate": False}
+        return {
+            "blocker": live,
+            "action": "none",
+            "feed": False,
+            "needs_trigger": False,
+            "retire_candidate": False,
+        }
     if live == "no_matching_work":
         # UNREALIZED, not dead. A capability that never matched has no TRIGGER wired — that is a
         # gap in how we invoke it, not evidence it is worthless. Owner direction 2026-08-09: the
@@ -2046,17 +2146,21 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
         if cap.get("matcher"):
             return {
                 "blocker": "trigger declared, but no work has matched it yet",
-                "action": ("wait for matching work, or widen the matcher if this work occurs "
-                           "under a different task type"),
+                "action": (
+                    "wait for matching work, or widen the matcher if this work occurs "
+                    "under a different task type"
+                ),
                 "feed": False,
-                "needs_trigger": False,   # already wired — not the enablement queue
+                "needs_trigger": False,  # already wired — not the enablement queue
                 "retire_candidate": False,
             }
         return {
             "blocker": "no trigger wired — nothing routes work here yet",
-            "action": ("define a matcher/trigger so this capability can be reached"
-                       + (" (long-unused: confirm it is still wanted)" if stale_enough else "")),
-            "feed": False,          # feeding cannot help until something routes here
+            "action": (
+                "define a matcher/trigger so this capability can be reached"
+                + (" (long-unused: confirm it is still wanted)" if stale_enough else "")
+            ),
+            "feed": False,  # feeding cannot help until something routes here
             "needs_trigger": True,  # the enablement queue
             "retire_candidate": False,
         }
@@ -2064,9 +2168,11 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
         return {
             "blocker": "none — an observer has no delivery outcome to link",
             "action": "none: confirm it still runs on cadence. Do NOT chase outcome linkage or "
-                      "durable reuse here; a report cannot merge a PR, and a gate that demands it "
-                      "would be permanently unsatisfiable",
-            "feed": False, "needs_trigger": False, "retire_candidate": False,
+            "durable reuse here; a report cannot merge a PR, and a gate that demands it "
+            "would be permanently unsatisfiable",
+            "feed": False,
+            "needs_trigger": False,
+            "retire_candidate": False,
         }
     if live == "invoked_without_outcomes":
         # THREE DIFFERENT SITUATIONS SHARE THIS CLASS, and for two of them "fix outcome linkage"
@@ -2085,13 +2191,19 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
         # (a) DEFERRED BY DECISION. A recorded deferral with a machine-checkable revisit condition
         # is not debt -- telling it to "fix linkage" contradicts a decision someone already made.
         notes = str(cap.get("notes") or "")
-        if re.search(r"\bREVISIT TRIGGER\b|deliberately NOT built|deferred with a", notes, re.I):
+        if re.search(
+            r"\bREVISIT TRIGGER\b|deliberately NOT built|deferred with a", notes, re.IGNORECASE
+        ):
             return {
                 "blocker": "no outcome linked -- deferred by an explicit decision",
-                "action": ("none: a resolver for this was deliberately not built and the deferral "
-                           "records its own revisit condition. Re-read the ledger `notes` before "
-                           "treating this as debt"),
-                "feed": False, "needs_trigger": False, "retire_candidate": False,
+                "action": (
+                    "none: a resolver for this was deliberately not built and the deferral "
+                    "records its own revisit condition. Re-read the ledger `notes` before "
+                    "treating this as debt"
+                ),
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
             }
 
         # (b) USAGE DROUGHT, not a linkage bug. An encoded gate with real bounds, zero accepted uses
@@ -2100,66 +2212,108 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
         # Manufacturing one for an advisory run is exactly what the un-gameable label forbids.
         last_inv = cap.get("last_invocation")
         drought_age = (current - int(last_inv)) / 86400.0 if last_inv else None
-        if (cap.get("gate_criteria") and not cap.get("outcome_links")
-                and drought_age is not None and drought_age >= 14):
+        if (
+            cap.get("gate_criteria")
+            and not cap.get("outcome_links")
+            and drought_age is not None
+            and drought_age >= 14
+        ):
             return {
                 "blocker": f"no ACCEPTED use yet -- last invocation {int(drought_age)}d ago",
-                "action": ("wait for an accepted use; this is a USAGE drought, not a measurement "
-                           "gap. The outcome path is declared and its gate_criteria are encoded, so "
-                           "there is no linkage to fix -- do NOT hand-link an outcome"),
-                "feed": False, "needs_trigger": False, "retire_candidate": False,
+                "action": (
+                    "wait for an accepted use; this is a USAGE drought, not a measurement "
+                    "gap. The outcome path is declared and its gate_criteria are encoded, so "
+                    "there is no linkage to fix -- do NOT hand-link an outcome"
+                ),
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
             }
 
         # (c) A GENUINE MEASUREMENT GAP -- the original case, unchanged.
         return {
             "blocker": "runs, but no outcome is linked",
             "action": "fix outcome linkage — this is a MEASUREMENT gap, not a usage gap. This "
-                      "capability influences runs that terminate, so a heartbeat carrying the "
-                      "run_id it influenced is what lets capability_outcome_bridge write the edge",
-            "feed": False,                       # more runs produce more unmeasured runs
-            "needs_trigger": False, "retire_candidate": False,
+            "capability influences runs that terminate, so a heartbeat carrying the "
+            "run_id it influenced is what lets capability_outcome_bridge write the edge",
+            "feed": False,  # more runs produce more unmeasured runs
+            "needs_trigger": False,
+            "retire_candidate": False,
         }
     if live == "matched_not_invoked":
-        return {"blocker": "matched but a gate blocked invocation",
-                "action": "lift the gate, or accept it is deliberately off",
-                "feed": False, "needs_trigger": False, "retire_candidate": False}
+        return {
+            "blocker": "matched but a gate blocked invocation",
+            "action": "lift the gate, or accept it is deliberately off",
+            "feed": False,
+            "needs_trigger": False,
+            "retire_candidate": False,
+        }
     if live == "wired_but_dry":
         # Two very different situations share this class. One is genuinely dry. The other is a
         # capability running at volume WITH outcomes that simply never got promoted out of its
         # initial state — abcd-experiment sits at 21 invocations/week with 143 outcomes. Telling
         # someone to hunt a dead producer there sends them looking for a problem that isn't there.
         if rate["invocations"] or debt["durable_reuses"] or (cap.get("outcome_links") or []):
-            return {"blocker": "running with evidence, but never promoted out of its initial state",
-                    "action": "promote it: the evidence exists, the lifecycle record is just stale",
-                    "feed": False, "needs_trigger": False, "retire_candidate": False}
-        return {"blocker": "wired but nothing flows through it",
-                "action": "find the dead upstream producer", "feed": False,
-                "retire_candidate": False}
+            return {
+                "blocker": "running with evidence, but never promoted out of its initial state",
+                "action": "promote it: the evidence exists, the lifecycle record is just stale",
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
+            }
+        return {
+            "blocker": "wired but nothing flows through it",
+            "action": "find the dead upstream producer",
+            "feed": False,
+            "retire_candidate": False,
+        }
     if live == "stale_active":
-        return {"blocker": "marked active but no recent success",
-                "action": "verify it still works, or transition it back",
-                "feed": False, "needs_trigger": False, "retire_candidate": False}
+        return {
+            "blocker": "marked active but no recent success",
+            "action": "verify it still works, or transition it back",
+            "feed": False,
+            "needs_trigger": False,
+            "retire_candidate": False,
+        }
     if live == "deliberately_gated":
         gate = gate_readiness(cap, now=current)
         if debt["blocked_by"]:
-            return {"blocker": "gate cannot lift on volume alone: " + "; ".join(debt["blocked_by"]),
-                    "action": "address the recorded failure/rework first",
-                    "feed": False, "needs_trigger": False, "retire_candidate": False}
+            return {
+                "blocker": "gate cannot lift on volume alone: " + "; ".join(debt["blocked_by"]),
+                "action": "address the recorded failure/rework first",
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
+            }
         if gate["ready"]:
-            return {"blocker": "none — every encoded criterion satisfied",
-                    "action": "READY TO LIFT: promote this gate",
-                    "feed": False, "needs_trigger": False, "retire_candidate": False}
+            return {
+                "blocker": "none — every encoded criterion satisfied",
+                "action": "READY TO LIFT: promote this gate",
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
+            }
         if not gate["encoded"]:
             # The threshold exists only as prose, so nothing can ever evaluate it. Feeding this
             # capability would accumulate evidence against a bar no code can check.
-            return {"blocker": "gate threshold is prose, not encoded",
-                    "action": ("define a machine-checkable threshold "
-                               "(capabilities.gate_criteria) before feeding this gate"),
-                    "feed": False, "needs_trigger": False, "retire_candidate": False}
+            return {
+                "blocker": "gate threshold is prose, not encoded",
+                "action": (
+                    "define a machine-checkable threshold "
+                    "(capabilities.gate_criteria) before feeding this gate"
+                ),
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
+            }
         if gate["unevaluated"]:
-            return {"blocker": gate["reason"],
-                    "action": "wire the missing observation, or accept the gate stays manual",
-                    "feed": False, "needs_trigger": False, "retire_candidate": False}
+            return {
+                "blocker": gate["reason"],
+                "action": "wire the missing observation, or accept the gate stays manual",
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
+            }
         # A DEFAULT-OFF SWITCH CANNOT BE FED. Found 2026-08-22 while building Layer 3: the only two
         # capabilities this branch called feedable (range-lane-rollout, synthesis-promotion) are both
         # held by a documented default-off flag ("restore documented default-off gate"). Routing work
@@ -2172,18 +2326,29 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
         # owner flips the switch, which is a decision only the owner makes.
         if _has_default_off_switch(cap):
             return {
-                "blocker": (f"needs {debt['remaining']} more independent durable reuse(s), but a "
-                            f"documented default-off switch prevents any from being produced"),
+                "blocker": (
+                    f"needs {debt['remaining']} more independent durable reuse(s), but a "
+                    f"documented default-off switch prevents any from being produced"
+                ),
                 "action": "owner decision: flip the documented default-off gate, or leave it off",
-                "feed": False, "needs_trigger": False, "retire_candidate": False,
+                "feed": False,
+                "needs_trigger": False,
+                "retire_candidate": False,
             }
         return {
             "blocker": f"needs {debt['remaining']} more independent durable reuse(s)",
             "action": f"route {debt['remaining']} matching item(s) here to satisfy the gate",
-            "feed": True,                        # the one case worth spending capacity on
-            "needs_trigger": False, "retire_candidate": False,
+            "feed": True,  # the one case worth spending capacity on
+            "needs_trigger": False,
+            "retire_candidate": False,
         }
-    return {"blocker": "none", "action": "none", "feed": False, "needs_trigger": False, "retire_candidate": False}
+    return {
+        "blocker": "none",
+        "action": "none",
+        "feed": False,
+        "needs_trigger": False,
+        "retire_candidate": False,
+    }
 
 
 def usage_report(report: dict[str, Any], *, now: int | None = None) -> dict[str, Any]:
@@ -2192,41 +2357,54 @@ def usage_report(report: dict[str, Any], *, now: int | None = None) -> dict[str,
     rows = []
     for name, cap in sorted(report["capabilities"].items()):
         live = classify_liveness(cap, now=current)
-        rows.append({
-            "capability_id": name, "status": cap.get("status"), "liveness": live,
-            "usage": usage_rate(cap, now=current), "debt": evidence_debt(cap),
-            "gate": gate_readiness(cap, now=current),
-            "unblock": unblock(cap, liveness=live, now=current),
-        })
+        rows.append(
+            {
+                "capability_id": name,
+                "status": cap.get("status"),
+                "liveness": live,
+                "usage": usage_rate(cap, now=current),
+                "debt": evidence_debt(cap),
+                "gate": gate_readiness(cap, now=current),
+                "unblock": unblock(cap, liveness=live, now=current),
+            }
+        )
     return {
         "generated_at": current,
         "total": len(rows),
-        "ready_to_lift": [r["capability_id"] for r in rows
-                          if r["unblock"]["action"].startswith("READY TO LIFT")],
-        "promotable": [r["capability_id"] for r in rows
-                       if r["unblock"]["blocker"].startswith("running with evidence")],
+        "ready_to_lift": [
+            r["capability_id"] for r in rows if r["unblock"]["action"].startswith("READY TO LIFT")
+        ],
+        "promotable": [
+            r["capability_id"]
+            for r in rows
+            if r["unblock"]["blocker"].startswith("running with evidence")
+        ],
         "worth_feeding": [r["capability_id"] for r in rows if r["unblock"]["feed"]],
         # The ENABLEMENT queue: capabilities that exist and work but have no trigger routing work
         # to them. This is the list to shorten — the point of the system is to increase capability
         # use, so an unused capability is unfinished wiring, not a candidate for deletion.
         "needs_trigger": [r["capability_id"] for r in rows if r["unblock"]["needs_trigger"]],
         "retire_candidates": [r["capability_id"] for r in rows if r["unblock"]["retire_candidate"]],
-        "measurement_gaps": [r["capability_id"] for r in rows
-                             if r["liveness"] == "invoked_without_outcomes"],
+        "measurement_gaps": [
+            r["capability_id"] for r in rows if r["liveness"] == "invoked_without_outcomes"
+        ],
         # Gates whose threshold no code can check. These are NOT ready and NOT feedable — they are
         # waiting on a definition, which is the one thing evidence cannot supply.
-        "threshold_undefined": [r["capability_id"] for r in rows
-                                if r["gate"]["gated"] and not r["gate"]["encoded"]],
+        "threshold_undefined": [
+            r["capability_id"] for r in rows if r["gate"]["gated"] and not r["gate"]["encoded"]
+        ],
         # Capabilities for which the causal reconciler has NEVER produced readiness. Distinct from
         # "short of evidence": the evidence pipeline itself never ran, so a debt of "3 more durable
         # reuses" describes an unread meter, not a measured shortfall. reconcile_causal_lifecycle
         # raises unless a capability carries immutable version lineage, and evidence only reaches it
         # through influence_edges rows tagged with capability_id — check BOTH before reading a zero
         # here as "this capability did no work" (2026-08-09).
-        "readiness_never_computed": [r["capability_id"] for r in rows
-                                     if not r["debt"]["has_evidence"]],
-        "gate_encoded": [r["capability_id"] for r in rows
-                         if r["gate"]["gated"] and r["gate"]["encoded"]],
+        "readiness_never_computed": [
+            r["capability_id"] for r in rows if not r["debt"]["has_evidence"]
+        ],
+        "gate_encoded": [
+            r["capability_id"] for r in rows if r["gate"]["gated"] and r["gate"]["encoded"]
+        ],
         "never_invoked": [r["capability_id"] for r in rows if not r["usage"]["ever_invoked"]],
         "active_last_28d": [r["capability_id"] for r in rows if r["usage"]["invocations"] > 0],
         "rows": rows,
@@ -2236,9 +2414,11 @@ def usage_report(report: dict[str, Any], *, now: int | None = None) -> dict[str,
 def format_usage_report(usage: dict[str, Any]) -> str:
     """Digest-shaped rendering: the roll-ups first, because those are the only actionable lines."""
     lines = [
-        "# Orchestrator capability usage", "",
+        "# Orchestrator capability usage",
+        "",
         f"{usage['total']} capabilities · {len(usage['active_last_28d'])} used in the last 28d · "
-        f"{len(usage['never_invoked'])} never invoked", "",
+        f"{len(usage['never_invoked'])} never invoked",
+        "",
     ]
     # READY TO LIFT has a DENOMINATOR. Reported bare it is a permanently-zero number that reads as
     # "nothing is progressing": of the gated capabilities, most state their threshold as prose no
@@ -2255,32 +2435,41 @@ def format_usage_report(usage: dict[str, Any]) -> str:
                 f"Gate promotion is reachable for {len(encoded)} of {gated_total} gated "
                 f"capabilities; the other {len(undefined)} state their threshold in prose no code "
                 f"can check, so no amount of evidence can lift them. Encode a `gate_criteria` "
-                f"bound to make one checkable.", "",
+                f"bound to make one checkable.",
+                "",
             ]
         else:
             lines += [
                 f"All {gated_total} gated capabilities have a machine-checkable threshold. A gate "
                 f"below is held by either unmet bounds (evidence will satisfy it) or a named "
                 f"`requires` observation the causal record cannot yet supply (something must be "
-                f"built, or the gate is deliberately unliftable).", "",
+                f"built, or the gate is deliberately unliftable).",
+                "",
             ]
     for label, key in (
-        (f"READY TO LIFT (gate satisfied; {len(encoded)} gates are machine-checkable)",
-         "ready_to_lift"),
+        (
+            f"READY TO LIFT (gate satisfied; {len(encoded)} gates are machine-checkable)",
+            "ready_to_lift",
+        ),
         ("PROMOTABLE (running with evidence; lifecycle record is stale)", "promotable"),
         ("MEASUREMENT GAPS (runs, but nothing is recorded)", "measurement_gaps"),
         ("WORTH FEEDING (starved, would lift with N more uses)", "worth_feeding"),
         ("THRESHOLD UNDEFINED (gate stated in prose no code can check)", "threshold_undefined"),
-        ("READINESS NEVER COMPUTED (evidence pipeline has not run — an unread meter, "
-         "not a measured shortfall)", "readiness_never_computed"),
+        (
+            "READINESS NEVER COMPUTED (evidence pipeline has not run — an unread meter, "
+            "not a measured shortfall)",
+            "readiness_never_computed",
+        ),
         ("NEEDS A TRIGGER (built and working; nothing routes work to it yet)", "needs_trigger"),
     ):
         items = usage.get(key) or []
         lines.append(f"## {label}: {len(items)}")
         lines.extend(f"- {name}" for name in items)
         lines.append("")
-    lines += ["| Capability | State | Liveness | Inv/wk | Durable | Need | Next action |",
-              "|---|---|---|---:|---:|---:|---|"]
+    lines += [
+        "| Capability | State | Liveness | Inv/wk | Durable | Need | Next action |",
+        "|---|---|---|---:|---:|---:|---|",
+    ]
     for row in usage["rows"]:
         d = row["debt"]
         lines.append(
@@ -2353,8 +2542,13 @@ def _selftest() -> None:
         # write-freedom, a test would mutate shared live state to ask a read-only question.
         declared_path = root / "declared.json"
         drifted = _blank_capability("role-prompt")
-        drifted.update({"status": "shadow", "entrypoint": "roles.py:ancient",
-                        "matcher": {"kind": "evidence_gate", "name": "stale"}})
+        drifted.update(
+            {
+                "status": "shadow",
+                "entrypoint": "roles.py:ancient",
+                "matcher": {"kind": "evidence_gate", "name": "stale"},
+            }
+        )
         _write_ledger_unlocked(declared_path, {"role-prompt": drifted})
         before = declared_path.read_bytes()
         reconciled = load_declared(declared_path)["role-prompt"]
@@ -2383,14 +2577,18 @@ def _selftest() -> None:
         # capability_compiler.py need no change — every id it registers is forced to the
         # `capability:` prefix (capability_compiler.py:275 and :1230), a namespace disjoint from
         # KNOWN_GATES' bare slugs — and it is what keeps this fix narrow.
-        assert not any(k.startswith("capability:") for k in KNOWN_GATES), \
-            "KNOWN_GATES took a compiled id; the compiler's create=False readers now need this fix"
+        assert not any(
+            k.startswith("capability:") for k in KNOWN_GATES
+        ), "KNOWN_GATES took a compiled id; the compiler's create=False readers now need this fix"
         compiled = _blank_capability("capability:reference-sync-hygiene-test-gate")
         compiled.update({"status": "shadow", "event_history": []})
-        _write_ledger_unlocked(summary_path, {
-            "redirect-apply-bootstrap": drifted_gate,
-            "capability:reference-sync-hygiene-test-gate": compiled,
-        })
+        _write_ledger_unlocked(
+            summary_path,
+            {
+                "redirect-apply-bootstrap": drifted_gate,
+                "capability:reference-sync-hygiene-test-gate": compiled,
+            },
+        )
         summary_before = summary_path.read_bytes()
         raw_counts = summary(summary_path, create=False)
         # READ-ONLY FIRST, so the two halves fail SEPARATELY: reverting to the writing `load()` to
@@ -2405,15 +2603,18 @@ def _selftest() -> None:
         # `classify_liveness` in periodic_report/dry_seam_audit still answers from stale disk text.
         assert reported["matcher"] == KNOWN_GATES["redirect-apply-bootstrap"]["matcher"], reported
         assert reported["gate_reason"] == KNOWN_GATES["redirect-apply-bootstrap"]["gate_reason"]
-        assert raw_counts["capabilities"][
-            "capability:reference-sync-hygiene-test-gate"]["status"] == "shadow", "control drifted"
+        assert (
+            raw_counts["capabilities"]["capability:reference-sync-hygiene-test-gate"]["status"]
+            == "shadow"
+        ), "control drifted"
         # ...and the writing path is unchanged: create=True still reconciles ON DISK. (It also
         # registers every other KNOWN_GATES declaration, so assert the ROW, not a global count.)
         persisted = summary(summary_path, create=True)["capabilities"]
         assert persisted["redirect-apply-bootstrap"]["status"] == "canary", persisted
         assert summary_path.read_bytes() != summary_before, "create=True must still persist"
-        assert load(summary_path, create=False)[
-            "redirect-apply-bootstrap"]["status"] == "canary", "create=True did not reconcile disk"
+        assert (
+            load(summary_path, create=False)["redirect-apply-bootstrap"]["status"] == "canary"
+        ), "create=True did not reconcile disk"
 
         cap = _blank_capability("active-fixture")
         cap.update(
@@ -2476,34 +2677,56 @@ def _selftest() -> None:
         return base
 
     # usage_rate counts only events INSIDE the window: a burst last year must not read as current.
-    windowed = _cap(event_history=[
-        {"type": "invocation", "timestamp": now - 2 * day},
-        {"type": "invocation", "timestamp": now - 3 * day},
-        {"type": "outcome", "timestamp": now - 3 * day},
-        {"type": "invocation", "timestamp": now - 400 * day},     # outside the window
-    ])
+    windowed = _cap(
+        event_history=[
+            {"type": "invocation", "timestamp": now - 2 * day},
+            {"type": "invocation", "timestamp": now - 3 * day},
+            {"type": "outcome", "timestamp": now - 3 * day},
+            {"type": "invocation", "timestamp": now - 400 * day},  # outside the window
+        ]
+    )
     rate = usage_rate(windowed, now=now, window_days=28)
     assert rate["invocations"] == 2 and rate["outcomes"] == 1, rate
-    assert rate["invocations_per_week"] == 0.5, rate                # 2 over 4 weeks
-    assert rate["age_days"] == 400, rate                            # age spans the FULL history
+    assert rate["invocations_per_week"] == 0.5, rate  # 2 over 4 weeks
+    assert rate["age_days"] == 400, rate  # age spans the FULL history
 
     # evidence_debt turns "gated" into a number, and flags when volume alone cannot help.
     # Feedable requires BOTH: a threshold code can check (Layer 2) and evidence still short of it.
-    gated = _cap(status="shadow", gate_reason="advisory only",
-                 gate_criteria={"min_independent_durable_reuse": 3},
-                 causal_evidence={"readiness": {
-                     "durable_subjects": ["a"], "terminal_outcomes": 1, "failures": 0,
-                     "rework": 0, "latest_evidence_ts": now - 3600, "ready": False}})
+    gated = _cap(
+        status="shadow",
+        gate_reason="advisory only",
+        gate_criteria={"min_independent_durable_reuse": 3},
+        causal_evidence={
+            "readiness": {
+                "durable_subjects": ["a"],
+                "terminal_outcomes": 1,
+                "failures": 0,
+                "rework": 0,
+                "latest_evidence_ts": now - 3600,
+                "ready": False,
+            }
+        },
+    )
     debt = evidence_debt(gated)
     assert debt["durable_reuses"] == 1 and debt["required"] == 3 and debt["remaining"] == 2, debt
     assert not debt["blocked_by"], debt
     act = unblock(gated, now=now)
-    assert act["feed"] is True and "2 more" in act["blocker"], act   # the one feedable case
+    assert act["feed"] is True and "2 more" in act["blocker"], act  # the one feedable case
 
     # A recorded failure breaches a zero-tolerance bound: more volume will NOT lift the gate,
     # so the acquisition lane must NOT be told to feed it.
-    broken = _cap(status="shadow", gate_reason="advisory only", causal_evidence={
-        "readiness": {"durable_subjects": ["a", "b", "c"], "failures": 1, "rework": 0, "ready": False}})
+    broken = _cap(
+        status="shadow",
+        gate_reason="advisory only",
+        causal_evidence={
+            "readiness": {
+                "durable_subjects": ["a", "b", "c"],
+                "failures": 1,
+                "rework": 0,
+                "ready": False,
+            }
+        },
+    )
     assert evidence_debt(broken)["blocked_by"], evidence_debt(broken)
     assert unblock(broken, now=now)["feed"] is False, "failed gates must not be fed"
 
@@ -2522,18 +2745,30 @@ def _selftest() -> None:
     assert off["feed"] is False, ("a documented default-off switch cannot be fed", off)
     assert "default-off switch" in off["blocker"], off
     assert "more independent durable reuse" in off["blocker"], (
-        "the evidence debt must still be reported, not hidden", off)
+        "the evidence debt must still be reported, not hidden",
+        off,
+    )
     assert "owner decision" in off["action"], off
     # And a capability with the SAME debt but no default-off switch stays feedable, so the guard
     # narrows nothing it should not.
     assert unblock(dict(gated_off, kill_switch="disable via config"), now=now)["feed"] is True
 
     # Satisfied thresholds surface as READY TO LIFT, and are not fed further.
-    ready = _cap(status="shadow", gate_reason="advisory only",
-                 gate_criteria={"min_independent_durable_reuse": 3},
-                 causal_evidence={"readiness": {
-                     "durable_subjects": ["a", "b", "c"], "terminal_outcomes": 3, "failures": 0,
-                     "rework": 0, "latest_evidence_ts": now - 3600, "ready": True}})
+    ready = _cap(
+        status="shadow",
+        gate_reason="advisory only",
+        gate_criteria={"min_independent_durable_reuse": 3},
+        causal_evidence={
+            "readiness": {
+                "durable_subjects": ["a", "b", "c"],
+                "terminal_outcomes": 3,
+                "failures": 0,
+                "rework": 0,
+                "latest_evidence_ts": now - 3600,
+                "ready": True,
+            }
+        },
+    )
     assert unblock(ready, now=now)["action"].startswith("READY TO LIFT")
     assert unblock(ready, now=now)["feed"] is False
 
@@ -2544,18 +2779,24 @@ def _selftest() -> None:
 
     # Never matched => UNREALIZED (needs a trigger), never a retirement default. Owner direction:
     # the purpose is to maximize capability use, so silence means "not yet wired", not "kill it".
-    stale = _cap(status="generated", event_history=[{"type": "migrated", "timestamp": now - 200 * day}])
+    stale = _cap(
+        status="generated", event_history=[{"type": "migrated", "timestamp": now - 200 * day}]
+    )
     old = unblock(stale, now=now)
     assert old["needs_trigger"] is True and old["feed"] is False, old
     assert old["retire_candidate"] is False, "long dormancy must not auto-propose retirement"
-    assert "still wanted" in old["action"], old          # long-unused still prompts a check
-    fresh = _cap(status="generated", event_history=[{"type": "migrated", "timestamp": now - 5 * day}])
+    assert "still wanted" in old["action"], old  # long-unused still prompts a check
+    fresh = _cap(
+        status="generated", event_history=[{"type": "migrated", "timestamp": now - 5 * day}]
+    )
     young = unblock(fresh, now=now)
     assert young["needs_trigger"] is True and "still wanted" not in young["action"], young
     # A capability that HAS a trigger is not in the enablement queue, even before work matches it.
-    wired_trigger = _cap(status="generated",
-                         matcher={"field": "task_type", "operator": "in", "value": ["testgen"]},
-                         event_history=[{"type": "migrated", "timestamp": now - 200 * day}])
+    wired_trigger = _cap(
+        status="generated",
+        matcher={"field": "task_type", "operator": "in", "value": ["testgen"]},
+        event_history=[{"type": "migrated", "timestamp": now - 200 * day}],
+    )
     wt = unblock(wired_trigger, now=now)
     assert wt["needs_trigger"] is False, "a declared trigger must not read as 'needs a trigger'"
     assert "no work has matched" in wt["blocker"], wt
@@ -2565,8 +2806,11 @@ def _selftest() -> None:
 
     # Running at volume with outcomes => promotable, not a dead-upstream hunt (the abcd-experiment
     # case: 21 invocations/week and 143 outcomes were reported as 'find the dead producer').
-    busy = _cap(status="generated", outcome_links=["r1", "r2"],
-                event_history=[{"type": "invocation", "timestamp": now - day}] * 5)
+    busy = _cap(
+        status="generated",
+        outcome_links=["r1", "r2"],
+        event_history=[{"type": "invocation", "timestamp": now - day}] * 5,
+    )
     busy_act = unblock(busy, now=now)
     assert busy_act["blocker"].startswith("running with evidence"), busy_act
     assert busy_act["feed"] is False, busy_act
@@ -2600,8 +2844,9 @@ def _selftest() -> None:
         drift = adopt_module_version("some-lane", path=ledger, root=droot)
         assert drift["adopted"] is False and drift["reason"] == "version_drift", drift
         assert drift["source_version_id"] != drift["current_version_id"], drift
-        assert load(ledger)["some-lane"]["capability_version_id"] == first["capability_version_id"], \
-            "drift must not silently rewrite an established version"
+        assert (
+            load(ledger)["some-lane"]["capability_version_id"] == first["capability_version_id"]
+        ), "drift must not silently rewrite an established version"
 
         # An unresolvable entrypoint refuses adoption rather than hashing a placeholder.
         ghost = adopt_module_version("ghost-lane", path=ledger, root=droot)
@@ -2613,10 +2858,14 @@ def _selftest() -> None:
         assert adopted_cap["status"] == "generated", "adoption must not promote"
         decision = capability_routing_decision(
             {"repository": "o/r", "task_type": "review", "lane": "opener"},
-            capabilities_by_id={"some-lane": {**adopted_cap,
-                                              "matcher": {"field": "task_type", "operator": "in",
-                                                          "value": ["review"]}}},
-            seed=1)
+            capabilities_by_id={
+                "some-lane": {
+                    **adopted_cap,
+                    "matcher": {"field": "task_type", "operator": "in", "value": ["review"]},
+                }
+            },
+            seed=1,
+        )
         assert decision["eligible_capability_ids"] == [], "lineage alone must not make it eligible"
         assert decision["rejection_reasons"]["some-lane"] == ["status:generated"], decision
 
@@ -2626,18 +2875,22 @@ def _selftest() -> None:
     # --- Matcher evaluation FAILS CLOSED (2026-08-09) ----------------------------------------
     trig = {"repository": "o/r", "task_type": "review", "lane": "opener"}
     # The work-routed shape is evaluated exactly.
-    assert _matches_trigger({"matcher": {"field": "task_type", "operator": "in",
-                                         "value": ["review"]}}, trig) == (True, [])
-    miss = _matches_trigger({"matcher": {"field": "task_type", "operator": "in",
-                                         "value": ["codemod"]}}, trig)
+    assert _matches_trigger(
+        {"matcher": {"field": "task_type", "operator": "in", "value": ["review"]}}, trig
+    ) == (True, [])
+    miss = _matches_trigger(
+        {"matcher": {"field": "task_type", "operator": "in", "value": ["codemod"]}}, trig
+    )
     assert miss == (False, ["task_type_mismatch"]), miss
     # THE BUG THIS FIXES: shapes the evaluator cannot assess must NOT pass. Each of these used to
     # return (True, []) — matching every trigger in the fleet.
     for matcher, reason in (
         ({"kind": "role", "equals": "triage"}, "role_not_in_trigger"),
         ({"kind": "evidence_gate", "name": "x"}, "evidence_gate_not_in_trigger"),
-        ({"kind": "env", "name": "ORCH_DEFINITELY_UNSET", "equals": "1"},
-         "env_mismatch:ORCH_DEFINITELY_UNSET"),
+        (
+            {"kind": "env", "name": "ORCH_DEFINITELY_UNSET", "equals": "1"},
+            "env_mismatch:ORCH_DEFINITELY_UNSET",
+        ),
         ({"kind": "evidence_gate"}, "matcher_kind_missing_expected_value:evidence_gate"),
         ({"field": "nonexistent_field", "value": ["x"]}, "unknown_matcher_field:nonexistent_field"),
         ({"totally_unknown_key": "x"}, "unknown_matcher_key:totally_unknown_key"),
@@ -2646,12 +2899,14 @@ def _selftest() -> None:
         assert matched is False and reasons == [reason], (matcher, matched, reasons)
     # GENERALISED KINDS: a kind matches a same-named trigger field, so adding a trigger kind is a
     # caller-side change. Each of these was permanently unmatchable before 2026-08-09.
-    for kind, expected_key, value in (("feedback_event", "name", "record_run"),
-                                      ("evidence_gate", "name", "ready_for_supervised_apply"),
-                                      ("supervised_trial", "name", "sol-terra-luna"),
-                                      ("experiment_phase", "equals", "evaluated"),
-                                      ("tick_phase", "name", "capacity"),
-                                      ("transport", "name", "offload")):
+    for kind, expected_key, value in (
+        ("feedback_event", "name", "record_run"),
+        ("evidence_gate", "name", "ready_for_supervised_apply"),
+        ("supervised_trial", "name", "sol-terra-luna"),
+        ("experiment_phase", "equals", "evaluated"),
+        ("tick_phase", "name", "capacity"),
+        ("transport", "name", "offload"),
+    ):
         m = {"kind": kind, expected_key: value}
         assert _matches_trigger({"matcher": m}, {**trig, kind: value}) == (True, []), m
         miss = _matches_trigger({"matcher": m}, {**trig, kind: "something-else"})
@@ -2661,68 +2916,122 @@ def _selftest() -> None:
     # No matcher means nothing can route here — not "everything routes here".
     assert _matches_trigger({}, trig) == (False, ["no_matcher_declared"])
     # A role matcher DOES match once the trigger carries the role.
-    assert _matches_trigger({"matcher": {"kind": "role", "equals": "triage"}},
-                            dict(trig, role="triage")) == (True, [])
+    assert _matches_trigger(
+        {"matcher": {"kind": "role", "equals": "triage"}}, dict(trig, role="triage")
+    ) == (True, [])
     # Routing must not become eligible purely because a matcher is unevaluatable.
     decision = capability_routing_decision(
         trig,
-        capabilities_by_id={"ghost": {**_blank_capability("ghost"), "status": "active",
-                                      "matcher": {"kind": "evidence_gate", "name": "x"},
-                                      "capability_version_id": "v1", "artifact_hash": "h",
-                                      "lifecycle_policy_hash": "p"}},
-        seed=1)
+        capabilities_by_id={
+            "ghost": {
+                **_blank_capability("ghost"),
+                "status": "active",
+                "matcher": {"kind": "evidence_gate", "name": "x"},
+                "capability_version_id": "v1",
+                "artifact_hash": "h",
+                "lifecycle_policy_hash": "p",
+            }
+        },
+        seed=1,
+    )
     assert decision["eligible_capability_ids"] == [], decision
     assert decision["rejection_reasons"]["ghost"] == ["evidence_gate_not_in_trigger"], decision
 
     # --- Layer 2: gate readiness for ANY status, silence never passes (2026-08-09) -----------
     def _gate(readiness=None, **over):
-        cap = _cap(status="shadow", gate_reason="advisory only",
-                   evidence_threshold="five linked outcomes, three durable", **over)
+        cap = _cap(
+            status="shadow",
+            gate_reason="advisory only",
+            evidence_threshold="five linked outcomes, three durable",
+            **over,
+        )
         cap["causal_evidence"] = {"readiness": readiness or {}}
         return cap
 
     # An UNGATED capability is simply not gated — not "ready".
     assert gate_readiness(_cap(status="shadow"), now=now) == {
-        "gated": False, "ready": False, "criteria": {}, "unevaluated": [], "reason": "not gated"}
+        "gated": False,
+        "ready": False,
+        "criteria": {},
+        "unevaluated": [],
+        "reason": "not gated",
+    }
 
     # Prose-only threshold: evaluable evidence exists, but nothing encoded it => NEVER ready.
-    prose = _gate({"durable_subjects": ["a", "b", "c"], "terminal_outcomes": 9,
-                   "failures": 0, "rework": 0, "latest_evidence_ts": now - 3600})
+    prose = _gate(
+        {
+            "durable_subjects": ["a", "b", "c"],
+            "terminal_outcomes": 9,
+            "failures": 0,
+            "rework": 0,
+            "latest_evidence_ts": now - 3600,
+        }
+    )
     pg = gate_readiness(prose, now=now)
     assert pg["gated"] and not pg["ready"] and not pg["encoded"], pg
     assert "prose only" in pg["reason"], pg
     assert unblock(prose, now=now)["feed"] is False, "an uncheckable gate must not be fed"
 
     # Encoded + satisfied => ready.
-    enc = _gate({"durable_subjects": ["a", "b", "c"], "terminal_outcomes": 5,
-                 "failures": 0, "rework": 0, "latest_evidence_ts": now - 3600},
-                gate_criteria={"min_linked_outcomes": 5, "min_independent_durable_reuse": 3})
+    enc = _gate(
+        {
+            "durable_subjects": ["a", "b", "c"],
+            "terminal_outcomes": 5,
+            "failures": 0,
+            "rework": 0,
+            "latest_evidence_ts": now - 3600,
+        },
+        gate_criteria={"min_linked_outcomes": 5, "min_independent_durable_reuse": 3},
+    )
     eg = gate_readiness(enc, now=now)
     assert eg["encoded"] and eg["ready"], eg
     assert unblock(enc, now=now)["action"].startswith("READY TO LIFT")
 
     # Encoded but one bound unmet => not ready, and the SPECIFIC bound is named.
-    short = _gate({"durable_subjects": ["a", "b", "c"], "terminal_outcomes": 2,
-                   "failures": 0, "rework": 0, "latest_evidence_ts": now - 3600},
-                  gate_criteria={"min_linked_outcomes": 5, "min_independent_durable_reuse": 3})
+    short = _gate(
+        {
+            "durable_subjects": ["a", "b", "c"],
+            "terminal_outcomes": 2,
+            "failures": 0,
+            "rework": 0,
+            "latest_evidence_ts": now - 3600,
+        },
+        gate_criteria={"min_linked_outcomes": 5, "min_independent_durable_reuse": 3},
+    )
     sg = gate_readiness(short, now=now)
     assert not sg["ready"] and sg["unmet"] == ["linked_outcomes"], sg
 
     # A criterion the causal record cannot supply keeps the gate un-auto-liftable BY DESIGN,
     # even when every countable bound is already satisfied.
-    ext = _gate({"durable_subjects": ["a", "b", "c"], "terminal_outcomes": 9,
-                 "failures": 0, "rework": 0, "latest_evidence_ts": now - 3600},
-                gate_criteria={"min_independent_durable_reuse": 3,
-                               "requires": ["exploration_review_recommendation"]})
+    ext = _gate(
+        {
+            "durable_subjects": ["a", "b", "c"],
+            "terminal_outcomes": 9,
+            "failures": 0,
+            "rework": 0,
+            "latest_evidence_ts": now - 3600,
+        },
+        gate_criteria={
+            "min_independent_durable_reuse": 3,
+            "requires": ["exploration_review_recommendation"],
+        },
+    )
     xg = gate_readiness(ext, now=now)
     assert xg["encoded"] and not xg["ready"] and xg["unevaluated"], xg
     assert "exploration_review_recommendation" in xg["unevaluated"][0], xg
     assert unblock(ext, now=now)["feed"] is False, "un-evaluable gates must not be fed"
 
     # An unrecognised criterion must not be silently ignored into a pass.
-    bogus = _gate({"durable_subjects": ["a", "b", "c"], "terminal_outcomes": 9,
-                   "failures": 0, "rework": 0, "latest_evidence_ts": now - 3600},
-                  gate_criteria={"min_independent_durable_reuse": 3, "vibes_are_good": True})
+    bogus = _gate(
+        {
+            "durable_subjects": ["a", "b", "c"],
+            "terminal_outcomes": 9,
+            "failures": 0,
+            "rework": 0,
+            "latest_evidence_ts": now - 3600,
+        },
+        gate_criteria={"min_independent_durable_reuse": 3, "vibes_are_good": True},
+    )
     assert not gate_readiness(bogus, now=now)["ready"], "unknown criteria must block readiness"
 
     # Gate readiness is status-independent: the same evidence reads the same on wired/canary.
@@ -2730,8 +3039,19 @@ def _selftest() -> None:
         variant = dict(enc, status=status)
         assert gate_readiness(variant, now=now)["ready"], status
 
-    report = usage_report({"capabilities": {"g": gated, "r": ready, "u": unmeasured, "s": stale,
-                                            "p": prose, "e": enc}}, now=now)
+    report = usage_report(
+        {
+            "capabilities": {
+                "g": gated,
+                "r": ready,
+                "u": unmeasured,
+                "s": stale,
+                "p": prose,
+                "e": enc,
+            }
+        },
+        now=now,
+    )
     assert report["ready_to_lift"] == ["e", "r"] and report["worth_feeding"] == ["g"], report
     assert report["measurement_gaps"] == ["u"] and report["needs_trigger"] == ["s"], report
     assert report["retire_candidates"] == [], "dormancy must never auto-propose retirement"
@@ -2743,8 +3063,8 @@ def _selftest() -> None:
     lag = _blank_capability("lagging")
     lag["status"] = "shadow"
     lag["last_match"] = 1000
-    lag["last_invocation"] = 9_000_000          # invoked just now
-    lag["outcome_links"] = ["run-a", "run-b"]   # ...and it HAS linked outcomes
+    lag["last_invocation"] = 9_000_000  # invoked just now
+    lag["outcome_links"] = ["run-a", "run-b"]  # ...and it HAS linked outcomes
     lag["event_history"] = [{"type": "outcome", "timestamp": 5_000_000}]
     assert classify_liveness(lag) != "invoked_without_outcomes", classify_liveness(lag)
     # With NO outcome evidence at all it correctly still reports the gap.
@@ -2763,8 +3083,10 @@ def _selftest() -> None:
         cap.setdefault("gate", {})
     if not report.get("threshold_undefined"):
         assert "the other 0 state" not in text_rl, text_rl[:400]
-    print("capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
-          "gate readiness w/ never-pass-on-silence)")
+    print(
+        "capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
+        "gate readiness w/ never-pass-on-silence)"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -2777,7 +3099,7 @@ def main(argv: list[str]) -> int:
     sub.add_parser("validate")
     sub.add_parser("summary")
     sub.add_parser("inventory")
-    sub.add_parser("usage")     # why capabilities are NOT used, and what would change that
+    sub.add_parser("usage")  # why capabilities are NOT used, and what would change that
     sub.add_parser("sweep")
     sub.add_parser("reconcile")
     register_cmd = sub.add_parser("register")
@@ -2803,7 +3125,11 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.command == "validate":
         result = validate_ledger()
-        print(json.dumps(result, indent=2) if args.json else ("PASS" if result["valid"] else json.dumps(result, indent=2)))
+        print(
+            json.dumps(result, indent=2)
+            if args.json
+            else ("PASS" if result["valid"] else json.dumps(result, indent=2))
+        )
         return 0 if result["valid"] else 1
     if args.command == "summary":
         print(json.dumps(summary(), indent=2))

@@ -13,6 +13,7 @@ Reflects PR #2350 Rev-2b/2c/2d:
     redirected with `--gemini_dir`; now wired into the route table.
 Simple/legible (design §11). `--selftest` validates command construction offline.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,8 +25,8 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterable
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 import execution_profiles
 
@@ -62,15 +63,18 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 VIBE_MODEL = "mistral-medium-3.5"
 
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    "codex":  {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
+    "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5", "full": "claude-opus-5"},
-    "gemini": {"cheap": "gemini-3.6-flash-low", "mid": "gemini-3.6-flash-high",
-               "full": "gemini-3.1-pro-high"},
+    "gemini": {
+        "cheap": "gemini-3.6-flash-low",
+        "mid": "gemini-3.6-flash-high",
+        "full": "gemini-3.1-pro-high",
+    },
     "cursor": {},
     "vibe": {},
     "aider": {},
 }
-MODEL_TIER_NAMES = ("cheap", "mid", "full")     # ordered cheap -> expensive; the ceiling relies on it
+MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
 
 # A seat can be high quality AND capacity-scarce — claude's weekly is frequently the binding
 # constraint on this fleet. Rather than lying about what the family offers (which would delete the
@@ -82,12 +86,14 @@ MODEL_TIER_NAMES = ("cheap", "mid", "full")     # ordered cheap -> expensive; th
 # and keep it purely for orchestration, use the existing 429-shed switch instead of a ceiling:
 #   touch ~/.codex/handoff/capacity-shed/claude     (remove the file to re-enable)
 AGENT_TIER_CEILING: dict[str, str] = {
-    "claude": "mid",     # owner policy 2026-08-09: routine claude work runs Sonnet 5, not Opus 5
+    "claude": "mid",  # owner policy 2026-08-09: routine claude work runs Sonnet 5, not Opus 5
 }
-CURSOR_FRONTIER_DEFAULT = None      # require explicit 'frontier:<model>'; bare 'frontier' is unsafe
+CURSOR_FRONTIER_DEFAULT = None  # require explicit 'frontier:<model>'; bare 'frontier' is unsafe
 # Owner policy: cursor runs Composer and only Composer. Pinned by id because omitting --model
 # selects `auto`, which is NOT Composer — it routes across every frontier model cursor advertises.
-CURSOR_COMPOSER_MODEL = os.environ.get("ORCH_CURSOR_COMPOSER_MODEL", "composer-2.5").strip() or "composer-2.5"
+CURSOR_COMPOSER_MODEL = (
+    os.environ.get("ORCH_CURSOR_COMPOSER_MODEL", "composer-2.5").strip() or "composer-2.5"
+)
 
 # Agents whose CLI can enumerate its own models. Used to validate a pin before dispatch and to
 # auto-resolve a replacement after a vendor rename. Agents absent here are never "unresolvable":
@@ -129,9 +135,10 @@ AUTH_PROBES: dict[str, dict] = {
     # app-server/doctor/sandbox/debug/apply/resume, `login` has only `status`, and the sole
     # server-touching alternative is `exec`, which BILLS. `doctor` is local and 12.2s.
     "codex": {
-        "cmd": ["codex", "login", "status"], "strength": "presence",
+        "cmd": ["codex", "login", "status"],
+        "strength": "presence",
         "limit": "permanent: codex exposes no non-billing round-trip (only `login status`, "
-                 "local `doctor`, or billing `exec`) — re-probed 2026-08-22",
+        "local `doctor`, or billing `exec`) — re-probed 2026-08-22",
     },
     # claude: PRESENCE IS PERMANENT here too, for a different and subtler reason. `auth status`
     # returns account identity (email, orgId, orgName, subscriptionType), which is strictly more
@@ -141,10 +148,11 @@ AUTH_PROBES: dict[str, dict] = {
     # experiment on the owner's working auth. Upgrading on the strength of plausible-looking output
     # is exactly what the original note forbade.
     "claude": {
-        "cmd": ["claude", "auth", "status"], "strength": "presence",
+        "cmd": ["claude", "auth", "status"],
+        "strength": "presence",
         "limit": "permanent: `auth status` returns token-claim identity that cannot be shown to "
-                 "require a server round-trip without invalidating live credentials — "
-                 "investigated 2026-08-22",
+        "require a server round-trip without invalidating live credentials — "
+        "investigated 2026-08-22",
     },
     # gemini: `agy models` is a server round-trip AND non-billing, so it genuinely validates.
     # Same command as the catalog probe; the caches are separate but both are TTL'd.
@@ -154,9 +162,9 @@ AUTH_PROBES: dict[str, dict] = {
 AUTH_PROBE_ENV: dict[str, dict[str, str]] = {
     "cursor": {"AGENT_CLI_CREDENTIAL_STORE": "memory"},
 }
-AUTH_CACHE_TTL_S = int(os.environ.get("ORCH_AUTH_CACHE_TTL_S") or 900)   # 15m
+AUTH_CACHE_TTL_S = int(os.environ.get("ORCH_AUTH_CACHE_TTL_S") or 900)  # 15m
 _AUTH_MEMO: dict = {}
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")   # CLIs colourize; strip before matching/reporting
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # CLIs colourize; strip before matching/reporting
 # Matched against a FAILED probe's output. Anything else non-zero (CLI missing, timeout, network)
 # stays UNKNOWN — an unreachable check must never shed a working seat.
 _AUTH_FAIL_RE = re.compile(
@@ -176,7 +184,7 @@ DEFAULT_GEMINI_MODEL = MODEL_TIERS["gemini"]["full"]
 GEMINI_MODEL_CACHE = AGENT_RUNTIME / "gemini" / "advertised-models.json"
 GEMINI_MODEL_CACHE_TTL_S = int(os.environ.get("ORCH_GEMINI_MODEL_CACHE_TTL_S") or 21600)  # 6h
 _GEMINI_VERSION_RE = re.compile(r"(\d+)\.(\d+)")
-_ADVERTISED_MEMO: dict = {}         # per-agent in-process memo; one CLI probe per agent per run
+_ADVERTISED_MEMO: dict = {}  # per-agent in-process memo; one CLI probe per agent per run
 
 # Offloads are advisory READS ("summarize 200 pages"), not flagship reasoning — but offload() has
 # always defaulted to mode='full', so a codex offload burned Sol and a gemini offload burned Pro.
@@ -357,7 +365,7 @@ def observed_model_from_stream(text: str) -> dict[str, Any]:
     return out
 
 
-parse_agy_models = parse_model_catalog          # back-compat alias
+parse_agy_models = parse_model_catalog  # back-compat alias
 
 
 def _model_probe_enabled() -> bool:
@@ -384,7 +392,7 @@ def _probe_env(agent: str) -> dict | None:
         for line in path.read_text().splitlines():
             line = line.strip()
             if line.startswith("export "):
-                line = line[len("export "):].strip()
+                line = line[len("export ") :].strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
@@ -408,7 +416,7 @@ def advertised_models(agent: str, *, refresh: bool = False, timeout_s: int = 30)
     now = time.time()
     cache_path = _catalog_cache_path(agent)
     if not refresh:
-        memo = (_ADVERTISED_MEMO.get(agent) or {})
+        memo = _ADVERTISED_MEMO.get(agent) or {}
         if memo.get("models") and now - float(memo.get("ts") or 0) <= GEMINI_MODEL_CACHE_TTL_S:
             return list(memo["models"])
         try:
@@ -421,12 +429,18 @@ def advertised_models(agent: str, *, refresh: bool = False, timeout_s: int = 30)
         except (OSError, ValueError, TypeError):
             pass
     try:
-        proc = subprocess.run(probe, capture_output=True, text=True, env=_probe_env(agent),
-                              timeout=timeout_s, stdin=subprocess.DEVNULL)
+        proc = subprocess.run(
+            probe,
+            capture_output=True,
+            text=True,
+            env=_probe_env(agent),
+            timeout=timeout_s,
+            stdin=subprocess.DEVNULL,
+        )
     except (OSError, subprocess.SubprocessError):
-        return []                            # CLI missing/hung => unknown, not "unavailable"
+        return []  # CLI missing/hung => unknown, not "unavailable"
     if proc.returncode != 0:
-        return []                            # includes 'Authentication required' => unknown
+        return []  # includes 'Authentication required' => unknown
     models = parse_agy_models(proc.stdout)
     if not models:
         return []
@@ -435,7 +449,7 @@ def advertised_models(agent: str, *, refresh: bool = False, timeout_s: int = 30)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps({"ts": int(now), "models": models}))
     except OSError:
-        pass                                 # cache is an optimization, never a hard dependency
+        pass  # cache is an optimization, never a hard dependency
     return models
 
 
@@ -454,8 +468,13 @@ def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> di
     """
     spec = AUTH_PROBES.get(agent)
     if not spec or not _model_probe_enabled():
-        return {"agent": agent, "authenticated": True, "checked": False, "strength": None,
-                "reason": "no auth probe for this agent"}
+        return {
+            "agent": agent,
+            "authenticated": True,
+            "checked": False,
+            "strength": None,
+            "reason": "no auth probe for this agent",
+        }
     probe, strength = spec["cmd"], spec["strength"]
     now = time.time()
     memo = _AUTH_MEMO.get(agent)
@@ -464,11 +483,22 @@ def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> di
     env = dict(_probe_env(agent) or os.environ)
     env.update(AUTH_PROBE_ENV.get(agent) or {})
     try:
-        proc = subprocess.run(probe, capture_output=True, text=True, env=env,
-                              timeout=timeout_s, stdin=subprocess.DEVNULL)
+        proc = subprocess.run(
+            probe,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout_s,
+            stdin=subprocess.DEVNULL,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"agent": agent, "authenticated": True, "checked": False, "strength": strength,
-                "reason": f"auth probe could not run ({type(exc).__name__})"}
+        return {
+            "agent": agent,
+            "authenticated": True,
+            "checked": False,
+            "strength": strength,
+            "reason": f"auth probe could not run ({type(exc).__name__})",
+        }
     # OUTPUT-driven, not returncode-driven: cursor-agent exits 0 while printing "Not logged in"
     # and while warning that the API key is invalid, so trusting the exit status reads a dead
     # credential as healthy. The failure text is the reliable signal.
@@ -476,17 +506,35 @@ def auth_health(agent: str, *, refresh: bool = False, timeout_s: int = 30) -> di
     if _AUTH_FAIL_RE.search(blob):
         # A failure signal is trustworthy from EITHER strength: presence probes still detect an
         # absent credential, they just cannot vouch that a present one still works.
-        result = {"agent": agent, "authenticated": False, "checked": True, "strength": strength,
-                  "reason": next((ln.strip() for ln in blob.splitlines()
-                                  if _AUTH_FAIL_RE.search(ln)), "auth failure")[:160]}
+        result = {
+            "agent": agent,
+            "authenticated": False,
+            "checked": True,
+            "strength": strength,
+            "reason": next(
+                (ln.strip() for ln in blob.splitlines() if _AUTH_FAIL_RE.search(ln)), "auth failure"
+            )[:160],
+        }
     elif proc.returncode == 0 and blob:
-        result = {"agent": agent, "authenticated": True, "checked": True, "strength": strength,
-                  "reason": (blob.splitlines()[0][:120] if strength == "validates"
-                             else "credential present (presence-only check): "
-                                  + " ".join(blob.split())[:80])}
+        result = {
+            "agent": agent,
+            "authenticated": True,
+            "checked": True,
+            "strength": strength,
+            "reason": (
+                blob.splitlines()[0][:120]
+                if strength == "validates"
+                else "credential present (presence-only check): " + " ".join(blob.split())[:80]
+            ),
+        }
     else:
-        return {"agent": agent, "authenticated": True, "checked": False, "strength": strength,
-                "reason": f"auth probe exited {proc.returncode} without a usable signal"}
+        return {
+            "agent": agent,
+            "authenticated": True,
+            "checked": False,
+            "strength": strength,
+            "reason": f"auth probe exited {proc.returncode} without a usable signal",
+        }
     _AUTH_MEMO[agent] = {"ts": now, "result": result}
     return dict(result)
 
@@ -500,7 +548,9 @@ def _rank_gemini_model(model_id: str) -> tuple:
     match = _GEMINI_VERSION_RE.search(model_id)
     major, minor = (int(match.group(1)), int(match.group(2))) if match else (0, 0)
     family = 0 if "pro" in model_id else 1
-    tier = next((i for i, t in enumerate(("high", "medium", "low")) if model_id.endswith("-" + t)), 3)
+    tier = next(
+        (i for i, t in enumerate(("high", "medium", "low")) if model_id.endswith("-" + t)), 3
+    )
     return (family, -major, -minor, tier, model_id)
 
 
@@ -510,7 +560,7 @@ def _tier_override(agent: str, tier: str) -> tuple[str, str] | tuple[None, None]
     value = os.environ.get(name, "").strip()
     if value:
         return value, name
-    if agent == "gemini" and tier == "full":      # legacy single-knob override, kept working
+    if agent == "gemini" and tier == "full":  # legacy single-knob override, kept working
         legacy = os.environ.get("ORCH_GEMINI_MODEL", "").strip()
         if legacy:
             return legacy, "ORCH_GEMINI_MODEL"
@@ -535,27 +585,61 @@ def model_health(agent: str, tier: str = "full", *, refresh: bool = False) -> di
     source = f"env:{env_name}" if override else ("pinned_default" if pinned else "cli_default")
     base = {"agent": agent, "tier": tier, "source": source}
     if not pinned:
-        return {**base, "model": None, "advertised": [], "resolvable": True,
-                "reason": f"no pinned model for {agent}/{tier}; CLI default applies"}
+        return {
+            **base,
+            "model": None,
+            "advertised": [],
+            "resolvable": True,
+            "reason": f"no pinned model for {agent}/{tier}; CLI default applies",
+        }
     advertised = advertised_models(agent, refresh=refresh)
     if not advertised:
-        return {**base, "model": pinned, "advertised": [], "resolvable": True,
-                "reason": f"{agent} model catalog unavailable; using {pinned} unverified"}
+        return {
+            **base,
+            "model": pinned,
+            "advertised": [],
+            "resolvable": True,
+            "reason": f"{agent} model catalog unavailable; using {pinned} unverified",
+        }
     if pinned in advertised:
-        return {**base, "model": pinned, "advertised": advertised, "resolvable": True,
-                "reason": f"{pinned} is advertised by {agent}"}
+        return {
+            **base,
+            "model": pinned,
+            "advertised": advertised,
+            "resolvable": True,
+            "reason": f"{pinned} is advertised by {agent}",
+        }
     if override:
-        return {**base, "model": override, "advertised": advertised, "resolvable": False,
-                "reason": (f"{env_name}={override!r} is not advertised by {agent} "
-                           f"(offered: {', '.join(advertised)})")}
+        return {
+            **base,
+            "model": override,
+            "advertised": advertised,
+            "resolvable": False,
+            "reason": (
+                f"{env_name}={override!r} is not advertised by {agent} "
+                f"(offered: {', '.join(advertised)})"
+            ),
+        }
     picked = _auto_resolve(agent, tier, pinned, advertised)
     if not picked:
-        return {**base, "model": pinned, "advertised": advertised, "resolvable": False,
-                "reason": (f"pinned {pinned} is not advertised by {agent} and no sibling matched "
-                           f"(offered: {', '.join(advertised)})")}
-    return {**base, "model": picked, "source": "auto_from_catalog", "advertised": advertised,
-            "resolvable": True,
-            "reason": f"pinned {pinned} no longer advertised by {agent}; auto-resolved to {picked}"}
+        return {
+            **base,
+            "model": pinned,
+            "advertised": advertised,
+            "resolvable": False,
+            "reason": (
+                f"pinned {pinned} is not advertised by {agent} and no sibling matched "
+                f"(offered: {', '.join(advertised)})"
+            ),
+        }
+    return {
+        **base,
+        "model": picked,
+        "source": "auto_from_catalog",
+        "advertised": advertised,
+        "resolvable": True,
+        "reason": f"pinned {pinned} no longer advertised by {agent}; auto-resolved to {picked}",
+    }
 
 
 def _auto_resolve(agent: str, tier: str, pinned: str, advertised: list[str]) -> str | None:
@@ -715,9 +799,7 @@ CLAUDE_PROJECTS = Path(os.environ.get("ORCH_CLAUDE_PROJECTS_DIR", HOME / ".claud
 # and the answer was False for three seats whose readers were already written.
 CLI_IDENTITY_READERS = ("codex", "claude", "cursor", "vibe", "gemini")
 CURSOR_CHATS = Path(os.environ.get("ORCH_CURSOR_CHATS_DIR", HOME / ".cursor" / "chats"))
-VIBE_SESSIONS = Path(
-    os.environ.get("ORCH_VIBE_SESSIONS_DIR", HOME / ".vibe" / "logs" / "session")
-)
+VIBE_SESSIONS = Path(os.environ.get("ORCH_VIBE_SESSIONS_DIR", HOME / ".vibe" / "logs" / "session"))
 AGY_HOME = Path(os.environ.get("ORCH_AGY_HOME", HOME / ".gemini" / "antigravity-cli"))
 # Only aider is left, and only because nothing has been found for it yet -- stated as an absence of
 # evidence, not as a property of the tool.
@@ -737,7 +819,7 @@ NO_SESSION_LOG_AGENTS = {
     # that needs a real paid call on a seat with zero runs in the last week, which is not worth
     # spending to learn. Named so the next reader starts from the finding, not from scratch.
     "aider": "analytics log carries no model; stdout echoes the floating `codestral-latest` alias, "
-             "which is the request. Unsettled: --llm-history-file (needs a paid call)",
+    "which is the request. Unsettled: --llm-history-file (needs a paid call)",
 }
 # A real vendor model id, used to pick the model out of a transcript that also mentions filenames,
 # branch names and prose. Deliberately an ALLOWLIST of vendor families: `_first_real_model` would
@@ -873,7 +955,11 @@ def _cursor_model_for(workspace: str, started_ts: int | None, window_s: int) -> 
         except sqlite3.Error:
             continue
         for (blob,) in rows:
-            text = blob.decode("utf-8", "ignore") if isinstance(blob, (bytes, bytearray)) else str(blob)
+            text = (
+                blob.decode("utf-8", "ignore")
+                if isinstance(blob, (bytes, bytearray))
+                else str(blob)
+            )
             found = re.search(r'"modelName"\s*:\s*"([^"]+)"', text)
             if found and VENDOR_MODEL_RE.fullmatch(found.group(1)):
                 return found.group(1)
@@ -899,7 +985,7 @@ def _vibe_model_for(workspace: str, started_ts: int | None, window_s: int) -> st
             stamp = _iso_to_epoch(meta.get("start_time"))
             if stamp and abs(stamp - started_ts) > window_s:
                 continue
-        model = str(((meta.get("config") or {}).get("active_model") or "")).strip()
+        model = str((meta.get("config") or {}).get("active_model") or "").strip()
         if model and VENDOR_MODEL_RE.fullmatch(model):
             return model
     return None
@@ -940,9 +1026,7 @@ def _agy_model_for(workspace: str, started_ts: int | None, window_s: int) -> str
                 continue
         logs = AGY_HOME / "brain" / str(conversation_id) / ".system_generated" / "logs"
         for name in ("transcript_full.jsonl", "transcript.jsonl"):
-            model = _first_real_model(
-                VENDOR_MODEL_RE.findall(_read_head(logs / name))
-            )
+            model = _first_real_model(VENDOR_MODEL_RE.findall(_read_head(logs / name)))
             if model:
                 return model
     return None
@@ -1002,20 +1086,24 @@ def cli_reported_model(
         return {"model": model, "cli_version": version, "source": str(path), "reason": None}
     if agent in ("cursor", "vibe", "gemini"):
         reader = {
-            "cursor": _cursor_model_for, "vibe": _vibe_model_for, "gemini": _agy_model_for,
+            "cursor": _cursor_model_for,
+            "vibe": _vibe_model_for,
+            "gemini": _agy_model_for,
         }[agent]
         model = reader(str(workspace), started_ts, window_s)
         if not model:
             return {**blank, "reason": f"no_{agent}_session_matched_workspace"}
-        return {"model": model, "cli_version": None, "source": f"{agent}-session-store",
-                "reason": None}
+        return {
+            "model": model,
+            "cli_version": None,
+            "source": f"{agent}-session-store",
+            "reason": None,
+        }
     if agent == "claude":
         directory = _claude_project_dir(workspace)
         if not directory.is_dir():
             return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
-        newest = sorted(
-            directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
-        )
+        newest = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         for path in newest[:4]:
             model = _first_real_model(_models_in_jsonl(path))
             if model:
@@ -1052,11 +1140,15 @@ def build_command(
         if selected_profile["agent"] != agent:
             raise ValueError(f"profile {selected_profile['profile_id']} does not belong to {agent}")
         if transport and transport not in selected_profile["transport_support"]:
-            raise ValueError(f"profile {selected_profile['profile_id']} does not support {transport}")
+            raise ValueError(
+                f"profile {selected_profile['profile_id']} does not support {transport}"
+            )
         immutable = {"reasoning_effort": reasoning_effort, "requested_model": requested_model}
         for key, override in immutable.items():
             if override is not None and override != selected_profile[key]:
-                raise ValueError(f"{key} override contradicts immutable profile {selected_profile['profile_id']}")
+                raise ValueError(
+                    f"{key} override contradicts immutable profile {selected_profile['profile_id']}"
+                )
         profile_permission = selected_profile["permission_mode"]
         if permission_mode is None:
             permission_mode = profile_permission
@@ -1068,18 +1160,18 @@ def build_command(
         requested_model = selected_profile["requested_model"]
         mode = mode if mode is not None else selected_profile.get("legacy_adapter_mode")
     if agent == "codex":
-        cmd = [profile_codex_binary() if selected_profile else "codex", "exec", "--skip-git-repo-check"]
+        cmd = [
+            profile_codex_binary() if selected_profile else "codex",
+            "exec",
+            "--skip-git-repo-check",
+        ]
         if cwd is not None:
             cmd += ["--cd", str(Path(cwd).expanduser().resolve())]
         # The outer-seat bypass may preserve a workspace-write profile because
         # the parent seatbelt remains authoritative. It must never defeat an
         # explicit read-only narrowing: in that case keep the child sandbox and
         # fail closed if macOS refuses nested seatbelt application.
-        if (
-            codex_bypass_inner_sandbox()
-            and mode != "assess"
-            and permission_mode != "read-only"
-        ):
+        if codex_bypass_inner_sandbox() and mode != "assess" and permission_mode != "read-only":
             cmd += ["--dangerously-bypass-approvals-and-sandbox"]
         else:
             sandbox = "read-only" if mode == "assess" else (permission_mode or "workspace-write")
@@ -1118,14 +1210,23 @@ def build_command(
         # that other code parses, and reshaping that output is a separate, riskier change.
         cursor_format = "stream-json" if transport == "offload" else "text"
         cmd = [
-            "cursor-agent", "-p", prompt,
-            "--force", "--output-format", cursor_format,
-            "--trust", "--workspace", ".",
+            "cursor-agent",
+            "-p",
+            prompt,
+            "--force",
+            "--output-format",
+            cursor_format,
+            "--trust",
+            "--workspace",
+            ".",
         ]
         if requested_model:
             cmd += ["--model", requested_model]
         elif mode and mode.startswith("frontier") and ":" in mode:
-            cmd += ["--model", mode.split(":", 1)[1]]   # explicit opt-in -> spends the metered mid-tier pool
+            cmd += [
+                "--model",
+                mode.split(":", 1)[1],
+            ]  # explicit opt-in -> spends the metered mid-tier pool
         else:
             # OWNER POLICY 2026-08-08: Composer ONLY, never frontier. Passing no --model does NOT
             # mean Composer — it means `auto`, which selects across all 193 advertised models
@@ -1142,8 +1243,15 @@ def build_command(
         # --trust trusts the cwd for this invocation only (the spawner sets cwd to the target worktree).
         return ["vibe", "--prompt", prompt, "--auto-approve", "--output", "text", "--trust"]
     if agent == "aider":
-        return [str(AIDER_BIN), "--model", "mistral/codestral-latest", "--message", prompt,
-                "--yes-always", "--no-stream"]
+        return [
+            str(AIDER_BIN),
+            "--model",
+            "mistral/codestral-latest",
+            "--message",
+            prompt,
+            "--yes-always",
+            "--no-stream",
+        ]
     if agent == "gemini":
         # agy (Antigravity): -p/--print runs headless; auth auto-loads from ~/.gemini; generous
         # --print-timeout so it doesn't self-terminate (default 5m). FIX 2026-06-15: agy's -p mode
@@ -1179,16 +1287,27 @@ def build_command(
         # outside an active tick. (2026-08-09)
         try:
             import capabilities
-            capabilities.daily_heartbeat("agy-runtime-isolation", "invocation",
-                                         ref="adapters.build_command:gemini")
+
+            capabilities.daily_heartbeat(
+                "agy-runtime-isolation", "invocation", ref="adapters.build_command:gemini"
+            )
         except Exception:
             pass
         cmd = ["agy", "--gemini_dir", gemini_dir]
         model = requested_model or _tier_model("gemini", mode) or gemini_model()
         if model:
             cmd += ["--model", model]
-        return cmd + ["--print", prompt, "--dangerously-skip-permissions",
-                      "--add-dir", str(workspace), "--print-timeout", "40m", "--log-file", log_file]
+        return cmd + [
+            "--print",
+            prompt,
+            "--dangerously-skip-permissions",
+            "--add-dir",
+            str(workspace),
+            "--print-timeout",
+            "40m",
+            "--log-file",
+            log_file,
+        ]
     raise ValueError(f"unknown agent: {agent}")
 
 
@@ -1220,30 +1339,51 @@ def done_marker_cmd(run_id: str, log_file, rc_var: str) -> str:
     )
 
 
-def dispatch(agent: str, prompt: str, mode: str | None = None, cwd: str = ".",
-             env: dict | None = None, timeout: int = 2400, *, profile=None,
-             transport: str | None = None, permission_mode: str | None = None,
-             reasoning_effort: str | None = None, requested_model: str | None = None) -> dict:
+def dispatch(
+    agent: str,
+    prompt: str,
+    mode: str | None = None,
+    cwd: str = ".",
+    env: dict | None = None,
+    timeout: int = 2400,
+    *,
+    profile=None,
+    transport: str | None = None,
+    permission_mode: str | None = None,
+    reasoning_effort: str | None = None,
+    requested_model: str | None = None,
+) -> dict:
     """Run an agent on a task; outcome is judged by git SIDE-EFFECTS, not stdout
     (per design: a commit that touches a file, not a self-claimed 'done').
     Records one consumption row; the caller reconciles real cost_usd afterward.
     """
     cmd = build_command(
-        agent, prompt, mode, cwd=cwd, profile=profile, transport=transport,
-        permission_mode=permission_mode, reasoning_effort=reasoning_effort,
+        agent,
+        prompt,
+        mode,
+        cwd=cwd,
+        profile=profile,
+        transport=transport,
+        permission_mode=permission_mode,
+        reasoning_effort=reasoning_effort,
         requested_model=requested_model,
     )
     proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-    status = subprocess.run(["git", "-C", cwd, "status", "--porcelain"],
-                            capture_output=True, text=True).stdout.strip()
+    status = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain"], capture_output=True, text=True
+    ).stdout.strip()
     selected = execution_profiles.get_profile(profile) if profile is not None else None
     record_ledger(
-        agent, count=1, cost_usd=0.0,
+        agent,
+        count=1,
+        cost_usd=0.0,
         selected_profile_id=selected.get("profile_id") if selected else None,
         requested_model=selected.get("requested_model") if selected else requested_model,
     )
     return {
-        "agent": agent, "mode": mode, "exit": proc.returncode,
+        "agent": agent,
+        "mode": mode,
+        "exit": proc.returncode,
         "selected_profile_id": selected.get("profile_id") if selected else None,
         "changed_files": bool(status),
         "stdout_tail": (proc.stdout or "")[-2000:],
@@ -1264,22 +1404,27 @@ def _selftest():
 
 
 def _selftest_inner(*, gaps: list[str] | None = None):
-    import env_prereq                       # imported here: env_prereq reads this module
+    import env_prereq  # imported here: env_prereq reads this module
+
     gaps = gaps if gaps is not None else []
     c = build_command("cursor", "do x")
     # Composer is PINNED, not implied: omitting --model selects `auto`, which routes across every
     # frontier model cursor sells. Owner policy is Composer only (2026-08-08).
     assert c[0] == "cursor-agent" and c[c.index("--model") + 1] == CURSOR_COMPOSER_MODEL, c
-    assert "--trust" in c and c[c.index("--workspace") + 1] == ".", c  # headless workspace, no prompt
+    assert (
+        "--trust" in c and c[c.index("--workspace") + 1] == "."
+    ), c  # headless workspace, no prompt
     cf = build_command("cursor", "do x", mode="frontier:gpt-5.5")
-    assert "--model" in cf and "gpt-5.5" in cf, cf                    # explicit opt-in draws the pool
+    assert "--model" in cf and "gpt-5.5" in cf, cf  # explicit opt-in draws the pool
     cb = build_command("cursor", "do x", mode="frontier")
-    assert cb[cb.index("--model") + 1] == CURSOR_COMPOSER_MODEL, cb   # bare 'frontier' => Composer, no blind spend
-    for tier in MODEL_TIER_NAMES:                                    # tiers never escape the policy
+    assert (
+        cb[cb.index("--model") + 1] == CURSOR_COMPOSER_MODEL
+    ), cb  # bare 'frontier' => Composer, no blind spend
+    for tier in MODEL_TIER_NAMES:  # tiers never escape the policy
         ct = build_command("cursor", "do x", mode=tier)
         assert ct[ct.index("--model") + 1] == CURSOR_COMPOSER_MODEL, (tier, ct)
     a = build_command("aider", "do x")
-    assert a[0].endswith("/aider-venv/bin/aider"), a                 # isolated venv binary
+    assert a[0].endswith("/aider-venv/bin/aider"), a  # isolated venv binary
     assert "mistral/codestral-latest" in a, a
     # A PRESENCE-ONLY PROBE MUST SAY WHY, PERMANENTLY OR NOT. `presence` means the probe proves a
     # credential EXISTS, not that the server accepts it, so every one is a known weakness. Without a
@@ -1290,27 +1435,42 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         if _spec["strength"] == "presence":
             assert _spec.get("limit"), f"{_agent}: presence-only probe needs a documented limit"
             assert "permanent" in _spec["limit"] or "pending" in _spec["limit"], (
-                f"{_agent}: a limit must say whether it is permanent or pending", _spec["limit"])
+                f"{_agent}: a limit must say whether it is permanent or pending",
+                _spec["limit"],
+            )
         else:
             # A validating probe must NOT carry a limit: that would be a contradiction in the record.
             assert not _spec.get("limit"), (_agent, _spec)
     assert AUTH_PROBES["cursor"]["strength"] == "validates", "cursor round-trips; do not downgrade"
-    assert AUTH_PROBES["gemini"]["strength"] == "validates", "agy models round-trips; do not downgrade"
+    assert (
+        AUTH_PROBES["gemini"]["strength"] == "validates"
+    ), "agy models round-trips; do not downgrade"
 
     v = build_command("vibe", "do x")
-    assert v[0] == "vibe" and "--auto-approve" in v and "--prompt" in v, v   # subscription headless
-    assert "--trust" in v, "vibe must --trust the cwd or it silently ignores AGENTS.md (2026-06-15 fix)"
+    assert v[0] == "vibe" and "--auto-approve" in v and "--prompt" in v, v  # subscription headless
+    assert (
+        "--trust" in v
+    ), "vibe must --trust the cwd or it silently ignores AGENTS.md (2026-06-15 fix)"
     assert "exec" in build_command("codex", "x")
     ca = build_command("codex", "x", mode="assess")
-    assert ca[:5] == ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only"] and "--json" not in ca, ca
+    assert (
+        ca[:5] == ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only"]
+        and "--json" not in ca
+    ), ca
     # Three-tier GPT-5.6 family: Luna (cheap) / Terra (mid) / Sol (full). Codex has no catalog
     # probe, so these resolve straight from MODEL_TIERS without a subprocess.
-    for tier, expected in (("cheap", "gpt-5.6-luna"), ("mid", "gpt-5.6-terra"), ("full", "gpt-5.6-sol")):
+    for tier, expected in (
+        ("cheap", "gpt-5.6-luna"),
+        ("mid", "gpt-5.6-terra"),
+        ("full", "gpt-5.6-sol"),
+    ):
         cc = build_command("codex", "x", mode=tier)
         assert cc[cc.index("--model") + 1] == expected, (tier, cc)
         assert model_identity("codex", tier) == expected, tier
     # Non-tier modes still pass NO --model and keep the legacy lane tag.
-    assert "--model" not in build_command("codex", "x", mode="assess"), "assess must not pin a model"
+    assert "--model" not in build_command(
+        "codex", "x", mode="assess"
+    ), "assess must not pin a model"
     assert model_identity("codex", None) == "codex:full:default"
     # An EXACT profile resolves the version-capable Codex binary and `profile_codex_binary()`
     # fails closed rather than falling back to PATH — deliberately, since a profile that cannot
@@ -1324,28 +1484,45 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             assert cmd[0] == str(CODEX_PROFILE_BIN), cmd
             assert cmd[cmd.index("--model") + 1] == profile["requested_model"], cmd
             assert cmd[cmd.index("--sandbox") + 1] == "workspace-write", cmd
-            assert cmd[cmd.index("-c") + 1] == f'model_reasoning_effort="{profile["reasoning_effort"]}"', cmd
+            assert (
+                cmd[cmd.index("-c") + 1]
+                == f'model_reasoning_effort="{profile["reasoning_effort"]}"'
+            ), cmd
             profile_commands[profile["profile_id"]] = cmd
             assess = build_command(
-                "codex", "x", mode="assess", profile=profile, transport="offload",
+                "codex",
+                "x",
+                mode="assess",
+                profile=profile,
+                transport="offload",
                 permission_mode="read-only",
             )
             assert assess[assess.index("--sandbox") + 1] == "read-only", assess
-            assert "--json" not in assess and assess[assess.index("--model") + 1] == profile["requested_model"], assess
-        assert {
-            cmd[cmd.index("--model") + 1] for cmd in profile_commands.values()
-        } == {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+            assert (
+                "--json" not in assess
+                and assess[assess.index("--model") + 1] == profile["requested_model"]
+            ), assess
+        assert {cmd[cmd.index("--model") + 1] for cmd in profile_commands.values()} == {
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+        }
     env_prereq.report_gaps("adapters.py", gaps)
     codex_cwd = HOME / ".codex" / "orchestrator" / "worktrees" / "selftest"
     ccwd = build_command("codex", "x", cwd=codex_cwd)
     assert "--cd" in ccwd and ccwd[ccwd.index("--cd") + 1] == str(codex_cwd), ccwd
     os.environ["CODEX_SANDBOX"] = "seatbelt"
     nested = build_command("codex", "x", cwd=codex_cwd)
-    assert "--dangerously-bypass-approvals-and-sandbox" in nested and "--sandbox" not in nested, nested
+    assert (
+        "--dangerously-bypass-approvals-and-sandbox" in nested and "--sandbox" not in nested
+    ), nested
     assert "--cd" in nested and nested[nested.index("--cd") + 1] == str(codex_cwd), nested
     os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = "0"
     forced_sandbox = build_command("codex", "x", cwd=codex_cwd)
-    assert "--sandbox" in forced_sandbox and "--dangerously-bypass-approvals-and-sandbox" not in forced_sandbox, forced_sandbox
+    assert (
+        "--sandbox" in forced_sandbox
+        and "--dangerously-bypass-approvals-and-sandbox" not in forced_sandbox
+    ), forced_sandbox
     os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
     os.environ.pop("CODEX_SANDBOX", None)
     # Claude 5 family: Haiku 4.5 (cheap) / Sonnet 5 (mid) / Opus 5 (full) — but the seat is CAPPED
@@ -1353,8 +1530,11 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     # written post-ceiling because that is what reaches the CLI.
     assert MODEL_TIERS["claude"]["full"] == "claude-opus-5", "frontier option must stay defined"
     assert tier_ceiling("claude") == "mid" and effective_tier("claude", "full") == "mid"
-    for tier, expected in (("cheap", "claude-haiku-4-5"), ("mid", "claude-sonnet-5"),
-                           ("full", "claude-sonnet-5")):
+    for tier, expected in (
+        ("cheap", "claude-haiku-4-5"),
+        ("mid", "claude-sonnet-5"),
+        ("full", "claude-sonnet-5"),
+    ):
         cl = build_command("claude", "x", mode=tier)
         assert cl[cl.index("--model") + 1] == expected, (tier, cl)
         assert model_identity("claude", tier) == expected, tier
@@ -1376,7 +1556,12 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     os.environ["ORCH_MODEL_PROBE"] = "0"
     try:
         g = build_command("gemini", "x", cwd=gemini_cwd)
-        assert g[0] == "agy" and "--print" in g and "--print-timeout" in g and "--dangerously-skip-permissions" in g, g
+        assert (
+            g[0] == "agy"
+            and "--print" in g
+            and "--print-timeout" in g
+            and "--dangerously-skip-permissions" in g
+        ), g
         assert "--model" in g and g[g.index("--model") + 1] == DEFAULT_GEMINI_MODEL, g
         assert model_identity("gemini") == f"agy:{DEFAULT_GEMINI_MODEL}"
         assert agy_advertised_models() == [], "kill-switch must suppress the CLI probe entirely"
@@ -1384,8 +1569,11 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         assert unprobed["resolvable"] and unprobed["source"] == "pinned_default", unprobed
         # THE ask: cheap/mid ride Flash, only full pays for Pro. Flash is both newer (3.6 vs 3.1)
         # and far cheaper in compute units on this metered seat.
-        for tier, expected in (("cheap", "gemini-3.6-flash-low"), ("mid", "gemini-3.6-flash-high"),
-                               ("full", "gemini-3.1-pro-high")):
+        for tier, expected in (
+            ("cheap", "gemini-3.6-flash-low"),
+            ("mid", "gemini-3.6-flash-high"),
+            ("full", "gemini-3.1-pro-high"),
+        ):
             gt = build_command("gemini", "x", mode=tier, cwd=gemini_cwd)
             assert gt[gt.index("--model") + 1] == expected, (tier, gt)
             assert model_identity("gemini", tier) == f"agy:{expected}", tier
@@ -1412,11 +1600,17 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     # Rename survival: pinned model gone => auto-pick the newest Pro/high seat, never die.
     old_memo = dict(_ADVERTISED_MEMO)
     try:
-        _ADVERTISED_MEMO["gemini"] = {"ts": time.time(), "models": [
-            "gemini-4.0-flash-high", "gemini-3.9-pro-low", "gemini-3.9-pro-high", "claude-sonnet-4-6",
-        ]}
+        _ADVERTISED_MEMO["gemini"] = {
+            "ts": time.time(),
+            "models": [
+                "gemini-4.0-flash-high",
+                "gemini-3.9-pro-low",
+                "gemini-3.9-pro-high",
+                "claude-sonnet-4-6",
+            ],
+        }
         renamed = gemini_model_health()
-        assert renamed["model"] == "gemini-3.9-pro-high", renamed   # pro > flash, high > low
+        assert renamed["model"] == "gemini-3.9-pro-high", renamed  # pro > flash, high > low
         assert renamed["resolvable"] and renamed["source"] == "auto_from_catalog", renamed
         # Auto-resolution stays inside the tier's own family: a renamed Flash tier must not
         # silently promote itself to the pricier Pro seat.
@@ -1440,11 +1634,18 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     finally:
         _ADVERTISED_MEMO.clear()
         _ADVERTISED_MEMO.update(old_memo)
-    assert "--gemini_dir" in g and "agent-runtime/gemini/.gemini" in g[g.index("--gemini_dir") + 1], g
-    assert g[g.index("--add-dir") + 1] == str(gemini_cwd), g   # writes land in exact worktree, not stale/project cwd
-    assert "--log-file" in g and "agent-runtime/gemini/logs/agy.log" in g[g.index("--log-file") + 1], g
+    assert (
+        "--gemini_dir" in g and "agent-runtime/gemini/.gemini" in g[g.index("--gemini_dir") + 1]
+    ), g
+    assert g[g.index("--add-dir") + 1] == str(
+        gemini_cwd
+    ), g  # writes land in exact worktree, not stale/project cwd
+    assert (
+        "--log-file" in g and "agent-runtime/gemini/logs/agy.log" in g[g.index("--log-file") + 1]
+    ), g
     old_handoff, old_ledger = HANDOFF, LEDGER
     import tempfile
+
     tmp = Path(tempfile.mkdtemp(prefix="adapters-ledger-selftest-"))
     try:
         globals()["HANDOFF"] = tmp
@@ -1456,13 +1657,17 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         globals()["HANDOFF"] = old_handoff
         globals()["LEDGER"] = old_ledger
         import shutil
+
         shutil.rmtree(tmp, ignore_errors=True)
     try:
-        build_command("bogus", "x"); raise AssertionError("expected ValueError")
+        build_command("bogus", "x")
+        raise AssertionError("expected ValueError")
     except ValueError:
         pass
-    print("adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
-          "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready)")
+    print(
+        "adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
+        "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready)"
+    )
 
 
 if __name__ == "__main__":

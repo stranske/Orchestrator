@@ -24,6 +24,7 @@ last_files_changed) are the real per-PR signals.
 Runtime: corpus lives on LOCAL disk (never the Dropbox checkout). Not wired into
 cron yet beyond an opt-in step. `--selftest` runs fully offline.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,16 +39,16 @@ from pathlib import Path
 import redirect_policy
 
 # keepalive's current blunt thresholds (the baseline we measure against).
-KEEPALIVE_STALL_THRESHOLD = 3          # consecutive zero-activity rounds before agent-switch
-CHURN_THRESHOLD = 2                    # rounds with commits but no task completion => churn
-DEFAULT_FAILURE_THRESHOLD = 3          # needs-human after N failures (GoalsAndPlumbing §4)
+KEEPALIVE_STALL_THRESHOLD = 3  # consecutive zero-activity rounds before agent-switch
+CHURN_THRESHOLD = 2  # rounds with commits but no task completion => churn
+DEFAULT_FAILURE_THRESHOLD = 3  # needs-human after N failures (GoalsAndPlumbing §4)
 CORPUS_PATH = Path(
     os.environ.get(
         "ORCH_KEEPALIVE_SHADOW_CORPUS",
         Path.home() / ".codex" / "orchestrator" / "keepalive-shadow" / "shadow.jsonl",
     )
 )
-READINESS_TARGET = 30                  # labeled trajectories needed before an A/B is worth running
+READINESS_TARGET = 30  # labeled trajectories needed before an A/B is worth running
 
 # Outcome taxonomy for the disagreement metric. The shadow A/B can only LEARN from FAILURE
 # trajectories — where keepalive's blunt action led somewhere bad and a supervisor MIGHT have done
@@ -66,7 +67,7 @@ def _is_failure_outcome(outcome) -> bool:
 RATE_LIMIT_LABELS = {"agent:rate-limited", "blocked-on-rate-reset"}
 AUTH_LABELS = {"blocked-on-auth", "needs-human"}
 # keepalive-state marker: `<!-- keepalive-state:<version> {JSON} -->` (keepalive_state.js:5,7)
-STATE_REGEX = re.compile(r"<!--\s*keepalive-state(?::[\w.-]+)?\s+(.*?)\s*-->", re.S)
+STATE_REGEX = re.compile(r"<!--\s*keepalive-state(?::[\w.-]+)?\s+(.*?)\s*-->", re.DOTALL)
 
 
 def _int(value, default: int = 0) -> int:
@@ -101,7 +102,9 @@ def normalize_signals(target: str, payload: dict | None, *, pr_state, labels) ->
     elif state_lc == "closed":
         outcome = "closed_unmerged"
     elif labels_lc & {"needs-human", "agent:needs-attention"}:
-        outcome = "needs_human"  # keepalive gave up -> a labeled failure trajectory (visible while open)
+        outcome = (
+            "needs_human"  # keepalive gave up -> a labeled failure trajectory (visible while open)
+        )
     else:
         outcome = None
     failure = payload.get("failure")
@@ -132,7 +135,9 @@ def keepalive_blunt_action(signals: dict) -> str:
     zero-activity rounds; otherwise continue (the current loop does NOT hard-stop at
     max_iterations -- that hard cap is the cheap-win in Workflows #2480).
     """
-    if signals.get("failure_count", 0) >= max(1, signals.get("failure_threshold", DEFAULT_FAILURE_THRESHOLD)):
+    if signals.get("failure_count", 0) >= max(
+        1, signals.get("failure_threshold", DEFAULT_FAILURE_THRESHOLD)
+    ):
         return "needs-human"
     if signals.get("consecutive_no_progress", 0) >= KEEPALIVE_STALL_THRESHOLD:
         return "switch-agent"
@@ -250,7 +255,11 @@ def record(entry: dict, corpus_path: Path = CORPUS_PATH) -> dict:
 def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
     if not corpus_path.exists():
         return {"n": 0, "ready_for_ab": False, "readiness_target": READINESS_TARGET}
-    rows = [json.loads(line) for line in corpus_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [
+        json.loads(line)
+        for line in corpus_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     n = len(rows)
     # Raw divergence (kept for transparency) vs the REFINED failure-weighted metric. Derived at READ
     # time from each row's stored actions + (possibly later-resolved) outcome, so it works across the
@@ -258,8 +267,11 @@ def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
     raw_disagreements = sum(1 for r in rows if r.get("disagreement"))
     failure_outcomes = sum(1 for r in rows if _is_failure_outcome(r.get("outcome")))
     meaningful_disagreements = sum(
-        1 for r in rows
-        if meaningful_disagreement(r.get("keepalive_blunt", ""), r.get("shadow_action", ""), r.get("outcome"))
+        1
+        for r in rows
+        if meaningful_disagreement(
+            r.get("keepalive_blunt", ""), r.get("shadow_action", ""), r.get("outcome")
+        )
     )
     labeled = sum(1 for r in rows if r.get("outcome") and r["outcome"] not in PENDING_OUTCOMES)
     pending = sum(1 for r in rows if r.get("outcome") in PENDING_OUTCOMES)
@@ -271,8 +283,12 @@ def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
     blunt_dist: dict[str, int] = {}
     shadow_dist: dict[str, int] = {}
     for r in rows:
-        blunt_dist[r.get("keepalive_blunt", "?")] = blunt_dist.get(r.get("keepalive_blunt", "?"), 0) + 1
-        shadow_dist[r.get("shadow_action", "?")] = shadow_dist.get(r.get("shadow_action", "?"), 0) + 1
+        blunt_dist[r.get("keepalive_blunt", "?")] = (
+            blunt_dist.get(r.get("keepalive_blunt", "?"), 0) + 1
+        )
+        shadow_dist[r.get("shadow_action", "?")] = (
+            shadow_dist.get(r.get("shadow_action", "?"), 0) + 1
+        )
     return {
         "n": n,
         "labeled_outcomes": labeled,
@@ -284,7 +300,9 @@ def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
         "meaningful_disagreements": meaningful_disagreements,
         # Headline = failure-weighted: of trajectories that FAILED, how often the shadow would have
         # diverged from keepalive's blunt action — the only A/B-relevant disagreement signal.
-        "disagreement_rate": round(meaningful_disagreements / failure_outcomes, 3) if failure_outcomes else 0.0,
+        "disagreement_rate": (
+            round(meaningful_disagreements / failure_outcomes, 3) if failure_outcomes else 0.0
+        ),
         "keepalive_blunt_distribution": blunt_dist,
         "shadow_action_distribution": shadow_dist,
         "ready_for_ab": labeled >= READINESS_TARGET,
@@ -297,14 +315,20 @@ def gather_signals(target: str, *, runner=subprocess.run) -> dict:
     repo, _, num = target.partition("#")
     if not num:
         raise ValueError("target must be owner/repo#N")
-    meta = runner(["gh", "pr", "view", num, "-R", repo, "--json", "state,labels"],
-                  capture_output=True, text=True)
+    meta = runner(
+        ["gh", "pr", "view", num, "-R", repo, "--json", "state,labels"],
+        capture_output=True,
+        text=True,
+    )
     if meta.returncode != 0:
         raise RuntimeError(f"gh pr view failed: {(meta.stderr or '').strip()[-300:]}")
     mdoc = json.loads(meta.stdout or "{}")
     labels = [l.get("name") for l in (mdoc.get("labels") or []) if isinstance(l, dict)]
-    comments = runner(["gh", "pr", "view", num, "-R", repo, "--json", "comments",
-                       "-q", ".comments[].body"], capture_output=True, text=True)
+    comments = runner(
+        ["gh", "pr", "view", num, "-R", repo, "--json", "comments", "-q", ".comments[].body"],
+        capture_output=True,
+        text=True,
+    )
     payload = extract_state_payload(comments.stdout if comments.returncode == 0 else "")
     return normalize_signals(target, payload, pr_state=mdoc.get("state"), labels=labels)
 
@@ -314,27 +338,43 @@ def _gh_throttle(resource: str) -> None:
     no-op + fail-open otherwise so the backfill never breaks on a missing/erroring module."""
     try:
         import gh_capacity
+
         gh_capacity.throttle_if_enabled(resource)
     except Exception:
         pass
 
 
-def _durability_outcome(target: str, *, runner=subprocess.run,
-                        revert_cache: dict | None = None) -> str | None:
+def _durability_outcome(
+    target: str, *, runner=subprocess.run, revert_cache: dict | None = None
+) -> str | None:
     """Durability label for a MERGED keepalive PR, reusing durability_sweep's classifier
     (revert/reopen detection via gh + 7-day grace). Returns durable|reverted|reopened|
     merged_pending, or None on error (caller falls back to coarse 'merged'). `revert_cache`
     is threaded so a backfill over many PRs does 1 revert search/repo, not 1/PR."""
     import durability_sweep
+
     repo, _, num = target.partition("#")
-    res = runner(["gh", "pr", "view", num, "-R", repo, "--json",
-                  "number,state,mergedAt,mergeCommit,baseRefName"], capture_output=True, text=True)
+    res = runner(
+        [
+            "gh",
+            "pr",
+            "view",
+            num,
+            "-R",
+            repo,
+            "--json",
+            "number,state,mergedAt,mergeCommit,baseRefName",
+        ],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
         return None
     pr = json.loads(res.stdout or "{}")
     pr["repo"] = repo
     verdict = durability_sweep.classify_durability(
-        {"target": target, "mode": "remote"}, pr, revert_cache=revert_cache)
+        {"target": target, "mode": "remote"}, pr, revert_cache=revert_cache
+    )
     return verdict.get("durability") or "merged_pending"
 
 
@@ -355,10 +395,18 @@ def _backfilled_targets(corpus_path: Path) -> set[str]:
     return seen
 
 
-def backfill(*, days: int = 90, grace_days: int = 7, limit: int = 150,
-             since: str | None = None, until: str | None = None,
-             runner=subprocess.run, durability: bool = True, durability_fn=None,
-             corpus_path: Path = CORPUS_PATH) -> dict:
+def backfill(
+    *,
+    days: int = 90,
+    grace_days: int = 7,
+    limit: int = 150,
+    since: str | None = None,
+    until: str | None = None,
+    runner=subprocess.run,
+    durability: bool = True,
+    durability_fn=None,
+    corpus_path: Path = CORPUS_PATH,
+) -> dict:
     """One labeled end-state entry per CLOSED keepalive PR updated in the last `days`.
 
     Historical seeding so the corpus can reach `ready_for_ab` without waiting weeks.
@@ -374,13 +422,35 @@ def backfill(*, days: int = 90, grace_days: int = 7, limit: int = 150,
     if until is None:
         until = (datetime.date.today() - datetime.timedelta(days=grace_days)).isoformat()
     _gh_throttle("search")  # `gh search prs` = SEARCH (30/min)
-    res = runner(["gh", "search", "prs", "--owner", "stranske", "--label", "agents:keepalive",
-                  "--state", "closed", "--updated", f"{since}..{until}", "--limit", str(limit),
-                  "--json", "repository,number",
-                  "--jq", '.[] | "\\(.repository.nameWithOwner)#\\(.number)"'],
-                 capture_output=True, text=True)
+    res = runner(
+        [
+            "gh",
+            "search",
+            "prs",
+            "--owner",
+            "stranske",
+            "--label",
+            "agents:keepalive",
+            "--state",
+            "closed",
+            "--updated",
+            f"{since}..{until}",
+            "--limit",
+            str(limit),
+            "--json",
+            "repository,number",
+            "--jq",
+            '.[] | "\\(.repository.nameWithOwner)#\\(.number)"',
+        ],
+        capture_output=True,
+        text=True,
+    )
     if res.returncode != 0:
-        return {"since": since, "error": (res.stderr or "gh search failed").strip()[-300:], "recorded": 0}
+        return {
+            "since": since,
+            "error": (res.stderr or "gh search failed").strip()[-300:],
+            "recorded": 0,
+        }
     targets = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
     already = _backfilled_targets(corpus_path)
     recorded = skipped = 0
@@ -397,7 +467,8 @@ def backfill(*, days: int = 90, grace_days: int = 7, limit: int = 150,
         if signals.get("pr_state") == "merged" and durability:
             try:
                 label = (durability_fn or _durability_outcome)(
-                    target, runner=runner, revert_cache=revert_cache)
+                    target, runner=runner, revert_cache=revert_cache
+                )
             except Exception:
                 label = None
             signals = {**signals, "outcome": label or signals.get("outcome") or "merged"}
@@ -407,8 +478,14 @@ def backfill(*, days: int = 90, grace_days: int = 7, limit: int = 150,
         entry["backfill_until"] = until
         record(entry, corpus_path)
         recorded += 1
-    return {"since": since, "until": until, "candidates": len(targets), "recorded": recorded,
-            "skipped_already_backfilled": skipped, "capped": len(targets) >= limit}
+    return {
+        "since": since,
+        "until": until,
+        "candidates": len(targets),
+        "recorded": recorded,
+        "skipped_already_backfilled": skipped,
+        "capped": len(targets) >= limit,
+    }
 
 
 def _selftest() -> None:
@@ -424,10 +501,20 @@ def _selftest() -> None:
     assert extract_state_payload("no marker here") is None
 
     # normalize_signals reads the real payload field names + failure fallbacks.
-    norm = normalize_signals("o/r#9", {"failure": {"count": 2}, "complete_gate_failure_rounds": 4,
-                                       "consecutive_zero_activity_rounds": 3, "max_iterations": 5},
-                             pr_state="OPEN", labels=["agent:codex"])
-    assert norm["failure_count"] == 4 and norm["consecutive_no_progress"] == 3 and norm["has_marker"], norm
+    norm = normalize_signals(
+        "o/r#9",
+        {
+            "failure": {"count": 2},
+            "complete_gate_failure_rounds": 4,
+            "consecutive_zero_activity_rounds": 3,
+            "max_iterations": 5,
+        },
+        pr_state="OPEN",
+        labels=["agent:codex"],
+    )
+    assert (
+        norm["failure_count"] == 4 and norm["consecutive_no_progress"] == 3 and norm["has_marker"]
+    ), norm
 
     def sig(target="o/r#1", pr_state="open", labels=None, **payload):
         return normalize_signals(target, payload, pr_state=pr_state, labels=labels or [])
@@ -438,7 +525,9 @@ def _selftest() -> None:
     assert a["shadow_action"] == "inspect" and a["disagreement"] is True, a
 
     # B: stalled + rate-limited -> keepalive switches; shadow redirects -> disagree.
-    b = shadow_decide(sig("o/r#2", labels=["agent:rate-limited"], consecutive_zero_activity_rounds=3))
+    b = shadow_decide(
+        sig("o/r#2", labels=["agent:rate-limited"], consecutive_zero_activity_rounds=3)
+    )
     assert b["keepalive_blunt"] == "switch-agent" and b["shadow_action"] == "redirect", b
     assert b["disagreement"] is True, b
 
@@ -486,20 +575,24 @@ def _selftest() -> None:
     assert _is_failure_outcome("closed_unmerged") and not _is_failure_outcome("durable")
     assert meaningful_disagreement("switch-agent", "inspect", "needs_human") is True
     assert meaningful_disagreement("switch-agent", "inspect", "reverted") is True
-    assert meaningful_disagreement("switch-agent", "inspect", "durable") is False     # success -> excluded
+    assert (
+        meaningful_disagreement("switch-agent", "inspect", "durable") is False
+    )  # success -> excluded
     assert meaningful_disagreement("switch-agent", "inspect", "merged_pending") is False
-    assert meaningful_disagreement("continue", "wait", "needs_human") is False         # no raw divergence
+    assert meaningful_disagreement("continue", "wait", "needs_human") is False  # no raw divergence
     with tempfile.TemporaryDirectory(prefix="keepalive-shadow-fw-") as tmp:
         corpus = Path(tmp) / "shadow.jsonl"
-        record({**a, "outcome": "needs_human"}, corpus)        # disagree + FAILURE -> meaningful
-        record({**b, "outcome": "reverted"}, corpus)           # disagree + FAILURE -> meaningful
-        record({**a, "outcome": "durable"}, corpus)            # disagree + SUCCESS -> noise (excluded)
-        record({**c, "outcome": "closed_unmerged"}, corpus)    # agree   + FAILURE -> not a disagreement
+        record({**a, "outcome": "needs_human"}, corpus)  # disagree + FAILURE -> meaningful
+        record({**b, "outcome": "reverted"}, corpus)  # disagree + FAILURE -> meaningful
+        record({**a, "outcome": "durable"}, corpus)  # disagree + SUCCESS -> noise (excluded)
+        record(
+            {**c, "outcome": "closed_unmerged"}, corpus
+        )  # agree   + FAILURE -> not a disagreement
         s = summarize(corpus)
         assert s["disagreements"] == 3 and s["raw_disagreement_rate"] == round(3 / 4, 3), s
-        assert s["failure_outcomes"] == 3, s                   # needs_human, reverted, closed_unmerged
-        assert s["meaningful_disagreements"] == 2, s           # only the disagreements on failures
-        assert s["disagreement_rate"] == round(2 / 3, 3), s    # failure-weighted (raw would be 0.75)
+        assert s["failure_outcomes"] == 3, s  # needs_human, reverted, closed_unmerged
+        assert s["meaningful_disagreements"] == 2, s  # only the disagreements on failures
+        assert s["disagreement_rate"] == round(2 / 3, 3), s  # failure-weighted (raw would be 0.75)
 
     # backfill: historical seed from a fake gh; merged -> durability label; idempotent.
     search_commands = []
@@ -518,11 +611,19 @@ def _selftest() -> None:
 
     with tempfile.TemporaryDirectory(prefix="keepalive-shadow-bf-") as tmp:
         corpus = Path(tmp) / "shadow.jsonl"
-        r1 = backfill(since="2026-01-01", runner=fake_runner,
-                      durability_fn=lambda t, **k: "durable", corpus_path=corpus)
+        r1 = backfill(
+            since="2026-01-01",
+            runner=fake_runner,
+            durability_fn=lambda t, **k: "durable",
+            corpus_path=corpus,
+        )
         assert r1["recorded"] == 2 and r1["candidates"] == 2, r1
-        r2 = backfill(since="2026-01-01", runner=fake_runner,
-                      durability_fn=lambda t, **k: "durable", corpus_path=corpus)
+        r2 = backfill(
+            since="2026-01-01",
+            runner=fake_runner,
+            durability_fn=lambda t, **k: "durable",
+            corpus_path=corpus,
+        )
         assert r2["recorded"] == 0 and r2["skipped_already_backfilled"] == 2, r2  # idempotent
         r3 = backfill(
             since="2025-12-01",
@@ -533,42 +634,65 @@ def _selftest() -> None:
         )
         assert r3["since"] == "2025-12-01" and r3["until"] == "2025-12-31", r3
         assert any(
-            "--updated" in cmd and "2025-12-01..2025-12-31" in cmd
-            for cmd in search_commands
+            "--updated" in cmd and "2025-12-01..2025-12-31" in cmd for cmd in search_commands
         ), search_commands
         bf = summarize(corpus)
         assert bf["n"] == 2 and bf["labeled_outcomes"] == 2, bf  # merged->durable labeled
         rows = [json.loads(line) for line in corpus.read_text().splitlines()]
         assert all(
-            r["outcome"] == "durable"
-            and r["source"] == "backfill"
-            and r["backfill_until"]
+            r["outcome"] == "durable" and r["source"] == "backfill" and r["backfill_until"]
             for r in rows
         ), rows
 
-    print("keepalive_shadow.py selftest: OK (marker extract, signal normalize, "
-          "stall/rate-limit/progress/churn/exit/needs-human/no-marker synthesis, "
-          "blunt-vs-shadow disagreement, failure-weighted disagreement metric, "
-          "record/summarize, no live action)")
+    print(
+        "keepalive_shadow.py selftest: OK (marker extract, signal normalize, "
+        "stall/rate-limit/progress/churn/exit/needs-human/no-marker synthesis, "
+        "blunt-vs-shadow disagreement, failure-weighted disagreement metric, "
+        "record/summarize, no live action)"
+    )
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Shadow-mode keepalive supervision corpus builder (no live action).")
-    parser.add_argument("--shadow", metavar="owner/repo#N", help="gather a PR's signals, record the shadow vs blunt decision")
-    parser.add_argument("--summarize", action="store_true", help="summarize the shadow corpus + A/B readiness")
+    parser = argparse.ArgumentParser(
+        description="Shadow-mode keepalive supervision corpus builder (no live action)."
+    )
+    parser.add_argument(
+        "--shadow",
+        metavar="owner/repo#N",
+        help="gather a PR's signals, record the shadow vs blunt decision",
+    )
+    parser.add_argument(
+        "--summarize", action="store_true", help="summarize the shadow corpus + A/B readiness"
+    )
     parser.add_argument("--corpus", default=str(CORPUS_PATH))
-    parser.add_argument("--backfill", action="store_true",
-                        help="historical seed: label closed keepalive PRs from the last --days")
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="historical seed: label closed keepalive PRs from the last --days",
+    )
     parser.add_argument("--days", type=int, default=90)
-    parser.add_argument("--since", default="",
-                        help="inclusive YYYY-MM-DD lower bound for --backfill; overrides --days")
-    parser.add_argument("--until", default="",
-                        help="inclusive YYYY-MM-DD upper bound for --backfill; defaults to today minus --grace-days")
-    parser.add_argument("--grace-days", type=int, default=7,
-                        help="exclude PRs updated within this many days (so merged ones resolve)")
+    parser.add_argument(
+        "--since",
+        default="",
+        help="inclusive YYYY-MM-DD lower bound for --backfill; overrides --days",
+    )
+    parser.add_argument(
+        "--until",
+        default="",
+        help="inclusive YYYY-MM-DD upper bound for --backfill; defaults to today minus --grace-days",
+    )
+    parser.add_argument(
+        "--grace-days",
+        type=int,
+        default=7,
+        help="exclude PRs updated within this many days (so merged ones resolve)",
+    )
     parser.add_argument("--limit", type=int, default=150)
-    parser.add_argument("--no-durability", action="store_true",
-                        help="skip the durability label on merged PRs (faster, fewer gh calls)")
+    parser.add_argument(
+        "--no-durability",
+        action="store_true",
+        help="skip the durability label on merged PRs (faster, fewer gh calls)",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
 
@@ -580,9 +704,20 @@ def main(argv: list[str]) -> int:
         print(json.dumps(summarize(corpus), indent=2))
         return 0
     if args.backfill:
-        print(json.dumps(backfill(days=args.days, grace_days=args.grace_days, limit=args.limit,
-                                   since=args.since or None, until=args.until or None,
-                                   durability=not args.no_durability, corpus_path=corpus), indent=2))
+        print(
+            json.dumps(
+                backfill(
+                    days=args.days,
+                    grace_days=args.grace_days,
+                    limit=args.limit,
+                    since=args.since or None,
+                    until=args.until or None,
+                    durability=not args.no_durability,
+                    corpus_path=corpus,
+                ),
+                indent=2,
+            )
+        )
         return 0
     if args.shadow:
         signals = gather_signals(args.shadow)

@@ -5,13 +5,15 @@ The epic lane is the first increment for taking a large or vague goal and turnin
 it into a structured subtask plan that can later be dispatched, monitored, and
 re-decomposed when a slice stalls.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 VALID_LANES = {"opener", "closer", "local"}
 VALID_TASK_TYPES = {"mechanical", "implement", "testgen", "polish", "review", "epic"}
@@ -72,7 +74,9 @@ def build_planner_prompt(
 
     file_context = _read_optional(context_file)
     context_parts = [part.strip() for part in (context, file_context) if part and part.strip()]
-    context_block = "\n\nAdditional context:\n" + "\n\n".join(context_parts) if context_parts else ""
+    context_block = (
+        "\n\nAdditional context:\n" + "\n\n".join(context_parts) if context_parts else ""
+    )
     repo_block = f"\nRepository: {repo}" if repo else ""
     target_block = f"\nTarget: {target}" if target else ""
     count_block = f"\nTarget subtask count: {subtask_count}" if subtask_count else ""
@@ -140,7 +144,11 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
         return errors
 
     epic = plan["epic"]
-    errors.extend(_validate_required_mapping(epic, "epic", ("title", "goal", "repo", "constraints", "definition_of_done")))
+    errors.extend(
+        _validate_required_mapping(
+            epic, "epic", ("title", "goal", "repo", "constraints", "definition_of_done")
+        )
+    )
     if isinstance(epic, dict):
         if not _is_nonempty_string(epic.get("title")):
             errors.append("epic.title must be a non-empty string")
@@ -148,8 +156,14 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
             errors.append("epic.goal must be a non-empty string")
         if epic.get("repo") is not None and not isinstance(epic.get("repo"), str):
             errors.append("epic.repo must be a string or null")
-        errors.extend(_validate_string_list(epic.get("constraints"), "epic.constraints", nonempty=False))
-        errors.extend(_validate_string_list(epic.get("definition_of_done"), "epic.definition_of_done", nonempty=True))
+        errors.extend(
+            _validate_string_list(epic.get("constraints"), "epic.constraints", nonempty=False)
+        )
+        errors.extend(
+            _validate_string_list(
+                epic.get("definition_of_done"), "epic.definition_of_done", nonempty=True
+            )
+        )
 
     subtasks = plan["subtasks"]
     if not isinstance(subtasks, list):
@@ -199,12 +213,22 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
         if not _is_nonempty_string(task.get("scope")):
             errors.append(f"{path}.scope must be a non-empty string")
         errors.extend(_validate_string_list(task.get("files"), f"{path}.files", nonempty=False))
-        errors.extend(_validate_string_list(task.get("acceptance"), f"{path}.acceptance", nonempty=True))
-        errors.extend(_validate_string_list(task.get("validation"), f"{path}.validation", nonempty=True))
-        errors.extend(_validate_string_list(task.get("dependencies"), f"{path}.dependencies", nonempty=False))
+        errors.extend(
+            _validate_string_list(task.get("acceptance"), f"{path}.acceptance", nonempty=True)
+        )
+        errors.extend(
+            _validate_string_list(task.get("validation"), f"{path}.validation", nonempty=True)
+        )
+        errors.extend(
+            _validate_string_list(task.get("dependencies"), f"{path}.dependencies", nonempty=False)
+        )
         if not _is_nonempty_string(task.get("dispatch_prompt")):
             errors.append(f"{path}.dispatch_prompt must be a non-empty string")
-        errors.extend(_validate_string_list(task.get("redecompose_if"), f"{path}.redecompose_if", nonempty=True))
+        errors.extend(
+            _validate_string_list(
+                task.get("redecompose_if"), f"{path}.redecompose_if", nonempty=True
+            )
+        )
 
     known_ids = set(ids)
     for idx, task in enumerate(subtasks):
@@ -212,10 +236,16 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
             continue
         for dep_idx, dep in enumerate(task["dependencies"]):
             if isinstance(dep, str) and dep.strip() not in known_ids:
-                errors.append(f"subtasks[{idx}].dependencies[{dep_idx}] references unknown subtask ID {dep!r}")
+                errors.append(
+                    f"subtasks[{idx}].dependencies[{dep_idx}] references unknown subtask ID {dep!r}"
+                )
 
     integration = plan["integration"]
-    errors.extend(_validate_required_mapping(integration, "integration", ("order", "risks", "final_verification")))
+    errors.extend(
+        _validate_required_mapping(
+            integration, "integration", ("order", "risks", "final_verification")
+        )
+    )
     if isinstance(integration, dict):
         order = integration.get("order")
         errors.extend(_validate_string_list(order, "integration.order", nonempty=True))
@@ -223,7 +253,9 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
             order_ids = [item.strip() for item in order]
             for order_idx, item in enumerate(order_ids):
                 if item not in known_ids:
-                    errors.append(f"integration.order[{order_idx}] references unknown subtask ID {item!r}")
+                    errors.append(
+                        f"integration.order[{order_idx}] references unknown subtask ID {item!r}"
+                    )
             if len(order_ids) != len(set(order_ids)):
                 errors.append("integration.order must not contain duplicate subtask IDs")
             if known_ids and set(order_ids) != known_ids:
@@ -233,10 +265,22 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
                     errors.append(f"integration.order is missing subtask IDs: {missing}")
                 if extra:
                     errors.append(f"integration.order contains unknown subtask IDs: {extra}")
-        errors.extend(_validate_string_list(integration.get("risks"), "integration.risks", nonempty=False))
-        errors.extend(_validate_string_list(integration.get("final_verification"), "integration.final_verification", nonempty=True))
+        errors.extend(
+            _validate_string_list(integration.get("risks"), "integration.risks", nonempty=False)
+        )
+        errors.extend(
+            _validate_string_list(
+                integration.get("final_verification"),
+                "integration.final_verification",
+                nonempty=True,
+            )
+        )
 
-    errors.extend(_validate_string_list(plan.get("re_decomposition_triggers"), "re_decomposition_triggers", nonempty=True))
+    errors.extend(
+        _validate_string_list(
+            plan.get("re_decomposition_triggers"), "re_decomposition_triggers", nonempty=True
+        )
+    )
     return errors
 
 
@@ -343,28 +387,32 @@ def build_dispatch_prompts(plan: dict[str, Any]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     epic = plan["epic"]
     for task in plan["subtasks"]:
-        prompt = "\n".join([
-            f"Epic: {epic['title']}",
-            f"Subtask {task['id']}: {task['title']}",
-            "",
-            task["dispatch_prompt"].strip(),
-            "",
-            "Acceptance:",
-            *[f"- {item}" for item in task["acceptance"]],
-            "",
-            "Validation:",
-            *[f"- {item}" for item in task["validation"]],
-            "",
-            "Re-decompose this subtask if:",
-            *[f"- {item}" for item in task["redecompose_if"]],
-        ])
-        records.append({
-            "id": task["id"],
-            "lane": task["lane"],
-            "task_type": task["task_type"],
-            "dependencies": task["dependencies"],
-            "prompt": prompt,
-        })
+        prompt = "\n".join(
+            [
+                f"Epic: {epic['title']}",
+                f"Subtask {task['id']}: {task['title']}",
+                "",
+                task["dispatch_prompt"].strip(),
+                "",
+                "Acceptance:",
+                *[f"- {item}" for item in task["acceptance"]],
+                "",
+                "Validation:",
+                *[f"- {item}" for item in task["validation"]],
+                "",
+                "Re-decompose this subtask if:",
+                *[f"- {item}" for item in task["redecompose_if"]],
+            ]
+        )
+        records.append(
+            {
+                "id": task["id"],
+                "lane": task["lane"],
+                "task_type": task["task_type"],
+                "dependencies": task["dependencies"],
+                "prompt": prompt,
+            }
+        )
     return records
 
 
@@ -389,7 +437,9 @@ def _valid_plan() -> dict[str, Any]:
                 "validation": ["pytest tests/test_analytics.py"],
                 "dependencies": [],
                 "dispatch_prompt": "Implement the analytics data model and query layer.",
-                "redecompose_if": ["The existing schema cannot represent progress without a migration"],
+                "redecompose_if": [
+                    "The existing schema cannot represent progress without a migration"
+                ],
             },
             {
                 "id": "E2",
@@ -421,7 +471,10 @@ def _valid_plan() -> dict[str, Any]:
         "integration": {
             "order": ["E1", "E2", "E3"],
             "risks": ["UI may depend on aggregation semantics"],
-            "final_verification": ["pytest", "Run frontend verifier against instructor course page if served locally"],
+            "final_verification": [
+                "pytest",
+                "Run frontend verifier against instructor course page if served locally",
+            ],
         },
         "re_decomposition_triggers": ["A subtask fails validation twice for different root causes"],
     }
@@ -468,12 +521,16 @@ def _selftest() -> None:
     errs = validate_plan(empty_checks)
     assert any("subtasks[0].acceptance must be a non-empty list" in err for err in errs), errs
     assert any("subtasks[1].validation[0] must be a non-empty string" in err for err in errs), errs
-    assert any("integration.final_verification must be a non-empty list" in err for err in errs), errs
+    assert any(
+        "integration.final_verification must be a non-empty list" in err for err in errs
+    ), errs
 
-    parsed = parse_plan_json("```json\n{\"epic\": {\"title\": \"x\"}}\n```")
+    parsed = parse_plan_json('```json\n{"epic": {"title": "x"}}\n```')
     assert parsed == {"epic": {"title": "x"}}, parsed
 
-    print("epic_lane.py selftest: OK (prompt, schema validation, refs/order checks, dispatch prompts)")
+    print(
+        "epic_lane.py selftest: OK (prompt, schema validation, refs/order checks, dispatch prompts)"
+    )
 
 
 def _positive_int(raw: str) -> int:
@@ -497,6 +554,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
+
         capabilities.production_heartbeat("epic-decomposition", event_type, ref="epic_lane.main")
     except Exception:
         pass
@@ -504,7 +562,9 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 
 def main(argv: Sequence[str]) -> int:
     _capability_heartbeat()
-    parser = argparse.ArgumentParser(description="Build or validate an Orchestrator epic decomposition plan.")
+    parser = argparse.ArgumentParser(
+        description="Build or validate an Orchestrator epic decomposition plan."
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--goal", help="large/vague goal to turn into a planner prompt")
     group.add_argument("--goal-file", help="file containing the large/vague goal")
@@ -512,12 +572,19 @@ def main(argv: Sequence[str]) -> int:
     group.add_argument("--selftest", action="store_true", help="run offline selftests")
     parser.add_argument("--repo", help="optional owner/repo context")
     parser.add_argument("--target", help="optional issue/PR target context")
-    parser.add_argument("--context", default="", help="inline context to include in the planner prompt")
-    parser.add_argument("--context-file", help="extra context file to include in the planner prompt")
+    parser.add_argument(
+        "--context", default="", help="inline context to include in the planner prompt"
+    )
+    parser.add_argument(
+        "--context-file", help="extra context file to include in the planner prompt"
+    )
     parser.add_argument("--subtask-count", type=_positive_int, help="target number of subtasks")
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
-    parser.add_argument("--emit-dispatch-prompts", action="store_true",
-                        help="with --validate, include dispatch prompt records in JSON output")
+    parser.add_argument(
+        "--emit-dispatch-prompts",
+        action="store_true",
+        help="with --validate, include dispatch prompt records in JSON output",
+    )
     args = parser.parse_args(list(argv))
 
     if args.selftest:
@@ -562,4 +629,3 @@ def main(argv: Sequence[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

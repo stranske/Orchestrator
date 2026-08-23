@@ -10,6 +10,7 @@ Usage:
   python3 langsmith_pull.py --ndjson path/to/langsmith-fleet.ndjson --dry-run --json
   python3 langsmith_pull.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -242,7 +243,11 @@ def _resolve_run_id(record: dict[str, Any], indexes: dict[str, Any]) -> tuple[st
     if agent:
         agent_matches = indexes["by_ref_agent"].get((ref[0], ref[1], agent), [])
         if len(agent_matches) == 1:
-            return agent_matches[0], "github_ref_agent", f"{ref_field}:{ref[0]}#{ref[1]} agent:{agent}"
+            return (
+                agent_matches[0],
+                "github_ref_agent",
+                f"{ref_field}:{ref[0]}#{ref[1]} agent:{agent}",
+            )
         if len(agent_matches) > 1:
             return None, "ambiguous_github_ref_agent", f"{ref[0]}#{ref[1]} agent:{agent}"
     ref_matches = indexes["by_ref"].get(ref, [])
@@ -290,8 +295,14 @@ def _trace_key(source: str, run_id: str, record: dict[str, Any], raw_ref: str) -
     return f"{source}:{run_id}:{suffix}"
 
 
-def ingest_files(paths: list[Path], *, dry_run: bool = False, strict: bool = False,
-                 allow_unmatched: bool = False, source: str = "langsmith") -> dict[str, Any]:
+def ingest_files(
+    paths: list[Path],
+    *,
+    dry_run: bool = False,
+    strict: bool = False,
+    allow_unmatched: bool = False,
+    source: str = "langsmith",
+) -> dict[str, Any]:
     indexes = _run_indexes()
     cost_totals: dict[str, dict[str, float]] = defaultdict(
         lambda: {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "latency_s": 0.0}
@@ -353,7 +364,9 @@ def ingest_files(paths: list[Path], *, dry_run: bool = False, strict: bool = Fal
             if operation_role == "worker" and _profile_text(record, "profile_id"):
                 summary["worker_profile_records"] += 1
             if bridge_detail:
-                raw_ref = f"{raw_ref}; source_run_id={_text(record, 'run_id')}; bridge={bridge_detail}"
+                raw_ref = (
+                    f"{raw_ref}; source_run_id={_text(record, 'run_id')}; bridge={bridge_detail}"
+                )
             if durability:
                 summary["durability_records"] += 1
                 if not dry_run:
@@ -429,12 +442,13 @@ def ingest_files(paths: list[Path], *, dry_run: bool = False, strict: bool = Fal
 
     summary["skipped"] = dict(sorted(summary["skipped"].items()))
     summary["matched_by"] = dict(sorted(summary["matched_by"].items()))
-    summary["operation_role_counts"] = dict(
-        sorted(summary["operation_role_counts"].items())
-    )
-    if strict and (summary["errors"] or summary["skipped"].get("wrong_schema")
-                   or summary["skipped"].get("missing_run_id")
-                   or summary["skipped"].get("invalid_operation_role")):
+    summary["operation_role_counts"] = dict(sorted(summary["operation_role_counts"].items()))
+    if strict and (
+        summary["errors"]
+        or summary["skipped"].get("wrong_schema")
+        or summary["skipped"].get("missing_run_id")
+        or summary["skipped"].get("invalid_operation_role")
+    ):
         summary["strict_failed"] = True
     else:
         summary["strict_failed"] = False
@@ -446,7 +460,9 @@ def _print_summary(summary: dict[str, Any], *, as_json: bool):
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
     action = "would write" if summary["dry_run"] else "wrote"
-    trace_count = summary["trace_records"] if summary["dry_run"] else summary["written_trace_records"]
+    trace_count = (
+        summary["trace_records"] if summary["dry_run"] else summary["written_trace_records"]
+    )
     cost_count = summary["cost_records"] if summary["dry_run"] else summary["written_cost_records"]
     durability_count = (
         summary["durability_records"]
@@ -472,8 +488,14 @@ def _selftest():
     feedback.DB_PATH = tmp / "orchestrator.db"
     try:
         feedback.record_run("orch-1", "stranske/Workflows#1", "implement", "codex")
-        feedback.record_run("remote:stranske/Workflows#2151:codex", "stranske/Workflows#2151",
-                            "implement", "codex", mode="remote", pr_number=2151)
+        feedback.record_run(
+            "remote:stranske/Workflows#2151:codex",
+            "stranske/Workflows#2151",
+            "implement",
+            "codex",
+            mode="remote",
+            pr_number=2151,
+        )
         fixture = tmp / "langsmith-fleet.ndjson"
         records = [
             {
@@ -587,7 +609,9 @@ def _selftest():
         assert summary["matched_by"] == {"github_ref_agent": 2, "run_id": 2}, summary
         assert summary["trace_records"] == 3 and summary["written_trace_records"] == 3, summary
         assert summary["cost_records"] == 2 and summary["written_cost_records"] == 2, summary
-        assert summary["durability_records"] == 1 and summary["written_durability_records"] == 1, summary
+        assert (
+            summary["durability_records"] == 1 and summary["written_durability_records"] == 1
+        ), summary
         assert summary["skipped"] == {
             "no_trace_or_measurement": 1,
             "unmatched_github_ref": 1,
@@ -595,15 +619,25 @@ def _selftest():
         }, summary
         assert len(summary["errors"]) == 1, summary
         with feedback._conn() as c:
-            cost = c.execute("SELECT tokens_in, tokens_out, cost_usd, latency_s, source FROM costs "
-                             "WHERE run_id='orch-1'").fetchone()
-            remote_cost = c.execute("SELECT tokens_in, tokens_out, cost_usd, latency_s, source FROM costs "
-                                    "WHERE run_id='remote:stranske/Workflows#2151:codex'").fetchone()
-            traces = c.execute("SELECT COUNT(*) FROM execution_traces WHERE run_id='orch-1'").fetchone()[0]
-            remote_trace = c.execute("SELECT raw_ref FROM execution_traces "
-                                     "WHERE run_id='remote:stranske/Workflows#2151:codex'").fetchone()
-            remote_outcome = c.execute("SELECT merged, durability, notes FROM outcomes "
-                                       "WHERE run_id='remote:stranske/Workflows#2151:codex'").fetchone()
+            cost = c.execute(
+                "SELECT tokens_in, tokens_out, cost_usd, latency_s, source FROM costs "
+                "WHERE run_id='orch-1'"
+            ).fetchone()
+            remote_cost = c.execute(
+                "SELECT tokens_in, tokens_out, cost_usd, latency_s, source FROM costs "
+                "WHERE run_id='remote:stranske/Workflows#2151:codex'"
+            ).fetchone()
+            traces = c.execute(
+                "SELECT COUNT(*) FROM execution_traces WHERE run_id='orch-1'"
+            ).fetchone()[0]
+            remote_trace = c.execute(
+                "SELECT raw_ref FROM execution_traces "
+                "WHERE run_id='remote:stranske/Workflows#2151:codex'"
+            ).fetchone()
+            remote_outcome = c.execute(
+                "SELECT merged, durability, notes FROM outcomes "
+                "WHERE run_id='remote:stranske/Workflows#2151:codex'"
+            ).fetchone()
             role_counts = dict(
                 c.execute(
                     "SELECT operation_role,COUNT(*) FROM execution_attempts "
@@ -614,7 +648,11 @@ def _selftest():
         assert remote_cost == (10, 3, 0.07, 0.25, "langsmith"), remote_cost
         assert traces == 2, traces
         assert remote_trace and "source_run_id=workflows-run-123" in remote_trace[0], remote_trace
-        assert remote_outcome == (1, "reverted", "langsmith durability export: matching_revert_pr"), remote_outcome
+        assert remote_outcome == (
+            1,
+            "reverted",
+            "langsmith durability export: matching_revert_pr",
+        ), remote_outcome
         assert summary["operation_role_counts"] == {
             "evaluator": 1,
             "synthesizer": 1,
@@ -622,12 +660,14 @@ def _selftest():
             "verifier": 1,
         }, summary
         assert role_counts == {"evaluator": 1, "synthesizer": 1, "verifier": 1}, role_counts
-        assert feedback.resolved_worker_model_for_run("orch-1") is None, (
-            "evaluate_pr_compare evaluator changed worker-profile attribution"
+        assert (
+            feedback.resolved_worker_model_for_run("orch-1") is None
+        ), "evaluate_pr_compare evaluator changed worker-profile attribution"
+        print(
+            "langsmith_pull.py selftest: OK (fleet NDJSON parse, run_id/github_pr+agent bridge, "
+            "validated operation roles, evaluator-safe worker attribution, trace retention, "
+            "cost aggregation, durability labels, dry-run, skip/error accounting)"
         )
-        print("langsmith_pull.py selftest: OK (fleet NDJSON parse, run_id/github_pr+agent bridge, "
-              "validated operation roles, evaluator-safe worker attribution, trace retention, "
-              "cost aggregation, durability labels, dry-run, skip/error accounting)")
     finally:
         feedback.DB_PATH = old_db
         shutil.rmtree(tmp, ignore_errors=True)
@@ -635,14 +675,27 @@ def _selftest():
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ndjson", action="append", type=Path, default=[],
-                        help="langsmith-fleet/v1 NDJSON artifact to ingest; repeatable")
+    parser.add_argument(
+        "--ndjson",
+        action="append",
+        type=Path,
+        default=[],
+        help="langsmith-fleet/v1 NDJSON artifact to ingest; repeatable",
+    )
     parser.add_argument("paths", nargs="*", type=Path, help="additional NDJSON artifacts")
-    parser.add_argument("--dry-run", action="store_true", help="parse and join without writing feedback DB")
-    parser.add_argument("--strict", action="store_true",
-                        help="exit nonzero on malformed JSON, wrong schema, or missing run_id")
-    parser.add_argument("--allow-unmatched", action="store_true",
-                        help="write rows even when run_id is not already present in feedback.runs")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="parse and join without writing feedback DB"
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit nonzero on malformed JSON, wrong schema, or missing run_id",
+    )
+    parser.add_argument(
+        "--allow-unmatched",
+        action="store_true",
+        help="write rows even when run_id is not already present in feedback.runs",
+    )
     parser.add_argument("--source", default="langsmith", help="source label for costs/traces")
     parser.add_argument("--json", action="store_true", help="print machine-readable summary")
     parser.add_argument("--selftest", action="store_true", help="run offline selftest")
@@ -656,12 +709,16 @@ def main(argv: list[str]) -> int:
     if not paths:
         parser.error("provide at least one --ndjson PATH or positional PATH")
 
-    summary = ingest_files(paths, dry_run=args.dry_run, strict=args.strict,
-                           allow_unmatched=args.allow_unmatched, source=args.source)
+    summary = ingest_files(
+        paths,
+        dry_run=args.dry_run,
+        strict=args.strict,
+        allow_unmatched=args.allow_unmatched,
+        source=args.source,
+    )
     _print_summary(summary, as_json=args.json)
     return 2 if summary["strict_failed"] else 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

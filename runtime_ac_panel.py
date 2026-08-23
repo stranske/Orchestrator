@@ -14,8 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import feedback
 import runtime_ac
@@ -31,10 +32,7 @@ def _read_json(path: str | Path) -> Any:
 
 
 def _criterion_index(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        criterion["id"]: criterion
-        for criterion in spec.get("acceptance_criteria") or []
-    }
+    return {criterion["id"]: criterion for criterion in spec.get("acceptance_criteria") or []}
 
 
 def _gate_criteria(gate: dict[str, Any]) -> list[dict[str, Any]]:
@@ -152,9 +150,7 @@ def _list_or_empty(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _normalize_review(
-    review: dict[str, Any], idx: int, known_ac_ids: set[str]
-) -> dict[str, Any]:
+def _normalize_review(review: dict[str, Any], idx: int, known_ac_ids: set[str]) -> dict[str, Any]:
     if not isinstance(review, dict):
         raise ValueError(f"review[{idx}] must be an object")
     reviewer = str(review.get("reviewer") or f"reviewer-{idx + 1}").strip()
@@ -188,9 +184,7 @@ def _normalize_review(
             }
         )
     gaps = [
-        str(gap).strip()
-        for gap in _list_or_empty(review.get("evidence_gaps"))
-        if str(gap).strip()
+        str(gap).strip() for gap in _list_or_empty(review.get("evidence_gaps")) if str(gap).strip()
     ]
     return {
         "reviewer": reviewer,
@@ -241,19 +235,13 @@ def _parse_jsonish(text: str) -> Any:
         except json.JSONDecodeError:
             continue
     suffix = f" in first {JSON_SCAN_LIMIT} chars" if len(raw) > JSON_SCAN_LIMIT else ""
-    raise ValueError(
-        f"no parseable JSON object or array found in reviewer output{suffix}"
-    )
+    raise ValueError(f"no parseable JSON object or array found in reviewer output{suffix}")
 
 
 def _single_review_from_doc(doc: Any, reviewer: str) -> dict[str, Any]:
     if isinstance(doc, dict) and isinstance(doc.get("reviews"), list):
         candidates = [item for item in doc["reviews"] if isinstance(item, dict)]
-        exact = [
-            item
-            for item in candidates
-            if str(item.get("reviewer") or "").strip() == reviewer
-        ]
+        exact = [item for item in candidates if str(item.get("reviewer") or "").strip() == reviewer]
         if exact:
             review = dict(exact[0])
         elif candidates:
@@ -339,23 +327,15 @@ def dispatch_reviewers(
             }
         meta = {
             "reviewer": reviewer,
-            "agent": (
-                result.get("agent", reviewer) if isinstance(result, dict) else reviewer
-            ),
+            "agent": (result.get("agent", reviewer) if isinstance(result, dict) else reviewer),
             "exit": result.get("exit") if isinstance(result, dict) else None,
             "parsed": False,
             "cwd": result.get("cwd") if isinstance(result, dict) else None,
-            "isolated_cwd": (
-                result.get("isolated_cwd") if isinstance(result, dict) else None
-            ),
-            "stderr_tail": (
-                result.get("stderr_tail") if isinstance(result, dict) else None
-            ),
+            "isolated_cwd": (result.get("isolated_cwd") if isinstance(result, dict) else None),
+            "stderr_tail": (result.get("stderr_tail") if isinstance(result, dict) else None),
         }
         if not isinstance(result, dict):
-            review = _synthetic_review(
-                reviewer, "reviewer offload returned a non-dict result"
-            )
+            review = _synthetic_review(reviewer, "reviewer offload returned a non-dict result")
             meta["error"] = review["rationale"]
         elif result.get("exit") != 0:
             reason = (
@@ -503,9 +483,7 @@ def record_panel_verdict(run_id: str, panel: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _all_check_results(
-    spec: dict[str, Any], status: str = "PASS"
-) -> list[dict[str, Any]]:
+def _all_check_results(spec: dict[str, Any], status: str = "PASS") -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for criterion in spec["acceptance_criteria"]:
         for check in criterion["checks"]:
@@ -517,13 +495,9 @@ def _selftest() -> None:
     import tempfile
 
     spec = runtime_ac._valid_spec()
-    gate_pass = runtime_ac.evaluate_results(
-        spec, {"check_results": _all_check_results(spec)}
-    )
+    gate_pass = runtime_ac.evaluate_results(spec, {"check_results": _all_check_results(spec)})
     prompt = build_review_prompt(spec, gate_pass, reviewer="gemini")
-    assert (
-        "STRICT JSON" in prompt and '"reviewer": "gemini"' in prompt and "AC1" in prompt
-    ), prompt
+    assert "STRICT JSON" in prompt and '"reviewer": "gemini"' in prompt and "AC1" in prompt, prompt
 
     reviews_pass = {
         "reviews": [
@@ -547,8 +521,7 @@ def _selftest() -> None:
     }
     panel_pass = adjudicate_panel(spec, gate_pass, reviews_pass)
     assert (
-        panel_pass["verdict"] == "PASS"
-        and panel_pass["verifier_verdict"] == "PASS_RUNTIME_AC"
+        panel_pass["verdict"] == "PASS" and panel_pass["verifier_verdict"] == "PASS_RUNTIME_AC"
     ), panel_pass
 
     one_veto = {
@@ -591,8 +564,7 @@ def _selftest() -> None:
     }
     panel_unsubstantiated = adjudicate_panel(spec, gate_pass, unsubstantiated_fail)
     assert (
-        panel_unsubstantiated["verdict"] == "PASS"
-        and panel_unsubstantiated["n_vetoes"] == 0
+        panel_unsubstantiated["verdict"] == "PASS" and panel_unsubstantiated["n_vetoes"] == 0
     ), panel_unsubstantiated
     assert not panel_unsubstantiated["reviews"][1]["blockers"], panel_unsubstantiated
 
@@ -638,24 +610,20 @@ def _selftest() -> None:
     panel_fail = adjudicate_panel(spec, gate_pass, two_vetoes)
     assert panel_fail["verdict"] == "FAIL" and panel_fail["n_vetoes"] == 2, panel_fail
     assert panel_fail["evidence_gaps"][0]["gap"] == "need browser trace", panel_fail
-    assert (
-        panel_fail["evidence_type_citations"][0]["name"] == "runtime_output_evidence"
-    ), panel_fail
+    assert panel_fail["evidence_type_citations"][0]["name"] == "runtime_output_evidence", panel_fail
 
     insufficient = adjudicate_panel(
         spec, gate_pass, {"reviews": [{"reviewer": "solo", "verdict": "PASS"}]}
     )
     assert (
-        insufficient["verdict"] == "NEEDS_REVIEW"
-        and "below required" in insufficient["reason"]
+        insufficient["verdict"] == "NEEDS_REVIEW" and "below required" in insufficient["reason"]
     ), insufficient
     gate_fail = runtime_ac.evaluate_results(
         spec, {"check_results": _all_check_results(spec, "FAIL")}
     )
     panel_gate_fail = adjudicate_panel(spec, gate_fail, reviews_pass)
     assert (
-        panel_gate_fail["verdict"] == "FAIL"
-        and "automated" in panel_gate_fail["reason"]
+        panel_gate_fail["verdict"] == "FAIL" and "automated" in panel_gate_fail["reason"]
     ), panel_gate_fail
 
     def fake_offload(agent: str, prompt: str, **_kwargs: Any) -> dict[str, Any]:
@@ -685,9 +653,7 @@ def _selftest() -> None:
     )
     assert dispatched["dispatches"][0]["parsed"] is True, dispatched
     assert dispatched["dispatches"][2]["parsed"] is False, dispatched
-    assert (
-        dispatched["review_doc"]["reviews"][2]["verdict"] == "NEEDS_REVIEW"
-    ), dispatched
+    assert dispatched["review_doc"]["reviews"][2]["verdict"] == "NEEDS_REVIEW", dispatched
     panel_dispatched = adjudicate_panel(
         spec, gate_pass, dispatched["review_doc"], pass_threshold=0.66
     )
@@ -713,16 +679,13 @@ def _selftest() -> None:
         "no parseable JSON" in bad_dispatched["review_doc"]["reviews"][0]["rationale"]
     ), bad_dispatched
     assert (
-        "simulated adapter failure"
-        in bad_dispatched["review_doc"]["reviews"][1]["rationale"]
+        "simulated adapter failure" in bad_dispatched["review_doc"]["reviews"][1]["rationale"]
     ), bad_dispatched
 
     with tempfile.TemporaryDirectory(prefix="runtime-ac-panel-") as tmp:
         feedback.DB_PATH = Path(tmp) / "panel.db"
         feedback.record_run("run-panel", "o/r#1", "implement", "codex", mode="remote")
-        feedback.record_evidence_type(
-            "runtime_output_evidence", "fixture evidence type"
-        )
+        feedback.record_evidence_type("runtime_output_evidence", "fixture evidence type")
         rec = record_panel_verdict("run-panel", panel_fail)
         assert rec["recorded"] is True and rec["evidence_gaps"] == 1, rec
         assert rec["evidence_type_citations"] == 1, rec
@@ -750,9 +713,7 @@ def main(argv: list[str]) -> int:
         description="Build and adjudicate multi-judge runtime AC reviews."
     )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--prompt", help="runtime AC spec JSON file to turn into a judge prompt"
-    )
+    group.add_argument("--prompt", help="runtime AC spec JSON file to turn into a judge prompt")
     group.add_argument(
         "--adjudicate",
         help="runtime AC spec JSON file to adjudicate with --gate and --reviews",
@@ -763,17 +724,13 @@ def main(argv: list[str]) -> int:
     group.add_argument("--selftest", action="store_true")
     parser.add_argument("--gate", help="runtime AC gate JSON file")
     parser.add_argument("--reviews", help="review JSON file for --adjudicate")
-    parser.add_argument(
-        "--reviewer", default="reviewer", help="reviewer name to embed in --prompt"
-    )
+    parser.add_argument("--reviewer", default="reviewer", help="reviewer name to embed in --prompt")
     parser.add_argument(
         "--reviewers",
         default=",".join(DEFAULT_REVIEWERS),
         help="comma-separated reviewer agents for --dispatch (default: vibe,gemini,cursor)",
     )
-    parser.add_argument(
-        "--cwd", default=".", help="working directory for reviewer offloads"
-    )
+    parser.add_argument("--cwd", default=".", help="working directory for reviewer offloads")
     parser.add_argument(
         "--mode", help="optional reviewer offload mode to pass to dispatcher.offload"
     )
@@ -811,9 +768,7 @@ def main(argv: list[str]) -> int:
     if args.dispatch:
         if not args.gate:
             parser.error("--dispatch requires --gate")
-        spec = runtime_ac.parse_spec_json(
-            Path(args.dispatch).read_text(encoding="utf-8")
-        )
+        spec = runtime_ac.parse_spec_json(Path(args.dispatch).read_text(encoding="utf-8"))
         gate = _read_json(args.gate)
         dispatched = dispatch_reviewers(
             spec,
@@ -839,9 +794,7 @@ def main(argv: list[str]) -> int:
     if args.adjudicate:
         if not args.gate or not args.reviews:
             parser.error("--adjudicate requires --gate and --reviews")
-        spec = runtime_ac.parse_spec_json(
-            Path(args.adjudicate).read_text(encoding="utf-8")
-        )
+        spec = runtime_ac.parse_spec_json(Path(args.adjudicate).read_text(encoding="utf-8"))
         gate = _read_json(args.gate)
         reviews = _read_json(args.reviews)
         panel = adjudicate_panel(
@@ -861,4 +814,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

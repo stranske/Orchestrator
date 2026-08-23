@@ -1,5 +1,5 @@
-import time
 import sqlite3
+import time
 
 import pytest
 
@@ -34,12 +34,8 @@ def test_partial_execution_attempt_schema_migrates_before_indexes(tmp_path):
         with sqlite3.connect(feedback.DB_PATH) as conn:
             conn.execute("CREATE TABLE execution_attempts (attempt_id TEXT PRIMARY KEY)")
         with feedback._conn() as conn:
-            columns = {
-                row[1] for row in conn.execute("PRAGMA table_info(execution_attempts)")
-            }
-            indexes = {
-                row[1] for row in conn.execute("PRAGMA index_list(execution_attempts)")
-            }
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(execution_attempts)")}
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list(execution_attempts)")}
         assert {"operation_role", "status", "profile_id", "resolved_model"} <= columns
         assert {
             "idx_execution_attempts_run_role",
@@ -219,9 +215,7 @@ def test_evaluator_trace_cannot_resolve_worker_model(tmp_path):
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run(
-            "codex-worker", "stranske/Workflows#1", "implement", "codex"
-        )
+        feedback.record_run("codex-worker", "stranske/Workflows#1", "implement", "codex")
         feedback.record_execution_trace(
             "codex-worker",
             trace_id="claude-judge",
@@ -239,9 +233,9 @@ def test_evaluator_trace_cannot_resolve_worker_model(tmp_path):
             status="success",
         )
 
-        assert feedback.resolved_worker_model_for_run("codex-worker") is None, (
-            "evaluator trace resolved worker model"
-        )
+        assert (
+            feedback.resolved_worker_model_for_run("codex-worker") is None
+        ), "evaluator trace resolved worker model"
         with feedback._conn() as conn:
             roles = conn.execute(
                 "SELECT DISTINCT operation_role FROM execution_attempts "
@@ -283,10 +277,7 @@ def test_successful_worker_attempt_is_the_only_resolver(tmp_path):
             resolved_model="gpt-new-2026-07-01",
             status="success",
         )
-        assert (
-            feedback.resolved_worker_model_for_run("worker")
-            == "gpt-new-2026-07-01"
-        )
+        assert feedback.resolved_worker_model_for_run("worker") == "gpt-new-2026-07-01"
     finally:
         feedback.DB_PATH = old_db
 
@@ -339,9 +330,7 @@ def test_legacy_migration_is_additive_and_conservative(tmp_path):
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run(
-            "legacy", "o/r#3", "implement", "codex", model="claude-sonnet-4-6"
-        )
+        feedback.record_run("legacy", "o/r#3", "implement", "codex", model="claude-sonnet-4-6")
         with feedback._conn() as conn:
             conn.execute(
                 "INSERT INTO execution_traces VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -363,18 +352,14 @@ def test_legacy_migration_is_additive_and_conservative(tmp_path):
             )
             before = {
                 "runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
-                "traces": conn.execute(
-                    "SELECT COUNT(*) FROM execution_traces"
-                ).fetchone()[0],
+                "traces": conn.execute("SELECT COUNT(*) FROM execution_traces").fetchone()[0],
             }
 
         report = feedback.migrate_legacy_execution_attempts(apply=True)
         with feedback._conn() as conn:
             after = {
                 "runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
-                "traces": conn.execute(
-                    "SELECT COUNT(*) FROM execution_traces"
-                ).fetchone()[0],
+                "traces": conn.execute("SELECT COUNT(*) FROM execution_traces").fetchone()[0],
             }
             role = conn.execute(
                 "SELECT operation_role FROM execution_attempts "
@@ -402,12 +387,18 @@ def test_multi_capability_run_records_one_edge_each(tmp_path):
     # unregistered case, which the sibling test asserts produces no attribution.
     env_prereq.require(
         env_prereq.ledger_rows_absent("adversarial-review", "testgen-lane"),
-        env_prereq.ledger_version_lineage_absent("adversarial-review", "testgen-lane"))
+        env_prereq.ledger_version_lineage_absent("adversarial-review", "testgen-lane"),
+    )
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run("multi", "o/r#1", "review", "codex",
-                            capability_ids=["adversarial-review", "testgen-lane"])
+        feedback.record_run(
+            "multi",
+            "o/r#1",
+            "review",
+            "codex",
+            capability_ids=["adversarial-review", "testgen-lane"],
+        )
         with feedback._conn() as c:
             rows = c.execute(
                 "SELECT capability_id, capability_version_id FROM influence_edges "
@@ -426,8 +417,13 @@ def test_unversioned_capability_is_unattributed_not_misattributed(tmp_path):
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run("mixed", "o/r#2", "review", "codex",
-                            capability_ids=["adversarial-review", "no-such-capability"])
+        feedback.record_run(
+            "mixed",
+            "o/r#2",
+            "review",
+            "codex",
+            capability_ids=["adversarial-review", "no-such-capability"],
+        )
         with feedback._conn() as c:
             rows = c.execute(
                 "SELECT capability_id FROM influence_edges WHERE target_run_id='mixed'"
@@ -446,12 +442,14 @@ def test_role_run_creates_a_capability_tagged_edge(tmp_path):
     # Same prerequisite as the multi-capability case: no version lineage in the ledger, no edge.
     env_prereq.require(
         env_prereq.ledger_rows_absent("role-triage"),
-        env_prereq.ledger_version_lineage_absent("role-triage"))
+        env_prereq.ledger_version_lineage_absent("role-triage"),
+    )
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_role_run("role:triage:gemini:1", "triage",
-                                 "stranske/Workflows#1", "gemini", action="propose")
+        feedback.record_role_run(
+            "role:triage:gemini:1", "triage", "stranske/Workflows#1", "gemini", action="propose"
+        )
         with feedback._conn() as c:
             rows = c.execute(
                 "SELECT influence_type, capability_id, capability_version_id "
@@ -479,8 +477,14 @@ def test_placeholder_is_never_accepted_as_a_resolved_model():
             feedback.validate_resolved_worker_model(placeholder)
 
     # The refusal must stay NARROW -- a real vendor id can never be caught by it.
-    for real in ("gpt-5.6-terra", "claude-opus-5", "mistral-medium-3.5", "gemini-3.1-pro",
-                 "composer-2.5", "mistral/codestral-latest"):
+    for real in (
+        "gpt-5.6-terra",
+        "claude-opus-5",
+        "mistral-medium-3.5",
+        "gemini-3.1-pro",
+        "composer-2.5",
+        "mistral/codestral-latest",
+    ):
         assert feedback.validate_resolved_worker_model(real) == real
 
     # And the adapter-tag rule it already had is untouched.
@@ -508,9 +512,15 @@ def test_cli_reported_identity_resolves_only_seats_that_actually_report(tmp_path
     sessions.mkdir(parents=True)
     rollout = sessions / "rollout-2026-08-22T00-00-00-abc.jsonl"
     rollout.write_text(
-        json.dumps({"type": "session_meta", "payload": {
-            "cwd": str(workspace.resolve()), "cli_version": "0.149.0"}}) + "\n"
-        + json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}}) + "\n"
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"cwd": str(workspace.resolve()), "cli_version": "0.149.0"},
+            }
+        )
+        + "\n"
+        + json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}})
+        + "\n"
     )
     monkeypatch.setattr(adapters, "CODEX_SESSIONS", tmp_path / "sessions")
 
@@ -522,8 +532,10 @@ def test_cli_reported_identity_resolves_only_seats_that_actually_report(tmp_path
     # NEVER GUESSED. A rollout that names no real model resolves to nothing, with a reason --
     # the requested model and the catalog are both deliberately unreachable from here.
     rollout.write_text(
-        json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}}) + "\n"
-        + json.dumps({"type": "turn_context", "payload": {"model": "<synthetic>"}}) + "\n"
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}})
+        + "\n"
+        + json.dumps({"type": "turn_context", "payload": {"model": "<synthetic>"}})
+        + "\n"
     )
     blank = adapters.cli_reported_model("codex", workspace)
     assert blank["model"] is None
@@ -577,27 +589,43 @@ def test_completion_records_cli_identity_and_never_invents_one(tmp_path, monkeyp
         started = int(time.time())
         stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime(started))
         (sessions / "2026" / f"rollout-{stamp}-x.jsonl").write_text(
-            json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}}) + "\n"
-            + json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}}) + "\n"
+            json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}})
+            + "\n"
+            + json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}})
+            + "\n"
         )
         monkeypatch.setattr(adapters, "CODEX_SESSIONS", sessions)
 
         def _run(agent, profile_id, run_id):
             feedback.record_run(run_id, f"offload:{workspace}", "offload", agent)
             feedback.record_execution_attempt(
-                run_id, attempt_id=f"attempt:profile:{run_id}", operation_role="worker",
-                profile_id=profile_id, requested_provider="x", requested_model="y",
-                status="started", source="orchestrator-profile-decision",
+                run_id,
+                attempt_id=f"attempt:profile:{run_id}",
+                operation_role="worker",
+                profile_id=profile_id,
+                requested_provider="x",
+                requested_model="y",
+                status="started",
+                source="orchestrator-profile-decision",
                 started_ts=started,
             )
             ledger_reconcile.record_completion(
-                run_id, agent, target=f"offload:{workspace}", task_type="offload",
-                selected_profile_id=profile_id, started_ts=started,
+                run_id,
+                agent,
+                target=f"offload:{workspace}",
+                task_type="offload",
+                selected_profile_id=profile_id,
+                started_ts=started,
             )
-            return sqlite3.connect(feedback.DB_PATH).execute(
-                "SELECT status, resolved_provider, resolved_model, fallback_reason "
-                "FROM execution_attempts WHERE run_id=?", (run_id,)
-            ).fetchone()
+            return (
+                sqlite3.connect(feedback.DB_PATH)
+                .execute(
+                    "SELECT status, resolved_provider, resolved_model, fallback_reason "
+                    "FROM execution_attempts WHERE run_id=?",
+                    (run_id,),
+                )
+                .fetchone()
+            )
 
         status, provider, model, _ = _run("codex", "codex-5.6-terra-high", "r-codex")
         assert (status, provider, model) == ("complete", "openai", "gpt-5.6-terra")
@@ -613,7 +641,8 @@ def test_completion_records_cli_identity_and_never_invents_one(tmp_path, monkeyp
 
         # DELIBERATE BREAK: reader always blank, as before the fix.
         monkeypatch.setattr(
-            adapters, "cli_reported_model",
+            adapters,
+            "cli_reported_model",
             lambda *a, **k: {"model": None, "cli_version": None, "source": None, "reason": None},
         )
         status, _, model, _ = _run("codex", "codex-5.6-terra-high", "r-broken")
@@ -637,10 +666,15 @@ def test_reconcile_finds_the_profile_when_the_ledger_never_carried_one(tmp_path,
     try:
         feedback.record_run("r-attempt", "offload:/tmp/ws", "offload", "codex")
         feedback.record_execution_attempt(
-            "r-attempt", attempt_id="attempt:profile:r-attempt", operation_role="worker",
-            profile_id="codex-5.6-terra-high", requested_provider="openai",
-            requested_model="gpt-5.6-terra", status="started",
-            source="orchestrator-profile-decision", started_ts=int(time.time()),
+            "r-attempt",
+            attempt_id="attempt:profile:r-attempt",
+            operation_role="worker",
+            profile_id="codex-5.6-terra-high",
+            requested_provider="openai",
+            requested_model="gpt-5.6-terra",
+            status="started",
+            source="orchestrator-profile-decision",
+            started_ts=int(time.time()),
         )
         # The attempt knows its own profile even though no ledger row ever said so.
         assert ledger_reconcile._profile_id_from_attempt("r-attempt") == "codex-5.6-terra-high"
@@ -650,8 +684,10 @@ def test_reconcile_finds_the_profile_when_the_ledger_never_carried_one(tmp_path,
         # Once resolved, it is NOT offered again — otherwise reconcile would keep reopening
         # attempts that already carry provenance.
         feedback.complete_profile_attempt(
-            "r-attempt", selected_profile_id="codex-5.6-terra-high",
-            resolved_provider="openai", resolved_model="gpt-5.6-terra",
+            "r-attempt",
+            selected_profile_id="codex-5.6-terra-high",
+            resolved_provider="openai",
+            resolved_model="gpt-5.6-terra",
         )
         assert ledger_reconcile._profile_id_from_attempt("r-attempt") is None
     finally:
@@ -672,24 +708,36 @@ def test_a_resolved_attempt_cannot_also_have_fallen_back(tmp_path):
     try:
         feedback.record_run("fb-1", "offload:/tmp/ws", "offload", "codex")
         feedback.record_execution_attempt(
-            "fb-1", attempt_id="attempt:profile:fb-1", operation_role="worker",
-            profile_id="codex-5.6-terra-high", requested_provider="openai",
-            requested_model="gpt-5.6-terra", status="started", started_ts=int(time.time()),
+            "fb-1",
+            attempt_id="attempt:profile:fb-1",
+            operation_role="worker",
+            profile_id="codex-5.6-terra-high",
+            requested_provider="openai",
+            requested_model="gpt-5.6-terra",
+            status="started",
+            started_ts=int(time.time()),
             source="orchestrator-profile-decision",
         )
         # Closed unresolved first -- which is what every pre-reader attempt did.
         feedback.complete_profile_attempt_unresolved(
-            "fb-1", selected_profile_id="codex-5.6-terra-high",
+            "fb-1",
+            selected_profile_id="codex-5.6-terra-high",
             fallback_reason="resolved_model_not_reported_by_offload",
         )
         # Then resolved later by the sweep.
         feedback.complete_profile_attempt(
-            "fb-1", selected_profile_id="codex-5.6-terra-high",
-            resolved_provider="openai", resolved_model="gpt-5.6-terra",
+            "fb-1",
+            selected_profile_id="codex-5.6-terra-high",
+            resolved_provider="openai",
+            resolved_model="gpt-5.6-terra",
         )
-        row = sqlite3.connect(feedback.DB_PATH).execute(
-            "SELECT resolved_model, fallback_reason FROM execution_attempts WHERE run_id='fb-1'"
-        ).fetchone()
+        row = (
+            sqlite3.connect(feedback.DB_PATH)
+            .execute(
+                "SELECT resolved_model, fallback_reason FROM execution_attempts WHERE run_id='fb-1'"
+            )
+            .fetchone()
+        )
         assert row[0] == "gpt-5.6-terra", row
         assert row[1] is None, ("a resolved attempt did not fall back", row)
 
@@ -746,11 +794,15 @@ def test_every_seat_with_a_session_store_can_report_and_is_read_from_its_own_sto
     # --- vibe: session meta keyed by working_directory ---
     vibe = tmp_path / "vibe" / "session_1"
     vibe.mkdir(parents=True)
-    (vibe / "meta.json").write_text(_json.dumps({
-        "environment": {"working_directory": resolved_ws},
-        "config": {"active_model": "mistral-medium-3.5"},
-        "start_time": "2026-08-22T15:00:00+00:00",
-    }))
+    (vibe / "meta.json").write_text(
+        _json.dumps(
+            {
+                "environment": {"working_directory": resolved_ws},
+                "config": {"active_model": "mistral-medium-3.5"},
+                "start_time": "2026-08-22T15:00:00+00:00",
+            }
+        )
+    )
     monkeypatch.setattr(adapters, "VIBE_SESSIONS", tmp_path / "vibe")
     got = adapters.cli_reported_model("vibe", workspace)
     assert got["model"] == "mistral-medium-3.5", got
@@ -778,7 +830,10 @@ def test_every_seat_with_a_session_store_can_report_and_is_read_from_its_own_sto
     # does (`Propagating selected model override to backend: label="..."`), so the dispatcher gives
     # each gemini run its own log and resolves from it.
     assert "gemini" not in adapters.NO_SESSION_LOG_AGENTS, adapters.NO_SESSION_LOG_AGENTS
-    assert adapters.model_label_from_agy_log(
-        'model_config_manager.go:311] Propagating selected model override to backend: '
-        'label="Gemini 3.6 Flash (High)"'
-    ) == "Gemini 3.6 Flash (High)"
+    assert (
+        adapters.model_label_from_agy_log(
+            "model_config_manager.go:311] Propagating selected model override to backend: "
+            'label="Gemini 3.6 Flash (High)"'
+        )
+        == "Gemini 3.6 Flash (High)"
+    )

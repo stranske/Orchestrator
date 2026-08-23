@@ -17,6 +17,7 @@ on the finding. An auditor holding a candidate defect must apply the patch first
 without a patch there is nothing for step 2 to remove and the run cannot say anything about the
 finding. Recorded because a real audit run reached for it one phase early.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -120,7 +121,9 @@ def _default_test_paths(worktree: Path, base_ref: str) -> list[str]:
 def _extract_base(worktree: Path, base_ref: str, dest: Path) -> str | None:
     archive = _git(worktree, ["archive", "--format=tar", base_ref])
     if archive.returncode != 0:
-        return archive.stderr.decode(errors="replace").strip() or f"git archive failed for {base_ref}"
+        return (
+            archive.stderr.decode(errors="replace").strip() or f"git archive failed for {base_ref}"
+        )
     with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as tf:
         tf.extractall(dest)
     return None
@@ -250,12 +253,15 @@ def _init_repo(root: Path, *, correct_impl: bool, test_body: str) -> Path:
     wt = root / "repo"
     wt.mkdir(parents=True)
     subprocess.run(["git", "init", str(wt)], check=True, capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(wt), "config", "user.email", "verify@example.test"], check=True)
+    subprocess.run(
+        ["git", "-C", str(wt), "config", "user.email", "verify@example.test"], check=True
+    )
     subprocess.run(["git", "-C", str(wt), "config", "user.name", "Verifier"], check=True)
     (wt / "math_utils.py").write_text("def add(a, b):\n    return 0\n")
     subprocess.run(["git", "-C", str(wt), "add", "math_utils.py"], check=True)
-    subprocess.run(["git", "-C", str(wt), "commit", "-m", "base"], check=True,
-                   capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(wt), "commit", "-m", "base"], check=True, capture_output=True, text=True
+    )
     if correct_impl:
         (wt / "math_utils.py").write_text("def add(a, b):\n    return a + b\n")
     (wt / "tests").mkdir()
@@ -280,15 +286,33 @@ class TestHollow(unittest.TestCase):
     cmd = f"{sys.executable} -m unittest discover -s tests"
     with tempfile.TemporaryDirectory(prefix="local-verify-selftest-") as tmp:
         sound = _init_repo(Path(tmp) / "sound", correct_impl=True, test_body=sound_test)
-        out = verify(sound, base_ref="HEAD", test_cmd=cmd, test_paths=["tests/test_math_utils.py"], timeout=30)
+        out = verify(
+            sound,
+            base_ref="HEAD",
+            test_cmd=cmd,
+            test_paths=["tests/test_math_utils.py"],
+            timeout=30,
+        )
         assert out["verdict"] == "PASS", out
 
         hollow = _init_repo(Path(tmp) / "hollow", correct_impl=True, test_body=hollow_test)
-        out = verify(hollow, base_ref="HEAD", test_cmd=cmd, test_paths=["tests/test_math_utils.py"], timeout=30)
+        out = verify(
+            hollow,
+            base_ref="HEAD",
+            test_cmd=cmd,
+            test_paths=["tests/test_math_utils.py"],
+            timeout=30,
+        )
         assert out["verdict"] == "FAIL_HOLLOW", out
 
         broken = _init_repo(Path(tmp) / "broken", correct_impl=False, test_body=sound_test)
-        out = verify(broken, base_ref="HEAD", test_cmd=cmd, test_paths=["tests/test_math_utils.py"], timeout=30)
+        out = verify(
+            broken,
+            base_ref="HEAD",
+            test_cmd=cmd,
+            test_paths=["tests/test_math_utils.py"],
+            timeout=30,
+        )
         assert out["verdict"] == "FAIL_BROKEN", out
 
         old_db = feedback.DB_PATH
@@ -303,7 +327,9 @@ class TestHollow(unittest.TestCase):
         finally:
             feedback.DB_PATH = old_db
 
-    print("local_verify.py selftest: OK (green/red deliberate-break PASS, hollow, broken, feedback record)")
+    print(
+        "local_verify.py selftest: OK (green/red deliberate-break PASS, hollow, broken, feedback record)"
+    )
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
@@ -317,7 +343,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
-        capabilities.production_heartbeat("deliberate-break-verifier", event_type, ref="local_verify.main")
+
+        capabilities.production_heartbeat(
+            "deliberate-break-verifier", event_type, ref="local_verify.main"
+        )
     except Exception:
         pass
 
@@ -333,8 +362,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--test-cmd", required=True)
     parser.add_argument("--test-path", action="append", default=[])
     parser.add_argument("--timeout", type=int, default=120)
-    parser.add_argument("--record-run-id", default="",
-                        help="optional feedback.run_id to patch with verifier_verdict")
+    parser.add_argument(
+        "--record-run-id",
+        default="",
+        help="optional feedback.run_id to patch with verifier_verdict",
+    )
     args = parser.parse_args(argv)
     result = verify(
         args.worktree,
@@ -351,4 +383,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

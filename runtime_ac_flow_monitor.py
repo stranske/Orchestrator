@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_DB = Path.home() / ".codex/orchestrator/feedback/orchestrator.db"
 DEFAULT_CRON_LOG = Path.home() / ".codex/handoff/orchestrator-cron.log"
 DEFAULT_REPORT = Path.home() / ".codex/orchestrator/runtime-ac-flow-monitor.json"
@@ -31,8 +30,7 @@ PRODUCTION_RUNTIME_AC = (
     "and r.target not like '%[exp %'"
 )
 EXPERIMENT_RUNTIME_AC = (
-    "r.task_type = 'runtime_ac' "
-    "and (r.run_id like 'backfill-%' or r.target like '%[exp %')"
+    "r.task_type = 'runtime_ac' " "and (r.run_id like 'backfill-%' or r.target like '%[exp %')"
 )
 # Retained as a diagnostic only. It is explicitly not the live-flow denominator.
 CLOSER_PROXY = (
@@ -55,7 +53,9 @@ def _query_one(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ())
     return {key: row[key] for key in row.keys()}
 
 
-def _query_all(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+def _query_all(
+    conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()
+) -> list[dict[str, Any]]:
     cur = conn.execute(sql, params)
     return [{key: row[key] for key in row.keys()} for row in cur.fetchall()]
 
@@ -71,8 +71,13 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 def _stats(conn: sqlite3.Connection, where_clause: str, cutoff_ts: int) -> dict[str, int]:
     if not _table_exists(conn, "runs") or not _table_exists(conn, "outcomes"):
         return {
-            "total": 0, "in_window": 0, "outcomes": 0, "merged": 0,
-            "pending": 0, "durable": 0, "durability_failures": 0,
+            "total": 0,
+            "in_window": 0,
+            "outcomes": 0,
+            "merged": 0,
+            "pending": 0,
+            "durable": 0,
+            "durability_failures": 0,
         }
     row = _query_one(
         conn,
@@ -179,7 +184,8 @@ def _load_gate_events(
 
 def _summarize_gate_events(events: list[dict[str, Any]], sample_limit: int) -> dict[str, Any]:
     active_required = [
-        row for row in events
+        row
+        for row in events
         if bool(row.get("required"))
         and not bool(row.get("dry_run"))
         and row.get("gate_status") in ACTIVE_REQUIRED_STATUSES
@@ -316,7 +322,9 @@ def build_report(
                 "message": event_plane.get("reason"),
             }
         )
-        report["actions"].append("Run the additive feedback migration before evaluating runtime-AC flow.")
+        report["actions"].append(
+            "Run the additive feedback migration before evaluating runtime-AC flow."
+        )
     if zero_flow_alert:
         report["alerts"].append(
             {
@@ -340,7 +348,9 @@ def build_report(
         targets = ", ".join(
             str(row.get("target")) for row in gate_summary["missing_spec_recent"][:3]
         )
-        report["actions"].append(f"Materialize runtime-AC specs at the recorded exact paths: {targets}.")
+        report["actions"].append(
+            f"Materialize runtime-AC specs at the recorded exact paths: {targets}."
+        )
     if attribution_alert:
         report["alerts"].append(
             {
@@ -348,7 +358,9 @@ def build_report(
                 "message": "A structured event has target/spec attribution that does not match its canonical path.",
             }
         )
-        report["actions"].append("Quarantine mismatched target/spec events; do not count or execute them.")
+        report["actions"].append(
+            "Quarantine mismatched target/spec events; do not count or execute them."
+        )
     if materialization_alert:
         report["alerts"].append(
             {
@@ -356,7 +368,9 @@ def build_report(
                 "message": "A range-lane runtime-AC artifact reached a terminal non-installed state.",
             }
         )
-        report["actions"].append("Inspect the recorded materialization terminal_reason and regenerate the exact-target spec.")
+        report["actions"].append(
+            "Inspect the recorded materialization terminal_reason and regenerate the exact-target spec."
+        )
     if gate_summary["verdict_counts"]["FAIL"] or gate_summary["verdict_counts"]["NEEDS_REVIEW"]:
         report["alerts"].append(
             {
@@ -365,7 +379,9 @@ def build_report(
             }
         )
     if gate_summary["downstream"]["pending"]:
-        report["actions"].append("Run the durability sweep after the grace window for joined runtime-AC outcomes.")
+        report["actions"].append(
+            "Run the durability sweep after the grace window for joined runtime-AC outcomes."
+        )
     if experiment_rows_without_outcomes:
         report["actions"].append(
             "Evaluate experiment runtime-AC rows through the experiment path; they are not live gate firing."
@@ -440,8 +456,7 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
+    conn.executescript("""
         create table runs (
           run_id text primary key, ts integer, target text, task_type text,
           agent text, mode text, reasoning_level text, model text,
@@ -459,8 +474,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           payload_json text, content_hash text, redaction_count integer,
           created_ts integer, updated_ts integer
         );
-        """
-    )
+        """)
 
 
 def _insert_gate_event(
@@ -496,9 +510,20 @@ def _insert_gate_event(
     conn.execute(
         "INSERT INTO completion_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            event_id, 1, f"gate:{event_id}", None, "verification", "verification",
-            "runtime_ac_gate", "pass" if verdict == "PASS" else "fail",
-            "accepted", json.dumps({"runtime_ac_gate": gate}), "hash", 0, now, now,
+            event_id,
+            1,
+            f"gate:{event_id}",
+            None,
+            "verification",
+            "verification",
+            "runtime_ac_gate",
+            "pass" if verdict == "PASS" else "fail",
+            "accepted",
+            json.dumps({"runtime_ac_gate": gate}),
+            "hash",
+            0,
+            now,
+            now,
         ),
     )
 

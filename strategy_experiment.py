@@ -26,8 +26,9 @@ import shlex
 import sys
 import tempfile
 import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 import exp_abcd
 import research_scheduler
@@ -129,9 +130,7 @@ def normalize_arm(raw: Any, index: int = 0) -> dict[str, Any]:
         "synthesize": synthesize,
         "label": label,
         "profile_id": arm_profile_id,
-        "cost_basis": (
-            "sum_agent_runs" if strategy == "parallel" else "single_agent_run"
-        ),
+        "cost_basis": ("sum_agent_runs" if strategy == "parallel" else "single_agent_run"),
     }
 
 
@@ -144,9 +143,7 @@ def normalize_arms(arms: Sequence[Any]) -> list[dict[str, Any]]:
 
 def implementation_agents(arms: Sequence[Any]) -> list[str]:
     normalized = (
-        arms
-        if arms and isinstance(arms[0], dict) and "arm_id" in arms[0]
-        else normalize_arms(arms)
+        arms if arms and isinstance(arms[0], dict) and "arm_id" in arms[0] else normalize_arms(arms)
     )
     return _dedupe_preserve(agent for arm in normalized for agent in arm["agents"])
 
@@ -175,9 +172,7 @@ def read_arms_json(value: str) -> list[Any]:
     if isinstance(parsed, dict):
         parsed = parsed.get("arms")
     if not isinstance(parsed, list):
-        raise ValueError(
-            "--arms-json must be a JSON list or an object with an arms list"
-        )
+        raise ValueError("--arms-json must be a JSON list or an object with an arms list")
     return parsed
 
 
@@ -240,9 +235,7 @@ def build_strategy_plan(
     if hypothesis:
         strategy_args.extend(["--hypothesis", str(hypothesis)])
     else:
-        strategy_args.extend(
-            ["--arms-json", json.dumps(list(arms), separators=(",", ":"))]
-        )
+        strategy_args.extend(["--arms-json", json.dumps(list(arms), separators=(",", ":"))])
     if task_type:
         strategy_args.extend(["--task-type", task_type])
 
@@ -328,15 +321,15 @@ def strategy_metadata(
 def prepare_strategy_experiment(
     plan: dict[str, Any],
     *,
-    prepare_fn: Callable[[str, str, str, list[dict[str, Any]]], dict[str, Any]] = exp_abcd.prepare_arms,
+    prepare_fn: Callable[
+        [str, str, str, list[dict[str, Any]]], dict[str, Any]
+    ] = exp_abcd.prepare_arms,
 ) -> dict[str, Any]:
     """Prepare strategy arms without flattening shared members across arms."""
     metadata_path = Path(plan["metadata_path"])
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.write_text(
-        json.dumps(strategy_metadata(plan), indent=2, sort_keys=True)
-    )
-    
+    metadata_path.write_text(json.dumps(strategy_metadata(plan), indent=2, sort_keys=True))
+
     arms = plan["arms"]
     prepared = prepare_fn(
         plan["repo"],
@@ -344,7 +337,7 @@ def prepare_strategy_experiment(
         plan["exp_id"],
         arms,
     )
-    
+
     metadata_path.write_text(
         json.dumps(strategy_metadata(plan, prepared=prepared), indent=2, sort_keys=True)
     )
@@ -503,7 +496,13 @@ def _selftest() -> None:
         costs = strategy_arm_costs(
             plan,
             [
-                {"run_id": run_id, "tokens_in": 10, "tokens_out": 5, "cost_usd": 1.0, "latency_s": 2.0}
+                {
+                    "run_id": run_id,
+                    "tokens_in": 10,
+                    "tokens_out": 5,
+                    "cost_usd": 1.0,
+                    "latency_s": 2.0,
+                }
                 for run_id in plan["arms"][1]["attempt_run_ids"]
             ],
         )
@@ -511,9 +510,7 @@ def _selftest() -> None:
         assert parallel_cost["observed_attempt_count"] == 3, parallel_cost
         assert parallel_cost["tokens_in"] == 30 and parallel_cost["cost_usd"] == 3.0, parallel_cost
 
-    print(
-        "strategy_experiment.py selftest: OK (plan, normalize, guarded prepare metadata)"
-    )
+    print("strategy_experiment.py selftest: OK (plan, normalize, guarded prepare metadata)")
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -525,9 +522,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     source.add_argument(
         "--hypothesis", help="Hypothesis id from experiments/hypotheses.json, e.g. H4"
     )
-    source.add_argument(
-        "--arms-json", help="JSON list/object or path containing strategy arms"
-    )
+    source.add_argument("--arms-json", help="JSON list/object or path containing strategy arms")
     parser.add_argument("--hypotheses-path", help="Optional hypotheses JSON path")
     parser.add_argument(
         "--task-type",
@@ -538,9 +533,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Launch the underlying exp_abcd prepare phase",
     )
-    parser.add_argument(
-        "--confirm-strategy", action="store_true", help="Required with --prepare"
-    )
+    parser.add_argument("--confirm-strategy", action="store_true", help="Required with --prepare")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--selftest", action="store_true")
     return parser.parse_args(list(argv))
@@ -557,7 +550,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
-        capabilities.production_heartbeat("strategy-experiments", event_type, ref="strategy_experiment.main")
+
+        capabilities.production_heartbeat(
+            "strategy-experiments", event_type, ref="strategy_experiment.main"
+        )
     except Exception:
         pass
 
@@ -568,9 +564,7 @@ def main(argv: Sequence[str]) -> int:
     if args.selftest:
         _selftest()
         return 0
-    missing = [
-        name for name in ("repo", "spec_file", "exp_id") if not getattr(args, name)
-    ]
+    missing = [name for name in ("repo", "spec_file", "exp_id") if not getattr(args, name)]
     if missing:
         print(
             f"missing required args: {', '.join('--' + m.replace('_', '-') for m in missing)}",
@@ -583,10 +577,7 @@ def main(argv: Sequence[str]) -> int:
     try:
         plan = _build_plan_from_args(args)
         if args.prepare:
-            if (
-                not args.confirm_strategy
-                or os.environ.get("ORCH_STRATEGY_EXPERIMENT") != "1"
-            ):
+            if not args.confirm_strategy or os.environ.get("ORCH_STRATEGY_EXPERIMENT") != "1":
                 print(
                     "--prepare requires --confirm-strategy and ORCH_STRATEGY_EXPERIMENT=1",
                     file=sys.stderr,

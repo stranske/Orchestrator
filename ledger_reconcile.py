@@ -12,11 +12,11 @@ Usage:
   python3 ledger_reconcile.py reconcile --dry-run --json
   python3 ledger_reconcile.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import sys
@@ -64,7 +64,10 @@ def _known_runs() -> set[str]:
 
 def _cost_sources() -> dict[str, str]:
     with feedback._conn() as c:
-        return {str(row[0]): str(row[1] or "") for row in c.execute("SELECT run_id, source FROM costs").fetchall()}
+        return {
+            str(row[0]): str(row[1] or "")
+            for row in c.execute("SELECT run_id, source FROM costs").fetchall()
+        }
 
 
 def _number(value: Any) -> float | None:
@@ -172,7 +175,9 @@ def _log_cost_usd(path: Path | None, run_id: str) -> float:
 
 def _latency_s(rows: list[dict[str, Any]]) -> float:
     starts = [int(r.get("ts") or 0) for r in rows if r.get("event") == "start" and r.get("ts")]
-    completes = [int(r.get("ts") or 0) for r in rows if r.get("event") == "complete" and r.get("ts")]
+    completes = [
+        int(r.get("ts") or 0) for r in rows if r.get("event") == "complete" and r.get("ts")
+    ]
     if not starts or not completes:
         return 0.0
     return float(max(0, max(completes) - min(starts)))
@@ -189,8 +194,19 @@ def _latest_log_file(rows: list[dict[str, Any]]) -> Path | None:
 # item 16f: CLI resume identifiers, harvested from each run's log segment. First match wins;
 # patterns are a living registry — extend as agents' output formats reveal themselves.
 RESUME_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
-    ("claude_session", re.compile(r'"session_id"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"')),
-    ("codex_session", re.compile(r"session id:?\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)),
+    (
+        "claude_session",
+        re.compile(
+            r'"session_id"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"'
+        ),
+    ),
+    (
+        "codex_session",
+        re.compile(
+            r"session id:?\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+            re.IGNORECASE,
+        ),
+    ),
     ("codex_rollout", re.compile(r'"rollout_path"\s*:\s*"([^"]+\.jsonl)"')),
     ("cursor_chat", re.compile(r'"chat_?[iI]d"\s*:\s*"([A-Za-z0-9_-]{8,})"')),
 )
@@ -285,7 +301,7 @@ def resolve_unresolved_worker_attempts(*, apply: bool = False, limit: int = 5000
     for run_id, profile_id, agent, target, ts in rows:
         agent = str(agent or "").lower()
         workspace = (
-            str(target)[len("offload:"):] if str(target or "").startswith("offload:/") else None
+            str(target)[len("offload:") :] if str(target or "").startswith("offload:/") else None
         )
         probe = adapters.cli_reported_model(agent, workspace, started_ts=int(ts or 0))
         if not probe.get("model"):
@@ -377,7 +393,7 @@ def _workspace_from_rows(run_rows) -> str | None:
     for row in run_rows:
         value = str(row.get("target") or "")
         if value.startswith("offload:/"):
-            return value[len("offload:"):]
+            return value[len("offload:") :]
     return None
 
 
@@ -391,9 +407,7 @@ def _cli_identity_for_run(run_rows, started_ts: int | None = None) -> dict:
     agent = next((str(row.get("agent")) for row in run_rows if row.get("agent")), "")
     if not agent:
         return {"model": None, "cli_version": None, "source": None, "reason": "no_agent_on_run"}
-    return adapters.cli_reported_model(
-        agent, _workspace_from_rows(run_rows), started_ts=started_ts
-    )
+    return adapters.cli_reported_model(agent, _workspace_from_rows(run_rows), started_ts=started_ts)
 
 
 def record_completion(
@@ -421,14 +435,12 @@ def record_completion(
             # caller left EMPTY -- an explicitly supplied resolved_model always wins, because the
             # caller may have provenance this reader cannot see.
             probed = adapters.cli_reported_model(
-                agent, target[len("offload:"):], started_ts=started_ts
+                agent, target[len("offload:") :], started_ts=started_ts
             )
             probe_reason = probed.get("reason")
             if probed.get("model"):
                 resolved_model = probed["model"]
-                resolved_provider = resolved_provider or _provider_for_profile(
-                    selected_profile_id
-                )
+                resolved_provider = resolved_provider or _provider_for_profile(selected_profile_id)
         if resolved_model:
             if not resolved_provider:
                 raise ValueError("resolved_model completion evidence requires resolved_provider")
@@ -471,8 +483,11 @@ def record_completion(
         policy_version=policy_version,
         propensity=propensity,
         causal_context={
-            key: value for key, value in {"subject_id": subject_id, "arm_id": arm_id}.items() if value
-        } or None,
+            key: value
+            for key, value in {"subject_id": subject_id, "arm_id": arm_id}.items()
+            if value
+        }
+        or None,
     )
     try:
         feedback.record_completion_event(
@@ -556,12 +571,8 @@ def reconcile(
         # 16f/16h harvest from the run's log segment (same segment _log_usage scans).
         if log_file is not None and not dry_run:
             seg = _log_segment(log_file, run_id)
-            agent = next(
-                (str(r.get("agent")) for r in run_rows if r.get("agent")), ""
-            )
-            target = next(
-                (str(r.get("target")) for r in run_rows if r.get("target")), ""
-            )
+            agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
+            target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
             tok = _resume_token_from_segment(seg)
             if tok is not None:
                 kind, token = tok
@@ -596,15 +607,11 @@ def reconcile(
         latency_s = _latency_s(run_rows)
         marker = _done_marker(log_file, run_id)
         marker_rc = marker.get("rc") if marker is not None else None
-        if marker is not None and not any(
-            r.get("event") == "complete" for r in run_rows
-        ):
+        if marker is not None and not any(r.get("event") == "complete" for r in run_rows):
             # No ndjson complete event — the python completion step was likely killed (audit F2).
             # Fall back to the shell-native done marker for latency/exit before giving up.
             starts = [
-                int(r.get("ts") or 0)
-                for r in run_rows
-                if r.get("event") == "start" and r.get("ts")
+                int(r.get("ts") or 0) for r in run_rows if r.get("event") == "start" and r.get("ts")
             ]
             marker_ts = int(_number(marker.get("ts")) or 0)
             if starts and marker_ts:
@@ -616,9 +623,7 @@ def reconcile(
                 if row.get("event") == "start" and row.get("selected_profile_id")
             }
             if len(profile_ids) > 1:
-                raise ValueError(
-                    f"run {run_id} changed selected profile in capacity ledger"
-                )
+                raise ValueError(f"run {run_id} changed selected profile in capacity ledger")
             if not profile_ids:
                 # Fall back to what the attempt itself recorded; see _profile_id_from_attempt.
                 from_attempt = _profile_id_from_attempt(run_id)
@@ -630,7 +635,11 @@ def reconcile(
                 # `execution_attempts.resolved_model` had no writer at all and
                 # `unresolved_model_provenance` was unavoidable on every event in the system.
                 started = min(
-                    (int(r.get("ts") or 0) for r in run_rows if r.get("event") == "start" and r.get("ts")),
+                    (
+                        int(r.get("ts") or 0)
+                        for r in run_rows
+                        if r.get("event") == "start" and r.get("ts")
+                    ),
                     default=None,
                 )
                 identity = _cli_identity_for_run(run_rows, started_ts=started)
@@ -707,9 +716,7 @@ def reconcile(
         "owner_questions_recorded": owner_questions_recorded,
         "log_costs_harvested": log_costs_harvested,
         "telemetry_runs_backfilled": telemetry_runs_backfilled,
-        "owner_questions_expired": (
-            0 if dry_run else feedback.expire_owner_questions()
-        ),
+        "owner_questions_expired": (0 if dry_run else feedback.expire_owner_questions()),
         "costs": prepared,
         "skipped": dict(sorted(skipped.items())),
         "errors": errors,
@@ -752,27 +759,68 @@ def _selftest():
         log.write_text(
             "=== 2026-06-16T00:00:00Z dispatch codex/full -> stranske/Repo#1 "
             "[implement] cwd=/tmp run_id=local-1 ===\n"
-            + json.dumps({"type": "turn.completed",
-                          "usage": {"input_tokens": 100, "output_tokens": 50}}) + "\n"
-            + json.dumps({"type": "turn.completed",
-                          "usage": {"prompt_tokens": 200, "completion_tokens": 100}}) + "\n"
+            + json.dumps(
+                {"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 50}}
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"prompt_tokens": 200, "completion_tokens": 100},
+                }
+            )
+            + "\n"
         )
-        adapters.record_ledger("codex", count=1, event="start", run_id="local-1",
-                               target="stranske/Repo#1", log_file=str(log), ts=100)
-        record_completion("local-1", "codex", "stranske/Repo#1", "full", "implement",
-                          str(log), started_ts=100)
-        adapters.record_ledger("codex", count=1, event="start", run_id="remote-1",
-                               target="stranske/Repo#2", log_file=str(log), ts=100)
-        adapters.record_ledger("codex", count=1, event="start", run_id="ccusage-1",
-                               target="stranske/Repo#3", log_file=str(log), ts=100)
-        adapters.record_ledger("codex", count=1, event="start", run_id="unknown-1",
-                               target="stranske/Repo#3", log_file=str(log), ts=100)
+        adapters.record_ledger(
+            "codex",
+            count=1,
+            event="start",
+            run_id="local-1",
+            target="stranske/Repo#1",
+            log_file=str(log),
+            ts=100,
+        )
+        record_completion(
+            "local-1", "codex", "stranske/Repo#1", "full", "implement", str(log), started_ts=100
+        )
+        adapters.record_ledger(
+            "codex",
+            count=1,
+            event="start",
+            run_id="remote-1",
+            target="stranske/Repo#2",
+            log_file=str(log),
+            ts=100,
+        )
+        adapters.record_ledger(
+            "codex",
+            count=1,
+            event="start",
+            run_id="ccusage-1",
+            target="stranske/Repo#3",
+            log_file=str(log),
+            ts=100,
+        )
+        adapters.record_ledger(
+            "codex",
+            count=1,
+            event="start",
+            run_id="unknown-1",
+            target="stranske/Repo#3",
+            log_file=str(log),
+            ts=100,
+        )
 
         dry = reconcile(adapters.LEDGER, dry_run=True)
         assert dry["prepared"] == 1 and dry["written_cost_rows"] == 0, dry
         cost = dry["costs"][0]
-        assert cost["run_id"] == "local-1" and cost["tokens_in"] == 300 and cost["tokens_out"] == 150, cost
-        assert dry["skipped"]["langsmith_cost_exists"] == 1 and dry["skipped"]["ccusage_cost_exists"] == 1, dry
+        assert (
+            cost["run_id"] == "local-1" and cost["tokens_in"] == 300 and cost["tokens_out"] == 150
+        ), cost
+        assert (
+            dry["skipped"]["langsmith_cost_exists"] == 1
+            and dry["skipped"]["ccusage_cost_exists"] == 1
+        ), dry
         assert dry["skipped"]["unknown_run_id"] == 1, dry
 
         # F2 (2026-07-03 audit): a run whose python completion was SIGKILLed leaves NO complete
@@ -784,8 +832,15 @@ def _selftest():
             "=== 2026-06-16T00:00:00Z dispatch codex/full -> stranske/Repo#4 "
             "[implement] cwd=/tmp run_id=killed-1 ===\n"
         )
-        adapters.record_ledger("codex", count=1, event="start", run_id="killed-1",
-                               target="stranske/Repo#4", log_file=str(klog), ts=100)
+        adapters.record_ledger(
+            "codex",
+            count=1,
+            event="start",
+            run_id="killed-1",
+            target="stranske/Repo#4",
+            log_file=str(klog),
+            ts=100,
+        )
         done_dir = klog.parent / "done"
         done_dir.mkdir(exist_ok=True)
         (done_dir / "killed-1.json").write_text(
@@ -808,10 +863,14 @@ def _selftest():
             ).fetchone()
         assert fc and fc[0] == "transient_infra" and "marker rc=137" in (fc[1] or ""), fc
         with feedback._conn() as c:
-            row = c.execute("SELECT tokens_in, tokens_out, source FROM costs WHERE run_id='local-1'").fetchone()
+            row = c.execute(
+                "SELECT tokens_in, tokens_out, source FROM costs WHERE run_id='local-1'"
+            ).fetchone()
             remote = c.execute("SELECT source FROM costs WHERE run_id='remote-1'").fetchone()
             ccusage = c.execute("SELECT source FROM costs WHERE run_id='ccusage-1'").fetchone()
-            killed = c.execute("SELECT latency_s, source FROM costs WHERE run_id='killed-1'").fetchone()
+            killed = c.execute(
+                "SELECT latency_s, source FROM costs WHERE run_id='killed-1'"
+            ).fetchone()
         assert row == (300, 150, "ledger"), row
         assert remote == ("langsmith",), remote
         assert ccusage == ("ccusage",), ccusage
@@ -826,15 +885,30 @@ def _selftest():
         hlog.write_text(
             "=== 2026-06-16T00:00:00Z dispatch claude/full -> stranske/Repo#5 "
             "[implement] cwd=/tmp run_id=harvest-1 ===\n"
-            + json.dumps({"type": "system", "session_id": "0a1b2c3d-1111-2222-3333-444455556666"}) + "\n"
+            + json.dumps({"type": "system", "session_id": "0a1b2c3d-1111-2222-3333-444455556666"})
+            + "\n"
             + 'OWNER_QUESTION: {"question": "Rename the CLI flag?", "default": "keep old name", "expires_days": -1}\n'
-            + json.dumps({"type": "result", "total_cost_usd": 0.4321,
-                          "usage": {"input_tokens": 10, "output_tokens": 5}}) + "\n"
+            + json.dumps(
+                {
+                    "type": "result",
+                    "total_cost_usd": 0.4321,
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                }
+            )
+            + "\n"
         )
-        adapters.record_ledger("claude", count=1, event="start", run_id="harvest-1",
-                               target="stranske/Repo#5", log_file=str(hlog), ts=100)
-        record_completion("harvest-1", "claude", "stranske/Repo#5", "full", "implement",
-                          str(hlog), started_ts=100)
+        adapters.record_ledger(
+            "claude",
+            count=1,
+            event="start",
+            run_id="harvest-1",
+            target="stranske/Repo#5",
+            log_file=str(hlog),
+            ts=100,
+        )
+        record_completion(
+            "harvest-1", "claude", "stranske/Repo#5", "full", "implement", str(hlog), started_ts=100
+        )
         hsum = reconcile(adapters.LEDGER)
         assert hsum["resume_tokens_captured"] == 1, hsum
         assert hsum["owner_questions_recorded"] == 1, hsum
@@ -844,16 +918,18 @@ def _selftest():
         # 16(j): the agent's own reported dollars land in the cost row (ledger rows were $0)
         assert hsum["log_costs_harvested"] == 1, hsum
         with feedback._conn() as c:
-            hcost = c.execute(
-                "SELECT cost_usd FROM costs WHERE run_id='harvest-1'"
-            ).fetchone()
+            hcost = c.execute("SELECT cost_usd FROM costs WHERE run_id='harvest-1'").fetchone()
         assert hcost and abs(hcost[0] - 0.4321) < 1e-9, hcost
         decisions = feedback.owner_decisions_for(repo="stranske/Repo")
-        assert any(d["decision"] == "keep old name" and d["source"] == "default_ratified"
-                   for d in decisions), decisions
-        print("ledger_reconcile.py selftest: OK (completion rows, log usage parse, "
-              "known-run guard, richer-source-preserving cost write, dry-run, "
-              "done-marker backfill for killed completions)")
+        assert any(
+            d["decision"] == "keep old name" and d["source"] == "default_ratified"
+            for d in decisions
+        ), decisions
+        print(
+            "ledger_reconcile.py selftest: OK (completion rows, log usage parse, "
+            "known-run guard, richer-source-preserving cost write, dry-run, "
+            "done-marker backfill for killed completions)"
+        )
     finally:
         feedback.DB_PATH = old_db
         adapters.HANDOFF = old_handoff
@@ -869,7 +945,9 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd")
 
-    complete = sub.add_parser("complete", help="append a completion row to the local capacity ledger")
+    complete = sub.add_parser(
+        "complete", help="append a completion row to the local capacity ledger"
+    )
     complete.add_argument("--run-id", required=True)
     complete.add_argument("--agent", required=True)
     complete.add_argument("--target")
@@ -886,7 +964,9 @@ def main(argv: list[str]) -> int:
     complete.add_argument("--subject-id")
     complete.add_argument("--arm-id")
 
-    rec = sub.add_parser("reconcile", help="write feedback.costs rows from local ledger/log evidence")
+    rec = sub.add_parser(
+        "reconcile", help="write feedback.costs rows from local ledger/log evidence"
+    )
     rec.add_argument("--ledger", type=Path)
     rec.add_argument("--dry-run", action="store_true")
     rec.add_argument("--strict", action="store_true")
@@ -900,10 +980,13 @@ def main(argv: list[str]) -> int:
 
     args = parser.parse_args(argv)
     if args.cmd == "resolve-unresolved":
-        print(json.dumps(
-            resolve_unresolved_worker_attempts(apply=args.apply, limit=args.limit),
-            indent=2, sort_keys=True,
-        ))
+        print(
+            json.dumps(
+                resolve_unresolved_worker_attempts(apply=args.apply, limit=args.limit),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     if args.cmd == "complete":
         record_completion(

@@ -25,7 +25,15 @@ def test_ineligible_closers_do_not_trigger_zero_flow(tmp_path: Path) -> None:
             target = f"owner/repo#{index + 1}"
             conn.execute(
                 "INSERT INTO runs(run_id,ts,target,task_type,agent,mode,source) VALUES(?,?,?,?,?,?,?)",
-                (f"closer-{index}", now - index, target, "implement", "codex", "remote", "keepalive"),
+                (
+                    f"closer-{index}",
+                    now - index,
+                    target,
+                    "implement",
+                    "codex",
+                    "remote",
+                    "keepalive",
+                ),
             )
             monitor._insert_gate_event(
                 conn,
@@ -39,13 +47,9 @@ def test_ineligible_closers_do_not_trigger_zero_flow(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    report = monitor.build_report(
-        db_path, tmp_path / "missing.log", 72, 1, 5, now_ts=now
-    )
+    report = monitor.build_report(db_path, tmp_path / "missing.log", 72, 1, 5, now_ts=now)
     assert report["closer_proxy_present"] is True
-    assert report["zero_flow_alert"] is False, (
-        "ineligible closer traffic triggered zero-flow alert"
-    )
+    assert report["zero_flow_alert"] is False, "ineligible closer traffic triggered zero-flow alert"
     assert report["required_event_denominator"] == 0
 
 
@@ -65,9 +69,7 @@ def test_required_gate_that_does_not_execute_triggers_zero_flow(tmp_path: Path) 
         conn.commit()
     finally:
         conn.close()
-    report = monitor.build_report(
-        db_path, tmp_path / "missing.log", 72, 1, 5, now_ts=now
-    )
+    report = monitor.build_report(db_path, tmp_path / "missing.log", 72, 1, 5, now_ts=now)
     assert report["required_event_denominator"] == 1
     assert report["executed_gate_numerator"] == 0
     assert report["zero_flow_alert"] is True
@@ -97,9 +99,7 @@ def _fake_gate(verdict: str):
     return run
 
 
-def test_gate_records_missing_and_each_executed_verdict(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_gate_records_missing_and_each_executed_verdict(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
     spec_dir = tmp_path / "specs"
     missing_item = {
@@ -136,14 +136,10 @@ def test_gate_records_missing_and_each_executed_verdict(
 
     events = feedback.runtime_ac_gate_events(limit=100)
     assert any(row["gate_status"] == "missing_spec" for row in events)
-    assert {row.get("verifier_verdict") for row in events} >= {
-        "PASS", "NEEDS_REVIEW", "FAIL"
-    }
+    assert {row.get("verifier_verdict") for row in events} >= {"PASS", "NEEDS_REVIEW", "FAIL"}
 
 
-def test_range_materialization_is_exact_target_and_hash(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_range_materialization_is_exact_target_and_hash(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
     spec_dir = tmp_path / "specs"
     workflows_spec = _target_spec("stranske/Workflows#2742")
@@ -206,7 +202,8 @@ def test_gate_event_joins_closer_verifier_and_downstream_outcome(
     assert gate["closer_run_id"] == run_id
     assert gate["verifier_run_id"] == "fixture-pass"
     event = next(
-        row for row in feedback.runtime_ac_gate_events(limit=20)
+        row
+        for row in feedback.runtime_ac_gate_events(limit=20)
         if row.get("gate_status") == "executed"
     )
     assert event["closer_run_id"] == run_id

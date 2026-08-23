@@ -5,6 +5,7 @@ The transport remains :func:`dispatcher.offload`.  This module only adds determi
 partitioning, result validation, provenance envelopes, and fail-closed synthesis so a large
 corpus is never mistaken for one successful (or timed-out) prompt.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,8 +16,9 @@ import re
 import tempfile
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULT_MAX_ITEMS = 10
@@ -191,7 +193,9 @@ def validate_corpus(corpus: Any) -> list[str]:
     if not isinstance(corpus, dict):
         return ["corpus must be a JSON object"]
     errors: list[str] = []
-    unknown = sorted(set(corpus) - {"schema_version", "review_id", "objective", "shared_context", "items"})
+    unknown = sorted(
+        set(corpus) - {"schema_version", "review_id", "objective", "shared_context", "items"}
+    )
     if unknown:
         errors.append(f"corpus has unknown keys: {unknown}")
     if corpus.get("schema_version") != SCHEMA_VERSION:
@@ -209,7 +213,10 @@ def validate_corpus(corpus: Any) -> list[str]:
         if not isinstance(item, dict):
             errors.append(f"{path} must be an object")
             continue
-        unknown = sorted(set(item) - {"item_id", "assertion_key", "group_key", "assertion", "context", "source_refs"})
+        unknown = sorted(
+            set(item)
+            - {"item_id", "assertion_key", "group_key", "assertion", "context", "source_refs"}
+        )
         if unknown:
             errors.append(f"{path} has unknown keys: {unknown}")
         for key in ("item_id", "group_key", "assertion"):
@@ -312,7 +319,9 @@ def build_partition_prompt(plan: dict[str, Any], partition: dict[str, Any]) -> s
 
 
 def partition_corpus(
-    corpus: dict[str, Any], *, max_items: int = DEFAULT_MAX_ITEMS,
+    corpus: dict[str, Any],
+    *,
+    max_items: int = DEFAULT_MAX_ITEMS,
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS,
 ) -> dict[str, Any]:
     errors = validate_corpus(corpus)
@@ -341,11 +350,13 @@ def partition_corpus(
     }
 
     def candidate(group_key: str, items: list[dict[str, Any]], number: int) -> dict[str, Any]:
-        return _partition_with_digest({
-            "partition_id": f"p{number:03d}-{_slug(group_key)}",
-            "group_key": group_key,
-            "items": items,
-        })
+        return _partition_with_digest(
+            {
+                "partition_id": f"p{number:03d}-{_slug(group_key)}",
+                "group_key": group_key,
+                "items": items,
+            }
+        )
 
     for group_key, items in groups.items():
         current: list[dict[str, Any]] = []
@@ -369,14 +380,16 @@ def partition_corpus(
             ordinal += 1
             partitions.append(candidate(group_key, current, ordinal))
 
-    plan = _plan_with_digest({
-        "schema_version": SCHEMA_VERSION,
-        "review_id": corpus["review_id"].strip(),
-        "objective": corpus["objective"].strip(),
-        "shared_context": corpus.get("shared_context", []),
-        "limits": {"max_items": max_items, "max_prompt_chars": max_prompt_chars},
-        "partitions": partitions,
-    })
+    plan = _plan_with_digest(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "review_id": corpus["review_id"].strip(),
+            "objective": corpus["objective"].strip(),
+            "shared_context": corpus.get("shared_context", []),
+            "limits": {"max_items": max_items, "max_prompt_chars": max_prompt_chars},
+            "partitions": partitions,
+        }
+    )
     plan_errors = validate_plan(plan)
     if plan_errors:
         raise AssertionError("generated invalid plan: " + "; ".join(plan_errors))
@@ -390,7 +403,15 @@ def validate_plan(plan: Any) -> list[str]:
     if not isinstance(plan, dict):
         return ["plan must be a JSON object"]
     errors: list[str] = []
-    required = {"schema_version", "review_id", "objective", "shared_context", "limits", "partitions", "plan_sha256"}
+    required = {
+        "schema_version",
+        "review_id",
+        "objective",
+        "shared_context",
+        "limits",
+        "partitions",
+        "plan_sha256",
+    }
     unknown = sorted(set(plan) - required)
     missing = sorted(required - set(plan))
     if missing:
@@ -423,8 +444,15 @@ def validate_plan(plan: Any) -> list[str]:
     item_ids: set[str] = set()
     for p_index, partition in enumerate(partitions):
         path = f"plan.partitions[{p_index}]"
-        if not isinstance(partition, dict) or set(partition) != {"partition_id", "group_key", "items", "partition_digest"}:
-            errors.append(f"{path} must contain exactly partition_id, group_key, items, partition_digest")
+        if not isinstance(partition, dict) or set(partition) != {
+            "partition_id",
+            "group_key",
+            "items",
+            "partition_digest",
+        }:
+            errors.append(
+                f"{path} must contain exactly partition_id, group_key, items, partition_digest"
+            )
             continue
         for key in ("partition_id", "group_key", "partition_digest"):
             if not _is_text(partition.get(key)):
@@ -469,10 +497,20 @@ def validate_plan(plan: Any) -> list[str]:
     return errors
 
 
-def _finding_errors(finding: Any, path: str, expected_items: dict[str, dict[str, Any]]) -> list[str]:
+def _finding_errors(
+    finding: Any, path: str, expected_items: dict[str, dict[str, Any]]
+) -> list[str]:
     if not isinstance(finding, dict):
         return [f"{path} must be an object"]
-    required = {"item_id", "assertion_key", "disposition", "summary", "evidence", "confidence", "recommended_action"}
+    required = {
+        "item_id",
+        "assertion_key",
+        "disposition",
+        "summary",
+        "evidence",
+        "confidence",
+        "recommended_action",
+    }
     errors: list[str] = []
     missing = sorted(required - set(finding))
     unknown = sorted(set(finding) - required)
@@ -493,7 +531,9 @@ def _finding_errors(finding: Any, path: str, expected_items: dict[str, dict[str,
         errors.append(f"{path}.summary must be a non-empty string")
     if finding.get("confidence") not in CONFIDENCES:
         errors.append(f"{path}.confidence must be one of {sorted(CONFIDENCES)}")
-    if finding.get("recommended_action") is not None and not _is_text(finding.get("recommended_action")):
+    if finding.get("recommended_action") is not None and not _is_text(
+        finding.get("recommended_action")
+    ):
         errors.append(f"{path}.recommended_action must be a non-empty string or null")
     evidence = finding.get("evidence")
     if not isinstance(evidence, list) or not evidence:
@@ -516,10 +556,19 @@ def _finding_errors(finding: Any, path: str, expected_items: dict[str, dict[str,
     return errors
 
 
-def validate_partition_result(result: Any, plan: dict[str, Any], partition: dict[str, Any]) -> list[str]:
+def validate_partition_result(
+    result: Any, plan: dict[str, Any], partition: dict[str, Any]
+) -> list[str]:
     if not isinstance(result, dict):
         return ["partition result must be a JSON object"]
-    required = {"schema_version", "review_id", "partition_id", "partition_digest", "categories", "summary"}
+    required = {
+        "schema_version",
+        "review_id",
+        "partition_id",
+        "partition_digest",
+        "categories",
+        "summary",
+    }
     errors: list[str] = []
     missing = sorted(required - set(result))
     unknown = sorted(set(result) - required)
@@ -556,9 +605,17 @@ def validate_partition_result(result: Any, plan: dict[str, Any], partition: dict
             errors.extend(_finding_errors(finding, path, expected_items))
             if isinstance(finding, dict) and _is_text(finding.get("item_id")):
                 seen.append(finding["item_id"])
-            if category == "intentional_adapters" and isinstance(finding, dict) and finding.get("disposition") != "intentional":
+            if (
+                category == "intentional_adapters"
+                and isinstance(finding, dict)
+                and finding.get("disposition") != "intentional"
+            ):
                 errors.append(f"{path}.disposition must be 'intentional'")
-            if category == "unresolved_design_dispositions" and isinstance(finding, dict) and finding.get("disposition") != "unresolved":
+            if (
+                category == "unresolved_design_dispositions"
+                and isinstance(finding, dict)
+                and finding.get("disposition") != "unresolved"
+            ):
                 errors.append(f"{path}.disposition must be 'unresolved'")
     duplicates = sorted({item_id for item_id in seen if seen.count(item_id) > 1})
     if duplicates:
@@ -581,7 +638,9 @@ def _source_refs(partition: dict[str, Any]) -> list[dict[str, Any]]:
     return [by_digest[key] for key in sorted(by_digest)]
 
 
-def _valid_completed_envelope(envelope: Any, plan: dict[str, Any], partition: dict[str, Any]) -> bool:
+def _valid_completed_envelope(
+    envelope: Any, plan: dict[str, Any], partition: dict[str, Any]
+) -> bool:
     return isinstance(envelope, dict) and not _validate_envelope(envelope, plan, partition)
 
 
@@ -643,10 +702,16 @@ def register_review_round(
 
 
 def run_plan(
-    plan: dict[str, Any], *, agent: str, cwd: str | Path, results_dir: str | Path,
-    timeout: int = DEFAULT_PARTITION_TIMEOUT, resume: bool = True,
+    plan: dict[str, Any],
+    *,
+    agent: str,
+    cwd: str | Path,
+    results_dir: str | Path,
+    timeout: int = DEFAULT_PARTITION_TIMEOUT,
+    resume: bool = True,
     offload_fn: Callable[..., dict[str, Any]] | None = None,
-    round_agents: list[str] | None = None, round_date: str | None = None,
+    round_agents: list[str] | None = None,
+    round_date: str | None = None,
 ) -> dict[str, Any]:
     errors = validate_plan(plan)
     if errors:
@@ -655,12 +720,11 @@ def run_plan(
         raise ValueError("timeout must be >= 1 second")
     if offload_fn is None:
         import dispatcher
+
         offload_fn = dispatcher.offload
     results_root = Path(results_dir)
     # Register BEFORE the first offload: the round id has to exist to be stamped onto the attempts.
-    round_info = register_review_round(
-        plan, round_agents or [agent], date=round_date
-    )
+    round_info = register_review_round(plan, round_agents or [agent], date=round_date)
     research_round = round_info.get("round_id")
     statuses: list[dict[str, Any]] = []
     for partition in plan["partitions"]:
@@ -671,12 +735,22 @@ def run_plan(
             except (OSError, json.JSONDecodeError):
                 existing = None
             if _valid_completed_envelope(existing, plan, partition):
-                statuses.append({"partition_id": partition["partition_id"], "status": "complete", "reused": True})
+                statuses.append(
+                    {
+                        "partition_id": partition["partition_id"],
+                        "status": "complete",
+                        "reused": True,
+                    }
+                )
                 continue
         prompt = build_partition_prompt(plan, partition)
         try:
             offload = offload_fn(
-                agent, prompt, cwd=str(cwd), timeout=timeout, isolate=False,
+                agent,
+                prompt,
+                cwd=str(cwd),
+                timeout=timeout,
+                isolate=False,
                 research_round=research_round,
             )
         except Exception as exc:  # one bad lane must not erase the remaining partition evidence
@@ -684,13 +758,17 @@ def run_plan(
         validation_errors: list[str] = []
         parsed: dict[str, Any] | None = None
         status = "failed"
-        failure_reason = offload.get("error") or (f"agent exited {offload.get('exit')}" if offload.get("exit") else None)
+        failure_reason = offload.get("error") or (
+            f"agent exited {offload.get('exit')}" if offload.get("exit") else None
+        )
         if offload.get("exit") == 0 and not offload.get("error"):
             try:
                 parsed = _parse_json_object(offload.get("output", ""))
                 validation_errors = validate_partition_result(parsed, plan, partition)
                 status = "complete" if not validation_errors else "invalid"
-                failure_reason = None if status == "complete" else "partition result failed schema validation"
+                failure_reason = (
+                    None if status == "complete" else "partition result failed schema validation"
+                )
             except (ValueError, json.JSONDecodeError) as exc:
                 status = "invalid"
                 validation_errors = [f"could not parse strict JSON result: {exc}"]
@@ -718,7 +796,9 @@ def run_plan(
             "result": parsed,
         }
         _atomic_json(result_path, envelope)
-        statuses.append({"partition_id": partition["partition_id"], "status": status, "reused": False})
+        statuses.append(
+            {"partition_id": partition["partition_id"], "status": status, "reused": False}
+        )
     incomplete = [row["partition_id"] for row in statuses if row["status"] != "complete"]
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -753,7 +833,11 @@ def _validate_envelope(envelope: Any, plan: dict[str, Any], partition: dict[str,
         errors.append(f"partition status is {envelope.get('status')!r}, not complete")
     errors.extend(validate_partition_result(envelope.get("result"), plan, partition))
     provenance = envelope.get("provenance")
-    if not isinstance(provenance, dict) or not _is_text(provenance.get("run_id")) or not _is_text(provenance.get("log")):
+    if (
+        not isinstance(provenance, dict)
+        or not _is_text(provenance.get("run_id"))
+        or not _is_text(provenance.get("log"))
+    ):
         errors.append("completed partition requires provenance.run_id and provenance.log")
     return errors
 
@@ -772,7 +856,8 @@ def _adjudication_queue(categories: dict[str, list[dict[str, Any]]]) -> dict[str
         elif len(findings) > 1:
             corroborated.append(assertion_key)
     unresolved = [
-        finding for finding in categories["unresolved_design_dispositions"]
+        finding
+        for finding in categories["unresolved_design_dispositions"]
         if finding["disposition"] == "unresolved"
     ]
     return {
@@ -817,15 +902,18 @@ def _validate_adjudication(value: Any, synthesis: dict[str, Any]) -> list[str]:
         return ["adjudication must be a JSON object"]
     errors: list[str] = []
     if set(value) != {"schema_version", "review_id", "plan_sha256", "decisions"}:
-        errors.append("adjudication must contain exactly schema_version, review_id, plan_sha256, decisions")
+        errors.append(
+            "adjudication must contain exactly schema_version, review_id, plan_sha256, decisions"
+        )
         return errors
     if value.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"adjudication.schema_version must equal {SCHEMA_VERSION}")
-    if value.get("review_id") != synthesis["review_id"] or value.get("plan_sha256") != synthesis["plan_sha256"]:
+    if (
+        value.get("review_id") != synthesis["review_id"]
+        or value.get("plan_sha256") != synthesis["plan_sha256"]
+    ):
         errors.append("adjudication provenance does not match the synthesis")
-    expected = {
-        row["assertion_key"] for row in synthesis["adjudication"]["conflicts"]
-    } | {
+    expected = {row["assertion_key"] for row in synthesis["adjudication"]["conflicts"]} | {
         row["assertion_key"] for row in synthesis["adjudication"]["unresolved_design_dispositions"]
     }
     decisions = value.get("decisions")
@@ -834,7 +922,12 @@ def _validate_adjudication(value: Any, synthesis: dict[str, Any]) -> list[str]:
     seen: list[str] = []
     for index, decision in enumerate(decisions):
         path = f"adjudication.decisions[{index}]"
-        if not isinstance(decision, dict) or set(decision) != {"assertion_key", "decision", "rationale", "evidence_refs"}:
+        if not isinstance(decision, dict) or set(decision) != {
+            "assertion_key",
+            "decision",
+            "rationale",
+            "evidence_refs",
+        }:
             errors.append(f"{path} has an invalid shape")
             continue
         seen.append(decision.get("assertion_key"))
@@ -844,15 +937,20 @@ def _validate_adjudication(value: Any, synthesis: dict[str, Any]) -> list[str]:
             errors.append(f"{path}.decision must be one of {sorted(ADJUDICATION_DECISIONS)}")
         if not _is_text(decision.get("rationale")):
             errors.append(f"{path}.rationale must be a non-empty string")
-        errors.extend(_string_list(decision.get("evidence_refs"), f"{path}.evidence_refs", nonempty=True))
+        errors.extend(
+            _string_list(decision.get("evidence_refs"), f"{path}.evidence_refs", nonempty=True)
+        )
     if set(seen) != expected or len(seen) != len(set(seen)):
         errors.append("adjudication must decide every queued assertion exactly once")
     return errors
 
 
 def synthesize_results(
-    plan: dict[str, Any], *, results_dir: str | Path,
-    adjudicator_agent: str | None = None, cwd: str | Path = ".",
+    plan: dict[str, Any],
+    *,
+    results_dir: str | Path,
+    adjudicator_agent: str | None = None,
+    cwd: str | Path = ".",
     timeout: int = DEFAULT_PARTITION_TIMEOUT,
     offload_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -867,18 +965,38 @@ def synthesize_results(
     for partition in plan["partitions"]:
         path = _partition_path(results_dir, partition["partition_id"])
         if not path.exists():
-            partition_statuses.append({"partition_id": partition["partition_id"], "status": "missing", "errors": ["result envelope missing"]})
+            partition_statuses.append(
+                {
+                    "partition_id": partition["partition_id"],
+                    "status": "missing",
+                    "errors": ["result envelope missing"],
+                }
+            )
             continue
         try:
             envelope = _read_json(path)
         except (OSError, json.JSONDecodeError) as exc:
-            partition_statuses.append({"partition_id": partition["partition_id"], "status": "invalid", "errors": [str(exc)]})
+            partition_statuses.append(
+                {
+                    "partition_id": partition["partition_id"],
+                    "status": "invalid",
+                    "errors": [str(exc)],
+                }
+            )
             continue
         envelope_errors = _validate_envelope(envelope, plan, partition)
         if envelope_errors:
-            partition_statuses.append({"partition_id": partition["partition_id"], "status": "invalid", "errors": envelope_errors})
+            partition_statuses.append(
+                {
+                    "partition_id": partition["partition_id"],
+                    "status": "invalid",
+                    "errors": envelope_errors,
+                }
+            )
             continue
-        partition_statuses.append({"partition_id": partition["partition_id"], "status": "complete", "errors": []})
+        partition_statuses.append(
+            {"partition_id": partition["partition_id"], "status": "complete", "errors": []}
+        )
         provenance.append({"partition_id": partition["partition_id"], **envelope["provenance"]})
         for category in CATEGORY_KEYS:
             for finding in envelope["result"]["categories"][category]:
@@ -886,7 +1004,9 @@ def synthesize_results(
     incomplete = [row["partition_id"] for row in partition_statuses if row["status"] != "complete"]
     adjudication = _adjudication_queue(categories)
     remaining = [
-        row for findings in categories.values() for row in findings
+        row
+        for findings in categories.values()
+        for row in findings
         if row["disposition"] in {"remaining", "partial"}
     ]
     if incomplete:
@@ -920,14 +1040,23 @@ def synthesize_results(
     elif adjudicator_agent and adjudication["status"] == "needed":
         if offload_fn is None:
             import dispatcher
+
             offload_fn = dispatcher.offload
         try:
             response = offload_fn(
-                adjudicator_agent, _adjudicator_prompt(synthesis), cwd=str(cwd),
-                timeout=timeout, isolate=False,
+                adjudicator_agent,
+                _adjudicator_prompt(synthesis),
+                cwd=str(cwd),
+                timeout=timeout,
+                isolate=False,
             )
         except Exception as exc:
-            response = {"agent": adjudicator_agent, "exit": 70, "output": "", "error": f"offload raised: {exc}"}
+            response = {
+                "agent": adjudicator_agent,
+                "exit": 70,
+                "output": "",
+                "error": f"offload raised: {exc}",
+            }
         parsed = None
         adjudication_errors: list[str] = []
         if response.get("exit") == 0 and not response.get("error"):
@@ -955,16 +1084,26 @@ def synthesize_results(
     return synthesis
 
 
-def _sample_finding(item: dict[str, Any], *, category: str = "removed_product_surfaces") -> dict[str, Any]:
-    disposition = "intentional" if category == "intentional_adapters" else (
-        "unresolved" if category == "unresolved_design_dispositions" else "satisfied"
+def _sample_finding(
+    item: dict[str, Any], *, category: str = "removed_product_surfaces"
+) -> dict[str, Any]:
+    disposition = (
+        "intentional"
+        if category == "intentional_adapters"
+        else ("unresolved" if category == "unresolved_design_dispositions" else "satisfied")
     )
     return {
         "item_id": item["item_id"],
         "assertion_key": item["assertion_key"],
         "disposition": disposition,
         "summary": "Verified against current code and history.",
-        "evidence": [{"type": "current_code", "ref": "src/example.py:1", "observation": "Current implementation inspected."}],
+        "evidence": [
+            {
+                "type": "current_code",
+                "ref": "src/example.py:1",
+                "observation": "Current implementation inspected.",
+            }
+        ],
         "confidence": "high",
         "recommended_action": None,
     }
@@ -982,7 +1121,9 @@ def _selftest() -> None:
                 "assertion_key": f"surface-{index}",
                 "group_key": "source-pr-61" if index < 3 else "source-pr-62",
                 "assertion": f"Verify surface {index}",
-                "source_refs": [{"kind": "pull_request", "ref": f"owner/repo#{61 if index < 3 else 62}"}],
+                "source_refs": [
+                    {"kind": "pull_request", "ref": f"owner/repo#{61 if index < 3 else 62}"}
+                ],
             }
             for index in range(5)
         ],
@@ -1006,12 +1147,18 @@ def _selftest() -> None:
     # Deliberate break: a name scan alone cannot turn discovery into a confirmed result.
     broken = json.loads(json.dumps(result))
     broken["categories"]["removed_product_surfaces"][0]["evidence"][0]["type"] = "name_scan"
-    assert any("raw name scans" in error for error in validate_partition_result(broken, plan, partition))
+    assert any(
+        "raw name scans" in error for error in validate_partition_result(broken, plan, partition)
+    )
     assert not validate_partition_result(result, plan, partition), "reverted result must validate"
     with tempfile.TemporaryDirectory(prefix="partitioned-review-") as tmp:
         incomplete = synthesize_results(plan, results_dir=tmp)
-        assert incomplete["verdict"] == "INCOMPLETE" and incomplete["coverage_status"] == "incomplete"
-    print("partitioned_review.py selftest: OK (bounded groups, strict categories, name-scan break/revert, fail-closed missing partitions)")
+        assert (
+            incomplete["verdict"] == "INCOMPLETE" and incomplete["coverage_status"] == "incomplete"
+        )
+    print(
+        "partitioned_review.py selftest: OK (bounded groups, strict categories, name-scan break/revert, fail-closed missing partitions)"
+    )
 
 
 DISABLED = os.environ.get("ORCH_PARTITIONED_REVIEW_DISABLED", "").strip() == "1"
@@ -1029,13 +1176,17 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
+
         capabilities.production_heartbeat(
-            "partitioned-review", event_type, ref="partitioned_review.main")
-    except Exception:                                              # noqa: BLE001
+            "partitioned-review", event_type, ref="partitioned_review.main"
+        )
+    except Exception:  # noqa: BLE001
         pass
 
 
-def main(argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, Any]] | None = None) -> int:
+def main(
+    argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, Any]] | None = None
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--selftest", action="store_true")
     sub = parser.add_subparsers(dest="command")
@@ -1061,7 +1212,9 @@ def main(argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, A
     # Given explicitly when resuming a round started on an earlier day, so the resumed run lands
     # on the SAME subject rather than creating a second one.
     run.add_argument("--round-date", help="YYYY-MM-DD of the round (default: today)")
-    synth = sub.add_parser("synthesize", help="fail-closed synthesis and optional advisory adjudication")
+    synth = sub.add_parser(
+        "synthesize", help="fail-closed synthesis and optional advisory adjudication"
+    )
     synth.add_argument("--plan", required=True)
     synth.add_argument("--results-dir", required=True)
     synth.add_argument("--output", required=True)
@@ -1081,31 +1234,57 @@ def main(argv: list[str] | None = None, *, offload_fn: Callable[..., dict[str, A
     _capability_heartbeat()
     if args.command == "prepare":
         plan = partition_corpus(
-            _read_json(args.corpus), max_items=args.max_items,
+            _read_json(args.corpus),
+            max_items=args.max_items,
             max_prompt_chars=args.max_prompt_chars,
         )
         _atomic_json(args.plan, plan)
-        print(json.dumps({"plan": args.plan, "plan_sha256": plan["plan_sha256"], "partitions": len(plan["partitions"])}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "plan": args.plan,
+                    "plan_sha256": plan["plan_sha256"],
+                    "partitions": len(plan["partitions"]),
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     if args.command == "run":
         summary = run_plan(
-            _read_json(args.plan), agent=args.agent, cwd=args.cwd,
-            results_dir=args.results_dir, timeout=args.timeout,
+            _read_json(args.plan),
+            agent=args.agent,
+            cwd=args.cwd,
+            results_dir=args.results_dir,
+            timeout=args.timeout,
             round_agents=[a.strip() for a in (args.round_agents or "").split(",") if a.strip()]
             or None,
             round_date=args.round_date,
-            resume=not args.no_resume, offload_fn=offload_fn,
+            resume=not args.no_resume,
+            offload_fn=offload_fn,
         )
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0 if summary["coverage_status"] == "complete" else 1
     if args.command == "synthesize":
         synthesis = synthesize_results(
-            _read_json(args.plan), results_dir=args.results_dir,
-            adjudicator_agent=args.adjudicator_agent, cwd=args.cwd,
-            timeout=args.timeout, offload_fn=offload_fn,
+            _read_json(args.plan),
+            results_dir=args.results_dir,
+            adjudicator_agent=args.adjudicator_agent,
+            cwd=args.cwd,
+            timeout=args.timeout,
+            offload_fn=offload_fn,
         )
         _atomic_json(args.output, synthesis)
-        print(json.dumps({"output": args.output, "coverage_status": synthesis["coverage_status"], "verdict": synthesis["verdict"]}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "output": args.output,
+                    "coverage_status": synthesis["coverage_status"],
+                    "verdict": synthesis["verdict"],
+                },
+                sort_keys=True,
+            )
+        )
         return 0 if synthesis["verdict"] == "COMPLETE" else 1
     parser.print_help()
     return 2

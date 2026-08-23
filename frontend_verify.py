@@ -45,9 +45,7 @@ BROWSER_ENDPOINT_HINT = (
     "--browser-endpoint http://127.0.0.1:9222 or set ORCH_FRONTEND_VERIFY_BROWSER_ENDPOINT."
 )
 DEFAULT_BROWSER_ENDPOINT = "http://127.0.0.1:9222"
-DEFAULT_BROWSER_PROFILE = (
-    Path.home() / ".codex" / "orchestrator" / "frontend-verify" / "chrome-cdp"
-)
+DEFAULT_BROWSER_PROFILE = Path.home() / ".codex" / "orchestrator" / "frontend-verify" / "chrome-cdp"
 CHROME_PATH_ENV = "ORCH_FRONTEND_VERIFY_CHROME_PATH"
 CHROME_PROFILE_ENV = "ORCH_FRONTEND_VERIFY_CHROME_PROFILE"
 
@@ -84,9 +82,7 @@ def _endpoint_port(endpoint: str | None) -> tuple[int | None, str | None]:
     return int(parsed.port), None
 
 
-def browser_launch_commands(
-    port: int = 9222, profile_dir: str | None = None
-) -> list[str]:
+def browser_launch_commands(port: int = 9222, profile_dir: str | None = None) -> list[str]:
     profile = profile_dir or os.environ.get(
         CHROME_PROFILE_ENV, "$HOME/.codex/orchestrator/frontend-verify/chrome-cdp"
     )
@@ -189,19 +185,13 @@ def start_browser_endpoint(
         "attempted": True,
         "ok": bool(probe.get("reachable")),
         "endpoint": endpoint,
-        "diagnostic": (
-            "browser_started" if probe.get("reachable") else "browser_start_not_ready"
-        ),
+        "diagnostic": ("browser_started" if probe.get("reachable") else "browser_start_not_ready"),
         "pid": getattr(proc, "pid", None),
         "browser_path": selected,
         "profile_dir": str(profile),
         "command": _shell_join(argv),
         "probe": probe,
-        "hint": (
-            "Browser endpoint is ready."
-            if probe.get("reachable")
-            else BROWSER_ENDPOINT_HINT
-        ),
+        "hint": ("Browser endpoint is ready." if probe.get("reachable") else BROWSER_ENDPOINT_HINT),
     }
 
 
@@ -213,9 +203,7 @@ def _endpoint_version_url(endpoint: str) -> str | None:
     return f"{base}/json/version"
 
 
-def probe_browser_endpoint(
-    endpoint: str | None, fetch_url=None, timeout: float = 2.0
-) -> dict:
+def probe_browser_endpoint(endpoint: str | None, fetch_url=None, timeout: float = 2.0) -> dict:
     if not endpoint:
         return {
             "configured": False,
@@ -419,12 +407,8 @@ def verify(
             "diagnostic": "node_missing",
             "hint": "Install Node.js or add it to PATH before running frontend_verify.py.",
         }
-    endpoint = (
-        browser_endpoint if browser_endpoint is not None else default_browser_endpoint()
-    )
-    argv = build_node_argv(
-        url, asserts, click_text, then_text, screenshot, timeout, endpoint
-    )
+    endpoint = browser_endpoint if browser_endpoint is not None else default_browser_endpoint()
+    argv = build_node_argv(url, asserts, click_text, then_text, screenshot, timeout, endpoint)
     try:
         r = subprocess.run(
             argv,
@@ -443,9 +427,7 @@ def verify(
     try:
         return json.loads(r.stdout)
     except Exception:
-        classified = classify_helper_failure(
-            r.stdout or "", r.stderr or "", r.returncode, endpoint
-        )
+        classified = classify_helper_failure(r.stdout or "", r.stderr or "", r.returncode, endpoint)
         if classified:
             return classified
         return {
@@ -471,30 +453,20 @@ def _selftest() -> None:
     )
     assert argv[:4] == ["node", str(VERIFY_JS), "--url", "http://x/"], argv
     assert (
-        argv.count("--assert") == 2
-        and "text:Test Page" in argv
-        and "role:button=Continue" in argv
+        argv.count("--assert") == 2 and "text:Test Page" in argv and "role:button=Continue" in argv
     ), argv
-    assert (
-        "--click-text" in argv and "--then-text" in argv and "--screenshot" in argv
-    ), argv
+    assert "--click-text" in argv and "--then-text" in argv and "--screenshot" in argv, argv
     assert "9000" in argv, argv
     cdp_argv = build_node_argv(
         "http://x/", asserts=["text:hi"], browser_endpoint="http://127.0.0.1:9222"
     )
     assert cdp_argv[-2:] == ["--browser-endpoint", "http://127.0.0.1:9222"], cdp_argv
-    classified = classify_helper_failure(
-        "", "MachPortRendezvous failed bootstrap_check_in", 1
-    )
-    assert (
-        classified and classified["diagnostic"] == "browser_launch_permission_denied"
-    ), classified
+    classified = classify_helper_failure("", "MachPortRendezvous failed bootstrap_check_in", 1)
+    assert classified and classified["diagnostic"] == "browser_launch_permission_denied", classified
     classified = classify_helper_failure(
         "", "connect ECONNREFUSED 127.0.0.1:9222", 1, "http://127.0.0.1:9222"
     )
-    assert (
-        classified and classified["diagnostic"] == "browser_endpoint_connect_failed"
-    ), classified
+    assert classified and classified["diagnostic"] == "browser_endpoint_connect_failed", classified
     ready_probe = probe_browser_endpoint(
         "http://127.0.0.1:9222",
         fetch_url=lambda url, timeout: b'{"Browser":"Chrome/fixture","webSocketDebuggerUrl":"ws://fixture"}',
@@ -538,9 +510,7 @@ def _selftest() -> None:
         helper_path=helper,
         node_path="/usr/bin/node",
     )
-    assert (
-        blocked_doctor["ok"] is False and blocked_doctor["status"] == "not_ready"
-    ), blocked_doctor
+    assert blocked_doctor["ok"] is False and blocked_doctor["status"] == "not_ready", blocked_doctor
     start_state = {"ready": False}
 
     def fake_fetch(url, timeout):
@@ -620,9 +590,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--click-text",
         help="optional: click the first element containing this text (before asserting)",
     )
-    p.add_argument(
-        "--then-text", help="optional: after the click, wait for this text to appear"
-    )
+    p.add_argument("--then-text", help="optional: after the click, wait for this text to appear")
     p.add_argument(
         "--screenshot",
         help="optional: also save a screenshot here (vision fallback for canvas/SVG)",
@@ -675,7 +643,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
-        capabilities.production_heartbeat("frontend-verifier", event_type, ref="frontend_verify.main")
+
+        capabilities.production_heartbeat(
+            "frontend-verifier", event_type, ref="frontend_verify.main"
+        )
     except Exception:
         pass
 

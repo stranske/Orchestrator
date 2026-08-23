@@ -34,14 +34,14 @@ current audit against history: what moved to reachable, what regressed, what is 
     python3 capability_activation_audit.py --snapshot   # record today's state
     python3 capability_activation_audit.py --selftest
 """
-from __future__ import annotations
 
-import pathlib
+from __future__ import annotations
 
 import argparse
 import ast
 import json
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -59,8 +59,16 @@ MAX_SNAPSHOTS = 60
 
 # Modules that actually drive a tick. A directly-entered capability is only reachable if its
 # heartbeat sits on a path one of these can reach.
-DRIVER_MODULES = ("tick.py", "dispatcher.py", "orchestrate.sh", "router.py", "roles.py",
-                  "capacity.py", "backlog.py", "outcomes.py")
+DRIVER_MODULES = (
+    "tick.py",
+    "dispatcher.py",
+    "orchestrate.sh",
+    "router.py",
+    "roles.py",
+    "capacity.py",
+    "backlog.py",
+    "outcomes.py",
+)
 
 ENTRY_TASK_ROUTED = "task_routed"
 ENTRY_DIRECT = "directly_entered"
@@ -74,18 +82,18 @@ DEFECT_CLASSES = {
     "label_absent_from_fleet": "the labels that would produce its task_type exist in ~no repo",
     "heartbeat_off_path": "its code runs, but the heartbeat is unreachable from any driver",
     "heartbeat_env_suppressed": "a shell driver invokes its entrypoint ABOVE the "
-                                "ORCH_CAPABILITY_HEARTBEATS export, so the heartbeat call runs "
-                                "and records nothing",
+    "ORCH_CAPABILITY_HEARTBEATS export, so the heartbeat call runs "
+    "and records nothing",
     "no_heartbeat": "the entrypoint records nothing at all",
     "entrypoint_no_caller": "no driver module calls the entrypoint",
     "entrypoint_missing": "the declared entrypoint file does not exist",
     "entrypoint_external": "the entrypoint lives in another repository; activation needs a "
-                           "change there, not here",
+    "change there, not here",
     "trigger_shape_mismatch": "kind-matched, so a task_type trigger can never reach it",
     "vocabulary_mismatch": "the fleet uses a label in this namespace that the code does not accept",
     "advisor_reach_regression": "it used to be nameable from a free-text task at the advisor front "
-                               "door and no longer is; a tightened matcher dropped it out of the "
-                               "front door with nothing reporting it",
+    "door and no longer is; a tightened matcher dropped it out of the "
+    "front door with nothing reporting it",
 }
 
 # Code-side label vocabularies that gate behaviour, and the capability each one gates. A fleet label
@@ -115,22 +123,28 @@ INTENTIONAL_EXCLUSIONS = {
 def vocabulary_gaps(index: dict) -> dict:
     """Fleet labels that share a namespace with a code vocabulary but are not accepted by it."""
     import importlib
+
     fleet = set()
     for labels in (index.get("repos") or {}).values():
         fleet |= set(labels)
     out: dict[str, list[str]] = {}
     for cap_id, module_name, attr in GATE_VOCABULARIES:
         try:
-            accepted = {str(x).strip().lower()
-                        for x in getattr(importlib.import_module(module_name), attr, ()) or ()}
+            accepted = {
+                str(x).strip().lower()
+                for x in getattr(importlib.import_module(module_name), attr, ()) or ()
+            }
         except Exception:
             continue
         namespaces = {a.split(":", 1)[0] for a in accepted if ":" in a}
         deliberate = INTENTIONAL_EXCLUSIONS.get(cap_id, set())
         misses = sorted(
-            f for f in fleet
-            if ":" in f and f.split(":", 1)[0] in namespaces
-            and f not in accepted and f not in deliberate
+            f
+            for f in fleet
+            if ":" in f
+            and f.split(":", 1)[0] in namespaces
+            and f not in accepted
+            and f not in deliberate
         )
         if misses:
             out[cap_id] = misses
@@ -138,6 +152,7 @@ def vocabulary_gaps(index: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- entry class
+
 
 def entry_class(cap: dict) -> str:
     """How is this capability ENTERED? The wrong question is worse than no answer."""
@@ -153,11 +168,18 @@ def entry_class(cap: dict) -> str:
 
 # --------------------------------------------------------------------------- shared helpers
 
+
 def emittable_task_types() -> set[str]:
     """Every task_type `backlog.classify()` can produce, by brute force over its own vocabulary."""
     vocab: set[str] = set()
-    for name in ("MECHANICAL_LABELS", "TESTGEN_LABELS", "EPIC_LABELS", "CODEMOD_LABELS",
-                 "CROSS_REPO_LABELS", "RUNTIME_AC_LABELS"):
+    for name in (
+        "MECHANICAL_LABELS",
+        "TESTGEN_LABELS",
+        "EPIC_LABELS",
+        "CODEMOD_LABELS",
+        "CROSS_REPO_LABELS",
+        "RUNTIME_AC_LABELS",
+    ):
         vocab |= set(getattr(backlog, name, ()) or ())
     out = {backlog.classify([])}
     for label in vocab:
@@ -168,6 +190,7 @@ def emittable_task_types() -> set[str]:
 def _prompt_templates() -> set[str]:
     try:
         import dispatcher
+
         return set(dispatcher.PROMPT_TEMPLATES)
     except Exception:
         return set()
@@ -176,8 +199,14 @@ def _prompt_templates() -> set[str]:
 def labels_producing(task_type: str) -> list[str]:
     """Which labels would make classify() emit this task_type."""
     vocab: set[str] = set()
-    for name in ("MECHANICAL_LABELS", "TESTGEN_LABELS", "EPIC_LABELS", "CODEMOD_LABELS",
-                 "CROSS_REPO_LABELS", "RUNTIME_AC_LABELS"):
+    for name in (
+        "MECHANICAL_LABELS",
+        "TESTGEN_LABELS",
+        "EPIC_LABELS",
+        "CODEMOD_LABELS",
+        "CROSS_REPO_LABELS",
+        "RUNTIME_AC_LABELS",
+    ):
         vocab |= set(getattr(backlog, name, ()) or ())
     return sorted(l for l in vocab if backlog.classify([l]) == task_type)
 
@@ -336,26 +365,47 @@ def entrypoint_presence(cap: dict) -> dict:
     raw = str(cap.get("entrypoint") or "").strip()
     declared = _declared_modules(cap)
     if not raw or not declared:
-        return {"state": ENTRYPOINT_UNDECLARED, "entrypoint": raw, "present": [],
-                "missing": [], "found_in": [], "searched": [],
-                "detail": "the row declares no entrypoint module at all"}
+        return {
+            "state": ENTRYPOINT_UNDECLARED,
+            "entrypoint": raw,
+            "present": [],
+            "missing": [],
+            "found_in": [],
+            "searched": [],
+            "detail": "the row declares no entrypoint module at all",
+        }
 
     present = [p.name for p in _entrypoint_files(cap)]
-    missing = [{"token": token, "candidates": candidates}
-               for token, candidates in declared
-               if not any((HERE / name).exists() for name in candidates)]
+    missing = [
+        {"token": token, "candidates": candidates}
+        for token, candidates in declared
+        if not any((HERE / name).exists() for name in candidates)
+    ]
     if present:
-        return {"state": ENTRYPOINT_PRESENT, "entrypoint": raw, "present": present,
-                "missing": missing, "found_in": [], "searched": [],
-                "detail": f"{', '.join(present)} present in this tree"}
+        return {
+            "state": ENTRYPOINT_PRESENT,
+            "entrypoint": raw,
+            "present": present,
+            "missing": missing,
+            "found_in": [],
+            "searched": [],
+            "detail": f"{', '.join(present)} present in this tree",
+        }
 
     # A path with directory components names another REPOSITORY, not a module we failed to find.
-    external = any("/" in token and not token.startswith(("./", "/"))
-                   for token, _candidates in declared)
+    external = any(
+        "/" in token and not token.startswith(("./", "/")) for token, _candidates in declared
+    )
     if external:
-        return {"state": ENTRYPOINT_EXTERNAL, "entrypoint": raw, "present": [],
-                "missing": missing, "found_in": [], "searched": [],
-                "detail": f"{raw} names a path in another repository"}
+        return {
+            "state": ENTRYPOINT_EXTERNAL,
+            "entrypoint": raw,
+            "present": [],
+            "missing": missing,
+            "found_in": [],
+            "searched": [],
+            "detail": f"{raw} names a path in another repository",
+        }
 
     wanted = [c for _token, candidates in declared for c in candidates]
     searched, found_in = [], []
@@ -364,11 +414,16 @@ def entrypoint_presence(cap: dict) -> dict:
         hits = sorted({name for name in wanted if (path / name).is_file()})
         if hits:
             found_in.append({"checkout": label, "path": str(path), "modules": hits})
-    names = ", ".join(dict.fromkeys(
-        c for _token, candidates in declared for c in candidates[-1:]))
-    return {"state": ENTRYPOINT_ABSENT, "entrypoint": raw, "present": [], "missing": missing,
-            "found_in": found_in, "searched": searched,
-            "detail": f"{names} is not in this tree"}
+    names = ", ".join(dict.fromkeys(c for _token, candidates in declared for c in candidates[-1:]))
+    return {
+        "state": ENTRYPOINT_ABSENT,
+        "entrypoint": raw,
+        "present": [],
+        "missing": missing,
+        "found_in": found_in,
+        "searched": searched,
+        "detail": f"{names} is not in this tree",
+    }
 
 
 def absent_entrypoint_report(capability_ids, *, path: Path | None = None) -> dict:
@@ -392,8 +447,7 @@ def absent_entrypoint_report(capability_ids, *, path: Path | None = None) -> dic
     return {"absent": absent, "checked": len(wanted), "total": len(ledger)}
 
 
-def absent_entrypoint_note(capability_ids, *, path: Path | None = None,
-                           indent: str = "  ") -> str:
+def absent_entrypoint_note(capability_ids, *, path: Path | None = None, indent: str = "  ") -> str:
     """The diagnostic block, or '' when every row's code is here. Appended to a FAILURE, never a skip.
 
     One formatter for all three checks so they cannot tell three different stories about the same
@@ -402,10 +456,12 @@ def absent_entrypoint_note(capability_ids, *, path: Path | None = None,
     """
     try:
         rep = absent_entrypoint_report(capability_ids, path=path)
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         # A diagnostic must never convert the real assertion into an error about the diagnostic.
-        return (f"\n{indent}[entrypoint-presence diagnostic unavailable: "
-                f"{type(exc).__name__}: {exc}]")
+        return (
+            f"\n{indent}[entrypoint-presence diagnostic unavailable: "
+            f"{type(exc).__name__}: {exc}]"
+        )
     if not rep["absent"]:
         return ""
     n = len(rep["absent"])
@@ -422,15 +478,20 @@ def absent_entrypoint_note(capability_ids, *, path: Path | None = None,
         f"caller/heartbeat/fixture CANNOT be here either:",
     ]
     for row in rep["absent"]:
-        out.append(f"{indent}  {row['capability_id']}  declares {row['entrypoint']} — "
-                   f"{row['detail']}")
+        out.append(
+            f"{indent}  {row['capability_id']}  declares {row['entrypoint']} — " f"{row['detail']}"
+        )
         if row["found_in"]:
             for hit in row["found_in"]:
-                out.append(f"{indent}      but {', '.join(hit['modules'])} IS present in "
-                           f"{hit['checkout']}")
+                out.append(
+                    f"{indent}      but {', '.join(hit['modules'])} IS present in "
+                    f"{hit['checkout']}"
+                )
         elif row["searched"]:
-            out.append(f"{indent}      not found in {len(row['searched'])} sibling checkout(s) "
-                       f"either ({', '.join(row['searched'][:4])})")
+            out.append(
+                f"{indent}      not found in {len(row['searched'])} sibling checkout(s) "
+                f"either ({', '.join(row['searched'][:4])})"
+            )
         else:
             out.append(f"{indent}      no sibling checkout to search from here")
     out += [
@@ -450,6 +511,7 @@ def absent_entrypoint_note(capability_ids, *, path: Path | None = None,
 
 # --------------------------------------------------------------------------- static analysis
 
+
 def _heartbeat_functions(path: Path) -> set[str]:
     """Functions in `path` whose body reaches a capability heartbeat call."""
     try:
@@ -465,8 +527,13 @@ def _heartbeat_functions(path: Path) -> set[str]:
                 continue
             func = sub.func
             called = getattr(func, "id", None) or getattr(func, "attr", None) or ""
-            if called in ("_capability_heartbeat", "production_heartbeat", "daily_heartbeat",
-                          "heartbeat", "_lane_capability_match"):
+            if called in (
+                "_capability_heartbeat",
+                "production_heartbeat",
+                "daily_heartbeat",
+                "heartbeat",
+                "_lane_capability_match",
+            ):
                 names.add(node.name)
                 break
     return names
@@ -478,8 +545,9 @@ def _call_graph(path: Path) -> dict[str, set[str]]:
         tree = ast.parse(path.read_text(errors="ignore"))
     except (OSError, SyntaxError):
         return {}
-    local = {n.name for n in ast.walk(tree)
-             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    local = {
+        n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     graph: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -511,7 +579,7 @@ def _reaches(start: str, graph: dict[str, set[str]], targets: set[str]) -> bool:
         if current in seen:
             continue
         seen.add(current)
-        for callee in graph.get(current, ()):  # noqa: SIM118
+        for callee in graph.get(current, ()):
             if callee in targets:
                 return True
             if callee not in seen:
@@ -585,11 +653,21 @@ def external_caller(cap: dict) -> dict | None:
     for root, origin in _fleet_roots():
         path = root / rel
         if path.exists():
-            return {"exists": True, "repo": repo, "workflow": workflow,
-                    "path": str(path), "root_origin": origin}
+            return {
+                "exists": True,
+                "repo": repo,
+                "workflow": workflow,
+                "path": str(path),
+                "root_origin": origin,
+            }
     tried = [str(r / rel) for r, _ in _fleet_roots()]
-    return {"exists": False, "repo": repo, "workflow": workflow,
-            "path": tried[0] if tried else "", "tried": tried}
+    return {
+        "exists": False,
+        "repo": repo,
+        "workflow": workflow,
+        "path": tried[0] if tried else "",
+        "tried": tried,
+    }
 
 
 def _fleet_roots() -> list[tuple[pathlib.Path, str]]:
@@ -612,8 +690,12 @@ def _fleet_roots() -> list[tuple[pathlib.Path, str]]:
     if env:
         roots.append((pathlib.Path(env).expanduser(), "ORCH_FLEET_ROOT"))
     roots.append((HERE.parent, "sibling-of-module"))
-    roots.append((pathlib.Path.home() / "Library/CloudStorage/Dropbox/Learning/Code",
-                  "home-anchored-workspace"))
+    roots.append(
+        (
+            pathlib.Path.home() / "Library/CloudStorage/Dropbox/Learning/Code",
+            "home-anchored-workspace",
+        )
+    )
     seen, out = set(), []
     for r, origin in roots:
         key = str(r)
@@ -644,13 +726,16 @@ def heartbeat_reachable(cap: dict) -> dict:
     # here only because the dispatcher really does credit it. Nothing is guessed from naming.
     try:
         import dispatcher as _dispatcher
+
         _lane_credited = set((_dispatcher.TASK_TYPE_CAPABILITY or {}).values())
     except Exception:
         _lane_credited = set()
     if cap.get("capability_id") in _lane_credited:
-        return {"status": "reachable",
-                "via": ["dispatcher.build_prompt via TASK_TYPE_CAPABILITY (prompt-schema capability)"],
-                "functions": ["build_prompt"]}
+        return {
+            "status": "reachable",
+            "via": ["dispatcher.build_prompt via TASK_TYPE_CAPABILITY (prompt-schema capability)"],
+            "functions": ["build_prompt"],
+        }
     # CROSS-REPO CAPABILITIES ARE CREDITED BY THE BRIDGE, for the same reason and by the same rule.
     # `docs-drift-fix-agent`'s entrypoint lives in the Workflows repo, so asking whether a heartbeat
     # sits on ITS path is unanswerable -- the file is in another repository.
@@ -659,14 +744,19 @@ def heartbeat_reachable(cap: dict) -> dict:
     # Declared from the bridge's own EXTERNAL_CI_CAPABILITIES mapping, never inferred.
     try:
         import capability_outcome_bridge as _bridge
+
         _ci_credited = set(_bridge.EXTERNAL_CI_CAPABILITIES or {})
     except Exception:
         _ci_credited = set()
     if cap.get("capability_id") in _ci_credited:
-        return {"status": "reachable",
-                "via": ["capability_outcome_bridge.ingest_external_ci_invocations "
-                        "(cross-repo CI observation)"],
-                "functions": ["ingest_external_ci_invocations"]}
+        return {
+            "status": "reachable",
+            "via": [
+                "capability_outcome_bridge.ingest_external_ci_invocations "
+                "(cross-repo CI observation)"
+            ],
+            "functions": ["ingest_external_ci_invocations"],
+        }
     files = _entrypoint_files(cap)
     if not files:
         return {"status": "no_local_entrypoint", "detail": str(cap.get("entrypoint") or "")[:60]}
@@ -689,8 +779,11 @@ def heartbeat_reachable(cap: dict) -> dict:
         # `role-triage` with 688 recorded invocations.
         declared = _declared_functions(cap) & set(graph)
         if declared and (declared & bearing):
-            return {"status": "reachable", "via": [f"declared entrypoint {sorted(declared)[0]}"],
-                    "functions": sorted(hb_funcs)}
+            return {
+                "status": "reachable",
+                "via": [f"declared entrypoint {sorted(declared)[0]}"],
+                "functions": sorted(hb_funcs),
+            }
 
         non_main = {f for f in bearing if f != "main"}
         callers = _callers_of(stem, non_main) if non_main else []
@@ -702,9 +795,12 @@ def heartbeat_reachable(cap: dict) -> dict:
         # Its code may still run — via direct function calls that bypass the heartbeat.
         any_call = _callers_of(stem, {"*"})
         if any_call:
-            return {"status": "off_path", "functions": sorted(hb_funcs),
-                    "detail": f"heartbeat only in {sorted(hb_funcs)}, but drivers call "
-                              f"{any_call[:2]} directly"}
+            return {
+                "status": "off_path",
+                "functions": sorted(hb_funcs),
+                "detail": f"heartbeat only in {sorted(hb_funcs)}, but drivers call "
+                f"{any_call[:2]} directly",
+            }
         return {"status": "no_caller", "functions": sorted(hb_funcs)}
     return {"status": "no_heartbeat", "files": [p.name for p in files]}
 
@@ -749,8 +845,10 @@ def emits_heartbeat(path: Path) -> bool:
         text = path.read_text(errors="ignore")
     except OSError:
         return False
-    return any(_HEARTBEAT_CALL_RE.search(line) and not _HEARTBEAT_DEF_RE.match(line)
-               for line in text.splitlines())
+    return any(
+        _HEARTBEAT_CALL_RE.search(line) and not _HEARTBEAT_DEF_RE.match(line)
+        for line in text.splitlines()
+    )
 
 
 def shell_heartbeat_gate(text: str) -> dict:
@@ -785,7 +883,8 @@ def shell_heartbeat_gate(text: str) -> dict:
         if not stripped or stripped.startswith("#"):
             continue
         if export_line is None and re.search(
-                rf"^\s*export\s+{re.escape(HEARTBEAT_ENV_FLAG)}=1\b", line):
+            rf"^\s*export\s+{re.escape(HEARTBEAT_ENV_FLAG)}=1\b", line
+        ):
             export_line = lineno
             continue
         if not _SHELL_PY_INVOKE_RE.search(line.split("#", 1)[0]):
@@ -811,9 +910,16 @@ def heartbeat_env_gate(*, here: Path | None = None) -> dict:
     can be read: 0 suppressed of 40 invocations is a correct ordering, 0 of 0 is a broken parse.
     """
     root = here or HERE
-    out = {"flag": HEARTBEAT_ENV_FLAG, "anchor": HEARTBEAT_EXPORT_ANCHOR, "drivers": {},
-           "suppressed_modules": [], "invocations_before": 0, "invocations_after": 0,
-           "invocations_deferred": 0, "anchor_present": False}
+    out = {
+        "flag": HEARTBEAT_ENV_FLAG,
+        "anchor": HEARTBEAT_EXPORT_ANCHOR,
+        "drivers": {},
+        "suppressed_modules": [],
+        "invocations_before": 0,
+        "invocations_after": 0,
+        "invocations_deferred": 0,
+        "anchor_present": False,
+    }
     suppressed: dict[str, list[str]] = {}
     for driver in SHELL_DRIVERS:
         dpath = root / driver
@@ -823,8 +929,7 @@ def heartbeat_env_gate(*, here: Path | None = None) -> dict:
         gate = shell_heartbeat_gate(text)
         if HEARTBEAT_EXPORT_ANCHOR in text:
             out["anchor_present"] = True
-        emitting_before = sorted({
-            mod for _, mod in gate["before"] if emits_heartbeat(root / mod)})
+        emitting_before = sorted({mod for _, mod in gate["before"] if emits_heartbeat(root / mod)})
         out["drivers"][driver] = {
             "export_line": gate["export_line"],
             "invocations_before": len(gate["before"]),
@@ -874,13 +979,15 @@ def heartbeat_env_gate(*, here: Path | None = None) -> dict:
 # drop an entry from the dispatcher's map and the front door narrows silently. So the exemption that
 # was correct for a literal is exactly wrong for a derivation, and the direct set gets its own
 # baseline rather than no baseline.
-ADVISOR_REACH_BASELINE = frozenset({
-    "codemod-campaign",
-    "cross-repo-coordination",
-    "deliberate-break-verifier",
-    "epic-decomposition",
-    "testgen-lane",
-})
+ADVISOR_REACH_BASELINE = frozenset(
+    {
+        "codemod-campaign",
+        "cross-repo-coordination",
+        "deliberate-break-verifier",
+        "epic-decomposition",
+        "testgen-lane",
+    }
+)
 # Targets reachable ONLY through the derived direct-entry map — never through a declared matcher.
 # `runtime-ac-checks` is the case that proves the point: the dispatcher has routed `runtime_ac` to it
 # all along while the advisor named `deliberate-break-verifier` for the same work, and nothing
@@ -898,26 +1005,36 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
     """
     try:
         import capability_advisor
+
         task_types = list(capability_advisor.TASK_SIGNALS)
-    except Exception as exc:                                   # noqa: BLE001
-        return {"unreadable": f"capability_advisor unavailable ({type(exc).__name__})",
-                "reachable": [], "by_capability": {}, "task_types": [],
-                "regressed": sorted(ADVISOR_REACH_BASELINE),
-                "direct_entry": {}, "direct_entry_targets": [], "direct_entry_only": [],
-                "direct_entry_baseline": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
-                "direct_entry_regressed": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
-                "total_reachable_count": 0}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "unreadable": f"capability_advisor unavailable ({type(exc).__name__})",
+            "reachable": [],
+            "by_capability": {},
+            "task_types": [],
+            "regressed": sorted(ADVISOR_REACH_BASELINE),
+            "direct_entry": {},
+            "direct_entry_targets": [],
+            "direct_entry_only": [],
+            "direct_entry_baseline": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
+            "direct_entry_regressed": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
+            "total_reachable_count": 0,
+        }
     # ONE source for the direct-entry map: the advisor's own, which derives from the dispatcher.
     # Re-listing it here would be the second inventory this function exists to prevent.
     try:
         direct = dict(capability_advisor.direct_entry())
-    except Exception:                                          # noqa: BLE001
+    except Exception:  # noqa: BLE001
         direct = {}
     direct_targets = {str(v) for v in direct.values() if v}
     by_capability: dict[str, list[str]] = {}
     for task_type in task_types:
-        trigger = {"repository": ADVISOR_REACH_PROBE_REPO, "task_type": task_type,
-                   "lane": ADVISOR_REACH_PROBE_LANE}
+        trigger = {
+            "repository": ADVISOR_REACH_PROBE_REPO,
+            "task_type": task_type,
+            "lane": ADVISOR_REACH_PROBE_LANE,
+        }
         for cap_id, cap in sorted(caps.items()):
             if cap.get("status") in {"retired", "superseded"}:
                 continue
@@ -948,6 +1065,7 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
 
 # --------------------------------------------------------------------------- fleet vocabulary
 
+
 def _fleet_label_index(*, use_cache: bool = True) -> dict:
     """Labels that EXIST per repo. Cached: 12 API calls is too slow for a hot path."""
     cache = STATE_DIR / "fleet-label-index.json"
@@ -964,19 +1082,25 @@ def _fleet_label_index(*, use_cache: bool = True) -> dict:
     # that took the whole audit down — same information, opposite outcome. Named here, and it
     # short-circuits: with no gh at all there is nothing to ask 12 times.
     if not shutil.which("gh"):
-        return {"generated_at": time.time(), "repos": {},
-                "unreadable": "gh CLI not installed; fleet label vocabulary unknown"}
+        return {
+            "generated_at": time.time(),
+            "repos": {},
+            "unreadable": "gh CLI not installed; fleet label vocabulary unknown",
+        }
     for full in getattr(backlog, "SUPPORTED_REPOS", []):
         try:
-            proc = subprocess.run(["gh", "label", "list", "--repo", full, "--limit", "300",
-                                   "--json", "name"], capture_output=True, text=True, timeout=120)
+            proc = subprocess.run(
+                ["gh", "label", "list", "--repo", full, "--limit", "300", "--json", "name"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
         except (OSError, subprocess.SubprocessError):
-            continue                       # unknown for this repo, exactly like a nonzero exit
+            continue  # unknown for this repo, exactly like a nonzero exit
         if proc.returncode != 0:
             continue
         try:
-            index[full] = sorted(r["name"].strip().lower()
-                                 for r in json.loads(proc.stdout or "[]"))
+            index[full] = sorted(r["name"].strip().lower() for r in json.loads(proc.stdout or "[]"))
         except ValueError:
             continue
     blob = {"generated_at": time.time(), "repos": index}
@@ -995,21 +1119,39 @@ def label_coverage(task_type: str, index: dict) -> dict:
     if not wanted or not repos:
         return {"labels": sorted(wanted), "repos_with": None, "repos_total": len(repos)}
     have = [r for r, labels in repos.items() if wanted & set(labels)]
-    return {"labels": sorted(wanted), "repos_with": len(have), "repos_total": len(repos),
-            "missing_in": sorted(r.split("/")[-1] for r in repos if r not in have)[:6]}
+    return {
+        "labels": sorted(wanted),
+        "repos_with": len(have),
+        "repos_total": len(repos),
+        "missing_in": sorted(r.split("/")[-1] for r in repos if r not in have)[:6],
+    }
 
 
 # --------------------------------------------------------------------------- the audit
 
-def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: set[str],
-                     label_index: dict, vocab_gaps: dict | None = None,
-                     env_gate: dict | None = None, reach: dict | None = None) -> dict:
+
+def audit_capability(
+    cap_id: str,
+    cap: dict,
+    *,
+    emittable: set[str],
+    templates: set[str],
+    label_index: dict,
+    vocab_gaps: dict | None = None,
+    env_gate: dict | None = None,
+    reach: dict | None = None,
+) -> dict:
     """One capability: entry class, machinery verdict, named defects. Never a demand guess."""
     entry = entry_class(cap)
     defects: list[str] = []
     notes: list[str] = []
-    row = {"capability_id": cap_id, "status": cap.get("status"), "entry_class": entry,
-           "matcher": cap.get("matcher"), "entrypoint": cap.get("entrypoint")}
+    row = {
+        "capability_id": cap_id,
+        "status": cap.get("status"),
+        "entry_class": entry,
+        "matcher": cap.get("matcher"),
+        "entrypoint": cap.get("entrypoint"),
+    }
 
     if entry == ENTRY_TASK_ROUTED:
         values = (cap.get("matcher") or {}).get("value") or []
@@ -1027,20 +1169,26 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
                 defects.append("label_absent_from_fleet")
                 notes.append(f"no repo carries a label producing {value!r}")
             elif (cov.get("repos_with") or 0) and cov["repos_with"] <= max(
-                    1, (cov.get("repos_total") or 12) // 6):
+                1, (cov.get("repos_total") or 12) // 6
+            ):
                 defects.append("label_absent_from_fleet")
-                notes.append(f"a label producing {value!r} exists in only "
-                             f"{cov['repos_with']}/{cov['repos_total']} repos")
+                notes.append(
+                    f"a label producing {value!r} exists in only "
+                    f"{cov['repos_with']}/{cov['repos_total']} repos"
+                )
 
     elif entry == ENTRY_DIRECT:
         hb = heartbeat_reachable(cap)
         row["heartbeat"] = hb
         if hb["status"] == "off_path":
-            defects.append("heartbeat_off_path"); notes.append(hb.get("detail", ""))
+            defects.append("heartbeat_off_path")
+            notes.append(hb.get("detail", ""))
         elif hb["status"] == "no_heartbeat":
-            defects.append("no_heartbeat"); notes.append("entrypoint records nothing")
+            defects.append("no_heartbeat")
+            notes.append("entrypoint records nothing")
         elif hb["status"] == "no_caller":
-            defects.append("entrypoint_no_caller"); notes.append("no driver calls it")
+            defects.append("entrypoint_no_caller")
+            notes.append("no driver calls it")
         elif hb["status"] == "no_local_entrypoint":
             # A cross-repo entrypoint is not a MISSING file — reporting it as missing implies a
             # local defect and hides the real blocker, which is a change in another repository.
@@ -1055,14 +1203,17 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
             row["external_caller"] = caller
             if caller and caller.get("exists"):
                 # The cross-repo caller HAS landed, so this is no longer blocked.
-                notes.append(f"cross-repo entrypoint, caller present: "
-                             f"{caller['repo']}/.github/workflows/{caller['workflow']}.yml")
+                notes.append(
+                    f"cross-repo entrypoint, caller present: "
+                    f"{caller['repo']}/.github/workflows/{caller['workflow']}.yml"
+                )
             else:
                 defects.append("entrypoint_external" if external else "entrypoint_missing")
                 notes.append(detail)
                 if caller:
-                    notes.append(f"awaiting caller {caller.get('workflow')} in "
-                                 f"{caller.get('repo')}")
+                    notes.append(
+                        f"awaiting caller {caller.get('workflow')} in " f"{caller.get('repo')}"
+                    )
                 # WHERE the code actually is, when it is somewhere. `entrypoint_missing` alone
                 # reads as "registered with no implementation"; a named sibling checkout turns the
                 # same row into "another session's in-flight branch", which is the opposite action.
@@ -1072,8 +1223,10 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
                 if hits:
                     shown = ", ".join(h["checkout"] for h in hits[:3])
                     more = f" (+{len(hits) - 3} more)" if len(hits) > 3 else ""
-                    notes.append(f"module absent HERE but present in {shown}{more} — "
-                                 f"wait-or-merge, not retire")
+                    notes.append(
+                        f"module absent HERE but present in {shown}{more} — "
+                        f"wait-or-merge, not retire"
+                    )
         # A kind-matcher is correct for this class, but the INVENTORY must not ask it a
         # task_type question — that is what produced years of meaningless `no_matching_work`.
         notes.append("kind-matched: judge by whether its code path runs, not by work matching")
@@ -1105,16 +1258,20 @@ def audit_capability(cap_id: str, cap: dict, *, emittable: set[str], templates: 
         row["advisor_task_types"] = (reach.get("by_capability") or {}).get(cap_id) or []
         if cap_id in set(reach.get("regressed") or []):
             defects.append("advisor_reach_regression")
-            notes.append("was nameable at the advisor front door and no longer is; a tightened "
-                         "matcher dropped it out without any diff saying so")
+            notes.append(
+                "was nameable at the advisor front door and no longer is; a tightened "
+                "matcher dropped it out without any diff saying so"
+            )
 
     suppressed = set((env_gate or {}).get("suppressed_modules") or [])
     if suppressed:
         mine = sorted({p.name for p in _entrypoint_files(cap) if p.name in suppressed})
         if mine:
             defects.append("heartbeat_env_suppressed")
-            notes.append(f"{', '.join(mine)} is invoked above the "
-                         f"{HEARTBEAT_ENV_FLAG} export, so its heartbeat records nothing")
+            notes.append(
+                f"{', '.join(mine)} is invoked above the "
+                f"{HEARTBEAT_ENV_FLAG} export, so its heartbeat records nothing"
+            )
             row["heartbeat_env_suppressed"] = mine
 
     row["defects"] = sorted(set(defects))
@@ -1132,8 +1289,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities as _caps
-        _caps.production_heartbeat("capability-activation-audit", event_type,
-                                   ref="capability_activation_audit.audit")
+
+        _caps.production_heartbeat(
+            "capability-activation-audit", event_type, ref="capability_activation_audit.audit"
+        )
     except Exception:
         pass
 
@@ -1147,9 +1306,19 @@ def audit(*, path=None, use_cache: bool = True) -> dict:
     vgaps = vocabulary_gaps(index)
     env_gate = heartbeat_env_gate()
     reach = advisor_reach(caps)
-    rows = [audit_capability(cid, cap, emittable=emittable, templates=templates,
-                             label_index=index, vocab_gaps=vgaps, env_gate=env_gate, reach=reach)
-            for cid, cap in sorted(caps.items())]
+    rows = [
+        audit_capability(
+            cid,
+            cap,
+            emittable=emittable,
+            templates=templates,
+            label_index=index,
+            vocab_gaps=vgaps,
+            env_gate=env_gate,
+            reach=reach,
+        )
+        for cid, cap in sorted(caps.items())
+    ]
     by_defect: dict[str, list[str]] = {}
     for row in rows:
         for defect in row["defects"]:
@@ -1177,6 +1346,7 @@ def audit(*, path=None, use_cache: bool = True) -> dict:
 
 # --------------------------------------------------------------------------- progress over time
 
+
 def load_history(path: Path | None = None) -> list[dict]:
     p = path or SNAPSHOT_PATH
     if not p.exists():
@@ -1192,10 +1362,14 @@ def record_snapshot(rep: dict, *, path: Path | None = None) -> dict:
     """Persist the headline numbers so progress is measured, not asserted."""
     p = path or SNAPSHOT_PATH
     history = load_history(p)
-    entry = {"generated_at": rep["generated_at"], "total": rep["total"],
-             "reachable": rep["reachable"], "blocked": rep["blocked"],
-             "reachable_ids": sorted(rep["reachable_ids"]),
-             "by_defect": {k: len(v) for k, v in rep["by_defect"].items()}}
+    entry = {
+        "generated_at": rep["generated_at"],
+        "total": rep["total"],
+        "reachable": rep["reachable"],
+        "blocked": rep["blocked"],
+        "reachable_ids": sorted(rep["reachable_ids"]),
+        "by_defect": {k: len(v) for k, v in rep["by_defect"].items()},
+    }
     history.append(entry)
     history = history[-MAX_SNAPSHOTS:]
     try:
@@ -1223,34 +1397,44 @@ def progress(rep: dict, *, path: Path | None = None) -> dict:
         "reachable_now": rep["reachable"],
         "gained": sorted(now_ids - prev_ids),
         "regressed": sorted(prev_ids - now_ids),
-        "defect_delta": {k: now_def.get(k, 0) - prev_def.get(k, 0)
-                         for k in sorted(set(now_def) | set(prev_def))
-                         if now_def.get(k, 0) != prev_def.get(k, 0)},
+        "defect_delta": {
+            k: now_def.get(k, 0) - prev_def.get(k, 0)
+            for k in sorted(set(now_def) | set(prev_def))
+            if now_def.get(k, 0) != prev_def.get(k, 0)
+        },
     }
 
 
 # --------------------------------------------------------------------------- rendering
 
+
 def format_scorecard(rep: dict, prog: dict | None = None) -> str:
     pct = 100 * rep["reachable"] / rep["total"] if rep["total"] else 0
     lines = [
-        "# Capability activation scorecard", "",
+        "# Capability activation scorecard",
+        "",
         f"  CAN FIRE:  {rep['reachable']:>3} of {rep['total']}  ({pct:.0f}%)",
-        f"  BLOCKED:   {rep['blocked']:>3}", "",
-        "  entry classes: " + ", ".join(f"{k}={v}" for k, v in sorted(rep["by_entry_class"].items())),
+        f"  BLOCKED:   {rep['blocked']:>3}",
+        "",
+        "  entry classes: "
+        + ", ".join(f"{k}={v}" for k, v in sorted(rep["by_entry_class"].items())),
         "",
     ]
     if prog and prog.get("baseline"):
         age = (rep["generated_at"] - int(prog["baseline"])) / 86400
-        lines += [f"  vs last snapshot ({age:.1f}d ago): "
-                  f"{prog['reachable_then']} -> {prog['reachable_now']} reachable"]
+        lines += [
+            f"  vs last snapshot ({age:.1f}d ago): "
+            f"{prog['reachable_then']} -> {prog['reachable_now']} reachable"
+        ]
         if prog["gained"]:
             lines.append(f"    GAINED:    {', '.join(prog['gained'])}")
         if prog["regressed"]:
             lines.append(f"    REGRESSED: {', '.join(prog['regressed'])}")
         if prog["defect_delta"]:
-            lines.append("    defect delta: " + ", ".join(
-                f"{k} {v:+d}" for k, v in prog["defect_delta"].items()))
+            lines.append(
+                "    defect delta: "
+                + ", ".join(f"{k} {v:+d}" for k, v in prog["defect_delta"].items())
+            )
         lines.append("")
     elif prog:
         lines += [f"  {prog.get('detail')}", ""]
@@ -1264,23 +1448,32 @@ def format_scorecard(rep: dict, prog: dict | None = None) -> str:
         lines.append("")
     if not rep["by_defect"]:
         lines += ["  none — every capability can fire", ""]
-    lines += ["## Per capability", "",
-              "| Capability | Entry | Can fire | Defects |", "|---|---|---|---|"]
+    lines += [
+        "## Per capability",
+        "",
+        "| Capability | Entry | Can fire | Defects |",
+        "|---|---|---|---|",
+    ]
     for row in rep["rows"]:
-        lines.append(f"| {row['capability_id']} | {row['entry_class']} | "
-                     f"{'yes' if row['reachable'] else 'NO'} | "
-                     f"{', '.join(row['defects']) or '—'} |")
+        lines.append(
+            f"| {row['capability_id']} | {row['entry_class']} | "
+            f"{'yes' if row['reachable'] else 'NO'} | "
+            f"{', '.join(row['defects']) or '—'} |"
+        )
     return "\n".join(lines) + "\n"
 
 
 # --------------------------------------------------------------------------- selftest
+
 
 def _selftest() -> None:
     import tempfile
 
     # ENTRY CLASS is the load-bearing distinction: asking a task_type question of a kind-matched
     # capability is what made `no_matching_work` meaningless for 26 of 34 capabilities.
-    assert entry_class({"matcher": {"field": "task_type", "value": ["testgen"]}}) == ENTRY_TASK_ROUTED
+    assert (
+        entry_class({"matcher": {"field": "task_type", "value": ["testgen"]}}) == ENTRY_TASK_ROUTED
+    )
     assert entry_class({"matcher": {"kind": "transport", "name": "offload"}}) == ENTRY_DIRECT
     assert entry_class({"matcher": {"kind": "env", "name": "ORCH_X"}}) == ENTRY_GATED
     assert entry_class({"matcher": {}, "gate_reason": "held"}) == ENTRY_GATED
@@ -1292,32 +1485,51 @@ def _selftest() -> None:
     # a capability in the mapping is credited, and one that is NOT in it still has to earn
     # reachability the normal way, or this becomes a blanket excuse for a genuinely dead module.
     import dispatcher as _d
+
     _mapped = set((_d.TASK_TYPE_CAPABILITY or {}).values())
     assert "codemod-campaign" in _mapped, _mapped
-    assert heartbeat_reachable({"capability_id": "codemod-campaign",
-                                "entrypoint": "codemod_lane.py"})["status"] == "reachable"
+    assert (
+        heartbeat_reachable({"capability_id": "codemod-campaign", "entrypoint": "codemod_lane.py"})[
+            "status"
+        ]
+        == "reachable"
+    )
     # NARROWNESS CONTROL: `deliberate-break-verifier` is the same shape but is NOT in the mapping,
     # and must keep reporting a real defect -- local_verify.py genuinely has no caller.
     assert "deliberate-break-verifier" not in _mapped, _mapped
-    assert heartbeat_reachable({"capability_id": "deliberate-break-verifier",
-                                "entrypoint": "local_verify.py"})["status"] != "reachable"
+    assert (
+        heartbeat_reachable(
+            {"capability_id": "deliberate-break-verifier", "entrypoint": "local_verify.py"}
+        )["status"]
+        != "reachable"
+    )
     # CROSS-REPO CREDITING, same rule and same narrowness.
     import capability_outcome_bridge as _bridge
+
     _ci = set(_bridge.EXTERNAL_CI_CAPABILITIES or {})
     assert "docs-drift-fix-agent" in _ci, _ci
-    assert heartbeat_reachable({"capability_id": "docs-drift-fix-agent",
-                                "entrypoint": "Workflows/scripts/docs_drift_fix_agent.py"}
-                               )["status"] == "reachable"
-    assert heartbeat_reachable({"capability_id": "not-declared-anywhere",
-                                "entrypoint": "Other/repo/script.py"}
-                               )["status"] == "no_local_entrypoint"
+    assert (
+        heartbeat_reachable(
+            {
+                "capability_id": "docs-drift-fix-agent",
+                "entrypoint": "Workflows/scripts/docs_drift_fix_agent.py",
+            }
+        )["status"]
+        == "reachable"
+    )
+    assert (
+        heartbeat_reachable(
+            {"capability_id": "not-declared-anywhere", "entrypoint": "Other/repo/script.py"}
+        )["status"]
+        == "no_local_entrypoint"
+    )
 
     # classify() reachability, derived from backlog's own vocabulary rather than hardcoded.
     em = emittable_task_types()
     assert "testgen" in em and "codemod" in em and "implement" in em
     assert "docs" not in em, "docs labels map to mechanical; if this changes, the docs fix landed"
     assert "review" not in em, "classify() cannot emit review; if this changes, the fix landed"
-    assert backlog.classify(["docs"]) == "mechanical"      # the reason docs is unreachable
+    assert backlog.classify(["docs"]) == "mechanical"  # the reason docs is unreachable
     assert "testing" in labels_producing("testgen")
 
     idx = {"repos": {"o/a": ["testing", "bug"], "o/b": ["bug"], "o/c": ["bug"]}}
@@ -1328,17 +1540,24 @@ def _selftest() -> None:
     assert "testgen" in tmpl and "docs" not in tmpl
 
     # A task-routed capability whose task_type cannot be emitted is BLOCKED, and says why.
-    row = audit_capability("x", {"matcher": {"field": "task_type", "value": ["docs"]},
-                                 "status": "generated"},
-                           emittable=em, templates=tmpl, label_index=idx)
+    row = audit_capability(
+        "x",
+        {"matcher": {"field": "task_type", "value": ["docs"]}, "status": "generated"},
+        emittable=em,
+        templates=tmpl,
+        label_index=idx,
+    )
     assert not row["reachable"]
     assert "task_type_not_emittable" in row["defects"] and "no_prompt_template" in row["defects"]
 
     # A healthy task-routed capability is reachable.
-    ok = audit_capability("t", {"matcher": {"field": "task_type", "value": ["testgen"]},
-                                "status": "generated"},
-                          emittable=em, templates=tmpl,
-                          label_index={"repos": {f"o/{i}": ["testing"] for i in range(12)}})
+    ok = audit_capability(
+        "t",
+        {"matcher": {"field": "task_type", "value": ["testgen"]}, "status": "generated"},
+        emittable=em,
+        templates=tmpl,
+        label_index={"repos": {f"o/{i}": ["testing"] for i in range(12)}},
+    )
     assert ok["reachable"], ok
 
     # HEARTBEAT REACHABILITY — the generalisation of the offload NameError and the main()-stranded
@@ -1351,10 +1570,11 @@ def _selftest() -> None:
             (HERE / "lonely.py").write_text(
                 "def _capability_heartbeat():\n    import capabilities\n"
                 "    capabilities.production_heartbeat('x','invocation')\n"
-                "def main(argv):\n    _capability_heartbeat()\n")
+                "def main(argv):\n    _capability_heartbeat()\n"
+            )
             (HERE / "tick.py").write_text("import lonely\nlonely.helper()\n")
             hb = heartbeat_reachable({"entrypoint": "lonely.py"})
-            assert hb["status"] == "off_path", hb          # runs, but credit cannot land
+            assert hb["status"] == "off_path", hb  # runs, but credit cannot land
             # ...and with a driver calling the heartbeat-bearing function, it IS reachable.
             (HERE / "tick.py").write_text("import lonely\nlonely._capability_heartbeat()\n")
             hb2 = heartbeat_reachable({"entrypoint": "lonely.py"})
@@ -1377,19 +1597,23 @@ def _selftest() -> None:
         root = Path(td)
         (root / "producer.py").write_text(
             "import capabilities\n"
-            "def go():\n    capabilities.production_heartbeat('p','invocation')\n")
+            "def go():\n    capabilities.production_heartbeat('p','invocation')\n"
+        )
         # DEFINES the helpers and calls neither — the shape of capabilities.py, which MUST be
         # allowed above the export because it is the validation gate that authorises heartbeats.
         (root / "gatekeeper.py").write_text(
             "def production_heartbeat(a, b):\n    return False\n"
-            "def daily_heartbeat(a, b):\n    return False\n")
+            "def daily_heartbeat(a, b):\n    return False\n"
+        )
         assert emits_heartbeat(root / "producer.py")
         assert not emits_heartbeat(root / "gatekeeper.py"), "a definition is not a call"
 
-        bad = ('python3 "$ORCH/gatekeeper.py" --validate\n'
-               'python3 "$ORCH/producer.py" --run\n'
-               "export ORCH_CAPABILITY_HEARTBEATS=1\n"
-               'python3 "$ORCH/producer.py" --run-again\n')
+        bad = (
+            'python3 "$ORCH/gatekeeper.py" --validate\n'
+            'python3 "$ORCH/producer.py" --run\n'
+            "export ORCH_CAPABILITY_HEARTBEATS=1\n"
+            'python3 "$ORCH/producer.py" --run-again\n'
+        )
         (root / "orchestrate.sh").write_text(bad)
         broken = heartbeat_env_gate(here=root)
         assert broken["suppressed_modules"] == ["producer.py"], broken
@@ -1398,10 +1622,12 @@ def _selftest() -> None:
 
         # REVERT: move the export above the producer and the defect must clear — and the
         # denominator must stay non-zero, so a clean verdict is distinguishable from a dead parse.
-        good = (f"# {HEARTBEAT_EXPORT_ANCHOR}\n"
-                'python3 "$ORCH/gatekeeper.py" --validate\n'
-                "export ORCH_CAPABILITY_HEARTBEATS=1\n"
-                'python3 "$ORCH/producer.py" --run\n')
+        good = (
+            f"# {HEARTBEAT_EXPORT_ANCHOR}\n"
+            'python3 "$ORCH/gatekeeper.py" --validate\n'
+            "export ORCH_CAPABILITY_HEARTBEATS=1\n"
+            'python3 "$ORCH/producer.py" --run\n'
+        )
         (root / "orchestrate.sh").write_text(good)
         fixed = heartbeat_env_gate(here=root)
         assert fixed["suppressed_modules"] == [], fixed
@@ -1414,7 +1640,8 @@ def _selftest() -> None:
         (root / "orchestrate.sh").write_text(
             '_g() { python3 "$ORCH/producer.py" --gate; }\n'
             "export ORCH_CAPABILITY_HEARTBEATS=1\n"
-            'python3 "$ORCH/gatekeeper.py" --x\n')
+            'python3 "$ORCH/gatekeeper.py" --x\n'
+        )
         fn = heartbeat_env_gate(here=root)
         assert fn["suppressed_modules"] == [], fn
         assert fn["invocations_deferred"] == 1, fn
@@ -1423,7 +1650,8 @@ def _selftest() -> None:
         (root / "orchestrate.sh").write_text(
             '# python3 "$ORCH/producer.py" --run\n'
             "export ORCH_CAPABILITY_HEARTBEATS=1\n"
-            'python3 "$ORCH/producer.py" --run\n')
+            'python3 "$ORCH/producer.py" --run\n'
+        )
         cm = heartbeat_env_gate(here=root)
         assert cm["suppressed_modules"] == [], cm
         assert cm["invocations_before"] == 0, cm
@@ -1435,9 +1663,18 @@ def _selftest() -> None:
         saved_here = HERE
         try:
             HERE = root
-            row = audit_capability("p", {"matcher": {"kind": "tick_phase", "name": "p"},
-                                         "entrypoint": "producer.py", "status": "generated"},
-                                   emittable=em, templates=tmpl, label_index=idx, env_gate=gate)
+            row = audit_capability(
+                "p",
+                {
+                    "matcher": {"kind": "tick_phase", "name": "p"},
+                    "entrypoint": "producer.py",
+                    "status": "generated",
+                },
+                emittable=em,
+                templates=tmpl,
+                label_index=idx,
+                env_gate=gate,
+            )
         finally:
             HERE = saved_here
         assert "heartbeat_env_suppressed" in row["defects"], row
@@ -1446,14 +1683,21 @@ def _selftest() -> None:
     # ADVISOR REACH — the span of the front door, and whether it has narrowed. Synthetic ledger, so
     # this exercises the mechanism rather than today's ledger contents.
     synthetic = {
-        "task-shaped": {"capability_id": "task-shaped", "status": "generated",
-                        "matcher": {"field": "task_type", "operator": "in",
-                                    "value": ["testgen"]}},
-        "kind-shaped": {"capability_id": "kind-shaped", "status": "generated",
-                        "matcher": {"kind": "tick_phase", "name": "x"}},
-        "retired-task-shaped": {"capability_id": "retired-task-shaped", "status": "retired",
-                                "matcher": {"field": "task_type", "operator": "in",
-                                            "value": ["testgen"]}},
+        "task-shaped": {
+            "capability_id": "task-shaped",
+            "status": "generated",
+            "matcher": {"field": "task_type", "operator": "in", "value": ["testgen"]},
+        },
+        "kind-shaped": {
+            "capability_id": "kind-shaped",
+            "status": "generated",
+            "matcher": {"kind": "tick_phase", "name": "x"},
+        },
+        "retired-task-shaped": {
+            "capability_id": "retired-task-shaped",
+            "status": "retired",
+            "matcher": {"field": "task_type", "operator": "in", "value": ["testgen"]},
+        },
     }
     reach = advisor_reach(synthetic)
     assert reach["reachable"] == ["task-shaped"], reach
@@ -1462,32 +1706,57 @@ def _selftest() -> None:
     # THE DERIVED HALF must be reported and must agree with the advisor's own total. Two modules
     # publishing different "reach" numbers for the same front door is a parallel inventory.
     import capability_advisor
+
     assert reach["direct_entry"] == dict(sorted(capability_advisor.direct_entry().items())), reach
     assert reach["total_reachable_count"] == len(
-        set(reach["reachable"]) | set(reach["direct_entry_targets"])), reach
+        set(reach["reachable"]) | set(reach["direct_entry_targets"])
+    ), reach
     # A derived direct-entry map CAN shrink with no diff in either module (drop an entry from
     # dispatcher.TASK_TYPE_CAPABILITY and the front door narrows in silence), which is why the
     # derived set has its own baseline. Simulate the shrink: an empty map must regress.
     import unittest.mock as _mock
-    with _mock.patch.object(capability_advisor, "direct_entry", lambda: {}):
+
+    with _mock.patch.object(capability_advisor, "direct_entry", dict):
         shrunk = advisor_reach(synthetic)
     assert shrunk["direct_entry_regressed"] == sorted(ADVISOR_DIRECT_ENTRY_BASELINE), shrunk
     assert shrunk["direct_entry_targets"] == [], shrunk
     # A kind-shaped matcher failing to match is CORRECT, not a defect: it is entered directly.
-    kind_row = audit_capability("kind-shaped", synthetic["kind-shaped"], emittable=em,
-                                templates=tmpl, label_index=idx, reach=reach)
+    kind_row = audit_capability(
+        "kind-shaped",
+        synthetic["kind-shaped"],
+        emittable=em,
+        templates=tmpl,
+        label_index=idx,
+        reach=reach,
+    )
     assert kind_row["advisor_reachable"] is False, kind_row
     assert "advisor_reach_regression" not in kind_row["defects"], kind_row
     # ...but a capability IN THE BASELINE that is no longer reachable is a silent narrowing, and
     # must surface. Simulate it by naming a baseline member the synthetic ledger cannot reach.
     victim = sorted(ADVISOR_REACH_BASELINE)[0]
-    regressed = advisor_reach({victim: {"capability_id": victim, "status": "generated",
-                                        "matcher": {"kind": "ci_workflow", "name": "y"}}})
+    regressed = advisor_reach(
+        {
+            victim: {
+                "capability_id": victim,
+                "status": "generated",
+                "matcher": {"kind": "ci_workflow", "name": "y"},
+            }
+        }
+    )
     assert regressed["regressed"], regressed
-    reg_row = audit_capability(victim, {"capability_id": victim, "status": "generated",
-                                        "matcher": {"kind": "ci_workflow", "name": "y"},
-                                        "entrypoint": "nothing.py"},
-                               emittable=em, templates=tmpl, label_index=idx, reach=regressed)
+    reg_row = audit_capability(
+        victim,
+        {
+            "capability_id": victim,
+            "status": "generated",
+            "matcher": {"kind": "ci_workflow", "name": "y"},
+            "entrypoint": "nothing.py",
+        },
+        emittable=em,
+        templates=tmpl,
+        label_index=idx,
+        reach=regressed,
+    )
     assert "advisor_reach_regression" in reg_row["defects"], reg_row
     # An unreadable advisor must report the whole baseline as regressed rather than an empty,
     # reassuring result — silence must never read as a pass.
@@ -1503,8 +1772,10 @@ def _selftest() -> None:
             (sibling / ".github" / "workflows").mkdir(parents=True)
             globals()["HERE"] = Path(td4) / "Orchestrator"
             (Path(td4) / "Orchestrator").mkdir()
-            cap = {"matcher": {"kind": "ci_workflow", "name": "maint-99-thing"},
-                   "entrypoint": "SiblingRepo/scripts/thing.py"}
+            cap = {
+                "matcher": {"kind": "ci_workflow", "name": "maint-99-thing"},
+                "entrypoint": "SiblingRepo/scripts/thing.py",
+            }
             # Caller absent -> not reachable.
             got = external_caller(cap)
             assert got and got["exists"] is False, got
@@ -1522,11 +1793,13 @@ def _selftest() -> None:
             # a temp dir that contains no fleet repo, a REAL fleet capability must still resolve via
             # the home-anchored candidate — otherwise the verdict depends on where it ran.
             import capabilities as _caps_mod
+
             _real_cap = _caps_mod.load(_caps_mod.REG).get("docs-drift-fix-agent")
             if _real_cap:
                 anywhere = external_caller(_real_cap)
-                assert anywhere and anywhere["exists"] is True, \
-                    f"a real fleet caller must resolve from ANY cwd, not just the canonical tree: {anywhere}"
+                assert (
+                    anywhere and anywhere["exists"] is True
+                ), f"a real fleet caller must resolve from ANY cwd, not just the canonical tree: {anywhere}"
                 assert anywhere.get("root_origin") == "home-anchored-workspace", anywhere
 
             # An explicit override wins, so a relocated workspace stays checkable.
@@ -1555,7 +1828,8 @@ def _selftest() -> None:
                 "def _event():\n    import capabilities\n"
                 "    capabilities.production_heartbeat('x','match')\n"
                 "def run_thing_agent():\n    _event()\n"
-                "def unrelated():\n    return 1\n")
+                "def unrelated():\n    return 1\n"
+            )
             (Path(td3) / "tick.py").write_text("import rolesy\nrolesy.unrelated()\n")
             hb = heartbeat_reachable({"entrypoint": "rolesy.py:run_thing_agent"})
             assert hb["status"] == "reachable", hb
@@ -1581,30 +1855,37 @@ def _selftest() -> None:
     # A DELIBERATE exclusion must not be reported as a gap — flagging risk:low would push toward
     # spending reviewer seats on routine work.
     assert "adversarial-review" not in vocabulary_gaps(
-        {"repos": {"o/a": ["risk:low", "risk:minor"]}}), "deliberate exclusion reported as a gap"
+        {"repos": {"o/a": ["risk:low", "risk:minor"]}}
+    ), "deliberate exclusion reported as a gap"
     # And the FIXED label must no longer be reported as a gap — proof the fix landed.
-    assert "risk:major" not in vocabulary_gaps(
-        {"repos": {"o/a": ["risk:major"]}}).get("adversarial-review", []), \
-        "risk:major should now be accepted by HIGH_STAKES_LABELS"
+    assert "risk:major" not in vocabulary_gaps({"repos": {"o/a": ["risk:major"]}}).get(
+        "adversarial-review", []
+    ), "risk:major should now be accepted by HIGH_STAKES_LABELS"
     # A label in a namespace the code never uses is NOT a mismatch (no false positives).
-    assert not vocabulary_gaps({"repos": {"o/a": ["colour:blue", "bug"]}}), \
-        "unrelated namespace flagged as a mismatch"
+    assert not vocabulary_gaps(
+        {"repos": {"o/a": ["colour:blue", "bug"]}}
+    ), "unrelated namespace flagged as a mismatch"
     # And an accepted label produces no gap.
     assert "adversarial-review" not in vocabulary_gaps({"repos": {"o/a": ["risk:critical"]}})
 
     # Both audit bugs found on first live run, pinned so they cannot return.
     # (a) `module.function` entrypoints must resolve, or a running capability reads as missing.
-    assert [p.name for p in _entrypoint_files({"entrypoint": "dispatcher.offload"})] \
-        == ["dispatcher.py"], "module.function entrypoint did not resolve"
-    assert [p.name for p in _entrypoint_files({"entrypoint": "roles.py:run_triage_agent"})] \
-        == ["roles.py"]
+    assert [p.name for p in _entrypoint_files({"entrypoint": "dispatcher.offload"})] == [
+        "dispatcher.py"
+    ], "module.function entrypoint did not resolve"
+    assert [p.name for p in _entrypoint_files({"entrypoint": "roles.py:run_triage_agent"})] == [
+        "roles.py"
+    ]
     assert _entrypoint_files({"entrypoint": "Workflows/scripts/nope.py"}) == []
     # The split-out parse must not fabricate a module out of punctuation: the `->` in
     # `exp_abcd.py:followup -> synthesis_promotion.py:reconcile` is a separator, and reporting it
     # as a MISSING module would be a defect invented by the diagnostic itself.
-    assert [t for t, _c in _declared_modules(
-        {"entrypoint": "exp_abcd.py:followup -> synthesis_promotion.py:reconcile"})] \
-        == ["exp_abcd.py:followup", "synthesis_promotion.py:reconcile"]
+    assert [
+        t
+        for t, _c in _declared_modules(
+            {"entrypoint": "exp_abcd.py:followup -> synthesis_promotion.py:reconcile"}
+        )
+    ] == ["exp_abcd.py:followup", "synthesis_promotion.py:reconcile"]
 
     # ---- MODULE ABSENT FROM THIS TREE vs. PRESENT-BUT-INCOMPLETE (2026-08-22) ----------------
     # The two have OPPOSITE fixes — wait-or-merge versus fix-the-declaration — and until this
@@ -1622,14 +1903,22 @@ def _selftest() -> None:
         (other / "brand_new.py").write_text("def run():\n    pass\n")
         ledger_path = droot / "capabilities.json"
         rows = {
-            "absent-row": {**capabilities._blank_capability("absent-row"),
-                           "entrypoint": "brand_new.py:run"},
-            "present-row": {**capabilities._blank_capability("present-row"),
-                            "entrypoint": "capabilities.py"},
-            "external-row": {**capabilities._blank_capability("external-row"),
-                             "entrypoint": "Workflows/scripts/elsewhere.py"},
-            "undeclared-row": {**capabilities._blank_capability("undeclared-row"),
-                               "entrypoint": None},
+            "absent-row": {
+                **capabilities._blank_capability("absent-row"),
+                "entrypoint": "brand_new.py:run",
+            },
+            "present-row": {
+                **capabilities._blank_capability("present-row"),
+                "entrypoint": "capabilities.py",
+            },
+            "external-row": {
+                **capabilities._blank_capability("external-row"),
+                "entrypoint": "Workflows/scripts/elsewhere.py",
+            },
+            "undeclared-row": {
+                **capabilities._blank_capability("undeclared-row"),
+                "entrypoint": None,
+            },
         }
         capabilities.save(rows, ledger_path)
         saved_here = HERE
@@ -1659,8 +1948,13 @@ def _selftest() -> None:
 
             # The note must say WHICH situation this is, WHERE the code is, and what NOT to do.
             note = absent_entrypoint_note(sorted(rows), path=ledger_path)
-            for phrase in ("ABSENT FROM THIS TREE", "absent-row", ".claude/worktrees/theirs",
-                           "WAIT-OR-MERGE", "WAIVERS"):
+            for phrase in (
+                "ABSENT FROM THIS TREE",
+                "absent-row",
+                ".claude/worktrees/theirs",
+                "WAIT-OR-MERGE",
+                "WAIVERS",
+            ):
                 assert phrase in note, (phrase, note)
             # It must NOT accuse a row whose module is right here.
             assert "present-row" not in note and "external-row" not in note, note
@@ -1672,16 +1966,19 @@ def _selftest() -> None:
             # BREAK: land the module in this tree. The verdict must flip to `present` and the
             # note must fall silent, because the fix is now the declaration, not a merge.
             (here_tree / "brand_new.py").write_text("def run():\n    pass\n")
-            assert entrypoint_presence(rows["absent-row"])["state"] == ENTRYPOINT_PRESENT, \
-                "a module that IS in this tree must not be reported absent"
-            assert absent_entrypoint_note(sorted(rows), path=ledger_path) == "", \
-                "the note must go quiet once the code is here — otherwise it sends a reader to " \
+            assert (
+                entrypoint_presence(rows["absent-row"])["state"] == ENTRYPOINT_PRESENT
+            ), "a module that IS in this tree must not be reported absent"
+            assert absent_entrypoint_note(sorted(rows), path=ledger_path) == "", (
+                "the note must go quiet once the code is here — otherwise it sends a reader to "
                 "wait for a merge that already happened"
+            )
             # REVERT: take it away again and the original verdict must come back exactly.
             (here_tree / "brand_new.py").unlink()
             assert entrypoint_presence(rows["absent-row"])["state"] == ENTRYPOINT_ABSENT
-            assert absent_entrypoint_note(sorted(rows), path=ledger_path) == note, \
-                "the diagnostic must be a function of the tree, not of call order"
+            assert (
+                absent_entrypoint_note(sorted(rows), path=ledger_path) == note
+            ), "the diagnostic must be a function of the tree, not of call order"
 
             # DIAGNOSTIC ONLY. It reports; it must not be able to shrink a failing set or turn a
             # red into a skip. Proven on the real shape: the note is APPENDED to a message about
@@ -1706,15 +2003,16 @@ def _selftest() -> None:
             globals()["HERE"] = Path(td2)
             (Path(td2) / "lonely2.py").write_text(
                 "def _capability_heartbeat():\n    pass\n"
-                "def main(argv):\n    _capability_heartbeat()\n")
+                "def main(argv):\n    _capability_heartbeat()\n"
+            )
             (Path(td2) / "tick.py").write_text("import lonely2\nlonely2.helper()\n")
-            (Path(td2) / "orchestrate.sh").write_text(
-                "# See lonely2.py for details\necho hi\n")
+            (Path(td2) / "orchestrate.sh").write_text("# See lonely2.py for details\necho hi\n")
             hb = heartbeat_reachable({"entrypoint": "lonely2.py"})
             assert hb["status"] == "off_path", f"comment counted as a caller: {hb}"
             # A real invocation on a non-comment line IS a caller.
             (Path(td2) / "orchestrate.sh").write_text(
-                "# See lonely2.py for details\npython3 \"$ORCH/lonely2.py\" --run\n")
+                '# See lonely2.py for details\npython3 "$ORCH/lonely2.py" --run\n'
+            )
             assert heartbeat_reachable({"entrypoint": "lonely2.py"})["status"] == "reachable"
         finally:
             globals()["HERE"] = saved
@@ -1722,28 +2020,47 @@ def _selftest() -> None:
     # PROGRESS: snapshots must show movement, and a regression must be visible as such.
     with tempfile.TemporaryDirectory(prefix="cap-hist-") as td:
         hp = Path(td) / "h.json"
-        r1 = {"generated_at": 1000, "total": 3, "reachable": 1, "blocked": 2,
-              "reachable_ids": ["a"], "by_defect": {"no_heartbeat": ["b", "c"]}}
+        r1 = {
+            "generated_at": 1000,
+            "total": 3,
+            "reachable": 1,
+            "blocked": 2,
+            "reachable_ids": ["a"],
+            "by_defect": {"no_heartbeat": ["b", "c"]},
+        }
         assert record_snapshot(r1, path=hp)["recorded"]
-        r2 = {"generated_at": 2000, "total": 3, "reachable": 2, "blocked": 1,
-              "reachable_ids": ["a", "b"], "by_defect": {"no_heartbeat": ["c"]}}
+        r2 = {
+            "generated_at": 2000,
+            "total": 3,
+            "reachable": 2,
+            "blocked": 1,
+            "reachable_ids": ["a", "b"],
+            "by_defect": {"no_heartbeat": ["c"]},
+        }
         p = progress(r2, path=hp)
         assert p["gained"] == ["b"] and p["regressed"] == [], p
         assert p["defect_delta"] == {"no_heartbeat": -1}, p
         # A regression is reported, not smoothed over.
         record_snapshot(r2, path=hp)
-        r3 = dict(r2, generated_at=3000, reachable=1, reachable_ids=["a"],
-                  by_defect={"no_heartbeat": ["b", "c"]})
+        r3 = dict(
+            r2,
+            generated_at=3000,
+            reachable=1,
+            reachable_ids=["a"],
+            by_defect={"no_heartbeat": ["b", "c"]},
+        )
         p3 = progress(r3, path=hp)
         assert p3["regressed"] == ["b"], p3
         assert p3["defect_delta"] == {"no_heartbeat": 1}, p3
         assert progress(r2, path=Path(td) / "absent.json")["baseline"] is None
 
-    print("capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
-          "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
-          "directions, advisor reach + narrowing, progress + regression tracking, "
-          "entrypoint absent-here vs present vs external-repo vs undeclared with the "
-          "create/delete flip and a diagnostic that cannot suppress a failure)")
+    print(
+        "capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
+        "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
+        "directions, advisor reach + narrowing, progress + regression tracking, "
+        "entrypoint absent-here vs present vs external-repo vs undeclared with the "
+        "create/delete flip and a diagnostic that cannot suppress a failure)"
+    )
 
 
 def main(argv: list[str]) -> int:

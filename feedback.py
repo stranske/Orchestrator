@@ -39,12 +39,8 @@ import execution_profiles
 ORCH = Path(__file__).resolve().parent
 # The live SQLite store stays on LOCAL disk — Dropbox can corrupt a DB written mid-sync. The CODE lives
 # in Code/Orchestrator (Dropbox); snapshot_json() writes a reviewable copy of the dataset INTO the project.
-LOCAL_RUNTIME = Path(
-    os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator")
-)
-DB_PATH = Path(
-    os.environ.get("ORCH_FEEDBACK_DB", LOCAL_RUNTIME / "feedback" / "orchestrator.db")
-)
+LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
+DB_PATH = Path(os.environ.get("ORCH_FEEDBACK_DB", LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -342,34 +338,83 @@ VALID_COMPLETION_STATUSES = {
 }
 COMPLETION_NESTED_FIELDS = {
     "verification": {
-        "verifier_verdict", "adjudicated_verdict", "verifier_ids", "result_hashes",
+        "verifier_verdict",
+        "adjudicated_verdict",
+        "verifier_ids",
+        "result_hashes",
     },
     "delivery": {
-        "pr_number", "target_id", "task_type", "experiment_id", "merged", "ci_status",
+        "pr_number",
+        "target_id",
+        "task_type",
+        "experiment_id",
+        "merged",
+        "ci_status",
     },
     "durability": {"status", "checked_ts"},
     "result": {
-        "outcome_verdict", "influence_type", "influence_id", "influenced_run_id",
-        "operation_role", "status", "trace_key_hash", "action_id", "decision_source_id",
-        "backend_run_id", "proposal_hash", "notes_hash", "version_hash",
-        "selector_status", "selector_reason_id", "matched", "invoked", "accepted",
-        "disagreement", "profile_fit_id", "evidence_readiness_id",
+        "outcome_verdict",
+        "influence_type",
+        "influence_id",
+        "influenced_run_id",
+        "operation_role",
+        "status",
+        "trace_key_hash",
+        "action_id",
+        "decision_source_id",
+        "backend_run_id",
+        "proposal_hash",
+        "notes_hash",
+        "version_hash",
+        "selector_status",
+        "selector_reason_id",
+        "matched",
+        "invoked",
+        "accepted",
+        "disagreement",
+        "profile_fit_id",
+        "evidence_readiness_id",
     },
     "skill": {"skill_id", "version_hash", "phase", "result", "accepted"},
     "runtime_ac_gate": {
-        "schema_version", "gate_event_id", "target", "required", "dry_run",
-        "eligibility_source", "eligibility_refs", "spec_path", "spec_hash",
-        "spec_path_matches_target", "gate_status", "blocking", "terminal_reason",
-        "closer_run_id", "verifier_run_id", "verifier_verdict",
-        "downstream_verdict", "downstream_merged", "downstream_durability",
-        "materialization_source", "materialization_status",
+        "schema_version",
+        "gate_event_id",
+        "target",
+        "required",
+        "dry_run",
+        "eligibility_source",
+        "eligibility_refs",
+        "spec_path",
+        "spec_hash",
+        "spec_path_matches_target",
+        "gate_status",
+        "blocking",
+        "terminal_reason",
+        "closer_run_id",
+        "verifier_run_id",
+        "verifier_verdict",
+        "downstream_verdict",
+        "downstream_merged",
+        "downstream_durability",
+        "materialization_source",
+        "materialization_status",
         "materialization_run_id",
     },
 }
 COMPLETION_RETRY_FIELDS = {
-    "attempt_ordinal", "operation_role", "profile_id", "requested_provider",
-    "requested_model", "selected_model", "reported_model", "resolved_provider",
-    "resolved_model", "fallback_reason_id", "runner_version", "cli_version", "status",
+    "attempt_ordinal",
+    "operation_role",
+    "profile_id",
+    "requested_provider",
+    "requested_model",
+    "selected_model",
+    "reported_model",
+    "resolved_provider",
+    "resolved_model",
+    "fallback_reason_id",
+    "runner_version",
+    "cli_version",
+    "status",
 }
 
 
@@ -401,15 +446,10 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     if "routing_metadata" not in cols:
         c.execute("ALTER TABLE runs ADD COLUMN routing_metadata TEXT")
     tables = {
-        row[0]
-        for row in c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     if "outcomes" in tables:
-        outcome_cols = {
-            row[1] for row in c.execute("PRAGMA table_info(outcomes)").fetchall()
-        }
+        outcome_cols = {row[1] for row in c.execute("PRAGMA table_info(outcomes)").fetchall()}
         if "influenced_by_run_id" not in outcome_cols:
             c.execute("ALTER TABLE outcomes ADD COLUMN influenced_by_run_id TEXT")
         if "failure_class" not in outcome_cols:
@@ -450,9 +490,7 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
         }
         for name, declaration in attempt_columns.items():
             if name not in attempt_cols:
-                c.execute(
-                    f"ALTER TABLE execution_attempts ADD COLUMN {name} {declaration}"
-                )
+                c.execute(f"ALTER TABLE execution_attempts ADD COLUMN {name} {declaration}")
         c.execute(
             "CREATE INDEX IF NOT EXISTS idx_execution_attempts_run_role "
             "ON execution_attempts(run_id, operation_role, status)"
@@ -462,9 +500,7 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
             "ON execution_attempts(profile_id, resolved_provider, resolved_model)"
         )
     if "evaluations_v2" in tables:
-        v2_cols = {
-            row[1] for row in c.execute("PRAGMA table_info(evaluations_v2)").fetchall()
-        }
+        v2_cols = {row[1] for row in c.execute("PRAGMA table_info(evaluations_v2)").fetchall()}
         required_v2 = {
             "experiment_id",
             "implementer_arm_id",
@@ -493,13 +529,12 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
                 "evaluator_agent TEXT, score REAL, rank INTEGER, verdict TEXT, ts INTEGER, "
                 "PRIMARY KEY (experiment_id, implementer_member_id, evaluator_id))"
             )
+
             def source_col(*names: str, fallback: str = "NULL") -> str:
                 return next((name for name in names if name in v2_cols), fallback)
 
             old_count = c.execute("SELECT COUNT(*) FROM evaluations_v2").fetchone()[0]
-            experiment_expr = source_col(
-                "experiment_id", fallback="'legacy-experiment:' || rowid"
-            )
+            experiment_expr = source_col("experiment_id", fallback="'legacy-experiment:' || rowid")
             arm_expr = source_col(
                 "implementer_arm_id", "implementer_arm", fallback="'legacy-arm:' || rowid"
             )
@@ -529,9 +564,7 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
                 f"{evaluator_arm_expr}, {evaluator_profile_expr}, {evaluator_agent_expr}, "
                 f"{score_expr}, {rank_expr}, {verdict_expr}, {ts_expr} FROM evaluations_v2"
             )
-            new_count = c.execute(
-                "SELECT COUNT(*) FROM evaluations_v2_rebuild"
-            ).fetchone()[0]
+            new_count = c.execute("SELECT COUNT(*) FROM evaluations_v2_rebuild").fetchone()[0]
             if new_count != old_count:
                 raise RuntimeError(
                     "evaluations_v2 migration refused row loss: "
@@ -559,9 +592,7 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
             "ON completion_events(capability_id,capability_version_id,run_id,phase)"
         )
     if "influence_edges" in tables:
-        edge_cols = {
-            row[1] for row in c.execute("PRAGMA table_info(influence_edges)").fetchall()
-        }
+        edge_cols = {row[1] for row in c.execute("PRAGMA table_info(influence_edges)").fetchall()}
         for name in ("capability_id", "capability_version_id"):
             if name not in edge_cols:
                 c.execute(f"ALTER TABLE influence_edges ADD COLUMN {name} TEXT")
@@ -583,9 +614,7 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
     )
 
 
-def _derive_source(
-    run_id: str, mode: str | None, source: str | None = None
-) -> str | None:
+def _derive_source(run_id: str, mode: str | None, source: str | None = None) -> str | None:
     if source:
         return source
     rid = run_id or ""
@@ -696,7 +725,11 @@ def _sanitize_artifact_refs(value, redacted: list[str]) -> list[dict]:
                 continue
             if key == "content_hash":
                 text = str(item)
-                clean[key] = text if re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", text) else _completion_hash(text)
+                clean[key] = (
+                    text
+                    if re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", text)
+                    else _completion_hash(text)
+                )
             else:
                 clean[key] = _safe_identifier(item, redacted, f"artifact_refs[{index}].{key}")
         if "artifact_id" not in clean:
@@ -716,7 +749,9 @@ def _sanitize_result_hashes(value, redacted: list[str], path: str) -> dict:
             break
         name = _safe_identifier(key, redacted, f"{path}.key")
         text = str(item or "")
-        result[name] = text if re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", text) else _completion_hash(item)
+        result[name] = (
+            text if re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", text) else _completion_hash(item)
+        )
     return result
 
 
@@ -763,7 +798,11 @@ def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
             for nested_key in ("trace_key_hash", "proposal_hash", "notes_hash", "version_hash"):
                 if name == "result" and nested.get(nested_key):
                     text = str(nested[nested_key])
-                    nested[nested_key] = text if re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", text) else _completion_hash(text)
+                    nested[nested_key] = (
+                        text
+                        if re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", text)
+                        else _completion_hash(text)
+                    )
             clean[name] = nested
         elif name == "retry_sequence":
             rows = list(value or []) if isinstance(value, (list, tuple)) else [value]
@@ -780,12 +819,21 @@ def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
                         f"unknown_field:retry_sequence[{index}].{item}" for item in unknown_nested
                     )
                     continue
-                clean_rows.append(_sanitize_completion_value(row, redacted, f"retry_sequence[{index}]"))
+                clean_rows.append(
+                    _sanitize_completion_value(row, redacted, f"retry_sequence[{index}]")
+                )
             clean[name] = clean_rows
         elif name in {
-            "changed_path_classes", "command_ids", "test_ids", "capability_ids",
-            "role_ids", "skill_ids", "workflow_ids", "acceptance_gate_ids",
-            "root_cause_ids", "panel_ids",
+            "changed_path_classes",
+            "command_ids",
+            "test_ids",
+            "capability_ids",
+            "role_ids",
+            "skill_ids",
+            "workflow_ids",
+            "acceptance_gate_ids",
+            "root_cause_ids",
+            "panel_ids",
         }:
             values = list(value or []) if isinstance(value, (list, tuple, set)) else [value]
             if len(values) > MAX_COMPLETION_LIST_ITEMS:
@@ -798,18 +846,26 @@ def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
         else:
             clean[name] = _sanitize_completion_value(value, redacted, name)
     if rejection_codes:
-        return {
-            "rejection_codes": rejection_codes[:MAX_COMPLETION_LIST_ITEMS],
-            "redacted_fields": sorted(set(redacted))[:MAX_COMPLETION_LIST_ITEMS],
-        }, "rejected", len(redacted)
+        return (
+            {
+                "rejection_codes": rejection_codes[:MAX_COMPLETION_LIST_ITEMS],
+                "redacted_fields": sorted(set(redacted))[:MAX_COMPLETION_LIST_ITEMS],
+            },
+            "rejected",
+            len(redacted),
+        )
     if redacted:
         clean["redacted_fields"] = sorted(set(redacted))[:MAX_COMPLETION_LIST_ITEMS]
     encoded = json.dumps(clean, sort_keys=True, separators=(",", ":"), default=str)
     if len(encoded.encode("utf-8")) > MAX_COMPLETION_EVENT_BYTES:
-        return {
-            "rejection_codes": ["event_size_limit"],
-            "redacted_fields": sorted(set(redacted))[:MAX_COMPLETION_LIST_ITEMS],
-        }, "rejected", len(redacted)
+        return (
+            {
+                "rejection_codes": ["event_size_limit"],
+                "redacted_fields": sorted(set(redacted))[:MAX_COMPLETION_LIST_ITEMS],
+            },
+            "rejected",
+            len(redacted),
+        )
     return clean, ("redacted" if redacted else "accepted"), len(redacted)
 
 
@@ -935,12 +991,18 @@ def _record_completion_event_in_conn(
     if bool(capability_id) != bool(capability_version_id):
         raise ValueError("completion capability lineage requires both identity and version")
     event_id = event_id or _completion_event_id(
-        run_id, event_type, phase, producer, attempt_id,
-        capability_id, capability_version_id,
+        run_id,
+        event_type,
+        phase,
+        producer,
+        attempt_id,
+        capability_id,
+        capability_version_id,
     )
     prior = c.execute(
         "SELECT payload_json,created_ts,capability_id,capability_version_id "
-        "FROM completion_events WHERE event_id=?", (event_id,)
+        "FROM completion_events WHERE event_id=?",
+        (event_id,),
     ).fetchone()
     if prior and (prior[2], prior[3]) != (capability_id, capability_version_id):
         raise ValueError(f"immutable capability identity changed for {event_id}")
@@ -958,14 +1020,26 @@ def _record_completion_event_in_conn(
     c.execute(
         "INSERT OR REPLACE INTO completion_events "
         "(event_id,schema_version,run_id,attempt_id,capability_id,capability_version_id,"
-        "event_type,phase,producer,status," 
+        "event_type,phase,producer,status,"
         "validation_status,payload_json,content_hash,redaction_count,created_ts,updated_ts) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            event_id, COMPLETION_EVENT_SCHEMA_VERSION, run_id, attempt_id,
-            capability_id, capability_version_id, event_type,
-            phase, producer, status, validation, encoded, content_hash, redactions,
-            created, now,
+            event_id,
+            COMPLETION_EVENT_SCHEMA_VERSION,
+            run_id,
+            attempt_id,
+            capability_id,
+            capability_version_id,
+            event_type,
+            phase,
+            producer,
+            status,
+            validation,
+            encoded,
+            content_hash,
+            redactions,
+            created,
+            now,
         ),
     )
     c.execute(
@@ -1001,14 +1075,23 @@ def record_completion_event(
     # ~120 completion events/day; coalesced daily for the same reason as feedback-store. Placed on
     # the PUBLIC entrypoint rather than `_record_completion_event_in_conn`, so the internal helper
     # (called several times inside a single record_run) stays free of ledger work.
-    _capability_daily_heartbeat("completion-event-lineage", "invocation",
-                               ref="record_completion_event")
+    _capability_daily_heartbeat(
+        "completion-event-lineage", "invocation", ref="record_completion_event"
+    )
     with _conn() as c:
         return _record_completion_event_in_conn(
-            c, run_id, event_type=event_type, phase=phase, producer=producer,
-            attempt_id=attempt_id, capability_id=capability_id,
-            capability_version_id=capability_version_id, status=status, payload=payload,
-            event_id=event_id, timestamp=timestamp,
+            c,
+            run_id,
+            event_type=event_type,
+            phase=phase,
+            producer=producer,
+            attempt_id=attempt_id,
+            capability_id=capability_id,
+            capability_version_id=capability_version_id,
+            status=status,
+            payload=payload,
+            event_id=event_id,
+            timestamp=timestamp,
         )
 
 
@@ -1044,7 +1127,9 @@ def _runtime_ac_completion_status(gate_status: str, verifier_verdict: str | None
 
 
 def _runtime_ac_event_id(target: str, gate_status: str, timestamp_ns: int) -> str:
-    identity = f"runtime-ac-gate-v{RUNTIME_AC_GATE_SCHEMA_VERSION}|{target}|{gate_status}|{timestamp_ns}"
+    identity = (
+        f"runtime-ac-gate-v{RUNTIME_AC_GATE_SCHEMA_VERSION}|{target}|{gate_status}|{timestamp_ns}"
+    )
     return "event:runtime-ac-gate:" + hashlib.sha256(identity.encode()).hexdigest()[:24]
 
 
@@ -1085,9 +1170,7 @@ def _record_runtime_ac_gate_event_in_conn(
     if gate_status not in RUNTIME_AC_GATE_STATUSES:
         raise ValueError(f"invalid runtime-AC gate status={gate_status!r}")
     if eligibility_source not in RUNTIME_AC_ELIGIBILITY_SOURCES:
-        raise ValueError(
-            f"invalid runtime-AC eligibility source={eligibility_source!r}"
-        )
+        raise ValueError(f"invalid runtime-AC eligibility source={eligibility_source!r}")
     if spec_hash and not re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", str(spec_hash)):
         raise ValueError("runtime-AC spec_hash must be a SHA-256 digest")
     normalized_verdict = str(verifier_verdict or "").strip().upper() or None
@@ -1105,10 +1188,10 @@ def _record_runtime_ac_gate_event_in_conn(
             "FROM outcomes WHERE run_id=?",
             (closer_run_id,),
         ).fetchone()
-    event_id = event_id or _runtime_ac_event_id(
-        target, gate_status, time.time_ns()
+    event_id = event_id or _runtime_ac_event_id(target, gate_status, time.time_ns())
+    event_run_id = str(
+        closer_run_id or f"runtime-ac-gate:{hashlib.sha256(target.encode()).hexdigest()[:24]}"
     )
-    event_run_id = str(closer_run_id or f"runtime-ac-gate:{hashlib.sha256(target.encode()).hexdigest()[:24]}")
     gate_payload = {
         "schema_version": RUNTIME_AC_GATE_SCHEMA_VERSION,
         "gate_event_id": event_id,
@@ -1127,7 +1210,9 @@ def _record_runtime_ac_gate_event_in_conn(
         "verifier_run_id": verifier_run_id,
         "verifier_verdict": normalized_verdict,
         "downstream_verdict": downstream[0] if downstream else None,
-        "downstream_merged": bool(downstream[1]) if downstream and downstream[1] is not None else None,
+        "downstream_merged": (
+            bool(downstream[1]) if downstream and downstream[1] is not None else None
+        ),
         "downstream_durability": downstream[2] if downstream else None,
         "materialization_source": materialization_source,
         "materialization_status": materialization_status,
@@ -1184,7 +1269,9 @@ def runtime_ac_gate_events(*, cutoff_ts: int = 0, limit: int = 1000) -> list[dic
                     gate.update(
                         {
                             "downstream_verdict": outcome[0],
-                            "downstream_merged": bool(outcome[1]) if outcome[1] is not None else None,
+                            "downstream_merged": (
+                                bool(outcome[1]) if outcome[1] is not None else None
+                            ),
                             "downstream_durability": outcome[2],
                         }
                     )
@@ -1211,6 +1298,7 @@ def _capability_daily_heartbeat(capability_id: str, event_type: str, **kw) -> No
     """
     try:
         import capabilities
+
         capabilities.daily_heartbeat(capability_id, event_type, **kw)
     except Exception:
         pass
@@ -1225,11 +1313,13 @@ def _resolve_capability_versions(capability_ids: list[str]) -> list[str]:
     """
     try:
         import capabilities
+
         ledger = capabilities.load()
     except Exception:
         return []
-    versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "")
-                for cid in capability_ids]
+    versions = [
+        str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in capability_ids
+    ]
     return versions if all(versions) else []
 
 
@@ -1275,12 +1365,19 @@ def _record_influence_edge_in_conn(
         raise ValueError(
             f"influence edge for target_run_id={target_run_id!r} has no completion event to point "
             "at, so it can never become causal evidence. If this target is an advisory run that "
-            "legitimately emits no envelope, pass allow_unlinked=True and record why")
+            "legitimately emits no envelope, pass allow_unlinked=True and record why"
+        )
     edge_identity = "|".join(
         str(item or "")
         for item in (
-            source_event_id, source_run_id, target_run_id, capability_id,
-            capability_version_id, kind, influence_id, bool(accepted),
+            source_event_id,
+            source_run_id,
+            target_run_id,
+            capability_id,
+            capability_version_id,
+            kind,
+            influence_id,
+            bool(accepted),
         )
     )
     edge_id = "edge:" + hashlib.sha256(edge_identity.encode()).hexdigest()[:32]
@@ -1289,22 +1386,36 @@ def _record_influence_edge_in_conn(
     now = int(time.time())
     c.execute(
         "INSERT INTO influence_edges "
-        "(edge_id,schema_version,source_event_id,source_run_id,target_event_id,target_run_id," 
+        "(edge_id,schema_version,source_event_id,source_run_id,target_event_id,target_run_id,"
         "capability_id,capability_version_id,influence_type,influence_id,"
-        "accepted,counterfactual,acceptance_gate_id," 
+        "accepted,counterfactual,acceptance_gate_id,"
         "outcome_verdict,merged,durability,created_ts,propagated_ts,metadata_hash) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(edge_id) DO UPDATE SET "
-        "source_event_id=COALESCE(excluded.source_event_id,influence_edges.source_event_id)," 
-        "source_run_id=COALESCE(excluded.source_run_id,influence_edges.source_run_id)," 
-        "target_event_id=COALESCE(excluded.target_event_id,influence_edges.target_event_id)," 
-        "acceptance_gate_id=COALESCE(excluded.acceptance_gate_id,influence_edges.acceptance_gate_id)," 
+        "source_event_id=COALESCE(excluded.source_event_id,influence_edges.source_event_id),"
+        "source_run_id=COALESCE(excluded.source_run_id,influence_edges.source_run_id),"
+        "target_event_id=COALESCE(excluded.target_event_id,influence_edges.target_event_id),"
+        "acceptance_gate_id=COALESCE(excluded.acceptance_gate_id,influence_edges.acceptance_gate_id),"
         "metadata_hash=excluded.metadata_hash",
         (
-            edge_id, COMPLETION_EVENT_SCHEMA_VERSION, source_event_id, source_run_id,
-            target_event_id, target_run_id, capability_id, capability_version_id,
-            kind, str(influence_id), int(bool(accepted)),
-            int(not bool(accepted)), acceptance_gate_id, None, None, None, now, None,
+            edge_id,
+            COMPLETION_EVENT_SCHEMA_VERSION,
+            source_event_id,
+            source_run_id,
+            target_event_id,
+            target_run_id,
+            capability_id,
+            capability_version_id,
+            kind,
+            str(influence_id),
+            int(bool(accepted)),
+            int(not bool(accepted)),
+            acceptance_gate_id,
+            None,
+            None,
+            None,
+            now,
+            None,
             metadata_hash,
         ),
     )
@@ -1371,11 +1482,19 @@ def record_capability_consumption(
             metadata={"accepted": accepted, "version_hash": capability_version_id},
         )
         _propagate_outcome_lineage_in_conn(c, target_run_id)
-        return {**edge, "source_event_id": source_event["event_id"], "target_event_id": target_event_id}
+        return {
+            **edge,
+            "source_event_id": source_event["event_id"],
+            "target_event_id": target_event_id,
+        }
 
 
 CAPABILITY_REGRESSION_DURABILITY = {
-    "reverted", "reworked", "reopened", "broke_later", "abandoned",
+    "reverted",
+    "reworked",
+    "reopened",
+    "broke_later",
+    "abandoned",
 }
 
 
@@ -1439,9 +1558,7 @@ def capability_causal_evidence(
                 ).fetchall()
             ]
             durability = str(row["durability"] or "").lower() or None
-            verdict = str(
-                row["adjudicated_verdict"] or row["verifier_verdict"] or ""
-            ).upper()
+            verdict = str(row["adjudicated_verdict"] or row["verifier_verdict"] or "").upper()
             consumed = bool(
                 row["accepted"]
                 and row["target_event_id"]
@@ -1455,10 +1572,7 @@ def capability_causal_evidence(
             )
             terminal_outcome = bool(
                 outcome_present
-                and (
-                    durability not in (None, "pending")
-                    or verdict.startswith("FAIL")
-                )
+                and (durability not in (None, "pending") or verdict.startswith("FAIL"))
             )
             durable_success = bool(
                 consumed
@@ -1548,9 +1662,7 @@ def validate_resolved_worker_model(model: str | None) -> str | None:
     return value
 
 
-def derive_operation_role(
-    operation: str | None, operation_role: str | None = None
-) -> str:
+def derive_operation_role(operation: str | None, operation_role: str | None = None) -> str:
     """Derive a causal role and reject producer claims that contradict known work."""
     op = str(operation or "").strip().lower().replace("-", "_")
     inferred = "unknown"
@@ -1745,10 +1857,7 @@ def record_run(
             "SELECT model, source, work_type, role_name, routing_metadata FROM runs WHERE run_id=?",
             (run_id,),
         ).fetchone()
-        run_model = (
-            model
-            or (existing[0] if existing and existing[0] else None)
-        )
+        run_model = model or (existing[0] if existing and existing[0] else None)
         run_source = _derive_source(run_id, mode, source) or (
             existing[1] if existing and existing[1] else None
         )
@@ -1889,7 +1998,7 @@ def record_run(
             # stronger claim than the evidence supports.
             for inherited_id, inherited_version in _capability_attribution_of(c, str(role_run_id)):
                 if inherited_id in capability_ids:
-                    continue          # the run declared it directly; don't double-count
+                    continue  # the run declared it directly; don't double-count
                 _record_influence_edge_in_conn(
                     c,
                     target_run_id=run_id,
@@ -2127,9 +2236,7 @@ def record_owner_question(
     qid = _question_id(question, scope)
     now = int(time.time())
     with _conn() as c:
-        row = c.execute(
-            "SELECT status FROM owner_questions WHERE question_id=?", (qid,)
-        ).fetchone()
+        row = c.execute("SELECT status FROM owner_questions WHERE question_id=?", (qid,)).fetchone()
         if row and row[0] in ("open", "answered"):
             return {"question_id": qid, "status": row[0], "deduped": True}
         c.execute(
@@ -2261,7 +2368,7 @@ def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str
     for edge_id, source_event_id, source_run_id, influence_type, influence_id in rows:
         now = int(time.time())
         c.execute(
-            "UPDATE influence_edges SET target_event_id=COALESCE(?,target_event_id)," 
+            "UPDATE influence_edges SET target_event_id=COALESCE(?,target_event_id),"
             "outcome_verdict=?,merged=?,durability=?,propagated_ts=? WHERE edge_id=?",
             (
                 target_event_id,
@@ -2281,8 +2388,15 @@ def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str
             ).fetchone()
             if row:
                 (
-                    source_event_run, event_type, phase, producer, status,
-                    payload_json, attempt_id, capability_id, capability_version_id,
+                    source_event_run,
+                    event_type,
+                    phase,
+                    producer,
+                    status,
+                    payload_json,
+                    attempt_id,
+                    capability_id,
+                    capability_version_id,
                 ) = row
                 try:
                     source_payload = json.loads(payload_json or "{}")
@@ -2371,9 +2485,7 @@ def _record_outcome_in_conn(
         ("notes", notes),
         ("influenced_by_run_id", influenced_by_run_id),
     ]
-    if (
-        row
-    ):  # late-arriving update (e.g. a durability sweep days later) — patch, don't clobber
+    if row:  # late-arriving update (e.g. a durability sweep days later) — patch, don't clobber
         sets, vals = [], []
         for k, v in values:
             if v is not None:
@@ -2404,7 +2516,7 @@ def _record_outcome_in_conn(
             ),
         )
     stored = c.execute(
-        "SELECT verifier_verdict,adjudicated_verdict,merged,ci_status,durability," 
+        "SELECT verifier_verdict,adjudicated_verdict,merged,ci_status,durability,"
         "durability_checked_ts FROM outcomes WHERE run_id=?",
         (run_id,),
     ).fetchone()
@@ -2415,7 +2527,10 @@ def _record_outcome_in_conn(
                 "verifier_verdict": vv,
                 "adjudicated_verdict": av,
             },
-            "delivery": {"merged": bool(stored_merged) if stored_merged is not None else None, "ci_status": stored_ci},
+            "delivery": {
+                "merged": bool(stored_merged) if stored_merged is not None else None,
+                "ci_status": stored_ci,
+            },
             "durability": {"status": stored_durability, "checked_ts": checked_ts},
             "result": {"outcome_verdict": av or vv},
         }
@@ -2661,8 +2776,12 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
         ).fetchall()
         selector: dict[str, dict[str, int]] = {
             role: {
-                "matched": 0, "invoked": 0, "accepted": 0, "rejected": 0,
-                "disagreement": 0, "no_matching_work": 0,
+                "matched": 0,
+                "invoked": 0,
+                "accepted": 0,
+                "rejected": 0,
+                "disagreement": 0,
+                "no_matching_work": 0,
                 "matched_not_invoked": 0,
             }
             for role in roles
@@ -2695,9 +2814,9 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
                 "WHERE ie.influence_type='role' AND ie.accepted=1 AND r.role_name=?",
                 (role,),
             ).fetchone()
-            role_runs = int(c.execute(
-                "SELECT COUNT(*) FROM runs WHERE role_name=?", (role,)
-            ).fetchone()[0])
+            role_runs = int(
+                c.execute("SELECT COUNT(*) FROM runs WHERE role_name=?", (role,)).fetchone()[0]
+            )
             out = selector[role]
             out["role_runs"] = role_runs
             out["linked"] = int(linked or 0)
@@ -2709,9 +2828,7 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
                 if out["linked"] >= 5 and out["durable"] >= 3 and out["rejected"] >= 1
                 else "collecting"
             )
-            out["profile_fit"] = (
-                "observed" if role_runs >= 3 else "insufficient_role_runs"
-            )
+            out["profile_fit"] = "observed" if role_runs >= 3 else "insufficient_role_runs"
         return {"roles": selector}
     finally:
         if close:
@@ -2820,9 +2937,8 @@ def record_skill_invocation(
     if not re.fullmatch(r"(?:sha256:)?[a-fA-F0-9]{64}", version):
         version = _completion_hash(version)
     invocation_id = invocation_id or (
-        "skill-invocation:" + hashlib.sha256(
-            f"{skill_id}|{version}|{time.time_ns()}".encode()
-        ).hexdigest()[:24]
+        "skill-invocation:"
+        + hashlib.sha256(f"{skill_id}|{version}|{time.time_ns()}".encode()).hexdigest()[:24]
     )
     run_id = f"skill:{skill_id}:{invocation_id.rsplit(':', 1)[-1]}"
     with _conn() as c:
@@ -2877,34 +2993,46 @@ def completion_event_health(*, conn: sqlite3.Connection | None = None) -> dict:
     close = conn is None
     try:
         total = int(c.execute("SELECT COUNT(*) FROM completion_events").fetchone()[0])
-        complete = int(c.execute(
-            "SELECT COUNT(DISTINCT run_id) FROM completion_events "
-            "WHERE phase IN ('outcome','durability') AND validation_status='accepted'"
-        ).fetchone()[0])
-        redacted = int(c.execute(
-            "SELECT COUNT(*) FROM completion_events WHERE validation_status='redacted'"
-        ).fetchone()[0])
-        rejected = int(c.execute(
-            "SELECT COUNT(*) FROM completion_events WHERE validation_status='rejected'"
-        ).fetchone()[0])
-        durable = int(c.execute(
-            "SELECT COUNT(DISTINCT ce.run_id) FROM completion_events ce JOIN outcomes o "
-            "ON o.run_id=ce.run_id WHERE o.durability='durable'"
-        ).fetchone()[0])
-        accepted = int(c.execute(
-            "SELECT COUNT(*) FROM influence_edges WHERE accepted=1"
-        ).fetchone()[0])
-        accepted_linked = int(c.execute(
-            "SELECT COUNT(*) FROM influence_edges WHERE accepted=1 AND propagated_ts IS NOT NULL "
-            "AND (outcome_verdict IS NOT NULL OR durability IS NOT NULL)"
-        ).fetchone()[0])
-        orphan_edges = int(c.execute(
-            "SELECT COUNT(*) FROM influence_edges ie WHERE "
-            "(ie.target_event_id IS NULL OR NOT EXISTS "
-            "(SELECT 1 FROM completion_events ce WHERE ce.event_id=ie.target_event_id)) "
-            "OR (ie.source_event_id IS NOT NULL AND NOT EXISTS "
-            "(SELECT 1 FROM completion_events ce WHERE ce.event_id=ie.source_event_id))"
-        ).fetchone()[0])
+        complete = int(
+            c.execute(
+                "SELECT COUNT(DISTINCT run_id) FROM completion_events "
+                "WHERE phase IN ('outcome','durability') AND validation_status='accepted'"
+            ).fetchone()[0]
+        )
+        redacted = int(
+            c.execute(
+                "SELECT COUNT(*) FROM completion_events WHERE validation_status='redacted'"
+            ).fetchone()[0]
+        )
+        rejected = int(
+            c.execute(
+                "SELECT COUNT(*) FROM completion_events WHERE validation_status='rejected'"
+            ).fetchone()[0]
+        )
+        durable = int(
+            c.execute(
+                "SELECT COUNT(DISTINCT ce.run_id) FROM completion_events ce JOIN outcomes o "
+                "ON o.run_id=ce.run_id WHERE o.durability='durable'"
+            ).fetchone()[0]
+        )
+        accepted = int(
+            c.execute("SELECT COUNT(*) FROM influence_edges WHERE accepted=1").fetchone()[0]
+        )
+        accepted_linked = int(
+            c.execute(
+                "SELECT COUNT(*) FROM influence_edges WHERE accepted=1 AND propagated_ts IS NOT NULL "
+                "AND (outcome_verdict IS NOT NULL OR durability IS NOT NULL)"
+            ).fetchone()[0]
+        )
+        orphan_edges = int(
+            c.execute(
+                "SELECT COUNT(*) FROM influence_edges ie WHERE "
+                "(ie.target_event_id IS NULL OR NOT EXISTS "
+                "(SELECT 1 FROM completion_events ce WHERE ce.event_id=ie.target_event_id)) "
+                "OR (ie.source_event_id IS NOT NULL AND NOT EXISTS "
+                "(SELECT 1 FROM completion_events ce WHERE ce.event_id=ie.source_event_id))"
+            ).fetchone()[0]
+        )
         return {
             "schema_version": COMPLETION_EVENT_SCHEMA_VERSION,
             "total": total,
@@ -2926,9 +3054,10 @@ def completion_event_health(*, conn: sqlite3.Connection | None = None) -> dict:
 
 
 def _table_exists(c: sqlite3.Connection, table: str) -> bool:
-    return c.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-    ).fetchone() is not None
+    return (
+        c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        is not None
+    )
 
 
 def _routing_metadata_dict(raw: str | None) -> dict:
@@ -2997,19 +3126,20 @@ def completion_event_episodes(
         if accepted_only:
             event_clauses.append("ce.validation_status='accepted'")
         rows = c.execute(
-            "SELECT ce.event_id,ce.schema_version,ce.run_id,ce.attempt_id,ce.event_type," 
-            "ce.phase,ce.producer,ce.status,ce.validation_status,ce.payload_json," 
-            "ce.content_hash,ce.redaction_count,ce.created_ts,ce.updated_ts," 
+            "SELECT ce.event_id,ce.schema_version,ce.run_id,ce.attempt_id,ce.event_type,"
+            "ce.phase,ce.producer,ce.status,ce.validation_status,ce.payload_json,"
+            "ce.content_hash,ce.redaction_count,ce.created_ts,ce.updated_ts,"
             "r.target,r.task_type,r.experiment_id,r.routing_metadata,r.agent "
             "FROM completion_events ce LEFT JOIN runs r ON r.run_id=ce.run_id WHERE "
             + " AND ".join(event_clauses)
             + " ORDER BY ce.updated_ts DESC,ce.run_id DESC,"
             "CASE ce.phase WHEN 'trigger' THEN 1 WHEN 'decision' THEN 2 "
             "WHEN 'execution' THEN 3 WHEN 'artifact' THEN 4 WHEN 'verification' THEN 5 "
-            "WHEN 'delivery' THEN 6 WHEN 'outcome' THEN 7 WHEN 'durability' THEN 8 END," 
+            "WHEN 'delivery' THEN 6 WHEN 'outcome' THEN 7 WHEN 'durability' THEN 8 END,"
             "ce.event_id",
             params,
         ).fetchall()
+
         # Raw Brain rows retain multiple producer observations.  The miner
         # boundary exports exactly one canonical event per run/phase.
         def canonical_rank(row: tuple) -> tuple:
@@ -3026,16 +3156,32 @@ def completion_event_episodes(
                     "feedback.record_outcome": 1,
                 }.get(producer, 2)
                 event_rank = 2 if event_type in {"verification", "panel"} else 1
-            terminal_rank = 1 if status in {
-                "succeeded", "pass", "fail", "needs_review", "merged", "durable",
-                "reverted", "reworked", "reopened", "broke_later", "abandoned",
-            } else 0
+            terminal_rank = (
+                1
+                if status
+                in {
+                    "succeeded",
+                    "pass",
+                    "fail",
+                    "needs_review",
+                    "merged",
+                    "durable",
+                    "reverted",
+                    "reworked",
+                    "reopened",
+                    "broke_later",
+                    "abandoned",
+                }
+                else 0
+            )
             return producer_rank, event_rank, terminal_rank, int(row[13] or 0), str(row[0])
 
         canonical_rows: dict[tuple[str, str], tuple] = {}
         for row in rows:
             key = (str(row[2]), str(row[5]))
-            if key not in canonical_rows or canonical_rank(row) > canonical_rank(canonical_rows[key]):
+            if key not in canonical_rows or canonical_rank(row) > canonical_rank(
+                canonical_rows[key]
+            ):
                 canonical_rows[key] = row
         phase_order = {
             "trigger": 1,
@@ -3054,25 +3200,44 @@ def completion_event_episodes(
         envelopes = []
         for row in rows:
             (
-                event_id, schema_version, run_id, stored_attempt_id, event_type, phase,
-                producer, status, validation_status, payload_json, content_hash,
-                redaction_count, created_ts, updated_ts, target, task_type, experiment_id,
-                routing_metadata, agent,
+                event_id,
+                schema_version,
+                run_id,
+                stored_attempt_id,
+                event_type,
+                phase,
+                producer,
+                status,
+                validation_status,
+                payload_json,
+                content_hash,
+                redaction_count,
+                created_ts,
+                updated_ts,
+                target,
+                task_type,
+                experiment_id,
+                routing_metadata,
+                agent,
             ) = row
             context = context_by_run.get(run_id)
             if context is None:
                 metadata = _routing_metadata_dict(routing_metadata)
                 worker = resolved_worker_identity_for_run(run_id, conn=c)
-                attempt_count = int(c.execute(
-                    "SELECT COUNT(*) FROM execution_attempts "
-                    "WHERE run_id=? AND operation_role='worker'",
-                    (run_id,),
-                ).fetchone()[0])
-                successful_attempt_count = int(c.execute(
-                    "SELECT COUNT(*) FROM execution_attempts ea WHERE run_id=? "
-                    "AND operation_role='worker' AND " + _successful_attempt_sql("ea"),
-                    (run_id,),
-                ).fetchone()[0])
+                attempt_count = int(
+                    c.execute(
+                        "SELECT COUNT(*) FROM execution_attempts "
+                        "WHERE run_id=? AND operation_role='worker'",
+                        (run_id,),
+                    ).fetchone()[0]
+                )
+                successful_attempt_count = int(
+                    c.execute(
+                        "SELECT COUNT(*) FROM execution_attempts ea WHERE run_id=? "
+                        "AND operation_role='worker' AND " + _successful_attempt_sql("ea"),
+                        (run_id,),
+                    ).fetchone()[0]
+                )
                 arm = None
                 if _table_exists(c, "evaluations_v2"):
                     arm = c.execute(
@@ -3096,16 +3261,14 @@ def completion_event_episodes(
                     and _table_exists(c, "research_subjects")
                 ):
                     subject = c.execute(
-                        "SELECT s.subject_id,s.subject_family_id,s.canonical_target,s.task_type," 
+                        "SELECT s.subject_id,s.subject_family_id,s.canonical_target,s.task_type,"
                         "s.spec_hash,s.base_sha,s.arms_json,s.profiles_json "
                         "FROM research_subject_experiments x "
                         "JOIN research_subjects s ON s.subject_id=x.subject_id WHERE x.exp_id=?",
                         (experiment_id,),
                     ).fetchone()
                 canonical_target = (
-                    (subject[2] if subject else None)
-                    or str(target or "").strip().lower()
-                    or None
+                    (subject[2] if subject else None) or str(target or "").strip().lower() or None
                 )
                 canonical_task_type = (subject[3] if subject else None) or task_type
                 spec_hash = (
@@ -3128,7 +3291,13 @@ def completion_event_episodes(
                 else:
                     subject_arms = metadata.get("arms") or metadata.get("arm_set") or []
                     subject_profiles = metadata.get("profiles") or metadata.get("profile_set") or []
-                if not subject_id and canonical_target and canonical_task_type and spec_hash and base_sha:
+                if (
+                    not subject_id
+                    and canonical_target
+                    and canonical_task_type
+                    and spec_hash
+                    and base_sha
+                ):
                     normalized_spec_hash = _normalized_sha256_id(spec_hash)
                     raw_spec_hash = (
                         normalized_spec_hash.split(":", 1)[1]
@@ -3170,7 +3339,16 @@ def completion_event_episodes(
                     else canonical_target
                 )
                 identity_complete = bool(
-                    all((subject_id, family_id, canonical_target, canonical_task_type, spec_hash, base_sha))
+                    all(
+                        (
+                            subject_id,
+                            family_id,
+                            canonical_target,
+                            canonical_task_type,
+                            spec_hash,
+                            base_sha,
+                        )
+                    )
                 )
                 provenance_complete = bool(
                     identity_complete
@@ -3257,9 +3435,7 @@ def completion_event_episodes(
             c.close()
 
 
-def record_cost(
-    run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, source="ledger"
-):
+def record_cost(run_id, tokens_in=0, tokens_out=0, cost_usd=0.0, latency_s=0.0, source="ledger"):
     with _conn() as c:
         c.execute(
             "INSERT OR REPLACE INTO costs VALUES (?,?,?,?,?,?,?)",
@@ -3472,10 +3648,10 @@ def _record_execution_attempt_in_conn(
             raise ValueError(f"resolved model changed for {attempt_id}")
     c.execute(
         "INSERT OR REPLACE INTO execution_attempts "
-        "(attempt_id,run_id,attempt_ordinal,operation_role,profile_id," 
-        "requested_provider,requested_model,selected_model,reported_model," 
-        "resolved_provider,resolved_model,fallback_reason,runner_version,cli_version," 
-        "status,tokens_in,tokens_out,latency_s,cost_usd,trace_key," 
+        "(attempt_id,run_id,attempt_ordinal,operation_role,profile_id,"
+        "requested_provider,requested_model,selected_model,reported_model,"
+        "resolved_provider,resolved_model,fallback_reason,runner_version,cli_version,"
+        "status,tokens_in,tokens_out,latency_s,cost_usd,trace_key,"
         "source,raw_ref,started_ts,completed_ts,recorded_ts) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
@@ -3518,7 +3694,9 @@ def _record_execution_attempt_in_conn(
                 "reported_model": reported_model,
                 "resolved_provider": resolved_provider,
                 "resolved_model": resolved_model,
-                "fallback_reason_id": _completion_hash(fallback_reason) if fallback_reason else None,
+                "fallback_reason_id": (
+                    _completion_hash(fallback_reason) if fallback_reason else None
+                ),
                 "runner_version": runner_version,
                 "cli_version": cli_version,
                 "status": status,
@@ -3584,12 +3762,15 @@ def record_execution_attempt(
 ) -> str:
     """Record a non-trace or trace-linked execution attempt additively."""
     role = validate_operation_role(operation_role)
-    key = attempt_id or hashlib.sha256(
-        "|".join(
-            str(value or "")
-            for value in (run_id, attempt_ordinal, role, trace_key, source, raw_ref)
-        ).encode()
-    ).hexdigest()[:24]
+    key = (
+        attempt_id
+        or hashlib.sha256(
+            "|".join(
+                str(value or "")
+                for value in (run_id, attempt_ordinal, role, trace_key, source, raw_ref)
+            ).encode()
+        ).hexdigest()[:24]
+    )
     key = key if str(key).startswith("attempt:") else f"attempt:{key}"
     with _conn() as c:
         _record_execution_attempt_in_conn(
@@ -3706,7 +3887,7 @@ def complete_profile_attempt_unresolved(
         if row[1]:
             return attempt_id
         c.execute(
-            "UPDATE execution_attempts SET resolved_provider=NULL,resolved_model=NULL," 
+            "UPDATE execution_attempts SET resolved_provider=NULL,resolved_model=NULL,"
             "fallback_reason=?,status=?,completed_ts=? WHERE attempt_id=?",
             (reason, status, int(completed_ts or time.time()), attempt_id),
         )
@@ -3727,7 +3908,7 @@ def migrate_legacy_execution_attempts(
     before_traces = c.execute("SELECT COUNT(*) FROM execution_traces").fetchone()[0]
     before_runs = c.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
     rows = c.execute(
-        "SELECT et.trace_key,et.run_id,et.provider,et.model,et.operation,et.status," 
+        "SELECT et.trace_key,et.run_id,et.provider,et.model,et.operation,et.status,"
         "et.latency_s,et.cost_usd,et.source,et.raw_ref,et.pulled_ts,r.model,r.agent "
         "FROM execution_traces et LEFT JOIN runs r ON r.run_id=et.run_id "
         "WHERE NOT EXISTS (SELECT 1 FROM execution_attempts ea "
@@ -3764,11 +3945,7 @@ def migrate_legacy_execution_attempts(
         by_role[role] += 1
         operation_key = str(operation or "unknown")
         by_operation[operation_key] = by_operation.get(operation_key, 0) + 1
-        if (
-            role in {"evaluator", "verifier", "replay"}
-            and model
-            and legacy_run_model == model
-        ):
+        if role in {"evaluator", "verifier", "replay"} and model and legacy_run_model == model:
             collision_runs.add(str(run_id))
             agent_key = str(run_agent or "unknown")
             collision_runs_by_agent.setdefault(agent_key, set()).add(str(run_id))
@@ -3811,8 +3988,7 @@ def migrate_legacy_execution_attempts(
         "legacy_worker_nonworker_model_collision_runs": len(collision_runs),
         "legacy_worker_nonworker_model_collision_run_ids": sorted(collision_runs)[:50],
         "legacy_worker_nonworker_model_collision_runs_by_agent": {
-            agent: len(run_ids)
-            for agent, run_ids in sorted(collision_runs_by_agent.items())
+            agent: len(run_ids) for agent, run_ids in sorted(collision_runs_by_agent.items())
         },
         "trace_rows_before": before_traces,
         "trace_rows_after": after_traces,
@@ -3917,15 +4093,11 @@ def worker_model_provenance_summary(window_days: int = 90) -> dict:
         "unmigrated_legacy_trace_rows": int(
             migration_preview.get("legacy_trace_rows_examined") or 0
         ),
-        "legacy_migration_complete": not bool(
-            migration_preview.get("legacy_trace_rows_examined")
-        ),
+        "legacy_migration_complete": not bool(migration_preview.get("legacy_trace_rows_examined")),
     }
 
 
-def record_evaluation(
-    experiment_id, implementer, evaluator, score, rank=None, verdict=None
-):
+def record_evaluation(experiment_id, implementer, evaluator, score, rank=None, verdict=None):
     with _conn() as c:
         c.execute(
             "INSERT OR REPLACE INTO evaluations VALUES (?,?,?,?,?,?,?)",
@@ -4002,9 +4174,7 @@ def record_human_calibration(ref, human_verdict, note=None):
         )
 
 
-def _is_success(
-    durability: str, adjudicated: str | None, verifier: str | None = None
-) -> bool:
+def _is_success(durability: str, adjudicated: str | None, verifier: str | None = None) -> bool:
     """Goal-success = a PASS verdict that DURABLY held (the un-gameable part). A merge that
     reverts/reworks/reopens later is a failure the verdict missed. A verifier failure such
     as FAIL_HOLLOW is also a failure even if the PR later merged."""
@@ -4037,11 +4207,7 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
     now = int(time.time())
     since = now - window_days * 86400
     with _conn() as c:
-        ver = (
-            c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[
-                0
-            ]
-        ) + 1
+        ver = (c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]) + 1
         # Pass 1: per-cell outcome + measured-cost stats. Measured = cost_usd > 0 only — the $0
         # ledger rows are the killed-completion class (audit F2), not evidence of free work.
         cells: dict[tuple[str, str], dict] = {}
@@ -4057,9 +4223,7 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _ in rows if _is_success(d, a, v))
-                measured = [
-                    cu for d, a, v, cu in rows if _is_success(d, a, v) and cu and cu > 0
-                ]
+                measured = [cu for d, a, v, cu in rows if _is_success(d, a, v) and cu and cu > 0]
                 cells[(task_type, agent)] = {
                     "prior": prior,
                     "n": n,
@@ -4119,17 +4283,13 @@ def current_weights(task_type: str, version: int | None = None) -> list[dict]:
     the hand-set ROUTE_TABLE remains the prior/floor. Empty until relearn() has run."""
     with _conn() as c:
         if version is None:
-            version = c.execute(
-                "SELECT COALESCE(MAX(version),0) FROM route_weights"
-            ).fetchone()[0]
+            version = c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]
         rows = c.execute(
             "SELECT agent, posterior, score, n_obs FROM route_weights "
             "WHERE version=? AND task_type=? ORDER BY score DESC",
             (version, task_type),
         ).fetchall()
-        return [
-            {"agent": a, "posterior": p, "score": s, "n_obs": n} for a, p, s, n in rows
-        ]
+        return [{"agent": a, "posterior": p, "score": s, "n_obs": n} for a, p, s, n in rows]
 
 
 def runs_needing_outcome(mode: str | None = None) -> list:
@@ -4145,9 +4305,7 @@ def runs_needing_outcome(mode: str | None = None) -> list:
         if mode:
             q += " AND r.mode=?"
             params.append(mode)
-        return [
-            {"run_id": rid, "target": t} for rid, t in c.execute(q, params).fetchall()
-        ]
+        return [{"run_id": rid, "target": t} for rid, t in c.execute(q, params).fetchall()]
 
 
 def latest_run_id_for_target(target: str, mode: str | None = None) -> str | None:
@@ -4242,9 +4400,7 @@ def record_evidence_gap(ref: str, evaluator: str, gap: str):
         )
 
 
-def propose_evidence_changes(
-    min_recurrence: int = 3, window_days: int = 120
-) -> list[dict]:
+def propose_evidence_changes(min_recurrence: int = 3, window_days: int = 120) -> list[dict]:
     """Aggregate open evidence-gaps; a gap recurring >= threshold becomes a proposed new evidence type.
     This is the 'identify what data was needed -> add to reporting' step (human approves before schema
     migration via record_evidence_type)."""
@@ -4255,10 +4411,7 @@ def propose_evidence_changes(
             "GROUP BY gap HAVING n>=? ORDER BY n DESC",
             (since, min_recurrence),
         ).fetchall()
-    return [
-        {"gap": g, "recurrence": n, "proposal": f"add evidence type for: {g}"}
-        for g, n in rows
-    ]
+    return [{"gap": g, "recurrence": n, "proposal": f"add evidence type for: {g}"} for g, n in rows]
 
 
 def record_evidence_type(name: str, rationale: str = ""):
@@ -4297,12 +4450,7 @@ def normalize_evidence_type_citations(raw) -> list[str]:
     seen: set[str] = set()
     for value in values:
         if isinstance(value, dict):
-            name = (
-                value.get("name")
-                or value.get("evidence_type")
-                or value.get("type")
-                or ""
-            )
+            name = value.get("name") or value.get("evidence_type") or value.get("type") or ""
         else:
             name = str(value)
         name = " ".join(str(name).strip().split())
@@ -4324,9 +4472,7 @@ def record_evidence_type_citations(raw) -> list[str]:
     with _conn() as c:
         active = {
             row[0]
-            for row in c.execute(
-                "SELECT name FROM evidence_types WHERE status='active'"
-            ).fetchall()
+            for row in c.execute("SELECT name FROM evidence_types WHERE status='active'").fetchall()
         }
         applied: list[str] = []
         for name in names:
@@ -4393,9 +4539,7 @@ def approve_evidence_type(
         if not apply:
             return result
         if not eligible:
-            result["blocked_reason"] = (
-                f"recurrence {recurrence} < min_recurrence {min_recurrence}"
-            )
+            result["blocked_reason"] = f"recurrence {recurrence} < min_recurrence {min_recurrence}"
             return result
         if existing:
             if existing[0] == "retired":
@@ -4430,9 +4574,7 @@ def approve_evidence_type(
 def bump_evidence_influence(name: str):
     """An evidence type was actually CITED in a verdict — track influence so dead weight can be pruned."""
     with _conn() as c:
-        c.execute(
-            "UPDATE evidence_types SET influence=influence+1 WHERE name=?", (name,)
-        )
+        c.execute("UPDATE evidence_types SET influence=influence+1 WHERE name=?", (name,))
 
 
 def prune_dead_evidence(min_influence: int = 1) -> list[str]:
@@ -4491,17 +4633,12 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
     since = now - window_days * 86400
     try:
         half_life = float(
-            os.environ.get("ORCH_RELEARN_HALF_LIFE_DAYS", "")
-            or DEFAULT_RELEARN_HALF_LIFE_DAYS
+            os.environ.get("ORCH_RELEARN_HALF_LIFE_DAYS", "") or DEFAULT_RELEARN_HALF_LIFE_DAYS
         )
     except ValueError:
         half_life = DEFAULT_RELEARN_HALF_LIFE_DAYS
     with _conn() as c:
-        ver = (
-            c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[
-                0
-            ]
-        ) + 1
+        ver = (c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]) + 1
         # Pass 1: per-cell quality evidence + MEASURED-only effort telemetry.
         cells: dict[tuple[str, str], dict] = {}
         for task_type, priors in task_type_priors.items():
@@ -4559,7 +4696,15 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                 subject_n_eff = 0.0
                 superseded_n = 0
                 evidence_run_ids: list[str] = []
-                for run_id, durability, adjudicated, verifier, run_model, run_ts, failure_class in c.execute(
+                for (
+                    run_id,
+                    durability,
+                    adjudicated,
+                    verifier,
+                    run_model,
+                    run_ts,
+                    failure_class,
+                ) in c.execute(
                     f"SELECT r.run_id, o.durability, o.adjudicated_verdict, o.verifier_verdict, {model_expr}, r.ts, o.failure_class "
                     "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                     "WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
@@ -4574,11 +4719,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                     elif str(failure_class or "") == "transient_infra":
                         continue  # item 9: infra death is not capability evidence
                     elif _has_outcome_evidence(durability, adjudicated, verifier):
-                        q = (
-                            1.0
-                            if _is_success(durability, adjudicated, verifier)
-                            else 0.0
-                        )
+                        q = 1.0 if _is_success(durability, adjudicated, verifier) else 0.0
                         outcome_n += 1
                         raw_n += 1
                     else:
@@ -4640,9 +4781,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                 if s[m]:
                     agent_pool[m].setdefault(pool_agent, []).append(float(s[m]))
                     global_pool[m].append(float(s[m]))
-        agent_mean = {
-            m: {a: sum(v) / len(v) for a, v in agent_pool[m].items()} for m in metrics
-        }
+        agent_mean = {m: {a: sum(v) / len(v) for a, v in agent_pool[m].items()} for m in metrics}
         global_median = {
             m: (sorted(global_pool[m])[len(global_pool[m]) // 2] if global_pool[m] else None)
             for m in metrics
@@ -4701,7 +4840,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
 def _selftest():
     import tempfile
 
-    import env_prereq                       # imported here: this module is env_prereq's own dep
+    import env_prereq  # imported here: this module is env_prereq's own dep
 
     tmp = tempfile.mkdtemp(prefix="feedback-selftest-")
     gaps: list[str] = []
@@ -4710,9 +4849,7 @@ def _selftest():
     try:
         legacy = sqlite3.connect(":memory:")
         try:
-            legacy.execute(
-                "CREATE TABLE runs (run_id TEXT PRIMARY KEY, ts INTEGER, source TEXT)"
-            )
+            legacy.execute("CREATE TABLE runs (run_id TEXT PRIMARY KEY, ts INTEGER, source TEXT)")
             legacy.execute("CREATE TABLE outcomes (run_id TEXT PRIMARY KEY)")
             legacy.execute(
                 "INSERT INTO runs (run_id, ts, source) VALUES ('old-keepalive', 1, 'keepalive')"
@@ -4722,17 +4859,15 @@ def _selftest():
             )
             _migrate_schema(legacy)
             migrated = dict(
-                legacy.execute(
-                    "SELECT run_id, assignment FROM runs ORDER BY run_id"
-                ).fetchall()
+                legacy.execute("SELECT run_id, assignment FROM runs ORDER BY run_id").fetchall()
             )
             assert migrated == {
                 "old-keepalive": "assigned",
                 "old-router": "experimental",
             }, migrated
-            before = [
-                row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()
-            ].count("assignment")
+            before = [row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()].count(
+                "assignment"
+            )
             before_work_type = [
                 row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()
             ].count("work_type")
@@ -4743,13 +4878,12 @@ def _selftest():
                 row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()
             ].count("routing_metadata")
             before_influenced = [
-                row[1]
-                for row in legacy.execute("PRAGMA table_info(outcomes)").fetchall()
+                row[1] for row in legacy.execute("PRAGMA table_info(outcomes)").fetchall()
             ].count("influenced_by_run_id")
             _migrate_schema(legacy)
-            after = [
-                row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()
-            ].count("assignment")
+            after = [row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()].count(
+                "assignment"
+            )
             after_work_type = [
                 row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()
             ].count("work_type")
@@ -4760,8 +4894,7 @@ def _selftest():
                 row[1] for row in legacy.execute("PRAGMA table_info(runs)").fetchall()
             ].count("routing_metadata")
             after_influenced = [
-                row[1]
-                for row in legacy.execute("PRAGMA table_info(outcomes)").fetchall()
+                row[1] for row in legacy.execute("PRAGMA table_info(outcomes)").fetchall()
             ].count("influenced_by_run_id")
             assert before == 1 and after == 1, (before, after)
             assert before_work_type == 1 and after_work_type == 1, (
@@ -4787,32 +4920,26 @@ def _selftest():
         # No data yet -> relearn yields the PRIOR (posterior == prior).
         v0 = relearn(priors)
         w0 = {x["agent"]: x for x in current_weights("implement", v0)}
-        assert (
-            abs(w0["claude"]["posterior"] - 0.7) < 1e-9 and w0["claude"]["n_obs"] == 0
-        ), w0
+        assert abs(w0["claude"]["posterior"] - 0.7) < 1e-9 and w0["claude"]["n_obs"] == 0, w0
 
         # Feed evidence that contradicts the prior: cursor succeeds durably + cheap; claude reverts.
         for i in range(12):
             rid = f"r{i}"
             record_run(rid, f"o/r#{i}", "implement", "cursor" if i % 2 else "claude")
             if i % 2:  # cursor: durable success, cheap
-                record_outcome(
-                    rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-                )
+                record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
                 record_cost(rid, cost_usd=1.0)
             else:  # claude: merged but reverted later (durability catches the verdict-miss)
-                record_outcome(
-                    rid, adjudicated_verdict="PASS", merged=True, durability="reverted"
-                )
+                record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="reverted")
                 record_cost(rid, cost_usd=5.0)
         v1 = relearn(priors)
         w1 = {x["agent"]: x for x in current_weights("implement", v1)}
         # cursor's posterior should rise toward its durable-success; claude's should fall (reverts).
         assert w1["cursor"]["posterior"] > w1["claude"]["posterior"], w1
         # and the learned order now puts cursor first DESPITE the prior favoring claude — evidence won.
-        assert (
-            current_weights("implement", v1)[0]["agent"] == "cursor"
-        ), current_weights("implement", v1)
+        assert current_weights("implement", v1)[0]["agent"] == "cursor", current_weights(
+            "implement", v1
+        )
 
         # F1 regression (2026-07-03 audit): a MISSING cost must not beat a MEASURED one. Two agents
         # with IDENTICAL outcomes; only one has cost rows. The old formula scored the unmeasured
@@ -4823,9 +4950,7 @@ def _selftest():
             for imp_agent in ("paid", "dark"):
                 rid = f"imp-{imp_agent}-{i}"
                 record_run(rid, f"o/imp#{imp_agent}{i}", "imputetest", imp_agent)
-                record_outcome(
-                    rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-                )
+                record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
                 if imp_agent == "paid":
                     record_cost(rid, cost_usd=2.0)
         vi = relearn({"imputetest": {"paid": 0.5, "dark": 0.5}})
@@ -4852,9 +4977,7 @@ def _selftest():
         )
         vh = relearn({"verifytest": {"cursor": 0.5}})
         hollow_weight = current_weights("verifytest", vh)[0]
-        assert (
-            hollow_weight["n_obs"] == 1 and hollow_weight["posterior"] < 0.5
-        ), hollow_weight
+        assert hollow_weight["n_obs"] == 1 and hollow_weight["posterior"] < 0.5, hollow_weight
 
         record_run("runtime-ac-fail", "o/r#runtime-ac", "verifytest", "cursor")
         record_outcome(
@@ -4866,18 +4989,10 @@ def _selftest():
         )
         vr = relearn({"verifytest": {"cursor": 0.5}})
         runtime_weight = current_weights("verifytest", vr)[0]
-        assert (
-            runtime_weight["n_obs"] == 2 and runtime_weight["posterior"] < 0.5
-        ), runtime_weight
-        record_run(
-            "older-target", "o/r#target", "implement", "cursor", mode="remote", ts=100
-        )
-        record_run(
-            "newer-target", "o/r#target", "implement", "codex", mode="remote", ts=200
-        )
-        record_run(
-            "local-target", "o/r#target", "implement", "vibe", mode="local", ts=300
-        )
+        assert runtime_weight["n_obs"] == 2 and runtime_weight["posterior"] < 0.5, runtime_weight
+        record_run("older-target", "o/r#target", "implement", "cursor", mode="remote", ts=100)
+        record_run("newer-target", "o/r#target", "implement", "codex", mode="remote", ts=200)
+        record_run("local-target", "o/r#target", "implement", "vibe", mode="local", ts=300)
         assert latest_run_id_for_target("o/r#target") == "local-target"
         assert latest_run_id_for_target("o/r#target", mode="remote") == "newer-target"
         with _conn() as c:
@@ -4893,12 +5008,8 @@ def _selftest():
             "newer-target": ("orchestrator_remote", "experimental"),
             "local-target": ("orchestrator_local", "experimental"),
         }, sources
-        record_run(
-            "work-type-run", "o/r#work-type", "implement", "codex", work_type="sync"
-        )
-        record_run(
-            "work-type-run", "o/r#work-type", "implement", "codex", mode="remote"
-        )
+        record_run("work-type-run", "o/r#work-type", "implement", "codex", work_type="sync")
+        record_run("work-type-run", "o/r#work-type", "implement", "codex", mode="remote")
         with _conn() as c:
             work_type_row = c.execute(
                 "SELECT work_type, mode FROM runs WHERE run_id='work-type-run'"
@@ -4915,9 +5026,7 @@ def _selftest():
                 "exploration_mode": "thompson-hybrid",
             },
         )
-        record_run(
-            "routing-meta-run", "o/r#routing-meta", "implement", "codex", mode="local"
-        )
+        record_run("routing-meta-run", "o/r#routing-meta", "implement", "codex", mode="local")
         with _conn() as c:
             assignment, routing_metadata = c.execute(
                 "SELECT assignment, routing_metadata FROM runs WHERE run_id='routing-meta-run'"
@@ -4958,14 +5067,10 @@ def _selftest():
                 "WHERE run_id='trace-run'"
             ).fetchone()
         assert trace == ("tr-1", 1.2, 0.04), trace
-        record_execution_trace(
-            "trace-before-run", model="trace-model", operation="dispatch"
-        )
+        record_execution_trace("trace-before-run", model="trace-model", operation="dispatch")
         record_run("trace-before-run", "o/r#trace", "implement", "codex")
         record_run("trace-before-run", "o/r#trace", "implement", "codex", mode="remote")
-        record_run(
-            "direct-model", "o/r#direct", "implement", "claude", model="claude-test"
-        )
+        record_run("direct-model", "o/r#direct", "implement", "claude", model="claude-test")
         with _conn() as c:
             reconciled = c.execute(
                 "SELECT model, mode FROM runs WHERE run_id='trace-before-run'"
@@ -4973,18 +5078,14 @@ def _selftest():
             direct_model = c.execute(
                 "SELECT model FROM runs WHERE run_id='direct-model'"
             ).fetchone()[0]
-        assert (
-            reconciled == (None, "remote") and direct_model == "claude-test"
-        ), (
+        assert reconciled == (None, "remote") and direct_model == "claude-test", (
             reconciled,
             direct_model,
         )
 
         # test_evaluator_trace_cannot_resolve_worker_model: exact worker identity is causal,
         # not "the latest model seen near this run". Both judge models remain retained.
-        record_run(
-            "evaluator-contamination", "o/r#judge", "implement", "codex"
-        )
+        record_run("evaluator-contamination", "o/r#judge", "implement", "codex")
         record_execution_trace(
             "evaluator-contamination",
             trace_id="judge-claude",
@@ -5001,9 +5102,9 @@ def _selftest():
             operation="evaluate_pr_compare",
             status="success",
         )
-        assert resolved_worker_model_for_run("evaluator-contamination") is None, (
-            "evaluator trace resolved worker model"
-        )
+        assert (
+            resolved_worker_model_for_run("evaluator-contamination") is None
+        ), "evaluator trace resolved worker model"
         with _conn() as c:
             roles = c.execute(
                 "SELECT DISTINCT operation_role FROM execution_attempts "
@@ -5052,18 +5153,12 @@ def _selftest():
 
         # GROWTH: evidence-gap -> proposal -> register -> influence -> prune
         for _ in range(3):
-            record_evidence_gap(
-                "expX", "claude", "need test-execution output to judge correctness"
-            )
+            record_evidence_gap("expX", "claude", "need test-execution output to judge correctness")
         props = propose_evidence_changes(min_recurrence=3)
-        assert any(
-            "test-execution" in p["gap"] for p in props
-        ), props  # recurring gap proposed
+        assert any("test-execution" in p["gap"] for p in props), props  # recurring gap proposed
         record_evidence_type("test_run_output", "evaluators repeatedly lacked it")
         bump_evidence_influence("test_run_output")  # it got cited -> survives
-        assert (
-            active_evidence_types()[0]["name"] == "test_run_output"
-        ), active_evidence_types()
+        assert active_evidence_types()[0]["name"] == "test_run_output", active_evidence_types()
         normalized = normalize_evidence_type_citations(
             [
                 " test_run_output ",
@@ -5088,9 +5183,7 @@ def _selftest():
             "stderr_capture", gap_text, min_recurrence=3, window_days=120, apply=False
         )
         assert (
-            preview["eligible"]
-            and not preview["applied"]
-            and preview["gaps_marked"] == 0
+            preview["eligible"] and not preview["applied"] and preview["gaps_marked"] == 0
         ), preview
         assert preview["evidence_type_status"] == "new", preview
         applied = approve_evidence_type(
@@ -5120,9 +5213,7 @@ def _selftest():
             et_status,
         )
         with _conn() as c:
-            c.execute(
-                "UPDATE evidence_types SET status='retired' WHERE name='stderr_capture'"
-            )
+            c.execute("UPDATE evidence_types SET status='retired' WHERE name='stderr_capture'")
         record_evidence_gap("expZ", "judge-c", gap_text)
         reactivated = approve_evidence_type(
             "stderr_capture",
@@ -5140,13 +5231,9 @@ def _selftest():
 
         # QUALITY-MAGNITUDE learner: continuous scores, free-agent effort reward.
         for i in range(3):
-            record_run(
-                f"q_cur_{i}", "o/r", "implement", "cursor", experiment_id=f"E{i}"
-            )
+            record_run(f"q_cur_{i}", "o/r", "implement", "cursor", experiment_id=f"E{i}")
             record_run(f"q_cod_{i}", "o/r", "implement", "codex", experiment_id=f"E{i}")
-            record_evaluation(
-                f"E{i}", "cursor", f"j{i}", 8.5
-            )  # cursor consistently rated higher
+            record_evaluation(f"E{i}", "cursor", f"j{i}", 8.5)  # cursor consistently rated higher
             record_evaluation(f"E{i}", "codex", f"j{i}", 7.0)
         record_cost("q_cur_0", cost_usd=0.0)  # cursor free
         record_cost("q_cod_0", cost_usd=2.0)  # codex metered
@@ -5163,9 +5250,7 @@ def _selftest():
             ("heavy", 20_000_000, 600.0),
         ):
             rid = f"effort_{agent}"
-            record_run(
-                rid, "o/r#effort", "effortlearn", agent, experiment_id=f"EFF-{agent}"
-            )
+            record_run(rid, "o/r#effort", "effortlearn", agent, experiment_id=f"EFF-{agent}")
             record_evaluation(f"EFF-{agent}", agent, "judge", 8.0)
             record_cost(rid, tokens_in=tokens, latency_s=latency)
         effort_v = relearn_quality({"effortlearn": {"lean": 0.5, "heavy": 0.5}})
@@ -5179,19 +5264,14 @@ def _selftest():
                 (effort_v,),
             ).fetchone()[0]
         assert (
-            "mean_tokens=20000000" in heavy_reason
-            and "mean_latency_s=600.0" in heavy_reason
+            "mean_tokens=20000000" in heavy_reason and "mean_latency_s=600.0" in heavy_reason
         ), heavy_reason
         record_run("telemetry_only", "o/r#telemetry", "coldtelemetry", "agent_t")
-        record_cost(
-            "telemetry_only", tokens_in=50_000_000, latency_s=3600.0, cost_usd=10.0
-        )
+        record_cost("telemetry_only", tokens_in=50_000_000, latency_s=3600.0, cost_usd=10.0)
         cold_v = relearn_quality({"coldtelemetry": {"agent_t": 0.5}})
         cold_w = current_weights("coldtelemetry", cold_v)[0]
         assert (
-            cold_w["n_obs"] == 0
-            and cold_w["posterior"] == 0.5
-            and cold_w["score"] == 0.5
+            cold_w["n_obs"] == 0 and cold_w["posterior"] == 0.5 and cold_w["score"] == 0.5
         ), cold_w
 
         # F1 regression for the LIVE learner (2026-07-03 audit): silence must not earn the best
@@ -5241,9 +5321,7 @@ def _selftest():
         finally:
             del os.environ["ORCH_RELEARN_HALF_LIFE_DAYS"]
         dk_w0 = {x["agent"]: x for x in current_weights("decaytest", dk_v0)}
-        assert (
-            abs(dk_w0["fresh_win"]["posterior"] - dk_w0["stale_win"]["posterior"]) < 1e-9
-        ), dk_w0
+        assert abs(dk_w0["fresh_win"]["posterior"] - dk_w0["stale_win"]["posterior"]) < 1e-9, dk_w0
 
         # item 9 two-tier enum: an abandoned outcome classified transient_infra must NOT lower
         # the posterior (the agent was killed by the environment, not out-coded); an identical
@@ -5268,18 +5346,29 @@ def _selftest():
         with _conn() as _c:
             # A run written WITHOUT a completion event -- `record_run` emits one, so it cannot be
             # used here; the whole point is a target that has no envelope to point at.
-            _c.execute("INSERT OR IGNORE INTO runs (run_id,ts,target,task_type,agent) "
-                       "VALUES ('orphan-probe',0,'o/r#1','implement','codex')")
+            _c.execute(
+                "INSERT OR IGNORE INTO runs (run_id,ts,target,task_type,agent) "
+                "VALUES ('orphan-probe',0,'o/r#1','implement','codex')"
+            )
             try:
                 _record_influence_edge_in_conn(
-                    _c, target_run_id="orphan-probe", influence_type="role",
-                    influence_id="role:probe", accepted=True)
+                    _c,
+                    target_run_id="orphan-probe",
+                    influence_type="role",
+                    influence_id="role:probe",
+                    accepted=True,
+                )
                 raise AssertionError("an unlinked edge must not be insertable by default")
             except ValueError as exc:
                 assert "no completion event" in str(exc), exc
             _ok = _record_influence_edge_in_conn(
-                _c, target_run_id="orphan-probe", influence_type="role",
-                influence_id="role:probe", accepted=True, allow_unlinked=True)
+                _c,
+                target_run_id="orphan-probe",
+                influence_type="role",
+                influence_id="role:probe",
+                accepted=True,
+                allow_unlinked=True,
+            )
             assert _ok["edge_id"].startswith("edge:"), _ok
             # Clean up: a later assertion in this selftest checks the fixture holds ZERO orphan
             # edges, and that check is worth more than this one's leftovers.
@@ -5322,23 +5411,22 @@ def _selftest():
             "Keep CSV export default ON?", "yes, keep ON", repo="o/r", expires_days=7
         )
         assert q1["status"] == "open" and not q1["deduped"], q1
-        q1b = record_owner_question(
-            "Keep CSV export default ON?", "different default", repo="o/r"
-        )
+        q1b = record_owner_question("Keep CSV export default ON?", "different default", repo="o/r")
         assert q1b["deduped"] and q1b["question_id"] == q1["question_id"], q1b
         assert len(open_owner_questions()) == 1
         assert answer_owner_question(q1["question_id"], "no, make it opt-in") is True
         assert answer_owner_question(q1["question_id"], "again") is False  # idempotent
         dec = owner_decisions_for(repo="o/r")
-        assert dec and dec[0]["decision"] == "no, make it opt-in" and dec[0]["source"] == "owner", dec
+        assert (
+            dec and dec[0]["decision"] == "no, make it opt-in" and dec[0]["source"] == "owner"
+        ), dec
         q2 = record_owner_question(
             "Drop legacy endpoint?", "keep it for now", repo="o/r", expires_days=-1
         )
         assert expire_owner_questions() == 1
         dec2 = owner_decisions_for(repo="o/r", limit=5)
         assert any(
-            d["decision"] == "keep it for now" and d["source"] == "default_ratified"
-            for d in dec2
+            d["decision"] == "keep it for now" and d["source"] == "default_ratified" for d in dec2
         ), dec2
         assert not open_owner_questions(), "expiry must leave no open backlog"
 
@@ -5367,39 +5455,29 @@ def _selftest():
             rid_b = f"prod_b_{i}"
             record_run(rid_a, "o/r#prod", "prodlearn", "agent_a")
             record_run(rid_b, "o/r#prod", "prodlearn", "agent_b")
-            record_outcome(
-                rid_a, adjudicated_verdict="PASS", merged=True, durability="reverted"
-            )
-            record_outcome(
-                rid_b, adjudicated_verdict="PASS", merged=True, durability="durable"
-            )
+            record_outcome(rid_a, adjudicated_verdict="PASS", merged=True, durability="reverted")
+            record_outcome(rid_b, adjudicated_verdict="PASS", merged=True, durability="durable")
         blended = relearn_quality({"prodlearn": {"agent_a": 0.6, "agent_b": 0.5}})
         blended_weights = {x["agent"]: x for x in current_weights("prodlearn", blended)}
         assert blended_weights["agent_b"]["n_obs"] == 13, blended_weights
         assert (
-            blended_weights["agent_b"]["posterior"]
-            > blended_weights["agent_a"]["posterior"]
+            blended_weights["agent_b"]["posterior"] > blended_weights["agent_a"]["posterior"]
         ), blended_weights
-        assert (
-            current_weights("prodlearn", blended)[0]["agent"] == "agent_b"
-        ), blended_weights
+        assert current_weights("prodlearn", blended)[0]["agent"] == "agent_b", blended_weights
 
         # Assigned keepalive observations are retained but excluded from causal route_weights learning.
         assign_priors = {"assignlearn": {"agentX": 0.4, "agentY": 0.4}}
         for i in range(4):
             rid = f"assign_exp_x_{i}"
             record_run(rid, "o/r#assign", "assignlearn", "agentX", mode="remote")
-            record_outcome(
-                rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-            )
+            record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
         assign_v0 = relearn_quality(assign_priors)
         assign_w0 = {x["agent"]: x for x in current_weights("assignlearn", assign_v0)}
         assert (
             assign_w0["agentX"]["posterior"] > 0.4 and assign_w0["agentX"]["n_obs"] == 4
         ), assign_w0
         assert (
-            assign_w0["agentY"]["posterior"] == 0.4
-            and assign_w0["agentY"]["n_obs"] == 0
+            assign_w0["agentY"]["posterior"] == 0.4 and assign_w0["agentY"]["n_obs"] == 0
         ), assign_w0
         for i in range(12):
             rid = f"keepalive:o/r#assign-{i}:agentY"
@@ -5412,18 +5490,13 @@ def _selftest():
                 source="keepalive",
                 assignment="assigned",
             )
-            record_outcome(
-                rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-            )
+            record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
             record_cost(rid, cost_usd=99.0)
         assign_v1 = relearn_quality(assign_priors)
         assign_w1 = {x["agent"]: x for x in current_weights("assignlearn", assign_v1)}
+        assert assign_w1["agentX"]["posterior"] == assign_w0["agentX"]["posterior"], assign_w1
         assert (
-            assign_w1["agentX"]["posterior"] == assign_w0["agentX"]["posterior"]
-        ), assign_w1
-        assert (
-            assign_w1["agentY"]["posterior"] == 0.4
-            and assign_w1["agentY"]["n_obs"] == 0
+            assign_w1["agentY"]["posterior"] == 0.4 and assign_w1["agentY"]["n_obs"] == 0
         ), assign_w1
         with _conn() as c:
             assigned_count = c.execute(
@@ -5443,18 +5516,13 @@ def _selftest():
                 assignment="none",
                 work_type="renovate",
             )
-            record_outcome(
-                rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-            )
+            record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
             record_cost(rid, cost_usd=77.0)
         assign_v2 = relearn_quality(assign_priors)
         assign_w2 = {x["agent"]: x for x in current_weights("assignlearn", assign_v2)}
+        assert assign_w2["agentX"]["posterior"] == assign_w0["agentX"]["posterior"], assign_w2
         assert (
-            assign_w2["agentX"]["posterior"] == assign_w0["agentX"]["posterior"]
-        ), assign_w2
-        assert (
-            assign_w2["agentY"]["posterior"] == 0.4
-            and assign_w2["agentY"]["n_obs"] == 0
+            assign_w2["agentY"]["posterior"] == 0.4 and assign_w2["agentY"]["n_obs"] == 0
         ), assign_w2
         assert "none" not in assign_w2, assign_w2
 
@@ -5476,13 +5544,9 @@ def _selftest():
             merged=True,
             durability="durable",
         )
-        linked = join_role_to_outcome(
-            "role-good", "downstream-good", notes="accepted redirect"
-        )
+        linked = join_role_to_outcome("role-good", "downstream-good", notes="accepted redirect")
         assert (
-            linked["linked"]
-            and linked["synced"]
-            and linked["task_type"] == "role:redirect"
+            linked["linked"] and linked["synced"] and linked["task_type"] == "role:redirect"
         ), linked
         record_role_run("role-bad", "redirect", "o/r#role", "codex", action="redirect")
         record_run("downstream-bad", "o/r#role", "implement", "codex")
@@ -5506,17 +5570,13 @@ def _selftest():
         assert role_row[0] == "role:redirect" and role_row[1] == "redirect", role_row
         assert "offload:cursor:1" in (role_row[2] or ""), role_row
         assert influenced == "role-good", influenced
-        assert (
-            role_outcome[0] == "durable" and "accepted redirect" in role_outcome[1]
-        ), role_outcome
+        assert role_outcome[0] == "durable" and "accepted redirect" in role_outcome[1], role_outcome
         role_v = relearn_quality({"role:redirect": {"cursor": 0.5, "codex": 0.5}})
         role_weights = {x["agent"]: x for x in current_weights("role:redirect", role_v)}
         assert (
             role_weights["cursor"]["posterior"] > role_weights["codex"]["posterior"]
         ), role_weights
-        record_role_run(
-            "role-rejected", "redirect", "o/r#role", "vibe", action="redirect"
-        )
+        record_role_run("role-rejected", "redirect", "o/r#role", "vibe", action="redirect")
         record_run("downstream-rejected", "o/r#role", "implement", "vibe")
         record_outcome(
             "downstream-rejected",
@@ -5524,9 +5584,7 @@ def _selftest():
             merged=True,
             durability="durable",
         )
-        rejected = join_role_to_outcome(
-            "role-rejected", "downstream-rejected", accepted=False
-        )
+        rejected = join_role_to_outcome("role-rejected", "downstream-rejected", accepted=False)
         assert rejected["linked"] and not rejected["synced"], rejected
         with _conn() as c:
             no_role_outcome = c.execute(
@@ -5535,20 +5593,14 @@ def _selftest():
         assert no_role_outcome is None, no_role_outcome
 
         # Multi-reviewer evaluated runs count once, and their outcome fallback is not double-counted.
-        record_run(
-            "panel-run", "o/r#panel", "panellearn", "panel_agent", experiment_id="PANEL"
-        )
+        record_run("panel-run", "o/r#panel", "panellearn", "panel_agent", experiment_id="PANEL")
         record_evaluation("PANEL", "panel_agent", "judge-1", 7.0)
         record_evaluation("PANEL", "panel_agent", "judge-2", 8.0)
         record_evaluation("PANEL", "panel_agent", "judge-3", 9.0)
-        record_outcome(
-            "panel-run", adjudicated_verdict="PASS", merged=True, durability="reverted"
-        )
+        record_outcome("panel-run", adjudicated_verdict="PASS", merged=True, durability="reverted")
         panel_version = relearn_quality({"panellearn": {"panel_agent": 0.5}})
         panel_weight = current_weights("panellearn", panel_version)[0]
-        assert (
-            panel_weight["n_obs"] == 1 and panel_weight["posterior"] > 0.5
-        ), panel_weight
+        assert panel_weight["n_obs"] == 1 and panel_weight["posterior"] > 0.5, panel_weight
 
         # Superseded-model evidence is still used, but carries lower effective weight.
         base_ts = int(time.time()) - 100
@@ -5590,18 +5642,10 @@ def _selftest():
                 resolved_model="new-model",
                 status="success",
             )
-            record_run(
-                null_rid, "o/r#drift", "driftlearn", "null_agent", ts=base_ts + i
-            )
-            record_outcome(
-                old_rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-            )
-            record_outcome(
-                new_rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-            )
-            record_outcome(
-                null_rid, adjudicated_verdict="PASS", merged=True, durability="durable"
-            )
+            record_run(null_rid, "o/r#drift", "driftlearn", "null_agent", ts=base_ts + i)
+            record_outcome(old_rid, adjudicated_verdict="PASS", merged=True, durability="durable")
+            record_outcome(new_rid, adjudicated_verdict="PASS", merged=True, durability="durable")
+            record_outcome(null_rid, adjudicated_verdict="PASS", merged=True, durability="durable")
         record_run(
             "drift_old_current",
             "o/r#drift",
@@ -5632,12 +5676,9 @@ def _selftest():
         )
         drift_w = {x["agent"]: x for x in current_weights("driftlearn", drift_v)}
         assert drift_w["old_agent"]["n_obs"] == 4, drift_w
+        assert drift_w["new_agent"]["posterior"] > drift_w["old_agent"]["posterior"], drift_w
         assert (
-            drift_w["new_agent"]["posterior"] > drift_w["old_agent"]["posterior"]
-        ), drift_w
-        assert (
-            abs(drift_w["new_agent"]["posterior"] - drift_w["null_agent"]["posterior"])
-            < 1e-9
+            abs(drift_w["new_agent"]["posterior"] - drift_w["null_agent"]["posterior"]) < 1e-9
         ), drift_w
         with _conn() as c:
             rationale = c.execute(
@@ -5645,9 +5686,7 @@ def _selftest():
                 "AND agent='old_agent'",
                 (drift_v,),
             ).fetchone()[0]
-        assert (
-            "eff_n=2.0" in rationale and "superseded_model_runs=4" in rationale
-        ), rationale
+        assert "eff_n=2.0" in rationale and "superseded_model_runs=4" in rationale, rationale
 
         # Issue 7: normal local, remote Keepalive, experiment, role, and skill
         # flows all traverse decision -> attempt -> completion -> outcome -> durability.
@@ -5734,7 +5773,15 @@ def _selftest():
         )
         assert redaction["validation_status"] == "redacted", redaction
         with _conn() as c:
-            required_phases = {"trigger", "decision", "execution", "artifact", "verification", "outcome", "durability"}
+            required_phases = {
+                "trigger",
+                "decision",
+                "execution",
+                "artifact",
+                "verification",
+                "outcome",
+                "durability",
+            }
             for lineage_run, *_ in lineage_runs:
                 phases = {
                     row[0]
@@ -5760,19 +5807,35 @@ def _selftest():
         # credited with a version it never had. `offload`'s row exists only on an instance that
         # has run it, so the SECTION is gated and named — everything else here still runs.
         if env_prereq.runnable(
-                gaps,
-                env_prereq.ledger_rows_absent("role-redirect", "offload"),
-                env_prereq.ledger_version_lineage_absent("role-redirect", "offload")):
-            record_role_run("role:redirect:offloaded", "redirect", "owner/repo#tr", "cursor",
-                            backend_run_id="offload:abc123")
+            gaps,
+            env_prereq.ledger_rows_absent("role-redirect", "offload"),
+            env_prereq.ledger_version_lineage_absent("role-redirect", "offload"),
+        ):
+            record_role_run(
+                "role:redirect:offloaded",
+                "redirect",
+                "owner/repo#tr",
+                "cursor",
+                backend_run_id="offload:abc123",
+            )
             record_role_run("role:redirect:replayed", "redirect", "owner/repo#tr", "cursor")
             with _conn() as c:
-                offloaded = {r[0] for r in c.execute(
-                    "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
-                    "AND influence_type='capability'", ("role:redirect:offloaded",)).fetchall()}
-                replayed = {r[0] for r in c.execute(
-                    "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
-                    "AND influence_type='capability'", ("role:redirect:replayed",)).fetchall()}
+                offloaded = {
+                    r[0]
+                    for r in c.execute(
+                        "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
+                        "AND influence_type='capability'",
+                        ("role:redirect:offloaded",),
+                    ).fetchall()
+                }
+                replayed = {
+                    r[0]
+                    for r in c.execute(
+                        "SELECT capability_id FROM influence_edges WHERE target_run_id=? "
+                        "AND influence_type='capability'",
+                        ("role:redirect:replayed",),
+                    ).fetchall()
+                }
             assert offloaded == {"role-redirect", "offload"}, offloaded
             assert replayed == {"role-redirect"}, replayed
 
@@ -5783,18 +5846,30 @@ def _selftest():
         # weights would learn from advice that was never followed. Recording the disagreement is
         # correct; copying the PASS is not. (2026-08-21)
         record_role_run(
-            "lineage-role-rejected", "prompt", "owner/repo#rejected", "cursor",
+            "lineage-role-rejected",
+            "prompt",
+            "owner/repo#rejected",
+            "cursor",
             action="implement",
         )
-        record_run("lineage-rejected-work", "owner/repo#rejected", "implement", "codex",
-                   mode="local")
-        record_influence_edge(
-            target_run_id="lineage-rejected-work", influence_type="role",
-            influence_id="lineage-role-rejected", source_run_id="lineage-role-rejected",
-            accepted=False, metadata={"status": "rejected", "disagreement": True},
+        record_run(
+            "lineage-rejected-work", "owner/repo#rejected", "implement", "codex", mode="local"
         )
-        record_outcome("lineage-rejected-work", verifier_verdict="PASS",
-                       adjudicated_verdict="PASS", merged=True, durability="durable")
+        record_influence_edge(
+            target_run_id="lineage-rejected-work",
+            influence_type="role",
+            influence_id="lineage-role-rejected",
+            source_run_id="lineage-role-rejected",
+            accepted=False,
+            metadata={"status": "rejected", "disagreement": True},
+        )
+        record_outcome(
+            "lineage-rejected-work",
+            verifier_verdict="PASS",
+            adjudicated_verdict="PASS",
+            merged=True,
+            durability="durable",
+        )
         with _conn() as c:
             rejected_edge = c.execute(
                 "SELECT accepted,counterfactual,outcome_verdict,durability FROM influence_edges "
@@ -5813,36 +5888,51 @@ def _selftest():
         # whole selftest: every edge here is a `role-triage` capability edge, and the writer needs
         # that row's version lineage to create one at all.
         if env_prereq.runnable(
-                gaps,
-                env_prereq.ledger_rows_absent("role-triage"),
-                env_prereq.ledger_version_lineage_absent("role-triage")):
+            gaps,
+            env_prereq.ledger_rows_absent("role-triage"),
+            env_prereq.ledger_version_lineage_absent("role-triage"),
+        ):
             # ---- capability attribution must reach a run that CAN resolve -------------------
             # A role run is advisory and never gets an `outcomes` row, so its own capability edge is
             # permanently unresolvable. The run that ACTS on the proposal inherits the attribution,
             # and outcome propagation then resolves it on the already-existing path.
             record_role_run("role:triage:x:1", "triage", "o/r#7", "gemini")
-            capq = ("SELECT capability_id,target_run_id,durability FROM influence_edges "
-                    "WHERE influence_type='capability'")
+            capq = (
+                "SELECT capability_id,target_run_id,durability FROM influence_edges "
+                "WHERE influence_type='capability'"
+            )
             with _conn() as cc:
                 pre = cc.execute(capq + " AND target_run_id='role:triage:x:1'").fetchall()
             assert pre and pre[0][2] is None, f"advisory role run should have no outcome: {pre}"
 
-            record_run("cap-inherit-work", target="o/r#7", task_type="implement", agent="codex",
-                       influenced_by_role_run_ids=["role:triage:x:1"])
+            record_run(
+                "cap-inherit-work",
+                target="o/r#7",
+                task_type="implement",
+                agent="codex",
+                influenced_by_role_run_ids=["role:triage:x:1"],
+            )
             with _conn() as cc:
                 mid = cc.execute(capq + " AND target_run_id='cap-inherit-work'").fetchall()
             assert mid and mid[0][0] == "role-triage", f"attribution not inherited: {mid}"
 
-            record_outcome("cap-inherit-work", verifier_verdict="PASS", merged=1, durability="durable")
+            record_outcome(
+                "cap-inherit-work", verifier_verdict="PASS", merged=1, durability="durable"
+            )
             with _conn() as cc:
                 post = cc.execute(capq + " AND target_run_id='cap-inherit-work'").fetchall()
             assert post and post[0][2] == "durable", f"outcome did not reach the edge: {post}"
 
             # A run declaring the capability ITSELF must not also get an inherited duplicate.
             record_role_run("role:triage:x:2", "triage", "o/r#8", "gemini")
-            record_run("cap-nodupe", target="o/r#8", task_type="implement", agent="codex",
-                       capability_ids=["role-triage"],
-                       influenced_by_role_run_ids=["role:triage:x:2"])
+            record_run(
+                "cap-nodupe",
+                target="o/r#8",
+                task_type="implement",
+                agent="codex",
+                capability_ids=["role-triage"],
+                influenced_by_role_run_ids=["role:triage:x:2"],
+            )
             with _conn() as cc:
                 dupes = cc.execute(capq + " AND target_run_id='cap-nodupe'").fetchall()
             assert len(dupes) == 1, f"double-counted the same capability: {dupes}"
@@ -5853,16 +5943,26 @@ def _selftest():
             try:
                 globals()["_capability_attribution_of"] = lambda *a, **k: []
                 record_role_run("role:triage:x:3", "triage", "o/r#9", "gemini")
-                record_run("cap-broken", target="o/r#9", task_type="implement", agent="codex",
-                           influenced_by_role_run_ids=["role:triage:x:3"])
+                record_run(
+                    "cap-broken",
+                    target="o/r#9",
+                    task_type="implement",
+                    agent="codex",
+                    influenced_by_role_run_ids=["role:triage:x:3"],
+                )
                 with _conn() as cc:
                     broken = cc.execute(capq + " AND target_run_id='cap-broken'").fetchall()
                 assert not broken, "break did not change behaviour — test is vacuous"
             finally:
                 globals()["_capability_attribution_of"] = saved_lookup
             record_role_run("role:triage:x:4", "triage", "o/r#10", "gemini")
-            record_run("cap-reverted", target="o/r#10", task_type="implement", agent="codex",
-                       influenced_by_role_run_ids=["role:triage:x:4"])
+            record_run(
+                "cap-reverted",
+                target="o/r#10",
+                task_type="implement",
+                agent="codex",
+                influenced_by_role_run_ids=["role:triage:x:4"],
+            )
             with _conn() as cc:
                 rev = cc.execute(capq + " AND target_run_id='cap-reverted'").fetchall()
             assert rev, "revert did not restore inheritance"
@@ -5880,26 +5980,51 @@ def _selftest():
         # An episode whose verification does not say WHAT passed is refused as
         # `unnamed_verification`, which is why no otherwise-complete episode was ever eligible.
         record_run("gate-named", "o/r#1", "implement", "codex", pr_number=41)
-        record_outcome("gate-named", verifier_verdict="PASS", adjudicated_verdict="PASS",
-                       merged=1, ci_status="success", durability="durable")
-        named = _conn().execute(
-            "SELECT payload_json FROM completion_events WHERE run_id='gate-named' "
-            "AND phase='verification'").fetchone()
+        record_outcome(
+            "gate-named",
+            verifier_verdict="PASS",
+            adjudicated_verdict="PASS",
+            merged=1,
+            ci_status="success",
+            durability="durable",
+        )
+        named = (
+            _conn()
+            .execute(
+                "SELECT payload_json FROM completion_events WHERE run_id='gate-named' "
+                "AND phase='verification'"
+            )
+            .fetchone()
+        )
         assert named, "verification event missing"
         assert json.loads(named[0]).get("acceptance_gate_ids") == ["ci"], named[0]
         # And it must stay UNNAMED when no gate ran -- naming it unconditionally would restore
         # exactly the ungameable-label failure this check exists to prevent.
         record_run("gate-unnamed", "o/r#2", "implement", "codex", pr_number=42)
-        record_outcome("gate-unnamed", verifier_verdict="PASS", adjudicated_verdict="PASS",
-                       merged=1, durability="durable")
-        unnamed = _conn().execute(
-            "SELECT payload_json FROM completion_events WHERE run_id='gate-unnamed' "
-            "AND phase='verification'").fetchone()
+        record_outcome(
+            "gate-unnamed",
+            verifier_verdict="PASS",
+            adjudicated_verdict="PASS",
+            merged=1,
+            durability="durable",
+        )
+        unnamed = (
+            _conn()
+            .execute(
+                "SELECT payload_json FROM completion_events WHERE run_id='gate-unnamed' "
+                "AND phase='verification'"
+            )
+            .fetchone()
+        )
         assert unnamed and "acceptance_gate_ids" not in json.loads(unnamed[0]), unnamed[0]
         # Both events must survive payload validation -- a nested key would have been rejected.
-        assert all(row[0] == "accepted" for row in _conn().execute(
-            "SELECT validation_status FROM completion_events WHERE run_id IN "
-            "('gate-named','gate-unnamed') AND phase='verification'")), "verification rejected"
+        assert all(
+            row[0] == "accepted"
+            for row in _conn().execute(
+                "SELECT validation_status FROM completion_events WHERE run_id IN "
+                "('gate-named','gate-unnamed') AND phase='verification'"
+            )
+        ), "verification rejected"
 
         env_prereq.report_gaps("feedback.py", gaps)
         print(
@@ -5933,9 +6058,7 @@ def main(argv):
             except (ValueError, IndexError):
                 print("invalid --limit", file=sys.stderr)
                 return 2
-        rows = completion_event_episodes(
-            limit=limit, accepted_only=True, durable_only=durable_only
-        )
+        rows = completion_event_episodes(limit=limit, accepted_only=True, durable_only=durable_only)
         if "--json" in argv[1:]:
             print(json.dumps(rows, sort_keys=True))
         else:
@@ -5950,8 +6073,10 @@ def main(argv):
             print("no open owner questions (defaults applying; nothing waiting on you)")
         for row in rows:
             days_left = max(0, (row["expires_ts"] - int(time.time())) // 86400)
-            print(f"  [{row['question_id']}] ({row['repo'] or row['target'] or 'fleet'}) "
-                  f"{row['question']}")
+            print(
+                f"  [{row['question_id']}] ({row['repo'] or row['target'] or 'fleet'}) "
+                f"{row['question']}"
+            )
             print(f"      default (applies in {days_left}d if unanswered): {row['default_action']}")
             print(f"      answer: python3 {__file__} answer {row['question_id']} \"<your answer>\"")
         return 0

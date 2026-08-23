@@ -13,6 +13,7 @@ The command filters to low-risk opener work, applies a temporary exploration
 mode/rate only inside the window, rejects late/paygo assignments, and never
 changes the router default.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -72,9 +73,7 @@ def choose_mode(plan: dict, requested: str = "auto", *, now: int | None = None) 
 
 def _recommended_task_types(plan: dict) -> list[str]:
     return [
-        row["task_type"]
-        for row in plan.get("candidate_task_types") or []
-        if row.get("recommended")
+        row["task_type"] for row in plan.get("candidate_task_types") or [] if row.get("recommended")
     ][:3]
 
 
@@ -103,16 +102,25 @@ def _filter_backlog(
         elif task_type not in exploration_evidence_plan.LOW_RISK_OPENER_TASK_TYPES:
             reason = "task type is not low-risk for supervised collection"
         if reason:
-            skipped.append({"target": target, "task_type": task_type, "lane": item.get("lane"), "reason": reason})
+            skipped.append(
+                {
+                    "target": target,
+                    "task_type": task_type,
+                    "lane": item.get("lane"),
+                    "reason": reason,
+                }
+            )
             continue
-        selected.append({
-            "target": target,
-            "task_type": task_type,
-            "lane": "opener",
-            "labels": item.get("labels") or [],
-            "title": item.get("title") or "",
-            "body": item.get("body") or "",
-        })
+        selected.append(
+            {
+                "target": target,
+                "task_type": task_type,
+                "lane": "opener",
+                "labels": item.get("labels") or [],
+                "title": item.get("title") or "",
+                "body": item.get("body") or "",
+            }
+        )
         if len(selected) >= max_items:
             break
     return selected, skipped
@@ -120,19 +128,25 @@ def _filter_backlog(
 
 def _entry_is_late(task_type: str, assignment: dict) -> bool:
     for entry in (router.ROUTE_TABLE.get(task_type, {}) or {}).get("agents") or []:
-        if entry.get("agent") == assignment.get("agent") and entry.get("mode") == assignment.get("mode"):
+        if entry.get("agent") == assignment.get("agent") and entry.get("mode") == assignment.get(
+            "mode"
+        ):
             return bool(entry.get("late"))
     return False
 
 
-def _sanitize_decision(decision: dict, *, require_exploration: bool = False) -> tuple[dict, list[dict]]:
+def _sanitize_decision(
+    decision: dict, *, require_exploration: bool = False
+) -> tuple[dict, list[dict]]:
     kept = []
     rejected = []
     for assignment in decision.get("assignments") or []:
         reason = ""
         if assignment.get("lane") != "opener":
             reason = "not opener lane"
-        elif assignment.get("task_type") not in exploration_evidence_plan.LOW_RISK_OPENER_TASK_TYPES:
+        elif (
+            assignment.get("task_type") not in exploration_evidence_plan.LOW_RISK_OPENER_TASK_TYPES
+        ):
             reason = "not a low-risk supervised-collection task type"
         elif assignment.get("agent") in router.BACKUP_AGENTS:
             reason = "backup/paygo agent is not allowed in supervised exploration windows"
@@ -230,7 +244,9 @@ def _plan_for_seed(
 
 
 def _exploratory_count(decision: dict) -> int:
-    return sum(1 for assignment in decision.get("assignments") or [] if assignment.get("exploration"))
+    return sum(
+        1 for assignment in decision.get("assignments") or [] if assignment.get("exploration")
+    )
 
 
 def _issue_number(target: str) -> str:
@@ -343,7 +359,10 @@ def build_window(
         for row in (acquisition.get("supervised_collection") or {}).get("windows") or []
     }
     window = window_rows.get(mode) or {}
-    window_cap = int(window.get("max_exploratory_dispatches_per_day") or exploration_evidence_plan.SUPERVISED_COLLECTION_DAILY_CAP)
+    window_cap = int(
+        window.get("max_exploratory_dispatches_per_day")
+        or exploration_evidence_plan.SUPERVISED_COLLECTION_DAILY_CAP
+    )
     cap = max(0, min(window_cap, int(max_dispatches or window_cap)))
     selected, skipped = _filter_backlog(
         acquisition,
@@ -352,7 +371,9 @@ def build_window(
         exclude_targets=set(exclude_targets or []),
     )
     rate_value = _safe_rate(rate, exploration_evidence_plan.SUPERVISED_COLLECTION_RATE)
-    capacity_snapshot = exploration_evidence_plan._capacity_snapshot(capacity_payload=capacity_payload)
+    capacity_snapshot = exploration_evidence_plan._capacity_snapshot(
+        capacity_payload=capacity_payload
+    )
     min_exploratory = max(0, int(min_exploratory_dispatches))
 
     blocked_reasons = []
@@ -509,7 +530,9 @@ def format_human(window: dict) -> str:
                 f"  {assignment['target']}: {assignment['task_type']} -> "
                 f"{assignment['agent']}/{assignment['mode']}{marker}"
             )
-    lines.append("active dispatch requires --apply --confirm-window and ORCH_EXPLORATION_EVIDENCE=1")
+    lines.append(
+        "active dispatch requires --apply --confirm-window and ORCH_EXPLORATION_EVIDENCE=1"
+    )
     return "\n".join(lines)
 
 
@@ -559,8 +582,12 @@ def _selftest() -> None:
         assert dry["direct_exploration_assignments"] >= 1, dry
         assert all(a["exploration"] for a in dry["decision"]["assignments"]), dry
         assert all(a["lane"] == "opener" for a in dry["decision"]["assignments"]), dry
-        assert all(not _entry_is_late(a["task_type"], a) for a in dry["decision"]["assignments"]), dry
-        assert all(a["agent"] not in router.BACKUP_AGENTS for a in dry["decision"]["assignments"]), dry
+        assert all(
+            not _entry_is_late(a["task_type"], a) for a in dry["decision"]["assignments"]
+        ), dry
+        assert all(
+            a["agent"] not in router.BACKUP_AGENTS for a in dry["decision"]["assignments"]
+        ), dry
         testgen_prompt = _direct_evidence_prompt(
             {
                 "target": "o/r#2",
@@ -597,7 +624,9 @@ def _selftest() -> None:
         )
         codemod_assignment = codemod_dry["decision"]["assignments"][0]
         assert codemod_assignment["task_type"] == "codemod", codemod_assignment
-        assert "not just a codemod campaign plan" in codemod_assignment["prompt"], codemod_assignment
+        assert (
+            "not just a codemod campaign plan" in codemod_assignment["prompt"]
+        ), codemod_assignment
         assert "Closes #6" in codemod_assignment["prompt"], codemod_assignment
 
         excluded = build_window(
@@ -635,10 +664,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=MODE_CHOICES, default="auto")
     parser.add_argument("--rate", type=float, default=None)
     parser.add_argument("--max-dispatches", type=int, default=None)
-    parser.add_argument("--min-exploratory-dispatches", type=int, default=DEFAULT_MIN_EXPLORATORY_DISPATCHES)
+    parser.add_argument(
+        "--min-exploratory-dispatches", type=int, default=DEFAULT_MIN_EXPLORATORY_DISPATCHES
+    )
     parser.add_argument("--seed-search-limit", type=int, default=DEFAULT_SEED_SEARCH_LIMIT)
     parser.add_argument("--rng-seed", type=int, default=None)
-    parser.add_argument("--exclude-target", action="append", default=[], help="skip a known unsuitable target")
+    parser.add_argument(
+        "--exclude-target", action="append", default=[], help="skip a known unsuitable target"
+    )
     parser.add_argument("--apply", action="store_true", help="actively dispatch the window")
     parser.add_argument("--confirm-window", action="store_true", help="required with --apply")
     parser.add_argument("--selftest", action="store_true")

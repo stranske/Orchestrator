@@ -5,6 +5,7 @@
 wait, collect, inspect, redirect, or decompose. It is deliberately read-only and
 never kills processes, releases claims, or applies labels.
 """
+
 from __future__ import annotations
 
 import json
@@ -40,11 +41,15 @@ def _summary(history: list[dict]) -> dict:
         "prior_stalls": sum(1 for item in history if item.get("state") == "stalled"),
         "prior_drifts": sum(1 for item in history if _has_drift(item)),
         "prior_redirect_causes": sum(1 for item in history if _has_redirect_hint(item)),
-        "prior_actions": [item.get("recommended_action") for item in history if item.get("recommended_action")],
+        "prior_actions": [
+            item.get("recommended_action") for item in history if item.get("recommended_action")
+        ],
     }
 
 
-def _decision(action: str, reason: str, confidence: str, base_action: str, history: list[dict]) -> dict[str, Any]:
+def _decision(
+    action: str, reason: str, confidence: str, base_action: str, history: list[dict]
+) -> dict[str, Any]:
     return {
         "action": action,
         "reason": reason,
@@ -68,42 +73,93 @@ def decide(report: dict, attempt_history: list[dict] | None = None) -> dict[str,
     errors = report.get("errors") or []
 
     if state == "missing":
-        detail = f"classification errors: {', '.join(errors[:3])}" if errors else "no valid monitor signals"
+        detail = (
+            f"classification errors: {', '.join(errors[:3])}"
+            if errors
+            else "no valid monitor signals"
+        )
         return _decision("inspect", detail, "low", base_action, history)
 
     if state == "exited":
         if signals.get("has_worktree_changes"):
-            return _decision("collect", "agent exited after producing changes", "high", base_action, history)
-        return _decision("inspect", "agent exited without visible changes", "medium", base_action, history)
+            return _decision(
+                "collect", "agent exited after producing changes", "high", base_action, history
+            )
+        return _decision(
+            "inspect", "agent exited without visible changes", "medium", base_action, history
+        )
 
     if state in {"running", "progress"}:
         if _has_drift(report):
-            return _decision("inspect", "lane is active but drift signals require scope review",
-                             "high", base_action, history)
-        return _decision("wait", "lane is active without drift or root-cause hints", "high", base_action, history)
+            return _decision(
+                "inspect",
+                "lane is active but drift signals require scope review",
+                "high",
+                base_action,
+                history,
+            )
+        return _decision(
+            "wait", "lane is active without drift or root-cause hints", "high", base_action, history
+        )
 
     if state == "stalled":
         summary = _summary(history)
         if _has_redirect_hint(report):
             if summary["prior_redirect_causes"] >= DECOMPOSE_THRESHOLD:
-                return _decision("decompose", "repeated redirect-worthy failures; narrow the task before retrying",
-                                 "medium", base_action, history)
+                return _decision(
+                    "decompose",
+                    "repeated redirect-worthy failures; narrow the task before retrying",
+                    "medium",
+                    base_action,
+                    history,
+                )
             causes = ", ".join(sorted(_hint_kinds(report) & REDIRECT_HINTS))
-            return _decision("redirect", f"stalled with redirect-worthy root cause: {causes}",
-                             "high", base_action, history)
+            return _decision(
+                "redirect",
+                f"stalled with redirect-worthy root cause: {causes}",
+                "high",
+                base_action,
+                history,
+            )
         if _has_drift(report):
             if summary["prior_drifts"] >= DECOMPOSE_THRESHOLD:
-                return _decision("decompose", "repeated drift; split the task and retry with tighter scope",
-                                 "medium", base_action, history)
-            return _decision("inspect", "stalled with drift; inspect against acceptance criteria",
-                             "high", base_action, history)
+                return _decision(
+                    "decompose",
+                    "repeated drift; split the task and retry with tighter scope",
+                    "medium",
+                    base_action,
+                    history,
+                )
+            return _decision(
+                "inspect",
+                "stalled with drift; inspect against acceptance criteria",
+                "high",
+                base_action,
+                history,
+            )
         if summary["prior_stalls"] >= DECOMPOSE_THRESHOLD:
-            return _decision("decompose", "repeated stalls without a clear root cause; task is likely too broad",
-                             "medium", base_action, history)
-        return _decision("inspect", "stalled without a clear root cause; inspect before redirecting",
-                         "medium", base_action, history)
+            return _decision(
+                "decompose",
+                "repeated stalls without a clear root cause; task is likely too broad",
+                "medium",
+                base_action,
+                history,
+            )
+        return _decision(
+            "inspect",
+            "stalled without a clear root cause; inspect before redirecting",
+            "medium",
+            base_action,
+            history,
+        )
 
-    return _decision(base_action, f"defaulted to watch recommendation: {base_action}", "low", base_action, history)
+    return _decision(
+        base_action,
+        f"defaulted to watch recommendation: {base_action}",
+        "low",
+        base_action,
+        history,
+    )
 
 
 def _selftest() -> None:
@@ -120,14 +176,25 @@ def _selftest() -> None:
         return base
 
     assert decide(report("progress", recommended_action="wait"))["action"] == "wait"
-    assert decide(report("exited", signals={"has_worktree_changes": True},
-                         recommended_action="collect"))["action"] == "collect"
-    assert decide(report("exited", signals={"has_worktree_changes": False},
-                         recommended_action="collect"))["action"] == "inspect"
+    assert (
+        decide(
+            report("exited", signals={"has_worktree_changes": True}, recommended_action="collect")
+        )["action"]
+        == "collect"
+    )
+    assert (
+        decide(
+            report("exited", signals={"has_worktree_changes": False}, recommended_action="collect")
+        )["action"]
+        == "inspect"
+    )
     auth = report("stalled", hints=[{"kind": "auth"}])
     assert decide(auth)["action"] == "redirect"
-    drift = report("progress", recommended_action="wait",
-                   drift={"severity": "medium", "findings": [{"kind": "unexpected_paths"}]})
+    drift = report(
+        "progress",
+        recommended_action="wait",
+        drift={"severity": "medium", "findings": [{"kind": "unexpected_paths"}]},
+    )
     d = decide(drift)
     assert d["action"] == "inspect" and d["escalated"], d
     two_stalls = [report("stalled"), report("stalled")]
@@ -154,6 +221,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     outside an active tick (ORCH_CAPABILITY_HEARTBEATS). (2026-08-09)"""
     try:
         import capabilities
+
         capabilities.production_heartbeat("redirect-policy", event_type, ref="redirect_policy.main")
     except Exception:
         pass
@@ -166,7 +234,11 @@ def main(argv: list[str]) -> int:
         return 0
     if "--json" in argv:
         payload = json.load(sys.stdin)
-        print(json.dumps(decide(payload.get("report", payload), payload.get("attempt_history")), indent=2))
+        print(
+            json.dumps(
+                decide(payload.get("report", payload), payload.get("attempt_history")), indent=2
+            )
+        )
         return 0
     print("usage: redirect_policy.py --selftest | --json < payload.json", file=sys.stderr)
     return 2

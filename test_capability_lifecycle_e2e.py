@@ -202,9 +202,10 @@ def test_all_target_kinds_complete_shadow_canary_lifecycle(
         )
         capability_id = registered["capability"]["capability_id"]
         assert registered["status"] == "wired"
-        assert registered["binding"]["capability_version_id"] == registered["capability"][
-            "capability_version_id"
-        ]
+        assert (
+            registered["binding"]["capability_version_id"]
+            == registered["capability"]["capability_version_id"]
+        )
         no_match = capability_lifecycle.invoke_compiled_target(
             capability_id,
             trigger={},
@@ -262,9 +263,12 @@ def test_all_target_kinds_complete_shadow_canary_lifecycle(
         before_outcome = feedback.capability_causal_evidence(
             capability_id, registered["capability"]["capability_version_id"]
         )
-        assert next(row for row in before_outcome if row["target_run_id"] == second_run)[
-            "terminal_outcome"
-        ] is False
+        assert (
+            next(row for row in before_outcome if row["target_run_id"] == second_run)[
+                "terminal_outcome"
+            ]
+            is False
+        )
         quota = capability_lifecycle.invoke_compiled_target(
             capability_id,
             trigger={**fixture["trigger"], "target": f"owner/repo#{kind}-quota"},
@@ -426,9 +430,7 @@ def regressing_canary(tmp_path: Path) -> tuple[dict, Path]:
     return binding, registry
 
 
-def test_regression_requires_automatic_rollback(
-    regressing_canary: tuple[dict, Path]
-) -> None:
+def test_regression_requires_automatic_rollback(regressing_canary: tuple[dict, Path]) -> None:
     binding, registry = regressing_canary
     current = capability_targets.get_binding(
         binding["capability_version_id"], registry_path=registry

@@ -11,9 +11,8 @@ pre-gate capabilities are reported as legacy debt on every run and do not fail t
 that is red on arrival gets switched off, and then it protects nothing — so the trade is: block the
 next mistake, keep the old debt visible.
 """
-from __future__ import annotations
 
-import sys
+from __future__ import annotations
 
 import capabilities
 import capability_activation_audit as audit
@@ -44,8 +43,7 @@ def test_new_capabilities_carry_all_required_parts():
     assert not failing, (
         f"{len(failing)} capability(ies) added since the admission gate are missing required "
         f"parts: {detail}. Declare them in the ledger, or add an expiring WAIVERS entry with a "
-        f"reason — never leave it undeclared."
-        + audit.absent_entrypoint_note(failing)
+        f"reason — never leave it undeclared." + audit.absent_entrypoint_note(failing)
     )
 
 
@@ -76,7 +74,7 @@ def test_every_requirement_can_fail():
     for name, fn in admission.REQUIREMENTS:
         try:
             ok, _ = fn(empty, ctx)
-        except Exception:                                          # noqa: BLE001
+        except Exception:  # noqa: BLE001
             ok = False
         assert not ok, f"requirement {name!r} passes a capability that declares nothing"
 
@@ -128,12 +126,16 @@ def test_safety_guard_exemption_is_declared_and_narrow():
     """
     import capabilities
 
-    declared = {cid for cid, d in capabilities.KNOWN_DECLARATIONS.items()
-                if d.get("kill_switch_category") == "safety_guard"}
+    declared = {
+        cid
+        for cid, d in capabilities.KNOWN_DECLARATIONS.items()
+        if d.get("kill_switch_category") == "safety_guard"
+    }
     assert declared == {"agy-runtime-isolation"}, declared
     for cap_id in declared:
-        assert str(capabilities.KNOWN_DECLARATIONS[cap_id].get("kill_switch_rationale")
-                   or "").strip(), cap_id
+        assert str(
+            capabilities.KNOWN_DECLARATIONS[cap_id].get("kill_switch_rationale") or ""
+        ).strip(), cap_id
     # BOTH parts are required -- the category alone must not satisfy the gate.
     probe = dict(capabilities.KNOWN_DECLARATIONS["agy-runtime-isolation"])
     probe.pop("kill_switch_rationale", None)
@@ -148,8 +150,9 @@ def test_safety_guard_exemption_is_declared_and_narrow():
     # DRIFT GUARD: nothing may carry the exemption that the code table does not declare. This is what
     # catches a category typed into a live ledger instead of into the diff.
     ledger = capabilities.load_declared(capabilities.REG)
-    stray = {cid for cid, cap in ledger.items()
-             if cap.get("kill_switch_category") == "safety_guard"} - declared
+    stray = {
+        cid for cid, cap in ledger.items() if cap.get("kill_switch_category") == "safety_guard"
+    } - declared
     assert not stray, f"ledger declares safety_guard for undeclared capabilities: {stray}"
 
 
@@ -163,8 +166,11 @@ def test_compute_only_category_must_name_a_control_that_exists():
     """
     import capabilities
 
-    declared = {cid for cid, d in capabilities.KNOWN_DECLARATIONS.items()
-                if d.get("kill_switch_category") == "compute_only"}
+    declared = {
+        cid
+        for cid, d in capabilities.KNOWN_DECLARATIONS.items()
+        if d.get("kill_switch_category") == "compute_only"
+    }
     assert declared == {"windowed-capacity-policy", "redirect-policy", "feedback-store"}, declared
 
     controls = admission.known_controls()
@@ -177,25 +183,30 @@ def test_compute_only_category_must_name_a_control_that_exists():
         assert ok, cap_id
 
     # THE ANTI-ABUSE CONDITION: naming a switch that does not exist must FAIL, not pass.
-    fake = {**capabilities.KNOWN_DECLARATIONS["windowed-capacity-policy"],
-            "control_point": "ORCH_NOT_A_REAL_FLAG"}
+    fake = {
+        **capabilities.KNOWN_DECLARATIONS["windowed-capacity-policy"],
+        "control_point": "ORCH_NOT_A_REAL_FLAG",
+    }
     fake.pop("kill_switch", None)
     ok, detail = admission.req_kill_switch(fake, ctx)
     assert not ok and "not a known switch" in detail, detail
     # ...and the category with no control_point at all must also fail.
     bare = {**capabilities.KNOWN_DECLARATIONS["windowed-capacity-policy"]}
-    bare.pop("kill_switch", None); bare.pop("control_point", None)
+    bare.pop("kill_switch", None)
+    bare.pop("control_point", None)
     ok2, _ = admission.req_kill_switch(bare, ctx)
     assert not ok2, "compute_only without a named control must not satisfy the requirement"
 
     # NARROWNESS: capabilities that DO something are not in this category.
     for acting in ("repo-playbook", "offload", "agy-runtime-isolation"):
-        assert (capabilities.KNOWN_DECLARATIONS.get(acting) or {}
-                ).get("kill_switch_category") != "compute_only", acting
+        assert (capabilities.KNOWN_DECLARATIONS.get(acting) or {}).get(
+            "kill_switch_category"
+        ) != "compute_only", acting
     # DRIFT GUARD: same as the safety_guard case -- the ledger may not out-declare the code.
     ledger = capabilities.load_declared(capabilities.REG)
-    stray = {cid for cid, cap in ledger.items()
-             if cap.get("kill_switch_category") == "compute_only"} - declared
+    stray = {
+        cid for cid, cap in ledger.items() if cap.get("kill_switch_category") == "compute_only"
+    } - declared
     assert not stray, f"ledger declares compute_only for undeclared capabilities: {stray}"
 
 
@@ -236,14 +247,17 @@ def main() -> int:
     if skipped:
         # Green, and saying exactly what did not run. verify.py greps the mark and counts it
         # against a ceiling, so this can never quietly become the whole file.
-        print(f"\n{len(tests) - len(skipped)} of {len(tests)} admission checks passed, "
-              f"{len(skipped)} skipped: "
-              + "; ".join(f"{n} ({r[:80]})" for n, r in skipped))
+        print(
+            f"\n{len(tests) - len(skipped)} of {len(tests)} admission checks passed, "
+            f"{len(skipped)} skipped: " + "; ".join(f"{n} ({r[:80]})" for n, r in skipped)
+        )
         return 0
     rep = admission.report()
-    print(f"\nall {len(tests)} admission checks passed — "
-          f"{rep['enforced_total']} enforced, {len(rep['legacy_debt'])} legacy debt, "
-          f"commitments clean")
+    print(
+        f"\nall {len(tests)} admission checks passed — "
+        f"{rep['enforced_total']} enforced, {len(rep['legacy_debt'])} legacy debt, "
+        f"commitments clean"
+    )
     return 0
 
 

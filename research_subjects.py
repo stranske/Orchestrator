@@ -103,9 +103,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
 
 
 def canonical_target(target: str) -> str:
@@ -194,9 +197,7 @@ def completion_observation_id(
     subject_id: str | None, run_id: str, canonical_attempt_id: str | None
 ) -> str:
     """Stable across phase events; changes when subject/run/worker attempt changes."""
-    return "sha256:" + _hash(
-        f"{subject_id}|{run_id}|{canonical_attempt_id or 'unresolved'}"
-    )
+    return "sha256:" + _hash(f"{subject_id}|{run_id}|{canonical_attempt_id or 'unresolved'}")
 
 
 def unevaluated_experiment_ids(
@@ -281,9 +282,7 @@ def record_domain_research(
     missing record does. Capture and retrieval only.
     """
     identity = subject_identity(domain_target(slug), task_type, spec, None, arms, profiles)
-    record_subject(
-        identity, lifecycle=lifecycle, exp_id=exp_id, reason=reason, conn=conn
-    )
+    record_subject(identity, lifecycle=lifecycle, exp_id=exp_id, reason=reason, conn=conn)
     return identity
 
 
@@ -477,9 +476,7 @@ def _effective_lifecycle(conn: sqlite3.Connection, row: tuple) -> str:
     return lifecycle
 
 
-def prior_experiment_count(
-    identity: dict, *, conn: sqlite3.Connection | None = None
-) -> int:
+def prior_experiment_count(identity: dict, *, conn: sqlite3.Connection | None = None) -> int:
     """Independent subject-selection history, separate from quality outcomes."""
     db = conn or feedback._conn()
     close = conn is None
@@ -721,8 +718,8 @@ def record_subject(
     ).fetchone()
     db.execute(
         "INSERT OR REPLACE INTO research_subjects "
-        "(subject_id,subject_family_id,canonical_target,task_type,spec_hash,base_sha," 
-        "arm_set_hash,arms_json,profiles_json,lifecycle,exp_id,created_ts,updated_ts," 
+        "(subject_id,subject_family_id,canonical_target,task_type,spec_hash,base_sha,"
+        "arm_set_hash,arms_json,profiles_json,lifecycle,exp_id,created_ts,updated_ts,"
         "cooldown_until,evaluable_ts,evaluated_ts,last_reason) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
@@ -747,7 +744,7 @@ def record_subject(
     )
     db.execute(
         "INSERT OR REPLACE INTO research_subject_experiments "
-        "(exp_id,subject_id,subject_family_id,lifecycle,created_ts,updated_ts," 
+        "(exp_id,subject_id,subject_family_id,lifecycle,created_ts,updated_ts,"
         "cooldown_until,last_reason) VALUES (?,?,?,?,?,?,?,?)",
         (
             exp_id,
@@ -791,8 +788,8 @@ def mark_lifecycle(
         return False
     now = int(now or time.time())
     db.execute(
-        "UPDATE research_subjects SET lifecycle=?,updated_ts=?,last_reason=?," 
-        "evaluable_ts=CASE WHEN ?='evaluable' THEN ? ELSE evaluable_ts END," 
+        "UPDATE research_subjects SET lifecycle=?,updated_ts=?,last_reason=?,"
+        "evaluable_ts=CASE WHEN ?='evaluable' THEN ? ELSE evaluable_ts END,"
         "evaluated_ts=CASE WHEN ?='evaluated' THEN ? ELSE evaluated_ts END "
         "WHERE exp_id=?",
         (lifecycle, now, reason, lifecycle, now, lifecycle, now, exp_id),
@@ -847,9 +844,7 @@ def effective_evidence_weights(
     for run_id, agent, family_id in rows:
         by_agent_subject[(str(agent or "unknown"), str(family_id))].append(str(run_id))
     weights = {
-        run_id: 1.0 / len(run_ids)
-        for run_ids in by_agent_subject.values()
-        for run_id in run_ids
+        run_id: 1.0 / len(run_ids) for run_ids in by_agent_subject.values() for run_id in run_ids
     }
     if close:
         db.close()
@@ -873,8 +868,7 @@ def summary(
             "independent_subjects": 0,
             "unevaluated_backlog": len(unevaluated_ids),
             "unevaluated_cap": DEFAULT_UNEVALUATED_CAP,
-            "unevaluated_backlog_cap_reached": len(unevaluated_ids)
-            >= DEFAULT_UNEVALUATED_CAP,
+            "unevaluated_backlog_cap_reached": len(unevaluated_ids) >= DEFAULT_UNEVALUATED_CAP,
             "lifecycle_counts": {},
             "true_task_type_distribution": {},
             "duplicate_rejections": 0,
@@ -883,9 +877,7 @@ def summary(
             "effective_sample_count": 0.0,
             "registered_run_count": 0,
         }
-    rows = db.execute(
-        "SELECT subject_family_id,task_type FROM research_subjects"
-    ).fetchall()
+    rows = db.execute("SELECT subject_family_id,task_type FROM research_subjects").fetchall()
     experiment_rows = db.execute(
         "SELECT subject_family_id,lifecycle,exp_id FROM research_subject_experiments"
     ).fetchall()
@@ -901,9 +893,7 @@ def summary(
         "SELECT decision,COALESCE(reason,'') FROM research_subject_events WHERE ts>=?",
         (since,),
     ).fetchall()
-    rejection_reasons = Counter(
-        reason for decision, reason in event_rows if decision == "rejected"
-    )
+    rejection_reasons = Counter(reason for decision, reason in event_rows if decision == "rejected")
     duplicate_reasons = {
         "duplicate_candidate_in_plan",
         "subject_active",
@@ -920,14 +910,11 @@ def summary(
         "independent_subjects": len(families),
         "unevaluated_backlog": len(unevaluated_ids),
         "unevaluated_cap": DEFAULT_UNEVALUATED_CAP,
-        "unevaluated_backlog_cap_reached": len(unevaluated_ids)
-        >= DEFAULT_UNEVALUATED_CAP,
+        "unevaluated_backlog_cap_reached": len(unevaluated_ids) >= DEFAULT_UNEVALUATED_CAP,
         "lifecycle_counts": dict(sorted(lifecycle_counts.items())),
         "true_task_type_distribution": dict(sorted(task_counts.items())),
         "duplicate_rejections": sum(
-            count
-            for reason, count in rejection_reasons.items()
-            if reason in duplicate_reasons
+            count for reason, count in rejection_reasons.items() if reason in duplicate_reasons
         ),
         "rejections_by_reason": dict(sorted(rejection_reasons.items())),
         "research_production_collisions": sum(
@@ -992,12 +979,18 @@ def _selftest() -> None:
     # THE GATE MUST NAME ITS OWN DRAIN. Reporting only the blocker is what made a five-week
     # deadlock read as ordinary backpressure; the pair reachable-vs-total names it on sight.
     verdict = assess_candidate(
-        target="Owner/Repo#42", task_type="testgen", spec="s", base_sha="f0",
-        arms=["codex", "cursor"], conn=conn, now=cap_now, unevaluated_cap=99,
+        target="Owner/Repo#42",
+        task_type="testgen",
+        spec="s",
+        base_sha="f0",
+        arms=["codex", "cursor"],
+        conn=conn,
+        now=cap_now,
+        unevaluated_cap=99,
     )
     assert verdict["unevaluated_backlog_total"] >= verdict["unevaluated_backlog"], verdict
     assert verdict["unevaluated_backlog_total"] >= 3, verdict  # includes the 60-day-old one
-    assert verdict["unevaluated_backlog"] == 2, verdict        # reachable: fresh + unknown-age only
+    assert verdict["unevaluated_backlog"] == 2, verdict  # reachable: fresh + unknown-age only
     # ...and an evaluated experiment leaves the count by the original path, unchanged.
     conn.execute(
         "INSERT INTO evaluations (experiment_id,implementer,evaluator,score,ts) VALUES (?,?,?,?,?)",
@@ -1005,10 +998,14 @@ def _selftest() -> None:
     )
     assert "exp-fresh" not in unevaluated_experiment_ids(conn, now=cap_now), "evaluated must clear"
     # THE TWO WINDOWS ARE ONE NUMBER BY CONSTRUCTION, not by comment: followup defaults to it.
-    import exp_abcd as _exp_abcd
     import inspect as _inspect
-    assert (_inspect.signature(_exp_abcd.followup).parameters["max_age_days"].default
-            == EVALUABLE_WINDOW_DAYS), "followup window drifted from the cap window"
+
+    import exp_abcd as _exp_abcd
+
+    assert (
+        _inspect.signature(_exp_abcd.followup).parameters["max_age_days"].default
+        == EVALUABLE_WINDOW_DAYS
+    ), "followup window drifted from the cap window"
     record_subject(one, lifecycle="active", exp_id="exp-one", conn=conn, now=now)
     second = assess_candidate(
         target="owner/repo#1",
@@ -1039,7 +1036,15 @@ def _selftest() -> None:
         conn.execute(
             "INSERT INTO runs (run_id,ts,target,task_type,agent,experiment_id,assignment) "
             "VALUES (?,?,?,?,?,?,?)",
-            (f"ind-{index}", now, f"o/r#{index}", "testgen", "codex", f"exp-{index}", "experimental"),
+            (
+                f"ind-{index}",
+                now,
+                f"o/r#{index}",
+                "testgen",
+                "codex",
+                f"exp-{index}",
+                "experimental",
+            ),
         )
         conn.execute(
             "INSERT INTO evaluations (experiment_id,implementer,evaluator,score,rank,verdict,ts) "
@@ -1075,8 +1080,11 @@ def _selftest() -> None:
     dconn = sqlite3.connect(":memory:")
     ensure_schema(dconn)
     dident = record_domain_research(
-        "SBA Portfolio", "history + portfolio construction", ["codex", "claude"],
-        exp_id="domain:sba-2026-08-21", conn=dconn,
+        "SBA Portfolio",
+        "history + portfolio construction",
+        ["codex", "claude"],
+        exp_id="domain:sba-2026-08-21",
+        conn=dconn,
     )
     assert dident["canonical_target"] == "domain/sba-portfolio", dident
     assert dident["arms"] == ["claude", "codex"], dident
@@ -1087,16 +1095,21 @@ def _selftest() -> None:
     assert drow == ("domain/sba-portfolio", "research", "domain:sba-2026-08-21"), drow
     # A one-agent study is ONE arm; padding it would forge comparative evidence.
     solo = record_domain_research(
-        "Luminar Editing", "curves tool", ["claude"],
-        exp_id="domain:luminar-1", conn=dconn,
+        "Luminar Editing",
+        "curves tool",
+        ["claude"],
+        exp_id="domain:luminar-1",
+        conn=dconn,
     )
     assert solo["arms"] == ["claude"], solo
     assert solo["subject_id"] != dident["subject_id"], "distinct topics must be distinct subjects"
     dconn.close()
 
     # --- multi-agent research rounds (line B): audits fan out to several agents ---
-    assert research_round_id("stranske/Workflows", "Audit", "2026-08-16") == \
-        "stranske/workflows:audit:2026-08-16"
+    assert (
+        research_round_id("stranske/Workflows", "Audit", "2026-08-16")
+        == "stranske/workflows:audit:2026-08-16"
+    )
     for bad in (("", "audit", "2026-01-01"), ("a", "", "2026-01-01"), ("a", "audit", "")):
         try:
             research_round_id(*bad)
@@ -1107,8 +1120,12 @@ def _selftest() -> None:
     rconn = sqlite3.connect(":memory:")
     ensure_schema(rconn)
     rid, rident = record_research_round(
-        "stranske/Workflows", "audit", "2026-08-16", "8 audit categories",
-        ["codex", "gemini", "cursor", "vibe"], conn=rconn,
+        "stranske/Workflows",
+        "audit",
+        "2026-08-16",
+        "8 audit categories",
+        ["codex", "gemini", "cursor", "vibe"],
+        conn=rconn,
     )
     assert rid == "stranske/workflows:audit:2026-08-16", rid
     # Every arm retained: an audit fanned out to four agents is FOUR arms of comparable evidence.
@@ -1119,7 +1136,12 @@ def _selftest() -> None:
     ).fetchone() == (rid,), "round must join exp_id -> subject"
     # A solo round is ONE arm and must not be padded into false independence.
     _, solo_round = record_research_round(
-        "local/Reader", "audit", "2026-08-09", "scope", ["claude"], conn=rconn,
+        "local/Reader",
+        "audit",
+        "2026-08-09",
+        "scope",
+        ["claude"],
+        conn=rconn,
     )
     assert solo_round["arms"] == ["claude"], solo_round
     for empty in ([], ["", "  "]):
@@ -1160,8 +1182,11 @@ def main(argv: list[str] | None = None) -> int:
     filed.add_argument("--finding-ref", help="stable id of the finding inside the round")
     dur = sub.add_parser("round-durability", help="inherit downstream durability for a round")
     dur.add_argument("--round-id", required=True)
-    dur.add_argument("--apply-edges", action="store_true",
-                     help="write the linkage into influence_edges (default: read only)")
+    dur.add_argument(
+        "--apply-edges",
+        action="store_true",
+        help="write the linkage into influence_edges (default: read only)",
+    )
     args = parser.parse_args(argv)
     if args.cmd == "finding-filed":
         conn = feedback._conn()
@@ -1177,27 +1202,48 @@ def main(argv: list[str] | None = None) -> int:
                 # FAIL LOUD, NOT SILENT. An unregistered round means the linkage would hang off no
                 # subject and inherit nothing; saying so is the difference between a fixable
                 # mistake and a fact that quietly never existed.
-                print(json.dumps({"recorded": False,
-                                  "reason": f"no registered round {args.round_id}"}))
+                print(
+                    json.dumps(
+                        {"recorded": False, "reason": f"no registered round {args.round_id}"}
+                    )
+                )
                 return 1
             identity = {
-                "subject_id": row[0], "subject_family_id": row[1],
-                "canonical_target": row[2], "task_type": row[3],
+                "subject_id": row[0],
+                "subject_family_id": row[1],
+                "canonical_target": row[2],
+                "task_type": row[3],
             }
             event_id = record_finding_issue(
-                args.round_id, args.issue, arm=args.arm, identity=identity,
-                finding_ref=args.finding_ref, conn=conn,
+                args.round_id,
+                args.issue,
+                arm=args.arm,
+                identity=identity,
+                finding_ref=args.finding_ref,
+                conn=conn,
             )
         finally:
             conn.close()
-        print(json.dumps({"recorded": True, "event_id": event_id,
-                          "round_id": args.round_id, "issue": args.issue, "arm": args.arm}))
+        print(
+            json.dumps(
+                {
+                    "recorded": True,
+                    "event_id": event_id,
+                    "round_id": args.round_id,
+                    "issue": args.issue,
+                    "arm": args.arm,
+                }
+            )
+        )
         return 0
     if args.cmd == "round-durability":
-        print(json.dumps(
-            resolve_round_durability(args.round_id, apply_edges=args.apply_edges),
-            indent=2, sort_keys=True,
-        ))
+        print(
+            json.dumps(
+                resolve_round_durability(args.round_id, apply_edges=args.apply_edges),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     print(json.dumps(summary(), indent=2, sort_keys=True))
     return 0

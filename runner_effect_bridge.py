@@ -21,7 +21,6 @@ from completion_event_adapter import (
     validate_capability_effect_record,
 )
 
-
 RUNNER_OUTPUT_KEYS = {
     "capability_id": ("capability-id", "capability_id"),
     "effect_fingerprint": ("effect-fingerprint", "effect_fingerprint"),
@@ -180,9 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     outputs = json.loads(args.runner_output_json.read_text(encoding="utf-8"))
     try:
-        receipt = record_runner_effect(
-            outputs, event_ref=args.event_ref, ledger_path=args.ledger
-        )
+        receipt = record_runner_effect(outputs, event_ref=args.event_ref, ledger_path=args.ledger)
     except RunnerEffectError as exc:
         print(json.dumps({"status": "rejected", "reason": str(exc)}, sort_keys=True))
         return 2

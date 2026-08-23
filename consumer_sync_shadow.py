@@ -7,15 +7,14 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import time
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import capabilities
 import capability_compiler
 from runner_effect_bridge import record_runner_effect, runner_outputs_to_effect
-
 
 PLAN_SCHEMA = "workflows.consumer-sync-plan/v1"
 HANDOFF_SCHEMA = "workflows.consumer-sync-shadow-handoff/v1"
@@ -106,15 +105,13 @@ def validate_shadow_handoff(raw: Any, *, plan: dict[str, Any]) -> dict[str, Any]
         reasons.append("unsupported_shadow_handoff_schema")
     if raw.get("capability_id") != CAPABILITY_ID:
         reasons.append("shadow_handoff_capability_mismatch")
-    if raw.get("plan_schema") != PLAN_SCHEMA or raw.get("plan_id") != plan.get(
-        "plan_id"
-    ):
+    if raw.get("plan_schema") != PLAN_SCHEMA or raw.get("plan_id") != plan.get("plan_id"):
         reasons.append("shadow_handoff_plan_mismatch")
     if raw.get("manifest_sha256") != plan.get("manifest_sha256"):
         reasons.append("shadow_handoff_manifest_mismatch")
-    if raw.get("entry_count") != len(plan.get("entries") or []) or raw.get(
-        "removal_count"
-    ) != len(plan.get("removals") or []):
+    if raw.get("entry_count") != len(plan.get("entries") or []) or raw.get("removal_count") != len(
+        plan.get("removals") or []
+    ):
         reasons.append("shadow_handoff_count_mismatch")
     if raw.get("plan_filename") != "consumer-sync-plan.json":
         reasons.append("shadow_handoff_plan_filename_mismatch")
@@ -122,16 +119,12 @@ def validate_shadow_handoff(raw: Any, *, plan: dict[str, Any]) -> dict[str, Any]
     if not RUN_REF_RE.fullmatch(run_ref):
         reasons.append("invalid_shadow_handoff_run_ref")
     if any(
-        marker in run_ref.lower()
-        for marker in ("token", "secret", "password", "api-key", "apikey")
+        marker in run_ref.lower() for marker in ("token", "secret", "password", "api-key", "apikey")
     ):
         reasons.append("secret_like_shadow_handoff_run_ref")
     if raw.get("supervision_mode") != "shadow":
         reasons.append("shadow_handoff_supervision_mismatch")
-    if (
-        raw.get("write_authority") is not False
-        or raw.get("promotion_allowed") is not False
-    ):
+    if raw.get("write_authority") is not False or raw.get("promotion_allowed") is not False:
         reasons.append("shadow_handoff_requests_authority")
     if raw.get("effect_allowlist") != [
         "create",
@@ -201,9 +194,7 @@ def validate_consumer_sync_plan(raw: Any) -> dict[str, Any]:
             reasons.append(f"invalid_is_directory:{index}")
         for field in ("skip_repos", "overwrite_repos", "requires"):
             values = entry.get(field)
-            if not isinstance(values, list) or any(
-                not isinstance(item, str) for item in values
-            ):
+            if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
                 reasons.append(f"invalid_{field}:{index}")
         # `requires` names other manifest TARGETS. It never becomes a filesystem path in this
         # consumer, but it is hashed into the effect identity, so it is checked, not normalised —
@@ -213,11 +204,11 @@ def validate_consumer_sync_plan(raw: Any) -> dict[str, Any]:
         ):
             reasons.append(f"unsafe_requires:{index}")
         skip_reasons = entry.get("skip_reasons")
-        if not isinstance(skip_reasons, dict) or set(skip_reasons) != set(
-            entry.get("skip_repos") or []
+        if (
+            not isinstance(skip_reasons, dict)
+            or set(skip_reasons) != set(entry.get("skip_repos") or [])
+            or any(not isinstance(value, str) for value in skip_reasons.values())
         ):
-            reasons.append(f"invalid_skip_reasons:{index}")
-        elif any(not isinstance(value, str) for value in skip_reasons.values()):
             reasons.append(f"invalid_skip_reasons:{index}")
         if entry.get("template_sync") not in (None, "exact"):
             reasons.append(f"unsupported_template_sync:{index}")
@@ -253,9 +244,7 @@ def validate_consumer_sync_plan(raw: Any) -> dict[str, Any]:
         fingerprint = str(removal.get("effect_fingerprint") or "")
         if not SHA256_RE.fullmatch(fingerprint):
             reasons.append(f"invalid_removal_effect_fingerprint:{index}")
-        if fingerprint != _stable_hash(
-            "consumer-sync-removal-effect", {"target": target}
-        ):
+        if fingerprint != _stable_hash("consumer-sync-removal-effect", {"target": target}):
             reasons.append(f"removal_effect_identity_mismatch:{index}")
         if target in target_owners:
             reasons.append(f"duplicate_target:{target}")
@@ -307,10 +296,7 @@ def classify_shadow_drift(
             action, reason = "skip", "manifest_skip"
         elif observed is None:
             action, reason = "create", "target_missing"
-        elif (
-            entry["sync_mode"] == "create_only"
-            and repository not in entry["overwrite_repos"]
-        ):
+        elif entry["sync_mode"] == "create_only" and repository not in entry["overwrite_repos"]:
             action, reason = "skip", "create_only_existing"
         elif observed == entry["content_sha256"]:
             action, reason = "no_change", "content_matches"
@@ -327,9 +313,7 @@ def classify_shadow_drift(
         proposals.append(
             {
                 **proposal_core,
-                "effect_fingerprint": _stable_hash(
-                    "consumer-sync-effect", proposal_core
-                ),
+                "effect_fingerprint": _stable_hash("consumer-sync-effect", proposal_core),
             }
         )
     for removal in normalized["removals"]:
@@ -338,9 +322,7 @@ def classify_shadow_drift(
         proposal_core = {
             "target": target,
             "action": action,
-            "reason": "obsolete_target_present"
-            if action == "remove"
-            else "obsolete_target_absent",
+            "reason": "obsolete_target_present" if action == "remove" else "obsolete_target_absent",
             "source_effect_fingerprint": removal["effect_fingerprint"],
             "observed_sha256": observed_targets.get(target),
             "desired_sha256": None,
@@ -348,9 +330,7 @@ def classify_shadow_drift(
         proposals.append(
             {
                 **proposal_core,
-                "effect_fingerprint": _stable_hash(
-                    "consumer-sync-effect", proposal_core
-                ),
+                "effect_fingerprint": _stable_hash("consumer-sync-effect", proposal_core),
             }
         )
     if any(row["action"] not in ALLOWED_ACTIONS for row in proposals):
@@ -392,14 +372,10 @@ def validate_shadow_result(result: Any) -> dict[str, Any]:
         reasons.append("unsupported_result_schema")
     if result.get("capability_id") != CAPABILITY_ID:
         reasons.append("result_capability_mismatch")
-    if not isinstance(result.get("plan_id"), str) or not SHA256_RE.fullmatch(
-        result["plan_id"]
-    ):
+    if not isinstance(result.get("plan_id"), str) or not SHA256_RE.fullmatch(result["plan_id"]):
         reasons.append("invalid_result_plan_id")
     repo = result.get("repository")
-    if not isinstance(repo, str) or not re.fullmatch(
-        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo
-    ):
+    if not isinstance(repo, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         reasons.append("invalid_result_repository")
     elif repo != repo.lower():
         reasons.append("result_repository_not_lowercase")
@@ -477,9 +453,7 @@ def validate_shadow_result(result: Any) -> dict[str, Any]:
         "side_effects_performed": [],
         "proposals": proposals,
     }
-    if result.get("result_id") != _stable_hash(
-        "consumer-sync-shadow-result", result_core
-    ):
+    if result.get("result_id") != _stable_hash("consumer-sync-shadow-result", result_core):
         raise ConsumerSyncShadowError(["result_identity_mismatch"])
     return result
 
@@ -496,16 +470,10 @@ def record_shadow_result(
 ) -> dict[str, Any]:
     if supervision_mode not in {"shadow", "human-on-exception"}:
         raise ConsumerSyncShadowError(["invalid_supervision_mode"])
-    if phase_id is not None and not re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", phase_id
-    ):
+    if phase_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", phase_id):
         raise ConsumerSyncShadowError(["invalid_phase_id"])
-    if supervision_mode == "human-on-exception" and not str(phase_id or "").startswith(
-        "importer-"
-    ):
-        raise ConsumerSyncShadowError(
-            ["invalid_supervision_mode_without_importer_phase"]
-        )
+    if supervision_mode == "human-on-exception" and not str(phase_id or "").startswith("importer-"):
+        raise ConsumerSyncShadowError(["invalid_supervision_mode_without_importer_phase"])
 
     # Fully validate result shape/proposals/repository/result_id
     validate_shadow_result(result)
@@ -519,9 +487,7 @@ def record_shadow_result(
     if evidence_artifact_ref is None:
         suffix = result["result_id"].split(":", 1)[1]
         if phase_id:
-            evidence_artifact_ref = (
-                f"consumer-sync-{supervision_mode}-{phase_id}:{suffix}"
-            )
+            evidence_artifact_ref = f"consumer-sync-{supervision_mode}-{phase_id}:{suffix}"
         else:
             evidence_artifact_ref = f"consumer-sync-{supervision_mode}:{suffix}"
 
@@ -588,8 +554,7 @@ def promotion_dashboard(
     outcomes = [
         event
         for event in events
-        if event.get("type") == "outcome"
-        and str(event.get("ref") or "").startswith("effect:")
+        if event.get("type") == "outcome" and str(event.get("ref") or "").startswith("effect:")
     ]
     harms = [
         event
@@ -650,11 +615,7 @@ def main(argv: list[str] | None = None) -> int:
     dashboard.add_argument("--ledger", type=Path, default=capabilities.REG)
     args = parser.parse_args(argv)
     if args.command == "dashboard":
-        print(
-            json.dumps(
-                promotion_dashboard(ledger_path=args.ledger), indent=2, sort_keys=True
-            )
-        )
+        print(json.dumps(promotion_dashboard(ledger_path=args.ledger), indent=2, sort_keys=True))
         return 0
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
     plan = validate_consumer_sync_plan(plan)
@@ -662,9 +623,7 @@ def main(argv: list[str] | None = None) -> int:
         handoff = json.loads(args.handoff.read_text(encoding="utf-8"))
         validate_shadow_handoff(handoff, plan=plan)
     observed = json.loads(args.observed.read_text(encoding="utf-8"))
-    result = classify_shadow_drift(
-        plan, repository=args.repository, observed_targets=observed
-    )
+    result = classify_shadow_drift(plan, repository=args.repository, observed_targets=observed)
     output = {"result": result}
     if args.record:
         output["receipt"] = record_shadow_result(result, ledger_path=args.ledger)

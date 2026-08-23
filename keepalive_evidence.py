@@ -5,6 +5,7 @@ This is read-only over the feedback DB in normal operation. It surfaces human
 triage seeds from dynamic keepalive outcomes, plus routing/quality signals for
 the weekly repo-review automation.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -95,17 +96,39 @@ def _fetch_pr_title(repo: str, pr_number: int) -> str | None:
 
 
 def _issue_search(repo: str, query: str) -> list[dict]:
-    arr = _run_json([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search", query, "--limit", "20", "--json", "number,title",
-    ])
+    arr = _run_json(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--search",
+            query,
+            "--limit",
+            "20",
+            "--json",
+            "number,title",
+        ]
+    )
     return arr if isinstance(arr, list) else []
 
 
 def _linked_issues(repo: str, pr: int) -> list[dict]:
-    obj = _run_json([
-        "gh", "pr", "view", str(pr), "--repo", repo, "--json", "closingIssuesReferences",
-    ])
+    obj = _run_json(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr),
+            "--repo",
+            repo,
+            "--json",
+            "closingIssuesReferences",
+        ]
+    )
     refs = obj.get("closingIssuesReferences") if isinstance(obj, dict) else []
     if not isinstance(refs, list):
         return []
@@ -121,9 +144,18 @@ def _linked_issues(repo: str, pr: int) -> list[dict]:
         if issue_number in seen:
             continue
         seen.add(issue_number)
-        issue = _run_json([
-            "gh", "issue", "view", str(issue_number), "--repo", repo, "--json", "number,state",
-        ])
+        issue = _run_json(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(issue_number),
+                "--repo",
+                repo,
+                "--json",
+                "number,state",
+            ]
+        )
         if isinstance(issue, dict) and issue.get("number") is not None:
             try:
                 fetched_number = int(issue["number"])
@@ -191,7 +223,9 @@ def _dedupe_candidate(
         issue_number = issue.get("number")
         issue_title = str(issue.get("title") or "")
         haystack = f"#{issue_number} {issue_title}"
-        if _contains_pr_ref(issue_title, pr_number) or _contains_pr_ref(candidate["seed"], issue_number):
+        if _contains_pr_ref(issue_title, pr_number) or _contains_pr_ref(
+            candidate["seed"], issue_number
+        ):
             candidate["possible_duplicate"] = True
             candidate["dup_issue"] = issue_number
             return
@@ -273,13 +307,17 @@ def _process_signal_seed(repo: str, work_type: str, count: int, lookback_days: i
     if work_type == "renovate":
         tail = "renovate config likely too aggressive; consider pinning/grouping/scheduling."
     elif work_type == "sync":
-        tail = "sync automation may be stale or noisy; inspect template, mirror, and drift handling."
+        tail = (
+            "sync automation may be stale or noisy; inspect template, mirror, and drift handling."
+        )
     elif work_type == "tooling":
         tail = "tooling or CI workflow changes are unstable; tighten validation before rollout."
     else:
         tail = "docs workflow is churning; check ownership, templates, and review expectations."
     noun = "PR" if count == 1 else "PRs"
-    return f"{count} {work_type} {noun} reverted or abandoned in {lookback_days}d on {repo} -- {tail}"
+    return (
+        f"{count} {work_type} {noun} reverted or abandoned in {lookback_days}d on {repo} -- {tail}"
+    )
 
 
 def _process_signals(
@@ -316,7 +354,9 @@ def _process_signals(
         }
         if title:
             item["title"] = title
-        bucket = grouped.setdefault(work_type, {"work_type": work_type, "prs": [], "has_revert": False})
+        bucket = grouped.setdefault(
+            work_type, {"work_type": work_type, "prs": [], "has_revert": False}
+        )
         bucket["prs"].append(item)
         if durability == "reverted":
             bucket["has_revert"] = True
@@ -326,13 +366,15 @@ def _process_signals(
         bucket = grouped[work_type]
         prs = bucket["prs"]
         count = len(prs)
-        signals.append({
-            "work_type": work_type,
-            "count": count,
-            "severity": "HIGH" if bucket["has_revert"] else "MED",
-            "prs": prs,
-            "seed": _process_signal_seed(repo, work_type, count, lookback_days),
-        })
+        signals.append(
+            {
+                "work_type": work_type,
+                "count": count,
+                "severity": "HIGH" if bucket["has_revert"] else "MED",
+                "prs": prs,
+                "seed": _process_signal_seed(repo, work_type, count, lookback_days),
+            }
+        )
     return signals
 
 
@@ -430,7 +472,11 @@ def _human_summary(result: dict) -> str:
     ]
     lines.append("Issue candidates:")
     for candidate in result["candidates"]:
-        dup = f" possible duplicate #{candidate['dup_issue']}" if candidate.get("possible_duplicate") else ""
+        dup = (
+            f" possible duplicate #{candidate['dup_issue']}"
+            if candidate.get("possible_duplicate")
+            else ""
+        )
         lines.append(f"- {candidate['severity']} {candidate['type']}: {candidate['seed']}{dup}")
     if not result["candidates"]:
         lines.append("- No dynamic issue candidates.")
@@ -473,8 +519,14 @@ def _selftest() -> None:
         for run_id, target, agent, pr_number, durability, work_type, notes in rows:
             repo = target.split("#", 1)[0]
             feedback.record_run(
-                run_id, target, "implement", agent, mode="remote",
-                pr_number=pr_number, ts=now - 3600, source="keepalive",
+                run_id,
+                target,
+                "implement",
+                agent,
+                mode="remote",
+                pr_number=pr_number,
+                ts=now - 3600,
+                source="keepalive",
                 work_type=work_type,
             )
             feedback.record_outcome(
@@ -485,17 +537,21 @@ def _selftest() -> None:
                 notes=notes,
             )
 
-        knowledge_path.write_text(json.dumps({
-            "schema_version": 1,
-            "repos": {
-                "o/r": {
-                    "summary": "Fixture repo.",
-                    "gotchas": [
-                        "Recurring CI failure: migration drift caused failed keepalive runs.",
-                    ],
+        knowledge_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "repos": {
+                        "o/r": {
+                            "summary": "Fixture repo.",
+                            "gotchas": [
+                                "Recurring CI failure: migration drift caused failed keepalive runs.",
+                            ],
+                        }
+                    },
                 }
-            },
-        }))
+            )
+        )
 
         fetched_titles: list[int] = []
 
@@ -534,7 +590,9 @@ def _selftest() -> None:
         assert types.count("reversal") == 1, result
         assert types.count("abandoned") == 1, result
         assert types.count("recurring_failure") == 1, result
-        assert all(candidate["evidence"].get("pr") not in {2, 3, 5} for candidate in result["candidates"]), result
+        assert all(
+            candidate["evidence"].get("pr") not in {2, 3, 5} for candidate in result["candidates"]
+        ), result
         process_by_type = {signal["work_type"]: signal for signal in result["process_signals"]}
         assert sorted(process_by_type) == ["renovate", "sync"], result["process_signals"]
         assert process_by_type["renovate"]["count"] == 1, process_by_type
@@ -544,7 +602,9 @@ def _selftest() -> None:
         assert process_by_type["sync"]["severity"] == "MED", process_by_type
         assert process_by_type["sync"]["prs"][0]["pr"] == 3, process_by_type
         assert sorted(fetched_titles) == [1, 2, 3, 4], fetched_titles
-        dupes = [candidate for candidate in result["candidates"] if candidate.get("possible_duplicate")]
+        dupes = [
+            candidate for candidate in result["candidates"] if candidate.get("possible_duplicate")
+        ]
         assert {candidate["dup_issue"] for candidate in dupes} == {77, 88}, dupes
         linked_dupe = [candidate for candidate in dupes if candidate["dup_issue"] == 88]
         assert len(linked_dupe) == 1 and linked_dupe[0]["type"] == "reversal", dupes
@@ -552,13 +612,15 @@ def _selftest() -> None:
         term_dupe = [candidate for candidate in dupes if candidate["dup_issue"] == 77]
         assert len(term_dupe) == 1 and term_dupe[0]["evidence"].get("pr") == 4, dupes
         closed_linked = [
-            candidate for candidate in result["candidates"]
-            if candidate["evidence"].get("pr") == 4
+            candidate for candidate in result["candidates"] if candidate["evidence"].get("pr") == 4
         ]
         assert len(closed_linked) == 1 and closed_linked[0]["possible_duplicate"], closed_linked
         assert abs(result["signals"]["durable_rate"] - (1 / 7)) < 1e-9, result["signals"]
         assert result["signals"]["by_agent"]["codex"] == {
-            "durable": 1, "pending": 0, "abandoned": 1, "reverted": 1,
+            "durable": 1,
+            "pending": 0,
+            "abandoned": 1,
+            "reverted": 1,
         }, result["signals"]
 
         clean = evidence_for_repo(
@@ -583,7 +645,9 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Emit keepalive-derived issue candidate evidence.")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--repo", help="owner/repo to inspect")
-    group.add_argument("--all-active", action="store_true", help="inspect every active repo in the registry")
+    group.add_argument(
+        "--all-active", action="store_true", help="inspect every active repo in the registry"
+    )
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--selftest", action="store_true")

@@ -5,6 +5,7 @@ Offline analysis only: reads completed keepalive issue-work outcomes from the
 feedback Brain, fetches linked issue bodies from GitHub, and reports which issue
 content features correlate with durable vs reverted/abandoned PRs.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,7 +47,10 @@ TEST_PATH_RE = re.compile(
     r"|(?<![\w./-])[A-Za-z0-9_./-]*(?:test|spec)[A-Za-z0-9_./-]*\.(?:py|js|ts|tsx|jsx)(?![\w./-])",
     re.IGNORECASE,
 )
-AMBIGUITY_RE = re.compile(r"\b(?:maybe|probably|investigate|tbd|unclear|possibly|might|should\s+probably)\b|\?", re.IGNORECASE)
+AMBIGUITY_RE = re.compile(
+    r"\b(?:maybe|probably|investigate|tbd|unclear|possibly|might|should\s+probably)\b|\?",
+    re.IGNORECASE,
+)
 LINKED_PR_RE = re.compile(
     r"(?:github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+|\bPR\s*#\d+|\bpull\s+request\s+#\d+)",
     re.IGNORECASE,
@@ -161,9 +165,19 @@ def _run_json(args: list[str], *, timeout: int = 30) -> object | None:
 
 
 def fetch_linked_issue_numbers(repo: str, pr_number: int) -> list[int]:
-    obj = _run_json([
-        "gh", "pr", "view", str(pr_number), "-R", repo, "--json", "closingIssuesReferences",
-    ], timeout=GH_TIMEOUT_SECONDS)
+    obj = _run_json(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "-R",
+            repo,
+            "--json",
+            "closingIssuesReferences",
+        ],
+        timeout=GH_TIMEOUT_SECONDS,
+    )
     refs = obj.get("closingIssuesReferences") if isinstance(obj, dict) else []
     if not isinstance(refs, list):
         return []
@@ -183,9 +197,19 @@ def fetch_linked_issue_numbers(repo: str, pr_number: int) -> list[int]:
 
 
 def fetch_issue_body(repo: str, issue_number: int) -> dict | None:
-    obj = _run_json([
-        "gh", "issue", "view", str(issue_number), "-R", repo, "--json", "number,title,body,url",
-    ], timeout=GH_TIMEOUT_SECONDS)
+    obj = _run_json(
+        [
+            "gh",
+            "issue",
+            "view",
+            str(issue_number),
+            "-R",
+            repo,
+            "--json",
+            "number,title,body,url",
+        ],
+        timeout=GH_TIMEOUT_SECONDS,
+    )
     return obj if isinstance(obj, dict) else None
 
 
@@ -216,7 +240,9 @@ def resolve_issue_records(
     for row in rows:
         parts = _target_parts(row)
         if not parts:
-            skipped.append({"run_id": row.run_id, "target": row.target, "reason": "could not parse repo/pr"})
+            skipped.append(
+                {"run_id": row.run_id, "target": row.target, "reason": "could not parse repo/pr"}
+            )
             continue
         repo, pr_number = parts
         parsed_rows.append((row, repo, pr_number))
@@ -249,7 +275,9 @@ def resolve_issue_records(
                 out[key] = value
         return out
 
-    linked_cache = parallel_fetch({(repo, pr_number) for _, repo, pr_number in parsed_rows}, fetch_linked)
+    linked_cache = parallel_fetch(
+        {(repo, pr_number) for _, repo, pr_number in parsed_rows}, fetch_linked
+    )
     body_keys: set[tuple[str, int]] = set()
     for repo, pr_number in linked_cache:
         issue_numbers = linked_cache.get((repo, pr_number)) or []
@@ -265,50 +293,58 @@ def resolve_issue_records(
     for row, repo, pr_number in parsed_rows:
         issue_numbers = linked_cache.get((repo, pr_number)) or []
         if not issue_numbers:
-            skipped.append({
-                "run_id": row.run_id,
-                "target": row.target,
-                "repo": repo,
-                "pr_number": pr_number,
-                "reason": "no closingIssuesReferences",
-            })
+            skipped.append(
+                {
+                    "run_id": row.run_id,
+                    "target": row.target,
+                    "repo": repo,
+                    "pr_number": pr_number,
+                    "reason": "no closingIssuesReferences",
+                }
+            )
             continue
         for issue_number in issue_numbers:
             try:
                 body_key = (repo, int(issue_number))
             except (TypeError, ValueError):
-                skipped.append({
-                    "run_id": row.run_id,
-                    "target": row.target,
-                    "repo": repo,
-                    "pr_number": pr_number,
-                    "issue_number": issue_number,
-                    "reason": "invalid linked issue number",
-                })
+                skipped.append(
+                    {
+                        "run_id": row.run_id,
+                        "target": row.target,
+                        "repo": repo,
+                        "pr_number": pr_number,
+                        "issue_number": issue_number,
+                        "reason": "invalid linked issue number",
+                    }
+                )
                 continue
             coerced = _coerce_issue_payload(body_cache.get(body_key))
             if coerced is None:
-                skipped.append({
-                    "run_id": row.run_id,
-                    "target": row.target,
-                    "repo": repo,
-                    "pr_number": pr_number,
-                    "issue_number": int(issue_number),
-                    "reason": "could not fetch issue body",
-                })
+                skipped.append(
+                    {
+                        "run_id": row.run_id,
+                        "target": row.target,
+                        "repo": repo,
+                        "pr_number": pr_number,
+                        "issue_number": int(issue_number),
+                        "reason": "could not fetch issue body",
+                    }
+                )
                 continue
             body, title, url = coerced
-            records.append(IssueRecord(
-                run_id=row.run_id,
-                target=row.target or f"{repo}#{pr_number}",
-                repo=repo,
-                pr_number=pr_number,
-                issue_number=int(issue_number),
-                durability=row.durability,
-                body=body,
-                title=title,
-                url=url,
-            ))
+            records.append(
+                IssueRecord(
+                    run_id=row.run_id,
+                    target=row.target or f"{repo}#{pr_number}",
+                    repo=repo,
+                    pr_number=pr_number,
+                    issue_number=int(issue_number),
+                    durability=row.durability,
+                    body=body,
+                    title=title,
+                    url=url,
+                )
+            )
     return records, skipped
 
 
@@ -346,7 +382,9 @@ def extract_issue_features(body: str) -> dict:
     )
     has_acceptance_criteria = bool(
         re.search(r"\b(?:acceptance criteria|definition of done|done when|success criteria)\b", low)
-        or re.search(r"(?im)^\s*[-*]\s+\[[ xX]\]\s+.*\b(?:pass|verify|ensure|complete|done)\b", text)
+        or re.search(
+            r"(?im)^\s*[-*]\s+\[[ xX]\]\s+.*\b(?:pass|verify|ensure|complete|done)\b", text
+        )
     )
     has_test_instructions = bool(
         TEST_COMMAND_RE.search(text)
@@ -354,7 +392,9 @@ def extract_issue_features(body: str) -> dict:
         or _heading_present(text, r"tests?|test instructions|verification|validation")
     )
     has_non_goals = bool(
-        re.search(r"\b(?:non-?goals?|out of scope|not in scope|do not include|does not include)\b", low)
+        re.search(
+            r"\b(?:non-?goals?|out of scope|not in scope|do not include|does not include)\b", low
+        )
         or _heading_present(text, r"non-?goals?|out of scope")
     )
 
@@ -394,26 +434,30 @@ def _cell(rows: list[tuple[bool, bool]]) -> dict:
     }
 
 
-def analyze_issue_records(records: list[IssueRecord], *, min_cell_n: int = DEFAULT_MIN_CELL_N) -> dict:
+def analyze_issue_records(
+    records: list[IssueRecord], *, min_cell_n: int = DEFAULT_MIN_CELL_N
+) -> dict:
     issue_rows = []
     all_feature_names = list(FEATURE_LABELS.keys())
     for record in records:
         raw = extract_issue_features(record.body)
         scored = raw["scored_features"]
         is_durable = record.durability == DURABLE
-        issue_rows.append({
-            "run_id": record.run_id,
-            "target": record.target,
-            "repo": record.repo,
-            "pr_number": record.pr_number,
-            "issue_number": record.issue_number,
-            "title": record.title,
-            "url": record.url,
-            "durability": record.durability,
-            "durable": is_durable,
-            "raw_features": {k: v for k, v in raw.items() if k != "scored_features"},
-            "scored_features": scored,
-        })
+        issue_rows.append(
+            {
+                "run_id": record.run_id,
+                "target": record.target,
+                "repo": record.repo,
+                "pr_number": record.pr_number,
+                "issue_number": record.issue_number,
+                "title": record.title,
+                "url": record.url,
+                "durability": record.durability,
+                "durable": is_durable,
+                "raw_features": {k: v for k, v in raw.items() if k != "scored_features"},
+                "scored_features": scored,
+            }
+        )
 
     overall_n = len(issue_rows)
     overall_durable = sum(1 for row in issue_rows if row["durable"])
@@ -421,30 +465,40 @@ def analyze_issue_records(records: list[IssueRecord], *, min_cell_n: int = DEFAU
     feature_stats = []
     weights: dict[str, float] = {}
     for feature in all_feature_names:
-        present_rows = [(True, row["durable"]) for row in issue_rows if row["scored_features"].get(feature)]
-        absent_rows = [(False, row["durable"]) for row in issue_rows if not row["scored_features"].get(feature)]
+        present_rows = [
+            (True, row["durable"]) for row in issue_rows if row["scored_features"].get(feature)
+        ]
+        absent_rows = [
+            (False, row["durable"]) for row in issue_rows if not row["scored_features"].get(feature)
+        ]
         with_cell = _cell(present_rows)
         without_cell = _cell(absent_rows)
         with_rate = with_cell["durable_rate"]
         without_rate = without_cell["durable_rate"]
         lift = None if with_rate is None or without_rate is None else with_rate - without_rate
         powered = with_cell["n"] >= min_cell_n and without_cell["n"] >= min_cell_n
-        power_flag = None if powered else f"underpowered - one or more cells n<{min_cell_n}; not a finding"
+        power_flag = (
+            None if powered else f"underpowered - one or more cells n<{min_cell_n}; not a finding"
+        )
         weight = float(lift) if powered and lift is not None else 0.0
         weights[feature] = weight
-        feature_stats.append({
-            "feature": feature,
-            "label": FEATURE_LABELS[feature],
-            "with": with_cell,
-            "without": without_cell,
-            "lift": lift,
-            "powered": powered,
-            "power_flag": power_flag,
-            "weight": weight,
-        })
+        feature_stats.append(
+            {
+                "feature": feature,
+                "label": FEATURE_LABELS[feature],
+                "with": with_cell,
+                "without": without_cell,
+                "lift": lift,
+                "powered": powered,
+                "power_flag": power_flag,
+                "weight": weight,
+            }
+        )
 
     for row in issue_rows:
-        score_lift = sum(weights[name] for name, present in row["scored_features"].items() if present)
+        score_lift = sum(
+            weights[name] for name, present in row["scored_features"].items() if present
+        )
         row["score_lift"] = score_lift
         row["score"] = max(0.0, min(1.0, baseline + score_lift))
 
@@ -456,9 +510,15 @@ def analyze_issue_records(records: list[IssueRecord], *, min_cell_n: int = DEFAU
         )
     )
     underpowered = [item for item in feature_stats if not item["powered"]]
-    issue_rows.sort(key=lambda row: (row["score"], row["target"], row["issue_number"]), reverse=True)
+    issue_rows.sort(
+        key=lambda row: (row["score"], row["target"], row["issue_number"]), reverse=True
+    )
     return {
-        "baseline": {"n": overall_n, "durable": overall_durable, "durable_rate": baseline if overall_n else None},
+        "baseline": {
+            "n": overall_n,
+            "durable": overall_durable,
+            "durable_rate": baseline if overall_n else None,
+        },
         "min_cell_n": min_cell_n,
         "features": feature_stats,
         "feature_weights": weights,
@@ -485,12 +545,14 @@ def build_report(
         max_workers=max_workers,
     )
     analysis = analyze_issue_records(records, min_cell_n=min_cell_n)
-    analysis.update({
-        "lookback_days": lookback_days,
-        "runs_selected": len(rows),
-        "issues_analyzed": len(records),
-        "skipped": skipped,
-    })
+    analysis.update(
+        {
+            "lookback_days": lookback_days,
+            "runs_selected": len(rows),
+            "issues_analyzed": len(records),
+            "skipped": skipped,
+        }
+    )
     return analysis
 
 
@@ -651,7 +713,9 @@ Probably update the code. TBD.
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Score keepalive issue quality against durability outcomes.")
+    parser = argparse.ArgumentParser(
+        description="Score keepalive issue quality against durability outcomes."
+    )
     parser.add_argument("--lookback-days", type=int, default=90)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--selftest", action="store_true")

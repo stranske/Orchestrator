@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline unit tests for ux_review pure helpers (no network, no live agents)."""
+
 from __future__ import annotations
 
 import json
@@ -9,21 +10,22 @@ import unittest
 import research_subjects
 import ux_review as ur
 
-
 SAMPLE_BUNDLE = {
     "app": "stranske/Trend_Model_Project",
     "review_id": "stranske/Trend_Model_Project:uxreview:2026-06-22",
     "url": "http://localhost:8600/",
     "wired": {"ok": True, "findings": []},
     "screens": [{"name": "Home", "a11y": "button Run Demo", "notes": ""}],
-    "scenarios": [{
-        "name": "Run the demo",
-        "steps": [
-            {"action": "open Home", "observed": "Home screen visible"},
-            {"action": "click Run Demo", "observed": "results table appears"},
-        ],
-        "goal": "see results",
-    }],
+    "scenarios": [
+        {
+            "name": "Run the demo",
+            "steps": [
+                {"action": "open Home", "observed": "Home screen visible"},
+                {"action": "click Run Demo", "observed": "results table appears"},
+            ],
+            "goal": "see results",
+        }
+    ],
 }
 
 
@@ -66,22 +68,50 @@ class TestConsensusFlag(unittest.TestCase):
 
 class TestDedupeFindings(unittest.TestCase):
     def test_max_severity_and_confidence_wins(self):
-        f1 = {"screen": "Home", "element": "Run", "failure_mode": "confusion",
-              "severity": 2, "confidence": 0.6, "click_path": ["a"]}
-        f2 = {"screen": "Home", "element": "Run", "failure_mode": "confusion",
-              "severity": 4, "confidence": 0.8, "click_path": ["a"]}
-        f3 = {"screen": "Home", "element": "Help", "failure_mode": "missing_help",
-              "severity": 3, "confidence": 0.5, "click_path": ["b"]}
+        f1 = {
+            "screen": "Home",
+            "element": "Run",
+            "failure_mode": "confusion",
+            "severity": 2,
+            "confidence": 0.6,
+            "click_path": ["a"],
+        }
+        f2 = {
+            "screen": "Home",
+            "element": "Run",
+            "failure_mode": "confusion",
+            "severity": 4,
+            "confidence": 0.8,
+            "click_path": ["a"],
+        }
+        f3 = {
+            "screen": "Home",
+            "element": "Help",
+            "failure_mode": "missing_help",
+            "severity": 3,
+            "confidence": 0.5,
+            "click_path": ["b"],
+        }
         out = ur.dedupe_findings([f1, f2, f3])
         self.assertEqual(len(out), 2)
         self.assertEqual(out[0]["severity"], 4)
         self.assertEqual(out[0]["confidence"], 0.8)
 
     def test_sorted_by_severity_desc(self):
-        low = {"screen": "A", "element": "x", "failure_mode": "confusion",
-               "severity": 1, "click_path": ["a"]}
-        high = {"screen": "B", "element": "y", "failure_mode": "confusion",
-                "severity": 3, "click_path": ["b"]}
+        low = {
+            "screen": "A",
+            "element": "x",
+            "failure_mode": "confusion",
+            "severity": 1,
+            "click_path": ["a"],
+        }
+        high = {
+            "screen": "B",
+            "element": "y",
+            "failure_mode": "confusion",
+            "severity": 3,
+            "click_path": ["b"],
+        }
         out = ur.dedupe_findings([low, high])
         self.assertEqual(out[0]["severity"], 3)
 
@@ -90,16 +120,40 @@ class TestAggregateAcceptedFindings(unittest.TestCase):
     def test_majority_accepts(self):
         # majority_needed for n=4 is (4//2)+1 = 3. 2 of 4 is NOT a majority -> reject.
         ev_findings = {
-            "claude": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
-                        "click_path": ["x"], "confidence": 0.5}],
-            "codex": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
-                       "click_path": ["x"], "confidence": 0.6}],
+            "claude": [
+                {
+                    "screen": "H",
+                    "element": "E",
+                    "failure_mode": "confusion",
+                    "severity": 2,
+                    "click_path": ["x"],
+                    "confidence": 0.5,
+                }
+            ],
+            "codex": [
+                {
+                    "screen": "H",
+                    "element": "E",
+                    "failure_mode": "confusion",
+                    "severity": 3,
+                    "click_path": ["x"],
+                    "confidence": 0.6,
+                }
+            ],
         }
         accepted, non = ur.aggregate_accepted_findings(ev_findings, [], n_evaluators=4)
         self.assertEqual(len(accepted), 0)  # 2 of 4 — not a majority
         # add a 3rd evaluator -> 3 of 4 IS a majority -> accept, keeping max severity in the group.
-        ev_findings["cursor"] = [{"screen": "H", "element": "E", "failure_mode": "confusion",
-                                  "severity": 2, "click_path": ["x"], "confidence": 0.4}]
+        ev_findings["cursor"] = [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 2,
+                "click_path": ["x"],
+                "confidence": 0.4,
+            }
+        ]
         accepted, _ = ur.aggregate_accepted_findings(ev_findings, [], n_evaluators=4)
         self.assertEqual(len(accepted), 1)
         self.assertEqual(accepted[0]["severity"], 3)
@@ -107,15 +161,28 @@ class TestAggregateAcceptedFindings(unittest.TestCase):
     def test_adversarial_stuck_probability_accepts(self):
         accepted, _ = ur.aggregate_accepted_findings(
             {"claude": []},
-            [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
-              "click_path": ["x"], "stuck_probability": 0.6, "dimension": "adversarial"}],
+            [
+                {
+                    "screen": "H",
+                    "element": "E",
+                    "failure_mode": "confusion",
+                    "severity": 3,
+                    "click_path": ["x"],
+                    "stuck_probability": 0.6,
+                    "dimension": "adversarial",
+                }
+            ],
             n_evaluators=4,
         )
         self.assertEqual(len(accepted), 1)
 
     def test_missing_click_path_becomes_non_finding(self):
         accepted, non = ur.aggregate_accepted_findings(
-            {"claude": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2}]},
+            {
+                "claude": [
+                    {"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2}
+                ]
+            },
             [],
             n_evaluators=4,
         )
@@ -147,24 +214,59 @@ class TestGateDecision(unittest.TestCase):
 
 class TestAggregatePanel(unittest.TestCase):
     def test_dimension_medians_and_evidence_gaps(self):
-        agg = ur.aggregate_panel({
-            "claude": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8,
-                                  "workflow_productivity": 8},
-                       "overall": 8, "findings": [], "evidence_gaps": ["missing tooltip"]},
-            "codex": {"scores": {"wired": 9, "usability": 4, "help_clarity": 8,
-                                 "workflow_productivity": 8},
-                      "overall": 7, "findings": [], "evidence_gaps": []},
-            "cursor": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8,
-                                  "workflow_productivity": 8},
-                       "overall": 8, "findings": [], "evidence_gaps": []},
-            "gemini": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8,
-                                  "workflow_productivity": 8},
-                       "overall": 8, "findings": [], "evidence_gaps": []},
-        }, {"worst_case": "Run Demo", "findings": []}, n_evaluators=4)
+        agg = ur.aggregate_panel(
+            {
+                "claude": {
+                    "scores": {
+                        "wired": 9,
+                        "usability": 7,
+                        "help_clarity": 8,
+                        "workflow_productivity": 8,
+                    },
+                    "overall": 8,
+                    "findings": [],
+                    "evidence_gaps": ["missing tooltip"],
+                },
+                "codex": {
+                    "scores": {
+                        "wired": 9,
+                        "usability": 4,
+                        "help_clarity": 8,
+                        "workflow_productivity": 8,
+                    },
+                    "overall": 7,
+                    "findings": [],
+                    "evidence_gaps": [],
+                },
+                "cursor": {
+                    "scores": {
+                        "wired": 9,
+                        "usability": 7,
+                        "help_clarity": 8,
+                        "workflow_productivity": 8,
+                    },
+                    "overall": 8,
+                    "findings": [],
+                    "evidence_gaps": [],
+                },
+                "gemini": {
+                    "scores": {
+                        "wired": 9,
+                        "usability": 7,
+                        "help_clarity": 8,
+                        "workflow_productivity": 8,
+                    },
+                    "overall": 8,
+                    "findings": [],
+                    "evidence_gaps": [],
+                },
+            },
+            {"worst_case": "Run Demo", "findings": []},
+            n_evaluators=4,
+        )
         self.assertEqual(agg["dimension_medians"]["usability"], 7.0)
         self.assertTrue(agg["consensus_flags"]["usability"])
         self.assertIn("missing tooltip", agg["evidence_gaps"])
-
 
 
 class TestPanelSubjectRegistration(unittest.TestCase):
@@ -193,8 +295,11 @@ class TestPanelSubjectRegistration(unittest.TestCase):
         self.assertEqual(row[1], "ux_review")
         # The spec hash is the hash of the REAL rubric prompt, not an invented value.
         expected = research_subjects.subject_identity(
-            SAMPLE_BUNDLE["app"], "ux_review", ur.build_rubric_prompt(SAMPLE_BUNDLE),
-            ur.resolve_panel_base_sha(SAMPLE_BUNDLE), evaluators,
+            SAMPLE_BUNDLE["app"],
+            "ux_review",
+            ur.build_rubric_prompt(SAMPLE_BUNDLE),
+            ur.resolve_panel_base_sha(SAMPLE_BUNDLE),
+            evaluators,
         )
         self.assertEqual(row[2], expected["spec_hash"])
         self.assertEqual(identity["subject_id"], expected["subject_id"])
@@ -218,8 +323,6 @@ class TestPanelSubjectRegistration(unittest.TestCase):
         self.assertIsNone(ur.register_panel_subject(broken, ["claude"], spec="s"))
 
 
-
-
 class TestPanelArmOutcome(unittest.TestCase):
     """Route weights learn from outcomes, so each arm needs an un-gameable label."""
 
@@ -232,9 +335,7 @@ class TestPanelArmOutcome(unittest.TestCase):
 
     def test_corroborated_finding_is_durable(self):
         f = {"screen": "Home", "element": "Run", "failure_mode": "dead"}
-        v, d, note = ur.panel_arm_outcome(
-            {"scores": {"wired": 5}}, [f], {ur.finding_key(f)}, True
-        )
+        v, d, note = ur.panel_arm_outcome({"scores": {"wired": 5}}, [f], {ur.finding_key(f)}, True)
         self.assertEqual((v, d), ("PASS", "durable"))
         self.assertIn("corroborated", note)
 
@@ -256,19 +357,21 @@ class TestPanelArmOutcome(unittest.TestCase):
     def test_durability_values_are_learner_recognised(self):
         """A label the learner does not recognise is the same as no label at all."""
         from pattern_miner import DURABLE_STATUSES, TERMINAL_FAILURE_DURABILITY
+
         known = set(DURABLE_STATUSES) | set(TERMINAL_FAILURE_DURABILITY)
-        for args in [(None, [], set(), True),
-                     ({"scores": {"wired": 1}}, [], set(), False),
-                     ({"scores": {"wired": 1}}, [], {("a", "b", "c")}, True)]:
+        for args in [
+            (None, [], set(), True),
+            ({"scores": {"wired": 1}}, [], set(), False),
+            ({"scores": {"wired": 1}}, [], {("a", "b", "c")}, True),
+        ]:
             self.assertIn(ur.panel_arm_outcome(*args)[1], known)
-
-
 
 
 class TestPanelBaseSha(unittest.TestCase):
     def test_supplied_base_sha_wins(self):
         self.assertEqual(
-            ur.resolve_panel_base_sha({"app": "o/r", "base_sha": "deadbeef"}), "deadbeef")
+            ur.resolve_panel_base_sha({"app": "o/r", "base_sha": "deadbeef"}), "deadbeef"
+        )
 
     def test_non_repo_app_gets_no_placeholder(self):
         """An invented base commit makes two app states look like one subject."""
@@ -283,7 +386,6 @@ class TestPanelBaseSha(unittest.TestCase):
         self.assertEqual(identity["base_sha"], "abc123def")
         row = conn.execute("SELECT base_sha FROM research_subjects").fetchone()
         self.assertEqual(row[0], "abc123def")
-
 
 
 if __name__ == "__main__":

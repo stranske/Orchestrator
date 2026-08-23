@@ -55,9 +55,33 @@ SEMANTIC_SYNONYMS = {
     "break": "deliberate_break",
 }
 SEMANTIC_STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "been", "by", "for",
-    "from", "in", "is", "it", "no", "not", "of", "on", "or", "that",
-    "the", "this", "to", "was", "were", "with", "would",
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "no",
+    "not",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "was",
+    "were",
+    "with",
+    "would",
 }
 
 RULES = [
@@ -280,7 +304,11 @@ def cluster_gap_rows(
         core = {
             "name": name,
             "semantic_tokens": sorted(
-                {token for row in grouped for token in normalize_gap_semantics(row.get("gap") or "")}
+                {
+                    token
+                    for row in grouped
+                    for token in normalize_gap_semantics(row.get("gap") or "")
+                }
             ),
             "independent_subjects": independent_subjects,
             "independent_specs": independent_specs,
@@ -420,9 +448,7 @@ def active_type_review(
             recommendation = "keep; cited by evaluator verdicts"
         elif age_days >= prune_after_days:
             status = "prune_candidate"
-            recommendation = (
-                "consider retiring if the type is still uncited after review"
-            )
+            recommendation = "consider retiring if the type is still uncited after review"
         else:
             status = "monitoring"
             recommendation = "too new to prune; wait for evaluator traffic"
@@ -518,9 +544,7 @@ def build_report(
     rows = _gap_rows(window_days, now=now)
     open_rows = [row for row in rows if row["status"] == "open"]
     type_info = _type_counts()
-    proposals = clustered_proposals(
-        window_days=window_days, min_recurrence=min_recurrence, now=now
-    )
+    proposals = clustered_proposals(window_days=window_days, min_recurrence=min_recurrence, now=now)
     semantic_candidates = cluster_gap_rows(
         open_rows,
         min_distinct_subjects=min_recurrence,
@@ -535,12 +559,12 @@ def build_report(
     )
     if active_count and ready_candidates:
         status = "active_with_proposals"
-        recommendation = "Active evidence types exist and additional recurring gap classes are ready for review."
+        recommendation = (
+            "Active evidence types exist and additional recurring gap classes are ready for review."
+        )
     elif active_count:
         status = "active"
-        recommendation = (
-            "Active evidence types exist; monitor influence and prune unused types."
-        )
+        recommendation = "Active evidence types exist; monitor influence and prune unused types."
     elif ready_candidates:
         status = "approval_ready"
         recommendation = (
@@ -549,7 +573,9 @@ def build_report(
         )
     elif open_rows:
         status = "waiting_for_recurrence"
-        recommendation = "Evidence gaps exist, but no clustered proposal has reached the recurrence threshold."
+        recommendation = (
+            "Evidence gaps exist, but no clustered proposal has reached the recurrence threshold."
+        )
     else:
         status = "waiting_for_gaps"
         recommendation = "Run real evaluations that emit evidence_gaps."
@@ -607,14 +633,11 @@ def apply_candidate(
     matched_gaps = [
         row["gap"]
         for row in _gap_rows(window_days, now=now)
-        if row["status"] == "open"
-        and (_rule_for_gap(row["gap"]) or {}).get("name") == name
+        if row["status"] == "open" and (_rule_for_gap(row["gap"]) or {}).get("name") == name
     ]
     with feedback._conn() as c:
         c.execute("BEGIN IMMEDIATE")
-        existing = c.execute(
-            "SELECT status FROM evidence_types WHERE name=?", (name,)
-        ).fetchone()
+        existing = c.execute("SELECT status FROM evidence_types WHERE name=?", (name,)).fetchone()
         if existing:
             c.execute(
                 "UPDATE evidence_types SET status='active', rationale=? WHERE name=?",
@@ -716,9 +739,7 @@ def _selftest() -> None:
             assert "upload_flow_evidence" in after_names, after
             assert after["status"] == "active_with_proposals", after
             assert after["active_type_review"]["active_count"] == 1, after
-            assert (
-                after["active_type_review"]["active"][0]["status"] == "monitoring"
-            ), after
+            assert after["active_type_review"]["active"][0]["status"] == "monitoring", after
             with feedback._conn() as c:
                 c.execute(
                     "UPDATE evidence_types SET added_ts=? WHERE name=?",
@@ -726,9 +747,7 @@ def _selftest() -> None:
                 )
             stale = active_type_review(prune_after_days=30, now=now)
             assert stale["prune_candidate_count"] == 1, stale
-            cited = feedback.record_evidence_type_citations(
-                ["post_action_state_capture"]
-            )
+            cited = feedback.record_evidence_type_citations(["post_action_state_capture"])
             assert cited == ["post_action_state_capture"], cited
             used = active_type_review(prune_after_days=30, now=now)
             assert used["active"][0]["status"] == "used", used
@@ -744,14 +763,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
     parser.add_argument("--min-recurrence", type=int, default=DEFAULT_MIN_RECURRENCE)
-    parser.add_argument(
-        "--prune-after-days", type=int, default=DEFAULT_PRUNE_AFTER_DAYS
-    )
+    parser.add_argument("--prune-after-days", type=int, default=DEFAULT_PRUNE_AFTER_DAYS)
     parser.add_argument("--min-influence", type=int, default=DEFAULT_MIN_INFLUENCE)
     parser.add_argument("--json", action="store_true", dest="as_json")
-    parser.add_argument(
-        "--apply", default="", help="approve a clustered candidate by name"
-    )
+    parser.add_argument("--apply", default="", help="approve a clustered candidate by name")
     parser.add_argument("--confirm-type", default="")
     args = parser.parse_args(argv)
     if args.selftest:
@@ -799,4 +814,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -55,9 +55,7 @@ def _init_experiment(tmp_path: Path, name: str = "exp-1") -> tuple[Path, Path, s
         "## Scope\n- Update math_utils.py\n\n"
         "## Acceptance Criteria\n- Deliberate-break test proves add behavior.\n"
     )
-    (exp / "eval-maps.json").write_text(
-        json.dumps({"judge-a": {"A": "codex", "B": "cursor"}})
-    )
+    (exp / "eval-maps.json").write_text(json.dumps({"judge-a": {"A": "codex", "B": "cursor"}}))
     return exp, repo, base_sha
 
 
@@ -76,12 +74,8 @@ def _to_synth_complete(exp: Path, repo: Path, commit: str, now: int = 100) -> di
         "commit": commit,
         "resume_history": [],
     }
-    state, _ = promotion.transition(
-        state, "synth_running", reason="fixture_launch", now=now + 1
-    )
-    state, _ = promotion.transition(
-        state, "synth_complete", reason="fixture_complete", now=now + 2
-    )
+    state, _ = promotion.transition(state, "synth_running", reason="fixture_launch", now=now + 1)
+    state, _ = promotion.transition(state, "synth_complete", reason="fixture_complete", now=now + 2)
     promotion._atomic_json(promotion.state_path(exp), state)
     return state
 
@@ -91,9 +85,7 @@ def _passing_verification() -> dict:
         "scope": {
             "ok": True,
             "changed_paths": ["math_utils.py", "tests/test_math_utils.py"],
-            "changed_paths_hash": promotion._hash(
-                ["math_utils.py", "tests/test_math_utils.py"]
-            ),
+            "changed_paths_hash": promotion._hash(["math_utils.py", "tests/test_math_utils.py"]),
         },
         "secret_scan": {"ok": True, "finding_ids": []},
         "local_verify": {
@@ -103,9 +95,7 @@ def _passing_verification() -> dict:
             "test_paths": ["tests/test_math_utils.py"],
         },
         "runtime_ac": {"ok": True, "verdict": "PASS"},
-        "repo_gates": [
-            {"ok": True, "argv": ["pytest", "tests/test_math_utils.py"]}
-        ],
+        "repo_gates": [{"ok": True, "argv": ["pytest", "tests/test_math_utils.py"]}],
         "deliberate_break_status": "PASS",
     }
     return {
@@ -137,9 +127,9 @@ def _verified_candidate(tmp_path: Path, name: str = "exp-verified") -> tuple[Pat
 
 
 def test_candidate_requires_verified_predecessor() -> None:
-    assert "candidate_ready" not in promotion.PROMOTION_TRANSITIONS["synth_complete"], (
-        "candidate_ready bypassed synth_verified"
-    )
+    assert (
+        "candidate_ready" not in promotion.PROMOTION_TRANSITIONS["synth_complete"]
+    ), "candidate_ready bypassed synth_verified"
 
 
 def test_synthesis_launch_artifact_prevents_duplicate_spawn(
@@ -166,9 +156,7 @@ def test_synthesis_launch_artifact_prevents_duplicate_spawn(
     monkeypatch.setattr(
         exp_abcd,
         "_spawn",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("duplicate synthesis spawn")
-        ),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("duplicate synthesis spawn")),
     )
     first = exp_abcd.synthesize("owner/repo", "exp-launch")
     second = exp_abcd.synthesize("owner/repo", "exp-launch")
@@ -281,20 +269,16 @@ def test_candidate_preserves_accepted_capability_and_workflow_lineage(
     _exp, state = _verified_candidate(tmp_path, "exp-lineage")
     influences = state["candidate"]["lineage"]["accepted_influences"]
     assert any(
-        row["influence_type"] == "capability"
-        and row["influence_id"] == "abcd-experiment"
+        row["influence_type"] == "capability" and row["influence_id"] == "abcd-experiment"
         for row in influences
     )
     assert any(
-        row["influence_type"] == "workflow"
-        and row["influence_id"] == "exp_abcd"
+        row["influence_type"] == "workflow" and row["influence_id"] == "exp_abcd"
         for row in influences
     )
 
 
-def test_merged_durable_mirrors_and_reverted_retires(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_merged_durable_mirrors_and_reverted_retires(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
     exp, state = _verified_candidate(tmp_path, "exp-durable")
     source_ids = [row["source_run_id"] for row in state["lineage"]["members"]]

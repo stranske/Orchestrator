@@ -28,6 +28,7 @@ Read-only and safe; `--selftest` runs fully offline. Simple-first + legible by
 design (PR #2350 §11 anti-over-engineering): no scoring, no learning here — this
 module only answers "does agent X have headroom right now?".
 """
+
 from __future__ import annotations
 
 import json
@@ -41,11 +42,12 @@ from pathlib import Path
 import execution_profiles
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
-LEDGER = HANDOFF / "capacity-ledger.ndjson"   # one JSON object/line: {ts, agent, count, cost_usd}
+LEDGER = HANDOFF / "capacity-ledger.ndjson"  # one JSON object/line: {ts, agent, count, cost_usd}
 OUT = HANDOFF / "capacity.json"
-SHED_DIR = HANDOFF / "capacity-shed"           # touch <agent> here on an observed 429 -> forces shed
+SHED_DIR = HANDOFF / "capacity-shed"  # touch <agent> here on an observed 429 -> forces shed
 
 OK, WARN, SHED, UNKNOWN = "ok", "warn", "shed", "unknown"
+
 
 # Static capacity model. Limit numbers are the public plan caps (PR #2350 Rev-2b);
 # the unpublished Claude/Codex 5h ceilings are read live from ccusage instead.
@@ -116,35 +118,62 @@ AGENTS = {
     # block_token_limit (optional): projected-tokens ceiling for the active 5h block. Unset =>
     # the seat is OK (usable) and 429-shed is the authoritative limiter; set it (env, from your
     # observed ccusage peaks) to get early warn/shed. ccusage has NO % in JSON, so this is the lever.
-    "codex":  {"account": "chatgpt-pro",      "model": "ccusage", "window": "5h",
-               "block_token_limit": _env_int_or_none("CODEX_BLOCK_TOKEN_LIMIT")},
-    "claude": {"account": "claude-team-max",  "model": "ccusage", "window": "5h+weekly",
-               "block_token_limit": _env_int_or_none("CLAUDE_BLOCK_TOKEN_LIMIT")},
-    "cursor": {"account": "cursor-pro-plus",  "model": "metered", "window": "monthly"},  # METERED, NOT free
+    "codex": {
+        "account": "chatgpt-pro",
+        "model": "ccusage",
+        "window": "5h",
+        "block_token_limit": _env_int_or_none("CODEX_BLOCK_TOKEN_LIMIT"),
+    },
+    "claude": {
+        "account": "claude-team-max",
+        "model": "ccusage",
+        "window": "5h+weekly",
+        "block_token_limit": _env_int_or_none("CLAUDE_BLOCK_TOKEN_LIMIT"),
+    },
+    "cursor": {
+        "account": "cursor-pro-plus",
+        "model": "metered",
+        "window": "monthly",
+    },  # METERED, NOT free
     # gemini/Antigravity: a REASONING seat, COMPUTE-METERED (not a fixed chat count — weighs request
     # complexity + accumulated chat-history length). Public behavior is a 5h refresh window plus a
     # broader weekly budget for AI Pro/Ultra. No usage API → these are LOCAL SOFT GUARDS using ledger
     # rows as estimated units; observed 429/rate-limit remains AUTHORITATIVE.
-    "gemini": {"account": "antigravity-ai-pro", "model": "windowed_prepaid",
-               "window_soft_cap": (_env_float_or_none("GEMINI_WINDOW_SOFT_UNITS")
-                                   or _env_float_or_none("GEMINI_5H_SOFT_CAP") or 8.0),
-               "weekly_soft_cap": (_env_float_or_none("GEMINI_WEEKLY_SOFT_UNITS")
-                                   or _env_float_or_none("GEMINI_WEEKLY_SOFT_CAP") or 280.0),
-               "reserve_fraction": _env_float_or_none("GEMINI_RESERVE_FRACTION") or 0.25,
-               "drain_minutes": _env_int_or_none("GEMINI_DRAIN_MINUTES") or 90,
-               "window": "5h+weekly"},
+    "gemini": {
+        "account": "antigravity-ai-pro",
+        "model": "windowed_prepaid",
+        "window_soft_cap": (
+            _env_float_or_none("GEMINI_WINDOW_SOFT_UNITS")
+            or _env_float_or_none("GEMINI_5H_SOFT_CAP")
+            or 8.0
+        ),
+        "weekly_soft_cap": (
+            _env_float_or_none("GEMINI_WEEKLY_SOFT_UNITS")
+            or _env_float_or_none("GEMINI_WEEKLY_SOFT_CAP")
+            or 280.0
+        ),
+        "reserve_fraction": _env_float_or_none("GEMINI_RESERVE_FRACTION") or 0.25,
+        "drain_minutes": _env_int_or_none("GEMINI_DRAIN_MINUTES") or 90,
+        "window": "5h+weekly",
+    },
     # vibe (Mistral) — PRIMARY Mistral lane: Le Chat Pro/Team sub = subscription login +
     # "all-day coding" flat allowance + PAYG overflow. No usage API, so 429-shed is
     # authoritative (modeled like cursor's flat, but a SEPARATE account).
-    "vibe":   {"account": "mistral-vibe-sub", "model": "flat",      "window": "subscription"},
+    "vibe": {"account": "mistral-vibe-sub", "model": "flat", "window": "subscription"},
     # aider — BACKUP-ONLY as of 2026-06-21 (owner directive): router.BACKUP_AGENTS holds it OUT of
     # routine auto-selection; reachable only on explicit demand (`--agent aider` / `only={"aider"}`).
     # Capacity is still tracked so backup use respects the credit. Optional API fallback (Codestral API
     # burns the pay-go credit; the Vibe sub does NOT cover API calls). Two-tier: flat plan (count/day) then $25.
     # plan_limit PLACEHOLDER pending the real Mistral API tier cap; 0 => pure-credit.
-    "aider":  {"account": "mistral-codestral", "model": "plan_then_credit",
-               "plan_limit": 2000, "plan_window": "daily",
-               "credit_usd": 25.0, "credit_window": "monthly", "window": "daily"},
+    "aider": {
+        "account": "mistral-codestral",
+        "model": "plan_then_credit",
+        "plan_limit": 2000,
+        "plan_window": "daily",
+        "credit_usd": 25.0,
+        "credit_window": "monthly",
+        "window": "daily",
+    },
 }
 WARN_FRAC = 0.8
 _WINDOW_SECONDS = {"daily": 86400, "monthly": 30 * 86400, "5h": 5 * 3600, "weekly": 7 * 86400}
@@ -153,8 +182,12 @@ _WINDOW_SECONDS = {"daily": 86400, "monthly": 30 * 86400, "5h": 5 * 3600, "weekl
 def agent_tiers() -> dict[str, str]:
     """Authoritative research tiers, derived from real agent/pool policy."""
     out = {
-        "cursor": "metered", "codex": "metered", "claude": "metered",
-        "gemini": "metered", "vibe": "flat", "aider": "paygo",
+        "cursor": "metered",
+        "codex": "metered",
+        "claude": "metered",
+        "gemini": "metered",
+        "vibe": "flat",
+        "aider": "paygo",
     }
     for pool in execution_profiles.CAPACITY_POOLS.values():
         if pool.get("agent"):
@@ -234,17 +267,25 @@ def profile_capacity_snapshot(
     for pool_id, definition in execution_profiles.CAPACITY_POOLS.items():
         used = float(usage.get(pool_id, 0.0))
         limit = limits.get(pool_id)
-        agent_state = ((agent_snapshot.get("agents") or {}).get(definition.get("agent")) or {}).get("state", UNKNOWN)
+        agent_state = ((agent_snapshot.get("agents") or {}).get(definition.get("agent")) or {}).get(
+            "state", UNKNOWN
+        )
         exhausted = limit is not None and used >= float(limit)
         pools[pool_id] = {
-            **definition, "used": used, "limit": limit,
+            **definition,
+            "used": used,
+            "limit": limit,
             "state": SHED if exhausted else agent_state,
         }
     profiles = {}
     for profile_id, profile in registry.items():
         mapped = list(profile.get("capacity_pool_ids") or [])
         states = [(pools.get(pool_id) or {}).get("state", UNKNOWN) for pool_id in mapped]
-        state = SHED if SHED in states else UNKNOWN if UNKNOWN in states else WARN if WARN in states else OK
+        state = (
+            SHED
+            if SHED in states
+            else UNKNOWN if UNKNOWN in states else WARN if WARN in states else OK
+        )
         profiles[profile_id] = {"state": state, "capacity_pool_ids": mapped}
     return {"pools": pools, "profiles": profiles}
 
@@ -259,13 +300,17 @@ def _ccusage_active_block(timeout_s: int = 30):
     configured ceiling. ccusage is installed globally (fast); npx is the fallback.
     """
     exe = shutil.which("ccusage")
-    cmd = [exe, "blocks", "--active", "-j"] if exe else ["npx", "-y", "ccusage@latest", "blocks", "--active", "-j"]
+    cmd = (
+        [exe, "blocks", "--active", "-j"]
+        if exe
+        else ["npx", "-y", "ccusage@latest", "blocks", "--active", "-j"]
+    )
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s).stdout
         data = json.loads(out)
     except Exception:
         return None
-    for b in (data.get("blocks") or data.get("data") or []):
+    for b in data.get("blocks") or data.get("data") or []:
         if b.get("isActive"):
             return b
     return None
@@ -340,6 +385,7 @@ def _model_health(agent: str, tier: str = "full"):
     """
     try:
         import adapters
+
         return adapters.model_health(agent, tier)
     except Exception:
         return None
@@ -354,6 +400,7 @@ def _unresolvable_tier(agent: str):
     """
     try:
         import adapters
+
         tiers = adapters.MODEL_TIER_NAMES
     except Exception:
         return None
@@ -373,6 +420,7 @@ def _auth_health(agent: str):
     """Non-billing credential preflight, or None when it can't be evaluated."""
     try:
         import adapters
+
         return adapters.auth_health(agent)
     except Exception:
         return None
@@ -386,8 +434,11 @@ def _tier_models(agent: str) -> dict:
     """
     try:
         import adapters
-        return {t: adapters.resolve_model(agent, adapters.effective_tier(agent, t))
-                for t in adapters.MODEL_TIER_NAMES}
+
+        return {
+            t: adapters.resolve_model(agent, adapters.effective_tier(agent, t))
+            for t in adapters.MODEL_TIER_NAMES
+        }
     except Exception:
         return {}
 
@@ -395,6 +446,7 @@ def _tier_models(agent: str) -> dict:
 def _tier_ceiling(agent: str):
     try:
         import adapters
+
         return adapters.tier_ceiling(agent)
     except Exception:
         return None
@@ -412,32 +464,47 @@ def compute(agent: str, cfg: dict, ccusage_block):
     # failure sheds; an unrunnable probe leaves the seat alone.
     auth = _auth_health(agent)
     if auth and auth.get("checked") and not auth.get("authenticated", True):
-        return SHED, f"not authenticated: {auth.get('reason')}", {
-            "policy": "auth-failed",
-            "availability": "unavailable_auth_failed",
-            "next_action": (f"Refresh {agent} credentials, then re-check with "
-                            f"`python3 capacity.py --json`. The fleet reads the credential FILE, "
-                            f"not an interactive login session."),
-        }
+        return (
+            SHED,
+            f"not authenticated: {auth.get('reason')}",
+            {
+                "policy": "auth-failed",
+                "availability": "unavailable_auth_failed",
+                "next_action": (
+                    f"Refresh {agent} credentials, then re-check with "
+                    f"`python3 capacity.py --json`. The fleet reads the credential FILE, "
+                    f"not an interactive login session."
+                ),
+            },
+        )
     unresolvable = _unresolvable_tier(agent)
     if unresolvable:
         tier, health = unresolvable
-        return SHED, f"model not dispatchable ({tier} tier): {health.get('reason')}", {
-            "policy": "model-unresolvable",
-            "availability": "unavailable_model_unresolved",
-            "next_action": (f"Point ORCH_{agent.upper()}_MODEL_{tier.upper()} at a model the "
-                            f"{agent} CLI lists (or fix adapters.MODEL_TIERS[{agent!r}]"
-                            f"[{tier!r}]); headroom is unusable until then."),
-            "unresolvable_tier": tier,
-            "configured_model": health.get("model"),
-            "advertised_models": health.get("advertised") or [],
-        }
+        return (
+            SHED,
+            f"model not dispatchable ({tier} tier): {health.get('reason')}",
+            {
+                "policy": "model-unresolvable",
+                "availability": "unavailable_model_unresolved",
+                "next_action": (
+                    f"Point ORCH_{agent.upper()}_MODEL_{tier.upper()} at a model the "
+                    f"{agent} CLI lists (or fix adapters.MODEL_TIERS[{agent!r}]"
+                    f"[{tier!r}]); headroom is unusable until then."
+                ),
+                "unresolvable_tier": tier,
+                "configured_model": health.get("model"),
+                "advertised_models": health.get("advertised") or [],
+            },
+        )
     model = cfg["model"]
     if model == "metered":
         # cursor draws a metered monthly pool, but the Auto bucket has headroom even when the API
         # sub-bucket is spent (verified: headless `--model auto` runs with API at 100%). So it's a
         # normal usable cheap lane; no reliable quota API, so 429-shed stays authoritative.
-        return OK, "METERED monthly pool, usable via Auto bucket (use --model auto); 429-shed authoritative"
+        return (
+            OK,
+            "METERED monthly pool, usable via Auto bucket (use --model auto); 429-shed authoritative",
+        )
     if model == "flat":
         return OK, "subscription all-day (flat); 429-shed authoritative; PAYG overflow"
     if model == "ccusage":
@@ -459,7 +526,10 @@ def compute(agent: str, cfg: dict, ccusage_block):
             if frac >= WARN_FRAC:
                 return WARN, tag
             return OK, tag
-        return OK, f"5h proj {proj_tokens / 1e6:.0f}M tok{cost_tag} (no cap set; 429-shed authoritative)"
+        return (
+            OK,
+            f"5h proj {proj_tokens / 1e6:.0f}M tok{cost_tag} (no cap set; 429-shed authoritative)",
+        )
     if model == "count":
         _, cnt = _ledger_usage(agent, cfg["window"])
         lim = cfg["limit"]
@@ -542,7 +612,9 @@ def compute(agent: str, cfg: dict, ccusage_block):
         elapsed = int(now - block_start)
         minutes_to_refresh = int(round((window_seconds - elapsed) / 60))
         availability = "usable"
-        next_action = "Use Gemini for substantial, self-contained reasoning work when it is the best fit."
+        next_action = (
+            "Use Gemini for substantial, self-contained reasoning work when it is the best fit."
+        )
 
         if elapsed >= drain_start and used_this_block < w_cap:
             policy = "drain"
@@ -555,62 +627,90 @@ def compute(agent: str, cfg: dict, ccusage_block):
             state = WARN
             policy = "weekly-soft-cap"
             availability = "usable_soft_constrained"
-            reason = (f"usable but weekly soft-budget constrained: weekly soft budget reached "
-                      f"{used_weekly:.1f}/{wk_cap:.0f} estimated units; no 429/shed flag present")
-            next_action = ("Prefer ok seats; use Gemini only for substantial good-fit work. "
-                           "Do not treat it as broken unless a 429/shed/auth failure appears.")
+            reason = (
+                f"usable but weekly soft-budget constrained: weekly soft budget reached "
+                f"{used_weekly:.1f}/{wk_cap:.0f} estimated units; no 429/shed flag present"
+            )
+            next_action = (
+                "Prefer ok seats; use Gemini only for substantial good-fit work. "
+                "Do not treat it as broken unless a 429/shed/auth failure appears."
+            )
         elif used_5h >= w_cap:
             state = WARN
             policy = "window-soft-cap"
             availability = "usable_soft_constrained"
-            reason = (f"usable but 5h soft-budget constrained: 5h soft budget reached "
-                      f"{used_5h:.1f}/{w_cap:.0f} estimated units; "
-                      f"~{minutes_to_refresh} min to window refresh; no 429/shed flag present")
-            next_action = ("Prefer ok seats until the 5h window refreshes; use Gemini only for substantial "
-                           "good-fit work. Do not treat it as broken unless a 429/shed/auth failure appears.")
+            reason = (
+                f"usable but 5h soft-budget constrained: 5h soft budget reached "
+                f"{used_5h:.1f}/{w_cap:.0f} estimated units; "
+                f"~{minutes_to_refresh} min to window refresh; no 429/shed flag present"
+            )
+            next_action = (
+                "Prefer ok seats until the 5h window refreshes; use Gemini only for substantial "
+                "good-fit work. Do not treat it as broken unless a 429/shed/auth failure appears."
+            )
         elif used_weekly >= WARN_FRAC * wk_cap:
             state = WARN
             availability = "usable_soft_constrained"
             reason = f"usable but near weekly soft budget: {used_weekly:.1f}/{wk_cap:.0f} estimated units"
-            next_action = "Prefer ok seats for marginal work; keep Gemini for substantial good-fit tasks."
+            next_action = (
+                "Prefer ok seats for marginal work; keep Gemini for substantial good-fit tasks."
+            )
         elif used_5h >= WARN_FRAC * w_cap:
             state = WARN
             availability = "usable_soft_constrained"
-            reason = (f"usable but near 5h soft budget: {used_5h:.1f}/{w_cap:.0f} estimated units; "
-                      f"~{minutes_to_refresh} min to window refresh")
-            next_action = "Prefer ok seats for marginal work; keep Gemini for substantial good-fit tasks."
+            reason = (
+                f"usable but near 5h soft budget: {used_5h:.1f}/{w_cap:.0f} estimated units; "
+                f"~{minutes_to_refresh} min to window refresh"
+            )
+            next_action = (
+                "Prefer ok seats for marginal work; keep Gemini for substantial good-fit tasks."
+            )
         elif policy == "reserve":
             state = WARN
             availability = "usable_reserve"
-            reason = (f"reserve mode: {used_5h:.1f}/{w_cap:.0f} estimated units (5h), "
-                      f"{used_weekly:.1f}/{wk_cap:.0f} weekly; hold ~{reserve_units:.1f} unit(s) for later")
-            next_action = "Prefer normal ok seats; keep Gemini available for substantial fallback work."
+            reason = (
+                f"reserve mode: {used_5h:.1f}/{w_cap:.0f} estimated units (5h), "
+                f"{used_weekly:.1f}/{wk_cap:.0f} weekly; hold ~{reserve_units:.1f} unit(s) for later"
+            )
+            next_action = (
+                "Prefer normal ok seats; keep Gemini available for substantial fallback work."
+            )
         else:
             state = OK
-            suffix = "drain mode: spend suitable AGY work before 5h refresh" if policy == "drain" else "steady windowed compute"
+            suffix = (
+                "drain mode: spend suitable AGY work before 5h refresh"
+                if policy == "drain"
+                else "steady windowed compute"
+            )
             if policy == "drain":
                 availability = "usable_drain"
                 next_action = "Spend suitable Gemini work before the 5h window refresh wastes remaining headroom."
-            reason = (f"{used_5h:.1f}/{w_cap:.0f} estimated units (5h), "
-                      f"{used_weekly:.1f}/{wk_cap:.0f} weekly; {suffix}")
+            reason = (
+                f"{used_5h:.1f}/{w_cap:.0f} estimated units (5h), "
+                f"{used_weekly:.1f}/{wk_cap:.0f} weekly; {suffix}"
+            )
 
-        return state, reason, {
-            "policy": policy,
-            "availability": availability,
-            "next_action": next_action,
-            "configured_model": configured_model,   # what a dispatch would actually send to agy
-            "used_5h": used_5h,
-            "used_weekly": used_weekly,
-            "used_this_block": used_this_block,
-            "estimated_units_5h": used_5h,
-            "estimated_units_weekly": used_weekly,
-            "window_soft_cap": w_cap,
-            "weekly_soft_cap": wk_cap,
-            "soft_units_5h": w_cap,
-            "soft_units_weekly": wk_cap,
-            "elapsed_in_window": elapsed,
-            "minutes_to_window_refresh": minutes_to_refresh,
-        }
+        return (
+            state,
+            reason,
+            {
+                "policy": policy,
+                "availability": availability,
+                "next_action": next_action,
+                "configured_model": configured_model,  # what a dispatch would actually send to agy
+                "used_5h": used_5h,
+                "used_weekly": used_weekly,
+                "used_this_block": used_this_block,
+                "estimated_units_5h": used_5h,
+                "estimated_units_weekly": used_weekly,
+                "window_soft_cap": w_cap,
+                "weekly_soft_cap": wk_cap,
+                "soft_units_5h": w_cap,
+                "soft_units_weekly": wk_cap,
+                "elapsed_in_window": elapsed,
+                "minutes_to_window_refresh": minutes_to_refresh,
+            },
+        )
     return UNKNOWN, "no capacity model for agent"
 
 
@@ -619,6 +719,7 @@ def _capability_heartbeat(event_type: str, **kw) -> None:
     first thing the tick computes, and a capability-ledger problem must not be able to stop it."""
     try:
         import capabilities
+
         capabilities.production_heartbeat("windowed-capacity-policy", event_type, **kw)
     except Exception:
         pass
@@ -647,14 +748,19 @@ def build(ccusage_block=None) -> dict:
             # snapshot itself rather than only at dispatch time. None => CLI default applies.
             "tier_models": _tier_models(agent),
             "tier_ceiling": _tier_ceiling(agent),  # None => uncapped; else routine spend stops here
-            "auth": (_auth_health(agent) or {}),   # {} => not evaluable; never read as a failure
-            **(meta or {})
+            "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
+            **(meta or {}),
         }
     proj = (ccusage_block or {}).get("projection") or {}
-    base = {"generated_at": int(time.time()),
-            "ccusage_active": {"proj_tokens": proj.get("totalTokens"), "proj_cost": proj.get("totalCost")}
-            if ccusage_block else None,
-            "agents": agents}
+    base = {
+        "generated_at": int(time.time()),
+        "ccusage_active": (
+            {"proj_tokens": proj.get("totalTokens"), "proj_cost": proj.get("totalCost")}
+            if ccusage_block
+            else None
+        ),
+        "agents": agents,
+    }
     base.update(
         profile_capacity_snapshot(
             base,
@@ -677,8 +783,11 @@ def _selftest():
     assert compute("codex", capped, blk(120_000_000))[0] == SHED
     # cursor is METERED now: OK unless 429-shed (no reliable quota API); route table deprioritizes it
     cur_state, cur_reason = compute("cursor", AGENTS["cursor"], None)
-    assert cur_state == OK and "METERED" in cur_reason, (cur_state, cur_reason)   # usable metered lane (Auto bucket)
-    assert compute("vibe", AGENTS["vibe"], None)[0] == OK    # vibe flat sub is ok unless shed
+    assert cur_state == OK and "METERED" in cur_reason, (
+        cur_state,
+        cur_reason,
+    )  # usable metered lane (Auto bucket)
+    assert compute("vibe", AGENTS["vibe"], None)[0] == OK  # vibe flat sub is ok unless shed
     # Unit estimation tests
     assert _estimate_gemini_units({"task_type": "implement"}) == 4.0
     assert _estimate_gemini_units({"task_type": "testgen"}) == 4.0
@@ -690,6 +799,7 @@ def _selftest():
 
     # Gemini prepaid compute tests using temporary ledger and pinned time.
     import tempfile
+
     global LEDGER
     old_ledger = LEDGER
     tmp = Path(tempfile.mkdtemp(prefix="capacity-gemini-selftest-"))
@@ -700,7 +810,9 @@ def _selftest():
     try:
         # Auth gate: an EXPLICIT credential failure sheds the seat regardless of headroom.
         globals()["_auth_health"] = lambda agent: {
-            "agent": agent, "authenticated": False, "checked": True,
+            "agent": agent,
+            "authenticated": False,
+            "checked": True,
             "reason": "Error: Authentication required. Please run 'agent login'",
         }
         st, rs, mt = compute("cursor", AGENTS["cursor"], None)
@@ -708,18 +820,31 @@ def _selftest():
         assert "not authenticated" in rs, rs
         # An UNRUNNABLE probe must not shed: checked=False is unknown, not failure.
         globals()["_auth_health"] = lambda agent: {
-            "agent": agent, "authenticated": True, "checked": False, "reason": "no probe",
+            "agent": agent,
+            "authenticated": True,
+            "checked": False,
+            "reason": "no probe",
         }
         assert compute("cursor", AGENTS["cursor"], None)[0] == OK, "unknown auth must not shed"
         globals()["_auth_health"] = lambda agent: None
         assert compute("cursor", AGENTS["cursor"], None)[0] == OK, "None auth must not shed"
         # Pin the model preflight so the budget cases below stay offline+deterministic.
         globals()["_model_health"] = lambda agent, tier="full": {
-            "agent": agent, "tier": tier, "model": "gemini-3.1-pro-high", "resolvable": True,
-            "advertised": ["gemini-3.1-pro-high"], "reason": "selftest", "source": "pinned_default",
+            "agent": agent,
+            "tier": tier,
+            "model": "gemini-3.1-pro-high",
+            "resolvable": True,
+            "advertised": ["gemini-3.1-pro-high"],
+            "reason": "selftest",
+            "source": "pinned_default",
         }
-        gem_cfg = dict(AGENTS["gemini"], window_soft_cap=8.0, weekly_soft_cap=20.0,
-                       reserve_fraction=0.25, drain_minutes=90)
+        gem_cfg = dict(
+            AGENTS["gemini"],
+            window_soft_cap=8.0,
+            weekly_soft_cap=20.0,
+            reserve_fraction=0.25,
+            drain_minutes=90,
+        )
         fixed_now = 1_800_000.0
         block_start = fixed_now - (fixed_now % _WINDOW_SECONDS["5h"])
         early_now = block_start + 1200
@@ -730,7 +855,12 @@ def _selftest():
         assert state == OK and meta["policy"] == "steady", (state, meta)
 
         # Future timestamps are ignored instead of poisoning the current window.
-        LEDGER.write_text(json.dumps({"ts": early_now + 3600, "agent": "gemini", "count": 1, "task_type": "implement"}) + "\n")
+        LEDGER.write_text(
+            json.dumps(
+                {"ts": early_now + 3600, "agent": "gemini", "count": 1, "task_type": "implement"}
+            )
+            + "\n"
+        )
         state, reason, meta = compute("gemini", gem_cfg, None)
         assert state == OK and meta["used_5h"] == 0.0, (state, reason, meta)
 
@@ -750,14 +880,20 @@ def _selftest():
         assert state == OK and meta["policy"] == "drain", (state, reason, meta)
 
         # 5h soft cap reached -> WARN/window-soft-cap, not SHED; 429 flag is the hard limiter.
-        recs = [{"ts": block_start + 1000 * i, "agent": "gemini", "count": 1, "task_type": "implement"} for i in range(2)]
+        recs = [
+            {"ts": block_start + 1000 * i, "agent": "gemini", "count": 1, "task_type": "implement"}
+            for i in range(2)
+        ]
         LEDGER.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
         state, reason, meta = compute("gemini", gem_cfg, None)
         assert state == WARN and meta["policy"] == "window-soft-cap", (state, reason, meta)
 
         # Weekly soft cap reached outside the current 5h window -> WARN/weekly-soft-cap.
         old_ts = early_now - (_WINDOW_SECONDS["5h"] + 3600)
-        recs = [{"ts": old_ts - 60 * i, "agent": "gemini", "count": 1, "task_type": "implement"} for i in range(5)]
+        recs = [
+            {"ts": old_ts - 60 * i, "agent": "gemini", "count": 1, "task_type": "implement"}
+            for i in range(5)
+        ]
         LEDGER.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
         time.time = lambda: early_now
         state, reason, meta = compute("gemini", gem_cfg, None)
@@ -773,31 +909,52 @@ def _selftest():
         # rotted gemini-2.5-pro pin report full headroom while every dispatch exited 1.
         def _broken(agent, tier="full"):
             if tier != "cheap":
-                return {"agent": agent, "tier": tier, "model": "gemini-3.1-pro-high",
-                        "resolvable": True, "advertised": ["gemini-3.1-pro-high"],
-                        "reason": "ok", "source": "pinned_default"}
-            return {"agent": agent, "tier": tier, "model": "gemini-2.5-pro", "resolvable": False,
-                    "advertised": ["gemini-3.1-pro-high"], "source": "pinned_default",
-                    "reason": "gemini-2.5-pro is not advertised by gemini"}
+                return {
+                    "agent": agent,
+                    "tier": tier,
+                    "model": "gemini-3.1-pro-high",
+                    "resolvable": True,
+                    "advertised": ["gemini-3.1-pro-high"],
+                    "reason": "ok",
+                    "source": "pinned_default",
+                }
+            return {
+                "agent": agent,
+                "tier": tier,
+                "model": "gemini-2.5-pro",
+                "resolvable": False,
+                "advertised": ["gemini-3.1-pro-high"],
+                "source": "pinned_default",
+                "reason": "gemini-2.5-pro is not advertised by gemini",
+            }
+
         globals()["_model_health"] = _broken
         state, reason, meta = compute("gemini", gem_cfg, None)
-        assert state == SHED, (state, reason, meta)              # not OK, and not merely WARN
+        assert state == SHED, (state, reason, meta)  # not OK, and not merely WARN
         assert meta["availability"] == "unavailable_model_unresolved", meta
-        assert meta["unresolvable_tier"] == "cheap", meta        # ANY broken tier sheds the seat
-        assert meta["configured_model"] == "gemini-2.5-pro" and "not advertised" in reason, (reason, meta)
+        assert meta["unresolvable_tier"] == "cheap", meta  # ANY broken tier sheds the seat
+        assert meta["configured_model"] == "gemini-2.5-pro" and "not advertised" in reason, (
+            reason,
+            meta,
+        )
         # The gate is seat-level, not gemini-special: it applies to every agent uniformly.
         state_c, reason_c, meta_c = compute("codex", AGENTS["codex"], None)
         assert state_c == SHED and meta_c["unresolvable_tier"] == "cheap", (state_c, meta_c)
         # An unreadable model list must NOT shed a working seat (offline box / CLI absent).
         globals()["_model_health"] = lambda agent, tier="full": None
-        assert compute("gemini", gem_cfg, None)[0] == OK, "unknown model list must not shed the seat"
-        assert compute("codex", AGENTS["codex"], None)[0] == OK, "unknown must not shed codex either"
+        assert (
+            compute("gemini", gem_cfg, None)[0] == OK
+        ), "unknown model list must not shed the seat"
+        assert (
+            compute("codex", AGENTS["codex"], None)[0] == OK
+        ), "unknown must not shed codex either"
     finally:
         globals()["_model_health"] = original_health
         globals()["_auth_health"] = original_auth
         time.time = original_time
         LEDGER = old_ledger
         import shutil
+
         shutil.rmtree(tmp, ignore_errors=True)
     # aider two-tier: empty ledger => plan headroom => OK
     assert compute("aider", AGENTS["aider"], None)[0] == OK
@@ -818,7 +975,9 @@ def _selftest():
     finally:
         if created:
             flag.unlink()
-    print("capacity.py selftest: OK (4-state enum, shed override, METERED cursor pool, count/dollar/windowed-prepaid capacity)")
+    print(
+        "capacity.py selftest: OK (4-state enum, shed override, METERED cursor pool, count/dollar/windowed-prepaid capacity)"
+    )
 
 
 def main(argv):

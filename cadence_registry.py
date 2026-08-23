@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "capability-lifecycle",
@@ -43,7 +42,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "log": "evidence-acquisition.log",
         "gate": "a capability unblock() marks feedable; a documented default-off switch is never fed",
         "next_transition": "stays shadow-only until ORCH_EVIDENCE_ACQUISITION=1; feedable 0 is the "
-                           "honest state while every starved capability is held by a default-off gate",
+        "honest state while every starved capability is held by a default-off gate",
     },
     {
         "key": "keepalive-stage2-plan",
@@ -95,7 +94,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "log": "redirect-apply.log",
         "gate": "apply requires ORCH_REDIRECT_APPLY_BOOTSTRAP=1; linking is unconditional",
         "next_transition": "retry the outcome link after backoff; the bootstrap self-disables once "
-                           "the Stage-2 deficits close",
+        "the Stage-2 deficits close",
     },
     {
         "key": "capability-propensity",
@@ -104,11 +103,11 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "artifact": "capability-propensity.json",
         "log": "capability-propensity.log",
         "gate": "none; pure read of the capability ledger. "
-                "ORCH_CAPABILITY_PROPENSITY_DISABLED=1 stops the advisor ranking",
+        "ORCH_CAPABILITY_PROPENSITY_DISABLED=1 stops the advisor ranking",
         "next_transition": "while capabilities_with_evidence is 0 every propensity is the PRIOR, "
-                           "not a measurement, and the step says so on every run. It becomes a "
-                           "measurement when callers record trigger/usefulness against the "
-                           "advice:<digest> they were given",
+        "not a measurement, and the step says so on every run. It becomes a "
+        "measurement when callers record trigger/usefulness against the "
+        "advice:<digest> they were given",
     },
     {
         # EVERY TICK, and deliberately stampless (like capability-lifecycle): the step is a cheap
@@ -121,12 +120,12 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "artifact": "tick-capability-evidence.json",
         "log": "tick-capability-evidence.log",
         "gate": "ORCH_TICK_EVIDENCE_DISABLED=1 or ORCH_DISABLE_STEPS=tick-capability-evidence "
-                "makes it inert; a verdict additionally requires the graded capability's own "
-                "cadence artifact to have been regenerated since the last evaluation",
+        "makes it inert; a verdict additionally requires the graded capability's own "
+        "cadence artifact to have been regenerated since the last evaluation",
         "next_transition": "records at most one verdict per bound capability per UTC day; while "
-                           "`gradable` is non-zero and `verdicts_recorded` is 0 the step is waiting "
-                           "on those capabilities' own cadences, and a `gradable` of 0 is a "
-                           "deadlock rather than patience",
+        "`gradable` is non-zero and `verdicts_recorded` is 0 the step is waiting "
+        "on those capabilities' own cadences, and a `gradable` of 0 is a "
+        "deadlock rather than patience",
     },
     {
         "key": "capability-firing-monitor",
@@ -135,10 +134,10 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "artifact": "capability-firing-monitor.json",
         "log": "capability-firing-monitor.log",
         "gate": "none; read-only apart from its own history file. "
-                "ORCH_FIRING_MONITOR_DISABLED=1 stops the write",
+        "ORCH_FIRING_MONITOR_DISABLED=1 stops the write",
         "next_transition": "the regression alarm needs two snapshots, so the first run only "
-                           "establishes a baseline; from the second it reports any capability that "
-                           "used to fire and stopped",
+        "establishes a baseline; from the second it reports any capability that "
+        "used to fire and stopped",
     },
     {
         "key": "switch-review",
@@ -148,7 +147,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "log": "switch-review.log",
         "gate": "writes require ORCH_SWITCH_REVIEW=1; report-only otherwise",
         "next_transition": "re-raise held/idle switches weekly; questions auto-ratify to the "
-                           "conservative default so no backlog can form",
+        "conservative default so no backlog can form",
     },
     {
         "key": "feature-scan",
@@ -178,7 +177,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "log": "issue-readiness.log",
         "gate": "GitHub search+core capacity; writes require ORCH_ISSUE_AUTOREADY=1",
         "next_transition": "retry readiness assessment after backoff; unreviewed risk issues "
-                           "auto-ratify to ready at owner-question expiry, so nothing stalls",
+        "auto-ratify to ready at owner-question expiry, so nothing stalls",
     },
     {
         "key": "durability-sweep",
@@ -309,17 +308,13 @@ def inspect_cadence(
 ) -> dict:
     current = int(time.time()) if now is None else int(now)
     retry_h = int(
-        os.environ.get("ORCH_CADENCE_RETRY_HOURS", "6")
-        if retry_hours is None
-        else retry_hours
+        os.environ.get("ORCH_CADENCE_RETRY_HOURS", "6") if retry_hours is None else retry_hours
     )
     steps = []
     for declared in registry or CADENCE_STEPS:
         row = dict(declared)
         key = row["key"]
-        success_path = (
-            state_dir / row["success_stamp"] if row.get("success_stamp") else None
-        )
+        success_path = state_dir / row["success_stamp"] if row.get("success_stamp") else None
         failure_path = state_dir / f".fail-{key}"
         success_ts = _mtime(success_path) if success_path else None
         failure_ts = _mtime(failure_path)
@@ -333,14 +328,10 @@ def inspect_cadence(
         else:
             success_status = "stale" if success_age > stale_after_s else "fresh"
         try:
-            failure_count = (
-                int(failure_path.read_text().strip()) if failure_ts is not None else 0
-            )
+            failure_count = int(failure_path.read_text().strip()) if failure_ts is not None else 0
         except (OSError, ValueError):
             failure_count = 1 if failure_ts is not None else 0
-        retry_after_s = (
-            max(0, retry_h * 3600 - int(failure_age or 0)) if failure_count else 0
-        )
+        retry_after_s = max(0, retry_h * 3600 - int(failure_age or 0)) if failure_count else 0
         if failure_count:
             retry_state = "backoff" if retry_after_s else "ready_to_retry"
             exact_reason = f"{key} failed {failure_count} consecutive attempt(s)"
@@ -361,9 +352,7 @@ def inspect_cadence(
                 "retry_state": retry_state,
                 "retry_after_s": retry_after_s,
                 "exact_reason": exact_reason,
-                "artifact_path": str(state_dir / row["artifact"])
-                if row.get("artifact")
-                else None,
+                "artifact_path": str(state_dir / row["artifact"]) if row.get("artifact") else None,
                 "log_path": str(state_dir / row["log"]) if row.get("log") else None,
             }
         )
@@ -375,16 +364,13 @@ def inspect_cadence(
         "step_count": len(steps),
         "failed_step_count": len(failed),
         "backoff_step_count": sum(row["retry_state"] == "backoff" for row in failed),
-        "ready_to_retry_count": sum(
-            row["retry_state"] == "ready_to_retry" for row in failed
-        ),
+        "ready_to_retry_count": sum(row["retry_state"] == "ready_to_retry" for row in failed),
         "steps": steps,
         # Compatibility fields retained while callers migrate to the all-step rows.
         "durability_sweep_stamp": durability.get("success_path"),
         "durability_sweep_stamp_status": durability.get("success_status"),
         "durability_sweep_stamp_age_s": durability.get("success_age_s"),
-        "durability_sweep_stale_after_s": (int(durability.get("cadence_days") or 0) + 1)
-        * 86400
+        "durability_sweep_stale_after_s": (int(durability.get("cadence_days") or 0) + 1) * 86400
         + 12 * 3600,
     }
 
@@ -398,9 +384,7 @@ def shell_functions() -> str:
         key = row["key"]
         stamp = row.get("success_stamp") or ""
         stamp_cases.append(f"    {key}) printf '%s\\n' '{stamp}' ;;")
-        day_cases.append(
-            f"    {key}) printf '%s\\n' '{int(row.get('cadence_days') or 0)}' ;;"
-        )
+        day_cases.append(f"    {key}) printf '%s\\n' '{int(row.get('cadence_days') or 0)}' ;;")
         known_cases.append(f"    {key}) return 0 ;;")
     return "\n".join(
         [
@@ -423,9 +407,7 @@ def shell_functions() -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("json", "shell"), nargs="?", default="json")
-    parser.add_argument(
-        "--state-dir", type=Path, default=Path.home() / ".codex/orchestrator"
-    )
+    parser.add_argument("--state-dir", type=Path, default=Path.home() / ".codex/orchestrator")
     args = parser.parse_args(argv)
     if args.command == "shell":
         print(shell_functions())

@@ -7,6 +7,7 @@ current exploration review, local backlog/capacity snapshots when available, and
 the feedback DB, then reports exactly what evidence is still needed before any
 epsilon-greedy vs Thompson-hybrid default decision is actionable.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,7 +16,6 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
 
 import backlog
 import capacity
@@ -39,15 +39,23 @@ def _load_json_file(path: Path | None) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _backlog_items(backlog_path: Path | None = None, backlog_payload: dict | None = None) -> list[dict]:
-    payload = backlog_payload if backlog_payload is not None else _load_json_file(backlog_path or backlog.BACKLOG_JSON)
+def _backlog_items(
+    backlog_path: Path | None = None, backlog_payload: dict | None = None
+) -> list[dict]:
+    payload = (
+        backlog_payload
+        if backlog_payload is not None
+        else _load_json_file(backlog_path or backlog.BACKLOG_JSON)
+    )
     if not payload:
         return []
     items = payload.get("items") or []
     return [item for item in items if isinstance(item, dict)]
 
 
-def _capacity_snapshot(capacity_path: Path | None = None, capacity_payload: dict | None = None) -> dict:
+def _capacity_snapshot(
+    capacity_path: Path | None = None, capacity_payload: dict | None = None
+) -> dict:
     if capacity_payload is not None:
         return capacity_payload
     payload = _load_json_file(capacity_path or capacity.OUT)
@@ -82,19 +90,23 @@ def _mode_deficits(review: dict) -> list[dict]:
     for mode in MODES:
         row = by_mode.get(mode) or {}
         outcome_runs = int(row.get("outcome_runs") or 0)
-        deficits.append({
-            "mode": mode,
-            "target_outcome_runs": target,
-            "outcome_runs": outcome_runs,
-            "remaining_outcome_runs": max(0, target - outcome_runs),
-            "success_rate": row.get("success_rate"),
-            "task_types": row.get("task_types") or {},
-            "agents": row.get("agents") or {},
-        })
+        deficits.append(
+            {
+                "mode": mode,
+                "target_outcome_runs": target,
+                "outcome_runs": outcome_runs,
+                "remaining_outcome_runs": max(0, target - outcome_runs),
+                "success_rate": row.get("success_rate"),
+                "task_types": row.get("task_types") or {},
+                "agents": row.get("agents") or {},
+            }
+        )
     return deficits
 
 
-def _route_agent_observations(task_type: str, *, version: int | None, route_table: dict) -> dict[str, int]:
+def _route_agent_observations(
+    task_type: str, *, version: int | None, route_table: dict
+) -> dict[str, int]:
     agents = exploration_review._route_agents(task_type, route_table)
     try:
         rows = feedback.current_weights(task_type, version=version)
@@ -110,23 +122,33 @@ def _route_coverage_deficits(review: dict, *, route_table: dict) -> dict:
     task_rows = []
     for task in review.get("tasks") or []:
         task_type = task["task_type"]
-        agent_observations = _route_agent_observations(task_type, version=version, route_table=route_table)
+        agent_observations = _route_agent_observations(
+            task_type, version=version, route_table=route_table
+        )
         total_obs = int(task.get("total_observations") or 0)
         observed_agents = int(task.get("observed_agents") or 0)
         top_min = int(task.get("top_agent_min_observations") or 0)
-        task_rows.append({
-            "task_type": task_type,
-            "ready_for_default_review": bool(task.get("ready_for_default_review")),
-            "total_observations": total_obs,
-            "needed_total_observations": max(0, thresholds["min_task_observations"] - total_obs),
-            "observed_agents": observed_agents,
-            "needed_observed_agents": max(0, thresholds["min_observed_agents"] - observed_agents),
-            "top_agents": task.get("top_agents") or [],
-            "top_agent_min_observations": top_min,
-            "needed_top_agent_observations": max(0, thresholds["min_top_agent_observations"] - top_min),
-            "zero_observation_agents": task.get("zero_observation_agents") or [],
-            "agent_observations": agent_observations,
-        })
+        task_rows.append(
+            {
+                "task_type": task_type,
+                "ready_for_default_review": bool(task.get("ready_for_default_review")),
+                "total_observations": total_obs,
+                "needed_total_observations": max(
+                    0, thresholds["min_task_observations"] - total_obs
+                ),
+                "observed_agents": observed_agents,
+                "needed_observed_agents": max(
+                    0, thresholds["min_observed_agents"] - observed_agents
+                ),
+                "top_agents": task.get("top_agents") or [],
+                "top_agent_min_observations": top_min,
+                "needed_top_agent_observations": max(
+                    0, thresholds["min_top_agent_observations"] - top_min
+                ),
+                "zero_observation_agents": task.get("zero_observation_agents") or [],
+                "agent_observations": agent_observations,
+            }
+        )
     task_rows.sort(
         key=lambda row: (
             row["ready_for_default_review"],
@@ -136,7 +158,9 @@ def _route_coverage_deficits(review: dict, *, route_table: dict) -> dict:
     )
     return {
         "ready_task_count": review.get("ready_task_count"),
-        "needed_ready_task_count": max(0, thresholds["min_ready_tasks"] - int(review.get("ready_task_count") or 0)),
+        "needed_ready_task_count": max(
+            0, thresholds["min_ready_tasks"] - int(review.get("ready_task_count") or 0)
+        ),
         "task_count": review.get("task_count"),
         "zero_observation_cell_rate": review.get("zero_observation_cell_rate"),
         "max_zero_observation_cell_rate": thresholds["max_zero_cell_rate"],
@@ -144,7 +168,9 @@ def _route_coverage_deficits(review: dict, *, route_table: dict) -> dict:
     }
 
 
-def _candidate_task_types(items: list[dict], outcome_counts: dict[str, int], coverage: dict) -> list[dict]:
+def _candidate_task_types(
+    items: list[dict], outcome_counts: dict[str, int], coverage: dict
+) -> list[dict]:
     opener_counts: dict[str, int] = {}
     sample_targets: dict[str, list[str]] = {}
     for item in items:
@@ -177,18 +203,22 @@ def _candidate_task_types(items: list[dict], outcome_counts: dict[str, int], cov
                 if has_outcome_path
                 else "candidate low-risk opener task type; confirm outcome path before Stage 2"
             )
-        candidates.append({
-            "task_type": task_type,
-            "recommended": recommended,
-            "reason": reason,
-            "opener_backlog_items": opener_items,
-            "recent_outcome_rows": outcome_rows,
-            "has_outcome_path": has_outcome_path,
-            "route_ready": bool(route.get("ready_for_default_review")),
-            "needed_total_observations": route.get("needed_total_observations"),
-            "needed_observed_agents": route.get("needed_observed_agents"),
-            "sample_targets": [target for target in sample_targets.get(task_type, []) if target],
-        })
+        candidates.append(
+            {
+                "task_type": task_type,
+                "recommended": recommended,
+                "reason": reason,
+                "opener_backlog_items": opener_items,
+                "recent_outcome_rows": outcome_rows,
+                "has_outcome_path": has_outcome_path,
+                "route_ready": bool(route.get("ready_for_default_review")),
+                "needed_total_observations": route.get("needed_total_observations"),
+                "needed_observed_agents": route.get("needed_observed_agents"),
+                "sample_targets": [
+                    target for target in sample_targets.get(task_type, []) if target
+                ],
+            }
+        )
     candidates.sort(
         key=lambda row: (
             not row["recommended"],
@@ -215,24 +245,28 @@ def _capacity_summary(snapshot: dict) -> dict:
     }
 
 
-def _supervised_windows(mode_deficits: list[dict], candidates: list[dict], capacity_summary: dict) -> dict:
+def _supervised_windows(
+    mode_deficits: list[dict], candidates: list[dict], capacity_summary: dict
+) -> dict:
     recommended_tasks = [row["task_type"] for row in candidates if row.get("recommended")][:3]
     has_capacity = bool(capacity_summary.get("usable_agents"))
     windows = []
     for deficit in mode_deficits:
         remaining = int(deficit["remaining_outcome_runs"])
-        windows.append({
-            "mode": deficit["mode"],
-            "needed_outcomes": remaining,
-            "eligible": remaining > 0 and bool(recommended_tasks) and has_capacity,
-            "env": {
-                "ORCH_EXPLORATION_EVIDENCE": "1",
-                "ORCH_EXPLORATION_MODE": deficit["mode"],
-                "ORCH_EXPLORATION_RATE": f"{SUPERVISED_COLLECTION_RATE:.2f}",
-            },
-            "candidate_task_types": recommended_tasks,
-            "max_exploratory_dispatches_per_day": SUPERVISED_COLLECTION_DAILY_CAP,
-        })
+        windows.append(
+            {
+                "mode": deficit["mode"],
+                "needed_outcomes": remaining,
+                "eligible": remaining > 0 and bool(recommended_tasks) and has_capacity,
+                "env": {
+                    "ORCH_EXPLORATION_EVIDENCE": "1",
+                    "ORCH_EXPLORATION_MODE": deficit["mode"],
+                    "ORCH_EXPLORATION_RATE": f"{SUPERVISED_COLLECTION_RATE:.2f}",
+                },
+                "candidate_task_types": recommended_tasks,
+                "max_exploratory_dispatches_per_day": SUPERVISED_COLLECTION_DAILY_CAP,
+            }
+        )
     return {
         "enabled_by_default": False,
         "requires_opt_in": "ORCH_EXPLORATION_EVIDENCE=1",
@@ -283,11 +317,21 @@ def _readiness_summary(
     if not route_ready:
         blocks.append("route-weight coverage gates below threshold")
     if not any(row.get("recommended") for row in candidates):
-        blocks.append("no low-risk opener task types currently recommended for supervised collection")
-    max_remaining = max((int(row.get("remaining_outcome_runs") or 0) for row in mode_deficits), default=0)
+        blocks.append(
+            "no low-risk opener task types currently recommended for supervised collection"
+        )
+    max_remaining = max(
+        (int(row.get("remaining_outcome_runs") or 0) for row in mode_deficits), default=0
+    )
     recorded = review.get("recorded_exploration_evidence") or {}
-    velocity = (float(recorded.get("outcome_exploration_runs") or 0) / float(window_days)) if window_days else 0.0
-    estimated_days = int((max_remaining + velocity - 1) // velocity) if velocity > 0 and max_remaining else None
+    velocity = (
+        (float(recorded.get("outcome_exploration_runs") or 0) / float(window_days))
+        if window_days
+        else 0.0
+    )
+    estimated_days = (
+        int((max_remaining + velocity - 1) // velocity) if velocity > 0 and max_remaining else None
+    )
     return {
         "overall_ready": direct_ready and route_ready,
         "blocks_to_stage_2_or_review": blocks,
@@ -317,17 +361,30 @@ def build_plan(
     cap_summary = _capacity_summary(_capacity_snapshot(capacity_path, capacity_payload))
     windows = _supervised_windows(mode_deficits, candidates, cap_summary)
 
-    direct_ready = bool((review.get("recorded_exploration_evidence") or {}).get("ready_for_direct_comparison"))
+    direct_ready = bool(
+        (review.get("recorded_exploration_evidence") or {}).get("ready_for_direct_comparison")
+    )
     route_ready = (
         int(review.get("ready_task_count") or 0) >= review["thresholds"]["min_ready_tasks"]
-        and float(review.get("zero_observation_cell_rate") or 1.0) <= review["thresholds"]["max_zero_cell_rate"]
+        and float(review.get("zero_observation_cell_rate") or 1.0)
+        <= review["thresholds"]["max_zero_cell_rate"]
     )
     default_mode = review.get("current_default")
     recommendation = review.get("recommendation")
-    if direct_ready and route_ready and default_mode == "thompson-hybrid" and recommendation == "consider_thompson_hybrid_default":
+    if (
+        direct_ready
+        and route_ready
+        and default_mode == "thompson-hybrid"
+        and recommendation == "consider_thompson_hybrid_default"
+    ):
         stage = "stage_4_default_review_complete"
         next_action = "monitor Thompson-hybrid default outcomes and durability; no route-coverage backfill needed"
-    elif direct_ready and route_ready and default_mode == "epsilon-greedy" and recommendation == "keep_epsilon_greedy":
+    elif (
+        direct_ready
+        and route_ready
+        and default_mode == "epsilon-greedy"
+        and recommendation == "keep_epsilon_greedy"
+    ):
         stage = "stage_4_default_review_complete"
         next_action = "keep epsilon-greedy default; monitor future Thompson-hybrid evidence before another policy change"
     elif direct_ready and route_ready:
@@ -338,7 +395,9 @@ def build_plan(
         next_action = "review supervised window recommendations; enable Stage 2 only by explicit opt-in if passive progress stalls"
     else:
         stage = "stage_1_needs_backlog_or_research_targets"
-        next_action = "refresh backlog or schedule targeted research/A-B jobs before supervised collection"
+        next_action = (
+            "refresh backlog or schedule targeted research/A-B jobs before supervised collection"
+        )
 
     return {
         "generated_at": int(time.time()),
@@ -468,7 +527,9 @@ def _selftest() -> None:
                         "exploration_mode": mode,
                     },
                 )
-                feedback.record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
+                feedback.record_outcome(
+                    rid, adjudicated_verdict="PASS", merged=True, durability="durable"
+                )
         backlog_payload = {
             "items": [
                 {"target": "o/r#1", "task_type": "implement", "lane": "opener"},
@@ -497,7 +558,9 @@ def _selftest() -> None:
         assert candidates["implement"]["recommended"] is True, candidates["implement"]
         assert candidates["testgen"]["recommended"] is True, candidates["testgen"]
         assert candidates["epic"]["recommended"] is False, candidates["epic"]
-        assert plan["supervised_collection"]["enabled_by_default"] is False, plan["supervised_collection"]
+        assert plan["supervised_collection"]["enabled_by_default"] is False, plan[
+            "supervised_collection"
+        ]
         assert all(row["eligible"] for row in plan["supervised_collection"]["windows"]), plan
         assert plan["readiness"]["max_remaining_mode_outcomes"] == 28, plan["readiness"]
         assert plan["validation_commands"], plan
@@ -509,7 +572,9 @@ def _selftest() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only exploration evidence acquisition planner.")
+    parser = argparse.ArgumentParser(
+        description="Read-only exploration evidence acquisition planner."
+    )
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--backlog-json", type=Path, help="local backlog snapshot to read")
     parser.add_argument("--capacity-json", type=Path, help="local capacity snapshot to read")
