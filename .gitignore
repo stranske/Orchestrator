@@ -30,6 +30,54 @@ data/
 # GitHub rate-limit accounting for THIS machine only.
 gh-rate-ledger.ndjson
 
+# --- per-RUN execution telemetry the CI runner emits INTO the checkout ---
+# stranske/Workflows `reusable-codex-run.yml` writes langsmith-fleet-worker-attempt.json
+# to the checkout ROOT on every agent round (step "Write worker model attempt artifact"),
+# purely to stage the actions/upload-artifact step on the next line. That upload is the
+# real transport, so keeping the file out of git loses nothing, and nothing in this tree
+# reads the path -- the emitters here are langsmith_*.py (underscores) and they read
+# langsmith-fleet.ndjson out of $ORCH_STATE_DIR.
+#
+# It was TRACKED from 2118f57 until 2026-08-23, holding whichever run merged last: a
+# tool-vs-evidence violation (CLAUDE.md 1), and a second unmanaged store of the
+# `operation_role: worker` provenance that is supposed to reach the learner through
+# feedback.py's tables (CLAUDE.md 2). Ten commits across PRs #59/#61/#62/#63 rewrote it,
+# producing one add/add conflict per concurrent PR and silently widening diffs that had
+# nothing to do with their change -- that is what broke PR #66 (pr_number 66 against
+# main's 61) and what turned this branch's own rebase into a modify/delete conflict when
+# #68 merged underneath it.
+#
+# Untracking loses no provenance: the producer already uploads the same bytes as Actions
+# artifact `langsmith-fleet-v1-worker-attempt-<pr>` with 30-day retention, and that upload
+# is the only reason the file is written at all.
+#
+# UNTRACKING is what makes these patterns bite, and the order is not interchangeable:
+# `git add -A` skips an ignored UNTRACKED path but stages an ignored TRACKED one, so
+# ignoring alone would have changed nothing while the path stayed in the index.
+#
+# A pattern rather than the literal name: the runner names the file after the role it
+# recorded, so a verifier or evaluator attempt would arrive as a sibling and escape a
+# literal. Bounded to the two extensions the langsmith-fleet/v1 schema actually emits.
+#
+# ROOT-ANCHORED, and the leading slash is load-bearing. Unanchored, a gitignore pattern
+# matches at EVERY depth, so `langsmith-fleet*.json` would also swallow a contract schema
+# at docs/contracts/schemas/langsmith-fleet-v1.schema.json -- silently making a tracked,
+# load-bearing file untrackable. That is not hypothetical: stranske/Workflows tracks
+# exactly that path, and this tree already keeps its sibling
+# docs/contracts/schemas/artifact-manifest-v1.schema.json. It is the same near-miss the
+# vendored-node_modules exception records, and the same conclusion -- the anchored pattern
+# is the safe one. Only the runner's ROOT-level write is debris.
+#
+# The nested CI artifact directory is named separately for the same reason: anchoring it
+# to the one directory that holds it cannot reach a schema somewhere else.
+#
+# Deliberately ABOVE the template-managed block below: a Template-Version bump rewrites
+# that block, which would silently drop this. The fleet-wide home is the same pattern in
+# stranske/Workflows templates/consumer-repo/.gitignore.
+/langsmith-fleet*.json
+/langsmith-fleet*.ndjson
+artifacts/langsmith/
+
 # --- durable audit history belongs to the workspace, not the tool ---
 # Code/Audits/Orchestrator/ is the system-of-record for dated decision records;
 # capability_admission.commitments() reads it from there. A second copy here
@@ -73,27 +121,6 @@ venv/
 LOCAL_POLICY.md
 CAPABILITY_USEFULNESS.md
 *.local.md
-
-# --- per-run CI provenance: an artifact, not source ---
-# langsmith-fleet-worker-attempt.json is rewritten on EVERY reusable-codex-run
-# invocation (one langsmith-fleet/v1 record for that run's worker model attempt).
-# It was tracked from 2118f57 onward, and gitignore does not apply to an
-# already-tracked path — so the runner's `git add -A` commit step staged it every
-# time regardless of this file. Ten commits across PRs #59/#61/#62/#63 rewrote
-# it, producing one add/add conflict per concurrent PR and silently widening
-# diffs that had nothing to do with their change.
-#
-# Nothing reads it from the tree. This repo's langsmith-fleet/v1 consumers
-# (langsmith_pull.py, langsmith_fetch.py) ingest the NDJSON Actions artifact
-# `langsmith-fleet.ndjson`; neither one names this path. The producer already
-# uploads it as artifact `langsmith-fleet-v1-worker-attempt-<pr>` (30-day
-# retention), so untracking loses no provenance. stranske/Workflows reached the
-# same verdict for its own copy — same filename, same reason, see its .gitignore.
-#
-# Deliberately OUTSIDE the synced block below: that block mirrors Workflows'
-# templates/consumer-repo/.gitignore, which does NOT carry this pattern, so an
-# entry placed inside it would be dropped when the block is next rewritten.
-langsmith-fleet-worker-attempt.json
 
 # =============================================================================
 # Workflows Consumer Repo - Shared Status Files

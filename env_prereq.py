@@ -50,6 +50,7 @@ from __future__ import annotations
 import os
 import pathlib
 import shutil
+import subprocess
 import tomllib
 import unittest
 from pathlib import Path
@@ -222,6 +223,51 @@ def repo_files_absent(*relative_paths: str) -> str | None:
         f"root-level modules only (orch-sync-mirror.sh), so repository configuration is asserted "
         f"from a checkout. Run this check from the repo, where it is not skipped."
     )
+
+
+def git_repo_absent() -> str | None:
+    """Reason string when this tree is not a git checkout, so `git` cannot answer for it.
+
+    A few checks must ask GIT a question rather than read a file — whether a path is ignored, or
+    whether it is tracked. `.gitignore`'s own header forbids the alternative in terms: an early
+    version of that file put trailing comments on pattern lines, which silently made every pattern
+    inert and staged 795 files instead of 141, and the lesson recorded there is to verify with
+    `git check-ignore` and never with a hand-rolled parser. A reimplementation of gitignore
+    precedence in a test would be exactly that parser, and it would agree with itself rather than
+    with git.
+
+    So the prerequisite is git plus a repository, which the exec mirror is not: `orch-sync-mirror.sh`
+    copies files, not a `.git`. Detects the capability, never the context — no `$CI`.
+
+    Note what is NOT gated. This says only "git can answer here"; whether `.gitignore` exists, and
+    what it contains, stays inside the assertions. Gating on `.gitignore` itself would leave a check
+    on `.gitignore` unable to fail when the file went missing — a gate whose clear path is blocked by
+    the thing it measures, which is the defect the caller exists to prevent.
+    """
+    if shutil.which("git") is None:
+        return (
+            "git is not on PATH — this check asks git whether a path is ignored or tracked, since "
+            "reimplementing gitignore precedence in a test would only agree with itself"
+        )
+    here = Path(__file__).resolve().parent
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=here,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"git could not be run in {here}: {exc}"
+    if proc.returncode != 0:
+        return (
+            f"{here} is not a git repository (git rev-parse --git-dir failed), so git cannot be "
+            f"asked whether a path is ignored or tracked — the exec mirror is a file copy, not a "
+            f"checkout. Run this check from the repo, where it is not skipped."
+        )
+    return None
 
 
 def codex_profile_binary_absent() -> str | None:
