@@ -270,8 +270,13 @@ safety switch, not dead code.
   "Not logged in" with a live one). Prints the per-seat refresh hint; never prints secret values.
   `--json` for machines; exit 1 only when a seat is *definitively* broken, never on UNKNOWN.
 - **mcp_server.py** — exposes the fleet to any MCP client (registered user-scope as `orchestrator`):
-  capacity, fleet summary, route weights, owner-question list/answer, resume hints. Read-only plus
-  the two bounded owner-question actions; no dispatch through this door.
+  capacity, fleet summary, route weights, capability advice, owner-question list/answer, resume
+  hints. Read-only plus three bounded actions — the two owner-question ones and
+  `capability_decline`, which records that an OFFERED capability was rejected, why, and of which
+  `kind`. No dispatch through this door. A decline is append-only evidence and never a verdict: it
+  cannot reach the usefulness posterior, because the capability did not run. Only the kinds that
+  indict a binding (`wrong_match`, `scope_too_small`) can propose a demotion — a correct match with
+  nowhere to land is recorded and never counted against the capability.
 - **Cadence resilience** — failing daily/weekly steps back off (`.fail-<step>` stamps,
   `ORCH_CADENCE_RETRY_HOURS`) and ALERT after N consecutive failures instead of retrying hourly.
 - **Per-step kill switch** — `ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"` (comma or space

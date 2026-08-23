@@ -256,8 +256,60 @@ daily on its own and hashing a row whole would score the monitor useful on every
 make.
 
 **Demotion is the drain.** Bindings that could only grow end with every surface holding all 43 —
-the exact condition binding prevents. A capability bound to a surface that never triggers it across
-`DEMOTION_MIN_TRIALS` resolved experiments is proposed for removal.
+the exact condition binding prevents. Two rules propose removal, and they read **disjoint
+populations**: `never_triggered` counts offers where nothing was said (`not_triggered_silently`)
+across `DEMOTION_MIN_TRIALS`; `declined_with_reason` counts *demotable* declines across
+`DEMOTION_MIN_DECLINES`, a much lower floor because a stated reason is much better evidence. A single
+trigger at that surface disqualifies both — something actually used there is not a demotion candidate
+however often it is passed over. The disjointness is not tidiness: counting declines as silent offers
+lets an honest decline of a *correct* match trip the rule meant for capabilities nobody spoke about.
+
+**A DECLINE IS A THIRD STATE, NOT A NEGATIVE OUTCOME** (`capability_propensity.record_decline`, CLI
+`decline`, MCP `capability_decline`). Two independent audit rounds on 2026-08-23 reached the same
+finding: propensity carried information exactly once, because most candidates sat at the
+uninformative prior, and the missing input was not more consults but reasoned rejections — a
+capability declined on repo-specific grounds looked identical in the ledger to one nobody ever
+considered. So `triggered` / `declined` / `not_triggered_silently` now partition the candidate set,
+and *never considered* is the fourth case of not being a candidate at all.
+
+The discipline that makes this safe is a separation, not a convention. A decline means the capability
+did NOT run, so recording it as an `outcome` would bucket it into `not_useful` — asserting we tried
+it and it did not help, about something that never executed, corrupting the one signal declines
+exist to sharpen. A decline is therefore carried on a `match` event (it genuinely *was* offered)
+tagged `source=capability_decline`, and `usefulness()` reads `outcome` events only. There is no code
+path from a decline to the posterior. `propensity()` reports the decline count **beside** the
+posterior for exactly this reason: "prior, no evidence" and "prior, no evidence, four reasoned
+rejections" are opposite readings that were previously identical. A decline requires a reason and is
+refused without one, the same way `record_usefulness` refuses an unevidenced verdict.
+
+`detect` enumerates every surface that has either a declaration or evidence, not only the declared
+keys: `repo-audit:dimension-1` has no table entry of its own — it inherits `offload` surface-wide —
+so three independent audits declining `offload` there were recorded and never read. A drain that
+cannot see a surface cannot drain it, and the surfaces most likely to be over-bound are exactly the
+ones that only inherit.
+
+Attribution is on the event: the advisor records the `surface` on each `match`, because it recorded
+only `skill` before and the CLI has no `--skill` flag — so every `--surface` consult wrote
+`skill: null` and its whole control arm was unattributable to the surface that produced it.
+
+**And a decline has a KIND, because the kinds imply opposite corrections.** One undifferentiated
+"declined" column licenses the wrong fix. A third audit round on 2026-08-23 separated them and the
+separation is the finding: `testgen-lane` matched **correctly** three times in a read-only audit and
+was structurally impossible every time (no commit target), while `offload` was declined at 9 of 12
+surfaces because it is declared surface-wide and a one-subsystem audit has nothing big enough to hand
+off. The first calls for no change at all; the second calls for a precondition or a narrower
+declaration. And `frontend-verifier` — declined on two frontend-less repos, then the
+second-strongest finding of an audit on a repo that *does* have a display surface — is the same
+lesson from the other side: two negatives are not a verdict on a binding.
+
+So `demotable` is a property of the **kind**, declared once in `DECLINE_KINDS` and read nowhere
+else. `wrong_match` and `scope_too_small` may demote; `precondition_unmet`, `no_landing_zone`,
+`gated_off`, `deferred` and the `unspecified` default may not — they are counted and reported, and
+cannot clear the floor. `precondition_unmet` is the load-bearing one: the correct response to a
+capability whose condition does not hold here is to **evaluate the condition, not to weaken the
+binding**, which is why it is recorded and inert. An unknown kind is refused rather than coerced,
+because a typo silently becoming `unspecified` would discard the classification the caller believed
+it had made.
 
 First live run found a real gap: `deliberate-break-verifier` showed 69 hand-done instances in 1,765
 closer rounds while bound only to the opener, and the loop promoted it. **It must not ratchet:** raising selection pressure whenever a capability was not chosen,

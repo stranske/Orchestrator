@@ -481,7 +481,8 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     }
     if record and matched:
         # Asking the question is itself the observation that improves the answer.
-        result["recorded_matches"] = _record_matches(result, skill=skill, path=path)
+        result["recorded_matches"] = _record_matches(result, skill=skill,
+                                                     surface=surface or skill, path=path)
     return result
 
 
@@ -848,7 +849,7 @@ def experiment_id(task: str) -> str:
     return "advice:" + hashlib.sha1(str(task or "").encode()).hexdigest()[:12]
 
 
-def _record_matches(advice: dict, *, skill: str = "", path=None) -> int:
+def _record_matches(advice: dict, *, skill: str = "", surface: str = "", path=None) -> int:
     """Record that these capabilities matched REAL work, with the skill that surfaced it.
 
     Uses the existing `match` heartbeat rather than a new store: a capability whose declared trigger
@@ -859,6 +860,12 @@ def _record_matches(advice: dict, *, skill: str = "", path=None) -> int:
     The skill is carried in the event metadata, so `learned_associations()` can later aggregate
     skill -> capability from accumulated observations. Idempotent per (capability, exact task), so
     repeating the same query does not inflate frequency while distinct tasks still accumulate.
+
+    THE SURFACE IS RECORDED TOO (2026-08-23). It was not, and the CLI has no `--skill` flag at all —
+    so every `--surface` consult wrote `skill: null`, and the two audit rounds of 2026-08-23 produced
+    33 candidate-offers that `propose_demotions` and `missed_selection` could not attribute to any
+    surface. The control arm existed in the ledger and was unreachable, which is the same
+    "recorded but unusable" defect one level down from the declines this change is about.
     """
     import hashlib
     digest = hashlib.sha1(str(advice.get("task") or "").encode()).hexdigest()[:12]
@@ -871,6 +878,7 @@ def _record_matches(advice: dict, *, skill: str = "", path=None) -> int:
             path=path or capabilities.REG,
             idempotency_key=f"advice:{entry['capability_id']}:{digest}",
             metadata={"source": "capability_advisor", "skill": skill or None,
+                      "surface": surface or None,
                       "task_type": entry.get("matched_task_type")},
         )
         written += 1 if ok else 0
