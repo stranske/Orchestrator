@@ -184,7 +184,7 @@ mirror sync "the only circuit breaker between an agent's change and the dispatch
 those agents"; a loop that edits lane prompts is a self-modifying dispatch path. A surface's prompt
 says *consult your bound set*; the bound set is a table.
 
-### The recursive loop (detection built, promotion is the next step)
+### The recursive loop (both halves built)
 
 Selection should improve where it should have been chosen and was not. Three detectable signals,
 strongest first:
@@ -197,8 +197,27 @@ strongest first:
 3. **Post-hoc failure attribution.** A verifier follow-up exists because merged work missed its own
    criteria → `runtime-ac-checks` should have run.
 
-Promotion writes a `binding_promotion` event, which `binding_for()` reads — so the loop closes as a
-data change. **It must not ratchet:** raising selection pressure whenever a capability was not chosen,
+Implemented in `capability_propensity`: `hand_work()` scores signal 1 against a surface's own
+records, `missed_selection()` reports all three, `propose_bindings()` / `propose_demotions()` emit
+the actions, and `record_promotion()` writes a `binding_promotion` event that `binding_for()` reads —
+so the loop closes as a **data change**, with no prompt rewritten. `detect` runs it across every
+surface whose records resolve on this machine; the tick calls it REPORT-ONLY (`--apply` exists and is
+deliberately not passed, matching how `feature_scan` is wired).
+
+Signal 3 is consumed, not recomputed: `capability_matcher_proposals.evaluate()` already scores
+"should work have been ROUTED here" against the Brain's run history and reports 6 capabilities across
+379 runs of matching work never invoked. It was itself a built-and-forgotten module — working report,
+no caller, no ledger row. Note its limit: `runs` has no surface column (`runs.source` holds only
+keepalive / orchestrator_local / orchestrator_remote), so run history says a capability is under-used
+OVERALL and cannot say which surface passed it over. That is why signal 1 exists and why a promotion
+is never derived from run history alone.
+
+**Demotion is the drain.** Bindings that could only grow end with every surface holding all 43 —
+the exact condition binding prevents. A capability bound to a surface that never triggers it across
+`DEMOTION_MIN_TRIALS` resolved experiments is proposed for removal.
+
+First live run found a real gap: `deliberate-break-verifier` showed 69 hand-done instances in 1,765
+closer rounds while bound only to the opener, and the loop promoted it. **It must not ratchet:** raising selection pressure whenever a capability was not chosen,
 while "should have been chosen" is partly derived from that capability's own advocacy, optimises the
 measured number rather than usefulness. Promotion is therefore gated on an *external* signal (1 or 3
 above), never on the advisor's own naming.

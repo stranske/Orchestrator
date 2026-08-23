@@ -503,6 +503,19 @@ if _cadence_due capability-propensity && _attempt_ok capability-propensity; then
     else
       echo "    evidence: ${1} of ${2} capabilities; ${3} experiments, ${4} resolved"
     fi
+    # DETECTION half of the same loop: which surfaces did a capability's work by hand while never
+    # selecting it. REPORT-ONLY here on purpose -- `--apply` exists and is deliberately not passed,
+    # the same way feature_scan is wired, because a promotion widens a bound set and widening the
+    # narrowing mechanism without a diff anyone saw is how it quietly stops narrowing.
+    python3 "$ORCH/capability_propensity.py" detect --json \
+      > "$STAMP_DIR/capability-selection-detect.json" \
+      2>> "$STAMP_DIR/capability-propensity.log" || true
+    _det=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(len(d["promotions"]),len(d["demotions"]))' \
+             "$STAMP_DIR/capability-selection-detect.json" 2>/dev/null || echo "? ?")
+    set -- $_det
+    if [[ "${1:-0}" != "0" || "${2:-0}" != "0" ]]; then
+      echo "    selection gaps: ${1} promotion(s), ${2} demotion(s) proposed — see $STAMP_DIR/capability-selection-detect.json"
+    fi
     _mark_success capability-propensity
   else
     _mark_fail capability-propensity "see $STAMP_DIR/capability-propensity.log"
