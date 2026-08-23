@@ -25,7 +25,10 @@ What makes it honest:
   * a **floor** (`.verify-floor.json`) on tests collected and passed. A silent collection drop — an
     import error making a file uncollectable, a renamed file, a deleted test — fails instead of
     reading as green. This is the same trap in a different costume: fewer tests running looks
-    identical to all tests passing.
+    identical to all tests passing. `collected` is an EQUALITY, not a minimum (2026-08-23): a
+    floor that has fallen BEHIND reality is permissive by exactly the gap, and that direction
+    was silent for as long as it existed. See `_floor_problems` for why only `collected` can be
+    strict, and for the merge-conflict property the equality buys.
   * **zero collected is always a failure**, whatever the exit status.
   * the summary states what actually executed, never "the suite passed".
   * a **SKIP CEILING** (added 2026-08-21, with the first CI run). Skipping is the other way to
@@ -45,6 +48,7 @@ What makes it honest:
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import pathlib
 import re
@@ -272,6 +276,45 @@ def load_floor() -> dict:
     return {}
 
 
+# The drift message's opening words, named ONCE. The message is built from it and the
+# `--update-floor` unblock predicate matches on it; a matching pair of literals would drift, and a
+# drifted pair here would silently re-latch the gate closed. (House rule: one constant, defined
+# once, consumed by both the measuring and the draining side.)
+DRIFT_PREFIX = "floor is BEHIND reality"
+
+
+def _blocks_floor_update(problems: list[str]) -> list[str]:
+    """Which problems must stop `--update-floor` from writing? NOT the drift one.
+
+    LATCHED-GATE FIX. `--update-floor` used to require a fully green run. The moment `collected`
+    became an equality that stopped being safe: a floor behind reality is now a PROBLEM, so the
+    one command that fixes it would have been refused for the existence of the very condition it
+    exists to clear — the clear path blocked by the thing the gate measures. Real failures still
+    block the write, because recording a floor from a broken run would bake the breakage in.
+    """
+    return [p for p in problems if not p.startswith(DRIFT_PREFIX)]
+
+
+def _appended_note(prior: str | None, collected: int, passed: int, today: str) -> str:
+    """Append the recorded counts to the EXISTING note. Never replace it. Pure, so the selftest
+    can hold the preservation property rather than trusting it.
+
+    Until 2026-08-23 `--update-floor` overwrote the note with a generic sentence. The note is the
+    only record of WHY each ceiling is the number it is — which missing prerequisite justifies
+    each agreed skip — so overwriting it destroyed the rationale on every use. The file had to
+    carry a warning about its own tool ("must be restored by hand after every use"), and a tool
+    whose correct use requires undoing part of what it just did is a footgun, not a tool. It also
+    made the honest path — hand-editing two integers — the only safe one, which is how the floor
+    came to be updated rarely enough to fall behind in the first place.
+    """
+    stamp = (
+        f"FLOOR RECORDED by verify.py --update-floor on {today}: collected={collected}, "
+        f"passed={passed}. Ceilings preserved, never re-measured — they are edited by hand."
+    )
+    prior = (prior or "").strip()
+    return f"{prior} {stamp}" if prior else stamp
+
+
 # Ceiling keys, and what each bounds. Named once so the check below and `--update-floor` cannot
 # disagree about which number they mean.
 CEILINGS = (
@@ -282,21 +325,58 @@ CEILINGS = (
 
 
 def _floor_problems(floor: dict, py: dict) -> list[str]:
-    """Did the amount of CHECKING drop? Pure, so the selftest exercises the real rule.
+    """Is the amount of CHECKING wrong in either direction? Pure, so the selftest exercises the
+    real rule.
 
-    Two independent drops, both of which look like passing:
+    Three problems, all of which look like passing:
       * fewer tests COLLECTED — an import error, a rename, a deletion;
+      * MORE tests collected than the floor records — the floor has fallen behind reality;
       * fewer tests passed-or-consciously-skipped — a test that stopped running without becoming
         a named skip. `passed` alone cannot be the floor once skipping is legitimate, or the
         machine missing a prerequisite fails for being honest; `passed + skipped` can be, and the
         ceiling is what stops the skipped side swallowing everything.
     """
+    # WHY `collected` IS AN EQUALITY AND `passed` IS NOT.
+    #
+    # Until 2026-08-23 this fired only downward, so a branch could add tests and never touch the
+    # floor: silently green, with the floor left permissive by exactly the number added. That is
+    # not hypothetical — #34 and #37 each added a test and left the file alone, and every one of
+    # the recorded drifts (21 low at the worst, then 8, then 1, then 2) was caught only because
+    # somebody happened to look. A floor below reality is the hole this file exists to close, so
+    # falling BEHIND it has to be exactly as loud as dropping below it.
+    #
+    # The equality also buys what no amount of discipline could. Once every test-adding branch
+    # must edit these same two lines, two concurrent branches CONFLICT IN GIT. The second cannot
+    # merge without rebasing onto the first, and the rebased run reports the true merge-result
+    # count. Git's own conflict detection is what enforces "measure on the merge result, not on
+    # the branch" — the rule the note in .verify-floor.json had to repeat three times precisely
+    # because nothing enforced it. (This very change was rebased that way: #42 landed underneath
+    # it and moved the floor 368 -> 387.)
+    #
+    # Only `collected` can be strict, and the asymmetry is load-bearing. Collection is
+    # machine-invariant: a skipped test is still a collected test, so a runner with none of this
+    # instance's prerequisites collects exactly what the owner's machine collects — measured on
+    # CI and locally on 2026-08-23, both 368, with pass/skip splits of 344/24 against 368/0.
+    # `passed` is NOT invariant — it trades against `skipped` machine by machine — so it stays a
+    # MINIMUM on `passed + skipped`. Making that one strict too would fail every machine for
+    # being honest about a named skip.
     problems = []
     fc, fp = int(floor.get("collected", 0)), int(floor.get("passed", 0))
     if fc and py["collected"] < fc:
         problems.append(
             f"collection DROPPED: {py['collected']} < floor {fc} — tests stopped "
             f"running, which looks identical to tests passing"
+        )
+    elif fc and py["collected"] > fc:
+        # Both numbers AND the remedy, per the house rule that a gate must say what would clear
+        # it. "387 > 386" alone invites a shrug; naming the exact integer to write does not.
+        problems.append(
+            f"{DRIFT_PREFIX}: {py['collected']} collected > floor {fc} — the floor is "
+            f"{py['collected'] - fc} test(s) permissive, so that many could silently stop being "
+            f"collected and still read as green. Set \"collected\": {py['collected']} and "
+            f"\"passed\": {py['passed'] + py.get('skipped', 0)} in .verify-floor.json, keeping "
+            f"the existing note, or run `python3 verify.py --update-floor`. If a branch merged "
+            f"under you, REBASE FIRST: the number must be measured on the merge result."
         )
     if fp and py["passed"] + py.get("skipped", 0) < fp:
         problems.append(
@@ -367,11 +447,27 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
         limit = floor.get(key)
         return f"{actual[key]}" + (f"/{limit} max" if limit is not None else " (no ceiling set)")
 
+    # The floor reports its RELATIONSHIP to reality, not just its value. "floor 386" reads as
+    # fine at a glance; "floor 386 — 1 BEHIND" cannot be misread, which is the same house rule
+    # that makes each ceiling print its count against its limit.
+    floor_state = (
+        "unset"
+        if not fc
+        else (
+            f"{fc}"
+            if py["collected"] == fc
+            else (
+                f"{fc} — {py['collected'] - fc} BEHIND"
+                if py["collected"] > fc
+                else f"{fc} — NOT MET"
+            )
+        )
+    )
     lines = ["# verify.py", ""]
     lines.append(
         f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
         f"{_cap('skipped_max')} skipped "
-        f"({py['collected']} collected; floor {fc or 'unset'})"
+        f"({py['collected']} collected; floor {floor_state})"
     )
     lines.append(
         f"  selftests:  {len(st['ok'])} of {len(mods)} modules ran, "
@@ -429,7 +525,8 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
             )
         )
 
-    if update_floor and not problems:
+    # Drift does NOT block the write — see `_blocks_floor_update`. A real failure still does.
+    if update_floor and not _blocks_floor_update(problems):
         # `collected` and `passed` are re-measured; the CEILINGS are NOT. A ceiling re-recorded
         # from whatever the last run happened to skip is not a ceiling, it is a ratchet that
         # follows the leak — and on the machine that has every prerequisite it would record 0 and
@@ -443,11 +540,11 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
         for key, _label in CEILINGS:
             if floor.get(key) is not None:
                 blob[key] = int(floor[key])
-        blob["note"] = (
-            "floor recorded by verify.py --update-floor; a later run collecting fewer "
-            "tests FAILS, because silently running fewer tests looks exactly like "
-            "passing. `passed` is compared against passed+skipped. The *_max ceilings "
-            "bound skipping and are NOT re-measured here — edit them by hand."
+        blob["note"] = _appended_note(
+            str(floor.get("note", "")),
+            py["collected"],
+            blob["passed"],
+            _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
         )
         FLOOR.write_text(json.dumps(blob, indent=1) + "\n", encoding="utf-8")
         lines.append(
@@ -573,6 +670,68 @@ def _selftest() -> None:
     )
     assert any("collection DROPPED" in p for p in shrank), shrank
 
+    # ---- and the floor may not fall BEHIND reality either (2026-08-23) ------------------------
+    # The permissive direction, silent until this was added: a branch adds tests, leaves the file
+    # alone, and the floor is now slack by exactly the number added. DELIBERATE-BREAK DEMO: revert
+    # the `elif` in `_floor_problems` and this assert fails while every other check here still
+    # passes — which is precisely the shape of the bug, a real hole that reads as green.
+    behind = _floor_problems(
+        {"collected": 366, "passed": 366}, {"collected": 368, "passed": 368, "skipped": 0}
+    )
+    assert len(behind) == 1 and "BEHIND reality" in behind[0], behind
+    # It must name the exact integers to write; "too low" that does not say the number is how a
+    # gate becomes something people shrug at rather than clear.
+    assert '"collected": 368' in behind[0] and '"passed": 368' in behind[0], behind
+    assert "REBASE FIRST" in behind[0], behind
+    # Exact agreement is the only clean state, and a machine that SKIPS is still exact: skipped
+    # tests are collected, so the runner and the owner's machine hit the same equality.
+    assert (
+        _floor_problems(
+            {"collected": 368, "passed": 368}, {"collected": 368, "passed": 344, "skipped": 24}
+        )
+        == []
+    )
+    # An UNSET floor still means "nothing agreed yet" — it must not suddenly demand equality.
+    assert _floor_problems({}, {"collected": 368, "passed": 368, "skipped": 0}) == []
+
+    # ---- --update-floor can run while the floor gate is CLOSED (latched-gate fix) -------------
+    # DELIBERATE-BREAK DEMO: change the guard back to `not problems` and the remedy the drift
+    # message names becomes unreachable — the gate forbidding its own drain, which is the defect
+    # this repo hits most. The predicate is what keeps the two windows the same size.
+    assert _blocks_floor_update(behind) == [], behind
+    assert _blocks_floor_update(behind + ["3 pytest failure(s)/error(s)"]) == [
+        "3 pytest failure(s)/error(s)"
+    ]
+    # A collection DROP is not drift and must keep blocking: recording a floor from a run that
+    # lost tests would bake the loss in as the new normal.
+    assert _blocks_floor_update(shrank) != []
+    # ...and the predicate must be WIRED, not merely present. The three asserts above all pass
+    # while the call site still reads `not problems` -- the helper exists, nothing calls it,
+    # built-but-not-wired, which is this repo's founding defect wearing yet another hat. It got
+    # through the first draft of this very change and was caught only by the deliberate-break
+    # demo, so the guard line itself is now the assertion.
+    _src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    # The needle is BUILT FROM TWO PIECES on purpose. Written as one literal it would appear in
+    # this very line, so `_src` would contain it no matter what the call site said and the assert
+    # could never fail -- a test that cannot fail, guarding against a defect that already
+    # happened once. Split, the joined form exists only at the real guard.
+    _guard = "if update_floor and not " + "_blocks_floor_update(problems):"
+    assert _guard in _src, (
+        "the --update-floor guard no longer calls _blocks_floor_update — a floor behind reality "
+        "would once again block the one command that fixes it"
+    )
+
+    # ---- --update-floor APPENDS to the note, so the ceiling rationale survives the tool -------
+    # DELIBERATE-BREAK DEMO: restore the old `blob["note"] = (...)` literal and the first assert
+    # fails — the prior text, which is the only record of why each ceiling is what it is, is gone.
+    kept = _appended_note(
+        "26/7/2 is what a bare runner skips, measured 2026-08-21.", 387, 387, "2026-08-23"
+    )
+    assert kept.startswith("26/7/2 is what a bare runner skips, measured 2026-08-21."), kept
+    assert "collected=387" in kept and "2026-08-23" in kept, kept
+    assert _appended_note("", 387, 387, "2026-08-23").startswith("FLOOR RECORDED")
+    assert _appended_note(None, 1, 1, "2026-08-23")  # a missing note is not a crash
+
     # ---- the absent-module summary line -------------------------------------------------------
     # A row registered by another checkout makes three checks fail with messages that read
     # "registered with no implementation — retire it", and retiring it discards finished work. The
@@ -621,7 +780,9 @@ def _selftest() -> None:
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
         "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
-        "not, floor counts passed+skipped, absent-module line is silent when clean and is "
+        "not, floor counts passed+skipped, floor fails BEHIND reality as loudly as below "
+        "it and names the integers to write, --update-floor appends to the note instead of "
+        "clobbering the ceiling rationale, absent-module line is silent when clean and is "
         "never counted as a skip)"
     )
 
