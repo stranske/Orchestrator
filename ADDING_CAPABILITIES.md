@@ -41,11 +41,12 @@ Enforced by `capability_admission.py` + `test_capability_admission.py`. Run **be
 python3 capability_admission.py --preflight '{"capability_id":"capability:my-thing", ...}'
 ```
 
-`preflight` answers the five declarable requirements immediately and returns the other three as
-explicit **obligations** rather than silently skipping them — because silently skipping is how they
-got skipped.
+`preflight` answers the six declarable requirements immediately — including findability, which is the
+one most worth learning before the code exists — and returns the other three (caller, heartbeat,
+fixture) as explicit **obligations** rather than silently skipping them, because silently skipping is
+how they got skipped.
 
-### The eight parts
+### The nine parts
 
 | # | Requirement | The failure it prevents |
 |---|---|---|
@@ -57,23 +58,68 @@ got skipped.
 | 6 | **A kill switch** | An undeclared switch cannot be found in an emergency. |
 | 7 | **A rollback path** | — |
 | 8 | **An expiry or a cadence** | Nothing may sit unexamined forever; that is how dormancy survives two audits. |
+| 9 | **A surface that can OFFER it** (`findable`) | FM10 — 22 of 43 capabilities were bound to no surface at all, so nothing could offer them and no amount of running could produce evidence for them. All 43 had passed admission. The rule existed — as prose, in this file. |
 
-Enforcement binds on capabilities registered from 2026-08-21. The 36 pre-gate capabilities are
-reported as **legacy debt on every run** and do not fail the suite — a gate that is red on arrival
-gets switched off, and then it protects nothing. Legacy rows still print exactly what they are
-missing; the exemption lives on the row, never inside the predicates, so debt can never read as
-compliance.
+Enforcement binds on capabilities registered from 2026-08-21, and **each requirement carries its own
+date**: findability binds from 2026-08-23 (`capability_admission.REQUIREMENT_ENFORCED_FROM`). The
+pre-gate capabilities are reported as **legacy debt on every run** and do not fail the suite — a gate
+that is red on arrival gets switched off, and then it protects nothing. The same reasoning applies to
+a requirement added later, which is why the date is per-requirement rather than one global cutoff.
+Legacy and pre-cutoff rows still print exactly what they are missing; the exemption lives on the row,
+never inside the predicates, so debt can never read as compliance.
 
-### Say which surfaces bind it (or why none does)
+### Requirement 9 in detail: which surface can OFFER it (or why none can)
 
-The eight parts make a capability *invocable and observable*. They do not make it *findable*. A
-capability nothing binds is offered from a 40-plus catalogue queried generically, which is the
+The first eight parts make a capability *invocable and observable*. None of them makes it *findable*.
+A capability nothing binds is offered from a 40-plus catalogue queried generically, which is the
 measured 13.62% selection condition — built, admitted, and still not chosen.
 
+**This was prose in this file until 2026-08-23, and the measurement is what a prose rule is worth
+here: 37 of 43 capabilities had no usefulness evidence, and 22 of those were bound to no surface at
+all.** It is now the ninth predicate in `capability_admission.REQUIREMENTS`, and
+`test_capability_admission.py` fails on it.
+
 So when adding or reviving one, name its surfaces in `capability_advisor.SURFACE_BINDINGS` — the
-skills or automations for which it should be in the small declared set — with a one-line reason each,
-or state that no surface binds it yet and what would change that. Keep a bound set to 3–7 entries;
-past ~10 it reintroduces the problem the binding removes, and a selftest enforces the ceiling.
+skills or automations for which it should be in the small declared set — with a one-line reason each.
+Keep a bound set to 3–7 entries; past ~10 it reintroduces the problem the binding removes, and a
+selftest enforces the ceiling. Run `--preflight` first: findability is **declarable**, so the answer
+arrives before the code is written rather than after.
+
+**Three sub-causes, because the fixes differ.** The predicate names which one applies:
+
+| cause | what it means | the fix |
+|---|---|---|
+| `bound_nowhere` | no surface declares it | add one entry to a surface's 3–7, with its reason |
+| `bound_to_unconsulted_surface` | every binding names a surface no caller ever consults | bind a surface listed in `capability_advisor.CONSULT_SITES`, or make that surface consult |
+| *(invoked without attribution)* | a surface runs the entrypoint directly and the invocation is credited to nobody | **not checked** — see below |
+
+`CONSULT_SITES` is the other half of a binding, and until 2026-08-23 nothing declared it: `ci` bound
+two capabilities and no caller anywhere consults a `ci` surface, while `opener-lane` and `closer-lane`
+bind ten between them and both lane prompts consult with **no `--surface` at all**, so the declared
+set never reaches the caller it was written for. A declared consult site is a falsifiable claim about
+a file — the selftest opens it. Absent on this machine means *unverified*, never refuted; present and
+no longer naming its surface is DRIFT and fails.
+
+**A surface has exactly three honest states, and the selftest enforces it**: a caller consults it
+(`CONSULT_SITES`), it deliberately binds nothing (`NO_BINDING` with the reason), or it holds bindings
+nothing can reach and that is *recorded* (`KNOWN_UNCONSULTED`, with the reason AND the fix). A fourth
+state — bindings nothing can reach and nobody wrote down — is what `ci` was, and it is invisible until
+a capability is stranded on it, so it now fails `capability_advisor._selftest_findability` naming the
+SURFACE rather than only the capability. `KNOWN_UNCONSULTED` is a record, not a waiver: capabilities
+bound only there still fail requirement 9. And a fixed entry may not linger — the same selftest fails
+on a stale one, because a cached reason that outlives its evidence is this workspace's named defect.
+
+**What requirement 9 deliberately does NOT check**, stated here because a gate that cannot say what
+it skipped is the same defect as one that cannot say what would clear it: a surface that invokes the
+entrypoint *directly* without surface attribution. The `orchestrate` skill already runs `capacity.py`
+while `windowed-capacity-policy`'s heartbeat sits behind `ORCH_CAPABILITY_HEARTBEATS`, which only a
+live tick sets — so it is used and entirely uncredited.
+`capability_activation_audit.heartbeat_reachable` was checked first and answers a different question:
+it reports that row `reachable` via `orchestrate.sh (CLI)`, because it asks whether *some* driver
+reaches the heartbeat, not whether *this surface's* invocation is attributed to the surface. Deciding
+that needs the surface's own prompt, which lives outside this repository. Likewise
+`repo-audit:fix` is *named* by its skill and never *entered* by a run; only trial records can show
+that, never a table of files.
 
 Binding is prioritisation, not concealment: an unbound capability is still returned, ranked after the
 bound ones. That is deliberate — a capability that could never be selected could never earn the
@@ -122,3 +168,4 @@ write it down with the criterion that would change it.
 | FM7 circular measurement | the activation/recurrence split |
 | FM8 tests asserting bugs | fixture-must-not-error assertion; synthetic-fixture rule |
 | FM9 wrong tree | mirror re-run after every sync |
+| FM10 admitted but unofferable | `capability_admission.req_findable` (requirement 9), plus `capability_advisor.consulting_surfaces()` for the surfaces that strand a binding |
