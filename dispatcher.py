@@ -1204,13 +1204,18 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     can_report, no_report_reason = adapters.can_report_cli_identity(agent)
     is_evidence = bool(research_round)
     record_worker_attempt = can_report or is_evidence
+    # Set from the run's OWN stream-json output when the tool reports it; the completion path below
+    # prefers it over any store probe. Declared here so both live in the same scope.
+    observed_model: str | None = None
     argv = (
         adapters.build_command(
             agent, prepared_prompt, mode, cwd=run_cwd, profile=profile,
             transport="offload",
         )
         if profile
-        else adapters.build_command(agent, prepared_prompt, mode, cwd=run_cwd)
+        else adapters.build_command(
+            agent, prepared_prompt, mode, cwd=run_cwd, transport="offload"
+        )
     )   # raises ValueError on unknown agent
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
@@ -1346,7 +1351,13 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             #
             # Still never a fallback to the requested model: a seat whose store does not name what
             # served closes unresolved with the reason, exactly as before.
-            probe = adapters.cli_reported_model(agent, run_cwd, started_ts=started_ts)
+            # The run's own report wins: it is exact for THIS run, where a store probe has to
+            # match a workspace and a window and can pick a neighbour's session.
+            probe = (
+                {"model": observed_model, "reason": None}
+                if observed_model
+                else adapters.cli_reported_model(agent, run_cwd, started_ts=started_ts)
+            )
             if probe.get("model"):
                 feedback.complete_profile_attempt(
                     run_id,
@@ -1382,6 +1393,11 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     attempt_stderr = ""
 
     def _run_offload_attempt() -> dict:
+        # `nonlocal`, because the model this attempt observes must reach `_record_complete` in the
+        # ENCLOSING scope. Without it the assignment below made a local that the completion never
+        # saw: the parse found `composer-2.5` and the attempt still closed `unresolved`, which is
+        # the most deceptive possible failure -- the reader worked and the row said it had not.
+        nonlocal observed_model
         nonlocal attempt_stderr
         attempt_stderr = ""
         try:
@@ -1438,6 +1454,25 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
             raise
         attempt_stderr = proc.stderr or ""
+        # THE RUN REPORTED ITS OWN MODEL. When the transport asked for stream-json, the tool's
+        # `system/init` event names the model that actually served -- `gen_ai.response.model` in
+        # OpenTelemetry's terms, as opposed to the `--model` we requested. Read it here, from THIS
+        # run's stdout, so there is no workspace to match and no time window to guess: the reason
+        # all 24 cursor offloads were unresolvable is that they shared `/private/tmp`, so no session
+        # in cursor's own store was attributable to any single one of them.
+        #
+        # The stream is then reduced to its final result text before anyone sees it, so every
+        # existing caller keeps the plain-text contract it already expects.
+        if proc.stdout and '"subtype":"init"' in proc.stdout:
+            stream = adapters.observed_model_from_stream(proc.stdout)
+            label = stream.get("model_label")
+            if label:
+                observed_model = adapters.model_id_for_label(agent, label)
+            if stream.get("result_text") is not None:
+                proc = subprocess.CompletedProcess(
+                    getattr(proc, "args", argv), proc.returncode,
+                    stream["result_text"], proc.stderr,
+                )
         with logf.open("a") as fh:
             if proc.stdout:
                 fh.write(proc.stdout)
@@ -2050,6 +2085,62 @@ def _selftest() -> None:
         # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
         assert _attempts_for("codex", round_id=None), (
             "a resolvable seat's attempt is real provenance even unbound")
+
+        # THE RUN'S OWN stream-json REPORT RESOLVES THE MODEL, with no store to search. This is the
+        # standard answer (`gen_ai.response.model`): the tool prints the model it actually used, so
+        # there is no workspace to match and no window to guess. It is what makes cursor resolvable
+        # at all -- every one of its 24 real offloads shared `/private/tmp`, so no session in
+        # cursor's own chat store was attributable to any single run.
+        class _StreamCompleted:
+            returncode = 0
+            stdout = (
+                '{"type":"system","subtype":"init","cwd":"/x","session_id":"s1",'
+                '"model":"Composer 2.5"}\n'
+                '{"type":"result","subtype":"success","result":"THE ANSWER","session_id":"s1"}\n'
+            )
+            stderr = ""
+
+        def fake_stream_run(cmd, cwd=None, **_kwargs):
+            return _StreamCompleted()
+
+        try:
+            adapters.build_command = fake_build_command
+            subprocess.run = fake_stream_run
+            streamed = offload("cursor", "Summarize.", cwd=str(nongit), timeout=1)
+        finally:
+            adapters.build_command = old_build_command
+            subprocess.run = old_subprocess_run
+        # The caller keeps its plain-text contract: the stream is reduced to the final result.
+        assert streamed["output"].strip() == "THE ANSWER", streamed["output"]
+        with feedback._conn() as c:
+            row = c.execute(
+                "SELECT resolved_provider, resolved_model, status, fallback_reason "
+                "FROM execution_attempts WHERE run_id=? AND operation_role='worker'",
+                (streamed["run_id"],)).fetchone()
+        # THE MODEL CAME FROM THE RUN ITSELF -- and `nonlocal` is what carries it out of
+        # `_run_offload_attempt` to the completion. Without it the parse found `composer-2.5` and
+        # the attempt still closed `unresolved`: the reader worked and the row denied it, which is
+        # the most deceptive failure available here.
+        assert row is not None, "a resolvable seat must record the attempt"
+        assert row[1] == "composer-2.5", ("the run's own reported model must reach the row", row)
+        assert row[2] == "complete" and row[3] is None, row
+        # And the label -> id mapping never invents one.
+        assert adapters.model_id_for_label("cursor", "Composer 2.5") == "composer-2.5"
+        assert adapters.model_id_for_label("cursor", "some log prose") is None
+
+        # THE OFFLOAD MUST ACTUALLY ASK FOR THE STREAM. Asserted on the real argv, because the
+        # double above supplies stream-json stdout whatever was requested -- so without this,
+        # reverting the transport to `text` left the test passing while nothing would ever be
+        # reported in production. A double that answers a question the code did not ask is the
+        # vacuous shape this file keeps re-growing.
+        offload_argv = adapters.build_command(
+            "cursor", "p", "composer", cwd=str(nongit), transport="offload")
+        assert offload_argv[offload_argv.index("--output-format") + 1] == "stream-json", offload_argv
+        # And the long-running dispatch path is deliberately UNCHANGED: its output is parsed
+        # elsewhere, so reshaping it is a separate and riskier change.
+        local_argv = adapters.build_command(
+            "cursor", "p", "composer", cwd=str(nongit), transport="local")
+        assert local_argv[local_argv.index("--output-format") + 1] == "text", local_argv
         import ledger_reconcile
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
         cost_by_run = {row["run_id"]: row for row in dry_cost["costs"]}

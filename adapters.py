@@ -242,6 +242,99 @@ def parse_model_catalog(text: str) -> list[str]:
     return ids
 
 
+def parse_model_catalog_pairs(text: str) -> dict[str, str]:
+    """`{human label -> model id}` from a CLI catalog listing.
+
+    The reverse of `parse_model_catalog`, needed because the CLIs report the LABEL at runtime and
+    the id in their catalog: cursor's stream-json says `"model": "Composer 2.5"` while its catalog
+    says `composer-2.5 - Composer 2.5 (current)`, and agy's log says
+    `label="Gemini 3.7 Flash (High)"` against a catalog of `gemini-3.7-flash-high`. Parenthetical
+    status suffixes are dropped so `(current)` does not become part of the key.
+    """
+    pairs: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        if "\t" in line:
+            head, _, label = line.partition("\t")
+        elif " - " in line:
+            head, _, label = line.partition(" - ")
+        else:
+            continue
+        head, label = head.strip(), label.strip()
+        if not head or " " in head or head.startswith("-") or not label:
+            continue
+        # BOTH FORMS, because the trailing parenthetical means opposite things per vendor: agy's
+        # `(High)` is a TIER and part of the id, while cursor's `(current)` is status. Keying both
+        # the full label and the stripped one lets each match without guessing which it is.
+        pairs.setdefault(label.lower(), head)
+        bare = re.sub(r"\s*\([^)]*\)\s*$", "", label).strip().lower()
+        if bare:
+            pairs.setdefault(bare, head)
+    return pairs
+
+
+def model_id_for_label(agent: str, label: str) -> str | None:
+    """Turn a CLI's human model label into its model id, or None if it cannot be trusted.
+
+    Prefers the CLI's OWN catalog, because that is the authority on its own ids. Falls back to the
+    obvious slug (`Gemini 3.7 Flash (High)` -> `gemini-3.7-flash-high`, `Composer 2.5` ->
+    `composer-2.5`), which happens to be exactly how both vendors form them -- but the result is
+    only returned if it looks like a real vendor model, so a chatty log line cannot become an id.
+    """
+    text = str(label or "").strip()
+    if not text:
+        return None
+    try:
+        catalog = parse_model_catalog_pairs(
+            "\n".join(f"{mid}\t{mid}" for mid in advertised_models(agent))
+        )
+    except Exception:  # noqa: BLE001 - a probe failure must not block resolution
+        catalog = {}
+    direct = catalog.get(text.lower())
+    if direct and VENDOR_MODEL_RE.fullmatch(direct):
+        return direct
+    slug = re.sub(r"[^a-z0-9.]+", "-", re.sub(r"\s*\([^)]*\)\s*$", "", text).lower()).strip("-")
+    stripped = re.sub(r"\s*\(([^)]*)\)\s*$", r"-\1", text).lower()
+    stripped = re.sub(r"[^a-z0-9.]+", "-", stripped).strip("-")
+    for candidate in (stripped, slug):
+        if candidate and VENDOR_MODEL_RE.fullmatch(candidate):
+            return candidate
+    return None
+
+
+def observed_model_from_stream(text: str) -> dict[str, Any]:
+    """Model, session id and final text from a `stream-json` transcript the run itself printed.
+
+    THE STANDARD ANSWER, and the reason it beats every store-scraping heuristic: the tool reports
+    the model it actually used in its own stdout, so there is no workspace to match, no time window
+    to guess, and no chance of attributing another session's model to this run. It is the CLI form
+    of OpenTelemetry's `gen_ai.response.model` -- the model that SERVED the request, as distinct
+    from `gen_ai.request.model`, which is what `--model` asked for.
+
+    cursor emits `{"type":"system","subtype":"init",...,"model":"Composer 2.5"}` followed by a
+    terminal `{"type":"result",...,"result":"..."}`. Returns the label verbatim; mapping it to an id
+    is `model_id_for_label`'s job.
+    """
+    out: dict[str, Any] = {"model_label": None, "session_id": None, "result_text": None}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        out["session_id"] = out["session_id"] or row.get("session_id")
+        if row.get("type") == "system" and row.get("subtype") == "init":
+            out["model_label"] = row.get("model") or out["model_label"]
+        elif row.get("type") == "result":
+            value = row.get("result")
+            if isinstance(value, str):
+                out["result_text"] = value
+    return out
+
+
 parse_agy_models = parse_model_catalog          # back-compat alias
 
 
@@ -988,9 +1081,19 @@ def build_command(
                 cmd += ["--model", tiered]
         return cmd
     if agent == "cursor":
+        # OFFLOADS ASK FOR stream-json SO THE RUN REPORTS ITS OWN MODEL. cursor's `system/init`
+        # event carries `model` (plus cwd and session_id) in the offload's own stdout -- the CLI
+        # form of `gen_ai.response.model`. That is exact and per-run, where scraping
+        # `~/.cursor/chats` needs a workspace match and a time window and cannot distinguish two
+        # runs in the same directory: all 24 cursor offloads shared `/private/tmp`, so no session
+        # was attributable to any of them.
+        #
+        # Scoped to `transport="offload"` on purpose. The long-running dispatch path writes a log
+        # that other code parses, and reshaping that output is a separate, riskier change.
+        cursor_format = "stream-json" if transport == "offload" else "text"
         cmd = [
             "cursor-agent", "-p", prompt,
-            "--force", "--output-format", "text",
+            "--force", "--output-format", cursor_format,
             "--trust", "--workspace", ".",
         ]
         if requested_model:
