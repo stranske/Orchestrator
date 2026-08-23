@@ -14,9 +14,7 @@ def valid_dag() -> dict:
     return compiler.reference_workflow_source()
 
 
-def test_deterministic_sequence_compiles_to_idempotent_dag(
-    valid_dag: dict, tmp_path: Path
-) -> None:
+def test_deterministic_sequence_compiles_to_idempotent_dag(valid_dag: dict, tmp_path: Path) -> None:
     source_keys = [step["idempotency_key"] for step in valid_dag["steps"]]
     assert len(set(source_keys)) == len(source_keys), "duplicate idempotency key"
     plan_one = compiler.compile_workflow_rail(valid_dag)
@@ -28,7 +26,9 @@ def test_deterministic_sequence_compiles_to_idempotent_dag(
         "hygiene",
         "test-gate",
     ]
-    assert len({step["idempotency_key"] for step in plan_one["steps"]}) == len(plan_one["steps"]), "duplicate idempotency key"
+    assert len({step["idempotency_key"] for step in plan_one["steps"]}) == len(
+        plan_one["steps"]
+    ), "duplicate idempotency key"
     assert plan_one["execution_policy"] == {
         "executable": False,
         "mode": "shadow_dry_run",
@@ -51,9 +51,7 @@ def test_deterministic_sequence_compiles_to_idempotent_dag(
     assert cap["expiry"] == valid_dag["expires_at"]
     assert cap["kill_switch"] == valid_dag["kill_switch"]
     assert cap["rollback"]["steps"] == plan_one["rollback_order"]
-    assert cap["outcome_links"] == [
-        f"shadow:{first['consumer_receipt']['receipt_id']}"
-    ]
+    assert cap["outcome_links"] == [f"shadow:{first['consumer_receipt']['receipt_id']}"]
     assert all(
         (cap["activation_evidence"].get(probe) or {}).get("passed")
         for probe in capabilities.ACTIVE_PROBES
@@ -65,13 +63,17 @@ def test_deterministic_sequence_compiles_to_idempotent_dag(
     [
         (lambda dag: dag["steps"][0].update(depends_on=["test-gate"]), "cycle detected"),
         (lambda dag: dag["steps"][2].pop("rollback"), "missing rollback: hygiene"),
-        (lambda dag: dag["steps"][2].update(entrypoint="shell.run"), "unallowlisted command: shell.run"),
-        (lambda dag: dag["steps"][2].update(requires_judgment=True), "ambiguous judgment: workflow step"),
+        (
+            lambda dag: dag["steps"][2].update(entrypoint="shell.run"),
+            "unallowlisted command: shell.run",
+        ),
+        (
+            lambda dag: dag["steps"][2].update(requires_judgment=True),
+            "ambiguous judgment: workflow step",
+        ),
     ],
 )
-def test_unsafe_workflow_fixtures_are_rejected(
-    valid_dag: dict, mutation, reason: str
-) -> None:
+def test_unsafe_workflow_fixtures_are_rejected(valid_dag: dict, mutation, reason: str) -> None:
     mutation(valid_dag)
     with pytest.raises(compiler.WorkflowCompileError) as caught:
         compiler.compile_workflow_rail(valid_dag)
@@ -98,9 +100,7 @@ def test_reference_caller_records_bounded_failure_heartbeat(tmp_path: Path) -> N
 
     with pytest.raises(RuntimeError, match="raw proprietary"):
         compiler.run_reference_workflow(ledger_path=ledger, consumer=fail_consumer)
-    cap = capabilities.load(ledger, create=False)[
-        "capability:reference-sync-hygiene-test-gate"
-    ]
+    cap = capabilities.load(ledger, create=False)["capability:reference-sync-hygiene-test-gate"]
     failures = [event for event in cap["event_history"] if event["type"] == "failure"]
     assert len(failures) == 1
     assert failures[0]["ref"].startswith("sha256:")
@@ -120,9 +120,7 @@ def test_existing_shadow_capability_adopts_extended_plan(tmp_path: Path) -> None
     first["steps"] = [step for step in first["steps"] if step["id"] != "consumer-drift"]
     first["steps"][1]["depends_on"] = ["sync"]
     first["barriers"] = [
-        barrier
-        for barrier in first["barriers"]
-        if "consumer-drift" not in barrier["id"]
+        barrier for barrier in first["barriers"] if "consumer-drift" not in barrier["id"]
     ]
     old_plan = compiler.compile_workflow_rail(first)
     compiler._register_shadow(old_plan, ledger)

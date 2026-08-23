@@ -6,11 +6,10 @@ import pytest
 
 import capability_compiler
 import evidence_schema
+import exp_abcd
 import local_verify
 import runtime_ac
 import runtime_ac_panel
-import exp_abcd
-
 
 NOW = 2_000_000_000
 NAMED_TEST = (
@@ -218,4 +217,3 @@ def test_evaluator_prompt_and_generated_issue_are_contract_aware(gap_rows: list[
     assert features["has_acceptance_criteria"] is True
     assert features["has_test_instructions"] is True
     assert features["has_non_goals"] is True
-

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import shlex
 import subprocess
@@ -14,8 +13,15 @@ import capability_compiler as compiler
 import env_prereq
 import feedback
 
-
-QUICK_VALIDATE = Path.home() / ".codex" / "skills" / ".system" / "skill-creator" / "scripts" / "quick_validate.py"
+QUICK_VALIDATE = (
+    Path.home()
+    / ".codex"
+    / "skills"
+    / ".system"
+    / "skill-creator"
+    / "scripts"
+    / "quick_validate.py"
+)
 
 # EVERY test here builds from `compiler.reference_skill_source()`, which hashes a real installed
 # skill resource under ~/.codex/skills — on purpose: the skill compiler is exercised against a
@@ -26,8 +32,7 @@ QUICK_VALIDATE = Path.home() / ".codex" / "skills" / ".system" / "skill-creator"
 # individually with the reason attached, while a raise at import time would drop the collection
 # count by 7 — and a dropped collection count is exactly what verify.py's floor exists to catch.
 _SKILL_RESOURCE_ABSENT = env_prereq.skill_resource_absent()
-pytestmark = pytest.mark.skipif(bool(_SKILL_RESOURCE_ABSENT),
-                                reason=_SKILL_RESOURCE_ABSENT or "")
+pytestmark = pytest.mark.skipif(bool(_SKILL_RESOURCE_ABSENT), reason=_SKILL_RESOURCE_ABSENT or "")
 
 
 @pytest.fixture
@@ -120,9 +125,7 @@ def test_secret_bearing_resource_is_rejected_without_package(tmp_path: Path) -> 
             "content_hash": compiler._sha256_file(secret_script),
         }
     ]
-    decision = compiler.compile_skill_candidate(
-        source, output_root=tmp_path / "candidates"
-    )
+    decision = compiler.compile_skill_candidate(source, output_root=tmp_path / "candidates")
     assert decision["status"] == "rejected" and decision["target"] is None
     assert "secret-bearing resource: scripts/unsafe.py" in decision["rejection_reasons"]
     assert not (tmp_path / "candidates" / source["name"]).exists()
@@ -132,7 +135,12 @@ def test_secret_bearing_resource_is_rejected_without_package(tmp_path: Path) -> 
     ("field", "value", "reason", "target"),
     [
         ("reuse_scope", "repo_only", "repo-only procedure: route to playbook", "playbook"),
-        ("procedure_class", "deterministic_gate", "deterministic gate: route to acceptance_gate", "acceptance_gate"),
+        (
+            "procedure_class",
+            "deterministic_gate",
+            "deterministic gate: route to acceptance_gate",
+            "acceptance_gate",
+        ),
     ],
 )
 def test_non_skill_procedures_route_to_correct_target(
@@ -140,9 +148,7 @@ def test_non_skill_procedures_route_to_correct_target(
 ) -> None:
     source = compiler.reference_skill_source()
     source[field] = value
-    decision = compiler.compile_skill_candidate(
-        source, output_root=tmp_path / field
-    )
+    decision = compiler.compile_skill_candidate(source, output_root=tmp_path / field)
     assert decision["status"] == "routed"
     assert decision["target"] == target
     assert reason in decision["rejection_reasons"]
@@ -203,9 +209,7 @@ def test_shadow_invocation_records_version_artifacts_influence_and_durability(
         "skill_id": manifest["name"],
         "version_hash": manifest["content_hash"],
     }
-    assert artifact["artifact_id"] in {
-        row["artifact_id"] for row in payload["artifact_refs"]
-    }
+    assert artifact["artifact_id"] in {row["artifact_id"] for row in payload["artifact_refs"]}
     assert edge == (1, 0, "PASS", 1, "durable")
 
     cap = capabilities.load(ledger, create=False)[manifest["capability_id"]]
@@ -251,4 +255,3 @@ def test_rejected_shadow_use_remains_counterfactual(
     assert edge == (0, 1, None, None, None)
     assert payload["skill"]["accepted"] is False
     assert payload["skill"]["result"] == "failed"
-

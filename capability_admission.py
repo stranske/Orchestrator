@@ -33,6 +33,7 @@ So this module enforces two things the others cannot:
 Zero-owner by construction: every failure names a machine-checkable fix an agent performs. Nothing
 here queues anything for a human.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,12 +42,13 @@ import json
 import os
 import pathlib
 import re
-import sys
 
 import capabilities
 import env_prereq
 
 HERE = pathlib.Path(__file__).resolve().parent
+
+
 def _audits_dir() -> pathlib.Path:
     """Where the dated decision records live, resolved rather than hardcoded.
 
@@ -58,15 +60,19 @@ def _audits_dir() -> pathlib.Path:
     override = os.environ.get("ORCH_AUDITS_DIR")
     if override:
         return pathlib.Path(override).expanduser()
-    candidates = [pathlib.Path(os.environ["ORCH_FLEET_ROOT"]).expanduser()
-                  if os.environ.get("ORCH_FLEET_ROOT") else None,
-                  HERE.parent,
-                  pathlib.Path.home() / "Library/CloudStorage/Dropbox/Learning/Code"]
+    candidates = [
+        (
+            pathlib.Path(os.environ["ORCH_FLEET_ROOT"]).expanduser()
+            if os.environ.get("ORCH_FLEET_ROOT")
+            else None
+        ),
+        HERE.parent,
+        pathlib.Path.home() / "Library/CloudStorage/Dropbox/Learning/Code",
+    ]
     for root in candidates:
         if root and (root / "Audits" / "Orchestrator").is_dir():
             return root / "Audits" / "Orchestrator"
-    return (pathlib.Path.home()
-            / "Library/CloudStorage/Dropbox/Learning/Code/Audits/Orchestrator")
+    return pathlib.Path.home() / "Library/CloudStorage/Dropbox/Learning/Code/Audits/Orchestrator"
 
 
 AUDITS = _audits_dir()
@@ -77,7 +83,7 @@ AUDITS = _audits_dir()
 # FUTURE, so every capability — including brand-new ones — passed as grandfathered.
 # The selftest below caught it, which is the whole argument for this file: a cutoff
 # that silently admits everything is exactly the failure mode being guarded against.
-GRANDFATHERED_BEFORE = 1787270400   # 2026-08-21T00:00:00Z, the day this gate landed
+GRANDFATHERED_BEFORE = 1787270400  # 2026-08-21T00:00:00Z, the day this gate landed
 
 # A deliberate exception must name a capability, a reason, and a BOUNDED expiry. "Has an expiry" is
 # not enough: a break-test set one to 9999999999 and every check still passed, which would have made
@@ -98,15 +104,18 @@ def waiver_problems() -> list[str]:
         if expires <= 0:
             problems.append(f"{cap_id}: no expiry")
         elif expires > horizon:
-            problems.append(f"{cap_id}: expiry is {(expires - _now()) // 86400}d out, "
-                            f"beyond the {MAX_WAIVER_DAYS}d limit — that is a permanent "
-                            f"exemption wearing a deadline")
+            problems.append(
+                f"{cap_id}: expiry is {(expires - _now()) // 86400}d out, "
+                f"beyond the {MAX_WAIVER_DAYS}d limit — that is a permanent "
+                f"exemption wearing a deadline"
+            )
     return problems
 
 
 # --------------------------------------------------------------------------------------------
 # A. Admission requirements — the eight parts, each a machine-checkable predicate.
 # --------------------------------------------------------------------------------------------
+
 
 def _has(cap: dict, field: str) -> bool:
     value = cap.get(field)
@@ -121,12 +130,17 @@ def req_dedup_recorded(cap: dict, ctx: dict) -> tuple[bool, str]:
     was re-broken. The ledger IS durable, so the finding goes there.
     """
     notes = str(cap.get("notes") or "")
-    if re.search(r"\bdedup\b|already exists|not present.*build|checked .*(not|no) (present|match)",
-                 notes, re.I):
+    if re.search(
+        r"\bdedup\b|already exists|not present.*build|checked .*(not|no) (present|match)",
+        notes,
+        re.IGNORECASE,
+    ):
         return True, "dedup finding recorded in notes"
-    return False, ("no dedup finding recorded. State in `notes` which existing concepts were "
-                   "searched and the verdict — 'checked X/Y/Z; not present; building new' or "
-                   "'exists at file:line, dormant behind FLAG; activating'")
+    return False, (
+        "no dedup finding recorded. State in `notes` which existing concepts were "
+        "searched and the verdict — 'checked X/Y/Z; not present; building new' or "
+        "'exists at file:line, dormant behind FLAG; activating'"
+    )
 
 
 def req_caller_exists(cap: dict, ctx: dict) -> tuple[bool, str]:
@@ -144,6 +158,7 @@ def req_heartbeat(cap: dict, ctx: dict) -> tuple[bool, str]:
     could ever accrue evidence of its own usefulness.
     """
     import capability_activation_audit as audit
+
     hb = audit.heartbeat_reachable(cap)
     status = hb.get("status")
     if status == "reachable":
@@ -167,12 +182,15 @@ def req_outcome_path(cap: dict, ctx: dict) -> tuple[bool, str]:
     read `influence_edges`. Waiting could never have fixed it. A declared consumer AND a declared
     learning sink is the minimum that makes "wait for evidence" an honest instruction.
     """
-    if _has(cap, "downstream_consumer") and (_has(cap, "learning_sink")
-                                             or _has(cap, "outcome_links")):
+    if _has(cap, "downstream_consumer") and (
+        _has(cap, "learning_sink") or _has(cap, "outcome_links")
+    ):
         return True, "consumer + learning sink declared"
     missing = [f for f in ("downstream_consumer", "learning_sink") if not _has(cap, f)]
-    return False, (f"no path from output to judgement (missing {', '.join(missing)}). Without it, "
-                   "'let evidence accumulate' is an instruction that can never be satisfied")
+    return False, (
+        f"no path from output to judgement (missing {', '.join(missing)}). Without it, "
+        "'let evidence accumulate' is an instruction that can never be satisfied"
+    )
 
 
 def req_kill_switch(cap: dict, ctx: dict) -> tuple[bool, str]:
@@ -198,16 +216,22 @@ def req_kill_switch(cap: dict, ctx: dict) -> tuple[bool, str]:
     if _has(cap, "kill_switch"):
         return True, "kill switch declared"
     if cap.get("kill_switch_category") == "safety_guard" and _has(cap, "kill_switch_rationale"):
-        return True, ("safety guard: its OFF state is more dangerous than its ON state, so a kill "
-                      "switch would be an anti-feature")
-    if (cap.get("kill_switch_category") == "compute_only"
-            and _has(cap, "kill_switch_rationale")
-            and _has(cap, "control_point")):
+        return True, (
+            "safety guard: its OFF state is more dangerous than its ON state, so a kill "
+            "switch would be an anti-feature"
+        )
+    if (
+        cap.get("kill_switch_category") == "compute_only"
+        and _has(cap, "kill_switch_rationale")
+        and _has(cap, "control_point")
+    ):
         control = str(cap.get("control_point") or "")
         if control in (ctx.get("known_controls") or set()):
             return True, f"compute-only: the acting consumer carries the control ({control})"
-        return False, (f"compute-only capability names control_point '{control}', which is not a "
-                       "known switch in this tree -- an unverifiable control is not a control")
+        return False, (
+            f"compute-only capability names control_point '{control}', which is not a "
+            "known switch in this tree -- an unverifiable control is not a control"
+        )
     return False, "no kill switch: nothing can stop it without a code change"
 
 
@@ -268,9 +292,13 @@ def known_controls() -> set[str]:
 def _context(path: pathlib.Path | None = None) -> dict:
     import capability_activation_audit as audit
     import test_capability_set_coverage as coverage
+
     rows = {r["capability_id"]: r for r in audit.audit(use_cache=True)["rows"]}
-    return {"audit_rows": rows, "fixtures": coverage._fixture_capabilities(),
-            "known_controls": known_controls()}
+    return {
+        "audit_rows": rows,
+        "fixtures": coverage._fixture_capabilities(),
+        "known_controls": known_controls(),
+    }
 
 
 def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict:
@@ -284,7 +312,7 @@ def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | N
     for name, fn in REQUIREMENTS:
         try:
             ok, detail = fn(cap, ctx)
-        except Exception as exc:                                   # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             ok, detail = False, f"check errored: {str(exc)[:80]}"
         checks[name] = {"ok": bool(ok), "detail": detail}
         if not ok:
@@ -293,14 +321,21 @@ def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | N
     waived = bool(waiver and int(waiver.get("expires", 0)) > _now())
     created = _created_ts(cap)
     legacy = bool(created and created < GRANDFATHERED_BEFORE)
-    return {"capability_id": capability_id, "status": cap.get("status"),
-            "admitted": not missing, "missing": missing, "checks": checks,
-            "waived": waived, "waiver": waiver, "legacy": legacy,
-            # ENFORCED is the field the test acts on. Scoping matters more than strictness here: a
-            # gate that is red on arrival gets switched off, and then it protects nothing. So it
-            # binds on capabilities added from now on, while legacy debt is printed on every run
-            # instead of being silently forgiven.
-            "enforced": (not legacy) and not waived}
+    return {
+        "capability_id": capability_id,
+        "status": cap.get("status"),
+        "admitted": not missing,
+        "missing": missing,
+        "checks": checks,
+        "waived": waived,
+        "waiver": waiver,
+        "legacy": legacy,
+        # ENFORCED is the field the test acts on. Scoping matters more than strictness here: a
+        # gate that is red on arrival gets switched off, and then it protects nothing. So it
+        # binds on capabilities added from now on, while legacy debt is printed on every run
+        # instead of being silently forgiven.
+        "enforced": (not legacy) and not waived,
+    }
 
 
 def preflight(spec: dict) -> dict:
@@ -310,8 +345,10 @@ def preflight(spec: dict) -> dict:
     the code was written, when the fix was a second project. Running this on a spec first makes the
     missing part a design question instead of a post-mortem.
     """
-    stub = {**capabilities._blank_capability(spec.get("capability_id") or "capability:proposed"),
-            **spec}
+    stub = {
+        **capabilities._blank_capability(spec.get("capability_id") or "capability:proposed"),
+        **spec,
+    }
     ctx = {"audit_rows": {}, "fixtures": set()}
     checks, missing = {}, []
     # Caller/heartbeat/fixture cannot be verified for code that does not exist; they are reported as
@@ -319,19 +356,26 @@ def preflight(spec: dict) -> dict:
     obligations = {"caller_exists", "heartbeat", "fixture"}
     for name, fn in REQUIREMENTS:
         if name in obligations:
-            checks[name] = {"ok": None, "detail": "cannot verify pre-build — OBLIGATION: must be "
-                                                  "demonstrated before the capability is registered"}
+            checks[name] = {
+                "ok": None,
+                "detail": "cannot verify pre-build — OBLIGATION: must be "
+                "demonstrated before the capability is registered",
+            }
             continue
         try:
             ok, detail = fn(stub, ctx)
-        except Exception as exc:                                   # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             ok, detail = False, f"check errored: {str(exc)[:80]}"
         checks[name] = {"ok": bool(ok), "detail": detail}
         if not ok:
             missing.append(name)
-    return {"capability_id": stub["capability_id"], "declarable_missing": missing,
-            "obligations": sorted(obligations), "checks": checks,
-            "ready_to_build": not missing}
+    return {
+        "capability_id": stub["capability_id"],
+        "declarable_missing": missing,
+        "obligations": sorted(obligations),
+        "checks": checks,
+        "ready_to_build": not missing,
+    }
 
 
 # --------------------------------------------------------------------------------------------
@@ -343,8 +387,9 @@ CITED_RECORD_RE = re.compile(r"(20\d\d-\d\d-\d\d-[A-Za-z0-9._-]+\.md)")
 # required the date to follow almost immediately, so it missed
 # `ORCH_RANGE_LANE_TRIAL_UNTIL="${ORCH_RANGE_LANE_TRIAL_UNTIL:-2026-07-22}"` — the exact line whose
 # silent expiry this check exists to catch. A detector that misses the motivating case is worthless.
-DEADLINE_RE = re.compile(r"([A-Z][A-Z_]*(?:UNTIL|DEADLINE|EXPIRES?)[A-Z_]*)[^\n]{0,60}?"
-                         r"(20\d\d-\d\d-\d\d)")
+DEADLINE_RE = re.compile(
+    r"([A-Z][A-Z_]*(?:UNTIL|DEADLINE|EXPIRES?)[A-Z_]*)[^\n]{0,60}?" r"(20\d\d-\d\d-\d\d)"
+)
 SCAN_SUFFIXES = (".py", ".sh", ".md")
 # The backlog narrates history and cites closed records; this module necessarily NAMES the records
 # that were never written, because documenting them is the whole point. Both would otherwise report
@@ -362,8 +407,11 @@ def _today() -> str:
 
 def _subject_of(var: str) -> str:
     """`ORCH_RANGE_LANE_TRIAL_UNTIL` -> `range-lane`: the thing whose deadline passed."""
-    parts = [p for p in var.lower().split("_")
-             if p not in {"orch", "trial", "until", "deadline", "expires", "expire", "date"}]
+    parts = [
+        p
+        for p in var.lower().split("_")
+        if p not in {"orch", "trial", "until", "deadline", "expires", "expire", "date"}
+    ]
     return "-".join(parts[:2]) or var.lower()
 
 
@@ -383,7 +431,7 @@ def _decision_recorded_after(var: str, date: str) -> bool:
     needle = subject if len(subject) >= 6 else var.lower()
     pattern = re.compile(r"\b" + re.escape(needle) + r"\b")
     if not AUDITS.is_dir():
-        return True                       # cannot judge without the ledger; never fail on absence
+        return True  # cannot judge without the ledger; never fail on absence
     for record in AUDITS.glob("20*.md"):
         if record.name[:10] < date or record.name.endswith("-PLAN.md"):
             continue
@@ -392,7 +440,7 @@ def _decision_recorded_after(var: str, date: str) -> bool:
         try:
             if pattern.search(record.read_text(encoding="utf-8", errors="ignore").lower()):
                 return True
-        except Exception:                                          # noqa: BLE001
+        except Exception:  # noqa: BLE001
             continue
     return False
 
@@ -419,38 +467,59 @@ def commitments(*, root: pathlib.Path | None = None) -> dict:
     # environmental reasons gets disabled, which is how the range-lane citation went unnoticed in
     # the first place. Absence of the ledger means "cannot judge", never "violation".
     if not AUDITS.is_dir():
-        return {"dangling_citations": [], "overdue_without_record": [], "clean": True,
-                "skipped": f"audit ledger not present at {AUDITS} — citations not judged"}
+        return {
+            "dangling_citations": [],
+            "overdue_without_record": [],
+            "clean": True,
+            "skipped": f"audit ledger not present at {AUDITS} — citations not judged",
+        }
     dangling, overdue = [], []
     for path in sorted(root.iterdir()):
         if not path.is_file() or path.suffix not in SCAN_SUFFIXES or path.name in SKIP_NAMES:
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:                                          # noqa: BLE001
+        except Exception:  # noqa: BLE001
             continue
         for line_no, line in enumerate(text.splitlines(), 1):
             for name in CITED_RECORD_RE.findall(line):
                 if name.endswith("-PLAN.md"):
                     continue
                 if not _record_exists(name):
-                    dangling.append({"file": path.name, "line": line_no, "record": name,
-                                     "text": line.strip()[:120]})
+                    dangling.append(
+                        {
+                            "file": path.name,
+                            "line": line_no,
+                            "record": name,
+                            "text": line.strip()[:120],
+                        }
+                    )
             for var, date in DEADLINE_RE.findall(line):
                 if date >= _today():
                     continue
                 if not _decision_recorded_after(var, date):
-                    overdue.append({"file": path.name, "line": line_no, "var": var,
-                                    "date": date, "text": line.strip()[:120],
-                                    "needs": f"an audit record dated >= {date} that names "
-                                             f"{_subject_of(var)}"})
-    return {"dangling_citations": dangling, "overdue_without_record": overdue,
-            "clean": not dangling and not overdue}
+                    overdue.append(
+                        {
+                            "file": path.name,
+                            "line": line_no,
+                            "var": var,
+                            "date": date,
+                            "text": line.strip()[:120],
+                            "needs": f"an audit record dated >= {date} that names "
+                            f"{_subject_of(var)}",
+                        }
+                    )
+    return {
+        "dangling_citations": dangling,
+        "overdue_without_record": overdue,
+        "clean": not dangling and not overdue,
+    }
 
 
 # --------------------------------------------------------------------------------------------
 # Reporting
 # --------------------------------------------------------------------------------------------
+
 
 def _capability_heartbeat(event: str) -> None:
     """Credit this gate when it actually runs.
@@ -461,7 +530,7 @@ def _capability_heartbeat(event: str) -> None:
     """
     try:
         capabilities.production_heartbeat("capability-admission-gate", event)
-    except Exception:                                              # noqa: BLE001 — never break the gate
+    except Exception:  # noqa: BLE001 — never break the gate
         pass
 
 
@@ -471,23 +540,30 @@ def report(*, path: pathlib.Path | None = None) -> dict:
     ctx = _context(path)
     rows = [admit(cid, path=path, ctx=ctx) for cid in sorted(ledger)]
     enforced = [r for r in rows if r["enforced"]]
-    return {"total": len(rows),
-            "admitted": sum(1 for r in rows if r["admitted"]),
-            "enforced_total": len(enforced),
-            "enforced_failing": [r["capability_id"] for r in enforced if not r["admitted"]],
-            "legacy_debt": sorted(r["capability_id"] for r in rows
-                                  if r["legacy"] and not r["admitted"]),
-            "rows": rows,
-            "commitments": commitments()}
+    return {
+        "total": len(rows),
+        "admitted": sum(1 for r in rows if r["admitted"]),
+        "enforced_total": len(enforced),
+        "enforced_failing": [r["capability_id"] for r in enforced if not r["admitted"]],
+        "legacy_debt": sorted(
+            r["capability_id"] for r in rows if r["legacy"] and not r["admitted"]
+        ),
+        "rows": rows,
+        "commitments": commitments(),
+    }
 
 
 def format_report(rep: dict) -> str:
-    out = ["# Capability admission gate", "",
-           f"  ADMITTED:        {rep['admitted']} of {rep['total']}",
-           f"  ENFORCED (new):  {rep['enforced_total']} capability(ies) — "
-           f"{len(rep['enforced_failing'])} failing",
-           f"  LEGACY DEBT:     {len(rep['legacy_debt'])} pre-gate capability(ies) short of the "
-           f"full eight (visible every run, not forgiven)", ""]
+    out = [
+        "# Capability admission gate",
+        "",
+        f"  ADMITTED:        {rep['admitted']} of {rep['total']}",
+        f"  ENFORCED (new):  {rep['enforced_total']} capability(ies) — "
+        f"{len(rep['enforced_failing'])} failing",
+        f"  LEGACY DEBT:     {len(rep['legacy_debt'])} pre-gate capability(ies) short of the "
+        f"full eight (visible every run, not forgiven)",
+        "",
+    ]
     if rep["enforced_failing"]:
         out.append("  ENFORCED FAILURES — these block the suite:")
         for r in rep["rows"]:
@@ -497,7 +573,9 @@ def format_report(rep: dict) -> str:
             for name in r["missing"]:
                 out.append(f"        {name}: {r['checks'][name]['detail'][:104]}")
     else:
-        out.append("  no enforced failures: every capability added since the gate carries its parts")
+        out.append(
+            "  no enforced failures: every capability added since the gate carries its parts"
+        )
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
@@ -514,8 +592,10 @@ def format_report(rep: dict) -> str:
     for d in com["dangling_citations"]:
         out.append(f"    DANGLING  {d['file']}:{d['line']} cites {d['record']} — never written")
     for o in com["overdue_without_record"]:
-        out.append(f"    OVERDUE   {o['file']}:{o['line']} {o['var']}={o['date']} "
-                   f"passed with no record")
+        out.append(
+            f"    OVERDUE   {o['file']}:{o['line']} {o['var']}={o['date']} "
+            f"passed with no record"
+        )
     return "\n".join(out) + "\n"
 
 
@@ -527,8 +607,9 @@ def _probe_commitments(probe: pathlib.Path) -> None:
     """
     (probe / "fake.sh").write_text("# see 2026-01-02-nonexistent-decision.md\n")
     got = commitments(root=probe)
-    assert any(d["record"] == "2026-01-02-nonexistent-decision.md"
-               for d in got["dangling_citations"]), got
+    assert any(
+        d["record"] == "2026-01-02-nonexistent-decision.md" for d in got["dangling_citations"]
+    ), got
     assert not got["clean"]
     # A PLAN is not a decision record; citing one must not be flagged.
     (probe / "fake.sh").write_text("# see 2026-01-02-thing-PLAN.md\n")
@@ -537,7 +618,8 @@ def _probe_commitments(probe: pathlib.Path) -> None:
     # The MOTIVATING SHAPE, verbatim: a shell default with the var repeated inside. The first
     # pattern here could not match this, which would have made the whole check theatre.
     (probe / "fake2.sh").write_text(
-        'ORCH_THING_TRIAL_UNTIL="${ORCH_THING_TRIAL_UNTIL:-2020-01-01}"\n')
+        'ORCH_THING_TRIAL_UNTIL="${ORCH_THING_TRIAL_UNTIL:-2020-01-01}"\n'
+    )
     over = commitments(root=probe)
     assert any(o["date"] == "2020-01-01" for o in over["overdue_without_record"]), over
     # A future deadline is not overdue.
@@ -556,25 +638,31 @@ def _selftest() -> None:
     # Every requirement must be able to FAIL. A predicate that always passes is decoration.
     ctx = {"audit_rows": {}, "fixtures": set()}
     empty = capabilities._blank_capability("capability:nothing-declared")
-    empty["event_history"] = [{"timestamp": _now(), "type": "migrated"}]   # not grandfathered
+    empty["event_history"] = [{"timestamp": _now(), "type": "migrated"}]  # not grandfathered
     for name, fn in REQUIREMENTS:
         try:
             ok, _ = fn(empty, ctx)
-        except Exception:                                          # noqa: BLE001
+        except Exception:  # noqa: BLE001
             ok = False
         assert not ok, f"requirement {name!r} passes an empty capability — it checks nothing"
 
     # ...and each must be able to PASS, or the gate is unsatisfiable and will be disabled.
-    full = {**empty,
-            "notes": "dedup: checked A/B/C; not present; building new",
-            "downstream_consumer": "x.py:consume", "learning_sink": "feedback.outcomes",
-            "kill_switch": "ORCH_X=0", "rollback": "revert PR", "trigger_cadence": "daily"}
-    ctx_full = {"audit_rows": {"capability:nothing-declared":
-                               {"reachable": True, "defects": []}},
-                "fixtures": {"capability:nothing-declared"}}
+    full = {
+        **empty,
+        "notes": "dedup: checked A/B/C; not present; building new",
+        "downstream_consumer": "x.py:consume",
+        "learning_sink": "feedback.outcomes",
+        "kill_switch": "ORCH_X=0",
+        "rollback": "revert PR",
+        "trigger_cadence": "daily",
+    }
+    ctx_full = {
+        "audit_rows": {"capability:nothing-declared": {"reachable": True, "defects": []}},
+        "fixtures": {"capability:nothing-declared"},
+    }
     for name, fn in REQUIREMENTS:
         if name == "heartbeat":
-            continue                        # needs real module introspection; covered on live rows
+            continue  # needs real module introspection; covered on live rows
         ok, detail = fn(full, ctx_full)
         assert ok, f"requirement {name!r} cannot be satisfied even when declared: {detail}"
 
@@ -589,8 +677,9 @@ def _selftest() -> None:
         ledger_rows = report()["rows"]
         legacy_rows = [r for r in ledger_rows if r["legacy"]]
         assert legacy_rows, "expected pre-gate capabilities to be marked legacy"
-        assert any(r["missing"] for r in legacy_rows), \
-            "legacy rows must still report their missing parts, not be silently passed"
+        assert any(
+            r["missing"] for r in legacy_rows
+        ), "legacy rows must still report their missing parts, not be silently passed"
         assert all(not r["enforced"] for r in legacy_rows), "legacy rows must not block the suite"
 
     # A waiver must EXPIRE. An exception with no end date is how "temporary" became a month.
@@ -606,6 +695,7 @@ def _selftest() -> None:
     # that line, this assertion should be updated — but it must never be quietly dropped, so the
     # check below proves the DETECTOR works using a synthetic file either way.
     import tempfile
+
     with tempfile.TemporaryDirectory(prefix="cap-adm-") as td:
         probe = pathlib.Path(td)
         # POINT `AUDITS` AT A SYNTHETIC, EMPTY RECORD SET for the duration of the probe. Two
@@ -629,10 +719,17 @@ def _selftest() -> None:
 
     # preflight must report obligations rather than pretending it verified them.
 
-    pf = preflight({"capability_id": "capability:proposed-thing",
-                    "notes": "dedup: checked X; absent", "downstream_consumer": "a.py:b",
-                    "learning_sink": "feedback.outcomes", "kill_switch": "F=0",
-                    "rollback": "revert", "trigger_cadence": "daily"})
+    pf = preflight(
+        {
+            "capability_id": "capability:proposed-thing",
+            "notes": "dedup: checked X; absent",
+            "downstream_consumer": "a.py:b",
+            "learning_sink": "feedback.outcomes",
+            "kill_switch": "F=0",
+            "rollback": "revert",
+            "trigger_cadence": "daily",
+        }
+    )
     assert pf["ready_to_build"], pf
     assert set(pf["obligations"]) == {"caller_exists", "heartbeat", "fixture"}, pf
     assert all(pf["checks"][o]["ok"] is None for o in pf["obligations"]), pf
@@ -640,9 +737,11 @@ def _selftest() -> None:
     assert not pf2["ready_to_build"] and "kill_switch" in pf2["declarable_missing"], pf2
 
     env_prereq.report_gaps("capability_admission.py", gaps)
-    print("capability_admission.py selftest: OK (every requirement can fail and can pass, "
-          "grandfathering visible, waivers expire, dangling + overdue commitments detected)"
-          + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else ""))
+    print(
+        "capability_admission.py selftest: OK (every requirement can fail and can pass, "
+        "grandfathering visible, waivers expire, dangling + overdue commitments detected)"
+        + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
+    )
 
 
 def main() -> int:
@@ -650,8 +749,11 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--commitments", action="store_true", help="only the dated-promise check")
-    ap.add_argument("--preflight", metavar="JSON",
-                    help="answer admission for a proposed capability spec (JSON string or @file)")
+    ap.add_argument(
+        "--preflight",
+        metavar="JSON",
+        help="answer admission for a proposed capability spec (JSON string or @file)",
+    )
     args = ap.parse_args()
     if args.selftest:
         _selftest()
@@ -664,10 +766,21 @@ def main() -> int:
         return 0
     if args.commitments:
         com = commitments()
-        print(json.dumps(com, indent=2, sort_keys=True) if args.json
-              else format_report({"total": 0, "admitted": 0, "enforced_total": 0,
-                                  "enforced_failing": [], "legacy_debt": [],
-                                  "rows": [], "commitments": com}))
+        print(
+            json.dumps(com, indent=2, sort_keys=True)
+            if args.json
+            else format_report(
+                {
+                    "total": 0,
+                    "admitted": 0,
+                    "enforced_total": 0,
+                    "enforced_failing": [],
+                    "legacy_debt": [],
+                    "rows": [],
+                    "commitments": com,
+                }
+            )
+        )
         return 0 if com["clean"] else 1
     rep = report()
     print(json.dumps(rep, indent=2, sort_keys=True) if args.json else format_report(rep), end="")

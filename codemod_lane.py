@@ -6,6 +6,7 @@ author a strict campaign JSON, validate it conservatively, and emit a dry-run
 plan with review-before-run commands. It does not execute external tools or
 open batched PRs.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,8 +14,9 @@ import json
 import re
 import shlex
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 VALID_TOOLS = {"ast-grep", "comby", "jscodeshift", "openrewrite", "custom"}
 VALID_RISK_LEVELS = {"low", "medium", "high"}
@@ -75,7 +77,9 @@ def build_authoring_prompt(
 
     file_context = _read_optional(context_file)
     context_parts = [part.strip() for part in (context, file_context) if part and part.strip()]
-    context_block = "\n\nAdditional context:\n" + "\n\n".join(context_parts) if context_parts else ""
+    context_block = (
+        "\n\nAdditional context:\n" + "\n\n".join(context_parts) if context_parts else ""
+    )
     repos_block = "\nRepositories: " + ", ".join(repos) if repos else ""
     target_block = f"\nTarget: {target}" if target else ""
     schema = json.dumps(CAMPAIGN_SCHEMA_EXAMPLE, indent=2)
@@ -168,11 +172,13 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
         return errors
 
     meta = campaign["campaign"]
-    errors.extend(_validate_required_mapping(
-        meta,
-        "campaign",
-        ("id", "title", "goal", "repos", "constraints", "definition_of_done"),
-    ))
+    errors.extend(
+        _validate_required_mapping(
+            meta,
+            "campaign",
+            ("id", "title", "goal", "repos", "constraints", "definition_of_done"),
+        )
+    )
     if isinstance(meta, dict):
         campaign_id = meta.get("id")
         if not _is_nonempty_string(campaign_id):
@@ -184,18 +190,32 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
         if not _is_nonempty_string(meta.get("goal")):
             errors.append("campaign.goal must be a non-empty string")
         errors.extend(_validate_string_list(meta.get("repos"), "campaign.repos", nonempty=True))
-        errors.extend(_validate_string_list(meta.get("constraints"), "campaign.constraints", nonempty=False))
-        errors.extend(_validate_string_list(meta.get("definition_of_done"), "campaign.definition_of_done", nonempty=True))
+        errors.extend(
+            _validate_string_list(meta.get("constraints"), "campaign.constraints", nonempty=False)
+        )
+        errors.extend(
+            _validate_string_list(
+                meta.get("definition_of_done"), "campaign.definition_of_done", nonempty=True
+            )
+        )
 
     scope = campaign["scope"]
-    errors.extend(_validate_required_mapping(scope, "scope", ("include_globs", "exclude_globs", "max_files")))
+    errors.extend(
+        _validate_required_mapping(scope, "scope", ("include_globs", "exclude_globs", "max_files"))
+    )
     if isinstance(scope, dict):
-        errors.extend(_validate_string_list(scope.get("include_globs"), "scope.include_globs", nonempty=True))
-        errors.extend(_validate_string_list(scope.get("exclude_globs"), "scope.exclude_globs", nonempty=False))
+        errors.extend(
+            _validate_string_list(scope.get("include_globs"), "scope.include_globs", nonempty=True)
+        )
+        errors.extend(
+            _validate_string_list(scope.get("exclude_globs"), "scope.exclude_globs", nonempty=False)
+        )
         errors.extend(_validate_positive_int(scope.get("max_files"), "scope.max_files"))
 
     recipe = campaign["recipe"]
-    errors.extend(_validate_required_mapping(recipe, "recipe", ("tool", "language", "summary", "risk_level")))
+    errors.extend(
+        _validate_required_mapping(recipe, "recipe", ("tool", "language", "summary", "risk_level"))
+    )
     if isinstance(recipe, dict):
         if recipe.get("tool") not in VALID_TOOLS:
             errors.append(f"recipe.tool must be one of {sorted(VALID_TOOLS)}")
@@ -215,7 +235,9 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
         has_command_template = _is_nonempty_string(command_template)
         mechanism_count = sum([has_match_rewrite, has_rule_file, has_command_template])
         if mechanism_count != 1:
-            errors.append("recipe must include exactly one mechanism: (match+rewrite) OR rule_file OR command_template")
+            errors.append(
+                "recipe must include exactly one mechanism: (match+rewrite) OR rule_file OR command_template"
+            )
         if match is not None and not isinstance(match, str):
             errors.append("recipe.match must be a string when present")
         if rewrite is not None and not isinstance(rewrite, str):
@@ -226,7 +248,11 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
             errors.append("recipe.command_template must be a string when present")
 
     rollout = campaign["rollout"]
-    errors.extend(_validate_required_mapping(rollout, "rollout", ("batch_size", "branch_prefix", "pr_strategy")))
+    errors.extend(
+        _validate_required_mapping(
+            rollout, "rollout", ("batch_size", "branch_prefix", "pr_strategy")
+        )
+    )
     if isinstance(rollout, dict):
         errors.extend(_validate_positive_int(rollout.get("batch_size"), "rollout.batch_size"))
         if not _is_nonempty_string(rollout.get("branch_prefix")):
@@ -236,7 +262,9 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
 
     errors.extend(_validate_string_list(campaign.get("acceptance"), "acceptance", nonempty=True))
     errors.extend(_validate_string_list(campaign.get("validation"), "validation", nonempty=True))
-    errors.extend(_validate_string_list(campaign.get("manual_review"), "manual_review", nonempty=True))
+    errors.extend(
+        _validate_string_list(campaign.get("manual_review"), "manual_review", nonempty=True)
+    )
     if not _is_nonempty_string(campaign.get("delegate_prompt")):
         errors.append("delegate_prompt must be a non-empty string")
     return errors
@@ -258,7 +286,9 @@ def parse_campaign_json(content: str) -> dict[str, Any]:
     return parsed
 
 
-def _rg_scope_command(include_globs: Sequence[str], exclude_globs: Sequence[str], max_files: int) -> str:
+def _rg_scope_command(
+    include_globs: Sequence[str], exclude_globs: Sequence[str], max_files: int
+) -> str:
     parts = ["rg", "--files"]
     for glob in include_globs:
         parts.extend(["-g", shlex.quote(glob)])
@@ -284,10 +314,14 @@ def _template_is_safe_dry_run(command: str) -> bool:
 
 def _has_dry_run_marker(command: str) -> bool:
     lowered = command.lower()
-    return any(marker in lowered for marker in ("dryrun", "dry-run", "--dry", " -dry", "-diff", "--print"))
+    return any(
+        marker in lowered for marker in ("dryrun", "dry-run", "--dry", " -dry", "-diff", "--print")
+    )
 
 
-def _recipe_dry_run_command(recipe: dict[str, Any], scope: dict[str, Any]) -> tuple[str | None, str | None]:
+def _recipe_dry_run_command(
+    recipe: dict[str, Any], scope: dict[str, Any]
+) -> tuple[str | None, str | None]:
     """Build a conservative dry-run command when enough recipe fields exist."""
     tool = recipe.get("tool")
     include = scope.get("include_globs") or ["**/*"]
@@ -301,39 +335,54 @@ def _recipe_dry_run_command(recipe: dict[str, Any], scope: dict[str, Any]) -> tu
         if _is_nonempty_string(rule_file):
             return " ".join(["ast-grep", "scan", "--rule", shlex.quote(rule_file.strip())]), None
         if _is_nonempty_string(match):
-            return " ".join([
-                "ast-grep",
-                "scan",
-                "-l",
-                shlex.quote(language),
-                "-p",
-                shlex.quote(match.strip()),
-            ]), None
+            return (
+                " ".join(
+                    [
+                        "ast-grep",
+                        "scan",
+                        "-l",
+                        shlex.quote(language),
+                        "-p",
+                        shlex.quote(match.strip()),
+                    ]
+                ),
+                None,
+            )
 
     if tool == "comby" and _is_nonempty_string(match) and _is_nonempty_string(rewrite):
         target = include[0] if include else "."
         matcher = ".py" if language == "python" else language
-        return " ".join([
-            "comby",
-            shlex.quote(match.strip()),
-            shlex.quote(rewrite.strip()),
-            shlex.quote(target),
-            "-matcher",
-            shlex.quote(matcher),
-            "-diff",
-        ]), None
+        return (
+            " ".join(
+                [
+                    "comby",
+                    shlex.quote(match.strip()),
+                    shlex.quote(rewrite.strip()),
+                    shlex.quote(target),
+                    "-matcher",
+                    shlex.quote(matcher),
+                    "-diff",
+                ]
+            ),
+            None,
+        )
 
     if tool == "jscodeshift":
         if _is_nonempty_string(rule_file):
             target = include[0] if include else "."
-            return " ".join([
-                "jscodeshift",
-                "-t",
-                shlex.quote(rule_file.strip()),
-                "--dry",
-                "--print",
-                shlex.quote(target),
-            ]), None
+            return (
+                " ".join(
+                    [
+                        "jscodeshift",
+                        "-t",
+                        shlex.quote(rule_file.strip()),
+                        "--dry",
+                        "--print",
+                        shlex.quote(target),
+                    ]
+                ),
+                None,
+            )
         if _is_nonempty_string(command_template):
             cmd = command_template.strip()
             if _template_is_safe_dry_run(cmd) and _has_dry_run_marker(cmd):
@@ -345,13 +394,21 @@ def _recipe_dry_run_command(recipe: dict[str, Any], scope: dict[str, Any]) -> tu
             cmd = command_template.strip()
             if _template_is_safe_dry_run(cmd) and _has_dry_run_marker(cmd):
                 return cmd, None
-            return None, "openrewrite command_template omitted because it lacks explicit dry-run semantics"
+            return (
+                None,
+                "openrewrite command_template omitted because it lacks explicit dry-run semantics",
+            )
         if _is_nonempty_string(rule_file):
-            return " ".join([
-                "./mvnw",
-                f"-Drewrite.activeRecipes={shlex.quote(rule_file.strip())}",
-                "rewrite:dryRun",
-            ]), None
+            return (
+                " ".join(
+                    [
+                        "./mvnw",
+                        f"-Drewrite.activeRecipes={shlex.quote(rule_file.strip())}",
+                        "rewrite:dryRun",
+                    ]
+                ),
+                None,
+            )
 
     if tool == "custom" and _is_nonempty_string(command_template):
         cmd = command_template.strip()
@@ -381,38 +438,46 @@ def build_dry_run_plan(campaign: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     recipe_cmd, recipe_warning = _recipe_dry_run_command(recipe, scope)
     if recipe_cmd:
-        commands.append({
-            "purpose": "recipe_dry_run",
-            "tool": recipe["tool"],
-            "command": recipe_cmd,
-            "review_before_run": True,
-            "mutates_files": False,
-        })
+        commands.append(
+            {
+                "purpose": "recipe_dry_run",
+                "tool": recipe["tool"],
+                "command": recipe_cmd,
+                "review_before_run": True,
+                "mutates_files": False,
+            }
+        )
     if recipe_warning:
         warnings.append(recipe_warning)
 
-    commands.append({
-        "purpose": "scope_inventory",
-        "command": _rg_scope_command(include, exclude, max_files),
-        "review_before_run": True,
-        "mutates_files": False,
-    })
+    commands.append(
+        {
+            "purpose": "scope_inventory",
+            "command": _rg_scope_command(include, exclude, max_files),
+            "review_before_run": True,
+            "mutates_files": False,
+        }
+    )
     for repo in meta["repos"]:
-        commands.append({
-            "purpose": "proposed_branch",
-            "repo": repo,
-            "branch": f"{rollout['branch_prefix']}/{meta['id']}",
-            "review_before_run": True,
-            "mutates_files": False,
-            "note": "Branch creation is planned only; not executed in this increment.",
-        })
+        commands.append(
+            {
+                "purpose": "proposed_branch",
+                "repo": repo,
+                "branch": f"{rollout['branch_prefix']}/{meta['id']}",
+                "review_before_run": True,
+                "mutates_files": False,
+                "note": "Branch creation is planned only; not executed in this increment.",
+            }
+        )
     for cmd in campaign["validation"]:
-        commands.append({
-            "purpose": "validation",
-            "command": cmd,
-            "review_before_run": True,
-            "mutates_files": False,
-        })
+        commands.append(
+            {
+                "purpose": "validation",
+                "command": cmd,
+                "review_before_run": True,
+                "mutates_files": False,
+            }
+        )
 
     return {
         "campaign_id": meta["id"],
@@ -514,7 +579,10 @@ def _selftest() -> None:
     plan = build_dry_run_plan(valid)
     assert plan["campaign_id"] == "rename-legacy-handler", plan
     assert plan["execution_policy"]["auto_apply"] is False, plan
-    assert any(c["purpose"] == "scope_inventory" and "rg --files -g" in c["command"] for c in plan["commands"]), plan
+    assert any(
+        c["purpose"] == "scope_inventory" and "rg --files -g" in c["command"]
+        for c in plan["commands"]
+    ), plan
     recipe_cmds = [c for c in plan["commands"] if c.get("purpose") == "recipe_dry_run"]
     assert recipe_cmds and recipe_cmds[0]["review_before_run"] is True, plan
     assert recipe_cmds[0]["mutates_files"] is False, plan
@@ -551,7 +619,9 @@ def _selftest() -> None:
         "risk_level": "low",
     }
     assert validate_campaign(comby) == []
-    comby_cmd = next(c for c in build_dry_run_plan(comby)["commands"] if c.get("purpose") == "recipe_dry_run")
+    comby_cmd = next(
+        c for c in build_dry_run_plan(comby)["commands"] if c.get("purpose") == "recipe_dry_run"
+    )
     assert "-diff" in comby_cmd["command"], comby_cmd
 
     custom_apply = json.loads(json.dumps(valid))
@@ -564,7 +634,9 @@ def _selftest() -> None:
     }
     assert validate_campaign(custom_apply) == []
     custom_plan = build_dry_run_plan(custom_apply)
-    assert not any(c.get("purpose") == "recipe_dry_run" for c in custom_plan["commands"]), custom_plan
+    assert not any(
+        c.get("purpose") == "recipe_dry_run" for c in custom_plan["commands"]
+    ), custom_plan
     assert custom_plan["warnings"], custom_plan
 
     dry_custom = json.loads(json.dumps(valid))
@@ -575,11 +647,15 @@ def _selftest() -> None:
         "command_template": "mytool --dry-run src/",
         "risk_level": "low",
     }
-    assert any(c.get("purpose") == "recipe_dry_run" for c in build_dry_run_plan(dry_custom)["commands"])
+    assert any(
+        c.get("purpose") == "recipe_dry_run" for c in build_dry_run_plan(dry_custom)["commands"]
+    )
 
-    parsed = parse_campaign_json("```json\n{\"campaign\": {\"id\": \"x\"}}\n```")
+    parsed = parse_campaign_json('```json\n{"campaign": {"id": "x"}}\n```')
     assert parsed == {"campaign": {"id": "x"}}, parsed
-    print("codemod_lane.py selftest: OK (authoring prompt, schema validation, dry-run plan, delegation prompt)")
+    print(
+        "codemod_lane.py selftest: OK (authoring prompt, schema validation, dry-run plan, delegation prompt)"
+    )
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
@@ -593,6 +669,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
+
         capabilities.production_heartbeat("codemod-campaign", event_type, ref="codemod_lane.main")
     except Exception:
         pass
@@ -600,20 +677,31 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 
 def main(argv: Sequence[str]) -> int:
     _capability_heartbeat()
-    parser = argparse.ArgumentParser(description="Build or validate an Orchestrator codemod campaign.")
+    parser = argparse.ArgumentParser(
+        description="Build or validate an Orchestrator codemod campaign."
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--goal", help="refactor/codemod goal to turn into an authoring prompt")
     group.add_argument("--goal-file", help="file containing the refactor/codemod goal")
     group.add_argument("--validate", help="campaign JSON file to validate")
     group.add_argument("--plan", help="campaign JSON file to turn into a dry-run plan")
     group.add_argument("--selftest", action="store_true", help="run offline selftests")
-    parser.add_argument("--repo", action="append", dest="repos", help="optional owner/repo context; repeatable")
+    parser.add_argument(
+        "--repo", action="append", dest="repos", help="optional owner/repo context; repeatable"
+    )
     parser.add_argument("--target", help="optional issue/PR target context")
-    parser.add_argument("--context", default="", help="inline context to include in the authoring prompt")
-    parser.add_argument("--context-file", help="extra context file to include in the authoring prompt")
+    parser.add_argument(
+        "--context", default="", help="inline context to include in the authoring prompt"
+    )
+    parser.add_argument(
+        "--context-file", help="extra context file to include in the authoring prompt"
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
-    parser.add_argument("--emit-delegation-prompt", action="store_true",
-                        help="with --plan, include a dispatch-ready delegation prompt")
+    parser.add_argument(
+        "--emit-delegation-prompt",
+        action="store_true",
+        help="with --plan, include a dispatch-ready delegation prompt",
+    )
     args = parser.parse_args(list(argv))
 
     if args.selftest:

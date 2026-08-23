@@ -26,6 +26,7 @@ returns action='defer' rather than blocking for up to an hour) so rate-heavy ops
 
 Read-only and safe; fail-open everywhere (probe failure or no data => OK/proceed, never a false halt).
 """
+
 from __future__ import annotations
 
 import json
@@ -36,14 +37,21 @@ import time
 from pathlib import Path
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
-GH_LEDGER = HANDOFF / "gh-rate-ledger.ndjson"   # append-only: {ts, resource, remaining, limit, reset, used, source}
+GH_LEDGER = (
+    HANDOFF / "gh-rate-ledger.ndjson"
+)  # append-only: {ts, resource, remaining, limit, reset, used, source}
 OUT = HANDOFF / "gh-capacity.json"
 
 OK, LOW, SHED, UNKNOWN = "ok", "low", "shed", "unknown"
 
 # GitHub's documented fixed windows per resource (seconds) — used to derive a safe pacing interval.
-WINDOW_SECONDS = {"core": 3600, "search": 60, "graphql": 3600,
-                  "code_search": 60, "integration_manifest": 3600}
+WINDOW_SECONDS = {
+    "core": 3600,
+    "search": 60,
+    "graphql": 3600,
+    "code_search": 60,
+    "integration_manifest": 3600,
+}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -64,10 +72,10 @@ RESERVE = {
     "graphql": _env_int("GH_RESERVE_GRAPHQL", 100),
 }
 DEFAULT_RESERVE = 5
-LOW_FRAC = 0.25            # remaining below 25% of limit => LOW (pace)
-SHED_FRAC = 0.05           # remaining below 5% of limit (or <= the reserve floor) => SHED (defer)
-MAX_PACE_S = 10.0          # cap one throttle pace/short-defer sleep so a cron tick never stalls
-GATE_SHED_EXIT = 75        # --gate exit code when the resource is SHED (0 otherwise, fail-open)
+LOW_FRAC = 0.25  # remaining below 25% of limit => LOW (pace)
+SHED_FRAC = 0.05  # remaining below 5% of limit (or <= the reserve floor) => SHED (defer)
+MAX_PACE_S = 10.0  # cap one throttle pace/short-defer sleep so a cron tick never stalls
+GATE_SHED_EXIT = 75  # --gate exit code when the resource is SHED (0 otherwise, fail-open)
 TRACKED = ("core", "search", "graphql")
 
 
@@ -107,7 +115,8 @@ def _latest_ledger(resource: str) -> dict | None:
 
 def probe(*, timeout_s: int = 10, runner=subprocess.run) -> dict | None:
     """Read `gh api rate_limit` (FREE; does not count against any budget) and seed the ledger with
-    one row per resource. Returns the `resources` dict or None on failure (fail-open: callers proceed)."""
+    one row per resource. Returns the `resources` dict or None on failure (fail-open: callers proceed).
+    """
     try:
         r = runner(["gh", "api", "rate_limit"], capture_output=True, text=True, timeout=timeout_s)
     except Exception:
@@ -124,9 +133,17 @@ def probe(*, timeout_s: int = 10, runner=subprocess.run) -> dict | None:
     for name, res in resources.items():
         if not isinstance(res, dict):
             continue
-        rows.append({"ts": now, "resource": name, "remaining": res.get("remaining"),
-                     "limit": res.get("limit"), "reset": res.get("reset"),
-                     "used": res.get("used"), "source": "probe"})
+        rows.append(
+            {
+                "ts": now,
+                "resource": name,
+                "remaining": res.get("remaining"),
+                "limit": res.get("limit"),
+                "reset": res.get("reset"),
+                "used": res.get("used"),
+                "source": "probe",
+            }
+        )
     _append_ledger(rows)
     return resources
 
@@ -159,9 +176,15 @@ def _ratelimit_row_from_headers(headers: dict, *, fallback_resource: str) -> dic
         except (TypeError, ValueError):
             return None
 
-    return {"ts": time.time(), "resource": headers.get("x-ratelimit-resource") or fallback_resource,
-            "remaining": _int(rem), "limit": _int(lim), "reset": _int(headers.get("x-ratelimit-reset")),
-            "used": _int(headers.get("x-ratelimit-used")), "source": "call"}
+    return {
+        "ts": time.time(),
+        "resource": headers.get("x-ratelimit-resource") or fallback_resource,
+        "remaining": _int(rem),
+        "limit": _int(lim),
+        "reset": _int(headers.get("x-ratelimit-reset")),
+        "used": _int(headers.get("x-ratelimit-used")),
+        "source": "call",
+    }
 
 
 def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runner=subprocess.run):
@@ -192,23 +215,41 @@ def state(resource: str, *, _row: dict | None = None) -> tuple[str, dict]:
     row = _row if _row is not None else _latest_ledger(resource)
     now = time.time()
     if not row or row.get("remaining") is None or row.get("limit") is None:
-        return UNKNOWN, {"resource": resource, "pace_s": 0.0, "reset_in_s": 0,
-                         "reason": "no rate data; proceed (fail-open)"}
+        return UNKNOWN, {
+            "resource": resource,
+            "pace_s": 0.0,
+            "reset_in_s": 0,
+            "reason": "no rate data; proceed (fail-open)",
+        }
     remaining, limit = row["remaining"], row.get("limit") or 0
     reset = row.get("reset") or 0
     reset_in = max(0, int(reset - now)) if reset else 0
     # Past the reset => the window refilled; the stale `remaining` no longer applies.
     if reset and reset <= now:
-        return OK, {"resource": resource, "remaining": limit, "limit": limit, "reset_in_s": 0,
-                    "pace_s": 0.0, "reason": f"window reset; full budget ({limit})"}
+        return OK, {
+            "resource": resource,
+            "remaining": limit,
+            "limit": limit,
+            "reset_in_s": 0,
+            "pace_s": 0.0,
+            "reason": f"window reset; full budget ({limit})",
+        }
     reserve = RESERVE.get(resource, DEFAULT_RESERVE)
     frac = (remaining / limit) if limit else 0.0
     window = WINDOW_SECONDS.get(resource, 3600)
-    meta = {"resource": resource, "remaining": remaining, "limit": limit,
-            "reset_in_s": reset_in, "window_s": window, "pace_s": 0.0}
+    meta = {
+        "resource": resource,
+        "remaining": remaining,
+        "limit": limit,
+        "reset_in_s": reset_in,
+        "window_s": window,
+        "pace_s": 0.0,
+    }
     if remaining <= reserve or frac <= SHED_FRAC:
-        meta["reason"] = (f"{remaining}/{limit} remaining (<= reserve {reserve} or {SHED_FRAC:.0%}); "
-                          f"defer ~{reset_in}s to reset")
+        meta["reason"] = (
+            f"{remaining}/{limit} remaining (<= reserve {reserve} or {SHED_FRAC:.0%}); "
+            f"defer ~{reset_in}s to reset"
+        )
         return SHED, meta
     if frac <= LOW_FRAC:
         # Glide the remaining usable calls across the rest of the window, defending the reserve.
@@ -224,7 +265,8 @@ def state(resource: str, *, _row: dict | None = None) -> tuple[str, dict]:
 def throttle(resource: str, *, sleeper=time.sleep, allow_wait_s: float = MAX_PACE_S) -> dict:
     """Pace (LOW) or defer (SHED) against the shared gh budget. Makes NO gh calls — pure ledger read
     plus an optional bounded sleep. SHED with a long reset returns action='defer' (caller skips)
-    rather than blocking; SHED with a short reset (<= allow_wait_s, e.g. search's 60s window) waits."""
+    rather than blocking; SHED with a short reset (<= allow_wait_s, e.g. search's 60s window) waits.
+    """
     st, meta = state(resource)
     out = {"resource": resource, "state": st, "action": "proceed", "slept_s": 0.0, **meta}
     if st == SHED:
@@ -295,13 +337,20 @@ def _selftest():
 
         # 2. state() thresholds via crafted rows (search: limit 30, reserve 3).
         def row(resource, remaining, limit, reset_in):
-            return {"ts": now, "resource": resource, "remaining": remaining, "limit": limit,
-                    "reset": now + reset_in, "source": "probe"}
+            return {
+                "ts": now,
+                "resource": resource,
+                "remaining": remaining,
+                "limit": limit,
+                "reset": now + reset_in,
+                "source": "probe",
+            }
+
         assert state("search", _row=row("search", 20, 30, 40))[0] == OK
-        st, meta = state("search", _row=row("search", 6, 30, 15))   # 20% -> LOW
+        st, meta = state("search", _row=row("search", 6, 30, 15))  # 20% -> LOW
         assert st == LOW and 0 < meta["pace_s"] <= MAX_PACE_S, (st, meta)
-        assert state("search", _row=row("search", 2, 30, 40))[0] == SHED       # <= reserve 3
-        assert state("core", _row=row("core", 40, 5000, 1800))[0] == SHED      # < 5% of 5000
+        assert state("search", _row=row("search", 2, 30, 40))[0] == SHED  # <= reserve 3
+        assert state("core", _row=row("core", 40, 5000, 1800))[0] == SHED  # < 5% of 5000
         assert state("core", _row=row("core", 4000, 5000, 1800))[0] == OK
         # Past the reset => window refilled => OK regardless of the stale remaining.
         assert state("search", _row=row("search", 0, 30, -10))[0] == OK
@@ -310,15 +359,15 @@ def _selftest():
         slept = []
         sl = lambda s: slept.append(s)
         # craft via the ledger so throttle()'s internal state() read picks it up
-        _append_ledger([row("search", 1, 30, 1800)])      # SHED, long reset
+        _append_ledger([row("search", 1, 30, 1800)])  # SHED, long reset
         assert throttle("search", sleeper=sl)["action"] == "defer" and not slept
-        GH_LEDGER.write_text("")                            # reset ledger
-        _append_ledger([row("search", 1, 30, 5)])          # SHED, short reset (<= MAX_PACE_S)
+        GH_LEDGER.write_text("")  # reset ledger
+        _append_ledger([row("search", 1, 30, 5)])  # SHED, short reset (<= MAX_PACE_S)
         d = throttle("search", sleeper=sl)
         assert d["action"] == "waited" and slept and abs(slept[-1] - 5.5) < 1e-6, (d, slept)
         GH_LEDGER.write_text("")
         slept.clear()
-        _append_ledger([row("search", 6, 30, 15)])          # LOW
+        _append_ledger([row("search", 6, 30, 15)])  # LOW
         d = throttle("search", sleeper=sl)
         assert d["action"] == "paced" and slept and slept[-1] == d["slept_s"], (d, slept)
 
@@ -327,27 +376,44 @@ def _selftest():
 
         class FakeProbe:
             returncode = 0
-            stdout = json.dumps({"resources": {
-                "core": {"limit": 5000, "remaining": 4900, "reset": int(now + 3600), "used": 100},
-                "search": {"limit": 30, "remaining": 4, "reset": int(now + 30), "used": 26}}})
+            stdout = json.dumps(
+                {
+                    "resources": {
+                        "core": {
+                            "limit": 5000,
+                            "remaining": 4900,
+                            "reset": int(now + 3600),
+                            "used": 100,
+                        },
+                        "search": {"limit": 30, "remaining": 4, "reset": int(now + 30), "used": 26},
+                    }
+                }
+            )
 
         res = probe(runner=lambda *a, **k: FakeProbe())
         assert res and res["search"]["remaining"] == 4
-        assert state("core")[0] == OK, state("core")               # 4900/5000 -> OK
-        assert state("search")[0] == LOW, state("search")          # 4/30 = 13% (>5%, >reserve 3) -> LOW (pace)
+        assert state("core")[0] == OK, state("core")  # 4900/5000 -> OK
+        assert state("search")[0] == LOW, state(
+            "search"
+        )  # 4/30 = 13% (>5%, >reserve 3) -> LOW (pace)
 
         # 5. gh_run() parses --include headers, feeds a 'call' row, returns the parsed body.
         GH_LEDGER.write_text("")
-        inc = ("HTTP/2.0 200 OK\r\n"
-               "x-ratelimit-limit: 5000\r\nx-ratelimit-remaining: 4321\r\n"
-               f"x-ratelimit-reset: {int(now + 3600)}\r\nx-ratelimit-resource: core\r\n"
-               "x-ratelimit-used: 679\r\n\r\n" '{"sha": "abc"}')
+        inc = (
+            "HTTP/2.0 200 OK\r\n"
+            "x-ratelimit-limit: 5000\r\nx-ratelimit-remaining: 4321\r\n"
+            f"x-ratelimit-reset: {int(now + 3600)}\r\nx-ratelimit-resource: core\r\n"
+            "x-ratelimit-used: 679\r\n\r\n"
+            '{"sha": "abc"}'
+        )
 
         class FakeApi:
             returncode = 0
             stdout = inc
 
-        rc, body = gh_run(["api", "repos/o/r/commits"], resource="core", runner=lambda *a, **k: FakeApi())
+        rc, body = gh_run(
+            ["api", "repos/o/r/commits"], resource="core", runner=lambda *a, **k: FakeApi()
+        )
         assert rc == 0 and body == {"sha": "abc"}, (rc, body)
         latest = _latest_ledger("core")
         assert latest["remaining"] == 4321 and latest["source"] == "call", latest
@@ -362,29 +428,38 @@ def _selftest():
         os.environ["ORCH_GH_THROTTLE"] = "1"
         try:
             GH_LEDGER.write_text("")
-            assert throttle_if_enabled("search") == {"resource": "search", "state": UNKNOWN,
-                                                     "action": "proceed", "slept_s": 0.0,
-                                                     "pace_s": 0.0, "reset_in_s": 0,
-                                                     "reason": "no rate data; proceed (fail-open)"}
+            assert throttle_if_enabled("search") == {
+                "resource": "search",
+                "state": UNKNOWN,
+                "action": "proceed",
+                "slept_s": 0.0,
+                "pace_s": 0.0,
+                "reset_in_s": 0,
+                "reason": "no rate data; proceed (fail-open)",
+            }
         finally:
             os.environ.pop("ORCH_GH_THROTTLE", None)
 
         # 7. _gate: 0 for OK/UNKNOWN/LOW (fail-open), GATE_SHED_EXIT only for SHED.
         GH_LEDGER.write_text("")
+
         # UNKNOWN + probe disabled (runner returns failure) => fail-open 0
         class FailRunner:
             returncode = 1
             stdout = ""
+
         assert _gate("graphql", runner=lambda *a, **k: FailRunner()) == 0
-        _append_ledger([row("search", 1, 30, 1800)])       # SHED
+        _append_ledger([row("search", 1, 30, 1800)])  # SHED
         assert _gate("search", runner=lambda *a, **k: FailRunner()) == GATE_SHED_EXIT
-        _append_ledger([row("search", 25, 30, 50)])         # fresh OK row (newer ts not needed; same now)
+        _append_ledger([row("search", 25, 30, 50)])  # fresh OK row (newer ts not needed; same now)
         # newest row wins by ts; write an explicitly newer one
         _append_ledger([{**row("search", 25, 30, 50), "ts": now + 1}])
         assert _gate("search", runner=lambda *a, **k: FailRunner()) == 0
 
-        print("gh_capacity.py selftest: OK (4-state per resource, read-time ledger, probe/gh_run "
-              "header feed, pace/defer throttle, env-gated throttle_if_enabled, fail-open gate)")
+        print(
+            "gh_capacity.py selftest: OK (4-state per resource, read-time ledger, probe/gh_run "
+            "header feed, pace/defer throttle, env-gated throttle_if_enabled, fail-open gate)"
+        )
     finally:
         time.time = original_time
         GH_LEDGER = saved_ledger

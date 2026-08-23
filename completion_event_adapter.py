@@ -43,13 +43,13 @@ Selected arm/profile and resolved provider/model remain attempt provenance.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 import research_subjects
-
 
 ENVELOPE_SCHEMA = "orchestrator.completion-event-envelope"
 ENVELOPE_VERSION = 1
@@ -203,7 +203,19 @@ class OutOfScopeError(EnvelopeError):
 SUBJECTLESS_PRODUCERS = {
     "keepalive": "delivery mechanism: drives an existing PR forward; no spec, no arm set",
     "langsmith": "evaluator/observability trace; non-worker traces must not carry provenance (CLAUDE.md §2)",
-    "roles": "advisory role proposal; deterministic rails keep apply authority, no delivering arm",
+    "roles": (
+        # MEASURED 2026-08-22, correcting this entry's own earlier claim of "no delivering arm":
+        # the `redirect` role ran on 8 target/role cells across 2-3 agents each, and acceptance is
+        # tracked on influence_edges (14 accepted / 211 counterfactual) with durability already
+        # propagating. So a role round CAN carry a real arm set. It stays declared subjectless
+        # because the 1,397 events on record present no design set at all and would become
+        # rejections rather than episodes -- not because the producer is incapable. A role run that
+        # registers a round and presents a self-consistent subject identity now graduates on its
+        # own evidence; see the graduation branch below.
+        "advisory role proposal; the 1,397 events on record present no design set. NOT incapable: "
+        "the redirect role does fan out across agents, and such a round graduates via a "
+        "self-consistent subject identity without editing this declaration"
+    ),
     "feedback.record_role_run": "role execution under deterministic rails; no arm/profile design set",
     "runtime_ac_gate": "acceptance-gate verdict; a gate result is not an experimental arm",
     "ledger_reconcile": "bookkeeping reconciliation; no work and no design set",
@@ -228,25 +240,27 @@ SUBJECT_CAPABLE_PRODUCERS = {
 # entirely within this set AND it has no research context, it is out of scope rather than broken.
 # Anything outside this set (a bad payload, a secret, a redaction, a target mismatch) is a real
 # defect and keeps the event a rejection no matter what its scope is.
-NO_SUBJECT_REASONS = frozenset({
-    # A non-repo target (an offload path, a triage batch) is not malformed -- it simply is not a
-    # repo-scoped research observation. Same for an event with no task type: there is nothing to
-    # form a subject from. Both stay REJECTIONS when the event carries an experiment_id, because
-    # then it claims to be research and failed to identify itself.
-    "invalid_canonical_target",
-    "missing_task_type",
-    "invalid_normalized_spec_hash",
-    "missing_base_sha",
-    "missing_subject_id",
-    "missing_observation_id",
-    "missing_subject_design_set",
-    "missing_joined_attempt_id",
-    "invalid_subject_arm_set",
-    "invalid_subject_profile_set",
-    "unresolved_model_provenance",
-    "worker_attempt_not_resolved",
-    "identity_derivation_failed",
-})
+NO_SUBJECT_REASONS = frozenset(
+    {
+        # A non-repo target (an offload path, a triage batch) is not malformed -- it simply is not a
+        # repo-scoped research observation. Same for an event with no task type: there is nothing to
+        # form a subject from. Both stay REJECTIONS when the event carries an experiment_id, because
+        # then it claims to be research and failed to identify itself.
+        "invalid_canonical_target",
+        "missing_task_type",
+        "invalid_normalized_spec_hash",
+        "missing_base_sha",
+        "missing_subject_id",
+        "missing_observation_id",
+        "missing_subject_design_set",
+        "missing_joined_attempt_id",
+        "invalid_subject_arm_set",
+        "invalid_subject_profile_set",
+        "unresolved_model_provenance",
+        "worker_attempt_not_resolved",
+        "identity_derivation_failed",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -292,12 +306,18 @@ def validate_capability_effect_record(
         raise ValueError("invalid_capability_effect_fields")
     present = set(raw)
     # Required fields exactly; optional fields may be present or absent, nothing else is tolerated.
-    if not (CAPABILITY_EFFECT_FIELDS <= present
-            and present <= CAPABILITY_EFFECT_FIELDS | CAPABILITY_EFFECT_OPTIONAL_FIELDS):
+    if not (
+        CAPABILITY_EFFECT_FIELDS
+        <= present
+        <= CAPABILITY_EFFECT_FIELDS | CAPABILITY_EFFECT_OPTIONAL_FIELDS
+    ):
         raise ValueError("invalid_capability_effect_fields")
     keys = CAPABILITY_EFFECT_FIELDS | (present & CAPABILITY_EFFECT_OPTIONAL_FIELDS)
     record = {key: _string(raw.get(key)) for key in keys}
-    record = {key: value.lower() if key != "evidence_artifact_ref" else value for key, value in record.items()}
+    record = {
+        key: value.lower() if key != "evidence_artifact_ref" else value
+        for key, value in record.items()
+    }
     if record["schema"] not in CAPABILITY_EFFECT_SCHEMAS:
         raise ValueError("unsupported_capability_effect_schema")
     # An empty optional is the same as absent — never a subject called "".
@@ -317,7 +337,9 @@ def validate_capability_effect_record(
     if not EVIDENCE_ARTIFACT_REF_RE.fullmatch(artifact_ref):
         raise ValueError("invalid_capability_effect_artifact_ref")
     lowered_ref = artifact_ref.lower()
-    if any(marker in lowered_ref for marker in ("token", "secret", "password", "api-key", "apikey")):
+    if any(
+        marker in lowered_ref for marker in ("token", "secret", "password", "api-key", "apikey")
+    ):
         raise ValueError("secret_like_capability_effect_artifact_ref")
     if record["supervision_mode"] not in SUPERVISION_MODES:
         raise ValueError("unsupported_capability_effect_supervision_mode")
@@ -467,9 +489,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         else:
             unexpected_result = sorted(set(result) - RESULT_ALLOWLIST)
             if unexpected_result:
-                reasons.append(
-                    "result_field_not_allowlisted:" + ",".join(unexpected_result)
-                )
+                reasons.append("result_field_not_allowlisted:" + ",".join(unexpected_result))
     artifact_refs = payload.get("artifact_refs")
     if artifact_refs is not None:
         if not isinstance(artifact_refs, list):
@@ -483,14 +503,9 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
                     ARTIFACT_REF_REQUIRED_FIELDS | ARTIFACT_REF_OPTIONAL_FIELDS
                 ):
                     reasons.append(f"invalid_artifact_ref_fields:{index}")
-                if not all(
-                    _string(artifact.get(field))
-                    for field in ARTIFACT_REF_REQUIRED_FIELDS
-                ):
+                if not all(_string(artifact.get(field)) for field in ARTIFACT_REF_REQUIRED_FIELDS):
                     reasons.append(f"incomplete_artifact_ref:{index}")
-                if not SHA256_RE.fullmatch(
-                    _string(artifact.get("content_hash")).lower()
-                ):
+                if not SHA256_RE.fullmatch(_string(artifact.get("content_hash")).lower()):
                     reasons.append(f"invalid_artifact_content_hash:{index}")
     capability_effects = payload.get("capability_effects")
     if capability_effects is not None:
@@ -501,9 +516,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
             linked_ids = capability_ids if isinstance(capability_ids, list) else []
             for index, effect in enumerate(capability_effects):
                 try:
-                    validate_capability_effect_record(
-                        effect, expected_capability_ids=linked_ids
-                    )
+                    validate_capability_effect_record(effect, expected_capability_ids=linked_ids)
                 except ValueError as exc:
                     reasons.append(f"{exc}:{index}")
     if _string(event_raw.get("event_type")).lower() in {
@@ -533,7 +546,20 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     if not SHA256_RE.fullmatch(spec_hash):
         reasons.append("invalid_normalized_spec_hash")
     base_sha = _string(identity_raw.get("base_sha")).lower()
-    if not base_sha:
+    # BASE_SHA IS INAPPLICABLE TO A DOMAIN SUBJECT, not merely absent. `record_domain_research`
+    # passes `base_sha=None` on purpose -- a study of model pricing or a tier comparison is not cut
+    # from a commit -- and `research_subjects` handles a null base_sha throughout (its identity hash
+    # maps it to "unknown" and its cooldown/backlog queries have explicit null branches). Requiring
+    # it unconditionally would have made the ENTIRE domain-research namespace permanently
+    # unminable, which is the largest volume of research the system captures.
+    #
+    # NOT A RELAXATION OF THE IDENTITY CONTRACT. The check is scoped to one closed namespace, and
+    # within it base_sha would be constant-null across every subject, so it distinguishes nothing:
+    # dropping an inapplicable component removes no discriminating power, whereas admitting a
+    # repo-scoped subject with no base_sha genuinely would (you could not say WHICH code was
+    # studied). Repo-scoped targets still require it, and that is where all 203 of today's
+    # rejections live -- so this clears none of them and is not a way to move the accepted count.
+    if not base_sha and not research_subjects.is_domain_target(canonical_target):
         reasons.append("missing_base_sha")
     profile_id = _string(identity_raw.get("profile_id")).lower()
     arm_id = _string(identity_raw.get("arm_id")).lower()
@@ -563,7 +589,12 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         reasons.append("missing_subject_design_set")
     if arm_id and subject_arms and arm_id not in subject_arms:
         reasons.append("selected_arm_not_in_subject_set")
-    if isinstance(subject_profiles, list) and profile_id:
+    # ONLY JUDGEABLE WHEN A SUBJECT EXISTS, same rule as repository_target_mismatch above. A
+    # production event has no subject at all, so its profile cannot be "in the subject's set" and
+    # saying so is a cascade of one root cause, not a second defect: 111 events reported this on
+    # top of missing_subject_id, and because this code is not one of NO_SUBJECT_REASONS it dragged
+    # all 111 out of correctly-excluded and into the rejection count.
+    if isinstance(subject_profiles, list) and profile_id and (supplied_subject_id or subject_arms):
         profile_set = {_string(value).lower() for value in subject_profiles}
         if profile_id not in profile_set:
             reasons.append("selected_profile_not_in_subject_set")
@@ -599,10 +630,7 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
     if expected_ids is not None:
         if supplied_subject_id and supplied_subject_id != expected_ids["subject_id"]:
             reasons.append("subject_identity_mismatch")
-        if (
-            supplied_observation_id
-            and supplied_observation_id != expected_ids["observation_id"]
-        ):
+        if supplied_observation_id and supplied_observation_id != expected_ids["observation_id"]:
             reasons.append("observation_identity_mismatch")
         if supplied_family_id and supplied_family_id != expected_ids["family_id"]:
             reasons.append("family_identity_mismatch")
@@ -620,7 +648,28 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         # The declaration above says this producer has no subject. If it suddenly carries a
         # research context the contract changed, and admitting it silently would let an
         # undeclared identity path grow. Say so instead.
-        reasons.append("subjectless_producer_carries_experiment")
+        #
+        # BUT THE DECLARATION MUST NOT LATCH. As first written this reason fired on ANY
+        # experiment_id, so a declared-subjectless producer that started doing real research was
+        # rejected as malformed until a human edited a Python dict -- and the rejection was the
+        # only evidence that would have prompted the edit. That is a gate whose drain is blocked by
+        # the thing it measures. It matters concretely: `roles` is declared subjectless on the
+        # grounds that it has "no delivering arm", and that is empirically false for the `redirect`
+        # role -- 8 target/role cells ran it across 2-3 agents each, with acceptance tracked on
+        # `influence_edges` (14 accepted / 211 counterfactual) and durability already propagating.
+        #
+        # The drain that works while the gate is shut: a SELF-CONSISTENT subject identity. An event
+        # whose supplied subject_id equals the id derived from its own declared contract went
+        # through the registered-round path; it is a declared identity, not an undeclared one. A
+        # forged or borrowed experiment_id cannot satisfy this, because the derivation is over the
+        # event's own target/spec/arms and the miner already rejects a mismatch.
+        graduated = bool(
+            supplied_subject_id
+            and expected_ids is not None
+            and supplied_subject_id == expected_ids["subject_id"]
+        )
+        if not graduated:
+            reasons.append("subjectless_producer_carries_experiment")
     if reasons:
         codes = {reason.split(":", 1)[0] for reason in reasons}
         # Out of scope when NOTHING is wrong except the absence of a research design set, and the
@@ -633,13 +682,18 @@ def adapt_completion_event_envelope(raw: dict[str, Any]) -> CompletionEvent:
         # it is a defect, not a scope question -- otherwise the accepted count could be moved by
         # corrupting one identity field instead of supplying it. Out of scope means the event
         # offers no design set at all, which is the honest shape of production delivery.
+        # A PROFILE IS NOT A RESEARCH CLAIM. `subject_profiles` used to belong in this test because
+        # only research runs carried a profile at all. That stopped being true the moment worker
+        # provenance started resolving on ordinary production offloads: 111 production events with
+        # no subject, no arms and no experiment flipped from correctly EXCLUDED to reported as
+        # malformed, purely because they now name the model that served them. A profile is an
+        # execution detail; the design set is `subject_arms`. Counting it here inflated the defect
+        # count with non-defects, which is the same cascade the repository_target_mismatch comment
+        # above describes -- one root cause wearing 111 hats and hiding the real rejections.
         presents_identity = bool(
-            experiment_id or supplied_subject_id or supplied_family_id
-            or subject_arms or subject_profiles or base_sha
+            experiment_id or supplied_subject_id or supplied_family_id or subject_arms or base_sha
         )
-        no_research_context = (
-            producer in SUBJECTLESS_PRODUCERS or not presents_identity
-        )
+        no_research_context = producer in SUBJECTLESS_PRODUCERS or not presents_identity
         if no_research_context and codes <= NO_SUBJECT_REASONS:
             raise OutOfScopeError(
                 event_id,

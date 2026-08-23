@@ -28,6 +28,7 @@ TWO KINDS, and conflating them is the mistake to avoid:
 `--apply` writes ONLY work_routed matchers and never overwrites an existing one; infrastructure
 proposals are recorded as advisory notes because their triggers are code-level, not task-level.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,80 +52,99 @@ def _m(*task_types: str) -> dict:
 PROPOSALS: dict[str, dict] = {
     # ---- work-routed lanes: "should work have been routed here?" is answerable ----------------
     "codemod-campaign": {
-        "kind": WORK_ROUTED, "matcher": _m("codemod"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("codemod"),
         "rationale": "codemod_lane.py builds codemod/refactor campaign plans; the fleet ran codemod work.",
     },
     "cross-repo-coordination": {
-        "kind": WORK_ROUTED, "matcher": _m("cross_repo"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("cross_repo"),
         "rationale": "cross_repo_lane.py builds coordinated source+consumer change plans.",
     },
     "epic-decomposition": {
-        "kind": WORK_ROUTED, "matcher": _m("epic"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("epic"),
         "rationale": "epic_lane.py turns a vague goal into a structured subtask plan.",
     },
     "testgen-lane": {
-        "kind": WORK_ROUTED, "matcher": _m("testgen"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("testgen"),
         "rationale": "testgen_lane.py builds gate-backed prompts for generated-test work.",
     },
     "frontend-verifier": {
-        "kind": WORK_ROUTED, "matcher": _m("ux_review"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("ux_review"),
         "rationale": "frontend_verify.py performs vision-free frontend/UI verification; ux_review is that work.",
     },
     "adversarial-review": {
-        "kind": WORK_ROUTED, "matcher": _m("review"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("review"),
         "rationale": "adversarial.py is the refute-mode review panel; review is the work class it serves.",
     },
     "deliberate-break-verifier": {
-        "kind": WORK_ROUTED, "matcher": _m("testgen", "runtime_ac"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("testgen", "runtime_ac"),
         "rationale": "local_verify.py verifies delegated work by deliberate break — the gate-backed classes.",
     },
     "docs-drift-fix-agent": {
-        "kind": WORK_ROUTED, "matcher": _m("docs"),
+        "kind": WORK_ROUTED,
+        "matcher": _m("docs"),
         "rationale": "docs drift repair; the fleet records a docs task_type and a docs work_type.",
     },
     # ---- always-on infrastructure: a task matcher would misrepresent how these are reached -----
     "feedback-store": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "feedback_event", "name": "record_run"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "feedback_event", "name": "record_run"},
         "rationale": "feedback.py IS the Brain — exercised by every recorded run, never selected for a task.",
     },
     "windowed-capacity-policy": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "tick_phase", "name": "capacity"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "tick_phase", "name": "capacity"},
         "rationale": "capacity.py/router.py compute seat policy every tick; not routed work.",
     },
     "agy-runtime-isolation": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "adapter", "name": "gemini"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "adapter", "name": "gemini"},
         "rationale": "adapters/dispatcher runtime isolation for the agy seat; a property of dispatch.",
     },
     "offload": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "transport", "name": "offload"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "transport", "name": "offload"},
         "rationale": "dispatcher.offload is a transport mode, exercised by offload runs themselves.",
     },
     "abcd-experiment": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "experiment_phase", "name": "abcd"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "experiment_phase", "name": "abcd"},
         "rationale": "exp_abcd.py runs experiments on its own cadence; already self-attributing.",
     },
     "research-scheduler": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "tick_phase", "name": "research"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "tick_phase", "name": "research"},
         "rationale": "research_scheduler.py is the capacity-aware research arm, driven by hunger not task type.",
     },
     "stall-watcher": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "tick_phase", "name": "watch"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "tick_phase", "name": "watch"},
         "rationale": "watch.py monitors in-flight lanes; triggered by lane state, not by a task class.",
     },
     "redirect-plan": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "lane_event", "name": "redirect_decision"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "lane_event", "name": "redirect_decision"},
         "rationale": "redirect_plan.py builds execution plans once a redirect decision exists.",
     },
     "redirect-policy": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "lane_event", "name": "stall_detected"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "lane_event", "name": "stall_detected"},
         "rationale": "redirect_policy.py advises retry/decompose for watched lanes on stall.",
     },
     "repo-playbook": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "prompt_phase", "name": "delegation"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "prompt_phase", "name": "delegation"},
         "rationale": "repo_knowledge.py injects per-repo playbook snippets into delegation prompts.",
     },
     "feature-reflection-cli": {
-        "kind": INFRASTRUCTURE, "matcher": {"kind": "tick_phase", "name": "reflection"},
+        "kind": INFRASTRUCTURE,
+        "matcher": {"kind": "tick_phase", "name": "reflection"},
         "rationale": "features.py/periodic_report.py promote emergent features on a reporting cadence.",
     },
 }
@@ -134,8 +154,10 @@ def _task_counts(conn=None) -> dict[str, int]:
     close = conn is None
     c = conn or feedback._conn()
     try:
-        return {str(t): int(n) for t, n in
-                c.execute("SELECT task_type, COUNT(*) FROM runs GROUP BY task_type")}
+        return {
+            str(t): int(n)
+            for t, n in c.execute("SELECT task_type, COUNT(*) FROM runs GROUP BY task_type")
+        }
     finally:
         if close:
             c.close()
@@ -159,27 +181,34 @@ def evaluate(*, path=None, task_counts: dict | None = None) -> dict:
         invoked = bool(cap.get("last_invocation"))
         # SHOULD-HAVE: demonstrated work of this class ran, and the capability never did.
         should_have = bool(matched and not invoked) if matched is not None else None
-        rows.append({
-            "capability_id": cap_id, "kind": proposal["kind"],
-            "matcher": proposal["matcher"], "rationale": proposal["rationale"],
-            "historical_matches": matched, "ever_invoked": invoked,
-            "should_have_been_used": should_have,
-            "already_has_matcher": bool(cap.get("matcher")),
-            "in_ledger": cap_id in caps,
-        })
+        rows.append(
+            {
+                "capability_id": cap_id,
+                "kind": proposal["kind"],
+                "matcher": proposal["matcher"],
+                "rationale": proposal["rationale"],
+                "historical_matches": matched,
+                "ever_invoked": invoked,
+                "should_have_been_used": should_have,
+                "already_has_matcher": bool(cap.get("matcher")),
+                "in_ledger": cap_id in caps,
+            }
+        )
     return {
         "total": len(rows),
         "work_routed": [r["capability_id"] for r in rows if r["kind"] == WORK_ROUTED],
         "infrastructure": [r["capability_id"] for r in rows if r["kind"] == INFRASTRUCTURE],
         "should_have_been_used": [r["capability_id"] for r in rows if r["should_have_been_used"]],
-        "missed_run_total": sum(r["historical_matches"] or 0 for r in rows
-                                if r["should_have_been_used"]),
+        "missed_run_total": sum(
+            r["historical_matches"] or 0 for r in rows if r["should_have_been_used"]
+        ),
         "rows": rows,
     }
 
 
-def apply_matchers(rep: dict, *, path=None, dry_run: bool = False,
-                   include_infrastructure: bool = False) -> dict:
+def apply_matchers(
+    rep: dict, *, path=None, dry_run: bool = False, include_infrastructure: bool = False
+) -> dict:
     """Write proposed matchers into the ledger. Never overwrites an existing matcher.
 
     Infrastructure matchers are opt-in (`include_infrastructure`). They were withheld while
@@ -208,24 +237,33 @@ def apply_matchers(rep: dict, *, path=None, dry_run: bool = False,
 
 def format_report(rep: dict) -> str:
     lines = [
-        "# Proposed capability triggers, with historical evidence", "",
-        f"{len(rep['work_routed'])} work-routed · {len(rep['infrastructure'])} infrastructure", "",
+        "# Proposed capability triggers, with historical evidence",
+        "",
+        f"{len(rep['work_routed'])} work-routed · {len(rep['infrastructure'])} infrastructure",
+        "",
         f"## SHOULD HAVE BEEN USED: {len(rep['should_have_been_used'])} "
-        f"({rep['missed_run_total']} runs of matching work ran while the capability never did)", "",
+        f"({rep['missed_run_total']} runs of matching work ran while the capability never did)",
+        "",
     ]
     for row in rep["rows"]:
         if row["should_have_been_used"]:
-            lines.append(f"- **{row['capability_id']}** — {row['historical_matches']} matching runs. "
-                         f"{row['rationale']}")
-    lines += ["", "| Capability | Kind | Would have matched | Invoked | Should have | Matcher |",
-              "|---|---|---:|:--:|:--:|---|"]
+            lines.append(
+                f"- **{row['capability_id']}** — {row['historical_matches']} matching runs. "
+                f"{row['rationale']}"
+            )
+    lines += [
+        "",
+        "| Capability | Kind | Would have matched | Invoked | Should have | Matcher |",
+        "|---|---|---:|:--:|:--:|---|",
+    ]
     for row in rep["rows"]:
         m = row["historical_matches"]
         lines.append(
             f"| {row['capability_id']} | {row['kind']} | {'n/a' if m is None else m} | "
             f"{'yes' if row['ever_invoked'] else 'no'} | "
             f"{'—' if row['should_have_been_used'] is None else ('YES' if row['should_have_been_used'] else 'no')} | "
-            f"`{json.dumps(row['matcher'])}` |")
+            f"`{json.dumps(row['matcher'])}` |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -233,20 +271,32 @@ def _selftest() -> None:
     import tempfile
     from pathlib import Path
 
-    counts = {"codemod": 38, "testgen": 83, "ux_review": 105, "review": 914, "epic": 6,
-              "cross_repo": 6, "docs": 1, "runtime_ac": 25}
+    counts = {
+        "codemod": 38,
+        "testgen": 83,
+        "ux_review": 105,
+        "review": 914,
+        "epic": 6,
+        "cross_repo": 6,
+        "docs": 1,
+        "runtime_ac": 25,
+    }
 
     # Task-routed proposals score against history; infrastructure ones deliberately do not.
     assert score(PROPOSALS["codemod-campaign"], counts) == 38
     assert score(PROPOSALS["deliberate-break-verifier"], counts) == 83 + 25
-    assert score(PROPOSALS["feedback-store"], counts) is None, "infrastructure must not be task-scored"
+    assert (
+        score(PROPOSALS["feedback-store"], counts) is None
+    ), "infrastructure must not be task-scored"
 
     # Every proposal must name a kind and a rationale — no unexplained matcher may ship.
     for cid, p in PROPOSALS.items():
         assert p["kind"] in (WORK_ROUTED, INFRASTRUCTURE), cid
         assert p["rationale"].strip(), cid
         if p["kind"] == WORK_ROUTED:
-            assert p["matcher"].get("field") == "task_type", f"{cid} work-routed must be task-routed"
+            assert (
+                p["matcher"].get("field") == "task_type"
+            ), f"{cid} work-routed must be task-routed"
 
     with tempfile.TemporaryDirectory(prefix="matcher-proposal-selftest-") as td:
         ledger = Path(td) / "capabilities.json"
@@ -273,16 +323,21 @@ def _selftest() -> None:
         assert after["testgen-lane"]["matcher"]["value"] == ["preexisting"], after["testgen-lane"]
         assert "testgen-lane" in out["skipped"], out
 
-    print("capability_matcher_proposals.py selftest: OK (task scoring, infrastructure excluded, "
-          "dry-run inert, existing matchers preserved)")
+    print(
+        "capability_matcher_proposals.py selftest: OK (task scoring, infrastructure excluded, "
+        "dry-run inert, existing matchers preserved)"
+    )
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--apply", action="store_true")
-    ap.add_argument("--include-infrastructure", action="store_true",
-                    help="also write kind-shaped infrastructure matchers")
+    ap.add_argument(
+        "--include-infrastructure",
+        action="store_true",
+        help="also write kind-shaped infrastructure matchers",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
@@ -290,8 +345,11 @@ def main(argv: list[str]) -> int:
         return 0
     rep = evaluate()
     if args.apply:
-        print(json.dumps(apply_matchers(
-            rep, include_infrastructure=args.include_infrastructure), indent=2))
+        print(
+            json.dumps(
+                apply_matchers(rep, include_infrastructure=args.include_infrastructure), indent=2
+            )
+        )
         return 0
     print(json.dumps(rep, indent=2) if args.json else format_report(rep), end="")
     return 0

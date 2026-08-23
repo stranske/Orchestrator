@@ -11,7 +11,6 @@ import capabilities
 import execution_profiles
 import feedback
 
-
 NOW = int(time.time())
 
 
@@ -115,14 +114,20 @@ def test_additive_capability_migration_preserves_existing_rows(tmp_path, monkeyp
     with feedback._conn() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(completion_events)")}
         assert {"capability_id", "capability_version_id"} <= columns
-        assert conn.execute(
-            "SELECT COUNT(*) FROM completion_events WHERE event_id='legacy-event'"
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM completion_events WHERE event_id='legacy-event'"
+            ).fetchone()[0]
+            == 1
+        )
         edge_columns = {row[1] for row in conn.execute("PRAGMA table_info(influence_edges)")}
         assert {"capability_id", "capability_version_id"} <= edge_columns
-        assert conn.execute(
-            "SELECT COUNT(*) FROM influence_edges WHERE edge_id='legacy-edge'"
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM influence_edges WHERE edge_id='legacy-edge'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_event_identity_cannot_be_enriched_or_rewritten(tmp_path, monkeypatch):
@@ -186,7 +191,8 @@ def test_same_version_learns_across_profile_attempts_and_late_outcomes(tmp_path,
     assert stored["capability_version_id"] == version_id
     assert stored["routing_prior"]["observations"] == 3
     assert third in {
-        attempt for row in feedback.capability_causal_evidence(cap["capability_id"], version_id)
+        attempt
+        for row in feedback.capability_causal_evidence(cap["capability_id"], version_id)
         for attempt in row["profile_attempt_ids"]
     }
     transitions = [event for event in stored["event_history"] if event["type"] == "transition"]
@@ -231,7 +237,9 @@ def test_profile_decision_attaches_only_real_matching_attempt(tmp_path, monkeypa
         requested_model=profile["requested_model"],
         status="started",
     )
-    assert feedback.attach_profile_attempt_to_decision(envelope["decision_id"], attempt_id) == [attempt_id]
+    assert feedback.attach_profile_attempt_to_decision(envelope["decision_id"], attempt_id) == [
+        attempt_id
+    ]
     with feedback._conn() as conn:
         stored = conn.execute(
             "SELECT profile_attempt_ids_json FROM routing_decisions_v2 WHERE decision_id=?",
@@ -249,9 +257,7 @@ def test_profile_decision_attaches_only_real_matching_attempt(tmp_path, monkeypa
         status="started",
     )
     with pytest.raises(ValueError, match="decision/profile attempt mismatch"):
-        feedback.attach_profile_attempt_to_decision(
-            envelope["decision_id"], other_attempt
-        )
+        feedback.attach_profile_attempt_to_decision(envelope["decision_id"], other_attempt)
 
 
 def test_pending_durability_is_not_a_failure_or_promotion_vote(tmp_path, monkeypatch):

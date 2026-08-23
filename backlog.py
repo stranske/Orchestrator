@@ -22,6 +22,7 @@ backlog.json; it claims targets, so this producer does NOT need to dedup against
 `--selftest` is network-free (mocked gh). `--live` queries gh and writes
 ~/.codex/handoff/backlog.json.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,26 +38,55 @@ SENTINEL = HANDOFF / "lane-handoff.json"
 BACKLOG_JSON = HANDOFF / "backlog.json"
 
 SUPPORTED_REPOS = [
-    "stranske/Workflows", "stranske/Travel-Plan-Permission", "stranske/Trend_Model_Project",
-    "stranske/Portable-Alpha-Extension-Model", "stranske/Counter_Risk", "stranske/Manager-Database",
-    "stranske/Inv-Man-Intake", "stranske/Pension-Data", "stranske/Ready",
-    "stranske/trip-planner", "stranske/learning-management-system",
+    "stranske/Workflows",
+    "stranske/Travel-Plan-Permission",
+    "stranske/Trend_Model_Project",
+    "stranske/Portable-Alpha-Extension-Model",
+    "stranske/Counter_Risk",
+    "stranske/Manager-Database",
+    "stranske/Inv-Man-Intake",
+    "stranske/Pension-Data",
+    "stranske/Ready",
+    "stranske/trip-planner",
+    "stranske/learning-management-system",
     "stranske/Fine-Art-Archive",
 ]  # 12 repos; runtime authority is ~/.codex/bin/handoff.sh SUPPORTED_REPOS. `Ready` was absent
-   # here until 2026-08-18, so its issues were invisible to the backlog entirely.
+# here until 2026-08-18, so its issues were invisible to the backlog entirely.
 
 READY_LABELS = {"status: ready", "status:ready", "agent-ready"}
 # label (lowercased) -> task_type; absent => "implement"
-MECHANICAL_LABELS = {"dependencies", "dependency", "chore", "documentation", "docs",
-                     "style", "formatting", "lint", "ci"}
+MECHANICAL_LABELS = {
+    "dependencies",
+    "dependency",
+    "chore",
+    "documentation",
+    "docs",
+    "style",
+    "formatting",
+    "lint",
+    "ci",
+}
 TESTGEN_LABELS = {"test", "tests", "testing", "coverage", "testgen", "unit-tests"}
 EPIC_LABELS = {"epic", "planning", "decomposition", "multi-issue", "roadmap", "large-goal"}
 CODEMOD_LABELS = {"codemod", "refactor", "refactoring", "structural", "bulk-change", "campaign"}
-CROSS_REPO_LABELS = {"cross-repo", "multi-repo", "coordinated-change", "consumer-sync",
-                     "sync-manifest", "dependency-graph", "contract-change"}
-RUNTIME_AC_LABELS = {"runtime-ac", "runtime-verification", "acceptance-criteria",
-                     "verification-spec", "verification-plan", "ac-checks",
-                     "runtime-checks"}
+CROSS_REPO_LABELS = {
+    "cross-repo",
+    "multi-repo",
+    "coordinated-change",
+    "consumer-sync",
+    "sync-manifest",
+    "dependency-graph",
+    "contract-change",
+}
+RUNTIME_AC_LABELS = {
+    "runtime-ac",
+    "runtime-verification",
+    "acceptance-criteria",
+    "verification-spec",
+    "verification-plan",
+    "ac-checks",
+    "runtime-checks",
+}
 SOURCE_ISSUE_BRANCH_RE = re.compile(
     r"(?:^|[/_-])(?:issue|source|source-issue|src|gh)-?(\d+)(?:$|[/_-])",
     re.IGNORECASE,
@@ -145,6 +175,7 @@ def _blocker_expiry_ts(entry) -> int | None:
         return int(raw)
     try:
         import datetime as _dt
+
         return int(_dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp())
     except (ValueError, TypeError):
         return None
@@ -305,10 +336,17 @@ def build_backlog(repos, fetch_issues, fetch_prs, scoped: set[str] | None = None
             src_issue = issues_by_target.get(source_target)
             if src_issue:
                 source_labels.extend(_labels(src_issue))
-        items.append({"target": target, "task_type": "implement", "lane": "closer",
-                      "labels": labels, "source_labels": sorted(set(source_labels)),
-                      "title": pr.get("title", "") or "",
-                      "body": pr.get("body", "") or ""})
+        items.append(
+            {
+                "target": target,
+                "task_type": "implement",
+                "lane": "closer",
+                "labels": labels,
+                "source_labels": sorted(set(source_labels)),
+                "title": pr.get("title", "") or "",
+                "body": pr.get("body", "") or "",
+            }
+        )
 
     # Pass 2: agent-ready open issues NOT already worked by an open PR -> opener candidates.
     for repo in repos:
@@ -319,9 +357,16 @@ def build_backlog(repos, fetch_issues, fetch_prs, scoped: set[str] | None = None
             target = f"{repo}#{issue['number']}"
             if target in scoped or target in referenced_issue_targets:
                 continue
-            items.append({"target": target, "task_type": classify(labels), "lane": "opener",
-                          "labels": labels, "title": issue.get("title", "") or "",
-                          "body": issue.get("body", "") or ""})
+            items.append(
+                {
+                    "target": target,
+                    "task_type": classify(labels),
+                    "lane": "opener",
+                    "labels": labels,
+                    "title": issue.get("title", "") or "",
+                    "body": issue.get("body", "") or "",
+                }
+            )
 
     return items
 
@@ -338,13 +383,37 @@ def _gh_json(args: list[str]) -> list:
 
 
 def live_fetch_issues(repo: str) -> list:
-    return _gh_json(["issue", "list", "-R", repo, "--state", "open", "-L", "1000",
-                     "--json", "number,labels,title,body"])
+    return _gh_json(
+        [
+            "issue",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "open",
+            "-L",
+            "1000",
+            "--json",
+            "number,labels,title,body",
+        ]
+    )
 
 
 def live_fetch_prs(repo: str) -> list:
-    return _gh_json(["pr", "list", "-R", repo, "--state", "open", "-L", "50",
-                     "--json", "number,labels,title,body,closingIssuesReferences,headRefName,isDraft"])
+    return _gh_json(
+        [
+            "pr",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "open",
+            "-L",
+            "50",
+            "--json",
+            "number,labels,title,body,closingIssuesReferences,headRefName,isDraft",
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +423,10 @@ def live_fetch_prs(repo: str) -> list:
 # 1-item list does NOT mean "the fleet has no work": that inference was made on 2026-04-29 (recorded
 # in the workspace CLAUDE.md) and again on 2026-08-22, when a 1-item list was reported as fleet
 # starvation while the real pipeline closed 8 issues overnight. A docstring does not travel with JSON.
-SCOPE_NOTE = ("orchestrator-local dispatch lane only; NOT fleet workload. See "
-              "Workflows/docs/ops/REPO_REVIEW_PROCESS.md for where fleet work comes from.")
+SCOPE_NOTE = (
+    "orchestrator-local dispatch lane only; NOT fleet workload. See "
+    "Workflows/docs/ops/REPO_REVIEW_PROCESS.md for where fleet work comes from."
+)
 
 
 def build_payload(items: list, live_blockers, expired, raised) -> dict:
@@ -381,39 +452,94 @@ def _selftest() -> None:
     repos = ["o/A", "o/B"]
     issues = {
         "o/A": [
-            {"number": 1, "labels": [{"name": "status: ready"}], "body": "Do thing."},  # implement/opener
-            {"number": 2, "labels": [{"name": "status: ready"}, {"name": "chore"}]},  # mechanical/opener
-            {"number": 3, "labels": [{"name": "needs-triage"}]},                  # NOT ready -> excluded
+            {
+                "number": 1,
+                "labels": [{"name": "status: ready"}],
+                "body": "Do thing.",
+            },  # implement/opener
+            {
+                "number": 2,
+                "labels": [{"name": "status: ready"}, {"name": "chore"}],
+            },  # mechanical/opener
+            {"number": 3, "labels": [{"name": "needs-triage"}]},  # NOT ready -> excluded
             # risk:major here proves SOURCE-LABEL PROPAGATION: PR #100 closes this issue, and the
             # closer item must carry the risk label so adversarial review can see it.
             {"number": 9, "labels": [{"name": "status: ready"}, {"name": "risk:major"}]},
-            {"number": 10, "labels": [{"name": "status: ready"}, {"name": "coverage"}]},  # testgen/opener
-            {"number": 11, "labels": [{"name": "status: ready"}, {"name": "epic"}]},      # epic/opener
-            {"number": 12, "labels": [{"name": "status: ready"}, {"name": "refactor"}]},  # codemod/opener
-            {"number": 13, "labels": [{"name": "status: ready"}, {"name": "runtime-ac"}]}, # runtime_ac/opener
-            {"number": 14, "labels": [{"name": "status: ready"}]},                 # non-agent PR ref -> excluded
-            {"number": 15, "labels": [{"name": "status: ready"}]},                 # meta:issue PR ref -> excluded
-            {"number": 16, "labels": [{"name": "status: ready"}]},                 # issue URL PR ref -> excluded
-            {"number": 17, "labels": [{"name": "status: ready"}]},                 # duplicate PR source -> excluded
+            {
+                "number": 10,
+                "labels": [{"name": "status: ready"}, {"name": "coverage"}],
+            },  # testgen/opener
+            {"number": 11, "labels": [{"name": "status: ready"}, {"name": "epic"}]},  # epic/opener
+            {
+                "number": 12,
+                "labels": [{"name": "status: ready"}, {"name": "refactor"}],
+            },  # codemod/opener
+            {
+                "number": 13,
+                "labels": [{"name": "status: ready"}, {"name": "runtime-ac"}],
+            },  # runtime_ac/opener
+            {"number": 14, "labels": [{"name": "status: ready"}]},  # non-agent PR ref -> excluded
+            {"number": 15, "labels": [{"name": "status: ready"}]},  # meta:issue PR ref -> excluded
+            {"number": 16, "labels": [{"name": "status: ready"}]},  # issue URL PR ref -> excluded
+            {
+                "number": 17,
+                "labels": [{"name": "status: ready"}],
+            },  # duplicate PR source -> excluded
         ],
-        "o/B": [{"number": 5, "labels": [{"name": "status: ready"}, {"name": "dependencies"}]}],  # mechanical
+        "o/B": [
+            {"number": 5, "labels": [{"name": "status: ready"}, {"name": "dependencies"}]}
+        ],  # mechanical
     }
     prs = {
         "o/A": [
-            {"number": 100, "labels": [{"name": "agent:codex"}], "body": "PR body.",
-             "closingIssuesReferences": [{"number": 9}]},                          # closer; closes #9
-            {"number": 101, "labels": [{"name": "bug"}], "closingIssuesReferences": []},  # not agent -> excluded
-            {"number": 102, "labels": [{"name": "bug"}], "closingIssuesReferences": [{"number": 14}]},
-            {"number": 103, "labels": [{"name": "agent:codex"}],
-             "body": "<!-- meta:issue:15 -->\nSource Issue #15", "closingIssuesReferences": []},
-            {"number": 104, "labels": [{"name": "agent:codex"}],
-             "body": "Source: https://github.com/o/A/issues/16", "closingIssuesReferences": []},
-            {"number": 105, "labels": [{"name": "agent:codex"}], "headRefName": "orchestrator/issue-17-retry",
-             "isDraft": True, "closingIssuesReferences": []},
-            {"number": 106, "labels": [{"name": "agent:codex"}], "headRefName": "orchestrator/issue-17",
-             "isDraft": False, "closingIssuesReferences": []},
-            {"number": 107, "labels": [{"name": "agent:codex"}],
-             "body": "<!-- meta:issue:18 -->", "closingIssuesReferences": []},
+            {
+                "number": 100,
+                "labels": [{"name": "agent:codex"}],
+                "body": "PR body.",
+                "closingIssuesReferences": [{"number": 9}],
+            },  # closer; closes #9
+            {
+                "number": 101,
+                "labels": [{"name": "bug"}],
+                "closingIssuesReferences": [],
+            },  # not agent -> excluded
+            {
+                "number": 102,
+                "labels": [{"name": "bug"}],
+                "closingIssuesReferences": [{"number": 14}],
+            },
+            {
+                "number": 103,
+                "labels": [{"name": "agent:codex"}],
+                "body": "<!-- meta:issue:15 -->\nSource Issue #15",
+                "closingIssuesReferences": [],
+            },
+            {
+                "number": 104,
+                "labels": [{"name": "agent:codex"}],
+                "body": "Source: https://github.com/o/A/issues/16",
+                "closingIssuesReferences": [],
+            },
+            {
+                "number": 105,
+                "labels": [{"name": "agent:codex"}],
+                "headRefName": "orchestrator/issue-17-retry",
+                "isDraft": True,
+                "closingIssuesReferences": [],
+            },
+            {
+                "number": 106,
+                "labels": [{"name": "agent:codex"}],
+                "headRefName": "orchestrator/issue-17",
+                "isDraft": False,
+                "closingIssuesReferences": [],
+            },
+            {
+                "number": 107,
+                "labels": [{"name": "agent:codex"}],
+                "body": "<!-- meta:issue:18 -->",
+                "closingIssuesReferences": [],
+            },
         ],
         "o/B": [],
     }
@@ -426,31 +552,48 @@ def _selftest() -> None:
     assert "REPO_REVIEW_PROCESS" in _pay["scope"], _pay.get("scope")
     by_t = {i["target"]: i for i in items}
 
-    assert by_t["o/A#1"] == {"target": "o/A#1", "task_type": "implement", "lane": "opener",
-                             "labels": ["status: ready"], "title": "", "body": "Do thing."}, by_t.get("o/A#1")
+    assert by_t["o/A#1"] == {
+        "target": "o/A#1",
+        "task_type": "implement",
+        "lane": "opener",
+        "labels": ["status: ready"],
+        "title": "",
+        "body": "Do thing.",
+    }, by_t.get("o/A#1")
     assert by_t["o/A#2"]["body"] == "", by_t.get("o/A#2")
-    assert by_t["o/A#2"]["task_type"] == "mechanical", by_t.get("o/A#2")     # chore -> mechanical
-    assert by_t["o/A#10"]["task_type"] == "testgen", by_t.get("o/A#10")      # coverage -> testgen
-    assert by_t["o/A#11"]["task_type"] == "epic", by_t.get("o/A#11")         # epic -> epic
-    assert by_t["o/A#12"]["task_type"] == "codemod", by_t.get("o/A#12")      # refactor -> codemod
-    assert by_t["o/A#13"]["task_type"] == "runtime_ac", by_t.get("o/A#13")   # runtime-ac -> runtime_ac
-    assert by_t["o/B#5"]["task_type"] == "mechanical"                         # dependencies -> mechanical
+    assert by_t["o/A#2"]["task_type"] == "mechanical", by_t.get("o/A#2")  # chore -> mechanical
+    assert by_t["o/A#10"]["task_type"] == "testgen", by_t.get("o/A#10")  # coverage -> testgen
+    assert by_t["o/A#11"]["task_type"] == "epic", by_t.get("o/A#11")  # epic -> epic
+    assert by_t["o/A#12"]["task_type"] == "codemod", by_t.get("o/A#12")  # refactor -> codemod
+    assert by_t["o/A#13"]["task_type"] == "runtime_ac", by_t.get(
+        "o/A#13"
+    )  # runtime-ac -> runtime_ac
+    assert by_t["o/B#5"]["task_type"] == "mechanical"  # dependencies -> mechanical
     assert "o/A#3" not in by_t, "non-ready issue must be excluded"
     assert "o/A#9" not in by_t, "issue referenced by an open PR must be excluded (no redo)"
     assert "o/A#14" not in by_t, "issue referenced by non-agent open PR must be excluded (no redo)"
     assert "o/A#15" not in by_t, "issue referenced by meta:issue open PR must be excluded (no redo)"
     assert "o/A#16" not in by_t, "issue referenced by issue URL open PR must be excluded (no redo)"
-    assert "o/A#17" not in by_t, "issue referenced by source-issue branch PR must be excluded (no redo)"
-    assert by_t["o/A#100"] == {"target": "o/A#100", "task_type": "implement", "lane": "closer",
-                               "labels": ["agent:codex"],
-                               "source_labels": ["risk:major", "status: ready"],
-                               "title": "", "body": "PR body."}
+    assert (
+        "o/A#17" not in by_t
+    ), "issue referenced by source-issue branch PR must be excluded (no redo)"
+    assert by_t["o/A#100"] == {
+        "target": "o/A#100",
+        "task_type": "implement",
+        "lane": "closer",
+        "labels": ["agent:codex"],
+        "source_labels": ["risk:major", "status: ready"],
+        "title": "",
+        "body": "PR body.",
+    }
     # END-TO-END: risk metadata lives on the ISSUE, the closer lane reads PR labels, and no PR in
     # the fleet carries a `risk:*` label. Without propagation the adversarial panel could never see
     # the one signal it acts on, which is why Travel-Plan-Permission#1429/#1436 merged unreviewed.
     import adversarial as _adv
-    assert _adv.high_stakes_reason(by_t["o/A#100"]) == "high-stakes label: risk:major", \
-        _adv.high_stakes_reason(by_t["o/A#100"])
+
+    assert (
+        _adv.high_stakes_reason(by_t["o/A#100"]) == "high-stakes label: risk:major"
+    ), _adv.high_stakes_reason(by_t["o/A#100"])
     # The PR's OWN labels are untouched, so classify()/_has_agent_label see exactly what they did.
     assert by_t["o/A#100"]["labels"] == ["agent:codex"]
     # A closer whose source issue carries no risk label must NOT trip the panel.
@@ -464,8 +607,9 @@ def _selftest() -> None:
     assert "o/A#107" not in by_t, "PR whose source issue is no longer open must be suppressed"
 
     # scoped-blocker exclusion
-    items2 = build_backlog(repos, lambda r: issues.get(r, []), lambda r: prs.get(r, []),
-                           scoped={"o/A#1", "o/A#100"})
+    items2 = build_backlog(
+        repos, lambda r: issues.get(r, []), lambda r: prs.get(r, []), scoped={"o/A#1", "o/A#100"}
+    )
     t2 = {i["target"] for i in items2}
     assert "o/A#1" not in t2 and "o/A#100" not in t2, "scoped-blocked targets must be excluded"
     assert "o/B#5" in t2
@@ -486,35 +630,70 @@ def _selftest() -> None:
 
     # --- scoped-blocker EXPIRY is honoured (root-cause fix 2026-08-10) --------------------------
     import tempfile
+
     global SENTINEL
     _saved_sentinel = SENTINEL
     with tempfile.TemporaryDirectory(prefix="backlog-blocker-selftest-") as td:
         SENTINEL = Path(td) / "lane-handoff.json"
         now = 1_800_000_000
-        SENTINEL.write_text(json.dumps({"stop": {"scoped_blockers": {
-            "o/r#1": {"reason": "lapsed human wait", "await_human": True,
-                      "expires_at": "2026-01-01T00:00:00Z"},          # long past
-            "o/r#2": {"reason": "still current", "await_human": True,
-                      "expires_at": "2099-01-01T00:00:00Z"},          # far future
-            "o/r#3": {"reason": "no expiry -> unbounded block is deliberate",
-                      "await_human": True},                            # absent
-            "o/r#4": {"reason": "machine reason", "await_human": False,
-                      "expires_at": "2026-01-01T00:00:00Z"},          # expired, not human-awaited
-        }}}))
+        SENTINEL.write_text(
+            json.dumps(
+                {
+                    "stop": {
+                        "scoped_blockers": {
+                            "o/r#1": {
+                                "reason": "lapsed human wait",
+                                "await_human": True,
+                                "expires_at": "2026-01-01T00:00:00Z",
+                            },  # long past
+                            "o/r#2": {
+                                "reason": "still current",
+                                "await_human": True,
+                                "expires_at": "2099-01-01T00:00:00Z",
+                            },  # far future
+                            "o/r#3": {
+                                "reason": "no expiry -> unbounded block is deliberate",
+                                "await_human": True,
+                            },  # absent
+                            "o/r#4": {
+                                "reason": "machine reason",
+                                "await_human": False,
+                                "expires_at": "2026-01-01T00:00:00Z",
+                            },  # expired, not human-awaited
+                        }
+                    }
+                }
+            )
+        )
         live = load_scoped_blockers(now=now)
-        assert live == {"o/r#2", "o/r#3"}, live       # expired ones no longer block; no-expiry does
+        assert live == {"o/r#2", "o/r#3"}, live  # expired ones no longer block; no-expiry does
         expired = expired_scoped_blockers(now=now)
         assert set(expired) == {"o/r#1", "o/r#4"}, expired
         # A blocker whose expiry cannot be parsed must keep blocking (fail-safe).
-        SENTINEL.write_text(json.dumps({"stop": {"scoped_blockers": {
-            "o/r#9": {"reason": "garbled", "await_human": True, "expires_at": "not-a-date"}}}}))
+        SENTINEL.write_text(
+            json.dumps(
+                {
+                    "stop": {
+                        "scoped_blockers": {
+                            "o/r#9": {
+                                "reason": "garbled",
+                                "await_human": True,
+                                "expires_at": "not-a-date",
+                            }
+                        }
+                    }
+                }
+            )
+        )
         assert load_scoped_blockers(now=now) == {"o/r#9"}, "unparseable expiry must still block"
         assert expired_scoped_blockers(now=now) == {}, "unparseable expiry is not 'expired'"
     SENTINEL = _saved_sentinel
 
-    print("backlog.py selftest: OK (ready-issue + in-flight-agent-PR discovery, "
-          "body retention, label classification, open-PR-referenced-issue exclusion, "
-          "scoped-blocker filter + expiry honoured/fail-safe)")
+    print(
+        "backlog.py selftest: OK (ready-issue + in-flight-agent-PR discovery, "
+        "body retention, label classification, open-PR-referenced-issue exclusion, "
+        "scoped-blocker filter + expiry honoured/fail-safe)"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -526,8 +705,7 @@ def main(argv: list[str]) -> int:
         return 2
     live_blockers = load_scoped_blockers()
     expired = expired_scoped_blockers()
-    items = build_backlog(SUPPORTED_REPOS, live_fetch_issues, live_fetch_prs,
-                          scoped=live_blockers)
+    items = build_backlog(SUPPORTED_REPOS, live_fetch_issues, live_fetch_prs, scoped=live_blockers)
     # A lapsed human-awaited block silently starts letting work through. Raise it to the owner on
     # the live path only (dry-run stays read-only), deduped per target by the owner-question store.
     raised = raise_expired_blocker_questions() if "--live" in argv else []

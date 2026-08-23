@@ -12,6 +12,7 @@ Usage:
   python3 ccusage_reconcile.py reconcile --json
   python3 ccusage_reconcile.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,12 +22,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import adapters
 import feedback
@@ -121,7 +122,9 @@ def _parse_codex_period_ts(value: Any) -> int | None:
     return int(dt.replace(tzinfo=local_tz).timestamp())
 
 
-def _run_windows(rows: Iterable[dict[str, Any]], known_agents: dict[str, str]) -> tuple[list[RunWindow], dict[str, int]]:
+def _run_windows(
+    rows: Iterable[dict[str, Any]], known_agents: dict[str, str]
+) -> tuple[list[RunWindow], dict[str, int]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     skipped: dict[str, int] = defaultdict(int)
     for row in rows:
@@ -167,11 +170,23 @@ def _ccusage_since_arg(since_days: int) -> str:
     return since.strftime("%Y%m%d")
 
 
-def _load_ccusage_sessions(*, since_days: int = 7, timeout_s: int = 60) -> tuple[list[dict[str, Any]], list[str]]:
+def _load_ccusage_sessions(
+    *, since_days: int = 7, timeout_s: int = 60
+) -> tuple[list[dict[str, Any]], list[str]]:
     exe = shutil.which("ccusage")
-    cmd = [exe, "session", "-j", "--since", _ccusage_since_arg(since_days)] if exe else [
-        "npx", "-y", "ccusage@latest", "session", "-j", "--since", _ccusage_since_arg(since_days)
-    ]
+    cmd = (
+        [exe, "session", "-j", "--since", _ccusage_since_arg(since_days)]
+        if exe
+        else [
+            "npx",
+            "-y",
+            "ccusage@latest",
+            "session",
+            "-j",
+            "--since",
+            _ccusage_since_arg(since_days),
+        ]
+    )
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     except Exception as exc:
@@ -366,18 +381,40 @@ def _selftest() -> None:
         feedback.record_cost("run-langsmith", tokens_in=9, tokens_out=9, source="langsmith")
 
         adapters.record_ledger("codex", event="start", run_id="run-codex", ts=base, started_ts=base)
-        adapters.record_ledger("codex", event="complete", run_id="run-codex", ts=base + 100, started_ts=base)
-        adapters.record_ledger("codex", event="start", run_id="run-langsmith", ts=base + 200, started_ts=base + 200)
-        adapters.record_ledger("codex", event="complete", run_id="run-langsmith", ts=base + 260, started_ts=base + 200)
-        adapters.record_ledger("codex", event="start", run_id="run-a", ts=base + 400, started_ts=base + 400)
-        adapters.record_ledger("codex", event="complete", run_id="run-a", ts=base + 500, started_ts=base + 400)
-        adapters.record_ledger("codex", event="start", run_id="run-b", ts=base + 450, started_ts=base + 450)
-        adapters.record_ledger("codex", event="complete", run_id="run-b", ts=base + 550, started_ts=base + 450)
-        adapters.record_ledger("vibe", event="start", run_id="run-vibe", ts=base + 600, started_ts=base + 600)
-        adapters.record_ledger("vibe", event="complete", run_id="run-vibe", ts=base + 700, started_ts=base + 600)
+        adapters.record_ledger(
+            "codex", event="complete", run_id="run-codex", ts=base + 100, started_ts=base
+        )
+        adapters.record_ledger(
+            "codex", event="start", run_id="run-langsmith", ts=base + 200, started_ts=base + 200
+        )
+        adapters.record_ledger(
+            "codex", event="complete", run_id="run-langsmith", ts=base + 260, started_ts=base + 200
+        )
+        adapters.record_ledger(
+            "codex", event="start", run_id="run-a", ts=base + 400, started_ts=base + 400
+        )
+        adapters.record_ledger(
+            "codex", event="complete", run_id="run-a", ts=base + 500, started_ts=base + 400
+        )
+        adapters.record_ledger(
+            "codex", event="start", run_id="run-b", ts=base + 450, started_ts=base + 450
+        )
+        adapters.record_ledger(
+            "codex", event="complete", run_id="run-b", ts=base + 550, started_ts=base + 450
+        )
+        adapters.record_ledger(
+            "vibe", event="start", run_id="run-vibe", ts=base + 600, started_ts=base + 600
+        )
+        adapters.record_ledger(
+            "vibe", event="complete", run_id="run-vibe", ts=base + 700, started_ts=base + 600
+        )
 
         def iso(offset: int) -> str:
-            return datetime.fromtimestamp(base + offset, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            return (
+                datetime.fromtimestamp(base + offset, tz=timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
 
         sessions = [
             {
@@ -462,16 +499,22 @@ def _selftest() -> None:
             row = c.execute(
                 "SELECT tokens_in, tokens_out, cost_usd, latency_s, source FROM costs WHERE run_id='run-codex'"
             ).fetchone()
-            protected = c.execute("SELECT source FROM costs WHERE run_id='run-langsmith'").fetchone()
+            protected = c.execute(
+                "SELECT source FROM costs WHERE run_id='run-langsmith'"
+            ).fetchone()
         assert row == (25, 7, 0.3, 100.0, "ccusage"), row
         assert protected == ("langsmith",), protected
 
         reconcile(adapters.LEDGER, sessions=sessions, dry_run=False, slack_seconds=0)
         with feedback._conn() as c:
-            again = c.execute("SELECT COUNT(*), cost_usd FROM costs WHERE run_id='run-codex'").fetchone()
+            again = c.execute(
+                "SELECT COUNT(*), cost_usd FROM costs WHERE run_id='run-codex'"
+            ).fetchone()
         assert again == (1, 0.3), again
-        print("ccusage_reconcile.py selftest: OK (unique window attribution, aggregation, "
-              "source precedence, dry-run, idempotent re-ingest)")
+        print(
+            "ccusage_reconcile.py selftest: OK (unique window attribution, aggregation, "
+            "source precedence, dry-run, idempotent re-ingest)"
+        )
     finally:
         feedback.DB_PATH = old_db
         adapters.LEDGER = old_ledger

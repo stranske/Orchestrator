@@ -43,6 +43,7 @@ Exclusions are counted and reported, never silently dropped -- silence must not 
     python3 issue_readiness.py --apply         # requires ORCH_ISSUE_AUTOREADY=1
     python3 issue_readiness.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,8 +63,15 @@ READY_LABEL = "status: ready"
 OWNER_QUESTION_EXPIRY_DAYS = 7.0
 
 # Risk vocabulary taken from labels ACTUALLY present on the fleet, not invented.
-RISK_LABELS = {"risk:major", "risk:critical", "security", "breaking-change", "data-loss",
-               "priority:critical", "priority: critical"}
+RISK_LABELS = {
+    "risk:major",
+    "risk:critical",
+    "security",
+    "breaking-change",
+    "data-loss",
+    "priority:critical",
+    "priority: critical",
+}
 # Any label containing one of these is treated as risk even if the exact name is new.
 RISK_SUBSTRINGS = ("security", "risk:major", "risk:critical", "breaking", "data-loss")
 
@@ -73,29 +81,31 @@ RISK_SUBSTRINGS = ("security", "risk:major", "risk:critical", "breaking", "data-
 CONTAINER_LABELS = {"tracker:durable", "planning", "roadmap", "multi-issue"}
 # `\bepic\b` also matched `[Epic #845][P1] ...` CHILD subtasks, which locked 21 already-decomposed
 # fleet issues out of the ready queue as if they were containers. Children are ordinary work.
-CONTAINER_TITLE = re.compile(r"roadmap|campaign queue", re.I)
-EPIC_PARENT_TITLE = re.compile(r"^\s*\[epic\]", re.I)
-EPIC_CHILD_TITLE_RE = re.compile(r"^\s*\[epic\s*#\d+\]", re.I)
+CONTAINER_TITLE = re.compile(r"roadmap|campaign queue", re.IGNORECASE)
+EPIC_PARENT_TITLE = re.compile(r"^\s*\[epic\]", re.IGNORECASE)
+EPIC_CHILD_TITLE_RE = re.compile(r"^\s*\[epic\s*#\d+\]", re.IGNORECASE)
 
 # Recurring machine-generated reports. These are real output, but they are not opener work:
 # they are alerts and dashboards whose remedy is an operator action, not a code change.
 BOT_LABELS = {"automated"}
 BOT_TITLE = re.compile(
-    r"^[\U0001F300-\U0001FAFF☀-➿]"          # emoji-prefixed alert
+    r"^[\U0001F300-\U0001FAFF☀-➿]"  # emoji-prefixed alert
     r"|^(Dependency Dashboard|Agent metrics|Collaborator Onboarding)"
     r"|dashboard$|advisory report$|campaign queue$|fleet coverage —",
-    re.I,
+    re.IGNORECASE,
 )
 # Alerts whose remedy is an operator action; surfaced separately so they are never merely dropped.
-OPERATIONAL_ALERT = re.compile(r"expired|auth|credential|sync failed|action required|broken", re.I)
+OPERATIONAL_ALERT = re.compile(
+    r"expired|auth|credential|sync failed|action required|broken", re.IGNORECASE
+)
 
 # Actionability: an explicit acceptance contract, or enough concrete code anchors to act on.
-AC_MARKERS = re.compile(r"acceptance criteria|## tasks|- \[ \]", re.I)
+AC_MARKERS = re.compile(r"acceptance criteria|## tasks|- \[ \]", re.IGNORECASE)
 CODE_ANCHOR = re.compile(
     r"[\w/\-]+\.(?:py|ts|tsx|js|jsx|yml|yaml|md|sh|json|toml|cfg)\b"
     r"|\b\w+\([^)]{0,80}\)"
     r"|\bline \d+",
-    re.I,
+    re.IGNORECASE,
 )
 MIN_CODE_ANCHORS = 2
 
@@ -136,22 +146,26 @@ def _capability_heartbeat(event_type: str = "invocation", *, target: str | None 
     """
     try:
         import capabilities
+
         # Name the ISSUE, not just the function. The ref was a constant string, so the ledger
         # recorded 39 invocations without recording WHAT was assessed — and a future resolver
         # attributing a delivery to this capability would have had to infer the link from timing,
         # which capability_outcome_bridge refuses by design. With the target in the ref, the link
         # is recorded and available the moment ORCH_ISSUE_AUTOREADY arms the write arm. (2026-08-21)
         capabilities.production_heartbeat(
-            "issue-readiness", event_type,
-            ref=str(target) if target else "issue_readiness.classify_issue")
+            "issue-readiness",
+            event_type,
+            ref=str(target) if target else "issue_readiness.classify_issue",
+        )
     except Exception:
         pass
 
 
 def classify_issue(issue: dict) -> dict:
     """One issue -> {verdict, reason, task_type, actionable, risky}. Never raises on odd input."""
-    _capability_heartbeat(target=issue.get("target") or issue.get("html_url")
-                          or issue.get("number"))
+    _capability_heartbeat(
+        target=issue.get("target") or issue.get("html_url") or issue.get("number")
+    )
     labels = _norm_labels(issue)
     title = str(issue.get("title") or "")
     body = issue.get("body")
@@ -161,8 +175,13 @@ def classify_issue(issue: dict) -> dict:
     task_type = backlog.classify([str(r) for r in raw if r])
 
     def out(verdict, reason):
-        return {"verdict": verdict, "reason": reason, "task_type": task_type,
-                "actionable": actionable, "risky": risky}
+        return {
+            "verdict": verdict,
+            "reason": reason,
+            "task_type": task_type,
+            "actionable": actionable,
+            "risky": risky,
+        }
 
     if any(lab.startswith("agent:") for lab in labels) or "status:in-progress" in labels:
         return out("not_opener_work", "already routed to an agent")
@@ -207,7 +226,9 @@ def assess(issues: list[dict]) -> dict:
         "counts": counts,
         "reasons": reasons,
         "classifiable": classifiable,
-        "owner_review_share": round(counts["owner_review"] / classifiable, 4) if classifiable else 0.0,
+        "owner_review_share": (
+            round(counts["owner_review"] / classifiable, 4) if classifiable else 0.0
+        ),
         "owner_review_share_of_arrivals": round(per_arrival, 4),
         "attention": attention_cost(per_arrival),
         "rows": rows,
@@ -217,7 +238,7 @@ def assess(issues: list[dict]) -> dict:
 # Measured over 2026-W29..W32 via `gh search issues --owner stranske --created >=...`.
 ARRIVAL_RATE_PER_WEEK = 25.0
 OWNER_BUDGET_MIN_PER_WEEK = 30.0
-MIN_PER_REVIEW = 5.0            # deliberately the pessimistic end of the 3-5 min range
+MIN_PER_REVIEW = 5.0  # deliberately the pessimistic end of the 3-5 min range
 
 
 def attention_cost(share_of_arrivals: float) -> dict:
@@ -262,9 +283,20 @@ def fetch_open_issues(limit: int = 200) -> list[dict]:
     out: list[dict] = []
     for full in backlog.SUPPORTED_REPOS:
         name = full.split("/")[-1]
-        rows = _gh_json(["issue", "list", "--repo", full, "--state", "open",
-                         "--limit", str(limit), "--json",
-                         "number,title,labels,body,author"])
+        rows = _gh_json(
+            [
+                "issue",
+                "list",
+                "--repo",
+                full,
+                "--state",
+                "open",
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,labels,body,author",
+            ]
+        )
         if rows is None:
             continue
         for row in rows:
@@ -277,9 +309,24 @@ def fetch_failures(limit: int = 200) -> list[str]:
     """Repos whose issue listing could not be read. Surfaced so silence never reads as a pass."""
     bad = []
     for full in backlog.SUPPORTED_REPOS:
-        proc = subprocess.run(["gh", "issue", "list", "--repo", full, "--state", "open",
-                               "--limit", "1", "--json", "number"],
-                              capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                full,
+                "--state",
+                "open",
+                "--limit",
+                "1",
+                "--json",
+                "number",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         if proc.returncode != 0:
             bad.append(f"{full}: {(proc.stderr or '').strip()[:80]}")
     return bad
@@ -296,17 +343,26 @@ def repo_ready_label(repo: str, _cache: dict[str, str | None] = {}) -> str | Non
     """
     if repo in _cache:
         return _cache[repo]
-    proc = subprocess.run(["gh", "label", "list", "--repo", f"stranske/{repo}",
-                           "--limit", "200", "--json", "name"],
-                          capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        ["gh", "label", "list", "--repo", f"stranske/{repo}", "--limit", "200", "--json", "name"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     existing = set()
     if proc.returncode == 0:
         try:
             existing = {row.get("name", "") for row in json.loads(proc.stdout or "[]")}
         except json.JSONDecodeError:
             existing = set()
-    match = next((name for name in existing
-                  if name.strip().lower() in {r.lower() for r in backlog.READY_LABELS}), None)
+    match = next(
+        (
+            name
+            for name in existing
+            if name.strip().lower() in {r.lower() for r in backlog.READY_LABELS}
+        ),
+        None,
+    )
     _cache[repo] = match
     return match
 
@@ -322,13 +378,17 @@ def apply_ready(rows: list[dict], *, dry_run: bool = True) -> dict:
             repo, num = row["target"].split("#")
             label = repo_ready_label(repo)
             if not label:
-                errors.append(f"{row['target']}: repo has no ready label "
-                              f"(expected one of {sorted(backlog.READY_LABELS)})")
+                errors.append(
+                    f"{row['target']}: repo has no ready label "
+                    f"(expected one of {sorted(backlog.READY_LABELS)})"
+                )
                 continue
             proc = subprocess.run(
-                ["gh", "issue", "edit", num, "--repo", f"stranske/{repo}",
-                 "--add-label", label],
-                capture_output=True, text=True, timeout=120)
+                ["gh", "issue", "edit", num, "--repo", f"stranske/{repo}", "--add-label", label],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
             if proc.returncode == 0:
                 applied.append(row["target"])
             else:
@@ -339,19 +399,21 @@ def apply_ready(rows: list[dict], *, dry_run: bool = True) -> dict:
                 continue
             try:
                 import feedback
+
                 res = feedback.record_owner_question(
                     f"{row['target']} is risk-labelled: {row['title']}. "
                     f"Work it with the fleet, or handle it yourself?",
                     "proceed as a draft PR; delivery gates contain the risk",
-                    target=row["target"], repo=row["target"].split("#")[0],
+                    target=row["target"],
+                    repo=row["target"].split("#")[0],
                     options=["fleet", "mine", "skip"],
-                    expires_days=OWNER_QUESTION_EXPIRY_DAYS)
+                    expires_days=OWNER_QUESTION_EXPIRY_DAYS,
+                )
                 if not res.get("deduped"):
                     questions.append(row["target"])
-            except Exception as exc:                      # never let telemetry break the apply
+            except Exception as exc:  # never let telemetry break the apply
                 errors.append(f"{row['target']}: {exc}")
-    return {"applied": applied, "questions_raised": questions, "errors": errors,
-            "dry_run": dry_run}
+    return {"applied": applied, "questions_raised": questions, "errors": errors, "dry_run": dry_run}
 
 
 # ---------------------------------------------------------------------------
@@ -390,10 +452,12 @@ CONTROLLER_LABELS = {"automated", "automation"}
 TRANSIENT_TITLE = re.compile(
     r"\brun \d+|\bin \d+ (?:hours?|days?|minutes?)|expires? in\b|\bweek of\b"
     r"|\b\d{4}-\d{2}-\d{2}\b|\(run \d+\)|#\d+\b",
-    re.I,
+    re.IGNORECASE,
 )
-BOT_AUTHOR = re.compile(r"\[bot\]$|^app/|^(renovate|dependabot|github-actions)$", re.I)
-_TITLE_NOISE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]|#\d+|\b\d{4}-\d{2}-\d{2}\b|\b\d+\b")
+BOT_AUTHOR = re.compile(r"\[bot\]$|^app/|^(renovate|dependabot|github-actions)$", re.IGNORECASE)
+_TITLE_NOISE = re.compile(
+    r"[\U0001F300-\U0001FAFF\u2600-\u27BF]|#\d+|\b\d{4}-\d{2}-\d{2}\b|\b\d+\b"
+)
 
 
 def normalize_title(title: str) -> str:
@@ -426,12 +490,10 @@ def labelled_titles(issues: list[dict]) -> set[str]:
     a decision a person already made to items with an identical title. Only EXPLICIT labels seed
     this set, so propagation can never cascade off another inference.
     """
-    return {normalize_title(i.get("title")) for i in issues
-            if DURABLE_LABEL in _norm_labels(i)}
+    return {normalize_title(i.get("title")) for i in issues if DURABLE_LABEL in _norm_labels(i)}
 
 
-def durability_of(issue: dict, recurrence: dict[str, set],
-                  seeded: set[str] | None = None) -> dict:
+def durability_of(issue: dict, recurrence: dict[str, set], seeded: set[str] | None = None) -> dict:
     """Is this issue DESIGNED to stay open? Returns {durable, basis, bot, repos}."""
     labels = _norm_labels(issue)
     title = normalize_title(issue.get("title"))
@@ -440,19 +502,34 @@ def durability_of(issue: dict, recurrence: dict[str, set],
     if DURABLE_LABEL in labels:
         return {"durable": True, "basis": "labelled", "bot": bot, "repos": repos}
     if seeded and title in seeded:
-        return {"durable": True, "basis": "same title labelled durable elsewhere in the fleet",
-                "bot": bot, "repos": repos}
+        return {
+            "durable": True,
+            "basis": "same title labelled durable elsewhere in the fleet",
+            "bot": bot,
+            "repos": repos,
+        }
     if bot and repos >= MIN_REPOS_FOR_DURABLE:
-        return {"durable": True, "basis": f"bot tracker recurring in {repos} repos",
-                "bot": bot, "repos": repos}
+        return {
+            "durable": True,
+            "basis": f"bot tracker recurring in {repos} repos",
+            "bot": bot,
+            "repos": repos,
+        }
     # Single-repo controller tracker: a bot issue carrying a controller label whose title has no
     # counter or timestamp is a reused dashboard, not a per-occurrence alert. This is how #3130
     # (maint-68) and #3093 (health-67) are recognised -- both reuse one issue via "comment on
     # existing" but neither applies `tracker:durable` at creation.
-    if bot and (labels & CONTROLLER_LABELS) and not TRANSIENT_TITLE.search(
-            str(issue.get("title") or "")):
-        return {"durable": True, "basis": "controller-labelled tracker, no counter in title",
-                "bot": bot, "repos": repos}
+    if (
+        bot
+        and (labels & CONTROLLER_LABELS)
+        and not TRANSIENT_TITLE.search(str(issue.get("title") or ""))
+    ):
+        return {
+            "durable": True,
+            "basis": "controller-labelled tracker, no counter in title",
+            "bot": bot,
+            "repos": repos,
+        }
     # Everything else counts as real work. Never hide an issue on a weak signal.
     return {"durable": False, "basis": "counted as backlog", "bot": bot, "repos": repos}
 
@@ -485,9 +562,11 @@ def census(issues: list[dict]) -> dict:
         # queue (system-of-record: the Workflows repo) and is driven by the opener lane and GitHub
         # Actions keepalive, none of which reads these numbers. On 2026-08-22 a true_open of 1 was
         # reported as "the fleet has no work" while the real pipeline closed 8 issues overnight.
-        "scope": ("orchestrator-local dispatch lane only; NOT fleet throughput. Fleet work "
-                  "originates in the Workflows approved-issue queue and is driven by the opener "
-                  "lane + Actions keepalive."),
+        "scope": (
+            "orchestrator-local dispatch lane only; NOT fleet throughput. Fleet work "
+            "originates in the Workflows approved-issue queue and is driven by the opener "
+            "lane + Actions keepalive."
+        ),
         "label_gap": len(unlabelled),
         "durable_rows": durable,
         "actionable_rows": actionable,
@@ -504,9 +583,21 @@ def reconcile_durable(rows: list[dict], *, dry_run: bool = True) -> dict:
             applied.append(row["target"])
             continue
         repo, num = row["target"].split("#")
-        proc = subprocess.run(["gh", "issue", "edit", num, "--repo", f"stranske/{repo}",
-                               "--add-label", DURABLE_LABEL],
-                              capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(
+            [
+                "gh",
+                "issue",
+                "edit",
+                num,
+                "--repo",
+                f"stranske/{repo}",
+                "--add-label",
+                DURABLE_LABEL,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         if proc.returncode == 0:
             applied.append(row["target"])
         else:
@@ -538,25 +629,29 @@ def reconcile_durable(rows: list[dict], *, dry_run: bool = True) -> dict:
 TASK_LABEL_RULES = (
     # A parent epic needs an EPIC_LABEL or `classify()` returns `implement` and the decomposition
     # lane never sees it. Guarded below so `[Epic #NNN]` children are never given this label.
-    ("epic", re.compile(r"^\s*\[epic\](?!\s*#)", re.I)),
-    ("refactor", re.compile(
-        r"\blegacy removal\b|\bphase \d|\bremove (?:remaining|retired|duplicate|legacy)\b"
-        r"|\brelocate\b|consolidat|de-?dup|\brefactor\b|\bextract\b"
-        r"|\bmigrat(?:e|ion) .*(?:surface|shape|config)", re.I)),
+    ("epic", re.compile(r"^\s*\[epic\](?!\s*#)", re.IGNORECASE)),
+    (
+        "refactor",
+        re.compile(
+            r"\blegacy removal\b|\bphase \d|\bremove (?:remaining|retired|duplicate|legacy)\b"
+            r"|\brelocate\b|consolidat|de-?dup|\brefactor\b|\bextract\b"
+            r"|\bmigrat(?:e|ion) .*(?:surface|shape|config)",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 
 def task_label_for(issue: dict) -> str | None:
     """The task-type label this issue is MISSING, or None. Conservative by construction."""
-    raw = [lab.get("name") if isinstance(lab, dict) else lab
-           for lab in (issue.get("labels") or [])]
+    raw = [lab.get("name") if isinstance(lab, dict) else lab for lab in (issue.get("labels") or [])]
     labels = [str(r) for r in raw if r]
     # Only act when there is no existing routing signal to override.
     if backlog.classify(labels) != "implement":
         return None
     title = str(issue.get("title") or "")
     if EPIC_CHILD_TITLE_RE.search(title):
-        return None                      # an already-decomposed subtask is ordinary implement work
+        return None  # an already-decomposed subtask is ordinary implement work
     low = {l.strip().lower() for l in labels}
     if DURABLE_LABEL in low:
         return None
@@ -574,15 +669,18 @@ def task_label_gaps(issues: list[dict]) -> list[dict]:
         if not label:
             continue
         repo = (issue.get("repository") or {}).get("name") or "?"
-        raw = [lab.get("name") if isinstance(lab, dict) else lab
-               for lab in (issue.get("labels") or [])]
-        out.append({
-            "target": f"{repo}#{issue.get('number')}",
-            "title": str(issue.get("title") or "")[:80],
-            "label": label,
-            "routes_from": backlog.classify([str(r) for r in raw if r]),
-            "routes_to": backlog.classify([str(r) for r in raw if r] + [label]),
-        })
+        raw = [
+            lab.get("name") if isinstance(lab, dict) else lab for lab in (issue.get("labels") or [])
+        ]
+        out.append(
+            {
+                "target": f"{repo}#{issue.get('number')}",
+                "title": str(issue.get("title") or "")[:80],
+                "label": label,
+                "routes_from": backlog.classify([str(r) for r in raw if r]),
+                "routes_to": backlog.classify([str(r) for r in raw if r] + [label]),
+            }
+        )
     return out
 
 
@@ -595,20 +693,47 @@ def apply_task_labels(rows: list[dict], *, dry_run: bool = True) -> dict:
         if dry_run:
             applied.append(row["target"])
             continue
-        proc = subprocess.run(["gh", "issue", "edit", num, "--repo", f"stranske/{repo}",
-                               "--add-label", label],
-                              capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(
+            ["gh", "issue", "edit", num, "--repo", f"stranske/{repo}", "--add-label", label],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         if proc.returncode != 0 and "not found" in (proc.stderr or "").lower():
-            mk = subprocess.run(["gh", "label", "create", label, "--repo", f"stranske/{repo}",
-                                 "--color", "5319e7",
-                                 "--description", "Structural/mechanical change; routes to the "
-                                                  "Orchestrator codemod lane"],
-                                capture_output=True, text=True, timeout=120)
+            mk = subprocess.run(
+                [
+                    "gh",
+                    "label",
+                    "create",
+                    label,
+                    "--repo",
+                    f"stranske/{repo}",
+                    "--color",
+                    "5319e7",
+                    "--description",
+                    "Structural/mechanical change; routes to the " "Orchestrator codemod lane",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
             if mk.returncode == 0:
                 created.append(f"stranske/{repo}:{label}")
-                proc = subprocess.run(["gh", "issue", "edit", num, "--repo", f"stranske/{repo}",
-                                       "--add-label", label],
-                                      capture_output=True, text=True, timeout=120)
+                proc = subprocess.run(
+                    [
+                        "gh",
+                        "issue",
+                        "edit",
+                        num,
+                        "--repo",
+                        f"stranske/{repo}",
+                        "--add-label",
+                        label,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
         if proc.returncode == 0:
             applied.append(row["target"])
         else:
@@ -619,14 +744,19 @@ def apply_task_labels(rows: list[dict], *, dry_run: bool = True) -> dict:
 def format_census(cen: dict) -> str:
     pct = (cen["durable"] / cen["raw_open"] * 100) if cen["raw_open"] else 0.0
     lines = [
-        "# Open-issue census — how much of the backlog is real?", "",
+        "# Open-issue census — how much of the backlog is real?",
+        "",
         f"  raw open issues     {cen['raw_open']:>4}",
         f"  designed-permanent  {cen['durable']:>4}   ({pct:.0f}% — excluded from the backlog)",
-        f"  TRUE open backlog   {cen['true_open']:>4}", "",
+        f"  TRUE open backlog   {cen['true_open']:>4}",
+        "",
     ]
     if cen["needs_durable_label"]:
-        lines += [f"## Missing `{DURABLE_LABEL}` ({cen['label_gap']}) — any count is wrong until "
-                  "these are labelled", ""]
+        lines += [
+            f"## Missing `{DURABLE_LABEL}` ({cen['label_gap']}) — any count is wrong until "
+            "these are labelled",
+            "",
+        ]
         for r in cen["needs_durable_label"]:
             lines.append(f"  {r['target']:<34} {r['basis']:<32} {r['title'][:44]}")
         lines.append("")
@@ -641,8 +771,10 @@ def format_census(cen: dict) -> str:
 def format_report(rep: dict) -> str:
     c = rep["counts"]
     lines = [
-        "# Issue readiness — who decides what the fleet works", "",
-        f"{rep['total']} open issues; {rep['classifiable']} are candidate work items.", "",
+        "# Issue readiness — who decides what the fleet works",
+        "",
+        f"{rep['total']} open issues; {rep['classifiable']} are candidate work items.",
+        "",
         f"  auto_ready          {c['auto_ready']:>3}   -> `{READY_LABEL}` applied, no owner touch",
         f"  owner_review        {c['owner_review']:>3}   -> non-blocking question, ratifies in "
         f"{OWNER_QUESTION_EXPIRY_DAYS:.0f}d",
@@ -657,7 +789,8 @@ def format_report(rep: dict) -> str:
             f"({rep['owner_review_share']:.1%} of candidates) -> "
             f"{att['owner_reviews_per_week']:.2f} reviews/week -> {att['minutes_per_week']:.1f} "
             f"min/week vs {att['budget_min_per_week']:.0f} budget "
-            f"(ratio {att['ratio']:.2f}, {att['verdict'].upper()})", "",
+            f"(ratio {att['ratio']:.2f}, {att['verdict'].upper()})",
+            "",
         ]
     lines += ["## Verdict reasons (every issue counted exactly once)", ""]
     for reason, n in sorted(rep["reasons"].items(), key=lambda kv: -kv[1]):
@@ -671,18 +804,31 @@ def format_report(rep: dict) -> str:
 
 
 def _selftest() -> None:
-    ac = {"number": 1, "title": "Fix parser", "labels": [{"name": "bug"}],
-          "body": "## Tasks\n- [ ] fix it"}
+    ac = {
+        "number": 1,
+        "title": "Fix parser",
+        "labels": [{"name": "bug"}],
+        "body": "## Tasks\n- [ ] fix it",
+    }
     assert classify_issue(ac)["verdict"] == "auto_ready", classify_issue(ac)
 
     # Two code anchors are actionable even with no literal "acceptance criteria".
-    anchors = {"number": 2, "title": "promote() writes to two trees",
-               "labels": [{"name": "bug"}],
-               "body": "In ops/promote.py the call promote(master) diverges from sidecar.py"}
+    anchors = {
+        "number": 2,
+        "title": "promote() writes to two trees",
+        "labels": [{"name": "bug"}],
+        "body": "In ops/promote.py the call promote(master) diverges from sidecar.py",
+    }
     assert classify_issue(anchors)["verdict"] == "auto_ready", classify_issue(anchors)
 
     # FAIL-CLOSED on risk: exact label, unseen `risk:*` variant, and substring all reach the owner.
-    for lab in ("risk:major", "security", "risk:critical", "some-security-thing", "breaking-change"):
+    for lab in (
+        "risk:major",
+        "security",
+        "risk:critical",
+        "some-security-thing",
+        "breaking-change",
+    ):
         risky = dict(ac, labels=[{"name": "bug"}, {"name": lab}])
         assert classify_issue(risky)["verdict"] == "owner_review", lab
     assert is_risky({"risk:major"}) and not is_risky({"bug", "ui"})
@@ -692,8 +838,10 @@ def _selftest() -> None:
         thin = dict(ac, body=body)
         assert classify_issue(thin)["verdict"] == "needs_specification", body
     # ...and a risk label does not rescue an unactionable issue into the owner queue.
-    assert classify_issue(dict(ac, body="", labels=[{"name": "risk:major"}]))["verdict"] \
+    assert (
+        classify_issue(dict(ac, body="", labels=[{"name": "risk:major"}]))["verdict"]
         == "needs_specification"
+    )
 
     # Already-routed and already-ready are never re-readied.
     for lab in ("agent:codex", "status:in-progress", "status: ready"):
@@ -701,11 +849,19 @@ def _selftest() -> None:
         assert classify_issue(routed)["verdict"] == "not_opener_work", lab
 
     # Bot reports and containers are excluded, and the operational ones are named as such.
-    alert = {"number": 3, "title": "\U0001F6A8 CODEX_AUTH_JSON has expired - CI agents broken",
-             "labels": [], "body": "x"}
+    alert = {
+        "number": 3,
+        "title": "\U0001f6a8 CODEX_AUTH_JSON has expired - CI agents broken",
+        "labels": [],
+        "body": "x",
+    }
     assert classify_issue(alert)["reason"] == "operational alert", classify_issue(alert)
-    dash = {"number": 4, "title": "\U0001F4CA LangSmith Trace Coverage Dashboard",
-            "labels": [], "body": "x"}
+    dash = {
+        "number": 4,
+        "title": "\U0001f4ca LangSmith Trace Coverage Dashboard",
+        "labels": [],
+        "body": "x",
+    }
     assert classify_issue(dash)["verdict"] == "not_opener_work"
     # A PARENT epic is routable work for the decomposition lane, NOT a container to exclude.
     # It used to be excluded, which is why all 5 fleet parents were decomposed by hand.
@@ -716,16 +872,33 @@ def _selftest() -> None:
     assert backlog.classify(["epic"]) == "epic", "the epic label must route to the epic lane"
     # A CHILD subtask is ordinary work: it must NOT be excluded as a container, and must NOT be
     # given the epic label (21 fleet children were locked out of the ready queue by `\bepic\b`).
-    kid = {"number": 6, "title": "[Epic #845][P1] ExportService port", "labels": [],
-           "body": "- [ ] a"}
+    kid = {
+        "number": 6,
+        "title": "[Epic #845][P1] ExportService port",
+        "labels": [],
+        "body": "- [ ] a",
+    }
     assert classify_issue(kid)["verdict"] == "auto_ready", classify_issue(kid)
     assert "parent epic" not in classify_issue(kid)["reason"], classify_issue(kid)
     assert task_label_for(kid) is None, task_label_for(kid)
     # A genuine tracker container is still excluded.
-    assert classify_issue({"number": 7, "title": "Sync/Dependabot campaign queue",
-                           "labels": [], "body": "- [ ] a"})["verdict"] == "not_opener_work"
-    assert classify_issue({"number": 6, "title": "t", "labels": [{"name": "tracker:durable"}],
-                           "body": "- [ ] a"})["verdict"] == "not_opener_work"
+    assert (
+        classify_issue(
+            {
+                "number": 7,
+                "title": "Sync/Dependabot campaign queue",
+                "labels": [],
+                "body": "- [ ] a",
+            }
+        )["verdict"]
+        == "not_opener_work"
+    )
+    assert (
+        classify_issue(
+            {"number": 6, "title": "t", "labels": [{"name": "tracker:durable"}], "body": "- [ ] a"}
+        )["verdict"]
+        == "not_opener_work"
+    )
 
     # Malformed input must not raise and must not auto-ready.
     for bad in ({}, {"labels": None, "body": None}, {"labels": ["bug"], "title": None}):
@@ -734,8 +907,12 @@ def _selftest() -> None:
     # Roll-up counts every issue exactly once; exclusions are visible, not dropped.
     rep = assess([ac, dict(ac, number=7, labels=[{"name": "risk:major"}]), dash, dict(ac, body="")])
     assert sum(rep["counts"].values()) == rep["total"] == 4, rep["counts"]
-    assert rep["counts"] == {"auto_ready": 1, "owner_review": 1,
-                            "needs_specification": 1, "not_opener_work": 1}, rep["counts"]
+    assert rep["counts"] == {
+        "auto_ready": 1,
+        "owner_review": 1,
+        "needs_specification": 1,
+        "not_opener_work": 1,
+    }, rep["counts"]
     assert sum(rep["reasons"].values()) == 4, rep["reasons"]
     text = format_report(rep)
     assert "not dropped" in text and "Needs your call" in text
@@ -757,7 +934,7 @@ def _selftest() -> None:
     # one hardcoded variant silently under-applies. Resolution must follow the repo, and a repo
     # with no ready label at all must produce an error rather than a skipped no-op.
     spellings = {"spaced": "status: ready", "tight": "status:ready", "none": None}
-    live_cache = repo_ready_label.__defaults__[0]      # the module's own memo, primed for the test
+    live_cache = repo_ready_label.__defaults__[0]  # the module's own memo, primed for the test
     saved_run, calls = subprocess.run, []
     try:
         live_cache.update(spellings)
@@ -766,9 +943,11 @@ def _selftest() -> None:
         def fake_run(cmd, **kw):
             class R:
                 returncode, stdout, stderr = 0, "", ""
+
             if cmd[1] == "issue":
                 calls.append((cmd[cmd.index("--repo") + 1], cmd[cmd.index("--add-label") + 1]))
             return R()
+
         subprocess.run = fake_run
         out = apply_ready(rows, dry_run=False)
     finally:
@@ -785,28 +964,38 @@ def _selftest() -> None:
     global RISK_LABELS
     saved = RISK_LABELS
     try:
-        RISK_LABELS = set()                       # simulate the risk vocabulary going empty
+        RISK_LABELS = set()  # simulate the risk vocabulary going empty
         broken = classify_issue(dict(ac, labels=[{"name": "risk:major"}]))
         # Substring matching is the second line of defence and must still hold the line.
         assert broken["verdict"] == "owner_review", "substring fallback failed to fail closed"
         RISK_SUBS_SAVED = tuple(RISK_SUBSTRINGS)
-        globals()["RISK_SUBSTRINGS"] = ()          # remove BOTH defences
+        globals()["RISK_SUBSTRINGS"] = ()  # remove BOTH defences
         now_broken = classify_issue(dict(ac, labels=[{"name": "risk:major"}]))
-        assert now_broken["verdict"] == "auto_ready", "break did not change behaviour — test is vacuous"
+        assert (
+            now_broken["verdict"] == "auto_ready"
+        ), "break did not change behaviour — test is vacuous"
         globals()["RISK_SUBSTRINGS"] = RISK_SUBS_SAVED
     finally:
         RISK_LABELS = saved
-    assert classify_issue(dict(ac, labels=[{"name": "risk:major"}]))["verdict"] == "owner_review", \
-        "revert did not restore the risk gate"
+    assert (
+        classify_issue(dict(ac, labels=[{"name": "risk:major"}]))["verdict"] == "owner_review"
+    ), "revert did not restore the risk gate"
 
     # ---- durable-issue census -------------------------------------------------------------
     def _iss(repo, num, title, labels=(), author="app/github-actions", body="x"):
-        return {"number": num, "title": title, "body": body,
-                "labels": [{"name": l} for l in labels],
-                "author": {"login": author}, "repository": {"name": repo}}
+        return {
+            "number": num,
+            "title": title,
+            "body": body,
+            "labels": [{"name": l} for l in labels],
+            "author": {"login": author},
+            "repository": {"name": repo},
+        }
 
     # Emoji, dates and issue numbers must not stop the same tracker matching across repos.
-    assert normalize_title("\U0001F6A8 Dependency Dashboard #12 2026-08-18") == "dependency dashboard"
+    assert (
+        normalize_title("\U0001f6a8 Dependency Dashboard #12 2026-08-18") == "dependency dashboard"
+    )
     assert normalize_title(None) == ""
 
     fleet = [_iss(f"repo{i}", 100 + i, "Dependency Dashboard") for i in range(4)]
@@ -836,13 +1025,13 @@ def _selftest() -> None:
     cen = census(corpus)
     assert cen["raw_open"] == len(corpus)
     assert cen["durable"] + cen["true_open"] == cen["raw_open"], cen
-    assert cen["durable"] == 5 and cen["true_open"] == 4, cen      # 4 dashboards + 1 labelled
+    assert cen["durable"] == 5 and cen["true_open"] == 4, cen  # 4 dashboards + 1 labelled
     # THE SCOPE LABEL IS PART OF THE CONTRACT, not a comment. These counts were read as fleet
     # throughput on 2026-08-22 -- a true_open of 1 reported as "the fleet has no work" while the real
     # pipeline closed 8 issues overnight. A number that invites that misreading has to carry its own
     # scope in the payload, because prose in a docstring does not travel with the JSON.
     assert "NOT fleet throughput" in cen["scope"], cen.get("scope")
-    assert cen["label_gap"] == 4, cen                              # the 4 unlabelled dashboards
+    assert cen["label_gap"] == 4, cen  # the 4 unlabelled dashboards
     text = format_census(cen)
     assert "TRUE open backlog" in text and "Missing `tracker:durable`" in text
 
@@ -852,15 +1041,25 @@ def _selftest() -> None:
 
     # The registry's OWN examples (docs/ops/DURABLE_TRACKING_ISSUES.md, "Distinguishing trackers
     # from transient alerts"). Durable: generic title + controller label. Transient: counter/date.
-    ctrl = _iss("Workflows", 3130, "\U0001F6A8 Consumer Repo Sync Failed - Action Required",
-                labels=["sync-failure", "automated", "bug"])
+    ctrl = _iss(
+        "Workflows",
+        3130,
+        "\U0001f6a8 Consumer Repo Sync Failed - Action Required",
+        labels=["sync-failure", "automated", "bug"],
+    )
     assert durability_of(ctrl, title_recurrence([ctrl]))["durable"], durability_of(ctrl, {})
-    drift = _iss("Workflows", 3093, "\U0001F504 Integration-Tests sync drift detected",
-                 labels=["integration-sync", "automation"])
+    drift = _iss(
+        "Workflows",
+        3093,
+        "\U0001f504 Integration-Tests sync drift detected",
+        labels=["integration-sync", "automation"],
+    )
     assert durability_of(drift, title_recurrence([drift]))["durable"]
-    for transient in ("\u26A0\uFE0F CODEX_AUTH_JSON expires in 39 hours",
-                      "\U0001F534 Integration CI failed (run 235)",
-                      "\U0001F4CA LangSmith Trace Coverage Report - Week of 2026-08-01"):
+    for transient in (
+        "\u26a0\ufe0f CODEX_AUTH_JSON expires in 39 hours",
+        "\U0001f534 Integration CI failed (run 235)",
+        "\U0001f4ca LangSmith Trace Coverage Report - Week of 2026-08-01",
+    ):
         t = _iss("Workflows", 999, transient, labels=["automated"])
         assert not durability_of(t, title_recurrence([t]))["durable"], transient
     # A controller label alone, on a HUMAN-authored issue, must not hide it.
@@ -869,12 +1068,15 @@ def _selftest() -> None:
 
     # Sibling propagation: one explicit human label makes identical titles durable fleet-wide,
     # even when they are human-authored and below the recurrence threshold.
-    sib = [_iss("a", 1, "LangSmith fleet coverage", labels=[DURABLE_LABEL], author="stranske"),
-           _iss("b", 2, "LangSmith fleet coverage", author="stranske"),
-           _iss("c", 3, "LangSmith fleet coverage", author="stranske")]
+    sib = [
+        _iss("a", 1, "LangSmith fleet coverage", labels=[DURABLE_LABEL], author="stranske"),
+        _iss("b", 2, "LangSmith fleet coverage", author="stranske"),
+        _iss("c", 3, "LangSmith fleet coverage", author="stranske"),
+    ]
     srec, seeds = title_recurrence(sib), labelled_titles(sib)
-    assert durability_of(sib[1], srec, seeds)["basis"].startswith("same title labelled"), \
-        durability_of(sib[1], srec, seeds)
+    assert durability_of(sib[1], srec, seeds)["basis"].startswith(
+        "same title labelled"
+    ), durability_of(sib[1], srec, seeds)
     # ...and with NO seed it must stay counted (propagation cannot invent itself).
     assert not durability_of(sib[1], srec, set())["durable"]
     # Propagation seeds ONLY from explicit labels, so it cannot cascade off an inference.
@@ -882,9 +1084,13 @@ def _selftest() -> None:
     assert labelled_titles(infer) == set(), "inferred durability must not seed propagation"
 
     # ---- task-type label repair -----------------------------------------------------------
-    camp = _iss("Trend_Model_Project", 5856,
-                "Legacy removal Phase 6b: Remove legacy config and multi-period shapes",
-                labels=[], author="stranske")
+    camp = _iss(
+        "Trend_Model_Project",
+        5856,
+        "Legacy removal Phase 6b: Remove legacy config and multi-period shapes",
+        labels=[],
+        author="stranske",
+    )
     assert task_label_for(camp) == "refactor", task_label_for(camp)
 
     # THE LOAD-BEARING GUARD: never override an existing routing signal. classify()'s fixed chain
@@ -911,41 +1117,56 @@ def _selftest() -> None:
     # DELIBERATE BREAK -> REVERT on the guard: without it, a testgen issue is stolen by codemod.
     _saved_classify = backlog.classify
     try:
-        backlog.classify = lambda _labels: "implement"       # pretend there is never a signal
+        backlog.classify = lambda _labels: "implement"  # pretend there is never a signal
         stolen = task_label_for(dict(camp, labels=[{"name": "testing"}]))
         assert stolen == "refactor", "break did not change behaviour — test is vacuous"
     finally:
         backlog.classify = _saved_classify
-    assert task_label_for(dict(camp, labels=[{"name": "testing"}])) is None, \
-        "revert did not restore the guard"
+    assert (
+        task_label_for(dict(camp, labels=[{"name": "testing"}])) is None
+    ), "revert did not restore the guard"
 
     # DELIBERATE BREAK -> REVERT: drop the bot-author guard and the human issue gets hidden.
     global BOT_AUTHOR
     saved = BOT_AUTHOR
     try:
-        BOT_AUTHOR = re.compile(r".*")                 # everyone looks like a bot
+        BOT_AUTHOR = re.compile(r".*")  # everyone looks like a bot
         broken = durability_of(human, hrec)
         assert broken["durable"], "break did not change behaviour — test is vacuous"
     finally:
         BOT_AUTHOR = saved
     assert not durability_of(human, hrec)["durable"], "revert did not restore the author guard"
 
-    print("issue_readiness.py selftest: OK (fail-closed risk w/ break->revert, thin issues go to "
-          "the machine not the owner, exclusions counted, dry-run writes nothing)")
+    print(
+        "issue_readiness.py selftest: OK (fail-closed risk w/ break->revert, thin issues go to "
+        "the machine not the owner, exclusions counted, dry-run writes nothing)"
+    )
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--apply", action="store_true", help="write labels / raise questions")
-    ap.add_argument("--census", action="store_true",
-                    help="corrected open-issue count, excluding issues designed to stay open")
-    ap.add_argument("--reconcile-durable", action="store_true",
-                    help=f"apply `{DURABLE_LABEL}` to detected-but-unlabelled trackers")
-    ap.add_argument("--task-labels", action="store_true",
-                    help="report issues whose title names work their labels do not")
-    ap.add_argument("--apply-task-labels", action="store_true",
-                    help="apply the missing task-type label so classify() can route it")
+    ap.add_argument(
+        "--census",
+        action="store_true",
+        help="corrected open-issue count, excluding issues designed to stay open",
+    )
+    ap.add_argument(
+        "--reconcile-durable",
+        action="store_true",
+        help=f"apply `{DURABLE_LABEL}` to detected-but-unlabelled trackers",
+    )
+    ap.add_argument(
+        "--task-labels",
+        action="store_true",
+        help="report issues whose title names work their labels do not",
+    )
+    ap.add_argument(
+        "--apply-task-labels",
+        action="store_true",
+        help="apply the missing task-type label so classify() can route it",
+    )
     ap.add_argument("--limit", type=int, default=100)
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -965,19 +1186,23 @@ def main(argv: list[str]) -> int:
         if args.json:
             print(json.dumps(out, indent=2))
         else:
-            print(f"# Task-label gaps — titles naming work the labels do not\n")
+            print("# Task-label gaps — titles naming work the labels do not\n")
             print(f"  {len(gaps)} issue(s) would re-route once labelled\n")
             for g in gaps:
-                print(f"  {g['target']:<34} +{g['label']:<10} "
-                      f"{g['routes_from']} -> {g['routes_to']}")
+                print(
+                    f"  {g['target']:<34} +{g['label']:<10} "
+                    f"{g['routes_from']} -> {g['routes_to']}"
+                )
                 print(f"       {g['title']}")
         return 0
     if args.census or args.reconcile_durable:
         cen = census(issues)
         if args.reconcile_durable:
             if not APPLY_ENABLED:
-                print("refusing to apply: set ORCH_ISSUE_AUTOREADY=1 to enable writes",
-                      file=sys.stderr)
+                print(
+                    "refusing to apply: set ORCH_ISSUE_AUTOREADY=1 to enable writes",
+                    file=sys.stderr,
+                )
                 return 2
             cen["reconcile"] = reconcile_durable(cen["needs_durable_label"], dry_run=False)
         print(json.dumps(cen, indent=2) if args.json else format_census(cen), end="")

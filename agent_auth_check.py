@@ -15,6 +15,7 @@ This checks the way the fleet does, and never prints secret values.
 Exit code: 0 = nothing known-broken, 1 = at least one seat is definitively unusable.
 UNKNOWN is never an error — an unreachable check is not evidence of a bad credential.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,10 +43,14 @@ CREDENTIAL_FILES = {
     "vibe": (HOME / ".vibe" / ".env", "MISTRAL_API_KEY"),
 }
 REFRESH_HINT = {
-    "cursor": ("cursor.com → Dashboard → Integrations → API Keys → create key, then write "
-               "CURSOR_API_KEY=<key> to ~/.cursor/cursor-agent.env (chmod 600)"),
-    "claude": ("run `claude setup-token` and write the result as "
-               "CLAUDE_CODE_OAUTH_TOKEN=<token> to ~/.codex/handoff/.claude-oauth-token"),
+    "cursor": (
+        "cursor.com → Dashboard → Integrations → API Keys → create key, then write "
+        "CURSOR_API_KEY=<key> to ~/.cursor/cursor-agent.env (chmod 600)"
+    ),
+    "claude": (
+        "run `claude setup-token` and write the result as "
+        "CLAUDE_CODE_OAUTH_TOKEN=<token> to ~/.codex/handoff/.claude-oauth-token"
+    ),
     "aider": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.codex/handoff/aider.env",
     "vibe": "console.mistral.ai → API keys, then set MISTRAL_API_KEY in ~/.vibe/.env (chmod 600)",
 }
@@ -86,11 +91,22 @@ def _credential_file_state(agent: str) -> dict:
             if attempt + 1 < CRED_READ_ATTEMPTS:
                 time.sleep(0.2 * (attempt + 1))
     if text is None:
-        return {"path": str(path), "present": True, "expected_key": key, "key_present": None,
-                "read_error": read_error, "reason_class": "environment"}
-    return {"path": str(path), "present": True, "expected_key": key,
-            "key_present": any(line.strip().lstrip("export ").startswith(key + "=")
-                               for line in text.splitlines())}
+        return {
+            "path": str(path),
+            "present": True,
+            "expected_key": key,
+            "key_present": None,
+            "read_error": read_error,
+            "reason_class": "environment",
+        }
+    return {
+        "path": str(path),
+        "present": True,
+        "expected_key": key,
+        "key_present": any(
+            line.strip().lstrip("export ").startswith(key + "=") for line in text.splitlines()
+        ),
+    }
 
 
 def check(agent: str, *, refresh: bool = True) -> dict:
@@ -131,15 +147,23 @@ def check(agent: str, *, refresh: bool = True) -> dict:
         # UNKNOWN (deliberately NOT softened to a pass: an assertion weakened into a skip stops
         # catching the absent credential it exists for), but the detail now names where to look.
         verdict = "UNKNOWN"
-        detail = (f"could not read {cred['path']} after {CRED_READ_ATTEMPTS} attempts "
-                  f"({cred.get('read_error')}) -- this is an ENVIRONMENT fault (the file exists), "
-                  "not a missing credential; re-check the volume before changing any config")
+        detail = (
+            f"could not read {cred['path']} after {CRED_READ_ATTEMPTS} attempts "
+            f"({cred.get('read_error')}) -- this is an ENVIRONMENT fault (the file exists), "
+            "not a missing credential; re-check the volume before changing any config"
+        )
     else:
         verdict, detail = "UNKNOWN", auth["reason"]
-    return {"agent": agent, "verdict": verdict, "detail": detail, "tier_models": tiers,
-            "auth_strength": strength, "credential_file": cred,
-            "reason_class": cred.get("reason_class") or ("ok" if verdict != "UNKNOWN" else "tree"),
-            "refresh_hint": REFRESH_HINT.get(agent)}
+    return {
+        "agent": agent,
+        "verdict": verdict,
+        "detail": detail,
+        "tier_models": tiers,
+        "auth_strength": strength,
+        "credential_file": cred,
+        "reason_class": cred.get("reason_class") or ("ok" if verdict != "UNKNOWN" else "tree"),
+        "refresh_hint": REFRESH_HINT.get(agent),
+    }
 
 
 def run(agents=AGENTS) -> list[dict]:
@@ -164,8 +188,10 @@ def _render(rows: list[dict]) -> str:
     order = ("BROKEN", "OK", "PRESENT", "CONFIGURED", "UNKNOWN")
     tally = {v: sum(1 for r in rows if r["verdict"] == v) for v in order}
     out.append("")
-    out.append(f"{tally['BROKEN']} broken, {tally['OK']} verified, {tally['PRESENT']} present-only, "
-               f"{tally['CONFIGURED']} file-only, {tally['UNKNOWN']} unknown")
+    out.append(
+        f"{tally['BROKEN']} broken, {tally['OK']} verified, {tally['PRESENT']} present-only, "
+        f"{tally['CONFIGURED']} file-only, {tally['UNKNOWN']} unknown"
+    )
     out.append("  confidence, strongest first:")
     out.append("    OK         = credential round-tripped to the server and works")
     out.append("    PRESENT    = the CLI says a credential exists; nothing proved it still works")
@@ -176,27 +202,66 @@ def _render(rows: list[dict]) -> str:
 
 def _selftest() -> None:
     rows = [
-        {"agent": "a", "verdict": "OK", "detail": "fine", "tier_models": {},
-         "credential_file": {"present": True, "key_present": True, "path": "/x", "expected_key": "K"},
-         "refresh_hint": None},
-        {"agent": "b", "verdict": "BROKEN", "detail": "auth: nope", "tier_models": {},
-         "credential_file": {"present": False, "key_present": False, "path": "/y", "expected_key": "K"},
-         "refresh_hint": "do the thing"},
+        {
+            "agent": "a",
+            "verdict": "OK",
+            "detail": "fine",
+            "tier_models": {},
+            "credential_file": {
+                "present": True,
+                "key_present": True,
+                "path": "/x",
+                "expected_key": "K",
+            },
+            "refresh_hint": None,
+        },
+        {
+            "agent": "b",
+            "verdict": "BROKEN",
+            "detail": "auth: nope",
+            "tier_models": {},
+            "credential_file": {
+                "present": False,
+                "key_present": False,
+                "path": "/y",
+                "expected_key": "K",
+            },
+            "refresh_hint": "do the thing",
+        },
     ]
     text = _render(rows)
     assert "1 broken" in text and "credential file MISSING" in text and "do the thing" in text, text
     # UNKNOWN must never be counted as broken — the whole point of the unknown-vs-failure rule.
-    unknown = [{"agent": "c", "verdict": "UNKNOWN", "detail": "no probe", "tier_models": {},
-                "credential_file": {"present": None, "key_present": None, "path": None,
-                                    "expected_key": None}, "refresh_hint": None}]
+    unknown = [
+        {
+            "agent": "c",
+            "verdict": "UNKNOWN",
+            "detail": "no probe",
+            "tier_models": {},
+            "credential_file": {
+                "present": None,
+                "key_present": None,
+                "path": None,
+                "expected_key": None,
+            },
+            "refresh_hint": None,
+        }
+    ]
     assert "0 broken" in _render(unknown), _render(unknown)
     # A real run must not raise and must classify every seat.
     live = run()
-    assert {r["verdict"] for r in live} <= {"OK", "BROKEN", "PRESENT", "CONFIGURED", "UNKNOWN"}, live
+    assert {r["verdict"] for r in live} <= {
+        "OK",
+        "BROKEN",
+        "PRESENT",
+        "CONFIGURED",
+        "UNKNOWN",
+    }, live
     assert {r["agent"] for r in live} == set(AGENTS), live
     # A MACHINE FAULT MUST NOT READ AS A CONFIG DEFECT. On a cloud-sync mount a read can fail on a
     # file that plainly exists; that produced a bare UNKNOWN indistinguishable from "no credential".
     import tempfile as _tf
+
     with _tf.TemporaryDirectory(prefix="cred-state-") as _td:
         _p = Path(_td) / "seat.env"
         _p.write_text("export MISTRAL_API_KEY=abc\n")
@@ -207,11 +272,13 @@ def _selftest() -> None:
             _ok = _credential_file_state("vibe")
             assert _ok["key_present"] is True and not _ok.get("reason_class"), _ok
             _calls = []
+
             def _boom(self, *a, **k):
                 if self == _p:
                     _calls.append(1)
                     raise OSError("Resource temporarily unavailable")
                 return _real_read(self, *a, **k)
+
             Path.read_text = _boom
             _bad = _credential_file_state("vibe")
             assert _bad["key_present"] is None, _bad

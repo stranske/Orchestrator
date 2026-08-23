@@ -5,15 +5,16 @@ import json
 
 import pytest
 
+import pattern_miner
+import research_subjects
 from completion_event_adapter import (
-    EnvelopeError,
-    _canonical_target,
-    OutOfScopeError,
     SUBJECTLESS_PRODUCERS,
+    EnvelopeError,
+    OutOfScopeError,
+    _canonical_target,
     adapt_completion_event_envelope,
 )
 from pattern_miner import MAX_REPORTED_REJECTIONS, PHASES, PatternMiner, main
-import research_subjects
 
 
 def _sha(value: str) -> str:
@@ -138,15 +139,15 @@ def completion_episode(
             "schema_version": 1,
             "run_id": run_id,
             # Terra run-level rows may omit this; joined identity binds the attempt.
-            "attempt_id": attempt_id if phase in {"execution", "artifact", "verification"} else None,
+            "attempt_id": (
+                attempt_id if phase in {"execution", "artifact", "verification"} else None
+            ),
             "event_type": "completion",
             "phase": phase,
             "producer": (
                 entrypoint
                 if phase == "execution"
-                else "runtime_ac"
-                if phase == "verification"
-                else "dispatcher"
+                else "runtime_ac" if phase == "verification" else "dispatcher"
             ),
             "status": "success" if phase != "durability" else durability,
             "validation_status": "accepted",
@@ -231,9 +232,7 @@ def test_three_independent_episodes_emit_one_candidate():
 def test_retries_and_same_subject_do_not_inflate_evidence(repeated_subject_events):
     result = PatternMiner().mine(repeated_subject_events, now=200)
     progress = result.status["threshold_progress"][0]
-    assert progress["positive_distinct_subjects"] == 1, (
-        "repeated subject counted as independent"
-    )
+    assert progress["positive_distinct_subjects"] == 1, "repeated subject counted as independent"
     assert not result.candidates
     assert progress["required_positive_distinct_subjects"] == 3
 
@@ -265,9 +264,7 @@ def test_failed_retry_then_terminal_success_counts_subject_once_and_keeps_audit(
             verification="FAIL",
             durability="reverted",
         )
-        failed_artifact = next(
-            row for row in failed_retry if row["event"]["phase"] == "artifact"
-        )
+        failed_artifact = next(row for row in failed_retry if row["event"]["phase"] == "artifact")
         failed_payload = json.loads(failed_artifact["event"]["payload_json"])
         failed_payload["changed_path_classes"] = ["discarded-retry-output"]
         failed_artifact["event"]["payload_json"] = json.dumps(failed_payload)
@@ -389,13 +386,8 @@ def test_candidate_without_new_evidence_expires_to_tombstone():
     expiry = result.candidates[0].lifecycle.expires_at
     expired = miner.sweep(now=expiry)
     assert expired.candidates[0].lifecycle.state == "retired"
-    assert (
-        expired.candidates[0].lifecycle.expiry_reason
-        == "no_new_evidence_before_candidate_ttl"
-    )
-    tombstone = next(
-        item for item in expired.tombstones if item.capability_id is not None
-    )
+    assert expired.candidates[0].lifecycle.expiry_reason == "no_new_evidence_before_candidate_ttl"
+    tombstone = next(item for item in expired.tombstones if item.capability_id is not None)
     assert tombstone.fingerprint == expired.candidates[0].fingerprint
     assert expired.status["expired_candidate_count"] == 1
 
@@ -469,13 +461,24 @@ def test_valid_spec_hash_still_derives_identity_and_is_not_skipped():
 def _strip_identity(row: dict) -> dict:
     """Make a row look like ordinary production delivery: no research design set at all."""
     row = json.loads(json.dumps(row))
-    row["identity"].update({
-        "normalized_spec_hash": None, "base_sha": None, "subject_id": None,
-        "family_id": None, "observation_id": None, "attempt_id": None,
-        "attempt_resolution": "unresolved", "subject_arms": [], "subject_profiles": [],
-        "resolved_provider": None, "resolved_model": None, "profile_id": None,
-        "arm_id": None, "experiment_id": None,
-    })
+    row["identity"].update(
+        {
+            "normalized_spec_hash": None,
+            "base_sha": None,
+            "subject_id": None,
+            "family_id": None,
+            "observation_id": None,
+            "attempt_id": None,
+            "attempt_resolution": "unresolved",
+            "subject_arms": [],
+            "subject_profiles": [],
+            "resolved_provider": None,
+            "resolved_model": None,
+            "profile_id": None,
+            "arm_id": None,
+            "experiment_id": None,
+        }
+    )
     row["event"]["attempt_id"] = None
     return row
 
@@ -557,6 +560,208 @@ def test_mining_health_distinguishes_ran_from_mined():
     assert rejecting["state"] == "rejecting" and rejecting["actionable"] is True
 
 
+def test_rejecting_health_names_its_blockers_and_never_implies_a_false_drain():
+    """`203 rejected as malformed` said something was wrong and nothing about what to fix.
+
+    On the live corpus FOUR reason codes each hit 203 of 203 events. Naming only the
+    alphabetically-first one would invite fixing it and expecting the queue to drain, when in
+    fact it would not move by a single event. So a tie at the top must be reported as a tie.
+    """
+    bad = completion_episode(5)[0]
+    bad["identity"]["subject_id"] = "subject:forged"
+    health = PatternMiner().mine([bad], now=200).status["mining_health"]
+    assert health["state"] == "rejecting"
+    reasons = PatternMiner().mine([bad], now=200).status["rejected_event_reasons"]
+    assert reasons, "a rejecting run with no reason codes cannot be diagnosed"
+
+    # The blocker is NAMED in the operator-visible detail, not only in the JSON.
+    assert health["top_blocker"] in reasons, health
+    assert health["top_blocker"] in health["detail"], health["detail"]
+    assert str(health["top_blocker_count"]) in health["detail"], health["detail"]
+
+    # A tie is reported as a tie: every code sharing the top count is listed, and the phrasing
+    # says how many independent fixes stand in the way.
+    top = max(reasons.values())
+    tied = sorted(code for code, count in reasons.items() if count == top)
+    assert health["top_blockers"] == tied[:4], (health["top_blockers"], tied)
+    if len(tied) > 1:
+        assert f"{len(health['top_blockers'])} blockers" in health["detail"], health["detail"]
+        for code in health["top_blockers"]:
+            assert code in health["detail"], (code, health["detail"])
+
+    # DELIBERATE BREAK -> REVERT. Drop the reason counts the caller passes in, which is exactly
+    # what the pre-fix code did, and the detail line loses the diagnosis while still claiming
+    # the run is actionable -- actionable with nothing named is the silence this repo was built
+    # to prevent.
+    blind = pattern_miner._mining_health(1, 0, 1, 0, 0, 0, None)
+    assert blind["top_blocker"] is None and blind["top_blockers"] == []
+    assert "blocker" not in blind["detail"], blind["detail"]
+    assert blind["actionable"] is True, "the break keeps the alarm and loses the cause"
+    # REVERTED: pass the counts and the cause comes back.
+    seeing = pattern_miner._mining_health(1, 0, 1, 0, 0, 0, reasons)
+    assert seeing["top_blocker"] in seeing["detail"], seeing["detail"]
+
+
+def test_domain_research_mines_without_a_base_sha_but_a_repo_subject_still_cannot():
+    """`record_domain_research` passes `base_sha=None` on purpose -- a pricing study is not cut
+    from a commit -- so requiring it unconditionally made the whole domain namespace unminable.
+
+    The exemption is scoped to that ONE closed namespace, and this test pins both halves: a domain
+    subject mines with no base_sha, and a repo-scoped subject with no base_sha is still rejected.
+    Without the second half this would be a relaxation of the identity contract rather than
+    recognition that one component does not apply.
+    """
+    import research_subjects
+
+    domain = research_subjects.domain_target("model-tier-pricing")
+
+    def _domain_rows(index):
+        rows = completion_episode(index, target=domain, repository=domain)
+        for row in rows:
+            row["identity"]["base_sha"] = ""
+            ident = research_subjects.subject_identity_from_hash(
+                domain,
+                "testgen",
+                row["identity"]["normalized_spec_hash"],
+                None,
+                row["identity"]["subject_arms"],
+                row["identity"]["subject_profiles"],
+            )
+            row["identity"]["subject_id"] = ident["subject_id"]
+            row["identity"]["family_id"] = ident["subject_family_id"]
+            row["identity"]["observation_id"] = research_subjects.completion_observation_id(
+                ident["subject_id"], f"run-{index}", row["identity"]["attempt_id"]
+            )
+        return rows
+
+    rows = [r for i in (11, 12, 13) for r in _domain_rows(i)]
+    status = PatternMiner().mine(rows, now=200).status
+    assert "missing_base_sha" not in (status["rejected_event_reasons"] or {}), status[
+        "rejected_event_reasons"
+    ]
+    assert status["mining_health"]["state"] == "mining", status["mining_health"]
+    assert status["complete_episode_count"] == 3, status["mining_health"]
+
+    # THE OTHER HALF: a repo-scoped subject with no base_sha is still malformed. All 203 of the
+    # live rejections are repo-scoped, so the exemption above clears none of them.
+    repo_rows = completion_episode(21, target="owner/repo#21")
+    for row in repo_rows:
+        row["identity"]["base_sha"] = ""
+    repo_status = PatternMiner().mine(repo_rows, now=200).status
+    assert "missing_base_sha" in (repo_status["rejected_event_reasons"] or {}), repo_status[
+        "rejected_event_reasons"
+    ]
+
+
+def test_a_subjectless_producer_can_graduate_without_a_code_edit():
+    """The declaration must not latch: it once rejected the very evidence that would revise it.
+
+    `subjectless_producer_carries_experiment` originally fired on ANY experiment_id, so a producer
+    declared subjectless could never demonstrate otherwise -- a human had to edit a Python dict,
+    and the only signal prompting that edit was the rejection itself. `roles` is the live case: it
+    is declared to have "no delivering arm", which is empirically false for the `redirect` role
+    (8 target/role cells across 2-3 agents each, 14 accepted / 211 counterfactual role edges).
+
+    The drain that works while the gate is shut is a SELF-CONSISTENT identity, and both halves are
+    pinned here: a coherent one graduates, a forged one does not.
+    """
+    producer = sorted(SUBJECTLESS_PRODUCERS)[0]
+
+    # GRADUATES: identity derives from the event's own contract, so it went through the registered
+    # path. The producer declaration does not veto real evidence.
+    good = [row for index in (31, 32, 33) for row in completion_episode(index)]
+    for row in good:
+        row["event"]["producer"] = producer
+        row["identity"]["experiment_id"] = "round:some-audit:2026-08-22"
+    status = PatternMiner().mine(good, now=200).status
+    reasons = status["rejected_event_reasons"] or {}
+    assert "subjectless_producer_carries_experiment" not in reasons, reasons
+    assert status["mining_health"]["state"] == "mining", status["mining_health"]
+
+    # DOES NOT GRADUATE: an experiment_id with a subject_id that does not derive from the event's
+    # own contract is a borrowed or forged identity, and is still called out by name.
+    forged = completion_episode(34)
+    for row in forged:
+        row["event"]["producer"] = producer
+        row["identity"]["experiment_id"] = "round:borrowed:2026-08-22"
+        row["identity"]["subject_id"] = "subject:0000000000000000000000ff"
+    forged_reasons = PatternMiner().mine(forged, now=200).status["rejected_event_reasons"] or {}
+    assert "subjectless_producer_carries_experiment" in forged_reasons, forged_reasons
+
+
+def test_a_resolved_model_alone_does_not_make_a_production_event_a_defect():
+    """Regression: worker provenance landing on production runs must not create 111 fake defects.
+
+    `presents_identity` once counted `subject_profiles`, which was safe only while profiles
+    appeared exclusively on research runs. The moment `resolved_model` started resolving on
+    ordinary offloads, 111 production events with no subject, no arms and no experiment flipped
+    from correctly EXCLUDED to reported as malformed — purely for naming the model that served
+    them. One root cause wearing 111 hats, hiding the real rejections behind it.
+
+    A profile is an execution detail. The design set is the arm set.
+    """
+    rows = [_strip_identity(row) for row in completion_episode(41)]
+    for row in rows:
+        row["event"]["producer"] = "orchestrator_local"
+        row["identity"]["subject_profiles"] = ["codex-5.6-terra-high"]
+        row["identity"]["resolved_provider"] = "openai"
+        row["identity"]["resolved_model"] = "gpt-5.6-terra"
+    status = PatternMiner().mine(rows, now=200).status
+    assert status["rejected_event_count"] == 0, status["rejected_event_reasons"]
+    assert status["excluded_event_count"] == len(rows), status["mining_health"]
+    assert status["mining_health"]["state"] == "all_out_of_scope", status["mining_health"]
+
+    # A REAL research claim still gets judged as one: an arm set is the design set, so an
+    # incomplete claim beside it is a defect and not a scope question.
+    claiming = [_strip_identity(row) for row in completion_episode(42)]
+    for row in claiming:
+        row["event"]["producer"] = "orchestrator_local"
+        row["identity"]["subject_arms"] = ["codex", "cursor"]
+    claim_status = PatternMiner().mine(claiming, now=200).status
+    assert claim_status["rejected_event_count"] == len(claiming), claim_status["mining_health"]
+
+    # AND the profile-set check stays a real check where a subject DOES exist: a registration gap
+    # between the subject's declared profiles and the one that actually ran is still named.
+    mismatched = completion_episode(43)
+    for row in mismatched:
+        row["identity"]["subject_profiles"] = ["codex:some-other-profile"]
+        row["identity"]["profile_id"] = "codex-5.6-terra-high"
+    reasons = PatternMiner().mine(mismatched, now=200).status["rejected_event_reasons"] or {}
+    assert "selected_profile_not_in_subject_set" in reasons, reasons
+
+
+def test_rejections_report_how_many_could_ever_be_repaired():
+    """`184 malformed` reads as work somebody should do. All 184 were history.
+
+    `missing_joined_attempt_id` means the event carries no attempt row to join, and the export
+    builds that join FROM the attempt row -- so a run that finished without one can never gain it.
+    Verified on the live population: 25 UX-panel subjects, 0 with a base commit, 0 execution
+    attempts, every run before provenance existed. A blocked count without its drainable twin is
+    the same silence this repo keeps rediscovering.
+    """
+    unrepairable = completion_episode(51)
+    for row in unrepairable:
+        row["identity"]["attempt_id"] = ""  # no attempt row was ever written
+        row["identity"]["attempt_resolution"] = "unresolved"
+    health = PatternMiner().mine(unrepairable, now=200).status["mining_health"]
+    assert health["state"] == "rejecting", health
+    assert health["unrecoverable_rejections"] == health["rejected_event_count"], health
+    assert health["drainable_rejections"] == 0, health
+    assert "can never be repaired" in health["detail"], health["detail"]
+    assert "0 drainable" in health["detail"], health["detail"]
+
+    # THE OTHER HALF: a rejection that DOES have an attempt row is drainable, and must not be
+    # written off as history -- otherwise this becomes a way to make a real defect count vanish.
+    repairable = completion_episode(52)
+    for row in repairable:
+        row["identity"]["subject_id"] = "subject:0000000000000000000000ff"
+    health2 = PatternMiner().mine(repairable, now=200).status["mining_health"]
+    assert health2["state"] == "rejecting", health2
+    assert health2["unrecoverable_rejections"] == 0, health2
+    assert health2["drainable_rejections"] == health2["rejected_event_count"], health2
+    assert "can never be repaired" not in health2["detail"], health2["detail"]
+
+
 def test_every_declared_subjectless_producer_has_a_stated_reason():
     """A declaration without a reason is an assertion nobody can audit later."""
     for producer, reason in SUBJECTLESS_PRODUCERS.items():
@@ -567,28 +772,46 @@ def test_every_declared_subjectless_producer_has_a_stated_reason():
 def test_issue_scoped_targets_are_unchanged():
     """KEEPALIVE GUARD. Extending the grammar must not move `owner/repo#N` by one character."""
     assert _canonical_target("stranske/trip-planner#12") == (
-        "stranske/trip-planner#12", "stranske/trip-planner")
+        "stranske/trip-planner#12",
+        "stranske/trip-planner",
+    )
     # Numeric normalisation is part of the old contract and must survive.
     assert _canonical_target("stranske/trip-planner#007") == (
-        "stranske/trip-planner#7", "stranske/trip-planner")
+        "stranske/trip-planner#7",
+        "stranske/trip-planner",
+    )
     assert _canonical_target("Stranske/Trip-Planner#3") == (
-        "stranske/trip-planner#3", "stranske/trip-planner")
+        "stranske/trip-planner#3",
+        "stranske/trip-planner",
+    )
 
 
 def test_research_scopes_without_an_issue_now_parse():
     """Most research is not done on a GitHub issue; requiring one rejected all of it."""
     assert _canonical_target("stranske/trip-planner") == (
-        "stranske/trip-planner", "stranske/trip-planner")
+        "stranske/trip-planner",
+        "stranske/trip-planner",
+    )
     assert _canonical_target("domain/luminar-editing") == (
-        "domain/luminar-editing", "domain/luminar-editing")
+        "domain/luminar-editing",
+        "domain/luminar-editing",
+    )
     assert _canonical_target("local/Reader") == ("local/reader", "local/reader")
     assert _canonical_target("JobSearch.2026") == ("jobsearch.2026", "jobsearch.2026")
 
 
 def test_transport_noise_and_sentinels_are_still_rejected():
     """Widening scope must not admit things that name no scope at all."""
-    for bad in ("offload:/private/tmp", "triage:20-items",
-                "stranske/trip-planner [ux_review]", "unknown", "none", "-", "", "   "):
+    for bad in (
+        "offload:/private/tmp",
+        "triage:20-items",
+        "stranske/trip-planner [ux_review]",
+        "unknown",
+        "none",
+        "-",
+        "",
+        "   ",
+    ):
         assert _canonical_target(bad) is None, bad
 
 
@@ -597,17 +820,20 @@ def test_status_command_is_machine_readable_and_queue_free(tmp_path, capsys):
     path = tmp_path / "completion-events.json"
     path.write_text(json.dumps(events))
     status_path = tmp_path / "status.json"
-    assert main(
-        [
-            "status",
-            "--events",
-            str(path),
-            "--now",
-            "200",
-            "--write",
-            str(status_path),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "status",
+                "--events",
+                str(path),
+                "--now",
+                "200",
+                "--write",
+                str(status_path),
+            ]
+        )
+        == 0
+    )
     report = json.loads(capsys.readouterr().out)
     assert json.loads(status_path.read_text()) == report
     assert report["schema"] == "orchestrator.pattern-miner-status"
@@ -620,9 +846,7 @@ def test_status_command_is_machine_readable_and_queue_free(tmp_path, capsys):
     assert "candidates" not in report
 
 
-def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
-    tmp_path, capsys
-):
+def test_cadence_runner_restores_state_and_persists_expiry_tombstone(tmp_path, capsys):
     events = [row for index in range(1, 4) for row in completion_episode(index)]
     events_path = tmp_path / "completion-events.jsonl"
     events_path.write_text("".join(json.dumps(row) + "\n" for row in events))
@@ -632,23 +856,26 @@ def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
     status_path = tmp_path / "pattern-miner-status.json"
     inventory_path = tmp_path / "pattern-miner-inventory.json"
 
-    assert main(
-        [
-            "run",
-            "--events",
-            str(events_path),
-            "--state",
-            str(state_path),
-            "--status-out",
-            str(status_path),
-            "--inventory-out",
-            str(inventory_path),
-            "--ttl-days",
-            "1",
-            "--now",
-            "200",
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "run",
+                "--events",
+                str(events_path),
+                "--state",
+                str(state_path),
+                "--status-out",
+                str(status_path),
+                "--inventory-out",
+                str(inventory_path),
+                "--ttl-days",
+                "1",
+                "--now",
+                "200",
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
     first_state = json.loads(state_path.read_text())
     assert first_state["schema"] == "orchestrator.pattern-miner-state"
@@ -656,23 +883,26 @@ def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
     assert len(first_state["candidates"]) == 1
     expiry = first_state["candidates"][0]["lifecycle"]["expires_at"]
 
-    assert main(
-        [
-            "run",
-            "--events",
-            str(empty_path),
-            "--state",
-            str(state_path),
-            "--status-out",
-            str(status_path),
-            "--inventory-out",
-            str(inventory_path),
-            "--ttl-days",
-            "1",
-            "--now",
-            str(expiry),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "run",
+                "--events",
+                str(empty_path),
+                "--state",
+                str(state_path),
+                "--status-out",
+                str(status_path),
+                "--inventory-out",
+                str(inventory_path),
+                "--ttl-days",
+                "1",
+                "--now",
+                str(expiry),
+            ]
+        )
+        == 0
+    )
     report = json.loads(capsys.readouterr().out)
     persisted = json.loads(state_path.read_text())
     inventory = json.loads(inventory_path.read_text())
@@ -687,10 +917,7 @@ def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
         if item["reason"] == "no_new_evidence_before_candidate_ttl"
     ]
     assert len(expiry_tombstones) == 1
-    assert (
-        expiry_tombstones[0]["fingerprint"]
-        == persisted["candidates"][0]["fingerprint"]
-    )
+    assert expiry_tombstones[0]["fingerprint"] == persisted["candidates"][0]["fingerprint"]
 
 
 def test_result_metadata_schema_is_strict():
@@ -701,4 +928,3 @@ def test_result_metadata_schema_is_strict():
     result = PatternMiner().mine([event], now=200)
     reasons = {reason for rejection in result.rejections for reason in rejection.reasons}
     assert "result_field_not_allowlisted:arbitrary_llm_claim" in reasons
-

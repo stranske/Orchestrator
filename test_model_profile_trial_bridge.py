@@ -31,9 +31,8 @@ def _capacity():
 
 
 def _registries(tmp_path, *, safe=True):
-    pinned_runner = (
-        "stranske/Workflows/.github/workflows/reusable-model-profile-trial.yml@"
-        + ("1" * 40)
+    pinned_runner = "stranske/Workflows/.github/workflows/reusable-model-profile-trial.yml@" + (
+        "1" * 40
     )
     profiles = {}
     for profile_id in model_profile_trial.EXPECTED_PROFILE_IDS:
@@ -302,17 +301,21 @@ def test_remote_collector_binds_authenticated_actions_metadata(tmp_path, monkeyp
                 "conclusion": "success",
             }
         return {
-            "artifacts": [{
-                "id": attempt["github_artifact_id"],
-                "name": attempt["artifact_name"],
-                "expired": False,
-                "digest": "sha256:" + hashlib.sha256(archive_buffer.getvalue()).hexdigest(),
-                "workflow_run": {"head_sha": request["expected_source_sha"]},
-            }]
+            "artifacts": [
+                {
+                    "id": attempt["github_artifact_id"],
+                    "name": attempt["artifact_name"],
+                    "expired": False,
+                    "digest": "sha256:" + hashlib.sha256(archive_buffer.getvalue()).hexdigest(),
+                    "workflow_run": {"head_sha": request["expected_source_sha"]},
+                }
+            ]
         }
 
     monkeypatch.setattr(bridge, "_gh_json", fake_json)
-    monkeypatch.setattr(bridge, "_gh_download_artifact", lambda _artifact_id: archive_buffer.getvalue())
+    monkeypatch.setattr(
+        bridge, "_gh_download_artifact", lambda _artifact_id: archive_buffer.getvalue()
+    )
     collected = bridge.collect_remote_attempt(
         manifest,
         envelope,
@@ -329,8 +332,12 @@ def test_remote_collector_binds_authenticated_actions_metadata(tmp_path, monkeyp
 def test_instrumentation_completion_events_are_not_miner_input(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
     feedback.record_run(
-        "instrumentation-run", "owner/repo#1", "instrumentation:model_profile_trial",
-        "codex", assignment="instrumentation", source="instrumentation",
+        "instrumentation-run",
+        "owner/repo#1",
+        "instrumentation:model_profile_trial",
+        "codex",
+        assignment="instrumentation",
+        source="instrumentation",
     )
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM completion_events").fetchone()[0] > 0
@@ -388,9 +395,7 @@ def test_transport_qualification_rejects_tampering(tmp_path, tamper):
     quarantine = bridge.ingest_transport_results(manifest, envelope, results)
 
     if tamper == "source_manifest":
-        manifest["source_before"]["orchestrator"]["entries"][0]["sha256"] = (
-            "sha256:" + ("0" * 64)
-        )
+        manifest["source_before"]["orchestrator"]["entries"][0]["sha256"] = "sha256:" + ("0" * 64)
         match = "aggregate mismatch"
     elif tamper == "quarantine":
         quarantine["attempts"][0]["reported_model"] = "gpt-5.5"
@@ -426,10 +431,14 @@ def test_qualify_cli_defaults_next_to_quarantine_and_report_rejects_tamper(tmp_p
 
     command = [
         "qualify",
-        "--manifest", str(paths["manifest"]),
-        "--envelope", str(paths["envelope"]),
-        "--results", str(paths["results"]),
-        "--quarantine", str(paths["quarantine"]),
+        "--manifest",
+        str(paths["manifest"]),
+        "--envelope",
+        str(paths["envelope"]),
+        "--results",
+        str(paths["results"]),
+        "--quarantine",
+        str(paths["quarantine"]),
     ]
     assert bridge.main(command) == 0
     output = evidence / bridge.DEFAULT_QUALIFICATION_NAME

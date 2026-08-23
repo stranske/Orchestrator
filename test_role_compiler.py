@@ -9,9 +9,9 @@ import pytest
 
 import capabilities
 import capability_compiler as compiler
-from capability_ir import CapabilityIR, Lifecycle, SourceOccurrence, stable_hash
 import feedback
 import roles
+from capability_ir import CapabilityIR, Lifecycle, SourceOccurrence, stable_hash
 
 
 def _candidate(*, now: int | None = None) -> CapabilityIR:
@@ -120,17 +120,20 @@ def _candidate(*, now: int | None = None) -> CapabilityIR:
         selector=role_contract["selector"],
         graph={
             "phase_order": [
-                "trigger", "decision", "execution", "artifact",
-                "verification", "outcome", "durability",
+                "trigger",
+                "decision",
+                "execution",
+                "artifact",
+                "verification",
+                "outcome",
+                "durability",
             ],
             "edges": [],
             "decision_mode": "judgment",
             "requires_judgment": True,
             "role_contract": role_contract,
         },
-        artifact_refs=tuple(
-            ref for item in occurrences for ref in item.artifact_refs
-        ),
+        artifact_refs=tuple(ref for item in occurrences for ref in item.artifact_refs),
         gates={"durable_result_required": True},
         telemetry={
             "distinct_subject_count": 3,
@@ -283,7 +286,12 @@ def test_expiry_kill_switch_and_capacity_prevent_invocation(
     generated_role_manifest: dict, tmp_path: Path
 ) -> None:
     for env, current, available, reason in (
-        ({generated_role_manifest["lifecycle"]["kill_switch"]["env"]: "1"}, None, True, "shadow_gate_disabled"),
+        (
+            {generated_role_manifest["lifecycle"]["kill_switch"]["env"]: "1"},
+            None,
+            True,
+            "shadow_gate_disabled",
+        ),
         ({}, generated_role_manifest["lifecycle"]["expires_at"], True, "shadow_gate_disabled"),
         ({}, None, False, "no_role_capacity"),
     ):

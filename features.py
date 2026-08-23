@@ -10,6 +10,7 @@ of EVAL_AND_TESTING.md. Promotion/hardening is itself a capacity-aware job (rese
 Recognition heuristic (run at task end): "Did I build a structure that solves a problem a FUTURE task
 will hit? Is this the 2nd/3rd time?" -> record_use(). Promotion candidates surface automatically.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,57 +25,127 @@ LADDER = ["ad-hoc", "reused", "hardened"]
 
 # Seeded with what already emerged building this system — honest current state.
 SEED = {
-    "feedback-store":      {"problem": "retain decisions/outcomes/cost + learn over time", "maturity": "hardened",
-                            "module": "feedback.py", "uses": ["scorecard-eval"]},
-    "abcd-experiment":     {"problem": "unbiased comparative-advantage by N-way same-spec + cross-eval",
-                            "maturity": "hardened", "module": "exp_abcd.py", "uses": ["scorecard-eval"]},
-    "offload":             {"problem": "delegate token-heavy reading/design to a cheaper agent, get result back",
-                            "maturity": "hardened", "module": "dispatcher.offload", "uses": ["scorecard-spec-gen"]},
-    "research-scheduler":  {"problem": "run science only on spare capacity, ranked by info/cost",
-                            "maturity": "hardened", "module": "research_scheduler.py", "uses": []},
-    "stall-watcher":       {"problem": "monitor detached agents for progress, stalls, and changed-path drift",
-                            "maturity": "hardened", "module": "watch.py",
-                            "uses": ["scorecard-eval x2", "exp_abcd.status", "semantic-drift"]},
-    "frontend-verifier":   {"problem": "verify frontend behavior through deterministic accessibility-tree assertions",
-                            "maturity": "hardened", "module": "frontend_verify.py",
-                            "uses": ["live-demo", "trip-planner-runtime"]},
-    "testgen-lane":        {"problem": "accept generated pytest tests only after collect, non-regression, reliability, and coverage-delta gates",
-                            "maturity": "hardened", "module": "testgen_lane.py/testgen_gate.py",
-                            "uses": ["inv-man-workflow-validation-live"]},
-    "agy-runtime-isolation": {"problem": "run Antigravity from Codex with real-home auth and writable runtime project/app data",
-                              "maturity": "hardened", "module": "adapters.py/dispatcher.py",
-                              "uses": ["inv-man-testgen-offload"]},
-    "windowed-capacity-policy": {"problem": "model no-usage-API prepaid seats with soft windows and router policy hints",
-                                 "maturity": "hardened", "module": "capacity.py/router.py",
-                                 "uses": ["agy-capacity-policy"]},
-    "repo-playbook":      {"problem": "inject durable repo gotchas and definition-of-done rules into delegated prompts",
-                           "maturity": "hardened", "module": "repo_knowledge.py",
-                           "uses": ["durable-repo-knowledge", "snapshot-suggestions", "approval-controls",
-                                    "docs-comments-mining", "suggestion-clustering"]},
-    "redirect-policy":    {"problem": "turn watch reports plus attempt history into advisory retry/decompose decisions",
-                           "maturity": "hardened", "module": "redirect_policy.py",
-                           "uses": ["smarter-stall-redirection"]},
-    "redirect-plan":      {"problem": "convert redirect/decompose decisions into safe recovery commands, prompts, and guarded apply",
-                           "maturity": "hardened", "module": "redirect_plan.py",
-                           "uses": ["smarter-stall-redirection", "guarded-redirect-apply"]},
-    "deliberate-break-verifier": {"problem": "catch hollow tests by requiring candidate checks to fail on base code",
-                                  "maturity": "hardened", "module": "local_verify.py",
-                                  "uses": ["trustworthy-verification", "feedback-label-wiring"]},
-    "epic-decomposition": {"problem": "turn vague goals into structured subtask plans with re-decomposition triggers",
-                           "maturity": "hardened", "module": "epic_lane.py", "uses": ["epic-lane-v0"]},
-    "codemod-campaign": {"problem": "plan and validate cross-file structural refactor campaigns with safe dry-run artifacts",
-                         "maturity": "hardened", "module": "codemod_lane.py", "uses": ["codemod-lane-v0"]},
-    "cross-repo-coordination": {"problem": "plan source and consumer repo changes with dry-run barrier artifacts",
-                                "maturity": "hardened", "module": "cross_repo_lane.py",
-                                "uses": ["cross-repo-lane-v0"]},
-    "runtime-ac-checks": {"problem": "plan, execute, gate, and enforce AC-bound runtime verification evidence",
-                          "maturity": "hardened",
-                          "module": "runtime_ac.py/runtime_ac_gate.py/runtime_ac_panel.py/merge_guard.py",
-                          "uses": ["runtime-ac-v0", "runtime-ac-runner", "runtime-ac-tick-hook",
-                                   "runtime-ac-merge-guard", "runtime-ac-panel",
-                                   "runtime-ac-panel-dispatch"]},
-    "adversarial-review":  {"problem": "refute-mode + minority-veto ensemble for high-stakes correctness",
-                            "maturity": "hardened", "module": "adversarial.py", "uses": []},
+    "feedback-store": {
+        "problem": "retain decisions/outcomes/cost + learn over time",
+        "maturity": "hardened",
+        "module": "feedback.py",
+        "uses": ["scorecard-eval"],
+    },
+    "abcd-experiment": {
+        "problem": "unbiased comparative-advantage by N-way same-spec + cross-eval",
+        "maturity": "hardened",
+        "module": "exp_abcd.py",
+        "uses": ["scorecard-eval"],
+    },
+    "offload": {
+        "problem": "delegate token-heavy reading/design to a cheaper agent, get result back",
+        "maturity": "hardened",
+        "module": "dispatcher.offload",
+        "uses": ["scorecard-spec-gen"],
+    },
+    "research-scheduler": {
+        "problem": "run science only on spare capacity, ranked by info/cost",
+        "maturity": "hardened",
+        "module": "research_scheduler.py",
+        "uses": [],
+    },
+    "stall-watcher": {
+        "problem": "monitor detached agents for progress, stalls, and changed-path drift",
+        "maturity": "hardened",
+        "module": "watch.py",
+        "uses": ["scorecard-eval x2", "exp_abcd.status", "semantic-drift"],
+    },
+    "frontend-verifier": {
+        "problem": "verify frontend behavior through deterministic accessibility-tree assertions",
+        "maturity": "hardened",
+        "module": "frontend_verify.py",
+        "uses": ["live-demo", "trip-planner-runtime"],
+    },
+    "testgen-lane": {
+        "problem": "accept generated pytest tests only after collect, non-regression, reliability, and coverage-delta gates",
+        "maturity": "hardened",
+        "module": "testgen_lane.py/testgen_gate.py",
+        "uses": ["inv-man-workflow-validation-live"],
+    },
+    "agy-runtime-isolation": {
+        "problem": "run Antigravity from Codex with real-home auth and writable runtime project/app data",
+        "maturity": "hardened",
+        "module": "adapters.py/dispatcher.py",
+        "uses": ["inv-man-testgen-offload"],
+    },
+    "windowed-capacity-policy": {
+        "problem": "model no-usage-API prepaid seats with soft windows and router policy hints",
+        "maturity": "hardened",
+        "module": "capacity.py/router.py",
+        "uses": ["agy-capacity-policy"],
+    },
+    "repo-playbook": {
+        "problem": "inject durable repo gotchas and definition-of-done rules into delegated prompts",
+        "maturity": "hardened",
+        "module": "repo_knowledge.py",
+        "uses": [
+            "durable-repo-knowledge",
+            "snapshot-suggestions",
+            "approval-controls",
+            "docs-comments-mining",
+            "suggestion-clustering",
+        ],
+    },
+    "redirect-policy": {
+        "problem": "turn watch reports plus attempt history into advisory retry/decompose decisions",
+        "maturity": "hardened",
+        "module": "redirect_policy.py",
+        "uses": ["smarter-stall-redirection"],
+    },
+    "redirect-plan": {
+        "problem": "convert redirect/decompose decisions into safe recovery commands, prompts, and guarded apply",
+        "maturity": "hardened",
+        "module": "redirect_plan.py",
+        "uses": ["smarter-stall-redirection", "guarded-redirect-apply"],
+    },
+    "deliberate-break-verifier": {
+        "problem": "catch hollow tests by requiring candidate checks to fail on base code",
+        "maturity": "hardened",
+        "module": "local_verify.py",
+        "uses": ["trustworthy-verification", "feedback-label-wiring"],
+    },
+    "epic-decomposition": {
+        "problem": "turn vague goals into structured subtask plans with re-decomposition triggers",
+        "maturity": "hardened",
+        "module": "epic_lane.py",
+        "uses": ["epic-lane-v0"],
+    },
+    "codemod-campaign": {
+        "problem": "plan and validate cross-file structural refactor campaigns with safe dry-run artifacts",
+        "maturity": "hardened",
+        "module": "codemod_lane.py",
+        "uses": ["codemod-lane-v0"],
+    },
+    "cross-repo-coordination": {
+        "problem": "plan source and consumer repo changes with dry-run barrier artifacts",
+        "maturity": "hardened",
+        "module": "cross_repo_lane.py",
+        "uses": ["cross-repo-lane-v0"],
+    },
+    "runtime-ac-checks": {
+        "problem": "plan, execute, gate, and enforce AC-bound runtime verification evidence",
+        "maturity": "hardened",
+        "module": "runtime_ac.py/runtime_ac_gate.py/runtime_ac_panel.py/merge_guard.py",
+        "uses": [
+            "runtime-ac-v0",
+            "runtime-ac-runner",
+            "runtime-ac-tick-hook",
+            "runtime-ac-merge-guard",
+            "runtime-ac-panel",
+            "runtime-ac-panel-dispatch",
+        ],
+    },
+    "adversarial-review": {
+        "problem": "refute-mode + minority-veto ensemble for high-stakes correctness",
+        "maturity": "hardened",
+        "module": "adversarial.py",
+        "uses": [],
+    },
 }
 
 
@@ -82,7 +153,10 @@ def load(path: Path = REG) -> dict:
     if path.exists():
         return json.loads(path.read_text())
     path.parent.mkdir(parents=True, exist_ok=True)
-    seed = {k: {**v, "first_seen": int(time.time()), "count": len(v.get("uses", []))} for k, v in SEED.items()}
+    seed = {
+        k: {**v, "first_seen": int(time.time()), "count": len(v.get("uses", []))}
+        for k, v in SEED.items()
+    }
     path.write_text(json.dumps(seed, indent=2))
     return seed
 
@@ -108,12 +182,19 @@ def record_use(
     maturity: str | None = None,
 ) -> dict:
     """Log a (re)use of a feature. Auto-advances maturity ad-hoc->reused on the 2nd use. Hardening
-    (-> module) stays a deliberate promotion (mark_hardened) so we don't claim code that isn't written."""
+    (-> module) stays a deliberate promotion (mark_hardened) so we don't claim code that isn't written.
+    """
     if maturity is not None and maturity not in LADDER:
         raise ValueError(f"invalid maturity: {maturity}")
     reg = load(path)
-    f = reg.get(name) or {"problem": problem, "maturity": "ad-hoc", "module": None,
-                          "uses": [], "first_seen": int(time.time()), "count": 0}
+    f = reg.get(name) or {
+        "problem": problem,
+        "maturity": "ad-hoc",
+        "module": None,
+        "uses": [],
+        "first_seen": int(time.time()),
+        "count": 0,
+    }
     if problem and not f.get("problem"):
         f["problem"] = problem
     if module:
@@ -125,15 +206,19 @@ def record_use(
         f["maturity"] = "reused"
     if maturity:
         f["maturity"] = maturity
-    reg[name] = f; save(reg, path)
+    reg[name] = f
+    save(reg, path)
     return f
 
 
 def promotion_candidates(path: Path = REG, *, create: bool = True) -> list:
     """Features used >=3 times but not yet hardened into a selftested module — the rule of three firing."""
     reg = _read_registry(path, create=create)
-    return [{"name": n, "count": f["count"], "problem": f["problem"]}
-            for n, f in reg.items() if f["maturity"] != "hardened" and f["count"] >= 3]
+    return [
+        {"name": n, "count": f["count"], "problem": f["problem"]}
+        for n, f in reg.items()
+        if f["maturity"] != "hardened" and f["count"] >= 3
+    ]
 
 
 def mark_hardened(name: str, module: str, path: Path = REG) -> None:
@@ -194,11 +279,14 @@ def summary(path: Path = REG, *, create: bool = True) -> dict:
 
 
 def _selftest():
-    p = Path("/tmp/__features_selftest.json"); p.unlink(missing_ok=True)
+    p = Path("/tmp/__features_selftest.json")
+    p.unlink(missing_ok=True)
     reg = load(p)
     assert reg["abcd-experiment"]["maturity"] == "hardened", reg["abcd-experiment"]
     # a new ad-hoc structure: first use stays ad-hoc, second use auto-promotes to reused
-    f1 = record_use("diff-anonymizer", "scorecard-eval", "anonymize candidates for unbiased judging", p)
+    f1 = record_use(
+        "diff-anonymizer", "scorecard-eval", "anonymize candidates for unbiased judging", p
+    )
     assert f1["maturity"] == "ad-hoc" and f1["count"] == 1, f1
     f2 = record_use("diff-anonymizer", "future-exp-2", path=p)
     assert f2["maturity"] == "reused" and f2["count"] == 2, f2
@@ -212,8 +300,14 @@ def _selftest():
     missing.unlink(missing_ok=True)
     empty = summary(missing, create=False)
     assert empty["total"] == 0 and not missing.exists(), empty
-    reflected = record_use("reflection-cli", "task-end", "record reusable feature uses", p,
-                           module="features.py", maturity="hardened")
+    reflected = record_use(
+        "reflection-cli",
+        "task-end",
+        "record reusable feature uses",
+        p,
+        module="features.py",
+        maturity="hardened",
+    )
     assert reflected["maturity"] == "hardened" and reflected["module"] == "features.py", reflected
     try:
         mark_hardened("missing-feature", "missing.py", p)
@@ -221,9 +315,13 @@ def _selftest():
     except ValueError as exc:
         assert "unknown feature" in str(exc), exc
     mark_hardened("diff-anonymizer", "exp_abcd._anonymize", p)
-    assert "diff-anonymizer" not in [c["name"] for c in promotion_candidates(p)], "hardened -> not a candidate"
+    assert "diff-anonymizer" not in [
+        c["name"] for c in promotion_candidates(p)
+    ], "hardened -> not a candidate"
     p.unlink(missing_ok=True)
-    print("features.py selftest: OK (seed maturity, reflection record, summary, promotion candidates, harden)")
+    print(
+        "features.py selftest: OK (seed maturity, reflection record, summary, promotion candidates, harden)"
+    )
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
@@ -237,6 +335,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
+
         capabilities.production_heartbeat("feature-reflection-cli", event_type, ref="features.main")
     except Exception:
         pass
@@ -245,8 +344,11 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 def main(argv):
     _capability_heartbeat()
     if "--selftest" in argv:
-        _selftest(); return 0
-    parser = argparse.ArgumentParser(description="Record and inspect reusable Orchestrator feature patterns.")
+        _selftest()
+        return 0
+    parser = argparse.ArgumentParser(
+        description="Record and inspect reusable Orchestrator feature patterns."
+    )
     sub = parser.add_subparsers(dest="cmd")
     rec = sub.add_parser("record", help="Record the end-of-task reflection for a reusable feature.")
     rec.add_argument("--name", required=True)
@@ -266,8 +368,9 @@ def main(argv):
     sub.add_parser("list", help="List the feature registry.")
     args = parser.parse_args(argv)
     if args.cmd == "record":
-        item = record_use(args.name, args.where, args.problem, module=args.module or None,
-                          maturity=args.maturity)
+        item = record_use(
+            args.name, args.where, args.problem, module=args.module or None, maturity=args.maturity
+        )
         if args.as_json:
             print(json.dumps({"name": args.name, **item}, indent=2))
         else:
@@ -322,4 +425,5 @@ def main(argv):
 
 if __name__ == "__main__":
     import sys
+
     raise SystemExit(main(sys.argv[1:]))

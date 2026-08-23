@@ -29,23 +29,22 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-import redirect_policy
-import redirect_plan
-import router
+import backlog as backlog_mod
+import capabilities
 import dispatcher
 import epic_lane
-import backlog as backlog_mod
 import feedback
-import capabilities
+import redirect_plan
+import redirect_policy
+import router
 
 RESERVE = set(router.RESERVE_AGENTS)  # conserve scarce seats (claude) for roles too
-ALLOWED_ACTIONS = set(
-    redirect_policy.ACTIONS
-)  # wait/collect/inspect/redirect/decompose
+ALLOWED_ACTIONS = set(redirect_policy.ACTIONS)  # wait/collect/inspect/redirect/decompose
 CONFIDENCE = {"low", "medium", "high"}
 PROMPT_TASK_TYPES = set(router.ROUTE_TABLE)
 TRIAGE_ACTIONS = {"work_now", "defer", "needs_scope", "skip", "monitor"}
@@ -84,9 +83,7 @@ def _role_capability_event(
     """Emit strict production lifecycle evidence; remain inert in direct tests."""
     if os.environ.get("ORCH_CAPABILITY_HEARTBEATS") != "1":
         return
-    capabilities.heartbeat(
-        ROLE_CAPABILITY_IDS[role_name], event_type, ref=ref, metadata=metadata
-    )
+    capabilities.heartbeat(ROLE_CAPABILITY_IDS[role_name], event_type, ref=ref, metadata=metadata)
 
 
 def _backend_error_detail(result: dict) -> str | None:
@@ -108,15 +105,11 @@ class Role:
     name: str
     description: str
     route_as: str  # routing prior: an existing router.ROUTE_TABLE task_type
-    eligible_backends: (
-        frozenset  # candidate LLM backends (the `only` set for select_agent)
-    )
+    eligible_backends: frozenset  # candidate LLM backends (the `only` set for select_agent)
     mode: str | None  # adapters reasoning mode hint, e.g. "full"
     input_keys: tuple  # required context keys (doc + caller contract)
     output_keys: tuple  # proposal keys the role emits
-    build_prompt: Callable[
-        [dict], str
-    ]  # context -> backend prompt (JSON-only instruction)
+    build_prompt: Callable[[dict], str]  # context -> backend prompt (JSON-only instruction)
     validate: Callable[[dict], list]  # proposal -> list[str] of errors ([] == valid)
     # Generated roles carry these contracts.  Static roles keep their existing
     # hand-authored validators and therefore leave the fields unset.
@@ -138,9 +131,7 @@ def _redirect_prompt(ctx: dict) -> str:
     ac = (ctx.get("acceptance_criteria") or "").strip() or "(none provided)"
     history = ctx.get("attempt_history") or []
 
-    hints = [
-        f"  - {h.get('kind')}: {h.get('detail')}" for h in (report.get("hints") or [])
-    ]
+    hints = [f"  - {h.get('kind')}: {h.get('detail')}" for h in (report.get("hints") or [])]
     drift = report.get("drift") or {}
     drift_lines: list[str] = []
     if drift.get("severity") and drift.get("severity") != "none":
@@ -310,9 +301,7 @@ def _validate_prompt_agent(proposal: Any) -> list:
         return ["proposal is not a JSON object"]
     task_type = proposal.get("task_type")
     if task_type not in PROMPT_TASK_TYPES:
-        errs.append(
-            f"task_type must be one of {sorted(PROMPT_TASK_TYPES)}; got {task_type!r}"
-        )
+        errs.append(f"task_type must be one of {sorted(PROMPT_TASK_TYPES)}; got {task_type!r}")
     for key in ("summary", "scoped_prompt"):
         if not (isinstance(proposal.get(key), str) and proposal[key].strip()):
             errs.append(f"{key} must be a non-empty string")
@@ -328,9 +317,7 @@ def _validate_prompt_agent(proposal: Any) -> list:
             errs.append(f"{key} must be a non-empty list of non-empty strings")
     for key in optional_lists:
         value = proposal.get(key)
-        if not isinstance(value, list) or not all(
-            isinstance(v, str) and v.strip() for v in value
-        ):
+        if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
             errs.append(f"{key} must be a list of non-empty strings")
     if proposal.get("confidence") not in CONFIDENCE:
         errs.append(
@@ -340,9 +327,7 @@ def _validate_prompt_agent(proposal: Any) -> list:
     if isinstance(prompt, str):
         lowered = prompt.lower()
         if re.search(r"\byou are (cursor|codex|gemini|vibe|aider|claude)\b", lowered):
-            errs.append(
-                "scoped_prompt must not include agent persona text; dispatcher adds that"
-            )
+            errs.append("scoped_prompt must not include agent persona text; dispatcher adds that")
         if "repo playbook (" in lowered:
             errs.append(
                 "scoped_prompt must not include repo playbook text; dispatcher injects approved context"
@@ -353,9 +338,7 @@ def _validate_prompt_agent(proposal: Any) -> list:
     return errs
 
 
-def _prompt_agent_dispatch_prompt(
-    proposal: dict, *, target: str, lane: str | None = None
-) -> str:
+def _prompt_agent_dispatch_prompt(proposal: dict, *, target: str, lane: str | None = None) -> str:
     """Render PromptAgent JSON into a dispatch-ready prompt."""
     lines = [
         f"Target: {target}",
@@ -375,9 +358,7 @@ def _prompt_agent_dispatch_prompt(
     ]
     expected = proposal.get("expected_paths") or []
     if expected:
-        lines.extend(
-            ["", "Expected paths / areas:", *[f"- {item}" for item in expected]]
-        )
+        lines.extend(["", "Expected paths / areas:", *[f"- {item}" for item in expected]])
     out_of_scope = proposal.get("out_of_scope") or []
     if out_of_scope:
         lines.extend(["", "Out of scope:", *[f"- {item}" for item in out_of_scope]])
@@ -437,12 +418,8 @@ def _validate_decomposer(proposal: Any) -> list:
 # --------------------------------------------------------------------------------------
 # TriageAgent — backlog worth-it and batching contract + validation
 # --------------------------------------------------------------------------------------
-def _compact_backlog_items(
-    items: list[dict], *, max_items: int | None = None
-) -> list[dict]:
-    selected = (
-        items[:max_items] if max_items is not None and max_items >= 0 else list(items)
-    )
+def _compact_backlog_items(items: list[dict], *, max_items: int | None = None) -> list[dict]:
+    selected = items[:max_items] if max_items is not None and max_items >= 0 else list(items)
     compact: list[dict] = []
     for item in selected:
         labels = item.get("labels") or []
@@ -454,13 +431,10 @@ def _compact_backlog_items(
         compact.append(
             {
                 "target": str(item.get("target") or "").strip(),
-                "task_type": str(item.get("task_type") or "implement").strip()
-                or "implement",
+                "task_type": str(item.get("task_type") or "implement").strip() or "implement",
                 "lane": str(item.get("lane") or "").strip(),
                 "title": str(item.get("title") or "").strip(),
-                "labels": [
-                    str(label).strip() for label in labels if str(label).strip()
-                ],
+                "labels": [str(label).strip() for label in labels if str(label).strip()],
                 "body": body,
             }
         )
@@ -468,9 +442,7 @@ def _compact_backlog_items(
 
 
 def _triage_prompt(ctx: dict) -> str:
-    items = _compact_backlog_items(
-        ctx.get("backlog_items") or [], max_items=ctx.get("max_items")
-    )
+    items = _compact_backlog_items(ctx.get("backlog_items") or [], max_items=ctx.get("max_items"))
     capacity = ctx.get("capacity") or {}
     context = (ctx.get("context") or "").strip() or "(none provided)"
     omitted = max(0, int(ctx.get("omitted_count") or 0))
@@ -560,9 +532,7 @@ def _validate_triage_agent(proposal: Any) -> list:
             f"confidence must be one of {sorted(CONFIDENCE)}; got {proposal.get('confidence')!r}"
         )
     risks = proposal.get("global_risks")
-    if not isinstance(risks, list) or not all(
-        isinstance(r, str) and r.strip() for r in risks
-    ):
+    if not isinstance(risks, list) or not all(isinstance(r, str) and r.strip() for r in risks):
         errs.append("global_risks must be a list of non-empty strings")
 
     recs = proposal.get("recommendations")
@@ -575,26 +545,18 @@ def _validate_triage_agent(proposal: Any) -> list:
             continue
         extra_rec = set(rec) - TRIAGE_REC_KEYS
         if extra_rec:
-            errs.append(
-                f"recommendations[{idx}] has unexpected keys: {sorted(extra_rec)}"
-            )
+            errs.append(f"recommendations[{idx}] has unexpected keys: {sorted(extra_rec)}")
         if not (isinstance(rec.get("target"), str) and rec["target"].strip()):
             errs.append(f"recommendations[{idx}].target must be a non-empty string")
         if rec.get("action") not in TRIAGE_ACTIONS:
-            errs.append(
-                f"recommendations[{idx}].action must be one of {sorted(TRIAGE_ACTIONS)}"
-            )
+            errs.append(f"recommendations[{idx}].action must be one of {sorted(TRIAGE_ACTIONS)}")
         priority = rec.get("priority")
         if not isinstance(priority, int) or not 1 <= priority <= 5:
-            errs.append(
-                f"recommendations[{idx}].priority must be an integer from 1 to 5"
-            )
+            errs.append(f"recommendations[{idx}].priority must be an integer from 1 to 5")
         if not (isinstance(rec.get("reason"), str) and rec["reason"].strip()):
             errs.append(f"recommendations[{idx}].reason must be a non-empty string")
         batch_id = rec.get("batch_id")
-        if batch_id is not None and not (
-            isinstance(batch_id, str) and batch_id.strip()
-        ):
+        if batch_id is not None and not (isinstance(batch_id, str) and batch_id.strip()):
             errs.append(f"recommendations[{idx}].batch_id must be a string or null")
 
     batches = proposal.get("batches")
@@ -616,9 +578,7 @@ def _validate_triage_agent(proposal: Any) -> list:
             or not targets
             or not all(isinstance(t, str) and t.strip() for t in targets)
         ):
-            errs.append(
-                f"batches[{idx}].targets must be a non-empty list of target strings"
-            )
+            errs.append(f"batches[{idx}].targets must be a non-empty list of target strings")
         if not (isinstance(batch.get("reason"), str) and batch["reason"].strip()):
             errs.append(f"batches[{idx}].reason must be a non-empty string")
         if batch.get("risk") not in CONFIDENCE:
@@ -632,9 +592,7 @@ def _validate_triage_context(proposal: dict, backlog_items: list[dict]) -> list[
     recs = proposal.get("recommendations") or []
     rec_targets = [rec.get("target") for rec in recs if isinstance(rec, dict)]
     seen = set(rec_targets)
-    duplicates = sorted(
-        {target for target in rec_targets if rec_targets.count(target) > 1}
-    )
+    duplicates = sorted({target for target in rec_targets if rec_targets.count(target) > 1})
     if duplicates:
         errs.append(f"duplicate recommendations for targets: {duplicates}")
     unknown = sorted(target for target in seen if target not in known)
@@ -645,9 +603,7 @@ def _validate_triage_context(proposal: dict, backlog_items: list[dict]) -> list[
         errs.append(f"missing recommendations for input targets: {missing}")
 
     batch_ids = {
-        batch.get("id")
-        for batch in proposal.get("batches") or []
-        if isinstance(batch, dict)
+        batch.get("id") for batch in proposal.get("batches") or [] if isinstance(batch, dict)
     }
     batch_by_target = {
         rec.get("target"): rec.get("batch_id") for rec in recs if isinstance(rec, dict)
@@ -797,16 +753,12 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
 
     decision = proposal.get("decision")
     if decision not in ADJUDICATOR_DECISIONS:
-        errs.append(
-            f"decision must be one of {sorted(ADJUDICATOR_DECISIONS)}; got {decision!r}"
-        )
+        errs.append(f"decision must be one of {sorted(ADJUDICATOR_DECISIONS)}; got {decision!r}")
     if proposal.get("confidence") not in CONFIDENCE:
         errs.append(
             f"confidence must be one of {sorted(CONFIDENCE)}; got {proposal.get('confidence')!r}"
         )
-    if not (
-        isinstance(proposal.get("rationale"), str) and proposal["rationale"].strip()
-    ):
+    if not (isinstance(proposal.get("rationale"), str) and proposal["rationale"].strip()):
         errs.append("rationale must be a non-empty string")
     if not (
         isinstance(proposal.get("recommended_next_step"), str)
@@ -818,25 +770,15 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
         r"\b(merge|push|label|claim|delegate|kill|commit|open pr|create branch)\b",
         next_step,
     ):
-        errs.append(
-            "recommended_next_step must not contain mutating execution instructions"
-        )
+        errs.append("recommended_next_step must not contain mutating execution instructions")
 
     refs = proposal.get("ground_truth_refs")
-    if not isinstance(refs, list) or not all(
-        isinstance(ref, str) and ref.strip() for ref in refs
-    ):
+    if not isinstance(refs, list) or not all(isinstance(ref, str) and ref.strip() for ref in refs):
         errs.append("ground_truth_refs must be a list of non-empty strings")
     gaps = proposal.get("evidence_gaps")
-    if not isinstance(gaps, list) or not all(
-        isinstance(gap, str) and gap.strip() for gap in gaps
-    ):
+    if not isinstance(gaps, list) or not all(isinstance(gap, str) and gap.strip() for gap in gaps):
         errs.append("evidence_gaps must be a list of non-empty strings")
-    if (
-        decision in {"uphold_blocker", "reject_blocker"}
-        and isinstance(refs, list)
-        and not refs
-    ):
+    if decision in {"uphold_blocker", "reject_blocker"} and isinstance(refs, list) and not refs:
         errs.append(f"{decision} requires at least one ground_truth_ref")
     if decision == "needs_more_evidence" and isinstance(gaps, list) and not gaps:
         errs.append("needs_more_evidence requires at least one evidence_gap")
@@ -851,9 +793,7 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
             continue
         extra_item = set(item) - ADJUDICATOR_EVIDENCE_KEYS
         if extra_item:
-            errs.append(
-                f"evidence_assessment[{idx}] has unexpected keys: {sorted(extra_item)}"
-            )
+            errs.append(f"evidence_assessment[{idx}] has unexpected keys: {sorted(extra_item)}")
         if not (isinstance(item.get("claim"), str) and item["claim"].strip()):
             errs.append(f"evidence_assessment[{idx}].claim must be a non-empty string")
         if item.get("status") not in {"supported", "contradicted", "insufficient"}:
@@ -864,9 +804,7 @@ def _validate_adjudicator(proposal: Any) -> list[str]:
         if evidence_ref is not None and not (
             isinstance(evidence_ref, str) and evidence_ref.strip()
         ):
-            errs.append(
-                f"evidence_assessment[{idx}].evidence_ref must be a string or null"
-            )
+            errs.append(f"evidence_assessment[{idx}].evidence_ref must be a string or null")
         if not (isinstance(item.get("reason"), str) and item["reason"].strip()):
             errs.append(f"evidence_assessment[{idx}].reason must be a non-empty string")
     return errs
@@ -888,9 +826,7 @@ def _validate_adjudication_case(case: Any) -> list[str]:
 
 def _baseline_adjudication(case: dict, *, case_errors: list[str] | None = None) -> dict:
     finding = str(
-        (case or {}).get("disputed_finding")
-        or (case or {}).get("blocker")
-        or "disputed blocker"
+        (case or {}).get("disputed_finding") or (case or {}).get("blocker") or "disputed blocker"
     ).strip()
     gaps = list(case_errors or [])
     if not gaps:
@@ -1119,9 +1055,7 @@ def role_from_generated_manifest(manifest: dict[str, Any]) -> Role:
         raise ValueError("generated role has unsupported route prior")
     # Resolve eligible backends from the existing router at registration time;
     # the manifest itself never embeds provider/model/profile identity.
-    eligible = frozenset(
-        str(item["agent"]) for item in router.ROUTE_TABLE[route_as]["agents"]
-    )
+    eligible = frozenset(str(item["agent"]) for item in router.ROUTE_TABLE[route_as]["agents"])
     output_schema = manifest["output_schema"]
     return Role(
         name=manifest["name"],
@@ -1185,9 +1119,7 @@ def _generated_selector_matches(role: Role, context: dict[str, Any]) -> bool:
     return False
 
 
-def _register_generated_role_capability(
-    manifest: dict[str, Any], ledger_path: Path
-) -> None:
+def _register_generated_role_capability(manifest: dict[str, Any], ledger_path: Path) -> None:
     capability_id = manifest["capability_id"]
     existing = capabilities.load(ledger_path, create=False) if ledger_path.exists() else {}
     if capability_id in existing:
@@ -1273,7 +1205,9 @@ def run_generated_shadow_role(
     ).hexdigest()[:24]
     if matched:
         capabilities.heartbeat(
-            capability_id, "match", path=ledger_path,
+            capability_id,
+            "match",
+            path=ledger_path,
             idempotency_key=f"{event_prefix}:match",
         )
     if not selector["invoked"]:
@@ -1289,9 +1223,12 @@ def run_generated_shadow_role(
     output_errors = role.validate(proposal)
     errors = input_errors + output_errors
     accepted = not errors
-    proposal_hash = "sha256:" + hashlib.sha256(
-        json.dumps(proposal, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    proposal_hash = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(proposal, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     role_run_id = f"role:{role.name}:shadow:{time.time_ns()}"
     feedback.record_role_run(
         role_run_id,
@@ -1302,7 +1239,9 @@ def run_generated_shadow_role(
         action="accepted" if accepted else "rejected",
         decision_source="generated-role-shadow",
         proposal={"proposal_hash": proposal_hash},
-        rationale="schema-validated shadow proposal" if accepted else "schema-rejected shadow proposal",
+        rationale=(
+            "schema-validated shadow proposal" if accepted else "schema-rejected shadow proposal"
+        ),
         ts=current,
     )
     feedback.record_role_selector_event(
@@ -1317,42 +1256,62 @@ def run_generated_shadow_role(
         role_run_id=role_run_id,
     )
     capabilities.heartbeat(
-        capability_id, "invocation", ref=role_run_id, path=ledger_path,
+        capability_id,
+        "invocation",
+        ref=role_run_id,
+        path=ledger_path,
         idempotency_key=f"{event_prefix}:invocation",
     )
     capabilities.heartbeat(
-        capability_id, "output", ref=proposal_hash, path=ledger_path,
+        capability_id,
+        "output",
+        ref=proposal_hash,
+        path=ledger_path,
         idempotency_key=f"{event_prefix}:output",
     )
     links = [
         feedback.join_role_to_outcome(
-            role_run_id, run_id, accepted=accepted,
+            role_run_id,
+            run_id,
+            accepted=accepted,
             notes="generated-role-shadow-lineage",
         )
         for run_id in influenced_run_ids
     ]
-    consumer_ref = "sha256:" + hashlib.sha256(
-        json.dumps(
-            {"role_run_id": role_run_id, "targets": sorted(influenced_run_ids)},
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()
+    consumer_ref = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                {"role_run_id": role_run_id, "targets": sorted(influenced_run_ids)},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    )
     capabilities.heartbeat(
-        capability_id, "consumer", ref=consumer_ref, path=ledger_path,
+        capability_id,
+        "consumer",
+        ref=consumer_ref,
+        path=ledger_path,
         idempotency_key=f"{event_prefix}:consumer",
     )
     synced = [link for link in links if link.get("synced")]
     outcome_ref = None
     if accepted and synced:
-        outcome_ref = "sha256:" + hashlib.sha256(
-            json.dumps(synced, sort_keys=True).encode()
-        ).hexdigest()
+        outcome_ref = (
+            "sha256:" + hashlib.sha256(json.dumps(synced, sort_keys=True).encode()).hexdigest()
+        )
         capabilities.heartbeat(
-            capability_id, "success", ref=outcome_ref, path=ledger_path,
+            capability_id,
+            "success",
+            ref=outcome_ref,
+            path=ledger_path,
             idempotency_key=f"{event_prefix}:success",
         )
         capabilities.heartbeat(
-            capability_id, "outcome", ref=outcome_ref, path=ledger_path,
+            capability_id,
+            "outcome",
+            ref=outcome_ref,
+            path=ledger_path,
             idempotency_key=f"{event_prefix}:outcome",
         )
     for probe, ref in (
@@ -1360,9 +1319,7 @@ def run_generated_shadow_role(
         ("consumer_probe", consumer_ref),
         ("rollback_probe", lifecycle["rollback"]["predecessor"]),
     ):
-        capabilities.record_probe(
-            capability_id, probe, passed=True, ref=ref, path=ledger_path
-        )
+        capabilities.record_probe(capability_id, probe, passed=True, ref=ref, path=ledger_path)
     if outcome_ref:
         capabilities.record_probe(
             capability_id, "outcome_probe", passed=True, ref=outcome_ref, path=ledger_path
@@ -1419,11 +1376,7 @@ def route_role(
             }
     if not lw and isinstance(learned_all, dict):
         lw = learned_all.get(role.route_as)
-    pool = (
-        set(role.eligible_backends)
-        if high_leverage
-        else (set(role.eligible_backends) - RESERVE)
-    )
+    pool = set(role.eligible_backends) if high_leverage else (set(role.eligible_backends) - RESERVE)
     pick = router.select_agent(
         role.route_as, cap, only=pool, learned=lw, exploration_rate=exploration_rate
     )
@@ -1517,28 +1470,31 @@ def _role_cap(env: dict | None, role_name: str) -> int:
 
 def _dispatch_role_matches(assignment: dict) -> dict[str, tuple[bool, str]]:
     detail = "\n".join(
-        str(assignment.get(key) or "")
-        for key in ("prompt", "target_detail", "body", "goal")
+        str(assignment.get(key) or "") for key in ("prompt", "target_detail", "body", "goal")
     ).strip()
     labels = {str(label).lower() for label in assignment.get("labels") or []}
     detail_lower = detail.lower()
     has_acceptance_signal = bool(
         assignment.get("acceptance_criteria")
         or assignment.get("acceptance_gate_ids")
-        or ("acceptance" in detail_lower and any(
-            token in detail_lower for token in ("test", "validate", "verify", "done")
-        ))
+        or (
+            "acceptance" in detail_lower
+            and any(token in detail_lower for token in ("test", "validate", "verify", "done"))
+        )
     )
     underspecified = len(detail) < 180 or not has_acceptance_signal
     high_risk = bool(
-        labels & {"risk:high", "security", "runtime-ac", "high-risk"}
-        or assignment.get("high_risk")
+        labels & {"risk:high", "security", "runtime-ac", "high-risk"} or assignment.get("high_risk")
     )
-    epic = str(assignment.get("task_type") or "") == "epic" or str(
-        assignment.get("lane") or ""
-    ) == "epic_lane"
+    epic = (
+        str(assignment.get("task_type") or "") == "epic"
+        or str(assignment.get("lane") or "") == "epic_lane"
+    )
     return {
-        "prompt": (underspecified or high_risk, "underspecified" if underspecified else "high_risk"),
+        "prompt": (
+            underspecified or high_risk,
+            "underspecified" if underspecified else "high_risk",
+        ),
         "decomposer": (epic, "epic_lane" if epic else "not_epic"),
     }
 
@@ -1576,7 +1532,9 @@ def activate_dispatch_roles(
     capacity = cap if cap is not None else router.load_capacity()
     for role_name in ("prompt", "decomposer"):
         matched, reason = matches[role_name]
-        role_pick = route_role(role_name, cap=capacity, exploration_rate=0.0) if matched and gate else None
+        role_pick = (
+            route_role(role_name, cap=capacity, exploration_rate=0.0) if matched and gate else None
+        )
         available = bool(role_pick) if matched and gate else True
         selector = select_role_activation(
             role_name,
@@ -1614,7 +1572,9 @@ def activate_dispatch_roles(
         else:
             result = decomposer_runner(**common)
         role_run_id = result.get("role_run_id")
-        accepted = bool(role_run_id and result.get("proposal") is not None and not result.get("errors"))
+        accepted = bool(
+            role_run_id and result.get("proposal") is not None and not result.get("errors")
+        )
         selector["accepted"] = accepted
         try:
             feedback.record_role_selector_event(
@@ -1641,13 +1601,15 @@ def activate_dispatch_roles(
                 + "\n\nADVISORY DECOMPOSER PLAN (deterministic epic schema validated; rails remain authoritative):\n"
                 + json.dumps(result["proposal"], sort_keys=True)
             )
-        out["results"].append({
-            "role": role_name,
-            "role_run_id": role_run_id,
-            "accepted": accepted,
-            "decision_source": result.get("decision_source"),
-            "errors": list(result.get("errors") or []),
-        })
+        out["results"].append(
+            {
+                "role": role_name,
+                "role_run_id": role_run_id,
+                "accepted": accepted,
+                "decision_source": result.get("decision_source"),
+                "errors": list(result.get("errors") or []),
+            }
+        )
     return out
 
 
@@ -1666,23 +1628,41 @@ def activate_tick_triage(
     role_pick = route_role("triage", cap=cap, exploration_rate=0.0) if matched and gate else None
     available = bool(role_pick) if matched and gate else True
     selector = select_role_activation(
-        "triage", matched=matched, gate_enabled=gate, capacity_available=available,
-        max_invocations=_role_cap(env, "triage"), reason="bounded_backlog_snapshot",
-        target=f"backlog:{len(items)}", record=not dry_run,
+        "triage",
+        matched=matched,
+        gate_enabled=gate,
+        capacity_available=available,
+        max_invocations=_role_cap(env, "triage"),
+        reason="bounded_backlog_snapshot",
+        target=f"backlog:{len(items)}",
+        record=not dry_run,
     )
     if not selector["invoked"]:
         return {"selector": selector, "result": None, "recommendations": {}}
     result = runner(
-        backlog_items=items, cap=cap, backend=role_pick["agent"] if role_pick else None,
-        dispatch=True, max_items=20, cwd="."
+        backlog_items=items,
+        cap=cap,
+        backend=role_pick["agent"] if role_pick else None,
+        dispatch=True,
+        max_items=20,
+        cwd=".",
     )
-    accepted = bool(result.get("role_run_id") and result.get("proposal") is not None and not result.get("errors"))
+    accepted = bool(
+        result.get("role_run_id")
+        and result.get("proposal") is not None
+        and not result.get("errors")
+    )
     selector["accepted"] = accepted
     try:
         feedback.record_role_selector_event(
-            "triage", "invoked", reason="bounded_backlog_snapshot",
-            target=f"backlog:{len(items)}", matched=True, invoked=True,
-            accepted=accepted, disagreement=not accepted,
+            "triage",
+            "invoked",
+            reason="bounded_backlog_snapshot",
+            target=f"backlog:{len(items)}",
+            matched=True,
+            invoked=True,
+            accepted=accepted,
+            disagreement=not accepted,
             role_run_id=result.get("role_run_id"),
         )
     except Exception as exc:
@@ -1699,11 +1679,15 @@ def adjudication_case_for_disagreement(
     item: dict, gate_status: dict | None, review_status: dict | None
 ) -> dict | None:
     """Build a case only when two persisted/verifiable verdicts genuinely disagree."""
-    gate_verdict = str((gate_status or {}).get("verdict") or item.get("runtime_ac_verdict") or "").upper()
+    gate_verdict = str(
+        (gate_status or {}).get("verdict") or item.get("runtime_ac_verdict") or ""
+    ).upper()
     review_result = (review_status or {}).get("result") or {}
     panel_verdict = str(
-        review_result.get("verdict") or item.get("adversarial_verdict")
-        or item.get("review_verdict") or ""
+        review_result.get("verdict")
+        or item.get("adversarial_verdict")
+        or item.get("review_verdict")
+        or ""
     ).upper()
     if not gate_verdict or not panel_verdict or gate_verdict == panel_verdict:
         return None
@@ -1714,8 +1698,12 @@ def adjudication_case_for_disagreement(
         "panel_verdict": panel_verdict,
         "disputed_finding": f"runtime gate {gate_verdict} disagrees with review panel {panel_verdict}",
         "ground_truth_evidence": {
-            "runtime_ac": (gate_status or {}).get("evidence_ref") or item.get("runtime_ac_evidence_ref") or "persisted-runtime-ac",
-            "review": (review_status or {}).get("lineage") or item.get("review_evidence_ref") or "persisted-review",
+            "runtime_ac": (gate_status or {}).get("evidence_ref")
+            or item.get("runtime_ac_evidence_ref")
+            or "persisted-runtime-ac",
+            "review": (review_status or {}).get("lineage")
+            or item.get("review_evidence_ref")
+            or "persisted-review",
         },
     }
 
@@ -1737,25 +1725,42 @@ def activate_adjudicator_disagreement(
     role_pick = route_role("adjudicator", cap=cap, exploration_rate=0.0) if case and gate else None
     available = bool(role_pick) if case and gate else True
     selector = select_role_activation(
-        "adjudicator", matched=case is not None, gate_enabled=gate,
-        capacity_available=available, max_invocations=_role_cap(env, "adjudicator"),
+        "adjudicator",
+        matched=case is not None,
+        gate_enabled=gate,
+        capacity_available=available,
+        max_invocations=_role_cap(env, "adjudicator"),
         reason="persisted_evidence_disagreement" if case else "evidence_agrees_or_incomplete",
-        target=str(item.get("target") or ""), disagreement=case is not None,
+        target=str(item.get("target") or ""),
+        disagreement=case is not None,
         record=not dry_run,
     )
     if not selector["invoked"]:
         return {"selector": selector, "case": case, "result": None}
     result = runner(
-        case=case, cap=cap, backend=role_pick["agent"] if role_pick else None,
-        dispatch=True, cwd=".",
+        case=case,
+        cap=cap,
+        backend=role_pick["agent"] if role_pick else None,
+        dispatch=True,
+        cwd=".",
     )
-    accepted = bool(result.get("role_run_id") and result.get("proposal") is not None and not result.get("errors"))
+    accepted = bool(
+        result.get("role_run_id")
+        and result.get("proposal") is not None
+        and not result.get("errors")
+    )
     selector["accepted"] = accepted
     try:
         feedback.record_role_selector_event(
-            "adjudicator", "invoked", reason="persisted_evidence_disagreement",
-            target=str(item.get("target") or ""), matched=True, invoked=True,
-            accepted=accepted, disagreement=True, role_run_id=result.get("role_run_id"),
+            "adjudicator",
+            "invoked",
+            reason="persisted_evidence_disagreement",
+            target=str(item.get("target") or ""),
+            matched=True,
+            invoked=True,
+            accepted=accepted,
+            disagreement=True,
+            role_run_id=result.get("role_run_id"),
         )
     except Exception as exc:
         selector["record_error"] = str(exc)
@@ -1855,9 +1860,7 @@ def run_redirect_agent(
     """
     role = ROLE_REGISTRY["redirect"]
     if dispatch:
-        _role_capability_event(
-            "redirect", "match", metadata={"target": report.get("target")}
-        )
+        _role_capability_event("redirect", "match", metadata={"target": report.get("target")})
     report = dict(report)  # never mutate the caller's report
     attempt_history = attempt_history or []
     ctx = {
@@ -1879,9 +1882,7 @@ def run_redirect_agent(
         )
         backend_name = routing["agent"] if routing else None
 
-    baseline = redirect_policy.decide(
-        report, attempt_history
-    )  # already policy_decision-shaped
+    baseline = redirect_policy.decide(report, attempt_history)  # already policy_decision-shaped
 
     proposal: dict | None = None
     errors: list[str] = []
@@ -1896,9 +1897,7 @@ def run_redirect_agent(
         if not backend_name:
             errors.append("no eligible backend has capacity for the redirect role")
         else:
-            _role_capability_event(
-                "redirect", "invocation", metadata={"backend": backend_name}
-            )
+            _role_capability_event("redirect", "invocation", metadata={"backend": backend_name})
             res = dispatcher.offload(
                 backend_name,
                 prompt,
@@ -1911,9 +1910,7 @@ def run_redirect_agent(
             raw_output = res.get("output", "")
             backend_error_detail = _backend_error_detail(res)
             if res.get("exit") not in (0, None):
-                errors.append(
-                    f"backend exit={res.get('exit')} {res.get('error') or ''}".strip()
-                )
+                errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
             proposal = _parse_json(raw_output)
             if proposal is None:
                 errors.append("could not parse a JSON proposal from the backend output")
@@ -1937,9 +1934,7 @@ def run_redirect_agent(
         decision_source = "redirect_agent"
     else:
         report["policy_decision"] = dict(baseline)
-        plan_obj = redirect_plan.plan(
-            report, next_agent=next_agent, lane=lane, task_type=task_type
-        )
+        plan_obj = redirect_plan.plan(report, next_agent=next_agent, lane=lane, task_type=task_type)
         decision_source = "baseline_policy"
 
     role_run_id: str | None = None
@@ -1987,11 +1982,7 @@ def run_redirect_agent(
                     plan=plan_obj,
                     raw_output=raw_output,
                     backend_error_detail=backend_error_detail,
-                    corpus_path=(
-                        Path(corpus_path)
-                        if corpus_path
-                        else redirect_shadow.CORPUS_PATH
-                    ),
+                    corpus_path=(Path(corpus_path) if corpus_path else redirect_shadow.CORPUS_PATH),
                 )
             except Exception as exc:
                 # Corpus recording is best-effort; don't fail the main path.
@@ -2082,9 +2073,7 @@ def run_prompt_agent(
         )
         backend_name = routing["agent"] if routing else None
 
-    baseline_prompt = dispatcher.build_prompt(
-        task_type, target, target_detail or goal, lane=lane
-    )
+    baseline_prompt = dispatcher.build_prompt(task_type, target, target_detail or goal, lane=lane)
     proposal: dict | None = None
     errors: list[str] = []
     raw_output: str | None = None
@@ -2098,20 +2087,14 @@ def run_prompt_agent(
         if not backend_name:
             errors.append("no eligible backend has capacity for the prompt role")
         else:
-            _role_capability_event(
-                "prompt", "invocation", metadata={"backend": backend_name}
-            )
-            res = dispatcher.offload(
-                backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout
-            )
+            _role_capability_event("prompt", "invocation", metadata={"backend": backend_name})
+            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
             backend_error_detail = _backend_error_detail(res)
             if res.get("exit") not in (0, None):
-                errors.append(
-                    f"backend exit={res.get('exit')} {res.get('error') or ''}".strip()
-                )
+                errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
             proposal = _parse_json(raw_output)
             if proposal is None:
                 errors.append("could not parse a JSON proposal from the backend output")
@@ -2128,9 +2111,7 @@ def run_prompt_agent(
             proposal = None
 
     if proposal is not None:
-        dispatch_prompt = _prompt_agent_dispatch_prompt(
-            proposal, target=target, lane=lane
-        )
+        dispatch_prompt = _prompt_agent_dispatch_prompt(proposal, target=target, lane=lane)
         decision_source = "prompt_agent"
     else:
         dispatch_prompt = baseline_prompt
@@ -2206,9 +2187,7 @@ def run_decomposer_agent(
     """SHADOW ONLY. Author/validate an epic decomposition plan; never dispatches subtasks."""
     role = ROLE_REGISTRY["decomposer"]
     if dispatch:
-        _role_capability_event(
-            "decomposer", "match", metadata={"target": target or repo}
-        )
+        _role_capability_event("decomposer", "match", metadata={"target": target or repo})
     ctx = {
         "goal": goal,
         "repo": repo,
@@ -2250,25 +2229,17 @@ def run_decomposer_agent(
         if not backend_name:
             errors.append("no eligible backend has capacity for the decomposer role")
         else:
-            _role_capability_event(
-                "decomposer", "invocation", metadata={"backend": backend_name}
-            )
-            res = dispatcher.offload(
-                backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout
-            )
+            _role_capability_event("decomposer", "invocation", metadata={"backend": backend_name})
+            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
             backend_error_detail = _backend_error_detail(res)
             if res.get("exit") not in (0, None):
-                errors.append(
-                    f"backend exit={res.get('exit')} {res.get('error') or ''}".strip()
-                )
+                errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
             proposal = _parse_json(raw_output)
             if proposal is None:
-                errors.append(
-                    "could not parse a JSON decomposition plan from the backend output"
-                )
+                errors.append("could not parse a JSON decomposition plan from the backend output")
 
     dispatch_prompts: list[dict] = []
     if proposal is not None:
@@ -2352,9 +2323,7 @@ def run_triage_agent(
     """SHADOW ONLY. Advise backlog priority/batching; never claims, delegates, or mutates state."""
     role = ROLE_REGISTRY["triage"]
     if dispatch:
-        _role_capability_event(
-            "triage", "match", metadata={"visible_items": len(backlog_items)}
-        )
+        _role_capability_event("triage", "match", metadata={"visible_items": len(backlog_items)})
     max_items = max(0, int(max_items))
     visible_items = _compact_backlog_items(backlog_items, max_items=max_items)
     omitted_count = max(0, len(backlog_items) - len(visible_items))
@@ -2394,25 +2363,17 @@ def run_triage_agent(
         if not backend_name:
             errors.append("no eligible backend has capacity for the triage role")
         else:
-            _role_capability_event(
-                "triage", "invocation", metadata={"backend": backend_name}
-            )
-            res = dispatcher.offload(
-                backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout
-            )
+            _role_capability_event("triage", "invocation", metadata={"backend": backend_name})
+            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
             backend_error_detail = _backend_error_detail(res)
             if res.get("exit") not in (0, None):
-                errors.append(
-                    f"backend exit={res.get('exit')} {res.get('error') or ''}".strip()
-                )
+                errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
             proposal = _parse_json(raw_output)
             if proposal is None:
-                errors.append(
-                    "could not parse a JSON triage proposal from the backend output"
-                )
+                errors.append("could not parse a JSON triage proposal from the backend output")
 
     if proposal is not None:
         verrs = role.validate(proposal)
@@ -2438,9 +2399,7 @@ def run_triage_agent(
             for rec in advisory_plan.get("recommendations") or []:
                 action = rec.get("action")
                 actions[action] = actions.get(action, 0) + 1
-            action_summary = (
-                ",".join(f"{k}:{v}" for k, v in sorted(actions.items())) or None
-            )
+            action_summary = ",".join(f"{k}:{v}" for k, v in sorted(actions.items())) or None
             feedback.record_role_run(
                 role_run_id,
                 "triage",
@@ -2540,20 +2499,14 @@ def run_adjudicator_agent(
         elif case_errors:
             errors.append("case validation failed; refusing live dispatch")
         else:
-            _role_capability_event(
-                "adjudicator", "invocation", metadata={"backend": backend_name}
-            )
-            res = dispatcher.offload(
-                backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout
-            )
+            _role_capability_event("adjudicator", "invocation", metadata={"backend": backend_name})
+            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
             backend_error_detail = _backend_error_detail(res)
             if res.get("exit") not in (0, None):
-                errors.append(
-                    f"backend exit={res.get('exit')} {res.get('error') or ''}".strip()
-                )
+                errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
             proposal = _parse_json(raw_output)
             if proposal is None:
                 errors.append(
@@ -2697,9 +2650,7 @@ def format_decomposer_human(result: dict) -> str:
         lines.append("")
         lines.append("--- baseline_planner_prompt ---")
         lines.append((result.get("baseline_prompt") or "").rstrip())
-    lines.append(
-        "SHADOW: advisory decomposition only - no subtasks were delegated or changed."
-    )
+    lines.append("SHADOW: advisory decomposition only - no subtasks were delegated or changed.")
     return "\n".join(lines)
 
 
@@ -2762,9 +2713,7 @@ def format_adjudicator_human(result: dict) -> str:
         lines.append("errors: " + "; ".join(result["errors"]))
     case = result.get("case") or {}
     plan = result.get("advisory_plan") or {}
-    lines.append(
-        f"target={case.get('target') or '-'} case_type={case.get('case_type') or '-'}"
-    )
+    lines.append(f"target={case.get('target') or '-'} case_type={case.get('case_type') or '-'}")
     lines.append("")
     lines.append("--- adjudication ---")
     lines.append(f"decision={plan.get('decision')} confidence={plan.get('confidence')}")
@@ -2776,9 +2725,7 @@ def format_adjudicator_human(result: dict) -> str:
         lines.append("--- evidence_assessment ---")
         for item in assessments:
             ref = f" [{item.get('evidence_ref')}]" if item.get("evidence_ref") else ""
-            lines.append(
-                f"- {item.get('status')}{ref}: {item.get('claim')} - {item.get('reason')}"
-            )
+            lines.append(f"- {item.get('status')}{ref}: {item.get('claim')} - {item.get('reason')}")
     refs = plan.get("ground_truth_refs") or []
     if refs:
         lines.append("")
@@ -2809,9 +2756,7 @@ def _selftest() -> None:
     import io
     import tempfile
 
-    fake_cap = {
-        "agents": {a: {"state": "ok"} for a in ("gemini", "codex", "cursor", "vibe")}
-    }
+    fake_cap = {"agents": {a: {"state": "ok"} for a in ("gemini", "codex", "cursor", "vibe")}}
     old_db = feedback.DB_PATH
     tmp = tempfile.mkdtemp(prefix="roles-selftest-")
     feedback.DB_PATH = Path(tmp) / "roles.db"
@@ -2820,42 +2765,31 @@ def _selftest() -> None:
         # route_role: excludes RESERVE (claude) by default, and only routes within eligible backends.
         pick = route_role("redirect", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert (
-            pick is not None
-            and pick["agent"] in ROLE_REGISTRY["redirect"].eligible_backends
+            pick is not None and pick["agent"] in ROLE_REGISTRY["redirect"].eligible_backends
         ), pick
         assert pick["agent"] != "claude", pick
-        prompt_pick = route_role(
-            "prompt", cap=fake_cap, learned={}, exploration_rate=0.0
-        )
+        prompt_pick = route_role("prompt", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert (
             prompt_pick is not None
             and prompt_pick["agent"] in ROLE_REGISTRY["prompt"].eligible_backends
         ), prompt_pick
         assert prompt_pick["agent"] != "claude", prompt_pick
-        decomposer_pick = route_role(
-            "decomposer", cap=fake_cap, learned={}, exploration_rate=0.0
-        )
+        decomposer_pick = route_role("decomposer", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert (
             decomposer_pick is not None
-            and decomposer_pick["agent"]
-            in ROLE_REGISTRY["decomposer"].eligible_backends
+            and decomposer_pick["agent"] in ROLE_REGISTRY["decomposer"].eligible_backends
         ), decomposer_pick
         assert decomposer_pick["agent"] != "claude", decomposer_pick
-        triage_pick = route_role(
-            "triage", cap=fake_cap, learned={}, exploration_rate=0.0
-        )
+        triage_pick = route_role("triage", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert (
             triage_pick is not None
             and triage_pick["agent"] in ROLE_REGISTRY["triage"].eligible_backends
         ), triage_pick
         assert triage_pick["agent"] != "claude", triage_pick
-        adjudicator_pick = route_role(
-            "adjudicator", cap=fake_cap, learned={}, exploration_rate=0.0
-        )
+        adjudicator_pick = route_role("adjudicator", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert (
             adjudicator_pick is not None
-            and adjudicator_pick["agent"]
-            in ROLE_REGISTRY["adjudicator"].eligible_backends
+            and adjudicator_pick["agent"] in ROLE_REGISTRY["adjudicator"].eligible_backends
         ), adjudicator_pick
         assert adjudicator_pick["agent"] != "claude", adjudicator_pick
 
@@ -2867,22 +2801,16 @@ def _selftest() -> None:
         for idx in range(6):
             rid = f"role-bad-codex-{idx}"
             feedback.record_role_run(rid, "redirect", "o/r#role", "codex")
-            feedback.record_outcome(
-                rid, adjudicated_verdict="PASS", durability="reverted"
-            )
+            feedback.record_outcome(rid, adjudicated_verdict="PASS", durability="reverted")
         feedback.relearn_quality(
             {feedback.role_task_type("redirect"): {"codex": 0.7, "cursor": 0.5}}
         )
-        learned_pick = route_role(
-            "redirect", cap=fake_cap, learned={}, exploration_rate=0.0
-        )
+        learned_pick = route_role("redirect", cap=fake_cap, learned={}, exploration_rate=0.0)
         assert learned_pick and learned_pick["agent"] == "cursor", learned_pick
 
         # last-resort: when only claude has capacity, fall back to the reserve seat.
         claude_only = {"agents": {"claude": {"state": "ok"}}}
-        pick2 = route_role(
-            "redirect", cap=claude_only, learned={}, exploration_rate=0.0
-        )
+        pick2 = route_role("redirect", cap=claude_only, learned={}, exploration_rate=0.0)
         assert pick2 is not None and pick2["agent"] == "claude", pick2
 
         # validation: a good redirect proposal passes; bad ones are caught.
@@ -2922,24 +2850,20 @@ def _selftest() -> None:
             "risk_flags": ["Existing fixtures may need a seeded enrollment"],
             "confidence": "high",
         }
-        assert _validate_prompt_agent(good_prompt) == [], _validate_prompt_agent(
-            good_prompt
-        )
+        assert _validate_prompt_agent(good_prompt) == [], _validate_prompt_agent(good_prompt)
         bad_prompt = dict(good_prompt)
         bad_prompt["validation"] = []
         assert _validate_prompt_agent(bad_prompt), "empty validation list must fail"
 
         # tolerant JSON parse (fenced + trailing prose).
         assert (
-            _parse_json(
-                '```json\n{"action":"wait","reason":"r","confidence":"low"}\n```'
-            )["action"]
+            _parse_json('```json\n{"action":"wait","reason":"r","confidence":"low"}\n```')["action"]
             == "wait"
         )
         assert (
-            _parse_json(
-                'here you go {"action":"inspect","reason":"r","confidence":"low"} done'
-            )["action"]
+            _parse_json('here you go {"action":"inspect","reason":"r","confidence":"low"} done')[
+                "action"
+            ]
             == "inspect"
         )
         codex_events = "\n".join(
@@ -3010,14 +2934,12 @@ def _selftest() -> None:
             learned={},
             exploration_rate=0.0,
         )
-        assert (
-            res["mutates_state"] is False and res["plan"]["dry_run_only"] is True
-        ), res
+        assert res["mutates_state"] is False and res["plan"]["dry_run_only"] is True, res
         assert res["decision_source"] == "redirect_agent", res
         assert res["role_run_id"] is None and res["backend_run_id"] is None, res
-        assert (
-            res["plan"]["action"] == "redirect" and res["plan"]["requires_confirmation"]
-        ), res["plan"]
+        assert res["plan"]["action"] == "redirect" and res["plan"]["requires_confirmation"], res[
+            "plan"
+        ]
         assert res["plan"]["prompt_text"] == proposed["corrected_prompt"], res["plan"][
             "prompt_text"
         ]
@@ -3044,12 +2966,8 @@ def _selftest() -> None:
         assert bad["plan"]["action"] == "redirect", bad["plan"]
 
         # no proposal, no dispatch -> baseline plan + the role prompt are returned, still no mutation.
-        shadow = run_redirect_agent(
-            report, "AC", cap=fake_cap, learned={}, exploration_rate=0.0
-        )
-        assert (
-            shadow["decision_source"] == "baseline_policy" and shadow["prompt"]
-        ), shadow
+        shadow = run_redirect_agent(report, "AC", cap=fake_cap, learned={}, exploration_rate=0.0)
+        assert shadow["decision_source"] == "baseline_policy" and shadow["prompt"], shadow
         assert shadow["mutates_state"] is False, shadow
 
         old_offload = dispatcher.offload
@@ -3075,13 +2993,9 @@ def _selftest() -> None:
                 learned={},
                 exploration_rate=0.0,
             )
-            assert (
-                gemini_failure["decision_source"] == "baseline_policy"
-            ), gemini_failure
+            assert gemini_failure["decision_source"] == "baseline_policy", gemini_failure
             assert "agy log tail" in "; ".join(gemini_failure["errors"]), gemini_failure
-            assert "PlanModel" in (
-                gemini_failure["backend_error_detail"] or ""
-            ), gemini_failure
+            assert "PlanModel" in (gemini_failure["backend_error_detail"] or ""), gemini_failure
         finally:
             dispatcher.offload = old_offload
 
@@ -3096,15 +3010,12 @@ def _selftest() -> None:
             exploration_rate=0.0,
         )
         assert (
-            prompt_res["mutates_state"] is False
-            and prompt_res["decision_source"] == "prompt_agent"
+            prompt_res["mutates_state"] is False and prompt_res["decision_source"] == "prompt_agent"
         ), prompt_res
-        assert "Definition of done:" in prompt_res["dispatch_prompt"], prompt_res[
+        assert "Definition of done:" in prompt_res["dispatch_prompt"], prompt_res["dispatch_prompt"]
+        assert "pytest tests/test_progress.py" in prompt_res["dispatch_prompt"], prompt_res[
             "dispatch_prompt"
         ]
-        assert (
-            "pytest tests/test_progress.py" in prompt_res["dispatch_prompt"]
-        ), prompt_res["dispatch_prompt"]
         assert (
             prompt_res["role_run_id"] is None and prompt_res["backend_run_id"] is None
         ), prompt_res
@@ -3121,8 +3032,7 @@ def _selftest() -> None:
             exploration_rate=0.0,
         )
         assert (
-            mismatch_res["decision_source"] == "baseline_dispatcher"
-            and mismatch_res["errors"]
+            mismatch_res["decision_source"] == "baseline_dispatcher" and mismatch_res["errors"]
         ), mismatch_res
 
         baseline_prompt_res = run_prompt_agent(
@@ -3134,12 +3044,9 @@ def _selftest() -> None:
             learned={},
             exploration_rate=0.0,
         )
+        assert baseline_prompt_res["decision_source"] == "baseline_dispatcher", baseline_prompt_res
         assert (
-            baseline_prompt_res["decision_source"] == "baseline_dispatcher"
-        ), baseline_prompt_res
-        assert (
-            "Work stranske/LMS#12 to completion"
-            in baseline_prompt_res["dispatch_prompt"]
+            "Work stranske/LMS#12 to completion" in baseline_prompt_res["dispatch_prompt"]
         ), baseline_prompt_res
 
         decomposer_prompt = _decomposer_prompt(
@@ -3151,8 +3058,7 @@ def _selftest() -> None:
             }
         )
         assert (
-            "DecomposerAgent" in decomposer_prompt
-            and "Plan-and-Solve" in decomposer_prompt
+            "DecomposerAgent" in decomposer_prompt and "Plan-and-Solve" in decomposer_prompt
         ), decomposer_prompt
         good_plan = epic_lane._valid_plan()
         assert _validate_decomposer(good_plan) == [], _validate_decomposer(good_plan)
@@ -3185,8 +3091,7 @@ def _selftest() -> None:
             exploration_rate=0.0,
         )
         assert (
-            bad_decomposed["decision_source"] == "baseline_epic_lane"
-            and bad_decomposed["errors"]
+            bad_decomposed["decision_source"] == "baseline_epic_lane" and bad_decomposed["errors"]
         ), bad_decomposed
         assert bad_decomposed["dispatch_prompts"] == [], bad_decomposed
 
@@ -3219,9 +3124,7 @@ def _selftest() -> None:
         triage_prompt = _triage_prompt(
             {"backlog_items": triage_items, "capacity": fake_cap, "max_items": 3}
         )
-        assert (
-            "TriageAgent" in triage_prompt and "Do NOT select" in triage_prompt
-        ), triage_prompt
+        assert "TriageAgent" in triage_prompt and "Do NOT select" in triage_prompt, triage_prompt
         good_triage = {
             "summary": "One item is ready, one needs scope, and one closer PR should be monitored.",
             "recommendations": [
@@ -3255,17 +3158,13 @@ def _selftest() -> None:
                     "risk": "medium",
                 },
             ],
-            "global_risks": [
-                "The second issue needs a clearer body before delegation."
-            ],
+            "global_risks": ["The second issue needs a clearer body before delegation."],
             "confidence": "high",
         }
-        assert _validate_triage_agent(good_triage) == [], _validate_triage_agent(
-            good_triage
+        assert _validate_triage_agent(good_triage) == [], _validate_triage_agent(good_triage)
+        assert _validate_triage_context(good_triage, triage_items) == [], _validate_triage_context(
+            good_triage, triage_items
         )
-        assert (
-            _validate_triage_context(good_triage, triage_items) == []
-        ), _validate_triage_context(good_triage, triage_items)
         triaged = run_triage_agent(
             backlog_items=triage_items,
             proposal_json=good_triage,
@@ -3274,13 +3173,10 @@ def _selftest() -> None:
             exploration_rate=0.0,
         )
         assert (
-            triaged["mutates_state"] is False
-            and triaged["decision_source"] == "triage_agent"
+            triaged["mutates_state"] is False and triaged["decision_source"] == "triage_agent"
         ), triaged
         assert len(triaged["advisory_plan"]["recommendations"]) == 3, triaged
-        assert (
-            triaged["role_run_id"] is None and triaged["backend_run_id"] is None
-        ), triaged
+        assert triaged["role_run_id"] is None and triaged["backend_run_id"] is None, triaged
 
         bad_triage = json.loads(json.dumps(good_triage))
         bad_triage["recommendations"] = bad_triage["recommendations"][:2]
@@ -3292,8 +3188,7 @@ def _selftest() -> None:
             exploration_rate=0.0,
         )
         assert (
-            bad_triaged["decision_source"] == "baseline_backlog_order"
-            and bad_triaged["errors"]
+            bad_triaged["decision_source"] == "baseline_backlog_order" and bad_triaged["errors"]
         ), bad_triaged
         assert (
             bad_triaged["advisory_plan"]["recommendations"][0]["action"] == "work_now"
@@ -3307,9 +3202,7 @@ def _selftest() -> None:
             "panel_verdict": "NEEDS_REVIEW",
             "gate_verdict": "PASS",
             "disputed_finding": "Reviewer claimed AC1 lacks runtime evidence.",
-            "acceptance_criteria": [
-                {"id": "AC1", "statement": "Dashboard shows count"}
-            ],
+            "acceptance_criteria": [{"id": "AC1", "statement": "Dashboard shows count"}],
             "ground_truth_evidence": [
                 {
                     "ref": "frontend_verify:count",
@@ -3321,12 +3214,11 @@ def _selftest() -> None:
         }
         adjudicator_prompt = _adjudicator_prompt({"case": adjudication_case})
         assert (
-            "AdjudicatorAgent" in adjudicator_prompt
-            and "Do NOT emit PASS" in adjudicator_prompt
+            "AdjudicatorAgent" in adjudicator_prompt and "Do NOT emit PASS" in adjudicator_prompt
         ), adjudicator_prompt
-        assert (
-            _validate_adjudication_case(adjudication_case) == []
-        ), _validate_adjudication_case(adjudication_case)
+        assert _validate_adjudication_case(adjudication_case) == [], _validate_adjudication_case(
+            adjudication_case
+        )
         good_adjudication = {
             "decision": "reject_blocker",
             "confidence": "high",
@@ -3399,14 +3291,22 @@ def _selftest() -> None:
         reset_role_invocation_counts()
         for role_name in ROLE_REGISTRY:
             first = select_role_activation(
-                role_name, matched=True, gate_enabled=True,
-                capacity_available=True, max_invocations=1,
-                reason="selftest_fixture", record=False,
+                role_name,
+                matched=True,
+                gate_enabled=True,
+                capacity_available=True,
+                max_invocations=1,
+                reason="selftest_fixture",
+                record=False,
             )
             second = select_role_activation(
-                role_name, matched=True, gate_enabled=True,
-                capacity_available=True, max_invocations=1,
-                reason="selftest_fixture", record=False,
+                role_name,
+                matched=True,
+                gate_enabled=True,
+                capacity_available=True,
+                max_invocations=1,
+                reason="selftest_fixture",
+                record=False,
             )
             assert first["selector_status"] == "invoked", (role_name, first)
             assert second["selector_status"] == "matched_not_invoked", (role_name, second)
@@ -3425,8 +3325,13 @@ def _selftest() -> None:
         redirect_plan.PROMPT_DIR.mkdir(parents=True, exist_ok=True)
         try:
             stamped = run_redirect_agent(
-                report, "All endpoints return 200.", proposal_json=proposed,
-                backend="codex", dispatch=True, cap=fake_cap, learned={},
+                report,
+                "All endpoints return 200.",
+                proposal_json=proposed,
+                backend="codex",
+                dispatch=True,
+                cap=fake_cap,
+                learned={},
                 exploration_rate=0.0,
             )
             # (1) the advisory role run exists, and its model stays NULL: no backend ran, so there
@@ -3463,10 +3368,16 @@ def _selftest() -> None:
             assert seen.get("influenced_by_role_run_ids") == [role_run_id], seen
 
             # (4) the ACTING run's terminal outcome mirrors back onto the advisory role run.
-            feedback.record_run("work:lineage-stamp", str(report["target"]), "implement",
-                                "cursor", influenced_by_role_run_ids=[role_run_id])
-            feedback.record_outcome("work:lineage-stamp", adjudicated_verdict="PASS",
-                                    merged=True, durability="durable")
+            feedback.record_run(
+                "work:lineage-stamp",
+                str(report["target"]),
+                "implement",
+                "cursor",
+                influenced_by_role_run_ids=[role_run_id],
+            )
+            feedback.record_outcome(
+                "work:lineage-stamp", adjudicated_verdict="PASS", merged=True, durability="durable"
+            )
             with feedback._conn() as conn:
                 assert conn.execute(
                     "SELECT adjudicated_verdict,durability FROM outcomes WHERE run_id=?",
@@ -3480,34 +3391,48 @@ def _selftest() -> None:
             # (5) a REJECTED role run is still recorded -- disagreement is evidence -- but it is
             # never stamped onto the dispatch and never inherits the acting run's success.
             rejected = run_redirect_agent(
-                report, "AC",
-                proposal_json={"action": "redirect", "reason": "x", "confidence": "high",
-                               "corrected_prompt": ""},
-                backend="codex", dispatch=True, cap=fake_cap, learned={},
+                report,
+                "AC",
+                proposal_json={
+                    "action": "redirect",
+                    "reason": "x",
+                    "confidence": "high",
+                    "corrected_prompt": "",
+                },
+                backend="codex",
+                dispatch=True,
+                cap=fake_cap,
+                learned={},
                 exploration_rate=0.0,
             )
             assert rejected["role_run_id"] and rejected["errors"], rejected
             assert "accepted_role_run_id" not in rejected["plan"], rejected["plan"]
-            assert "--influenced-by-role-run-id" not in \
-                rejected["plan"]["steps"][-1]["commands"][0], rejected["plan"]
-            feedback.record_run("work:rejected-stamp", str(report["target"]), "implement",
-                                "cursor")
+            assert (
+                "--influenced-by-role-run-id" not in rejected["plan"]["steps"][-1]["commands"][0]
+            ), rejected["plan"]
+            feedback.record_run("work:rejected-stamp", str(report["target"]), "implement", "cursor")
             feedback.record_influence_edge(
-                target_run_id="work:rejected-stamp", influence_type="role",
+                target_run_id="work:rejected-stamp",
+                influence_type="role",
                 influence_id=rejected["role_run_id"],
-                source_run_id=rejected["role_run_id"], accepted=False,
+                source_run_id=rejected["role_run_id"],
+                accepted=False,
                 metadata={"status": "rejected", "disagreement": True},
             )
-            feedback.record_outcome("work:rejected-stamp", adjudicated_verdict="PASS",
-                                    merged=True, durability="durable")
+            feedback.record_outcome(
+                "work:rejected-stamp", adjudicated_verdict="PASS", merged=True, durability="durable"
+            )
             with feedback._conn() as conn:
                 assert conn.execute(
                     "SELECT accepted,counterfactual,outcome_verdict FROM influence_edges "
                     "WHERE target_run_id='work:rejected-stamp'"
                 ).fetchone() == (0, 1, None)
-                assert conn.execute(
-                    "SELECT 1 FROM outcomes WHERE run_id=?", (rejected["role_run_id"],)
-                ).fetchone() is None, "a rejected role must not inherit a PASS"
+                assert (
+                    conn.execute(
+                        "SELECT 1 FROM outcomes WHERE run_id=?", (rejected["role_run_id"],)
+                    ).fetchone()
+                    is None
+                ), "a rejected role must not inherit a PASS"
         finally:
             redirect_plan.PROMPT_DIR = old_prompt_dir
 
@@ -3519,8 +3444,18 @@ def _selftest() -> None:
         context_file.write_text("CONTEXT-FROM-FILE marker\n")
         cli_out = io.StringIO()
         with contextlib.redirect_stdout(cli_out):
-            rc = main(["prompt", "--target", "o/r#1", "--goal", "g",
-                       "--context-file", str(context_file), "--json"])
+            rc = main(
+                [
+                    "prompt",
+                    "--target",
+                    "o/r#1",
+                    "--goal",
+                    "g",
+                    "--context-file",
+                    str(context_file),
+                    "--json",
+                ]
+            )
         assert rc == 0, rc
         assert "CONTEXT-FROM-FILE marker" in json.loads(cli_out.getvalue())["prompt"]
 
@@ -3549,9 +3484,7 @@ def _read_backlog_items(path: str) -> list[dict]:
         backlog_items = data.get("backlog")
         if isinstance(backlog_items, list):
             return backlog_items
-    raise ValueError(
-        "backlog JSON must be a list or an object with an items/backlog list"
-    )
+    raise ValueError("backlog JSON must be a list or an object with an items/backlog list")
 
 
 def _read_case_json(path: str) -> dict:
@@ -3572,14 +3505,10 @@ def main(argv: list[str]) -> int:
 
     pr = sub.add_parser("route", help="show the router-chosen backend for a role")
     pr.add_argument("--role", default="redirect")
-    pr.add_argument(
-        "--high-leverage", action="store_true", help="allow reserve seats (claude)"
-    )
+    pr.add_argument("--high-leverage", action="store_true", help="allow reserve seats (claude)")
     pr.add_argument("--json", action="store_true", dest="as_json")
 
-    rd = sub.add_parser(
-        "redirect", help="run RedirectAgent in shadow and print a dry-run plan"
-    )
+    rd = sub.add_parser("redirect", help="run RedirectAgent in shadow and print a dry-run plan")
     rd.add_argument(
         "--report-json",
         default="",
@@ -3595,9 +3524,7 @@ def main(argv: list[str]) -> int:
     rd.add_argument(
         "--attempt-history-json", default="", help="prior watch reports for this target"
     )
-    rd.add_argument(
-        "--backend", default="", help="force a backend; default routes via route_role"
-    )
+    rd.add_argument("--backend", default="", help="force a backend; default routes via route_role")
     rd.add_argument(
         "--dispatch",
         action="store_true",
@@ -3634,9 +3561,7 @@ def main(argv: list[str]) -> int:
     pp.add_argument("--acceptance-criterion", action="append", default=[])
     pp.add_argument("--constraint", action="append", default=[])
     pp.add_argument("--expected-path", action="append", default=[])
-    pp.add_argument(
-        "--backend", default="", help="force a backend; default routes via route_role"
-    )
+    pp.add_argument("--backend", default="", help="force a backend; default routes via route_role")
     pp.add_argument(
         "--dispatch",
         action="store_true",
@@ -3661,9 +3586,7 @@ def main(argv: list[str]) -> int:
     dc.add_argument("--context", default="")
     dc.add_argument("--context-file", default="")
     dc.add_argument("--subtask-count", type=int, default=None)
-    dc.add_argument(
-        "--backend", default="", help="force a backend; default routes via route_role"
-    )
+    dc.add_argument("--backend", default="", help="force a backend; default routes via route_role")
     dc.add_argument(
         "--dispatch",
         action="store_true",
@@ -3679,9 +3602,7 @@ def main(argv: list[str]) -> int:
     dc.add_argument("--high-leverage", action="store_true")
     dc.add_argument("--json", action="store_true", dest="as_json")
 
-    tr = sub.add_parser(
-        "triage", help="run TriageAgent in shadow against a backlog snapshot"
-    )
+    tr = sub.add_parser("triage", help="run TriageAgent in shadow against a backlog snapshot")
     tr.add_argument(
         "--backlog-json",
         default="",
@@ -3690,9 +3611,7 @@ def main(argv: list[str]) -> int:
     tr.add_argument("--context", default="")
     tr.add_argument("--context-file", default="")
     tr.add_argument("--max-items", type=int, default=20)
-    tr.add_argument(
-        "--backend", default="", help="force a backend; default routes via route_role"
-    )
+    tr.add_argument("--backend", default="", help="force a backend; default routes via route_role")
     tr.add_argument(
         "--dispatch",
         action="store_true",
@@ -3712,14 +3631,10 @@ def main(argv: list[str]) -> int:
         "adjudicate",
         help="run AdjudicatorAgent in shadow against one disputed blocker case",
     )
-    aj.add_argument(
-        "--case-json", required=True, help="case JSON file; '-' reads stdin"
-    )
+    aj.add_argument("--case-json", required=True, help="case JSON file; '-' reads stdin")
     aj.add_argument("--context", default="")
     aj.add_argument("--context-file", default="")
-    aj.add_argument(
-        "--backend", default="", help="force a backend; default routes via route_role"
-    )
+    aj.add_argument("--backend", default="", help="force a backend; default routes via route_role")
     aj.add_argument(
         "--dispatch",
         action="store_true",
@@ -3753,9 +3668,7 @@ def main(argv: list[str]) -> int:
         "summarize-proposals",
         help="summarize RedirectAgent proposal quality/disagreement corpus",
     )
-    sm.add_argument(
-        "--corpus", default="", help="path to the redirect shadow corpus JSONL file"
-    )
+    sm.add_argument("--corpus", default="", help="path to the redirect shadow corpus JSONL file")
     sm.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args(argv)
@@ -3765,25 +3678,19 @@ def main(argv: list[str]) -> int:
         if args.as_json:
             print(json.dumps(pick, indent=2))
         else:
-            print(
-                f"role={args.role} backend={(pick or {}).get('agent', '(none available)')}"
-            )
+            print(f"role={args.role} backend={(pick or {}).get('agent', '(none available)')}")
         return 0
 
     if args.cmd == "redirect":
         report = (
-            json.loads(open(args.report_json).read())
-            if args.report_json
-            else json.load(sys.stdin)
+            json.loads(open(args.report_json).read()) if args.report_json else json.load(sys.stdin)
         )
         history = (
             json.loads(open(args.attempt_history_json).read())
             if args.attempt_history_json
             else None
         )
-        proposal = (
-            json.loads(open(args.proposal_json).read()) if args.proposal_json else None
-        )
+        proposal = json.loads(open(args.proposal_json).read()) if args.proposal_json else None
         result = run_redirect_agent(
             report,
             args.ac,
@@ -3803,12 +3710,8 @@ def main(argv: list[str]) -> int:
     if args.cmd == "prompt":
         context = args.context
         if args.context_file:
-            context = (context + "\n\n" if context else "") + Path(
-                args.context_file
-            ).read_text()
-        proposal = (
-            json.loads(open(args.proposal_json).read()) if args.proposal_json else None
-        )
+            context = (context + "\n\n" if context else "") + Path(args.context_file).read_text()
+        proposal = json.loads(open(args.proposal_json).read()) if args.proposal_json else None
         result = run_prompt_agent(
             target=args.target,
             goal=args.goal,
@@ -3827,21 +3730,13 @@ def main(argv: list[str]) -> int:
             cwd=args.cwd,
             timeout=args.timeout,
         )
-        print(
-            json.dumps(result, indent=2)
-            if args.as_json
-            else format_prompt_human(result)
-        )
+        print(json.dumps(result, indent=2) if args.as_json else format_prompt_human(result))
         return 0
     if args.cmd == "decompose":
         context = args.context
         if args.context_file:
-            context = (context + "\n\n" if context else "") + Path(
-                args.context_file
-            ).read_text()
-        proposal = (
-            json.loads(open(args.proposal_json).read()) if args.proposal_json else None
-        )
+            context = (context + "\n\n" if context else "") + Path(args.context_file).read_text()
+        proposal = json.loads(open(args.proposal_json).read()) if args.proposal_json else None
         result = run_decomposer_agent(
             goal=args.goal,
             repo=args.repo,
@@ -3855,21 +3750,13 @@ def main(argv: list[str]) -> int:
             cwd=args.cwd,
             timeout=args.timeout,
         )
-        print(
-            json.dumps(result, indent=2)
-            if args.as_json
-            else format_decomposer_human(result)
-        )
+        print(json.dumps(result, indent=2) if args.as_json else format_decomposer_human(result))
         return 0
     if args.cmd == "triage":
         context = args.context
         if args.context_file:
-            context = (context + "\n\n" if context else "") + Path(
-                args.context_file
-            ).read_text()
-        proposal = (
-            json.loads(open(args.proposal_json).read()) if args.proposal_json else None
-        )
+            context = (context + "\n\n" if context else "") + Path(args.context_file).read_text()
+        proposal = json.loads(open(args.proposal_json).read()) if args.proposal_json else None
         result = run_triage_agent(
             backlog_items=_read_backlog_items(args.backlog_json),
             context=context,
@@ -3881,21 +3768,13 @@ def main(argv: list[str]) -> int:
             cwd=args.cwd,
             timeout=args.timeout,
         )
-        print(
-            json.dumps(result, indent=2)
-            if args.as_json
-            else format_triage_human(result)
-        )
+        print(json.dumps(result, indent=2) if args.as_json else format_triage_human(result))
         return 0
     if args.cmd == "adjudicate":
         context = args.context
         if args.context_file:
-            context = (context + "\n\n" if context else "") + Path(
-                args.context_file
-            ).read_text()
-        proposal = (
-            json.loads(open(args.proposal_json).read()) if args.proposal_json else None
-        )
+            context = (context + "\n\n" if context else "") + Path(args.context_file).read_text()
+        proposal = json.loads(open(args.proposal_json).read()) if args.proposal_json else None
         result = run_adjudicator_agent(
             case=_read_case_json(args.case_json),
             context=context,
@@ -3906,11 +3785,7 @@ def main(argv: list[str]) -> int:
             cwd=args.cwd,
             timeout=args.timeout,
         )
-        print(
-            json.dumps(result, indent=2)
-            if args.as_json
-            else format_adjudicator_human(result)
-        )
+        print(json.dumps(result, indent=2) if args.as_json else format_adjudicator_human(result))
         return 0
     if args.cmd == "link-outcome":
         result = feedback.join_role_to_outcome(

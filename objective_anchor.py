@@ -18,6 +18,7 @@ note="objective:<label>", so judge_reliability and the calibration model consume
 Hooked into exp_abcd.evaluate() (env gate ORCH_OBJECTIVE_ANCHOR, default ON, time budget
 ORCH_OBJECTIVE_ANCHOR_BUDGET_S); the CLI supports per-experiment and --latest backfill runs.
 `--selftest` is fully offline (signals injected)."""
+
 from __future__ import annotations
 
 import argparse
@@ -35,9 +36,7 @@ import feedback
 import human_calibration
 import provision
 
-EXP_DIR = Path(
-    os.environ.get("ORCH_EXP_DIR", Path(__file__).resolve().parent / "experiments")
-)
+EXP_DIR = Path(os.environ.get("ORCH_EXP_DIR", Path(__file__).resolve().parent / "experiments"))
 TEST_FILE_RE = re.compile(r"(^|/)(tests?/|test_[^/]+\.py$|[^/]+_test\.py$)")
 PYTEST_TIMEOUT_S = 240
 DEFAULT_BUDGET_S = 600.0
@@ -73,9 +72,7 @@ def score_from_signals(sig: dict) -> tuple[float, str] | None:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 120) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout
-    )
+    return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
 
 
 def _changed_files(patch_text: str) -> list[str]:
@@ -144,9 +141,7 @@ def arm_signals(
                 sig["detail"] = f"pytest env rc={patched.returncode}"
                 return sig  # env problem — not decisive
             # Overlay the arm's test files onto a CLEAN base: hollow tests pass without the impl.
-            add2 = _run(
-                ["git", "worktree", "add", "--detach", str(base_wt), base], repo_dir
-            )
+            add2 = _run(["git", "worktree", "add", "--detach", str(base_wt), base], repo_dir)
             if add2.returncode != 0:
                 sig["detail"] = "base worktree failed"
                 return sig
@@ -267,9 +262,7 @@ def anchor_experiment(
         sig = signals_fn(repo, arm_base, patch)
         decisive = score_from_signals(sig)
         if not decisive:
-            out["skipped"].append(
-                {**common, "reason": sig.get("detail") or "not-decisive"}
-            )
+            out["skipped"].append({**common, "reason": sig.get("detail") or "not-decisive"})
             continue
         score, label = decisive
         result = human_calibration.record_anchor(
@@ -336,14 +329,22 @@ def _selftest() -> None:
             (edir / f"diff-{agent}.patch").write_text("+++ b/x.py\n")
         (edir / "diff-empty.patch").write_text("")
         fake = {
-            "good": {"applies": True, "compile_ok": True,
-                     "probe": {"patched_pass": True, "base_pass": False}},
+            "good": {
+                "applies": True,
+                "compile_ok": True,
+                "probe": {"patched_pass": True, "base_pass": False},
+            },
             "broken": {"applies": False, "detail": "does not apply"},
-            "vague": {"applies": True, "compile_ok": True, "probe": None,
-                      "detail": "pytest env rc=4"},
+            "vague": {
+                "applies": True,
+                "compile_ok": True,
+                "probe": None,
+                "detail": "pytest env rc=4",
+            },
         }
         res = anchor_experiment(
-            "EXP1", signals_fn=lambda repo, base, p: fake[p.stem.split("-", 1)[1]],
+            "EXP1",
+            signals_fn=lambda repo, base, p: fake[p.stem.split("-", 1)[1]],
             exp_dir=tmp / "exps",
         )
         got = {a["agent"]: (a["score"], a["label"]) for a in res["anchored"]}
@@ -354,7 +355,8 @@ def _selftest() -> None:
         reasons = {s["agent"]: s["reason"] for s in res["skipped"]}
         assert reasons["vague"] == "pytest env rc=4" and reasons["empty"] == "no-diff", res
         again = anchor_experiment(
-            "EXP1", signals_fn=lambda repo, base, p: fake[p.stem.split("-", 1)[1]],
+            "EXP1",
+            signals_fn=lambda repo, base, p: fake[p.stem.split("-", 1)[1]],
             exp_dir=tmp / "exps",
         )
         again_reasons = {s["agent"]: s["reason"] for s in again["skipped"]}
@@ -362,7 +364,14 @@ def _selftest() -> None:
         assert again_reasons["good"] == "already-anchored", again
         # anchors are consumable by the calibration stack unchanged
         anchors = human_calibration.parse_human_anchors(
-            [(1, "EXP1:good", json.dumps({"experiment_id": "EXP1", "implementer": "good", "score": 8.0}), "objective:x")]
+            [
+                (
+                    1,
+                    "EXP1:good",
+                    json.dumps({"experiment_id": "EXP1", "implementer": "good", "score": 8.0}),
+                    "objective:x",
+                )
+            ]
         )
         assert anchors and anchors[0]["score"] == 8.0, anchors
         # zero budget: arms are skipped as budget-exhausted, signals never run
@@ -435,9 +444,7 @@ def main(argv: list[str] | None = None) -> int:
         exp_ids.extend(_latest_exp_ids(args.latest))
     if not exp_ids:
         parser.error("need --exp-id or --latest N (or --selftest)")
-    results = [
-        anchor_experiment(e, apply=not args.dry_run) for e in dict.fromkeys(exp_ids)
-    ]
+    results = [anchor_experiment(e, apply=not args.dry_run) for e in dict.fromkeys(exp_ids)]
     if args.as_json:
         print(json.dumps(results, indent=2, default=str))
     else:

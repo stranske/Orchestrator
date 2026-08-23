@@ -9,6 +9,7 @@ coverage still lags, schedule real A/B research jobs for the missing
 route weights move only after ``exp_abcd evaluate`` records real evaluations or
 after normal production outcomes are ingested.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,7 +21,6 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
 
 import claims
 import exp_abcd
@@ -50,21 +50,33 @@ def _agent_available(agent: str, states: dict[str, str]) -> bool:
     return states.get(agent, "unknown") in {"ok", "warn"}
 
 
-def _cell_target(task_type: str, agent: str, task_row: dict, route_agents: list[str]) -> tuple[int, list[str]]:
+def _cell_target(
+    task_type: str, agent: str, task_row: dict, route_agents: list[str]
+) -> tuple[int, list[str]]:
     observed = int((task_row.get("agent_observations") or {}).get(agent, 0) or 0)
     target = 0
     reasons: list[str] = []
     if observed == 0:
         target = max(target, 1)
         reasons.append("zero_observation_cell")
-    if agent in set(task_row.get("top_agents") or []) and observed < exploration_review.MIN_TOP_AGENT_OBS:
+    if (
+        agent in set(task_row.get("top_agents") or [])
+        and observed < exploration_review.MIN_TOP_AGENT_OBS
+    ):
         target = max(target, exploration_review.MIN_TOP_AGENT_OBS)
         reasons.append("top_agent_min_observations")
-    if int(task_row.get("observed_agents") or 0) < exploration_review.MIN_OBSERVED_AGENTS and observed == 0:
+    if (
+        int(task_row.get("observed_agents") or 0) < exploration_review.MIN_OBSERVED_AGENTS
+        and observed == 0
+    ):
         target = max(target, 1)
         reasons.append("min_observed_agents")
     if int(task_row.get("needed_total_observations") or 0) > 0:
-        per_agent_target = max(1, (exploration_review.MIN_TASK_OBS + max(1, len(route_agents)) - 1) // max(1, len(route_agents)))
+        per_agent_target = max(
+            1,
+            (exploration_review.MIN_TASK_OBS + max(1, len(route_agents)) - 1)
+            // max(1, len(route_agents)),
+        )
         if observed < per_agent_target:
             target = max(target, per_agent_target)
             reasons.append("min_task_observations")
@@ -91,19 +103,23 @@ def _missing_cells(coverage: dict, *, route_table: dict) -> list[dict]:
                 observed,
                 index,
             )
-            cells.append({
-                "task_type": task_type,
-                "agent": agent,
-                "observations": observed,
-                "target_observations": target,
-                "needed_observations": max(0, target - observed),
-                "reasons": reasons,
-                "route_index": index,
-                "task_needed_total_observations": task_row.get("needed_total_observations"),
-                "task_needed_observed_agents": task_row.get("needed_observed_agents"),
-                "task_needed_top_agent_observations": task_row.get("needed_top_agent_observations"),
-                "_priority": priority,
-            })
+            cells.append(
+                {
+                    "task_type": task_type,
+                    "agent": agent,
+                    "observations": observed,
+                    "target_observations": target,
+                    "needed_observations": max(0, target - observed),
+                    "reasons": reasons,
+                    "route_index": index,
+                    "task_needed_total_observations": task_row.get("needed_total_observations"),
+                    "task_needed_observed_agents": task_row.get("needed_observed_agents"),
+                    "task_needed_top_agent_observations": task_row.get(
+                        "needed_top_agent_observations"
+                    ),
+                    "_priority": priority,
+                }
+            )
     cells.sort(key=lambda row: (row["_priority"], row["task_type"], row["agent"]))
     for row in cells:
         row.pop("_priority", None)
@@ -215,7 +231,9 @@ def _evaluated_backfill_targets() -> set[str]:
     return targets
 
 
-def _anchor_agent(task_type: str, missing_agents: list[str], states: dict[str, str], route_table: dict) -> str | None:
+def _anchor_agent(
+    task_type: str, missing_agents: list[str], states: dict[str, str], route_table: dict
+) -> str | None:
     for agent in _route_agents(task_type, route_table):
         if agent in router.BACKUP_AGENTS:
             continue
@@ -248,14 +266,26 @@ def _build_jobs(
     for task_type, task_cells in sorted(cells_by_task.items(), key=lambda item: item[0]):
         candidates = items_by_task.get(task_type) or []
         if not candidates:
-            blocked.append({
-                "task_type": task_type,
-                "reason": "no unclaimed opener backlog item for this task type",
-                "missing_cells": [
-                    {k: cell[k] for k in ("task_type", "agent", "observations", "target_observations", "needed_observations", "reasons")}
-                    for cell in task_cells[:10]
-                ],
-            })
+            blocked.append(
+                {
+                    "task_type": task_type,
+                    "reason": "no unclaimed opener backlog item for this task type",
+                    "missing_cells": [
+                        {
+                            k: cell[k]
+                            for k in (
+                                "task_type",
+                                "agent",
+                                "observations",
+                                "target_observations",
+                                "needed_observations",
+                                "reasons",
+                            )
+                        }
+                        for cell in task_cells[:10]
+                    ],
+                }
+            )
             continue
         for item in candidates:
             if len(jobs) >= max_jobs:
@@ -273,52 +303,68 @@ def _build_jobs(
                 if len(missing_agents) >= MAX_ARMS_PER_JOB:
                     break
             if not missing_agents:
-                blocked.append({
-                    "task_type": task_type,
-                    "target": item.get("target"),
-                    "reason": "missing-cell agents are not currently ok/warn in capacity snapshot",
-                })
+                blocked.append(
+                    {
+                        "task_type": task_type,
+                        "target": item.get("target"),
+                        "reason": "missing-cell agents are not currently ok/warn in capacity snapshot",
+                    }
+                )
                 continue
             anchor = _anchor_agent(task_type, missing_agents, states, route_table)
             agents = list(missing_agents)
             if anchor and anchor not in agents:
                 agents.insert(0, anchor)
             if len(agents) < 2:
-                blocked.append({
-                    "task_type": task_type,
-                    "target": item.get("target"),
-                    "reason": "need at least two runnable agents for an A/B backfill",
-                    "agents": agents,
-                })
+                blocked.append(
+                    {
+                        "task_type": task_type,
+                        "target": item.get("target"),
+                        "reason": "need at least two runnable agents for an A/B backfill",
+                        "agents": agents,
+                    }
+                )
                 continue
             agents = agents[:MAX_ARMS_PER_JOB]
             target = str(item.get("target") or "")
             exp_id = f"backfill-{_exp_id_slug(target)}"
-            jobs.append({
-                "job_kind": "exp_abcd",
-                "target": target,
-                "repo": _target_repo(target),
-                "task_type": task_type,
-                "title": item.get("title") or "",
-                "agents": agents,
-                "covers_cells": [
-                    {k: cell[k] for k in ("task_type", "agent", "observations", "target_observations", "needed_observations", "reasons")}
-                    for cell in covered_cells
-                    if cell["agent"] in agents
-                ],
-                "counts_when": "only after exp_abcd evaluate records real evaluations, or after normal production outcomes are ingested",
-            "apply_command": (
-                f"{ENV_FLAG}=1 python3 Orchestrator/exploration_backfill.py "
-                f"--apply --confirm-backfill --target {shlex.quote(target)} "
-                f"--agents {shlex.quote(','.join(agents))}"
-            ),
-                "follow_up_commands": [
-                    f"python3 Orchestrator/exp_abcd.py status <exp_id>",
-                    f"python3 Orchestrator/exp_abcd.py collect {_target_repo(target) or '<repo>'} <exp_id>",
-                    f"python3 Orchestrator/exp_abcd.py evaluate {_target_repo(target) or '<repo>'} <spec_file> <exp_id>",
-                ],
-                "exp_id_template": exp_id,
-            })
+            jobs.append(
+                {
+                    "job_kind": "exp_abcd",
+                    "target": target,
+                    "repo": _target_repo(target),
+                    "task_type": task_type,
+                    "title": item.get("title") or "",
+                    "agents": agents,
+                    "covers_cells": [
+                        {
+                            k: cell[k]
+                            for k in (
+                                "task_type",
+                                "agent",
+                                "observations",
+                                "target_observations",
+                                "needed_observations",
+                                "reasons",
+                            )
+                        }
+                        for cell in covered_cells
+                        if cell["agent"] in agents
+                    ],
+                    "counts_when": "only after exp_abcd evaluate records real evaluations, or after normal production outcomes are ingested",
+                    "apply_command": (
+                        f"{ENV_FLAG}=1 python3 Orchestrator/exploration_backfill.py "
+                        f"--apply --confirm-backfill --target {shlex.quote(target)} "
+                        f"--agents {shlex.quote(','.join(agents))}"
+                    ),
+                    "follow_up_commands": [
+                        "python3 Orchestrator/exp_abcd.py status <exp_id>",
+                        f"python3 Orchestrator/exp_abcd.py collect {_target_repo(target) or '<repo>'} <exp_id>",
+                        f"python3 Orchestrator/exp_abcd.py evaluate {_target_repo(target) or '<repo>'} <spec_file> <exp_id>",
+                    ],
+                    "exp_id_template": exp_id,
+                }
+            )
         if len(jobs) >= max_jobs:
             break
     return jobs, blocked
@@ -349,7 +395,9 @@ def build_plan(
     coverage = acquisition.get("route_coverage_deficits") or {}
     cells = _missing_cells(coverage, route_table=route_table)
     items = exploration_evidence_plan._backlog_items(backlog_path, backlog_payload)
-    capacity_snapshot = exploration_evidence_plan._capacity_snapshot(capacity_path, capacity_payload)
+    capacity_snapshot = exploration_evidence_plan._capacity_snapshot(
+        capacity_path, capacity_payload
+    )
     jobs, blocked = _build_jobs(
         cells=cells,
         items=items,
@@ -368,13 +416,19 @@ def build_plan(
     if not cells:
         blockers.append("no missing route cells detected")
 
-    active_eligible = route_lagging and bool(jobs) and (progress["progressing"] or not require_direct_progress)
+    active_eligible = (
+        route_lagging and bool(jobs) and (progress["progressing"] or not require_direct_progress)
+    )
     if active_eligible:
         status = "ready_to_schedule_backfill"
-        next_action = "run one guarded backfill job, then collect and evaluate it before counting evidence"
+        next_action = (
+            "run one guarded backfill job, then collect and evaluate it before counting evidence"
+        )
     elif cells and not progress["progressing"] and require_direct_progress:
         status = "waiting_for_direct_mode_progress"
-        next_action = "continue Stage 2 supervised collection until direct exploration outcomes start moving"
+        next_action = (
+            "continue Stage 2 supervised collection until direct exploration outcomes start moving"
+        )
     elif cells and not jobs:
         status = "needs_backlog_or_research_subjects"
         next_action = "refresh backlog or author a targeted research subject for the missing cells"
@@ -457,13 +511,24 @@ def schedule_backfill(
 ) -> dict:
     env = os.environ if env is None else env
     if not confirm or env.get(ENV_FLAG) != "1":
-        return {"error": f"active scheduling requires --confirm-backfill and {ENV_FLAG}=1", "read_only": True}
+        return {
+            "error": f"active scheduling requires --confirm-backfill and {ENV_FLAG}=1",
+            "read_only": True,
+        }
     if not plan.get("active_backfill_eligible"):
-        return {"blocked": True, "reason": "backfill plan is not active-eligible", "blockers": plan.get("blockers") or []}
+        return {
+            "blocked": True,
+            "reason": "backfill plan is not active-eligible",
+            "blockers": plan.get("blockers") or [],
+        }
     jobs = plan.get("planned_jobs") or []
     job = next((row for row in jobs if not target or row.get("target") == target), None)
     if not job:
-        return {"blocked": True, "reason": "requested target is not in planned_jobs", "target": target}
+        return {
+            "blocked": True,
+            "reason": "requested target is not in planned_jobs",
+            "target": target,
+        }
     if agents:
         requested = list(dict.fromkeys(agents))
         planned = set(job.get("agents") or [])
@@ -488,17 +553,38 @@ def schedule_backfill(
         )
         item = next((row for row in backlog_items if row.get("target") == target), None)
         if item is None:
-            item = {"target": target, "task_type": job.get("task_type"), "title": job.get("title") or "", "body": ""}
+            item = {
+                "target": target,
+                "task_type": job.get("task_type"),
+                "title": job.get("title") or "",
+                "body": "",
+            }
         spec = _spec_from_item(item, issue_body_fn=issue_body_fn)
         if not spec:
             claims.release(target, BACKFILL_CLAIM_AGENT)
-            return {"blocked": True, "reason": "missing issue body/title for frozen A/B spec", "target": target}
+            return {
+                "blocked": True,
+                "reason": "missing issue body/title for frozen A/B spec",
+                "target": target,
+            }
         spec_dir = Path(tempfile.mkdtemp(prefix="orch-exploration-backfill-"))
         spec_file = spec_dir / "spec.md"
         spec_file.write_text(spec, encoding="utf-8")
         exp_id = f"{job.get('exp_id_template')}-{int(time.time())}"
-        prepare = prepare_fn or exp_abcd.prepare
-        launched = prepare(repo, str(spec_file), exp_id, job["agents"], job.get("task_type") or "implement")
+        # prepare_arms, not prepare -- the SECOND launcher that had this bug. `prepare` writes only
+        # `meta["agents"]`, so `experiment_members()` falls back to `legacy=True`,
+        # `record_evaluation_v2` never fires, and the arm/member/profile identity §2 requires is
+        # replaced by an `agent_parent_projection`. All 21 on-disk manifests have
+        # `schema_version: None` and no `members[]` for exactly this reason. `tick` was fixed;
+        # this path was not, so the legacy shape would have kept being produced.
+        prepare = prepare_fn or exp_abcd.prepare_arms
+        launched = prepare(
+            repo,
+            str(spec_file),
+            exp_id,
+            exp_abcd.research_v2_arms(job["agents"], job.get("profiles")),
+            job.get("task_type") or "implement",
+        )
         meta_file = exp_abcd.exp_paths(exp_id) / "meta.json"
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -525,7 +611,12 @@ def schedule_backfill(
         }
     except Exception as exc:
         claims.release(target, BACKFILL_CLAIM_AGENT)
-        return {"blocked": True, "reason": "failed to launch backfill experiment", "error": str(exc), "target": target}
+        return {
+            "blocked": True,
+            "reason": "failed to launch backfill experiment",
+            "error": str(exc),
+            "target": target,
+        }
 
 
 def format_human(plan: dict) -> str:
@@ -588,11 +679,14 @@ def _selftest() -> None:
     feedback.DB_PATH = Path(tmp) / "feedback.db"
     try:
         route_table = {
-            "implement": {"role": "code", "agents": [
-                {"agent": "codex", "mode": "full", "late": False},
-                {"agent": "cursor", "mode": "composer", "late": False},
-                {"agent": "vibe", "mode": "full", "late": False},
-            ]}
+            "implement": {
+                "role": "code",
+                "agents": [
+                    {"agent": "codex", "mode": "full", "late": False},
+                    {"agent": "cursor", "mode": "composer", "late": False},
+                    {"agent": "vibe", "mode": "full", "late": False},
+                ],
+            }
         }
         with feedback._conn() as c:
             _insert_weight(c, 1, "implement", "codex", 2)
@@ -603,21 +697,33 @@ def _selftest() -> None:
             "o/r#progress",
             "implement",
             "codex",
-            routing_metadata={"source": "router_assignment", "exploration": True, "exploration_mode": "epsilon-greedy"},
+            routing_metadata={
+                "source": "router_assignment",
+                "exploration": True,
+                "exploration_mode": "epsilon-greedy",
+            },
         )
-        feedback.record_outcome("explore-progress", adjudicated_verdict="PASS", merged=True, durability="durable")
-        backlog_payload = {"items": [{
-            "target": "o/r#1",
-            "task_type": "implement",
-            "lane": "opener",
-            "title": "Implement fixture",
-            "body": "Do the fixture work.",
-        }]}
-        capacity_payload = {"agents": {
-            "codex": {"state": "ok"},
-            "cursor": {"state": "ok"},
-            "vibe": {"state": "ok"},
-        }}
+        feedback.record_outcome(
+            "explore-progress", adjudicated_verdict="PASS", merged=True, durability="durable"
+        )
+        backlog_payload = {
+            "items": [
+                {
+                    "target": "o/r#1",
+                    "task_type": "implement",
+                    "lane": "opener",
+                    "title": "Implement fixture",
+                    "body": "Do the fixture work.",
+                }
+            ]
+        }
+        capacity_payload = {
+            "agents": {
+                "codex": {"state": "ok"},
+                "cursor": {"state": "ok"},
+                "vibe": {"state": "ok"},
+            }
+        }
         plan = build_plan(
             backlog_payload=backlog_payload,
             capacity_payload=capacity_payload,
@@ -627,22 +733,41 @@ def _selftest() -> None:
         )
         assert plan["active_backfill_eligible"] is True, plan
         assert plan["missing_cell_count"] >= 2, plan["missing_cells"]
-        assert plan["planned_jobs"] and plan["planned_jobs"][0]["target"] == "o/r#1", plan["planned_jobs"]
+        assert plan["planned_jobs"] and plan["planned_jobs"][0]["target"] == "o/r#1", plan[
+            "planned_jobs"
+        ]
         assert {"cursor", "vibe"} <= set(plan["planned_jobs"][0]["agents"]), plan["planned_jobs"][0]
         assert "ORCH_EXPLORATION_BACKFILL=1" in format_human(plan), format_human(plan)
 
         calls: list[dict] = []
 
-        def fake_prepare(repo: str, spec_file: str, exp_id: str, agents: list[str], task_type: str = "implement") -> dict:
-            calls.append({
-                "repo": repo,
-                "spec_file": spec_file,
-                "exp_id": exp_id,
-                "agents": agents,
-                "task_type": task_type,
-            })
+        def fake_prepare(
+            repo: str, spec_file: str, exp_id: str, arms: list[dict], task_type: str = "implement"
+        ) -> dict:
+            # ASSERT THE SHAPE, not just that something was called. This double took a plain agent
+            # list and kept passing after the launcher switched to v2 arms -- a fake that accepts
+            # anything cannot tell `prepare` from `prepare_arms`, which is precisely the confusion
+            # that left `evaluations_v2` empty for 2,556 evaluations.
+            assert isinstance(arms, list) and arms, arms
+            for arm in arms:
+                assert isinstance(arm, dict), f"legacy agent list reached prepare_arms: {arms!r}"
+                assert arm.get("arm_id") and arm.get("agents"), arm
+            calls.append(
+                {
+                    "repo": repo,
+                    "spec_file": spec_file,
+                    "exp_id": exp_id,
+                    "agents": [a for arm in arms for a in arm["agents"]],
+                    "arms": arms,
+                    "task_type": task_type,
+                }
+            )
             assert "Do the fixture work." in Path(spec_file).read_text(), spec_file
-            return {"repo": repo, "exp_id": exp_id, "agents": agents}
+            return {
+                "repo": repo,
+                "exp_id": exp_id,
+                "agents": [a for arm in arms for a in arm["agents"]],
+            }
 
         original_backlog_items = exploration_evidence_plan._backlog_items
         exploration_evidence_plan._backlog_items = lambda *args, **kwargs: backlog_payload["items"]  # type: ignore
@@ -673,7 +798,9 @@ def _selftest() -> None:
             trials=5,
         )
         assert blocked["active_backfill_eligible"] is False, blocked
-        assert "direct exploration mode outcome counts" in " ".join(blocked["blockers"]), blocked["blockers"]
+        assert "direct exploration mode outcome counts" in " ".join(blocked["blockers"]), blocked[
+            "blockers"
+        ]
         print("exploration_backfill.py selftest: OK")
     finally:
         feedback.DB_PATH = old_db

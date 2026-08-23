@@ -12,14 +12,14 @@ import argparse
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import capabilities
 import capability_compiler
 import capability_targets
 import feedback
-
 
 DEFAULT_TARGET_REGISTRY = Path(
     os.environ.get(
@@ -29,9 +29,7 @@ DEFAULT_TARGET_REGISTRY = Path(
 )
 
 SAFE_CANARY_RISKS = {"low", "low_reversible", "moderate_reversible"}
-SAFE_CANARY_SIDE_EFFECTS = {
-    "read_only", "advisory", "managed_reversible_write", "reversible_write"
-}
+SAFE_CANARY_SIDE_EFFECTS = {"read_only", "advisory", "managed_reversible_write", "reversible_write"}
 
 TARGET_CONTRACTS = {
     "role": (
@@ -103,8 +101,7 @@ def _record(
 def _unsafe_policy(policy: Mapping[str, Any]) -> bool:
     return (
         str(policy.get("risk_level") or "low") not in SAFE_CANARY_RISKS
-        or str(policy.get("side_effect_policy") or "read_only")
-        not in SAFE_CANARY_SIDE_EFFECTS
+        or str(policy.get("side_effect_policy") or "read_only") not in SAFE_CANARY_SIDE_EFFECTS
     )
 
 
@@ -162,9 +159,7 @@ def register_compiled_target(
             options=["keep shadow unexported", "approve bounded supervised canary"],
             expires_days=float(policy.get("owner_question_expires_days") or 2.0),
         )
-        cap = capabilities.attach_owner_question(
-            capability_id, question, path=Path(ledger_path)
-        )
+        cap = capabilities.attach_owner_question(capability_id, question, path=Path(ledger_path))
         return {"status": "owner_question", "capability": cap, "binding": None}
 
     try:
@@ -175,10 +170,15 @@ def register_compiled_target(
             predecessor=predecessor,
             lifecycle_policy=policy,
             context=target_context,
-            identity={key: identity[key] for key in (
-                "capability_id", "capability_version_id", "artifact_hash",
-                "lifecycle_policy_hash",
-            )},
+            identity={
+                key: identity[key]
+                for key in (
+                    "capability_id",
+                    "capability_version_id",
+                    "artifact_hash",
+                    "lifecycle_policy_hash",
+                )
+            },
         )
     except Exception:
         capabilities.transition(
@@ -235,7 +235,8 @@ def invoke_compiled_target(
     if cap["status"] == "canary":
         limit = int((cap.get("lifecycle_policy") or {}).get("tasks_per_day") or 1)
         recent = sum(
-            1 for row in binding.get("invocations") or []
+            1
+            for row in binding.get("invocations") or []
             if int(row.get("invoked_at") or 0) >= now - 86400
             and row.get("lifecycle_stage") == "canary"
         )
@@ -263,9 +264,7 @@ def invoke_compiled_target(
     return result
 
 
-def start_canary(
-    capability_id: str, *, ledger_path: Path, evidence_ref: str
-) -> dict[str, Any]:
+def start_canary(capability_id: str, *, ledger_path: Path, evidence_ref: str) -> dict[str, Any]:
     cap = capabilities.load(Path(ledger_path), create=False)[capability_id]
     if cap["status"] != "exercised":
         raise ValueError("only an exercised capability can enter canary")
@@ -308,9 +307,7 @@ def reconcile_capability(
         registry_path=Path(target_registry_path),
         token=prepared["token"],
     )
-    proof = capability_targets.verify_rollback(
-        binding, registry_path=Path(target_registry_path)
-    )
+    proof = capability_targets.verify_rollback(binding, registry_path=Path(target_registry_path))
     if not proof["verified"]:
         return {**result, "rollback_status": "verification_failed_retryable"}
     retired = capabilities.complete_verified_rollback(
@@ -363,9 +360,7 @@ def main(argv: list[str] | None = None) -> int:
     reconcile.add_argument("--ledger", type=Path, default=capabilities.REG)
     reconcile.add_argument("--target-registry", type=Path, default=DEFAULT_TARGET_REGISTRY)
     args = parser.parse_args(argv)
-    result = reconcile_all(
-        ledger_path=args.ledger, target_registry_path=args.target_registry
-    )
+    result = reconcile_all(ledger_path=args.ledger, target_registry_path=args.target_registry)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["valid"] else 1
 

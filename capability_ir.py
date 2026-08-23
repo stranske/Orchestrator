@@ -8,11 +8,10 @@ it is never executable and never implies activation.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import hashlib
 import json
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
-
 
 IR_SCHEMA = "orchestrator.capability-ir"
 IR_VERSION = 2
@@ -34,7 +33,7 @@ def canonical_json(value: Any) -> str:
 
 
 def stable_hash(namespace: str, value: Any) -> str:
-    payload = f"{namespace}\0{canonical_json(value)}".encode("utf-8")
+    payload = f"{namespace}\0{canonical_json(value)}".encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
@@ -163,7 +162,7 @@ class CapabilityIR:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "CapabilityIR":
+    def from_dict(cls, raw: dict[str, Any]) -> CapabilityIR:
         """Restore one persisted v2 candidate without accepting loose shapes."""
         if raw.get("schema") != IR_SCHEMA or raw.get("version") != IR_VERSION:
             raise ValueError("unsupported persisted capability IR schema")
@@ -189,9 +188,7 @@ class CapabilityIR:
             for item in raw.get("counterexamples") or ()
         )
         payload["independent_subjects"] = tuple(raw.get("independent_subjects") or ())
-        payload["independent_repositories"] = tuple(
-            raw.get("independent_repositories") or ()
-        )
+        payload["independent_repositories"] = tuple(raw.get("independent_repositories") or ())
         payload["artifact_refs"] = tuple(raw.get("artifact_refs") or ())
         payload["aliases"] = tuple(raw.get("aliases") or ())
         payload["lifecycle"] = Lifecycle(**raw["lifecycle"])
@@ -215,11 +212,10 @@ class CandidateTombstone:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "CandidateTombstone":
+    def from_dict(cls, raw: dict[str, Any]) -> CandidateTombstone:
         payload = dict(raw)
         payload["aliases"] = tuple(raw.get("aliases") or ())
         tombstone = cls(**payload)
         if tombstone.schema != "orchestrator.capability-tombstone" or tombstone.version != 1:
             raise ValueError("unsupported persisted capability tombstone schema")
         return tombstone
-

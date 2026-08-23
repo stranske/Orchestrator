@@ -14,22 +14,23 @@ Integration seams (clearly stubbed for v0, wired against existing lane infra lat
 `--dry-run` prints what it WOULD spawn (no processes, no side effects beyond the
 heartbeat unless --no-heartbeat). `--selftest` is fully offline.
 """
+
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
-import shutil
 import shlex
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 import adapters
-import execution_profiles
 import claims
+import execution_profiles
 import feedback
 import provision
 import repo_knowledge
@@ -42,7 +43,9 @@ DECISION_JSON = HANDOFF / "routing-decision.json"
 HEARTBEAT_JSON = HANDOFF / "orchestrator.json"
 DISPATCH_LOG_DIR = HANDOFF / "dispatch-logs"
 CLAIMS_PY = ORCH_DIR / "claims.py"
-OFFLOAD_DIR = Path(os.environ.get("ORCH_OFFLOAD_DIR", Path.home() / ".codex" / "orchestrator" / "offloads"))
+OFFLOAD_DIR = Path(
+    os.environ.get("ORCH_OFFLOAD_DIR", Path.home() / ".codex" / "orchestrator" / "offloads")
+)
 AGENT_RUNTIME_DIR = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "agent-runtime"))
 
 
@@ -67,9 +70,11 @@ DEFAULT_GEMINI_OFFLOAD_TIMEOUT = _env_int("ORCH_GEMINI_OFFLOAD_TIMEOUT", 600)
 # only makes the binary resolve — agents still need auth). codex (~/.codex/auth.json) and
 # vibe (~/.vibe/.env) auto-load their own creds, so they need no explicit source here.
 AUTH_FILES = {
-    "cursor": str(REAL_HOME / ".cursor" / "cursor-agent.env"),          # exports CURSOR_API_KEY
-    "claude": str(REAL_HOME / ".codex" / "handoff" / ".claude-oauth-token"),  # exports CLAUDE_CODE_OAUTH_TOKEN
-    "aider":  str(REAL_HOME / ".codex" / "handoff" / "aider.env"),           # exports MISTRAL_API_KEY
+    "cursor": str(REAL_HOME / ".cursor" / "cursor-agent.env"),  # exports CURSOR_API_KEY
+    "claude": str(
+        REAL_HOME / ".codex" / "handoff" / ".claude-oauth-token"
+    ),  # exports CLAUDE_CODE_OAUTH_TOKEN
+    "aider": str(REAL_HOME / ".codex" / "handoff" / "aider.env"),  # exports MISTRAL_API_KEY
 }
 
 CRITICAL_EVALUATOR_DIRECTIVE = """CRITICAL-EVALUATOR STANCE (non-negotiable): Your job is correct judgment, not agreement. Evaluate
@@ -119,46 +124,64 @@ TASK_TYPE_CAPABILITY = {
 }
 
 PROMPT_TEMPLATES = {
-    "implement": ("Work {target} to completion: satisfy ALL its acceptance criteria and complete "
-                  "EVERY task in its checklist. Your goal is the issue's criteria, not a reviewer's "
-                  "approval. {target_detail}"),
-    "testgen": ("Generate focused pytest coverage for {target}. Add tests only unless a tiny, clearly "
-                "explained production-code testability fix is unavoidable. Before committing, run the "
-                "Orchestrator test-generation acceptance gate from testgen_gate.py (or the exact "
-                "testgen_lane.py prompt command if provided), iterate until it passes, and include the "
-                f"gate command/result in the PR body. {TESTGEN_READ_ONLY_GATE_GUARD} "
-                "{target_detail}"),
-    "mechanical": ("Apply the mechanical change for {target} (formatting / lint / dependency bump / "
-                   "docstrings / codemod as specified). Keep the diff minimal and strictly in-scope. "
-                   "{target_detail}"),
-    "polish": ("Apply the small, bounded improvements noted for {target} as ONE focused follow-up PR. "
-               "Do not expand scope. {target_detail}"),
-    "review": ("Review {target} against its acceptance criteria and emit a STRUCTURED, ADVISORY "
-               "(non-gating) verdict: tasks_complete, each acceptance criterion met/unmet with "
-               "evidence (file:line or test), and improvements[]. {target_detail}"),
-    "epic": ("Build or validate an Orchestrator epic decomposition plan for {target}. Produce strict "
-             "JSON matching epic_lane.py: epic metadata, dispatchable subtasks, integration order, "
-             "and re-decomposition triggers. Do not implement the subtasks in this planning pass. "
-             "{target_detail}"),
-    "codemod": ("Author, validate, or review a cross-file codemod/refactor campaign for {target}. "
-                "Produce strict JSON matching codemod_lane.py, run only dry-run/review_before_run "
-                "commands from the plan, and do not auto-apply mutating codemods or open batched PRs "
-                "without explicit approval. {target_detail}"),
-    "cross_repo": ("Author, validate, or review a cross-repo coordinated-change plan for {target}. "
-                   "Produce strict JSON matching cross_repo_lane.py, and generate a dry-run rollout "
-                   "plan with planned source/consumer work items, barrier ordering, and dispatch-ready "
-                   "prompts. Do not create branches, labels, issues, PRs, or merges in this planning pass. "
-                   "{target_detail}"),
-    "runtime_ac": ("Turn the goal/issue for {target} into a structured runtime acceptance-criteria "
-                   "verification spec. Produce strict JSON matching runtime_ac.py: verification metadata, "
-                   "AC-bound evidence_required lists, checks (frontend, command, deliberate_break, manual), "
-                   "non_regression checks, and verdict_policy. Generate a dry-run verification plan with "
-                   "review-before-run commands. Set verification.target to the exact target and "
-                   "verification.repo to its exact owner/repo. Save the final JSON artifact, then run "
-                   "runtime_ac_gate.py --materialize-range-spec <artifact> --target {target} --json so "
-                   "the next closer gate reads the same validated path and hash; report the terminal "
-                   "materialization result. Do not execute arbitrary project commands or mutate repositories. "
-                   "{target_detail}"),
+    "implement": (
+        "Work {target} to completion: satisfy ALL its acceptance criteria and complete "
+        "EVERY task in its checklist. Your goal is the issue's criteria, not a reviewer's "
+        "approval. {target_detail}"
+    ),
+    "testgen": (
+        "Generate focused pytest coverage for {target}. Add tests only unless a tiny, clearly "
+        "explained production-code testability fix is unavoidable. Before committing, run the "
+        "Orchestrator test-generation acceptance gate from testgen_gate.py (or the exact "
+        "testgen_lane.py prompt command if provided), iterate until it passes, and include the "
+        f"gate command/result in the PR body. {TESTGEN_READ_ONLY_GATE_GUARD} "
+        "{target_detail}"
+    ),
+    "mechanical": (
+        "Apply the mechanical change for {target} (formatting / lint / dependency bump / "
+        "docstrings / codemod as specified). Keep the diff minimal and strictly in-scope. "
+        "{target_detail}"
+    ),
+    "polish": (
+        "Apply the small, bounded improvements noted for {target} as ONE focused follow-up PR. "
+        "Do not expand scope. {target_detail}"
+    ),
+    "review": (
+        "Review {target} against its acceptance criteria and emit a STRUCTURED, ADVISORY "
+        "(non-gating) verdict: tasks_complete, each acceptance criterion met/unmet with "
+        "evidence (file:line or test), and improvements[]. {target_detail}"
+    ),
+    "epic": (
+        "Build or validate an Orchestrator epic decomposition plan for {target}. Produce strict "
+        "JSON matching epic_lane.py: epic metadata, dispatchable subtasks, integration order, "
+        "and re-decomposition triggers. Do not implement the subtasks in this planning pass. "
+        "{target_detail}"
+    ),
+    "codemod": (
+        "Author, validate, or review a cross-file codemod/refactor campaign for {target}. "
+        "Produce strict JSON matching codemod_lane.py, run only dry-run/review_before_run "
+        "commands from the plan, and do not auto-apply mutating codemods or open batched PRs "
+        "without explicit approval. {target_detail}"
+    ),
+    "cross_repo": (
+        "Author, validate, or review a cross-repo coordinated-change plan for {target}. "
+        "Produce strict JSON matching cross_repo_lane.py, and generate a dry-run rollout "
+        "plan with planned source/consumer work items, barrier ordering, and dispatch-ready "
+        "prompts. Do not create branches, labels, issues, PRs, or merges in this planning pass. "
+        "{target_detail}"
+    ),
+    "runtime_ac": (
+        "Turn the goal/issue for {target} into a structured runtime acceptance-criteria "
+        "verification spec. Produce strict JSON matching runtime_ac.py: verification metadata, "
+        "AC-bound evidence_required lists, checks (frontend, command, deliberate_break, manual), "
+        "non_regression checks, and verdict_policy. Generate a dry-run verification plan with "
+        "review-before-run commands. Set verification.target to the exact target and "
+        "verification.repo to its exact owner/repo. Save the final JSON artifact, then run "
+        "runtime_ac_gate.py --materialize-range-spec <artifact> --target {target} --json so "
+        "the next closer gate reads the same validated path and hash; report the terminal "
+        "materialization result. Do not execute arbitrary project commands or mutate repositories. "
+        "{target_detail}"
+    ),
 }
 
 
@@ -206,14 +229,20 @@ def _lane_capability_match(task_type: str) -> None:
         return
     try:
         import capabilities
+
         capabilities.production_heartbeat(
-            capability_id, "match", ref=f"dispatcher.build_prompt:{task_type}",
-            metadata={"task_type": task_type})
+            capability_id,
+            "match",
+            ref=f"dispatcher.build_prompt:{task_type}",
+            metadata={"task_type": task_type},
+        )
     except Exception:
         pass
 
 
-def build_prompt(task_type: str, target: str, target_detail: str = "", lane: str | None = None) -> str:
+def build_prompt(
+    task_type: str, target: str, target_detail: str = "", lane: str | None = None
+) -> str:
     target_detail = repo_knowledge.append_context(
         target_detail,
         target,
@@ -233,38 +262,62 @@ def build_prompt(task_type: str, target: str, target_detail: str = "", lane: str
 
 
 def _is_git_worktree(cwd: str | Path) -> bool:
-    res = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"],
-                         capture_output=True, text=True)
+    res = subprocess.run(
+        ["git", "-C", str(cwd), "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+    )
     return res.returncode == 0 and res.stdout.strip() == "true"
 
 
 def _agent_preamble(agent: str) -> str:
     persona = AGENT_PERSONAS.get(agent, "")
-    return f"{persona}\n\n{CRITICAL_EVALUATOR_DIRECTIVE}" if persona else CRITICAL_EVALUATOR_DIRECTIVE
+    return (
+        f"{persona}\n\n{CRITICAL_EVALUATOR_DIRECTIVE}" if persona else CRITICAL_EVALUATOR_DIRECTIVE
+    )
 
 
 def _offload_prompt(prompt: str, cwd: str | Path, agent: str | None = None) -> str:
     rules = [
         "OFFLOAD WORKSPACE RULES:",
         "- This is a synchronous offload; return the useful result to the orchestrator in stdout.",
-        ("- Do not return progress updates, future-tense promises, or 'I will inspect later' status. "
-         "Finish the requested deliverable before exiting."),
-        ("- If you cannot complete the offload in this invocation, print exactly "
-         "OFFLOAD_INCOMPLETE: <reason> and stop."),
+        (
+            "- Do not return progress updates, future-tense promises, or 'I will inspect later' status. "
+            "Finish the requested deliverable before exiting."
+        ),
+        (
+            "- If you cannot complete the offload in this invocation, print exactly "
+            "OFFLOAD_INCOMPLETE: <reason> and stop."
+        ),
         "- Do not run git commit, git push, or gh pr create from an offload.",
         "- If you edit files, keep changes inside the current workspace and report changed paths.",
-        ("- Product-level owner decision needed? Print one line "
-         'OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} '
-         "and PROCEED with your default — never wait."),
+        (
+            "- Product-level owner decision needed? Print one line "
+            'OWNER_QUESTION: {"question": "...", "default": "...", "expires_days": 7} '
+            "and PROCEED with your default — never wait."
+        ),
     ]
     if not _is_git_worktree(cwd):
-        rules.insert(1, "- Non-git workspace: do not try to create commits, branches, pushes, or PRs.")
+        rules.insert(
+            1, "- Non-git workspace: do not try to create commits, branches, pushes, or PRs."
+        )
     return f"{_agent_preamble(agent or '')}\n\n{prompt.rstrip()}\n\n" + "\n".join(rules)
 
 
 def _offload_ignore(_dir: str, names: list[str]) -> set[str]:
-    heavy = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
-             ".mypy_cache", ".ruff_cache", ".next", "dist", "build"}
+    heavy = {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".next",
+        "dist",
+        "build",
+    }
     return {name for name in names if name in heavy or name.endswith(".pyc")}
 
 
@@ -321,8 +374,9 @@ _AUTH_USAGE_PATTERNS = (
 )
 
 
-def _is_transient_network_failure(error: str | None, agent_log_tail: str | None,
-                                  stderr: str | None) -> bool:
+def _is_transient_network_failure(
+    error: str | None, agent_log_tail: str | None, stderr: str | None
+) -> bool:
     text = "\n".join(str(part or "") for part in (error, agent_log_tail, stderr))
     if not text.strip():
         return False
@@ -355,8 +409,7 @@ def _offload_incomplete_reason(output: str, *, progress_only: bool = True) -> st
 def _path_prefix() -> str:
     """PATH for child agent CLIs, independent of any per-agent HOME override."""
     return (
-        f'export PATH="/opt/homebrew/bin:{REAL_HOME}/.local/bin:'
-        f'{REAL_HOME}/.cursor/bin:$PATH"'
+        f'export PATH="/opt/homebrew/bin:{REAL_HOME}/.local/bin:' f'{REAL_HOME}/.cursor/bin:$PATH"'
     )
 
 
@@ -372,13 +425,24 @@ def _path_prefix() -> str:
 # HTTPS_PROXY reproduces the exact symptom; scrubbing it restores reliable output. The launchd fleet
 # proves this machine needs no proxy to reach the agent backends, so we strip the proxy family for
 # the agent subshell to match the fleet's clean env. Genuinely-proxied machines set ORCH_KEEP_PROXY=1.
-_PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY", "NO_PROXY",
-               "http_proxy", "https_proxy", "all_proxy", "ftp_proxy", "no_proxy")
+_PROXY_VARS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "FTP_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "ftp_proxy",
+    "no_proxy",
+)
 
 
 def _net_hygiene_prelude() -> str:
     """`unset` the inherited proxy family so a stray/dead *_PROXY can't blackhole the agent's HTTPS.
-    No-op when ORCH_KEEP_PROXY=1 (machines that truly require a proxy to reach the agent backends)."""
+    No-op when ORCH_KEEP_PROXY=1 (machines that truly require a proxy to reach the agent backends).
+    """
     if os.environ.get("ORCH_KEEP_PROXY") == "1":
         return ""
     return "unset " + " ".join(_PROXY_VARS) + "; "
@@ -387,9 +451,15 @@ def _net_hygiene_prelude() -> str:
 def _suspicious_net_env() -> list[str]:
     """Ambient network-affecting env vars present at dispatch — surfaced on a 0-byte timeout so an
     env-induced hang is self-diagnosing instead of mysterious (proxy is the confirmed culprit class;
-    CA-bundle / NODE_OPTIONS overrides are reported too because they can also wedge a TLS/agent start)."""
-    names = _PROXY_VARS + ("SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
-                           "NODE_EXTRA_CA_CERTS", "NODE_OPTIONS")
+    CA-bundle / NODE_OPTIONS overrides are reported too because they can also wedge a TLS/agent start).
+    """
+    names = _PROXY_VARS + (
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_OPTIONS",
+    )
     return [f"{n}={os.environ[n]}" for n in names if os.environ.get(n)]
 
 
@@ -457,16 +527,23 @@ def _ensure_agent_runtime(agent: str) -> Path:
         (base / "config").mkdir(parents=True, exist_ok=True)
         (base / "node-compile-cache").mkdir(parents=True, exist_ok=True)
         _runtime_link(REAL_HOME / ".cursor" / "cursor-agent.env", cursor_home / "cursor-agent.env")
-        _runtime_link(REAL_HOME / ".cursor" / "cli-config.json", base / "config" / "cli-config.json")
-        _runtime_link(REAL_HOME / ".cursor" / "agent-cli-state.json", base / "config" / "agent-cli-state.json")
+        _runtime_link(
+            REAL_HOME / ".cursor" / "cli-config.json", base / "config" / "cli-config.json"
+        )
+        _runtime_link(
+            REAL_HOME / ".cursor" / "agent-cli-state.json", base / "config" / "agent-cli-state.json"
+        )
     elif agent == "vibe":
         vibe_home = base / ".vibe"
         session_dir = vibe_home / "logs" / "session"
         session_dir.mkdir(parents=True, exist_ok=True)
         _runtime_link(REAL_HOME / ".vibe" / ".env", vibe_home / ".env")
-        _write_vibe_runtime_config(REAL_HOME / ".vibe" / "config.toml",
-                                   vibe_home / "config.toml", session_dir)
-        _runtime_link(REAL_HOME / ".vibe" / "trusted_folders.toml", vibe_home / "trusted_folders.toml")
+        _write_vibe_runtime_config(
+            REAL_HOME / ".vibe" / "config.toml", vibe_home / "config.toml", session_dir
+        )
+        _runtime_link(
+            REAL_HOME / ".vibe" / "trusted_folders.toml", vibe_home / "trusted_folders.toml"
+        )
     elif agent == "gemini":
         (base / "logs").mkdir(parents=True, exist_ok=True)
         gemini_dir = base / ".gemini"
@@ -501,12 +578,14 @@ def _agent_runtime_prelude(agent: str) -> str:
         # Cursor's login-keychain probe fails in restricted Codex subprocesses. Keep HOME real for
         # shell semantics, source CURSOR_API_KEY from the real auth file, and force Cursor to keep
         # only per-run credentials in memory while mutable data/cache live in the Orchestrator runtime.
-        exports.extend([
-            "export AGENT_CLI_CREDENTIAL_STORE=memory",
-            f"export CURSOR_DATA_DIR={shlex.quote(str(base / '.cursor'))}",
-            f"export CURSOR_CONFIG_DIR={shlex.quote(str(base / 'config'))}",
-            f"export NODE_COMPILE_CACHE={shlex.quote(str(base / 'node-compile-cache'))}",
-        ])
+        exports.extend(
+            [
+                "export AGENT_CLI_CREDENTIAL_STORE=memory",
+                f"export CURSOR_DATA_DIR={shlex.quote(str(base / '.cursor'))}",
+                f"export CURSOR_CONFIG_DIR={shlex.quote(str(base / 'config'))}",
+                f"export NODE_COMPILE_CACHE={shlex.quote(str(base / 'node-compile-cache'))}",
+            ]
+        )
     elif agent == "vibe":
         exports.append(f"export VIBE_HOME={shlex.quote(str(base / '.vibe'))}")
     return "; ".join(exports) + "; "
@@ -561,11 +640,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "capability_fallback": assignment.get("capability_fallback"),
         "requested_profile_id": assignment.get("requested_profile_id"),
     }
-    return {
-        key: value
-        for key, value in metadata.items()
-        if value not in (None, "", [], {})
-    }
+    return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
 
 
 def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
@@ -607,19 +682,24 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         # Local import avoids making deterministic dispatcher module import-time
         # dependent on the optional role layer (roles itself imports dispatcher).
         import roles
+
         role_activation = roles.activate_dispatch_roles(
             assignment, prompt, cwd=str(cwd), dry_run=dry_run
         )
         prompt = role_activation["prompt"]
         assignment = dict(assignment)
-        assignment["influenced_by_role_run_ids"] = list(dict.fromkeys(
-            list(assignment.get("influenced_by_role_run_ids") or [])
-            + list(role_activation.get("accepted_role_run_ids") or [])
-        ))
-        assignment["rejected_role_run_ids"] = list(dict.fromkeys(
-            list(assignment.get("rejected_role_run_ids") or [])
-            + list(role_activation.get("rejected_role_run_ids") or [])
-        ))
+        assignment["influenced_by_role_run_ids"] = list(
+            dict.fromkeys(
+                list(assignment.get("influenced_by_role_run_ids") or [])
+                + list(role_activation.get("accepted_role_run_ids") or [])
+            )
+        )
+        assignment["rejected_role_run_ids"] = list(
+            dict.fromkeys(
+                list(assignment.get("rejected_role_run_ids") or [])
+                + list(role_activation.get("rejected_role_run_ids") or [])
+            )
+        )
     except Exception as exc:
         # Role shadowing must never weaken or stop the deterministic dispatch rail.
         role_activation = {"error": str(exc), "prompt": prompt}
@@ -627,17 +707,23 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # and must not be lost because the optional role layer raised. `assignment` may still be the
     # caller's dict here, so copy before mutating.
     assignment = dict(assignment)
-    assignment["capability_ids"] = list(dict.fromkeys(
-        list(assignment.get("capability_ids") or [])
-        + _exercised_capability_ids(assignment, agent)
-    ))
+    assignment["capability_ids"] = list(
+        dict.fromkeys(
+            list(assignment.get("capability_ids") or [])
+            + _exercised_capability_ids(assignment, agent)
+        )
+    )
     prompt = f"{_agent_preamble(agent)}\n\n{prompt}"
     if agent == "gemini":
         prompt = _gemini_workspace_prompt(prompt, cwd)
     try:
         if selected_profile:
             argv = adapters.build_command(
-                agent, prompt, mode, cwd=cwd, profile=selected_profile,
+                agent,
+                prompt,
+                mode,
+                cwd=cwd,
+                profile=selected_profile,
                 transport=assignment.get("transport") or "local",
                 permission_mode=assignment.get("permission_mode"),
                 reasoning_effort=assignment.get("reasoning_effort"),
@@ -660,24 +746,35 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     release = shlex.join(["python3", str(CLAIMS_PY), "release", target, agent])
     # _net_hygiene_prelude lives INSIDE the agent subshell (release runs outside it, on the real env).
     wrapped = f"{path_prefix}; ({_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}); {release}"
-    return {"agent": agent, "mode": mode, "target": target, "lane": lane, "task_type": task_type,
-            "model": model, "cwd": str(cwd), "argv": argv, "wrapped": wrapped,
-            "worktree_missing": worktree_missing,
-            "feedback_mode": assignment.get("feedback_mode"),
-            "selected_profile_id": profile_id,
-            "requested_model": selected_profile.get("requested_model") if selected_profile else None,
-            "profile_policy_version": assignment.get("profile_policy_version"),
-            "profile_assignment_probability": assignment.get("profile_assignment_probability"),
-            "profile_decision": assignment.get("profile_decision"),
-            "routing_metadata": _routing_metadata(assignment),
-            "role_activation": role_activation,
-            "influenced_by_role_run_ids": list(assignment.get("influenced_by_role_run_ids") or []),
-            "rejected_role_run_ids": list(assignment.get("rejected_role_run_ids") or []),
-            "influenced_by_skill_event_ids": list(assignment.get("influenced_by_skill_event_ids") or []),
-            "influenced_by_workflow_ids": list(assignment.get("influenced_by_workflow_ids") or []),
-            "capability_ids": list(assignment.get("capability_ids") or []),
-            "capability_version_ids": list(assignment.get("capability_version_ids") or []),
-            "acceptance_gate_ids": list(assignment.get("acceptance_gate_ids") or [])}
+    return {
+        "agent": agent,
+        "mode": mode,
+        "target": target,
+        "lane": lane,
+        "task_type": task_type,
+        "model": model,
+        "cwd": str(cwd),
+        "argv": argv,
+        "wrapped": wrapped,
+        "worktree_missing": worktree_missing,
+        "feedback_mode": assignment.get("feedback_mode"),
+        "selected_profile_id": profile_id,
+        "requested_model": selected_profile.get("requested_model") if selected_profile else None,
+        "profile_policy_version": assignment.get("profile_policy_version"),
+        "profile_assignment_probability": assignment.get("profile_assignment_probability"),
+        "profile_decision": assignment.get("profile_decision"),
+        "routing_metadata": _routing_metadata(assignment),
+        "role_activation": role_activation,
+        "influenced_by_role_run_ids": list(assignment.get("influenced_by_role_run_ids") or []),
+        "rejected_role_run_ids": list(assignment.get("rejected_role_run_ids") or []),
+        "influenced_by_skill_event_ids": list(
+            assignment.get("influenced_by_skill_event_ids") or []
+        ),
+        "influenced_by_workflow_ids": list(assignment.get("influenced_by_workflow_ids") or []),
+        "capability_ids": list(assignment.get("capability_ids") or []),
+        "capability_version_ids": list(assignment.get("capability_version_ids") or []),
+        "acceptance_gate_ids": list(assignment.get("acceptance_gate_ids") or []),
+    }
 
 
 # Infrastructure capabilities this dispatch actually EXERCISES, tagged onto the run so the
@@ -694,8 +791,10 @@ def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
         out.append("agy-runtime-isolation")
     # router.py tags this only when Thompson sampling ACTUALLY chose a challenger, not merely when
     # the flag is set. Mirror that condition exactly; a routing choice influences the run it routed.
-    if (assignment.get("exploration")
-            and str(assignment.get("exploration_mode") or "") == "thompson-hybrid"):
+    if (
+        assignment.get("exploration")
+        and str(assignment.get("exploration_mode") or "") == "thompson-hybrid"
+    ):
         out.append("thompson-hybrid-routing")
     return out
 
@@ -733,7 +832,13 @@ def _spawn(d: dict) -> int:
     routing_metadata = d.get("routing_metadata") or {}
     if isinstance(routing_metadata, dict) and any(
         routing_metadata.get(key)
-        for key in ("profile_id", "selected_profile_id", "requested_profile_id", "arm_id", "member_id")
+        for key in (
+            "profile_id",
+            "selected_profile_id",
+            "requested_profile_id",
+            "arm_id",
+            "member_id",
+        )
     ):
         lineage_required = True
     run_args = (
@@ -764,10 +869,17 @@ def _spawn(d: dict) -> int:
             feedback.record_run(*run_args, **run_kwargs)
         except Exception as exc:
             adapters.record_ledger(
-                d["agent"], count=0, cost_usd=0.0, event="telemetry_error",
-                run_id=run_id, target=d["target"], mode=d.get("mode"),
-                model=d.get("model"), task_type=d.get("task_type"),
-                log_file=str(logf), started_ts=started_ts,
+                d["agent"],
+                count=0,
+                cost_usd=0.0,
+                event="telemetry_error",
+                run_id=run_id,
+                target=d["target"],
+                mode=d.get("mode"),
+                model=d.get("model"),
+                task_type=d.get("task_type"),
+                log_file=str(logf),
+                started_ts=started_ts,
                 error_hash=hashlib.sha256(str(exc).encode()).hexdigest(),
             )
             if lineage_required:
@@ -787,7 +899,18 @@ def _spawn(d: dict) -> int:
         # Profile telemetry is causal routing evidence, not best-effort logging.
         # Refuse to start if the replayable envelope cannot be retained.
         feedback.record_profile_decision(d["profile_decision"])
-    if selected_profile:
+    # SAME INVARIANT AS THE OFFLOAD PATH, applied here before this path can grow the same defect.
+    # It is latent today (no caller supplies `selected_profile_id`, so there are 0 worker attempts
+    # on non-offload runs) -- but the shape is identical, and gemini, cursor and vibe all dispatch
+    # through here, so the first caller to assign them a profile would start writing rows that can
+    # never resolve. Fixing one path and leaving its twin is how this defect comes back.
+    if selected_profile and not adapters.can_report_cli_identity(d["agent"])[0]:
+        print(
+            f"note: {d['agent']} keeps profile {selected_profile['profile_id']} but records no "
+            f"worker attempt ({adapters.can_report_cli_identity(d['agent'])[1]})",
+            file=sys.stderr,
+        )
+    elif selected_profile:
         feedback.record_execution_attempt(
             run_id,
             attempt_id=profile_attempt_id,
@@ -820,34 +943,59 @@ def _spawn(d: dict) -> int:
         policy_version=d.get("profile_policy_version"),
         propensity=d.get("profile_assignment_probability"),
     )
-    complete_cmd = shlex.join([
-        "python3", str(ORCH_DIR / "ledger_reconcile.py"), "complete",
-        "--run-id", run_id,
-        "--agent", d["agent"],
-        "--target", d["target"],
-        "--mode", str(d.get("mode") or ""),
-        "--task-type", str(d.get("task_type") or ""),
-        "--log-file", str(logf),
-        "--started-ts", str(started_ts),
-        "--selected-profile-id", str(d.get("selected_profile_id") or ""),
-        "--requested-model", str(d.get("requested_model") or ""),
-        "--policy-version", str(d.get("profile_policy_version") or ""),
-        "--propensity", str(d.get("profile_assignment_probability") or 0.0),
-    ])
+    complete_cmd = shlex.join(
+        [
+            "python3",
+            str(ORCH_DIR / "ledger_reconcile.py"),
+            "complete",
+            "--run-id",
+            run_id,
+            "--agent",
+            d["agent"],
+            "--target",
+            d["target"],
+            "--mode",
+            str(d.get("mode") or ""),
+            "--task-type",
+            str(d.get("task_type") or ""),
+            "--log-file",
+            str(logf),
+            "--started-ts",
+            str(started_ts),
+            "--selected-profile-id",
+            str(d.get("selected_profile_id") or ""),
+            "--requested-model",
+            str(d.get("requested_model") or ""),
+            "--policy-version",
+            str(d.get("profile_policy_version") or ""),
+            "--propensity",
+            str(d.get("profile_assignment_probability") or 0.0),
+        ]
+    )
     # Marker BEFORE the python completion: the python step gets SIGKILLed in the wild (audit F2);
     # the microsecond printf survives and ledger_reconcile backfills latency/exit from it.
     marker_cmd = adapters.done_marker_cmd(run_id, logf, "orch_dispatch_rc")
-    wrapped = f"{d['wrapped']}; orch_dispatch_rc=$?; {marker_cmd}; {complete_cmd}; exit $orch_dispatch_rc"
+    wrapped = (
+        f"{d['wrapped']}; orch_dispatch_rc=$?; {marker_cmd}; {complete_cmd}; exit $orch_dispatch_rc"
+    )
     with logf.open("a") as fh:
-        fh.write(f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} dispatch "
-                 f"{d['agent']}/{d['mode']} -> {d['target']} [{d['task_type']}] "
-                 f"cwd={d['cwd']} run_id={run_id} ===\n")
+        fh.write(
+            f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} dispatch "
+            f"{d['agent']}/{d['mode']} -> {d['target']} [{d['task_type']}] "
+            f"cwd={d['cwd']} run_id={run_id} ===\n"
+        )
         try:
-            proc = subprocess.Popen(["bash", "-lc", wrapped], cwd=d["cwd"],
-                                    stdout=fh, stderr=subprocess.STDOUT,
-                                    stdin=subprocess.DEVNULL, start_new_session=True)
+            proc = subprocess.Popen(
+                ["bash", "-lc", wrapped],
+                cwd=d["cwd"],
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         except Exception as exc:
-            if selected_profile:
+            # Only close what was opened -- an unreportable seat has no attempt row to complete.
+            if selected_profile and adapters.can_report_cli_identity(d["agent"])[0]:
                 feedback.complete_profile_attempt_unresolved(
                     run_id,
                     selected_profile_id=selected_profile["profile_id"],
@@ -884,7 +1032,9 @@ def _spawn(d: dict) -> int:
         )
         if not stamped:
             with logf.open("a") as fh:
-                fh.write("warn: claim metadata update returned false; redirect_sweep may use original claim metadata\n")
+                fh.write(
+                    "warn: claim metadata update returned false; redirect_sweep may use original claim metadata\n"
+                )
     except Exception as exc:
         with logf.open("a") as fh:
             fh.write(f"warn: claim metadata update failed: {exc}\n")
@@ -908,16 +1058,25 @@ def run(decision: dict, *, dry_run: bool = False, heartbeat: bool = True) -> dic
         else:
             d["pid"] = _spawn(d)
             launched.append(d)
-    return {"dry_run": dry_run, "launched": launched, "skipped": skipped,
-            "count": len(launched)}
+    return {"dry_run": dry_run, "launched": launched, "skipped": skipped, "count": len(launched)}
 
 
-def delegate(agent: str, target: str, lane: str, prompt: str, mode: str | None = None,
-             task_type: str = "implement", profile_id: str | None = None, *,
-             influenced_by_role_run_ids=None, influenced_by_skill_event_ids=None,
-             influenced_by_workflow_ids=None, capability_ids=None,
-             capability_version_ids=None,
-             acceptance_gate_ids=None) -> dict:
+def delegate(
+    agent: str,
+    target: str,
+    lane: str,
+    prompt: str,
+    mode: str | None = None,
+    task_type: str = "implement",
+    profile_id: str | None = None,
+    *,
+    influenced_by_role_run_ids=None,
+    influenced_by_skill_event_ids=None,
+    influenced_by_workflow_ids=None,
+    capability_ids=None,
+    capability_version_ids=None,
+    acceptance_gate_ids=None,
+) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
     wrapper). Returns {pid, log, worktree} to monitor, or {error}. This is the seat's hand —
@@ -929,25 +1088,34 @@ def delegate(agent: str, target: str, lane: str, prompt: str, mode: str | None =
     if not claims.claim(target, agent):
         h = claims.holder(target)
         return {"error": f"target already claimed by {h.get('agent') if h else 'another agent'}"}
-    a = {"agent": agent, "target": target, "lane": lane, "task_type": task_type,
-         "mode": mode, "prompt": prompt, "feedback_mode": "local",
-         "influenced_by_role_run_ids": list(influenced_by_role_run_ids or []),
-         "influenced_by_skill_event_ids": list(influenced_by_skill_event_ids or []),
-         "influenced_by_workflow_ids": list(influenced_by_workflow_ids or []),
-         "capability_ids": list(capability_ids or []),
-         "capability_version_ids": list(capability_version_ids or []),
-         "acceptance_gate_ids": list(acceptance_gate_ids or [])}
+    a = {
+        "agent": agent,
+        "target": target,
+        "lane": lane,
+        "task_type": task_type,
+        "mode": mode,
+        "prompt": prompt,
+        "feedback_mode": "local",
+        "influenced_by_role_run_ids": list(influenced_by_role_run_ids or []),
+        "influenced_by_skill_event_ids": list(influenced_by_skill_event_ids or []),
+        "influenced_by_workflow_ids": list(influenced_by_workflow_ids or []),
+        "capability_ids": list(capability_ids or []),
+        "capability_version_ids": list(capability_version_ids or []),
+        "acceptance_gate_ids": list(acceptance_gate_ids or []),
+    }
     if profile_id:
         profile = execution_profiles.get_profile(profile_id)
-        a.update({
-            "selected_profile_id": profile_id,
-            "requested_model": profile["requested_model"],
-            "reasoning_effort": profile["reasoning_effort"],
-            "permission_mode": profile["permission_mode"],
-            "transport": "local",
-            "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
-            "profile_assignment_probability": 1.0,
-        })
+        a.update(
+            {
+                "selected_profile_id": profile_id,
+                "requested_model": profile["requested_model"],
+                "reasoning_effort": profile["reasoning_effort"],
+                "permission_mode": profile["permission_mode"],
+                "transport": "local",
+                "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
+                "profile_assignment_probability": 1.0,
+            }
+        )
     d = plan_dispatch(a, dry_run=False)
     if d is None:
         claims.release(target, agent)
@@ -964,20 +1132,33 @@ def delegate(agent: str, target: str, lane: str, prompt: str, mode: str | None =
     # local-agent delegations never get a success/failure signal — only remote ones did.
     if not profile_id:
         try:
-            feedback.record_run(d["run_id"], target, task_type, agent,
-                                mode="local", reasoning_level=mode, model=d.get("model"),
-                                routing_metadata=d.get("routing_metadata"),
-                                influenced_by_role_run_ids=d.get("influenced_by_role_run_ids"),
-                                influenced_by_skill_event_ids=d.get("influenced_by_skill_event_ids"),
-                                influenced_by_workflow_ids=d.get("influenced_by_workflow_ids"),
-                                capability_ids=d.get("capability_ids"),
-                                capability_version_ids=d.get("capability_version_ids"),
-                                acceptance_gate_ids=d.get("acceptance_gate_ids"))
+            feedback.record_run(
+                d["run_id"],
+                target,
+                task_type,
+                agent,
+                mode="local",
+                reasoning_level=mode,
+                model=d.get("model"),
+                routing_metadata=d.get("routing_metadata"),
+                influenced_by_role_run_ids=d.get("influenced_by_role_run_ids"),
+                influenced_by_skill_event_ids=d.get("influenced_by_skill_event_ids"),
+                influenced_by_workflow_ids=d.get("influenced_by_workflow_ids"),
+                capability_ids=d.get("capability_ids"),
+                capability_version_ids=d.get("capability_version_ids"),
+                acceptance_gate_ids=d.get("acceptance_gate_ids"),
+            )
         except Exception:
             pass
-    return {"pid": d["pid"], "log": str(DISPATCH_LOG_DIR / f"{safe}.{agent}.log"),
-            "worktree": d["cwd"], "agent": agent, "target": target, "mode": mode,
-            "run_id": d["run_id"]}
+    return {
+        "pid": d["pid"],
+        "log": str(DISPATCH_LOG_DIR / f"{safe}.{agent}.log"),
+        "worktree": d["cwd"],
+        "agent": agent,
+        "target": target,
+        "mode": mode,
+        "run_id": d["run_id"],
+    }
 
 
 def _default_offload_timeout(agent: str, requested: int | None) -> int:
@@ -1053,9 +1234,10 @@ def _capability_heartbeat(event_type: str, *, agent: str, mode: str | None) -> N
     """
     try:
         import capabilities
+
         capabilities.production_heartbeat(
-            "offload", event_type, ref=f"{agent}:{mode}",
-            metadata={"agent": agent, "mode": mode})
+            "offload", event_type, ref=f"{agent}:{mode}", metadata={"agent": agent, "mode": mode}
+        )
     except Exception:
         pass
 
@@ -1076,7 +1258,19 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
         if not profiles:
             return None
-        candidate_ids = sorted(profile["profile_id"] for profile in profiles)
+        # HONOUR THE TIER THE CODEBASE ALREADY CHOSE. `DEFAULT_OFFLOAD_TIER` is "mid" with a comment
+        # that had already diagnosed this exact waste -- "a codex offload burned Sol and a gemini
+        # offload burned Pro" -- and selecting from ALL offload-capable profiles silently overrode
+        # it: with only a Pro profile registered, every gemini read was routed to the reasoning
+        # tier, and with three codex profiles it picked whichever sorted first.
+        #
+        # An offload is an advisory READ. Where the seat has a tier ladder, take the rung the ladder
+        # names for that tier; a single-lane seat (cursor, vibe, aider) has no ladder and keeps its
+        # one profile. Falling back to the full candidate set means a seat whose tier model has no
+        # registered profile behaves exactly as before rather than losing its profile entirely.
+        tier_model = adapters.resolve_model(agent, adapters.DEFAULT_OFFLOAD_TIER)
+        tiered = [p for p in profiles if tier_model and p["requested_model"] == tier_model]
+        candidate_ids = sorted(profile["profile_id"] for profile in (tiered or profiles))
         envelope = execution_profiles.select_profile(
             "offload",
             None,
@@ -1093,9 +1287,16 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         return None
 
 
-def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
-            timeout: int | None = None, isolate: bool = False,
-            profile_id: str | None = None, research_round: str | None = None) -> dict:
+def offload(
+    agent: str,
+    prompt: str,
+    cwd: str = ".",
+    mode: str | None = None,
+    timeout: int | None = None,
+    isolate: bool = False,
+    profile_id: str | None = None,
+    research_round: str | None = None,
+) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
     By default this runs in `cwd`. With isolate=True, it first copies `cwd` to a persistent local
@@ -1119,8 +1320,13 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     # shedding, which is a shed, not a stop. Checked FIRST, before provisioning, model resolution or
     # any ledger write, so a disabled offload spends nothing at all.
     if os.environ.get("ORCH_OFFLOAD_DISABLED", "").strip() == "1":
-        return {"error": "offload disabled by ORCH_OFFLOAD_DISABLED=1", "agent": agent,
-                "disabled": True, "exit": None, "run_id": None}
+        return {
+            "error": "offload disabled by ORCH_OFFLOAD_DISABLED=1",
+            "agent": agent,
+            "disabled": True,
+            "exit": None,
+            "run_id": None,
+        }
     if mode is None:
         # Offloads are advisory READS, but this defaulted to 'full' for years — so a codex offload
         # burned Sol (flagship) and a gemini offload burned 3.1 Pro, contradicting the "runs a
@@ -1169,27 +1375,73 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         # Agents with no profile registered for this transport are UNCHANGED: the selection is
         # skipped entirely, so nothing that worked before starts behaving differently.
         profile = _select_offload_profile(agent, mode)
+    # One name for the profile that is ACTUALLY in force, so the ledger, the routing metadata and
+    # the worker attempt cannot disagree about which profile ran.
+    effective_profile_id = profile["profile_id"] if profile else None
+    # WHY THIS ROW WOULD EXIST, resolved once per offload. Two different reasons justify a worker
+    # attempt, and keying on only one of them was wrong in both directions:
+    #
+    #   * the run is EVIDENCE -- bound to a registered research round, where the attempt is the
+    #     join that lets the round become a minable episode. True for any seat, because the round's
+    #     arms are whichever agents actually did the work.
+    #   * the seat can RESOLVE -- its CLI records what served the run, so the row carries real model
+    #     provenance and feeds drift detection. True for any run, round-bound or not.
+    #
+    # Gating on `can_report` alone (as first written) silenced exactly the case this is for: a
+    # gemini- or cursor-armed audit round could no longer produce an episode at all, which broke the
+    # round-registration path built for it hours earlier. Gating on nothing produced the junk: an
+    # unbound production offload by a seat that can never resolve leaves a row asserting the one
+    # thing it cannot establish, 230 times per two days, with nothing to decrement it.
+    #
+    # The pair is the predicate. An unbound offload by an unreportable seat is the only case that
+    # writes nothing, and it is the only case where the row could never be used for anything.
+    can_report, no_report_reason = adapters.can_report_cli_identity(agent)
+    is_evidence = bool(research_round)
+    record_worker_attempt = can_report or is_evidence
+    # Set from the run's OWN stream-json output when the tool reports it; the completion path below
+    # prefers it over any store probe. Declared here so both live in the same scope.
+    observed_model: str | None = None
     argv = (
         adapters.build_command(
-            agent, prepared_prompt, mode, cwd=run_cwd, profile=profile,
+            agent,
+            prepared_prompt,
+            mode,
+            cwd=run_cwd,
+            profile=profile,
             transport="offload",
         )
         if profile
-        else adapters.build_command(agent, prepared_prompt, mode, cwd=run_cwd)
-    )   # raises ValueError on unknown agent
+        else adapters.build_command(agent, prepared_prompt, mode, cwd=run_cwd, transport="offload")
+    )  # raises ValueError on unknown agent
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
         _align_gemini_print_timeout(argv, timeout)
+    # A PER-RUN agy LOG, because agy reports its model there and nowhere else. Its structured output
+    # carries only conversation_id/cwd/usage, but its log says
+    # `Propagating selected model override to backend: label="..."`. The default `--log-file` is one
+    # SHARED path for every gemini run, which is unattributable for exactly the reason cursor's
+    # reused `/private/tmp` was: a line in a shared file belongs to no particular run. Rewriting the
+    # value here follows the `--add-dir` precedent directly above and needs no signature change.
+    # Both of these must be settled BEFORE `wrapped` is composed, because `wrapped` freezes argv
+    # into a shell string: an argv edit after that point changes nothing that runs. The first
+    # version of this rewrite sat below and was therefore inert -- the run still wrote to the shared
+    # log, and the only symptom was a model that never resolved.
+    DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logf = DISPATCH_LOG_DIR / f"offload.{agent}.{time.time_ns()}.log"
+    agy_log: Path | None = None
+    if agent == "gemini" and "--log-file" in argv:
+        agy_log = logf.with_suffix(".agy.log")
+        argv[argv.index("--log-file") + 1] = str(agy_log)
     auth_prelude = _auth_prelude(agent)
     agent_prelude = _agent_runtime_prelude(agent)
-    wrapped = f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
+    wrapped = (
+        f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
+    )
     run_id = f"offload:{agent}:{time.time_ns()}"
     target = f"offload:{run_cwd}"
     task_type = "offload"
     model = adapters.model_identity(agent, mode, profile)
     started_ts = int(time.time())
-    DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    logf = DISPATCH_LOG_DIR / f"offload.{agent}.{time.time_ns()}.log"
     adapters.record_ledger(
         agent,
         count=1,
@@ -1202,25 +1454,58 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         task_type=task_type,
         log_file=str(logf),
         started_ts=started_ts,
-        selected_profile_id=profile_id,
+        # THE EFFECTIVE profile, not the caller's argument. `profile_id` is the parameter, which is
+        # None whenever the profile was chosen internally -- i.e. always, since no caller passes
+        # one. So the ledger recorded `selected_profile_id: null` beside `propensity: 1.0` and a
+        # policy version, describing a decision with no subject, and `reconcile` builds its
+        # `profile_ids` set from exactly this field: that is why the branch which resolves a worker
+        # attempt could never fire (250 marker backfills, 0 resolved, every run). The attempt row
+        # below always used `profile["profile_id"]`, so the run disagreed with itself.
+        selected_profile_id=effective_profile_id,
         requested_model=profile.get("requested_model") if profile else None,
         policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
         propensity=1.0 if profile else None,
     )
+
     def _record_offload_run() -> None:
         feedback.record_run(
-            run_id, target, task_type, agent, mode="offload",
+            run_id,
+            target,
+            task_type,
+            agent,
+            mode="offload",
             experiment_id=research_round or None,
-            reasoning_level=(profile.get("reasoning_effort") if profile else mode), model=model,
-            routing_metadata={
-                "selected_profile_id": profile_id,
-                "requested_model": profile.get("requested_model"),
-                "transport": "offload",
-                "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
-                "profile_assignment_probability": 1.0,
-            } if profile else None,
+            reasoning_level=(profile.get("reasoning_effort") if profile else mode),
+            model=model,
+            routing_metadata=(
+                {
+                    "selected_profile_id": effective_profile_id,
+                    "requested_model": profile.get("requested_model"),
+                    "transport": "offload",
+                    "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
+                    "profile_assignment_probability": 1.0,
+                }
+                if profile
+                else None
+            ),
         )
-        if profile:
+        # A WORKER ATTEMPT IS A PROVENANCE RECORD, so only a seat that can supply provenance may
+        # write one. Recording it for every profiled seat produced rows asserting the single thing
+        # they can never establish: cursor wrote 23 in five hours, each completed `unresolved` with
+        # the same prose reason re-cached per row, and at ~230 offloads every two days it never
+        # stops. Nothing decrements that -- it is an unbounded backlog whose drain is the very
+        # capability the seat lacks, and it dragged `resolved_model_coverage` for the profile to a
+        # permanent 0.00 over a denominator that only grows.
+        #
+        # The profile still applies: it is what puts the bare vendor id on the command line, and the
+        # ledger row and routing metadata still record which profile was in force, so the request
+        # stays fully auditable. What is withheld is only the claim we cannot back.
+        #
+        # Not a silent skip. The reason is a static property of the seat held in ONE place
+        # (`adapters.can_report_cli_identity`), reported by `mining_coverage` per seat, so adding a
+        # reader for a seat flips it on and the attempts begin -- that is the drain, and it needs
+        # none of the existing rows cleared first.
+        if profile and record_worker_attempt:
             feedback.record_execution_attempt(
                 run_id,
                 attempt_id=f"attempt:profile:{run_id}",
@@ -1232,6 +1517,12 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
                 source="orchestrator-profile-decision",
                 started_ts=started_ts,
             )
+        elif profile:
+            print(
+                f"note: {agent} offload keeps its profile but records no worker attempt "
+                f"({no_report_reason}; not bound to a research round)",
+                file=sys.stderr,
+            )
 
     if profile:
         _record_offload_run()  # fail closed before subprocess execution
@@ -1241,9 +1532,11 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         except Exception:
             pass
     with logf.open("a") as fh:
-        fh.write(f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} offload "
-                 f"{agent}/{mode} cwd={run_cwd} process_cwd={proc_cwd} timeout={timeout}s "
-                 f"run_id={run_id} ===\n")
+        fh.write(
+            f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} offload "
+            f"{agent}/{mode} cwd={run_cwd} process_cwd={proc_cwd} timeout={timeout}s "
+            f"run_id={run_id} ===\n"
+        )
     max_network_retries = max(0, _env_int("ORCH_OFFLOAD_NETWORK_RETRIES", 1))
     retry_backoff_s = max(0.0, _env_float("ORCH_OFFLOAD_RETRY_BACKOFF_S", 3.0))
     complete_written = False
@@ -1270,17 +1563,43 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             policy_version=execution_profiles.PROFILE_POLICY_VERSION if profile else None,
             propensity=1.0 if profile else None,
         )
-        if profile:
-            # The Codex CLI's bounded completion output does not currently carry
-            # a provider-resolved model identity. Close the selected attempt as
-            # explicitly unresolved instead of leaving a permanent `started`
-            # row or copying requested_model into resolved_model.
-            feedback.complete_profile_attempt_unresolved(
-                run_id,
-                selected_profile_id=profile["profile_id"],
-                fallback_reason="resolved_model_not_reported_by_offload",
-                completed_ts=int(time.time()),
+        # Only close what was opened -- reaching for a row deliberately not created is how a
+        # "stop recording this" change quietly becomes a crash.
+        if profile and record_worker_attempt:
+            # RESOLVE HERE, NOT IN A LATER SWEEP. This closed every attempt `unresolved` on the
+            # grounds that the CLI's completion output carries no model -- true of stdout, but the
+            # CLI has just written its OWN session record, and this is the moment we know the agent,
+            # the workspace and the run window. Resolving post-hoc instead left every attempt
+            # stranded until a sweep noticed, made that sweep the mechanism rather than a backstop,
+            # and let a row sit unresolved forever if the sweep never ran.
+            #
+            # Still never a fallback to the requested model: a seat whose store does not name what
+            # served closes unresolved with the reason, exactly as before.
+            # The run's own report wins: it is exact for THIS run, where a store probe has to
+            # match a workspace and a window and can pick a neighbour's session.
+            probe = (
+                {"model": observed_model, "reason": None}
+                if observed_model
+                else adapters.cli_reported_model(agent, run_cwd, started_ts=started_ts)
             )
+            if probe.get("model"):
+                feedback.complete_profile_attempt(
+                    run_id,
+                    selected_profile_id=profile["profile_id"],
+                    resolved_provider=profile["provider"],
+                    resolved_model=probe["model"],
+                    completed_ts=int(time.time()),
+                )
+            else:
+                feedback.complete_profile_attempt_unresolved(
+                    run_id,
+                    selected_profile_id=profile["profile_id"],
+                    fallback_reason=(
+                        f"resolved_model_not_reported_by_offload:"
+                        f"{probe.get('reason') or 'unknown'}"
+                    )[:200],
+                    completed_ts=int(time.time()),
+                )
         # Instant meter (2026-07-03 audit F2): don't wait a day for ledger_reconcile to pair the
         # ndjson events — the offload runs synchronously, so latency is known RIGHT NOW. Write the
         # costs row immediately; the daily reconcile recomputes the same values (INSERT OR REPLACE,
@@ -1298,12 +1617,23 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
     attempt_stderr = ""
 
     def _run_offload_attempt() -> dict:
+        # `nonlocal`, because the model this attempt observes must reach `_record_complete` in the
+        # ENCLOSING scope. Without it the assignment below made a local that the completion never
+        # saw: the parse found `composer-2.5` and the attempt still closed `unresolved`, which is
+        # the most deceptive possible failure -- the reader worked and the row said it had not.
+        nonlocal observed_model
         nonlocal attempt_stderr
         attempt_stderr = ""
         try:
             # stdin=DEVNULL (matches _spawn): never let an agent CLI block reading an inherited pipe/TTY.
-            proc = subprocess.run(["bash", "-lc", wrapped], cwd=str(proc_cwd), capture_output=True,
-                                  text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+            proc = subprocess.run(
+                ["bash", "-lc", wrapped],
+                cwd=str(proc_cwd),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
         except subprocess.TimeoutExpired:
             # A 0-byte timeout is the env-induced-hang signature; surface the ambient network env so the
             # cause is legible (proxy is scrubbed by default — if one shows here, ORCH_KEEP_PROXY=1 is set).
@@ -1316,22 +1646,33 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: timed out after {timeout}s\n")
                 if suspicious:
-                    fh.write("Suspect inherited env (proxy/CA/NODE_OPTIONS):\n  " + "\n  ".join(suspicious) + "\n")
+                    fh.write(
+                        "Suspect inherited env (proxy/CA/NODE_OPTIONS):\n  "
+                        + "\n  ".join(suspicious)
+                        + "\n"
+                    )
                 if agent_log_tail:
                     fh.write("[agent log tail]\n")
                     fh.write(agent_log_tail)
                     if not agent_log_tail.endswith("\n"):
                         fh.write("\n")
-            out = {"agent": agent, "exit": 124, "output": "", "error": error,
-                   "cwd": str(run_cwd), "process_cwd": str(proc_cwd),
-                   "isolated_cwd": str(run_cwd) if isolate else None,
-                   # Surfaced so a CALLER can record which model it spent. Without this a role run
-                   # had no way to record one at all: 450 local role runs carried model=NULL, i.e.
-                   # unattributable spend. This is a telemetry field, NOT a provenance claim -- it
-                   # may be a synthetic adapter tag, so it must never be read as a
-                   # provider-resolved identity for a worker attempt.
-                   "model": model,
-                   "run_id": run_id, "log": str(logf)}
+            out = {
+                "agent": agent,
+                "exit": 124,
+                "output": "",
+                "error": error,
+                "cwd": str(run_cwd),
+                "process_cwd": str(proc_cwd),
+                "isolated_cwd": str(run_cwd) if isolate else None,
+                # Surfaced so a CALLER can record which model it spent. Without this a role run
+                # had no way to record one at all: 450 local role runs carried model=NULL, i.e.
+                # unattributable spend. This is a telemetry field, NOT a provenance claim -- it
+                # may be a synthetic adapter tag, so it must never be read as a
+                # provider-resolved identity for a worker attempt.
+                "model": model,
+                "run_id": run_id,
+                "log": str(logf),
+            }
             if agent_log_tail:
                 out["agent_log_tail"] = agent_log_tail
             return out
@@ -1354,6 +1695,36 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
             raise
         attempt_stderr = proc.stderr or ""
+        # THE RUN REPORTED ITS OWN MODEL. When the transport asked for stream-json, the tool's
+        # `system/init` event names the model that actually served -- `gen_ai.response.model` in
+        # OpenTelemetry's terms, as opposed to the `--model` we requested. Read it here, from THIS
+        # run's stdout, so there is no workspace to match and no time window to guess: the reason
+        # all 24 cursor offloads were unresolvable is that they shared `/private/tmp`, so no session
+        # in cursor's own store was attributable to any single one of them.
+        #
+        # The stream is then reduced to its final result text before anyone sees it, so every
+        # existing caller keeps the plain-text contract it already expects.
+        # agy reports in its LOG, not its stdout, so read the per-run log this run was given.
+        if agy_log is not None and observed_model is None:
+            try:
+                agy_text = agy_log.read_text(errors="replace")
+            except OSError:
+                agy_text = ""
+            agy_label = adapters.model_label_from_agy_log(agy_text)
+            if agy_label:
+                observed_model = adapters.model_id_for_label(agent, agy_label)
+        if proc.stdout and '"subtype":"init"' in proc.stdout:
+            stream = adapters.observed_model_from_stream(proc.stdout)
+            label = stream.get("model_label")
+            if label:
+                observed_model = adapters.model_id_for_label(agent, label)
+            if stream.get("result_text") is not None:
+                proc = subprocess.CompletedProcess(
+                    getattr(proc, "args", argv),
+                    proc.returncode,
+                    stream["result_text"],
+                    proc.stderr,
+                )
         with logf.open("a") as fh:
             if proc.stdout:
                 fh.write(proc.stdout)
@@ -1370,7 +1741,9 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         if raw_exit != 0:
             error = f"agent exited {raw_exit}"
         else:
-            incomplete = _offload_incomplete_reason(proc.stdout or "", progress_only=(agent == "gemini"))
+            incomplete = _offload_incomplete_reason(
+                proc.stdout or "", progress_only=(agent == "gemini")
+            )
             if incomplete:
                 error = incomplete
                 exit_code = 70
@@ -1387,12 +1760,18 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
                     fh.write(agent_log_tail)
                     if not agent_log_tail.endswith("\n"):
                         fh.write("\n")
-        out = {"agent": agent, "exit": exit_code, "output": (proc.stdout or "").strip(),
-               "model": model,
-               "stderr_tail": (proc.stderr or "")[-800:], "cwd": str(run_cwd),
-               "process_cwd": str(proc_cwd),
-               "isolated_cwd": str(run_cwd) if isolate else None,
-               "run_id": run_id, "log": str(logf)}
+        out = {
+            "agent": agent,
+            "exit": exit_code,
+            "output": (proc.stdout or "").strip(),
+            "model": model,
+            "stderr_tail": (proc.stderr or "")[-800:],
+            "cwd": str(run_cwd),
+            "process_cwd": str(proc_cwd),
+            "isolated_cwd": str(run_cwd) if isolate else None,
+            "run_id": run_id,
+            "log": str(logf),
+        }
         if agent_log_tail:
             out["agent_log_tail"] = agent_log_tail
         if raw_exit != exit_code:
@@ -1411,12 +1790,16 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
             break
         if attempt > max_network_retries:
             break
-        if not _is_transient_network_failure(out.get("error"), out.get("agent_log_tail", ""), attempt_stderr):
+        if not _is_transient_network_failure(
+            out.get("error"), out.get("agent_log_tail", ""), attempt_stderr
+        ):
             break
         error_for_log = out.get("error") or f"exit {out.get('exit')}"
         with logf.open("a") as fh:
-            fh.write(f"[orchestrator] transient network failure ({error_for_log}); "
-                     f"retry {attempt}/{max_network_retries} after {retry_backoff_s}s\n")
+            fh.write(
+                f"[orchestrator] transient network failure ({error_for_log}); "
+                f"retry {attempt}/{max_network_retries} after {retry_backoff_s}s\n"
+            )
         if retry_backoff_s:
             time.sleep(retry_backoff_s)
     if attempts > 1:
@@ -1437,14 +1820,25 @@ def _remote_label_cmd(target: str, agent: str) -> list:
     # opener applies agent:<X> to a ready ISSUE (LABELS.md: drives intake -> creates the PR) OR a fresh PR
     # (keepalive runs it). Same label, one command for both — resolves the issue-vs-PR gap.
     repo, num = provision.parse_target(target)
-    return ["gh", "api", "--method", "POST", f"repos/{repo}/issues/{num}/labels", "-f", f"labels[]=agent:{agent}"]
+    return [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{repo}/issues/{num}/labels",
+        "-f",
+        f"labels[]=agent:{agent}",
+    ]
 
 
 def _target_labels(target: str) -> set:
     """Live: label names on the target ISSUE or PR via the issues API (works for both). Empty set on error."""
     repo, num = provision.parse_target(target)
-    r = subprocess.run(["gh", "api", f"repos/{repo}/issues/{num}", "--jq", ".labels[].name"],
-                       capture_output=True, text=True)
+    r = subprocess.run(
+        ["gh", "api", f"repos/{repo}/issues/{num}", "--jq", ".labels[].name"],
+        capture_output=True,
+        text=True,
+    )
     return set(r.stdout.split()) if r.returncode == 0 else set()
 
 
@@ -1462,44 +1856,76 @@ def _remote_skip_reason(labels: set, agent: str) -> str | None:
     return None
 
 
-def delegate_remote(agent: str, target: str, *, task_type: str = "implement", rationale: str = "",
-                    dry_run: bool = False, labels: set | None = None,
-                    influenced_by_role_run_ids=None, influenced_by_skill_event_ids=None,
-                    influenced_by_workflow_ids=None, capability_ids=None,
-                    acceptance_gate_ids=None) -> dict:
+def delegate_remote(
+    agent: str,
+    target: str,
+    *,
+    task_type: str = "implement",
+    rationale: str = "",
+    dry_run: bool = False,
+    labels: set | None = None,
+    influenced_by_role_run_ids=None,
+    influenced_by_skill_event_ids=None,
+    influenced_by_workflow_ids=None,
+    capability_ids=None,
+    acceptance_gate_ids=None,
+) -> dict:
     """Drive the REMOTE keepalive instead of a local agent: apply `agent:<agent>` to the target PR so
     GitHub runs reusable-<agent>-run.yml on a runner. The orchestrator's CHOICE of agent is the value
     (route-table + learned weights); execution + capacity are remote. Records the decision (mode=remote)
     so keepalive outcomes join the feedback loop by PR later. Cooperates with the rails (gate #4): skips
-    a paused/already-owned PR. Does NOT spawn or claim locally. `labels` overrides the live lookup (tests)."""
+    a paused/already-owned PR. Does NOT spawn or claim locally. `labels` overrides the live lookup (tests).
+    """
     if agent not in REMOTE_AGENTS:
-        return {"error": f"'{agent}' is not a keepalive-runnable remote agent {sorted(REMOTE_AGENTS)}"}
+        return {
+            "error": f"'{agent}' is not a keepalive-runnable remote agent {sorted(REMOTE_AGENTS)}"
+        }
     repo, num = provision.parse_target(target)
     if num is None:
         return {"error": f"remote delegation needs a PR number: {target!r}"}
     cmd = _remote_label_cmd(target, agent)
-    lbls = labels if labels is not None else _target_labels(target)   # fetch (read-only) so dry-run shadows the rails too
+    lbls = (
+        labels if labels is not None else _target_labels(target)
+    )  # fetch (read-only) so dry-run shadows the rails too
     skip = _remote_skip_reason(lbls, agent)
     if dry_run:
-        return {"target": target, "agent": agent, "label": f"agent:{agent}", "cmd": cmd,
-                "dry_run": True, "skip": skip}
-    if skip:                                  # rails: respect pause / existing ownership
+        return {
+            "target": target,
+            "agent": agent,
+            "label": f"agent:{agent}",
+            "cmd": cmd,
+            "dry_run": True,
+            "skip": skip,
+        }
+    if skip:  # rails: respect pause / existing ownership
         return {"target": target, "agent": agent, "applied": False, "skip": skip}
     res = subprocess.run(cmd, capture_output=True, text=True)
     applied = res.returncode == 0
-    try:   # decision capture — keepalive outcomes (merge/durability) join this by PR later
-        feedback.record_run(f"remote:{repo}#{num}:{agent}", target, task_type, agent, mode="remote",
-                            rationale=rationale or "remote keepalive delegation via agent label",
-                            pr_number=num, model=adapters.model_identity(agent, None),
-                            influenced_by_role_run_ids=influenced_by_role_run_ids,
-                            influenced_by_skill_event_ids=influenced_by_skill_event_ids,
-                            influenced_by_workflow_ids=influenced_by_workflow_ids,
-                            capability_ids=capability_ids,
-                            acceptance_gate_ids=acceptance_gate_ids)
+    try:  # decision capture — keepalive outcomes (merge/durability) join this by PR later
+        feedback.record_run(
+            f"remote:{repo}#{num}:{agent}",
+            target,
+            task_type,
+            agent,
+            mode="remote",
+            rationale=rationale or "remote keepalive delegation via agent label",
+            pr_number=num,
+            model=adapters.model_identity(agent, None),
+            influenced_by_role_run_ids=influenced_by_role_run_ids,
+            influenced_by_skill_event_ids=influenced_by_skill_event_ids,
+            influenced_by_workflow_ids=influenced_by_workflow_ids,
+            capability_ids=capability_ids,
+            acceptance_gate_ids=acceptance_gate_ids,
+        )
     except Exception:
         pass
-    return {"target": target, "agent": agent, "label": f"agent:{agent}", "applied": applied,
-            "stderr": (res.stderr or "")[-300:] if not applied else ""}
+    return {
+        "target": target,
+        "agent": agent,
+        "label": f"agent:{agent}",
+        "applied": applied,
+        "stderr": (res.stderr or "")[-300:] if not applied else "",
+    }
 
 
 def load_decision() -> dict:
@@ -1525,7 +1951,7 @@ def _selftest() -> None:
     DISPATCH_LOG_DIR = HANDOFF / "dispatch-logs"
     OFFLOAD_DIR = HANDOFF / "offloads"
     AGENT_RUNTIME_DIR = HANDOFF / "agent-runtime"
-    adapters.HANDOFF = HANDOFF              # so record_ledger writes into tmp
+    adapters.HANDOFF = HANDOFF  # so record_ledger writes into tmp
     adapters.LEDGER = HANDOFF / "capacity-ledger.ndjson"
     feedback.DB_PATH = HANDOFF / "feedback" / "orchestrator.db"
     try:
@@ -1535,21 +1961,45 @@ def _selftest() -> None:
             shown = _offload_prompt("SHOW-PROMPT TASK", HANDOFF, agent)
             assert persona in shown and CRITICAL_EVALUATOR_DIRECTIVE in shown, shown
 
-        decision = {"assignments": [
-            {"agent": "cursor", "mode": "composer", "target": "stranske/Repo#1",
-             "task_type": "mechanical", "lane": "closer",
-             "reason": "mechanical→cursor/composer (ok) via thompson-hybrid exploration",
-             "exploration": True, "exploration_mode": "thompson-hybrid",
-             "capacity_state": "ok", "capacity_policy": ""},
-            {"agent": "claude", "mode": "full", "target": "stranske/Repo#2",
-             "task_type": "implement", "lane": "opener"},
-            {"agent": "vibe", "mode": "full", "target": "stranske/Repo#3",
-             "task_type": "review", "lane": "closer"},
-            {"agent": "bogus", "mode": "full", "target": "stranske/Repo#4",
-             "task_type": "mechanical", "lane": "closer"},
-        ]}
+        decision = {
+            "assignments": [
+                {
+                    "agent": "cursor",
+                    "mode": "composer",
+                    "target": "stranske/Repo#1",
+                    "task_type": "mechanical",
+                    "lane": "closer",
+                    "reason": "mechanical→cursor/composer (ok) via thompson-hybrid exploration",
+                    "exploration": True,
+                    "exploration_mode": "thompson-hybrid",
+                    "capacity_state": "ok",
+                    "capacity_policy": "",
+                },
+                {
+                    "agent": "claude",
+                    "mode": "full",
+                    "target": "stranske/Repo#2",
+                    "task_type": "implement",
+                    "lane": "opener",
+                },
+                {
+                    "agent": "vibe",
+                    "mode": "full",
+                    "target": "stranske/Repo#3",
+                    "task_type": "review",
+                    "lane": "closer",
+                },
+                {
+                    "agent": "bogus",
+                    "mode": "full",
+                    "target": "stranske/Repo#4",
+                    "task_type": "mechanical",
+                    "lane": "closer",
+                },
+            ]
+        }
         out = run(decision, dry_run=True, heartbeat=False)
-        assert out["count"] == 3, out                      # 3 dispatchable
+        assert out["count"] == 3, out  # 3 dispatchable
         assert len(out["skipped"]) == 1 and out["skipped"][0]["assignment"]["agent"] == "bogus"
 
         by_t = {d["target"]: d for d in out["launched"]}
@@ -1561,7 +2011,9 @@ def _selftest() -> None:
         assert by_t["stranske/Repo#2"]["lane"] == "opener", by_t["stranske/Repo#2"]
         # Composer is pinned by id (owner policy): omitting --model would select `auto`, which
         # routes across every frontier model cursor sells.
-        assert by_t["stranske/Repo#1"]["model"] == f"cursor:{adapters.CURSOR_COMPOSER_MODEL}", by_t["stranske/Repo#1"]
+        assert by_t["stranske/Repo#1"]["model"] == f"cursor:{adapters.CURSOR_COMPOSER_MODEL}", by_t[
+            "stranske/Repo#1"
+        ]
         # Tiered since 2026-08-08: claude pins an exact model instead of a generic lane tag. The
         # seat is capped at `mid` (scarce weekly), so a 'full' assignment records Sonnet 5.
         expected_claude = adapters.MODEL_TIERS["claude"][adapters.effective_tier("claude", "full")]
@@ -1580,31 +2032,85 @@ def _selftest() -> None:
         # prompt content reflects task type (implement says "acceptance criteria")
         impl_argv = by_t["stranske/Repo#2"]["argv"]
         assert any("acceptance criteria" in tok for tok in impl_argv), impl_argv
-        testgen = plan_dispatch({"agent": "codex", "target": "o/r#8", "task_type": "testgen",
-                                 "mode": "full", "lane": "opener"}, dry_run=True)
-        assert any("test-generation acceptance gate" in tok for tok in testgen["argv"]), testgen["argv"]
+        testgen = plan_dispatch(
+            {
+                "agent": "codex",
+                "target": "o/r#8",
+                "task_type": "testgen",
+                "mode": "full",
+                "lane": "opener",
+            },
+            dry_run=True,
+        )
+        assert any("test-generation acceptance gate" in tok for tok in testgen["argv"]), testgen[
+            "argv"
+        ]
         assert any("testgen_gate.py" in tok for tok in testgen["argv"]), testgen["argv"]
-        epic = plan_dispatch({"agent": "gemini", "target": "o/r#9", "task_type": "epic",
-                              "mode": "full", "lane": "opener"}, dry_run=True)
+        epic = plan_dispatch(
+            {
+                "agent": "gemini",
+                "target": "o/r#9",
+                "task_type": "epic",
+                "mode": "full",
+                "lane": "opener",
+            },
+            dry_run=True,
+        )
         assert any("epic decomposition plan" in tok for tok in epic["argv"]), epic["argv"]
         assert any("Do not implement the subtasks" in tok for tok in epic["argv"]), epic["argv"]
         epic_prompt = " ".join(epic["argv"])
         assert AGENT_PERSONAS["gemini"] in epic_prompt, epic["argv"]
         assert CRITICAL_EVALUATOR_DIRECTIVE in epic_prompt, epic["argv"]
-        codemod = plan_dispatch({"agent": "cursor", "target": "o/r#10", "task_type": "codemod",
-                                 "mode": "composer", "lane": "opener"}, dry_run=True)
+        codemod = plan_dispatch(
+            {
+                "agent": "cursor",
+                "target": "o/r#10",
+                "task_type": "codemod",
+                "mode": "composer",
+                "lane": "opener",
+            },
+            dry_run=True,
+        )
         assert any("codemod/refactor campaign" in tok for tok in codemod["argv"]), codemod["argv"]
         assert any("codemod_lane.py" in tok for tok in codemod["argv"]), codemod["argv"]
-        cross_repo = plan_dispatch({"agent": "gemini", "target": "o/r#11", "task_type": "cross_repo",
-                                    "mode": "full", "lane": "opener"}, dry_run=True)
-        assert any("cross-repo coordinated-change plan" in tok for tok in cross_repo["argv"]), cross_repo["argv"]
+        cross_repo = plan_dispatch(
+            {
+                "agent": "gemini",
+                "target": "o/r#11",
+                "task_type": "cross_repo",
+                "mode": "full",
+                "lane": "opener",
+            },
+            dry_run=True,
+        )
+        assert any(
+            "cross-repo coordinated-change plan" in tok for tok in cross_repo["argv"]
+        ), cross_repo["argv"]
         assert any("cross_repo_lane.py" in tok for tok in cross_repo["argv"]), cross_repo["argv"]
-        runtime_ac = plan_dispatch({"agent": "gemini", "target": "o/r#12", "task_type": "runtime_ac",
-                                    "mode": "full", "lane": "opener"}, dry_run=True)
-        assert any("runtime acceptance-criteria" in tok for tok in runtime_ac["argv"]), runtime_ac["argv"]
+        runtime_ac = plan_dispatch(
+            {
+                "agent": "gemini",
+                "target": "o/r#12",
+                "task_type": "runtime_ac",
+                "mode": "full",
+                "lane": "opener",
+            },
+            dry_run=True,
+        )
+        assert any("runtime acceptance-criteria" in tok for tok in runtime_ac["argv"]), runtime_ac[
+            "argv"
+        ]
         assert any("runtime_ac.py" in tok for tok in runtime_ac["argv"]), runtime_ac["argv"]
-        trend = plan_dispatch({"agent": "codex", "target": "stranske/Trend_Model_Project#9",
-                               "task_type": "implement", "mode": "full", "lane": "opener"}, dry_run=True)
+        trend = plan_dispatch(
+            {
+                "agent": "codex",
+                "target": "stranske/Trend_Model_Project#9",
+                "task_type": "implement",
+                "mode": "full",
+                "lane": "opener",
+            },
+            dry_run=True,
+        )
         trend_prompt = " ".join(trend["argv"])
         assert "REPO PLAYBOOK (stranske/Trend_Model_Project)" in trend_prompt, trend["argv"]
         assert "phase-3" in trend_prompt and "ruff check" in trend_prompt, trend["argv"]
@@ -1614,42 +2120,76 @@ def _selftest() -> None:
         # wrapper prepends a PATH fix (local-bin tools) + always releases the claim afterward
         # (target is shlex-quoted for the shell, so it ends '... release <target> cursor')
         w = by_t["stranske/Repo#1"]["wrapped"]
-        assert f"{REAL_HOME}/.local/bin" in w, w         # PATH fix independent of child HOME
+        assert f"{REAL_HOME}/.local/bin" in w, w  # PATH fix independent of child HOME
         assert "ORCH_AGENT_RUNTIME" in w and "agent-runtime/cursor" in w, w
         assert "AGENT_CLI_CREDENTIAL_STORE=memory" in w and "CURSOR_DATA_DIR=" in w, w
-        assert "CURSOR_CONFIG_DIR=" in w and "NODE_COMPILE_CACHE=" in w and "export HOME=" not in w, w
+        assert (
+            "CURSOR_CONFIG_DIR=" in w and "NODE_COMPILE_CACHE=" in w and "export HOME=" not in w
+        ), w
         assert "cursor-agent.env" in w and "$HOME/.cursor" not in w and "set -a" in w, w
-        assert "claims.py" in w and " release " in w and "Repo#1" in w and w.rstrip().endswith("cursor"), w
+        assert (
+            "claims.py" in w
+            and " release " in w
+            and "Repo#1" in w
+            and w.rstrip().endswith("cursor")
+        ), w
         # net hygiene: the proxy family is unset BEFORE the agent runs (inside the subshell) so a stray
         # *_PROXY can't blackhole the agent's HTTPS (the in-session offload-hang root cause, 2026-06-20).
         assert "unset " in w and "HTTPS_PROXY" in w and "ALL_PROXY" in w, w
         assert w.index("unset ") < w.index("cursor-agent"), w
-        assert _net_hygiene_prelude().startswith("unset ") and "HTTPS_PROXY" in _net_hygiene_prelude(), _net_hygiene_prelude()
+        assert (
+            _net_hygiene_prelude().startswith("unset ") and "HTTPS_PROXY" in _net_hygiene_prelude()
+        ), _net_hygiene_prelude()
         os.environ["ORCH_KEEP_PROXY"] = "1"
-        assert _net_hygiene_prelude() == "", "ORCH_KEEP_PROXY=1 must preserve the inherited proxy env"
+        assert (
+            _net_hygiene_prelude() == ""
+        ), "ORCH_KEEP_PROXY=1 must preserve the inherited proxy env"
         os.environ.pop("ORCH_KEEP_PROXY", None)
         # claude sources its oauth token; vibe needs no explicit auth source (~/.vibe auto-loads)
-        assert ".claude-oauth-token" in by_t["stranske/Repo#2"]["wrapped"], by_t["stranske/Repo#2"]["wrapped"]
-        assert "cursor-agent.env" not in by_t["stranske/Repo#3"]["wrapped"], "vibe needs no sourced auth file"
-        assert "VIBE_HOME=" in by_t["stranske/Repo#3"]["wrapped"], by_t["stranske/Repo#3"]["wrapped"]
+        assert ".claude-oauth-token" in by_t["stranske/Repo#2"]["wrapped"], by_t["stranske/Repo#2"][
+            "wrapped"
+        ]
+        assert (
+            "cursor-agent.env" not in by_t["stranske/Repo#3"]["wrapped"]
+        ), "vibe needs no sourced auth file"
+        assert "VIBE_HOME=" in by_t["stranske/Repo#3"]["wrapped"], by_t["stranske/Repo#3"][
+            "wrapped"
+        ]
         vibe_cfg = AGENT_RUNTIME_DIR / "vibe" / ".vibe" / "config.toml"
         if (REAL_HOME / ".vibe" / "config.toml").exists():
-            assert f'save_dir = "{AGENT_RUNTIME_DIR / "vibe" / ".vibe" / "logs" / "session"}"' in vibe_cfg.read_text(), vibe_cfg.read_text()
-            assert str(REAL_HOME / ".vibe" / "logs" / "session") not in vibe_cfg.read_text(), vibe_cfg.read_text()
-        gemini_dispatch = plan_dispatch({"agent": "gemini", "target": "o/r#8", "task_type": "implement",
-                                         "mode": "full", "lane": "opener",
-                                         "prompt": "Summarize only."}, dry_run=True)
+            assert (
+                f'save_dir = "{AGENT_RUNTIME_DIR / "vibe" / ".vibe" / "logs" / "session"}"'
+                in vibe_cfg.read_text()
+            ), vibe_cfg.read_text()
+            assert (
+                str(REAL_HOME / ".vibe" / "logs" / "session") not in vibe_cfg.read_text()
+            ), vibe_cfg.read_text()
+        gemini_dispatch = plan_dispatch(
+            {
+                "agent": "gemini",
+                "target": "o/r#8",
+                "task_type": "implement",
+                "mode": "full",
+                "lane": "opener",
+                "prompt": "Summarize only.",
+            },
+            dry_run=True,
+        )
         assert "--model" in gemini_dispatch["argv"], gemini_dispatch["argv"]
         assert "--log-file" in gemini_dispatch["argv"], gemini_dispatch["argv"]
         assert "--gemini_dir" in gemini_dispatch["argv"], gemini_dispatch["argv"]
-        assert "agent-runtime/gemini/.gemini" in gemini_dispatch["argv"][
-            gemini_dispatch["argv"].index("--gemini_dir") + 1
-        ], gemini_dispatch["argv"]
-        assert gemini_dispatch["argv"][
-            gemini_dispatch["argv"].index("--add-dir") + 1
-        ] == gemini_dispatch["cwd"], gemini_dispatch["argv"]
+        assert (
+            "agent-runtime/gemini/.gemini"
+            in gemini_dispatch["argv"][gemini_dispatch["argv"].index("--gemini_dir") + 1]
+        ), gemini_dispatch["argv"]
+        assert (
+            gemini_dispatch["argv"][gemini_dispatch["argv"].index("--add-dir") + 1]
+            == gemini_dispatch["cwd"]
+        ), gemini_dispatch["argv"]
         gemini_prompt = gemini_dispatch["argv"][gemini_dispatch["argv"].index("--print") + 1]
-        assert "GEMINI WORKSPACE:" in gemini_prompt and gemini_dispatch["cwd"] in gemini_prompt, gemini_prompt
+        assert (
+            "GEMINI WORKSPACE:" in gemini_prompt and gemini_dispatch["cwd"] in gemini_prompt
+        ), gemini_prompt
         # worktree falls back to HOME when absent (seam flagged)
         assert by_t["stranske/Repo#1"]["worktree_missing"] is True
 
@@ -1671,7 +2211,8 @@ def _selftest() -> None:
         # has to be that the call is REACHED. Patching through the module global also means this
         # fails if the import is ever removed again, which is exactly the regression to catch.
         _hb_calls = []
-        import capabilities as _caps          # lazy, same as the helper
+        import capabilities as _caps  # lazy, same as the helper
+
         _real_hb = _caps.production_heartbeat
         _saved_flag = os.environ.get("ORCH_CAPABILITY_HEARTBEATS")
         try:
@@ -1680,7 +2221,7 @@ def _selftest() -> None:
             try:
                 offload("definitely-not-an-agent", "probe", cwd=tmp, timeout=1)
             except Exception:
-                pass          # the bogus agent is expected to fail AFTER the heartbeat
+                pass  # the bogus agent is expected to fail AFTER the heartbeat
             assert _hb_calls, "offload did not reach capabilities.production_heartbeat"
             assert _hb_calls[0][0][0] == "offload", _hb_calls
             assert _hb_calls[0][0][1] == "invocation", _hb_calls
@@ -1741,22 +2282,48 @@ def _selftest() -> None:
                 os.environ["ORCH_CAPABILITY_HEARTBEATS"] = _saved_flag
 
         # delegate path: the orchestrator's OWN prompt overrides the template
-        custom = plan_dispatch({"agent": "vibe", "target": "o/r#1", "task_type": "delegated",
-                                "mode": "full", "lane": "opener",
-                                "prompt": "ORCHESTRATOR-CRAFTED PROMPT with issue context"}, dry_run=True)
+        custom = plan_dispatch(
+            {
+                "agent": "vibe",
+                "target": "o/r#1",
+                "task_type": "delegated",
+                "mode": "full",
+                "lane": "opener",
+                "prompt": "ORCHESTRATOR-CRAFTED PROMPT with issue context",
+            },
+            dry_run=True,
+        )
         assert any("ORCHESTRATOR-CRAFTED PROMPT" in tok for tok in custom["argv"]), custom["argv"]
-        custom_known = plan_dispatch({"agent": "vibe", "target": "stranske/Counter_Risk#5",
-                                      "task_type": "implement", "mode": "full", "lane": "closer",
-                                      "prompt": "ORCHESTRATOR-CRAFTED PROMPT"}, dry_run=True)
+        custom_known = plan_dispatch(
+            {
+                "agent": "vibe",
+                "target": "stranske/Counter_Risk#5",
+                "task_type": "implement",
+                "mode": "full",
+                "lane": "closer",
+                "prompt": "ORCHESTRATOR-CRAFTED PROMPT",
+            },
+            dry_run=True,
+        )
         custom_known_prompt = " ".join(custom_known["argv"])
         assert "ORCHESTRATOR-CRAFTED PROMPT" in custom_known_prompt, custom_known["argv"]
-        assert "REPO PLAYBOOK (stranske/Counter_Risk)" in custom_known_prompt and "Black" in custom_known_prompt, custom_known["argv"]
+        assert (
+            "REPO PLAYBOOK (stranske/Counter_Risk)" in custom_known_prompt
+            and "Black" in custom_known_prompt
+        ), custom_known["argv"]
         for agent in AGENT_PERSONAS:
             mode = "composer" if agent == "cursor" else "full"
-            delegated = plan_dispatch({"agent": agent, "target": "o/r#77",
-                                       "task_type": "delegated", "mode": mode,
-                                       "lane": "opener", "prompt": "Delegated task."},
-                                      dry_run=True)
+            delegated = plan_dispatch(
+                {
+                    "agent": agent,
+                    "target": "o/r#77",
+                    "task_type": "delegated",
+                    "mode": mode,
+                    "lane": "opener",
+                    "prompt": "Delegated task.",
+                },
+                dry_run=True,
+            )
             delegated_prompt = " ".join(delegated["argv"])
             assert AGENT_PERSONAS[agent] in delegated_prompt, delegated["argv"]
             assert CRITICAL_EVALUATOR_DIRECTIVE in delegated_prompt, delegated["argv"]
@@ -1766,27 +2333,42 @@ def _selftest() -> None:
         nongit.mkdir()
         (nongit / "module.py").write_text("VALUE = 1\n")
         prepared = _offload_prompt("Implement a small proposal.", nongit, "cursor")
-        assert AGENT_PERSONAS["cursor"] in prepared and CRITICAL_EVALUATOR_DIRECTIVE in prepared, prepared
+        assert (
+            AGENT_PERSONAS["cursor"] in prepared and CRITICAL_EVALUATOR_DIRECTIVE in prepared
+        ), prepared
         assert "Non-git workspace" in prepared and "Do not run git commit" in prepared, prepared
         assert "OFFLOAD_INCOMPLETE" in prepared and "I will inspect later" in prepared, prepared
         isolated = _isolate_offload_cwd(nongit)
-        assert isolated != nongit and (isolated / "module.py").read_text() == "VALUE = 1\n", isolated
+        assert (
+            isolated != nongit and (isolated / "module.py").read_text() == "VALUE = 1\n"
+        ), isolated
         assert _default_offload_timeout("cursor", None) == DEFAULT_OFFLOAD_TIMEOUT
         assert _default_offload_timeout("gemini", None) == DEFAULT_GEMINI_OFFLOAD_TIMEOUT
         assert _default_offload_timeout("gemini", 123) == 123
         assert _offload_incomplete_reason("OFFLOAD_INCOMPLETE: command timed out") is not None
-        assert _offload_incomplete_reason(
-            "I am waiting for the pytest suite execution to finish. I will inspect the results as soon as it completes."
-        ) is not None
-        assert _offload_incomplete_reason(
-            "No active tools are needed at the moment. Waiting for the full product verification check "
-            "running as `task-85` to finish."
-        ) is not None
-        assert _offload_incomplete_reason("Reviewed three files and found no actionable issues.") is None
+        assert (
+            _offload_incomplete_reason(
+                "I am waiting for the pytest suite execution to finish. I will inspect the results as soon as it completes."
+            )
+            is not None
+        )
+        assert (
+            _offload_incomplete_reason(
+                "No active tools are needed at the moment. Waiting for the full product verification check "
+                "running as `task-85` to finish."
+            )
+            is not None
+        )
+        assert (
+            _offload_incomplete_reason("Reviewed three files and found no actionable issues.")
+            is None
+        )
         assert _is_transient_network_failure("connection reset by peer", "", "")
         assert not _is_transient_network_failure("401 unauthorized", "", "")
         assert not _is_transient_network_failure("", "", "")
-        assert not _is_transient_network_failure("", "neither PlanModel nor RequestedModel specified", "")
+        assert not _is_transient_network_failure(
+            "", "neither PlanModel nor RequestedModel specified", ""
+        )
         captured = {}
         old_build_command = adapters.build_command
         old_subprocess_run = subprocess.run
@@ -1796,10 +2378,19 @@ def _selftest() -> None:
             stdout = '{"usage":{"input_tokens":7,"output_tokens":3}}\nOFFLOAD RESULT\n'
             stderr = ""
 
+        class ProbeCompleted:
+            """An incidental subprocess a double must NOT mistake for the run under test."""
+
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
         class WaitingCompleted:
             returncode = 0
-            stdout = ("I am waiting for the pytest suite execution to finish in the offload workspace. "
-                      "I will inspect the results as soon as the task completes.\n")
+            stdout = (
+                "I am waiting for the pytest suite execution to finish in the offload workspace. "
+                "I will inspect the results as soon as the task completes.\n"
+            )
             stderr = ""
 
         class EmptyCompleted:
@@ -1807,10 +2398,15 @@ def _selftest() -> None:
             stdout = ""
             stderr = ""
 
-        def fake_build_command(agent, prompt, mode, cwd=None):
+        def fake_build_command(agent, prompt, mode, cwd=None, **kwargs):
+            # `**kwargs` is load-bearing, not defensive slack: every agent now has a registered
+            # execution profile, so offload passes `profile=` for any seat. A stub with a narrower
+            # signature raises TypeError inside offload() and the failure looks like a dispatch bug
+            # rather than a stale test double. Captured so the profile stays assertable.
             captured["prompt"] = prompt
             captured["mode"] = mode
             captured["build_cwd"] = cwd
+            captured["profile"] = kwargs.get("profile")
             return ["printf", "OFFLOAD RESULT"]
 
         def fake_run(cmd, cwd=None, **_kwargs):
@@ -1822,27 +2418,42 @@ def _selftest() -> None:
         try:
             adapters.build_command = fake_build_command
             subprocess.run = fake_run
-            off = offload("cursor", "Make a parallel-safe code proposal.", cwd=str(nongit),
-                          isolate=True, timeout=1)
+            off = offload(
+                "cursor",
+                "Make a parallel-safe code proposal.",
+                cwd=str(nongit),
+                isolate=True,
+                timeout=1,
+            )
         finally:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
-        assert off["exit"] == 0 and off["isolated_cwd"] and off["output"].endswith("OFFLOAD RESULT"), off
+        assert (
+            off["exit"] == 0 and off["isolated_cwd"] and off["output"].endswith("OFFLOAD RESULT")
+        ), off
         assert off["run_id"].startswith("offload:cursor:") and Path(off["log"]).exists(), off
-        assert captured["cwd"] == off["isolated_cwd"] and "Non-git workspace" in captured["prompt"], captured
+        assert (
+            captured["cwd"] == off["isolated_cwd"] and "Non-git workspace" in captured["prompt"]
+        ), captured
         assert captured["build_cwd"] == Path(off["isolated_cwd"]), captured
-        assert AGENT_PERSONAS["cursor"] in captured["prompt"] and CRITICAL_EVALUATOR_DIRECTIVE in captured["prompt"], captured
+        assert (
+            AGENT_PERSONAS["cursor"] in captured["prompt"]
+            and CRITICAL_EVALUATOR_DIRECTIVE in captured["prompt"]
+        ), captured
         assert "ORCH_AGENT_RUNTIME" in " ".join(captured["cmd"]), captured["cmd"]
         # offload also scrubs the proxy family and never inherits a blocking stdin (root-cause fix 2026-06-20)
-        assert "unset " in captured["cmd"][2] and "HTTPS_PROXY" in captured["cmd"][2], captured["cmd"]
+        assert "unset " in captured["cmd"][2] and "HTTPS_PROXY" in captured["cmd"][2], captured[
+            "cmd"
+        ]
         assert captured["kwargs"].get("stdin") == subprocess.DEVNULL, captured["kwargs"]
         assert isinstance(_suspicious_net_env(), list), "timeout diagnostic helper returns a list"
         ledger_rows = [json.loads(line) for line in adapters.LEDGER.read_text().splitlines()]
         off_rows = [row for row in ledger_rows if row.get("run_id") == off["run_id"]]
         assert [row.get("event") for row in off_rows] == ["start", "complete"], off_rows
         with feedback._conn() as c:
-            off_run = c.execute("SELECT task_type, agent, mode FROM runs WHERE run_id=?",
-                                (off["run_id"],)).fetchone()
+            off_run = c.execute(
+                "SELECT task_type, agent, mode FROM runs WHERE run_id=?", (off["run_id"],)
+            ).fetchone()
         assert off_run == ("offload", "cursor", "offload"), off_run
 
         # WORKER PROVENANCE, asserted BEHAVIOURALLY through offload() rather than by calling the
@@ -1850,13 +2461,8 @@ def _selftest() -> None:
         # using it -- a mechanism asserted against itself. This asserts the wiring: a profiled
         # agent must leave a worker execution attempt behind, because that row is the only thing
         # that can ever resolve model provenance, and without it no episode can complete.
-        def fake_build_any(agent, prompt, mode, cwd=None, **_kw):
-            # Accepts `profile=`: a profiled offload passes it, which is itself the wiring.
-            captured["profile_kw"] = _kw.get("profile")
-            return ["printf", "OFFLOAD RESULT"]
-
         try:
-            adapters.build_command = fake_build_any
+            adapters.build_command = fake_build_command
             subprocess.run = fake_run
             codex_off = offload("codex", "Summarize this file.", cwd=str(nongit), timeout=1)
         finally:
@@ -1865,26 +2471,222 @@ def _selftest() -> None:
         with feedback._conn() as c:
             worker = c.execute(
                 "SELECT profile_id, operation_role FROM execution_attempts "
-                "WHERE run_id=? AND operation_role='worker'", (codex_off["run_id"],)).fetchone()
-        assert captured.get("profile_kw"), "the selected profile must reach build_command"
+                "WHERE run_id=? AND operation_role='worker'",
+                (codex_off["run_id"],),
+            ).fetchone()
+        assert captured.get("profile"), "the selected profile must reach build_command"
         assert worker and worker[0], (
             "a profiled offload must record a worker execution attempt; without it "
-            "resolved_worker_identity_for_run can never return a row", codex_off)
+            "resolved_worker_identity_for_run can never return a row",
+            codex_off,
+        )
 
-        # And an UNPROFILED agent must still record none -- the selection may not invent identity.
+        # THE RUN MUST NOT DISAGREE WITH ITSELF. The attempt row always carried
+        # `profile["profile_id"]`, but the ledger and the routing metadata were handed the caller's
+        # `profile_id` argument -- None whenever the profile was chosen internally, which is always.
+        # `reconcile` builds its `profile_ids` set from the LEDGER field, so a null there is why the
+        # branch that resolves a worker attempt could never fire. Assert all three agree.
+        with feedback._conn() as c:
+            meta_json = c.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (codex_off["run_id"],)
+            ).fetchone()
+        routed = json.loads(meta_json[0]) if meta_json and meta_json[0] else {}
+        assert routed.get("selected_profile_id") == worker[0], (
+            "routing metadata must name the profile that actually ran",
+            routed,
+            worker,
+        )
+        # Read the ledger the way reconcile does, through its own reader -- a `hasattr` fallback
+        # here would make this assertion pass when the field is absent, which is the vacuous-test
+        # shape this file has already been burned by three times.
+        import ledger_reconcile as _lr
+
+        ledger_rows, _ = _lr._read_ledger(_lr._ledger_path())
+        ledger_ids = {
+            row.get("selected_profile_id")
+            for row in ledger_rows
+            if row.get("run_id") == codex_off["run_id"] and row.get("event") == "start"
+        }
+        assert ledger_ids == {worker[0]}, (
+            "the ledger start row must name the profile reconcile will look for",
+            ledger_ids,
+        )
+
+        # A SEAT THAT CANNOT REPORT PROVENANCE RECORDS NO WORKER ATTEMPT. This assertion used to
+        # demand the opposite -- "a profiled seat must record a worker attempt" -- and that was the
+        # bug: gemini, cursor, vibe and aider keep no per-session model log, so every attempt they
+        # wrote completed `unresolved` and could never become anything else. Cursor produced 23 in
+        # five hours at ~230 offloads per two days, each re-caching the same prose reason, dragging
+        # the profile's resolved-model coverage to a permanent 0.00 over a denominator that only
+        # grows. Nothing decrements that; the only thing that would is the capability the seat
+        # lacks. A row asserting the one fact it cannot establish is worse than no row.
+        #
+        # The profile still applies and the ledger still names it, so the REQUEST stays auditable.
+        # Only the unbackable claim is withheld.
+        # DERIVED FROM THE AUTHORITY, not a hardcoded seat. Four times now an assertion here named a
+        # specific agent as unable to report, and four times that stopped being true once its store
+        # or log was actually read -- so the test enforced a stale belief instead of catching it.
+        # Ask `NO_SESSION_LOG_AGENTS` who cannot report, and if the answer is nobody, say so and
+        # skip rather than inventing a case.
+        mute_seat = next(
+            (
+                a
+                for a in adapters.NO_SESSION_LOG_AGENTS
+                if execution_profiles.profiles_for_agent(a, transport="offload")
+            ),
+            None,
+        )
+        assert (
+            mute_seat
+        ), "no seat lacks a reader any more -- delete this case rather than faking one"
         try:
-            adapters.build_command = fake_build_any
+            adapters.build_command = fake_build_command
             subprocess.run = fake_run
-            gem_off = offload("gemini", "Summarize this file.", cwd=str(nongit), timeout=1)
+            gem_off = offload(mute_seat, "Summarize this file.", cwd=str(nongit), timeout=1)
         finally:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
         with feedback._conn() as c:
-            none_worker = c.execute(
-                "SELECT COUNT(*) FROM execution_attempts WHERE run_id=? AND operation_role='worker'",
-                (gem_off["run_id"],)).fetchone()[0]
-        assert none_worker == 0, "unprofiled agent must not get a fabricated worker attempt"
+            gem_rows = c.execute(
+                "SELECT resolved_model FROM execution_attempts "
+                "WHERE run_id=? AND operation_role='worker'",
+                (gem_off["run_id"],),
+            ).fetchall()
+        assert gem_rows == [], (
+            "a seat that can never resolve a model must not write a worker attempt",
+            mute_seat,
+            gem_rows,
+        )
+        assert (
+            feedback.resolved_worker_identity_for_run(gem_off["run_id"]) is None
+        ), "no attempt means no worker identity, which is the honest answer here"
+        # The profile is still in force and still recorded, so withholding the claim has not cost
+        # the audit trail: the run still says which profile ran.
+        with feedback._conn() as c:
+            gem_meta = c.execute(
+                "SELECT routing_metadata FROM runs WHERE run_id=?", (gem_off["run_id"],)
+            ).fetchone()
+        gem_routed = json.loads(gem_meta[0]) if gem_meta and gem_meta[0] else {}
+        assert gem_routed.get("selected_profile_id"), (
+            "the profile must still be recorded even when no worker attempt is",
+            gem_routed,
+        )
+        # And the reason is a STATIC property of the seat, from one authority -- never prose
+        # re-cached on thousands of rows.
+        ok, why = adapters.can_report_cli_identity(mute_seat)
+        assert ok is False and why and "no_cli_session_log" in why, (mute_seat, ok, why)
+        for seat in adapters.CLI_IDENTITY_READERS:
+            assert adapters.can_report_cli_identity(seat)[0] is True, seat
+
+        # ALL FOUR CELLS OF THE PREDICATE. Keying on either half alone was wrong in both
+        # directions: `can_report` alone silenced the gemini-armed audit round this exists to make
+        # minable, and no gate at all produced 23 permanently-dead rows in five hours. A row is
+        # justified when the run is EVIDENCE (bound to a registered round, any seat) or when the
+        # seat can RESOLVE (any run). Only unbound-and-unreportable writes nothing.
+        def _attempts_for(seat: str, *, round_id: str | None) -> list:
+            try:
+                adapters.build_command = fake_build_command
+                subprocess.run = fake_run
+                res = offload(
+                    seat, "Summarize.", cwd=str(nongit), timeout=1, research_round=round_id
+                )
+            finally:
+                adapters.build_command = old_build_command
+                subprocess.run = old_subprocess_run
+            with feedback._conn() as c:
+                return c.execute(
+                    "SELECT profile_id FROM execution_attempts WHERE run_id=? "
+                    "AND operation_role='worker'",
+                    (res["run_id"],),
+                ).fetchall()
+
+        # The unreportable seat comes from the AUTHORITY, never a hardcoded name: gemini sat here
+        # until its per-run CLI log turned out to name the model, and then this cell was asserting
+        # something false.
+        mute = next(
+            (
+                a
+                for a in adapters.NO_SESSION_LOG_AGENTS
+                if execution_profiles.profiles_for_agent(a, transport="offload")
+            ),
+            None,
+        )
+        assert mute, "no seat lacks a reader any more -- delete this case rather than faking one"
+        # unreportable + evidence -> RECORDED, because the round needs the join to mine at all.
+        assert _attempts_for(mute, round_id="domain/audit-x:review-corpus:2026-08-22"), (
+            "a round-bound offload must record the attempt its episode joins on",
+            mute,
+        )
+        # unreportable + no evidence -> nothing. This is the only silent cell, and the only one
+        # where the row could never be used for anything.
+        assert _attempts_for(mute, round_id=None) == [], ("the junk case must stay silent", mute)
+        # reportable + no evidence -> RECORDED, because it resolves and feeds drift detection.
+        assert _attempts_for(
+            "codex", round_id=None
+        ), "a resolvable seat's attempt is real provenance even unbound"
+
+        # THE RUN'S OWN stream-json REPORT RESOLVES THE MODEL, with no store to search. This is the
+        # standard answer (`gen_ai.response.model`): the tool prints the model it actually used, so
+        # there is no workspace to match and no window to guess. It is what makes cursor resolvable
+        # at all -- every one of its 24 real offloads shared `/private/tmp`, so no session in
+        # cursor's own chat store was attributable to any single run.
+        class _StreamCompleted:
+            returncode = 0
+            stdout = (
+                '{"type":"system","subtype":"init","cwd":"/x","session_id":"s1",'
+                '"model":"Composer 2.5"}\n'
+                '{"type":"result","subtype":"success","result":"THE ANSWER","session_id":"s1"}\n'
+            )
+            stderr = ""
+
+        def fake_stream_run(cmd, cwd=None, **_kwargs):
+            return _StreamCompleted()
+
+        try:
+            adapters.build_command = fake_build_command
+            subprocess.run = fake_stream_run
+            streamed = offload("cursor", "Summarize.", cwd=str(nongit), timeout=1)
+        finally:
+            adapters.build_command = old_build_command
+            subprocess.run = old_subprocess_run
+        # The caller keeps its plain-text contract: the stream is reduced to the final result.
+        assert streamed["output"].strip() == "THE ANSWER", streamed["output"]
+        with feedback._conn() as c:
+            row = c.execute(
+                "SELECT resolved_provider, resolved_model, status, fallback_reason "
+                "FROM execution_attempts WHERE run_id=? AND operation_role='worker'",
+                (streamed["run_id"],),
+            ).fetchone()
+        # THE MODEL CAME FROM THE RUN ITSELF -- and `nonlocal` is what carries it out of
+        # `_run_offload_attempt` to the completion. Without it the parse found `composer-2.5` and
+        # the attempt still closed `unresolved`: the reader worked and the row denied it, which is
+        # the most deceptive failure available here.
+        assert row is not None, "a resolvable seat must record the attempt"
+        assert row[1] == "composer-2.5", ("the run's own reported model must reach the row", row)
+        assert row[2] == "complete" and row[3] is None, row
+        # And the label -> id mapping never invents one.
+        assert adapters.model_id_for_label("cursor", "Composer 2.5") == "composer-2.5"
+        assert adapters.model_id_for_label("cursor", "some log prose") is None
+
+        # THE OFFLOAD MUST ACTUALLY ASK FOR THE STREAM. Asserted on the real argv, because the
+        # double above supplies stream-json stdout whatever was requested -- so without this,
+        # reverting the transport to `text` left the test passing while nothing would ever be
+        # reported in production. A double that answers a question the code did not ask is the
+        # vacuous shape this file keeps re-growing.
+        offload_argv = adapters.build_command(
+            "cursor", "p", "composer", cwd=str(nongit), transport="offload"
+        )
+        assert (
+            offload_argv[offload_argv.index("--output-format") + 1] == "stream-json"
+        ), offload_argv
+        # And the long-running dispatch path is deliberately UNCHANGED: its output is parsed
+        # elsewhere, so reshaping it is a separate and riskier change.
+        local_argv = adapters.build_command(
+            "cursor", "p", "composer", cwd=str(nongit), transport="local"
+        )
+        assert local_argv[local_argv.index("--output-format") + 1] == "text", local_argv
         import ledger_reconcile
+
         dry_cost = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
         cost_by_run = {row["run_id"]: row for row in dry_cost["costs"]}
         assert cost_by_run[off["run_id"]]["tokens_in"] == 7, dry_cost
@@ -1892,27 +2694,70 @@ def _selftest() -> None:
 
         captured.clear()
 
-        def fake_gemini_build_command(agent, prompt, mode, cwd=None):
+        def _write_agy_log(cmd, cwd, text):
+            """Write where the COMMAND says, as the real CLI does.
+
+            These doubles used to write a fixed `agy.log` beside the workspace. That silently
+            stopped being the path once offload began giving each run its own agy log -- and a
+            double writing somewhere the code no longer reads proves nothing, which is how the
+            retry and log-tail assertions both went quiet at once.
+            """
+            wrapped_cmd = cmd[-1] if isinstance(cmd, list) else str(cmd)
+            parts = shlex.split(wrapped_cmd)
+            if "--log-file" not in parts:
+                return
+            target = Path(parts[parts.index("--log-file") + 1])
+            if not target.is_absolute():
+                target = Path(cwd or ".") / target
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+
+        def fake_gemini_build_command(agent, prompt, mode, cwd=None, **_kwargs):
+            # `**_kwargs`: gemini has a registered profile now, so offload passes `profile=`.
             captured["prompt"] = prompt
             captured["mode"] = mode
             captured["build_cwd"] = cwd
             # Model comes from the adapter constant, never a second hardcoded copy: the literal
             # that used to sit here outlived the real model by a Google rename (2026-08-08).
-            return ["agy", "--gemini_dir", "/tmp/gemini", "--model", adapters.DEFAULT_GEMINI_MODEL,
-                    "--print", prompt, "--add-dir", ".", "--print-timeout", "40m", "--log-file", "agy.log"]
+            return [
+                "agy",
+                "--gemini_dir",
+                "/tmp/gemini",
+                "--model",
+                adapters.DEFAULT_GEMINI_MODEL,
+                "--print",
+                prompt,
+                "--add-dir",
+                ".",
+                "--print-timeout",
+                "40m",
+                "--log-file",
+                "agy.log",
+            ]
 
         try:
             adapters.build_command = fake_gemini_build_command
             subprocess.run = fake_run
-            gem = offload("gemini", "Inspect the isolated copy.", cwd=str(nongit),
-                          isolate=True, timeout=1)
+            gem = offload(
+                "gemini", "Inspect the isolated copy.", cwd=str(nongit), isolate=True, timeout=1
+            )
         finally:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
-        assert gem["exit"] == 0 and gem["isolated_cwd"] and gem["process_cwd"] == str(nongit.resolve()), gem
-        assert "GEMINI ISOLATED WORKSPACE" in captured["prompt"] and gem["isolated_cwd"] in captured["prompt"], captured
-        assert AGENT_PERSONAS["gemini"] in captured["prompt"] and CRITICAL_EVALUATOR_DIRECTIVE in captured["prompt"], captured
-        assert f"--add-dir {shlex.quote(gem['isolated_cwd'])}" in " ".join(captured["cmd"]), captured["cmd"]
+        assert (
+            gem["exit"] == 0 and gem["isolated_cwd"] and gem["process_cwd"] == str(nongit.resolve())
+        ), gem
+        assert (
+            "GEMINI ISOLATED WORKSPACE" in captured["prompt"]
+            and gem["isolated_cwd"] in captured["prompt"]
+        ), captured
+        assert (
+            AGENT_PERSONAS["gemini"] in captured["prompt"]
+            and CRITICAL_EVALUATOR_DIRECTIVE in captured["prompt"]
+        ), captured
+        assert f"--add-dir {shlex.quote(gem['isolated_cwd'])}" in " ".join(
+            captured["cmd"]
+        ), captured["cmd"]
         assert "--print-timeout 1m" in " ".join(captured["cmd"]), captured["cmd"]
 
         captured.clear()
@@ -1926,8 +2771,9 @@ def _selftest() -> None:
         try:
             adapters.build_command = fake_gemini_build_command
             subprocess.run = fake_waiting_run
-            bad_gem = offload("gemini", "Run tests and report JSON.", cwd=str(nongit),
-                              isolate=True, timeout=1)
+            bad_gem = offload(
+                "gemini", "Run tests and report JSON.", cwd=str(nongit), isolate=True, timeout=1
+            )
         finally:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
@@ -1936,14 +2782,20 @@ def _selftest() -> None:
         assert "offload marked failed" in Path(bad_gem["log"]).read_text(), bad_gem
 
         captured.clear()
-        (nongit / "agy.log").write_text(
-            "failed to construct executor: neither PlanModel nor RequestedModel specified\n"
-        )
 
         def fake_empty_run(cmd, cwd=None, **_kwargs):
             captured["cmd"] = cmd
             captured["cwd"] = cwd
             captured["kwargs"] = _kwargs
+            # WRITE WHERE THE COMMAND SAYS, as the real CLI does. This used to write a fixed
+            # `agy.log` beside the workspace, which silently stopped being the path once offload
+            # started giving each run its OWN agy log -- a double that writes somewhere the code
+            # no longer reads proves nothing.
+            _write_agy_log(
+                cmd,
+                cwd,
+                "failed to construct executor: neither PlanModel nor RequestedModel specified\n",
+            )
             return EmptyCompleted()
 
         try:
@@ -1971,7 +2823,7 @@ def _selftest() -> None:
                 return Completed()
             retry_calls["count"] += 1
             if retry_calls["count"] == 1:
-                (Path(cwd) / "agy.log").write_text("rpc failed: connection reset by peer\n")
+                _write_agy_log(cmd, cwd, "rpc failed: connection reset by peer\n")
                 return EmptyCompleted()
             return Completed()
 
@@ -1980,8 +2832,13 @@ def _selftest() -> None:
             os.environ["ORCH_OFFLOAD_NETWORK_RETRIES"] = "1"
             adapters.build_command = fake_gemini_build_command
             subprocess.run = fake_reset_then_success_run
-            retry_gem = offload("gemini", "Say READY after a transient reset.", cwd=str(nongit),
-                                isolate=True, timeout=1)
+            retry_gem = offload(
+                "gemini",
+                "Say READY after a transient reset.",
+                cwd=str(nongit),
+                isolate=True,
+                timeout=1,
+            )
         finally:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
@@ -1993,7 +2850,9 @@ def _selftest() -> None:
                 os.environ.pop("ORCH_OFFLOAD_NETWORK_RETRIES", None)
             else:
                 os.environ["ORCH_OFFLOAD_NETWORK_RETRIES"] = old_network_retries
-        assert retry_gem["exit"] == 0 and retry_gem["attempts"] == 2 and retry_gem["retried"] is True, retry_gem
+        assert (
+            retry_gem["exit"] == 0 and retry_gem["attempts"] == 2 and retry_gem["retried"] is True
+        ), retry_gem
         assert retry_calls["count"] == 2, retry_calls
 
         captured.clear()
@@ -2014,7 +2873,9 @@ def _selftest() -> None:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
         assert timed_out["exit"] == 124 and "timed out after 1s" in timed_out["error"], timed_out
-        assert "offload marked failed: timed out after 1s" in Path(timed_out["log"]).read_text(), timed_out
+        assert (
+            "offload marked failed: timed out after 1s" in Path(timed_out["log"]).read_text()
+        ), timed_out
 
         def fake_interrupt_run(cmd, cwd=None, **_kwargs):
             captured["cmd"] = cmd
@@ -2036,23 +2897,46 @@ def _selftest() -> None:
             adapters.build_command = old_build_command
             subprocess.run = old_subprocess_run
         ledger_rows = [json.loads(line) for line in adapters.LEDGER.read_text().splitlines()]
-        interrupted = [row for row in ledger_rows if row.get("error") == "interrupted by orchestrator"]
-        assert interrupted and interrupted[-1]["event"] == "complete" and interrupted[-1]["exit"] == 130, ledger_rows
+        interrupted = [
+            row for row in ledger_rows if row.get("error") == "interrupted by orchestrator"
+        ]
+        assert (
+            interrupted
+            and interrupted[-1]["event"] == "complete"
+            and interrupted[-1]["exit"] == 130
+        ), ledger_rows
 
         # delegate_remote: label-command + guards (dry_run => no live gh, no feedback write)
-        _rlc = _remote_label_cmd("stranske/Workflows#42", "cursor")   # issues/labels API -> works for issue OR PR
-        assert _rlc[:3] == ["gh", "api", "--method"] and "repos/stranske/Workflows/issues/42/labels" in _rlc \
-            and "labels[]=agent:cursor" in _rlc, _rlc
+        _rlc = _remote_label_cmd(
+            "stranske/Workflows#42", "cursor"
+        )  # issues/labels API -> works for issue OR PR
+        assert (
+            _rlc[:3] == ["gh", "api", "--method"]
+            and "repos/stranske/Workflows/issues/42/labels" in _rlc
+            and "labels[]=agent:cursor" in _rlc
+        ), _rlc
         dr = delegate_remote("cursor", "stranske/Workflows#42", dry_run=True, labels=set())
-        assert dr["label"] == "agent:cursor" and dr["dry_run"] and "labels[]=agent:cursor" in dr["cmd"], dr
-        assert "error" in delegate_remote("bogus", "o/r#1", dry_run=True), "unknown remote agent rejected"
-        assert "error" in delegate_remote("cursor", "o/r", dry_run=True), "remote delegation needs a PR number"
+        assert (
+            dr["label"] == "agent:cursor" and dr["dry_run"] and "labels[]=agent:cursor" in dr["cmd"]
+        ), dr
+        assert "error" in delegate_remote(
+            "bogus", "o/r#1", dry_run=True
+        ), "unknown remote agent rejected"
+        assert "error" in delegate_remote(
+            "cursor", "o/r", dry_run=True
+        ), "remote delegation needs a PR number"
         # gate #4 rails: skip a paused PR, or one ALREADY in the agent pipeline (any agent:* label)
         assert "paused" in _remote_skip_reason({"agents:paused"}, "cursor")
-        assert _remote_skip_reason({"agent:cursor"}, "cursor") is not None          # same agent -> skip
-        assert _remote_skip_reason({"agent:claude"}, "cursor") is not None          # DIFFERENT agent -> skip (no double-assign)
-        assert _remote_skip_reason({"size:S", "needs-review"}, "cursor") is None    # no agent:* -> fresh, delegate
-        drp = delegate_remote("cursor", "stranske/Workflows#42", dry_run=True, labels={"agents:paused"})
+        assert _remote_skip_reason({"agent:cursor"}, "cursor") is not None  # same agent -> skip
+        assert (
+            _remote_skip_reason({"agent:claude"}, "cursor") is not None
+        )  # DIFFERENT agent -> skip (no double-assign)
+        assert (
+            _remote_skip_reason({"size:S", "needs-review"}, "cursor") is None
+        )  # no agent:* -> fresh, delegate
+        drp = delegate_remote(
+            "cursor", "stranske/Workflows#42", dry_run=True, labels={"agents:paused"}
+        )
         assert drp["skip"] and "paused" in drp["skip"], drp
         dra = delegate_remote("cursor", "o/r#9", dry_run=True, labels={"agent:claude"})
         assert dra["skip"] and "agent pipeline" in dra["skip"], dra
@@ -2065,13 +2949,23 @@ def _selftest() -> None:
         thompson = {"exploration": True, "exploration_mode": "thompson-hybrid"}
         assert _exercised_capability_ids(thompson, "codex") == ["thompson-hybrid-routing"]
         # Flag set but no challenger actually chosen -> router does not heartbeat, so neither do we.
-        assert _exercised_capability_ids(
-            {"exploration": False, "exploration_mode": "thompson-hybrid"}, "codex") == []
+        assert (
+            _exercised_capability_ids(
+                {"exploration": False, "exploration_mode": "thompson-hybrid"}, "codex"
+            )
+            == []
+        )
         # A different exploration mode is not Thompson.
-        assert _exercised_capability_ids(
-            {"exploration": True, "exploration_mode": "epsilon-greedy"}, "codex") == []
+        assert (
+            _exercised_capability_ids(
+                {"exploration": True, "exploration_mode": "epsilon-greedy"}, "codex"
+            )
+            == []
+        )
         assert _exercised_capability_ids(thompson, "gemini") == [
-            "agy-runtime-isolation", "thompson-hybrid-routing"]
+            "agy-runtime-isolation",
+            "thompson-hybrid-routing",
+        ]
 
         # --- offload profile selection: the line that unblocked worker provenance ---
         # No worker execution attempt had ever been recorded, because the attempt write is guarded
@@ -2079,21 +2973,115 @@ def _selftest() -> None:
         codex_profile = _select_offload_profile("codex", "mid")
         assert codex_profile and codex_profile["agent"] == "codex", codex_profile
         assert codex_profile["profile_id"] in {
-            "codex-5.6-sol-high", "codex-5.6-terra-high", "codex-5.6-luna-high"}, codex_profile
+            "codex-5.6-sol-high",
+            "codex-5.6-terra-high",
+            "codex-5.6-luna-high",
+        }, codex_profile
         # Deterministic: the same agent must resolve to the SAME profile every time, or worker
         # attempts smear across three identities instead of accumulating against one.
         assert _select_offload_profile("codex", "mid")["profile_id"] == codex_profile["profile_id"]
-        # Agents with no profile for this transport are UNCHANGED -- selection must not invent one.
-        for unprofiled in ("gemini", "cursor", "claude", "vibe", "aider"):
-            assert _select_offload_profile(unprofiled, "mid") is None, unprofiled
+        # Every real seat now has a registered profile, so every seat can record a worker attempt.
+        # (Before this, only codex could, which is why provenance covered one agent of six.)
+        for seat in ("claude", "gemini", "cursor", "vibe", "aider"):
+            assert _select_offload_profile(seat, "mid"), f"{seat} must select a profile"
+        # An agent with NO registered profile still selects nothing -- selection may not invent one.
+        assert _select_offload_profile("definitely-not-an-agent", "mid") is None
 
-        print("dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
-              "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
-              "offload run_id ledger reconciliation + Gemini progress-only/log-tail fail-closed, heartbeat, bogus-agent skip, "
-              "delegate_remote label + guards, proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL, "
-              "offload profile selection)")
+        # AN OFFLOAD IS A READ, SO IT TAKES THE MID RUNG -- never the reasoning tier just because a
+        # profile happens to exist there. `DEFAULT_OFFLOAD_TIER` and the comment beside it had
+        # already diagnosed this ("a codex offload burned Sol and a gemini offload burned Pro"), and
+        # registering one top-tier profile per seat silently overrode it: every gemini read was
+        # routed to Pro.
+        #
+        # gemini is the case that matters, because its two lines are NOT one version ladder: Flash
+        # (3.7/3.6/3.5) is the fast mid tier and Pro (3.1) is the higher-end reasoning tier, so
+        # `3.7 > 3.1` is newer Flash rather than better than Pro. Both are legitimate; the task
+        # decides, and an advisory read is not the task for Pro.
+        for seat in ("codex", "claude", "gemini"):
+            wanted = adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER)
+            chosen = _select_offload_profile(seat, "offload")
+            assert wanted, f"{seat} must have a tier ladder"
+            assert chosen and chosen["requested_model"] == wanted, (seat, wanted, chosen)
+        # And the reasoning tier is still REGISTERED, so full-tier work can still ask for it -- the
+        # fix is choosing per task, not deleting the expensive rung.
+        gemini_ids = {p["profile_id"] for p in execution_profiles.profiles_for_agent("gemini")}
+        assert "gemini-3.1-pro-high" in gemini_ids, gemini_ids
+        assert "gemini-3.6-flash-high" in gemini_ids, gemini_ids
+
+        # AGY REPORTS IN ITS LOG, and the log must be PER RUN. agy's structured output carries only
+        # conversation_id/cwd/usage; its log carries
+        # `Propagating selected model override to backend: label="..."`. The default `--log-file` is
+        # one shared path for every gemini run, so a line in it belongs to no particular run -- the
+        # same non-attributability that made cursor's reused `/private/tmp` useless.
+        def fake_agy_run(cmd, cwd=None, **_kwargs):
+            # ISOLATION, NOT A SKIP. `adapters.advertised_models` shells out to `agy models` when
+            # its disk cache (`agent-runtime/gemini/advertised-models.json`) is cold -- the normal
+            # state on every machine except this instance, where the cache is warm and the probe
+            # never fires. That probe landed INSIDE this patch window and overwrote `captured`, so
+            # the per-run-log assertion below compared against `['agy', 'models']` and failed on a
+            # bare runner while passing here. Record only the run under test (offload always shells
+            # through `bash -lc <wrapped>`); let an incidental probe return empty and change nothing.
+            if not (isinstance(cmd, list) and list(cmd[:2]) == ["bash", "-lc"]):
+                return ProbeCompleted()
+            captured["cmd"] = cmd  # asserted below; a stale `captured` proves the wrong command
+            captured["cwd"] = cwd
+            _write_agy_log(
+                cmd,
+                cwd,
+                "I0822 20:08:19.863873 1 model_config_manager.go:311] Propagating selected "
+                'model override to backend: label="Gemini 3.6 Flash (High)"\n',
+            )
+            return Completed()
+
+        try:
+            adapters.build_command = fake_gemini_build_command
+            subprocess.run = fake_agy_run
+            agy_off = offload("gemini", "Summarize.", cwd=str(nongit), timeout=1)
+        finally:
+            adapters.build_command = old_build_command
+            subprocess.run = old_subprocess_run
+        with feedback._conn() as c:
+            agy_row = c.execute(
+                "SELECT resolved_provider, resolved_model, status, fallback_reason "
+                "FROM execution_attempts WHERE run_id=? AND operation_role='worker'",
+                (agy_off["run_id"],),
+            ).fetchone()
+        assert agy_row is not None, "gemini can report, so the attempt must be recorded"
+        assert agy_row[1] == "gemini-3.6-flash-high", ("agy's own log names the model", agy_row)
+        assert agy_row[2] == "complete" and agy_row[3] is None, agy_row
+        # The log path handed to agy must be THIS run's, never the shared default.
+        # The message stays SHORT and names what it saw: this assertion fired on a Linux/3.14
+        # runner while passing on the owner's Mac, and the bare `captured["cmd"]` dump was
+        # truncated out of the CI log, so the failure could not be attributed from the log alone.
+        _cmd = captured["cmd"]
+        _joined = " ".join(_cmd) if isinstance(_cmd, list) else str(_cmd)
+        assert "--log-file" in _joined, (
+            f"agy argv lost its per-run log: type={type(_cmd).__name__} "
+            f"len={len(_cmd)} head={str(_cmd)[:200]!r}"
+        )
+        assert "agent-runtime/gemini/logs/agy.log" not in _joined, (
+            "a shared agy log cannot attribute a model to one run",
+            captured["cmd"],
+        )
+        # And a label that is not a model never becomes one.
+        assert adapters.model_label_from_agy_log("nothing to see") is None
+        assert adapters.model_id_for_label("gemini", "some prose") is None
+
+        # A single-lane seat has no ladder and must keep its one profile rather than losing it.
+        for seat in ("cursor", "vibe"):
+            assert adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER) is None, seat
+            assert _select_offload_profile(seat, "offload"), seat
+
+        print(
+            "dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
+            "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
+            "offload run_id ledger reconciliation + Gemini progress-only/log-tail fail-closed, heartbeat, bogus-agent skip, "
+            "delegate_remote label + guards, proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL, "
+            "offload profile selection)"
+        )
     finally:
         import shutil
+
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("HANDOFF_DIR", None)
         AGENT_RUNTIME_DIR = old_agent_runtime_dir
@@ -2121,6 +3109,7 @@ def main(argv: list[str]) -> int:
         return 0
     if argv and argv[0] == "delegate":  # the orchestrator seat's hand
         import argparse
+
         p = argparse.ArgumentParser(prog="dispatcher.py delegate")
         p.add_argument("--agent", required=True)
         p.add_argument("--target", required=True)
@@ -2134,35 +3123,55 @@ def main(argv: list[str]) -> int:
             help="accepted advisory role run to stamp onto this downstream dispatch",
         )
         g = p.add_mutually_exclusive_group(required=True)
-        g.add_argument("--prompt", help="inline orchestrator-authored prompt; preferred for compact one-off work")
+        g.add_argument(
+            "--prompt",
+            help="inline orchestrator-authored prompt; preferred for compact one-off work",
+        )
         g.add_argument("--prompt-file", help="path to a large or reusable prompt brief")
         ns = p.parse_args(argv[1:])
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         out = delegate(
-            ns.agent, ns.target, ns.lane, prompt, ns.mode, task_type=ns.task_type,
+            ns.agent,
+            ns.target,
+            ns.lane,
+            prompt,
+            ns.mode,
+            task_type=ns.task_type,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
         )
         print(json.dumps(out, default=str))
         return 0 if "error" not in out else 1
     if argv and argv[0] == "offload":  # read/summarize/research -> cheap agent -> result back
         import argparse
+
         p = argparse.ArgumentParser(prog="dispatcher.py offload")
         p.add_argument("--agent", required=True)
         p.add_argument("--cwd", default=".")
         p.add_argument("--mode")
         p.add_argument("--timeout", type=int, default=None)
-        p.add_argument("--isolate", "--worktree-isolation", action="store_true", dest="isolate",
-                       help="copy cwd to a persistent local offload workspace before running")
+        p.add_argument(
+            "--isolate",
+            "--worktree-isolation",
+            action="store_true",
+            dest="isolate",
+            help="copy cwd to a persistent local offload workspace before running",
+        )
         g = p.add_mutually_exclusive_group(required=True)
         g.add_argument("--prompt", help="inline prompt; preferred for bounded offloads and reviews")
         g.add_argument("--prompt-file", help="path to a large or reusable prompt brief")
         ns = p.parse_args(argv[1:])
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         try:
-            out = offload(ns.agent, prompt, cwd=ns.cwd, mode=ns.mode,
-                          timeout=ns.timeout, isolate=ns.isolate)
+            out = offload(
+                ns.agent, prompt, cwd=ns.cwd, mode=ns.mode, timeout=ns.timeout, isolate=ns.isolate
+            )
         except KeyboardInterrupt:
-            out = {"agent": ns.agent, "exit": 130, "output": "", "error": "interrupted by orchestrator"}
+            out = {
+                "agent": ns.agent,
+                "exit": 130,
+                "output": "",
+                "error": "interrupted by orchestrator",
+            }
         print(out["output"] if out.get("output") else json.dumps(out, default=str))
         if out.get("error"):
             print(f"[orchestrator] offload error: {out['error']}", file=sys.stderr)

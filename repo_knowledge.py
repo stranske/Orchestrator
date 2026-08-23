@@ -6,6 +6,7 @@ keep a small JSON registry of repo conventions and recurring gotchas, then injec
 the relevant subset into delegated-agent prompts. This is deliberately simple:
 structured notes now, richer outcome/RAG feeds later.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import feedback
@@ -25,7 +25,9 @@ REG = Path(os.environ.get("ORCH_REPO_KNOWLEDGE_PATH", ORCH / "experiments" / "re
 DEFAULT_MAX_CHARS = 3000
 AGENTS_EXPORT_START = "<!-- BEGIN orch-playbook -->"
 AGENTS_EXPORT_END = "<!-- END orch-playbook -->"
-AGENTS_EXPORT_NOTE = "<!-- exported by repo_knowledge.py; owner: Orchestrator; freshness owner: keepalive -->"
+AGENTS_EXPORT_NOTE = (
+    "<!-- exported by repo_knowledge.py; owner: Orchestrator; freshness owner: keepalive -->"
+)
 AGENTS_EXPORT_MAX_LINES = 30
 MANAGED_RULE_HASH_PREFIX = "orch-rule"
 FAILURE_DURABILITIES = {"reverted", "reworked", "reopened", "broke_later", "abandoned"}
@@ -78,8 +80,29 @@ TOKEN_SYNONYMS = {
     "workflows": "workflow",
 }
 SUGGESTION_STOPWORDS = {
-    "a", "an", "and", "as", "at", "by", "for", "from", "if", "in", "into", "is", "it", "its",
-    "of", "on", "or", "that", "the", "this", "to", "when", "with",
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "when",
+    "with",
 }
 NOTE_SIGNAL_PATTERNS = [
     r"\bmust\b",
@@ -152,7 +175,7 @@ _TREND_BASE_GOTCHA = (
 _TREND_FORMAT_GOTCHA = (
     "Formatting is Black at line-length 100 (`black --check --line-length 100`, gated by "
     "`pr-00-gate.yml` `format_check: true`); lint is `ruff check` with "
-    "`lint.select = [\"E4\",\"E7\",\"E9\",\"F\"]`. Never run `ruff format` -- it is not configured "
+    '`lint.select = ["E4","E7","E9","F"]`. Never run `ruff format` -- it is not configured '
     "here and produces pure churn."
 )
 
@@ -162,8 +185,7 @@ SUPERSEDED_TEXT = {
     "stranske/Trend_Model_Project": {
         "Trend opener work cuts from phase-3, not the default branch.": _TREND_SUMMARY,
         "Use phase-3 as the base for opener work; do not assume main.": _TREND_BASE_GOTCHA,
-        "CI convention is ruff check; do not introduce unrelated ruff format churn.":
-            _TREND_FORMAT_GOTCHA,
+        "CI convention is ruff check; do not introduce unrelated ruff format churn.": _TREND_FORMAT_GOTCHA,
     },
 }
 
@@ -204,7 +226,7 @@ SEED = {
                     "text": "Two config packages with near-identical names and diverging rules: `src/trend_analysis/config/model.py` (singular -- the strict TrendConfig/PortfolioSettings validator) and `src/trend_analysis/config/models.py` (plural -- the runtime Config). Always check both.",
                 },
                 {
-                    "text": "`config/defaults.yml` ships `signals: {}` -- present but empty -- and `src/trend/spec.py` treats a falsy `signals` as \"no signals\", which discards the whole `vol_adjust` section. Several \"vol adjustment did not run\" symptoms trace to that one empty mapping.",
+                    "text": '`config/defaults.yml` ships `signals: {}` -- present but empty -- and `src/trend/spec.py` treats a falsy `signals` as "no signals", which discards the whole `vol_adjust` section. Several "vol adjustment did not run" symptoms trace to that one empty mapping.',
                 },
                 {
                     "text": "`validate_config(..., include_model_validation=...)` defaults to False while `src/trend/cli.py` passes True, so validation strictness differs by caller. Always state which setting a validation claim was made under.",
@@ -218,7 +240,7 @@ SEED = {
                     "capability": "frontend-verifier",
                     "reason": "`frontend_verify.py` snapshots this Streamlit SPA before the websocket render completes, so its evidence is unreliable here.",
                     "instead": "Drive a real browser, or execute the real functions.",
-                    "evidence": "Code/Audits/Trend_Model_Project/README.md, \"Standing notes for the next round\" -- recorded in the 2026-08-11 round and re-confirmed in the 2026-08-23 round after the render-timing fix.",
+                    "evidence": 'Code/Audits/Trend_Model_Project/README.md, "Standing notes for the next round" -- recorded in the 2026-08-11 round and re-confirmed in the 2026-08-23 round after the render-timing fix.',
                 },
             ],
             "validation": [
@@ -281,6 +303,7 @@ def _reseed_section(live: list, seeded: list, *, section: str) -> list:
     invariant loses a `task_types` list it should never have carried. Items the instance added are
     left exactly as they are; nothing is ever deleted.
     """
+
     def identity(item: object) -> str:
         if section == CONTRAINDICATION_SECTION:
             if not isinstance(item, dict):
@@ -454,8 +477,14 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[: max(0, max_chars - len(marker))].rstrip() + marker
 
 
-def context_for(target_or_repo: str, *, task_type: str | None = None, lane: str | None = None,
-                path: Path = REG, max_chars: int = DEFAULT_MAX_CHARS) -> str:
+def context_for(
+    target_or_repo: str,
+    *,
+    task_type: str | None = None,
+    lane: str | None = None,
+    path: Path = REG,
+    max_chars: int = DEFAULT_MAX_CHARS,
+) -> str:
     """Return a concise prompt block for the target repo, or empty string if unknown."""
     repo = repo_for(target_or_repo)
     reg = load(path)
@@ -475,9 +504,18 @@ def context_for(target_or_repo: str, *, task_type: str | None = None, lane: str 
         lines.append(f"- Base branch: {base}")
 
     sections = [
-        ("Definition of done", _matching_lines(entry.get("definition_of_done", []), task_type=task_type, lane=lane)),
-        ("Known gotchas", _matching_lines(entry.get("gotchas", []), task_type=task_type, lane=lane)),
-        ("Validation", _matching_lines(entry.get("validation", []), task_type=task_type, lane=lane)),
+        (
+            "Definition of done",
+            _matching_lines(entry.get("definition_of_done", []), task_type=task_type, lane=lane),
+        ),
+        (
+            "Known gotchas",
+            _matching_lines(entry.get("gotchas", []), task_type=task_type, lane=lane),
+        ),
+        (
+            "Validation",
+            _matching_lines(entry.get("validation", []), task_type=task_type, lane=lane),
+        ),
     ]
     for title, values in sections:
         if values:
@@ -485,7 +523,9 @@ def context_for(target_or_repo: str, *, task_type: str | None = None, lane: str 
             lines.extend(f"  - {value}" for value in values)
     warned = _contraindication_lines(entry)
     if warned:
-        lines.append("- Contraindicated capabilities (this repo's own record says these do not work here):")
+        lines.append(
+            "- Contraindicated capabilities (this repo's own record says these do not work here):"
+        )
         lines.extend(f"  - {value}" for value in warned)
 
     if len(lines) == 1:
@@ -493,9 +533,15 @@ def context_for(target_or_repo: str, *, task_type: str | None = None, lane: str 
     return _truncate("\n".join(lines), max_chars)
 
 
-def append_context(prompt: str, target_or_repo: str, *, task_type: str | None = None,
-                   lane: str | None = None, path: Path = REG,
-                   max_chars: int = DEFAULT_MAX_CHARS) -> str:
+def append_context(
+    prompt: str,
+    target_or_repo: str,
+    *,
+    task_type: str | None = None,
+    lane: str | None = None,
+    path: Path = REG,
+    max_chars: int = DEFAULT_MAX_CHARS,
+) -> str:
     """Append repo playbook context to a prompt unless no context exists or it is already present."""
     # Credit where the DRIVER actually enters this module. The heartbeat previously sat
     # only in main(), which no driver calls -- dispatcher/tick call this function
@@ -510,7 +556,9 @@ def append_context(prompt: str, target_or_repo: str, *, task_type: str | None = 
     # where no dispatch happened.
     if os.environ.get("ORCH_REPO_PLAYBOOK", "").strip() == "0":
         return prompt
-    ctx = context_for(target_or_repo, task_type=task_type, lane=lane, path=path, max_chars=max_chars)
+    ctx = context_for(
+        target_or_repo, task_type=task_type, lane=lane, path=path, max_chars=max_chars
+    )
     if not ctx or "REPO PLAYBOOK (" in prompt:
         return prompt
     return f"{prompt.rstrip()}\n\n{ctx}"
@@ -542,7 +590,9 @@ def _export_section_lines(title: str, items: list, *, max_items: int = 8) -> lis
     lines = ["", f"### {title}", ""]
     lines.extend(values[:max_items])
     if len(values) > max_items:
-        lines.append(f"- [{len(values) - max_items} additional approved rule(s) omitted; see Orchestrator repo_knowledge.json]")
+        lines.append(
+            f"- [{len(values) - max_items} additional approved rule(s) omitted; see Orchestrator repo_knowledge.json]"
+        )
     return lines
 
 
@@ -557,8 +607,9 @@ def _limit_lines(lines: list[str], max_lines: int) -> list[str]:
     ]
 
 
-def export_agents_md(repo_or_target: str, *, path: Path = REG,
-                     max_lines: int = AGENTS_EXPORT_MAX_LINES) -> str:
+def export_agents_md(
+    repo_or_target: str, *, path: Path = REG, max_lines: int = AGENTS_EXPORT_MAX_LINES
+) -> str:
     """Return a small managed AGENTS.md block from the approved repo playbook registry.
 
     The block is intentionally export-only: unapproved suggestions never appear here, and existing
@@ -611,9 +662,14 @@ def _replace_managed_section(existing: str, managed_block: str) -> tuple[str, bo
     return updated, updated != existing
 
 
-def update_agents_md(repo_path: Path | str, *, repo: str | None = None,
-                     path: Path = REG, apply: bool = False,
-                     max_lines: int = AGENTS_EXPORT_MAX_LINES) -> dict:
+def update_agents_md(
+    repo_path: Path | str,
+    *,
+    repo: str | None = None,
+    path: Path = REG,
+    apply: bool = False,
+    max_lines: int = AGENTS_EXPORT_MAX_LINES,
+) -> dict:
     """Preview or write the managed Orchestrator section in a repo's AGENTS.md."""
     root = Path(repo_path).expanduser().resolve()
     if not root.is_dir():
@@ -668,9 +724,13 @@ def _path_refs(markdown: str) -> list[str]:
     return refs
 
 
-def validate_agents_md_export(repo_path: Path | str, *, repo: str | None = None,
-                              path: Path = REG,
-                              max_lines: int = AGENTS_EXPORT_MAX_LINES) -> dict:
+def validate_agents_md_export(
+    repo_path: Path | str,
+    *,
+    repo: str | None = None,
+    path: Path = REG,
+    max_lines: int = AGENTS_EXPORT_MAX_LINES,
+) -> dict:
     """Validate the managed AGENTS.md section against the approved registry export."""
     root = Path(repo_path).expanduser().resolve()
     repo_name = repo or _repo_from_git_remote(root)
@@ -692,7 +752,9 @@ def validate_agents_md_export(repo_path: Path | str, *, repo: str | None = None,
     elif expected and actual != expected:
         warnings.append("managed Orchestrator section differs from current registry export")
     elif not expected and actual is not None:
-        warnings.append("managed Orchestrator section exists but registry has no approved playbook entry")
+        warnings.append(
+            "managed Orchestrator section exists but registry has no approved playbook entry"
+        )
 
     missing_refs: list[str] = []
     for ref in _path_refs(actual or expected or ""):
@@ -719,9 +781,13 @@ def validate_agents_md_export(repo_path: Path | str, *, repo: str | None = None,
                 missing_refs.append(detail)
     if registered and actual is None:
         status = "absent"
-    elif actual is not None and expected and actual != expected:
-        status = "mismatched"
-    elif actual is not None and not expected:
+    elif (
+        actual is not None
+        and expected
+        and actual != expected
+        or actual is not None
+        and not expected
+    ):
         status = "mismatched"
     elif missing_refs:
         status = "stale"
@@ -750,7 +816,12 @@ def validate_current_refs(repo_path: Path | str, refs: list[dict]) -> dict:
     if not root.is_dir():
         return {"valid": False, "status": "stale", "refs": [], "errors": ["repo root not found"]}
     if not isinstance(refs, list) or not refs:
-        return {"valid": False, "status": "stale", "refs": [], "errors": ["current refs are required"]}
+        return {
+            "valid": False,
+            "status": "stale",
+            "refs": [],
+            "errors": ["current refs are required"],
+        }
     for index, item in enumerate(refs):
         if not isinstance(item, dict) or set(item) not in ({"path"}, {"path", "symbol"}):
             errors.append(f"current_refs[{index}] must contain path and optional symbol")
@@ -804,14 +875,15 @@ def managed_rule_duplicate(
                 continue
             if isinstance(item, dict) and item.get("content_hash") == content_hash:
                 return {"section": section, "reason": "duplicate content hash", "item": item}
-            if existing_text.lower() == text.lower() or _token_similarity(existing_text, text) >= FUZZY_DUPLICATE_THRESHOLD:
+            if (
+                existing_text.lower() == text.lower()
+                or _token_similarity(existing_text, text) >= FUZZY_DUPLICATE_THRESHOLD
+            ):
                 return {"section": section, "reason": "duplicate playbook meaning", "item": item}
     return None
 
 
-def install_managed_rule(
-    manifest: dict, *, path: Path = REG, apply: bool = False
-) -> dict:
+def install_managed_rule(manifest: dict, *, path: Path = REG, apply: bool = False) -> dict:
     """Preview/apply one compiler-validated canary rule to the local registry."""
     repo = str(manifest["repo"])
     section = str(manifest["section"])
@@ -861,7 +933,8 @@ def remove_managed_rule(rule_id: str, *, repo: str, path: Path = REG, apply: boo
     for section in PLAYBOOK_SECTIONS:
         items = list(entry.get(section, []) or [])
         filtered = [
-            item for item in items
+            item
+            for item in items
             if not (isinstance(item, dict) and item.get("rule_id") == rule_id)
         ]
         if len(filtered) != len(items):
@@ -870,7 +943,13 @@ def remove_managed_rule(rule_id: str, *, repo: str, path: Path = REG, apply: boo
                 entry[section] = filtered
     if found and apply:
         save(reg, path)
-    return {"repo": repo, "rule_id": rule_id, "found": found, "removed": bool(found and apply), "preview": not apply}
+    return {
+        "repo": repo,
+        "rule_id": rule_id,
+        "found": found,
+        "removed": bool(found and apply),
+        "preview": not apply,
+    }
 
 
 def update_capability_bundle(
@@ -901,7 +980,12 @@ def update_capability_bundle(
     if apply and changed:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
-    return {"path": str(target), "preview": not apply, "changed": changed, "written": bool(apply and changed)}
+    return {
+        "path": str(target),
+        "preview": not apply,
+        "changed": changed,
+        "written": bool(apply and changed),
+    }
 
 
 def _looks_invariant(text: str) -> str:
@@ -937,12 +1021,17 @@ def scope_audit(path: Path = REG) -> dict:
                 scoped_total += 1
                 signal = _looks_invariant(_text(item))
                 if signal:
-                    invariant.append({
-                        "repo": repo, "section": section, "text": _text(item),
-                        "scope": scope, "invariant_signal": signal,
-                        "fix": "drop task_types/lanes: this states a repo invariant, so a "
-                               "review/audit consult must see it too",
-                    })
+                    invariant.append(
+                        {
+                            "repo": repo,
+                            "section": section,
+                            "text": _text(item),
+                            "scope": scope,
+                            "invariant_signal": signal,
+                            "fix": "drop task_types/lanes: this states a repo invariant, so a "
+                            "review/audit consult must see it too",
+                        }
+                    )
     return {
         "scoped_items": scoped_total,
         "invariant_scoped": invariant,
@@ -977,11 +1066,43 @@ def _clean_note(note: str, max_chars: int = 320) -> str:
 
 def _classify_candidate(text: str, *, failure_like: bool = False) -> str:
     lowered = text.lower()
-    if failure_like or any(s in lowered for s in ("avoid", "do not", "don't", "never", "missing", "failed", "wrong", "gotcha", "pitfall")):
+    if failure_like or any(
+        s in lowered
+        for s in (
+            "avoid",
+            "do not",
+            "don't",
+            "never",
+            "missing",
+            "failed",
+            "wrong",
+            "gotcha",
+            "pitfall",
+        )
+    ):
         return "gotchas"
-    if any(s in lowered for s in ("must", "required", "always", "before merging", "definition of done", "checklist")):
+    if any(
+        s in lowered
+        for s in ("must", "required", "always", "before merging", "definition of done", "checklist")
+    ):
         return "definition_of_done"
-    if any(s in lowered for s in ("run ", "validate", "validation", "test", "pytest", "ruff", "black", "mypy", "lint", "format", "coverage", "ci")):
+    if any(
+        s in lowered
+        for s in (
+            "run ",
+            "validate",
+            "validation",
+            "test",
+            "pytest",
+            "ruff",
+            "black",
+            "mypy",
+            "lint",
+            "format",
+            "coverage",
+            "ci",
+        )
+    ):
         return "validation"
     return "gotchas"
 
@@ -1013,8 +1134,7 @@ def _cluster_key(text: str) -> str:
     return "_".join(tokens[:5]) if tokens else "suggestion"
 
 
-def _merge_field(target: dict, incoming: dict, *, field: str, list_field: str,
-                 joiner: str) -> None:
+def _merge_field(target: dict, incoming: dict, *, field: str, list_field: str, joiner: str) -> None:
     value = incoming.get(field)
     if value is None or value == "":
         return
@@ -1048,15 +1168,18 @@ def _merge_suggestion(target: dict, incoming: dict, *, similarity: float) -> Non
         _merge_field(target, incoming, field=field, list_field=list_field, joiner="; ")
 
 
-def _append_suggestion(suggestions: list[dict], seen: set[str], known: set[str], suggestion: dict,
-                       *, max_per_repo: int) -> None:
+def _append_suggestion(
+    suggestions: list[dict], seen: set[str], known: set[str], suggestion: dict, *, max_per_repo: int
+) -> None:
     text = _clean_note(suggestion.get("candidate_text") or "", max_chars=600)
     if len(text) < 20:
         return
     key = text.lower()
     if key in seen:
         return
-    if key in known or any(_token_similarity(text, item) >= FUZZY_DUPLICATE_THRESHOLD for item in known):
+    if key in known or any(
+        _token_similarity(text, item) >= FUZZY_DUPLICATE_THRESHOLD for item in known
+    ):
         return
     for existing in suggestions:
         similarity = _token_similarity(text, existing.get("candidate_text") or "")
@@ -1080,8 +1203,12 @@ def _append_suggestion(suggestions: list[dict], seen: set[str], known: set[str],
 
 
 def _repo_from_git_remote(root: Path) -> str:
-    res = subprocess.run(["git", "-C", str(root), "config", "--get", "remote.origin.url"],
-                         capture_output=True, text=True, check=False)
+    res = subprocess.run(
+        ["git", "-C", str(root), "config", "--get", "remote.origin.url"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     remote = (res.stdout or "").strip()
     if not remote:
         return ""
@@ -1150,7 +1277,7 @@ def _doc_blocks(lines: list[str], *, sections: list[str] | None = None) -> list[
             elif any(phrase in title for phrase in wanted):
                 in_scope, scope_depth = True, depth
             elif scope_depth is not None and depth > scope_depth:
-                pass                                   # a sub-heading inside the matched section
+                pass  # a sub-heading inside the matched section
             else:
                 in_scope, scope_depth = False, None
             continue
@@ -1171,7 +1298,9 @@ def _doc_blocks(lines: list[str], *, sections: list[str] | None = None) -> list[
     return blocks
 
 
-def _iter_doc_files(root: Path, *, max_files: int = 100, include_root_docs: bool = False) -> list[Path]:
+def _iter_doc_files(
+    root: Path, *, max_files: int = 100, include_root_docs: bool = False
+) -> list[Path]:
     out: list[Path] = []
     seen: set[Path] = set()
     for name in sorted(DOC_ROOT_FILES):
@@ -1205,9 +1334,15 @@ def _iter_doc_files(root: Path, *, max_files: int = 100, include_root_docs: bool
     return out[:max_files]
 
 
-def suggest_from_docs(repo_path: Path | str, *, repo: str | None = None, path: Path = REG,
-                      max_per_repo: int = 10, include_root_docs: bool = False,
-                      sections: list[str] | None = None) -> list[dict]:
+def suggest_from_docs(
+    repo_path: Path | str,
+    *,
+    repo: str | None = None,
+    path: Path = REG,
+    max_per_repo: int = 10,
+    include_root_docs: bool = False,
+    sections: list[str] | None = None,
+) -> list[dict]:
     """Suggest playbook candidates by scanning repo docs.
 
     This is read-only and intentionally conservative: it looks for directive-like
@@ -1251,13 +1386,19 @@ def suggest_from_docs(repo_path: Path | str, *, repo: str | None = None, path: P
             # is durable guidance, and the output is still a review queue, not a write.
             if sections is None and not _doc_has_signal(text):
                 continue
-            _append_suggestion(suggestions, seen, known, {
-                "repo": repo_name,
-                "suggested_section": _classify_candidate(text),
-                "candidate_text": text,
-                "source": "repo-docs",
-                "evidence": f"{rel}:{lineno}",
-            }, max_per_repo=max_per_repo)
+            _append_suggestion(
+                suggestions,
+                seen,
+                known,
+                {
+                    "repo": repo_name,
+                    "suggested_section": _classify_candidate(text),
+                    "candidate_text": text,
+                    "source": "repo-docs",
+                    "evidence": f"{rel}:{lineno}",
+                },
+                max_per_repo=max_per_repo,
+            )
             if len(suggestions) >= max_per_repo:
                 return suggestions
     return suggestions
@@ -1275,13 +1416,18 @@ def _extract_comment_records(payload: object) -> list[dict]:
             return
         body = value.get("body")
         if isinstance(body, str) and body.strip():
-            records.append({
-                "body": body,
-                "path": value.get("path") or value.get("file") or "",
-                "url": value.get("html_url") or value.get("url") or "",
-                "author": ((value.get("user") or {}).get("login")
-                           if isinstance(value.get("user"), dict) else value.get("author")),
-            })
+            records.append(
+                {
+                    "body": body,
+                    "path": value.get("path") or value.get("file") or "",
+                    "url": value.get("html_url") or value.get("url") or "",
+                    "author": (
+                        (value.get("user") or {}).get("login")
+                        if isinstance(value.get("user"), dict)
+                        else value.get("author")
+                    ),
+                }
+            )
         for child in value.values():
             if isinstance(child, (list, dict)):
                 walk(child)
@@ -1290,9 +1436,14 @@ def _extract_comment_records(payload: object) -> list[dict]:
     return records
 
 
-def suggest_from_review_payload(payload: object, *, repo: str, path: Path = REG,
-                                source: str = "review-comments",
-                                max_per_repo: int = 10) -> list[dict]:
+def suggest_from_review_payload(
+    payload: object,
+    *,
+    repo: str,
+    path: Path = REG,
+    source: str = "review-comments",
+    max_per_repo: int = 10,
+) -> list[dict]:
     """Suggest playbook candidates from GitHub/reviewer comment payloads."""
     known = _known_texts_for_repo(repo, path)
     seen: set[str] = set()
@@ -1302,21 +1453,28 @@ def suggest_from_review_payload(payload: object, *, repo: str, path: Path = REG,
         if not _note_has_signal(text):
             continue
         evidence_bits = [str(part) for part in (rec.get("path"), rec.get("url")) if part]
-        _append_suggestion(suggestions, seen, known, {
-            "repo": repo,
-            "suggested_section": _classify_candidate(text, failure_like=True),
-            "candidate_text": text,
-            "source": source,
-            "evidence": " ".join(evidence_bits) if evidence_bits else None,
-            "author": rec.get("author"),
-        }, max_per_repo=max_per_repo)
+        _append_suggestion(
+            suggestions,
+            seen,
+            known,
+            {
+                "repo": repo,
+                "suggested_section": _classify_candidate(text, failure_like=True),
+                "candidate_text": text,
+                "source": source,
+                "evidence": " ".join(evidence_bits) if evidence_bits else None,
+                "author": rec.get("author"),
+            },
+            max_per_repo=max_per_repo,
+        )
         if len(suggestions) >= max_per_repo:
             return suggestions
     return suggestions
 
 
-def suggest_from_review_json(review_json: Path | str, *, repo: str, path: Path = REG,
-                             max_per_repo: int = 10) -> list[dict]:
+def suggest_from_review_json(
+    review_json: Path | str, *, repo: str, path: Path = REG, max_per_repo: int = 10
+) -> list[dict]:
     return suggest_from_review_payload(
         json.loads(Path(review_json).read_text()),
         repo=repo,
@@ -1326,8 +1484,9 @@ def suggest_from_review_json(review_json: Path | str, *, repo: str, path: Path =
     )
 
 
-def suggest_from_pr_comments(target: str, *, path: Path = REG, max_per_repo: int = 10,
-                             runner=subprocess.run) -> list[dict]:
+def suggest_from_pr_comments(
+    target: str, *, path: Path = REG, max_per_repo: int = 10, runner=subprocess.run
+) -> list[dict]:
     """Suggest playbook candidates from live GitHub issue, review, and PR comments."""
     repo, number = provision.parse_target(target)
     if number is None:
@@ -1366,8 +1525,9 @@ def suggest_from_pr_comments(target: str, *, path: Path = REG, max_per_repo: int
     )
 
 
-def suggest_from_snapshot(snapshot_path: Path | str, *, path: Path = REG,
-                          max_per_repo: int = 5) -> list[dict]:
+def suggest_from_snapshot(
+    snapshot_path: Path | str, *, path: Path = REG, max_per_repo: int = 5
+) -> list[dict]:
     """Suggest repo-playbook candidates from retained outcome notes.
 
     This is a review queue, not an auto-writer. It mines real failures/durability
@@ -1401,26 +1561,33 @@ def suggest_from_snapshot(snapshot_path: Path | str, *, path: Path = REG,
             repo_order.append(repo)
             per_repo_suggestions[repo] = []
             per_repo_seen[repo] = set()
-        _append_suggestion(per_repo_suggestions[repo], per_repo_seen[repo], known, {
-            "repo": repo,
-            "run_id": outcome.get("run_id"),
-            "target": target,
-            "task_type": run.get("task_type"),
-            "agent": run.get("agent"),
-            "verdict": verdict or None,
-            "durability": durability or None,
-            "suggested_section": "gotchas" if failure_like else "validation",
-            "candidate_text": notes,
-            "source": "feedback-snapshot.outcomes.notes",
-        }, max_per_repo=max_per_repo)
+        _append_suggestion(
+            per_repo_suggestions[repo],
+            per_repo_seen[repo],
+            known,
+            {
+                "repo": repo,
+                "run_id": outcome.get("run_id"),
+                "target": target,
+                "task_type": run.get("task_type"),
+                "agent": run.get("agent"),
+                "verdict": verdict or None,
+                "durability": durability or None,
+                "suggested_section": "gotchas" if failure_like else "validation",
+                "candidate_text": notes,
+                "source": "feedback-snapshot.outcomes.notes",
+            },
+            max_per_repo=max_per_repo,
+        )
     suggestions: list[dict] = []
     for repo in repo_order:
         suggestions.extend(per_repo_suggestions[repo])
     return suggestions
 
 
-def _memory_query_tokens(query: str | None, *, task_type: str | None = None,
-                         lane: str | None = None) -> set[str]:
+def _memory_query_tokens(
+    query: str | None, *, task_type: str | None = None, lane: str | None = None
+) -> set[str]:
     parts = [query or ""]
     if task_type:
         parts.append(task_type)
@@ -1429,8 +1596,9 @@ def _memory_query_tokens(query: str | None, *, task_type: str | None = None,
     return set(_fingerprint_tokens(" ".join(parts)))
 
 
-def _memory_match(tokens: set[str], text: str, *, base: float = 0.0,
-                  idf: dict[str, float] | None = None) -> dict:
+def _memory_match(
+    tokens: set[str], text: str, *, base: float = 0.0, idf: dict[str, float] | None = None
+) -> dict:
     if not text:
         return {"score": 0.0, "matched_terms": [], "coverage": 0.0}
     if not tokens:
@@ -1459,9 +1627,19 @@ def _score_memory_text(tokens: set[str], text: str, *, base: float = 0.0) -> flo
 
 
 def _memory_haystack(record: dict) -> str:
-    return " ".join(str(record.get(k) or "") for k in (
-        "text", "scope", "section", "target", "task_type", "agent", "verdict", "durability"
-    ))
+    return " ".join(
+        str(record.get(k) or "")
+        for k in (
+            "text",
+            "scope",
+            "section",
+            "target",
+            "task_type",
+            "agent",
+            "verdict",
+            "durability",
+        )
+    )
 
 
 def _memory_idf(records: list[dict]) -> dict[str, float]:
@@ -1476,8 +1654,7 @@ def _memory_idf(records: list[dict]) -> dict[str, float]:
         for token in set(_fingerprint_tokens(_memory_haystack(record))):
             doc_freq[token] = doc_freq.get(token, 0) + 1
     return {
-        token: 1.0 + math.log((1.0 + n_docs) / (1.0 + freq))
-        for token, freq in doc_freq.items()
+        token: 1.0 + math.log((1.0 + n_docs) / (1.0 + freq)) for token, freq in doc_freq.items()
     }
 
 
@@ -1506,38 +1683,47 @@ def _memory_item_visible(item: object, *, task_type: str | None, lane: str | Non
     return True
 
 
-def _playbook_memory_records(repo: str, *, task_type: str | None, lane: str | None,
-                             path: Path = REG) -> list[dict]:
+def _playbook_memory_records(
+    repo: str, *, task_type: str | None, lane: str | None, path: Path = REG
+) -> list[dict]:
     entry = (load(path).get("repos") or {}).get(repo) or {}
     records: list[dict] = []
     summary = str(entry.get("summary") or "").strip()
     if summary:
-        records.append({
-            "repo": repo,
-            "source": "approved-playbook",
-            "section": "summary",
-            "text": summary,
-            "evidence": "repo_knowledge.json:summary",
-        })
+        records.append(
+            {
+                "repo": repo,
+                "source": "approved-playbook",
+                "section": "summary",
+                "text": summary,
+                "evidence": "repo_knowledge.json:summary",
+            }
+        )
     base = str(entry.get("base_branch") or "").strip()
     if base:
-        records.append({
-            "repo": repo,
-            "source": "approved-playbook",
-            "section": "base_branch",
-            "text": f"Base branch for this repo: {base}.",
-            "evidence": "repo_knowledge.json:base_branch",
-        })
+        records.append(
+            {
+                "repo": repo,
+                "source": "approved-playbook",
+                "section": "base_branch",
+                "text": f"Base branch for this repo: {base}.",
+                "evidence": "repo_knowledge.json:base_branch",
+            }
+        )
     for item in entry.get(CONTRAINDICATION_SECTION) or []:
         if not isinstance(item, dict) or not item.get("capability"):
             continue
-        records.append({
-            "repo": repo,
-            "source": "approved-playbook",
-            "section": CONTRAINDICATION_SECTION,
-            "text": f"{item['capability']} is contraindicated here: {item.get('reason') or ''}".strip(),
-            "evidence": str(item.get("evidence") or f"repo_knowledge.json:{CONTRAINDICATION_SECTION}"),
-        })
+        records.append(
+            {
+                "repo": repo,
+                "source": "approved-playbook",
+                "section": CONTRAINDICATION_SECTION,
+                "text": f"{item['capability']} is contraindicated here: {item.get('reason') or ''}".strip(),
+                "evidence": str(
+                    item.get("evidence") or f"repo_knowledge.json:{CONTRAINDICATION_SECTION}"
+                ),
+            }
+        )
     for section in ("definition_of_done", "gotchas", "validation"):
         for item in entry.get(section, []) or []:
             if not _memory_item_visible(item, task_type=task_type, lane=lane):
@@ -1545,14 +1731,16 @@ def _playbook_memory_records(repo: str, *, task_type: str | None, lane: str | No
             text = _text(item)
             if text:
                 scope = _scope_suffix(item)
-                records.append({
-                    "repo": repo,
-                    "source": "approved-playbook",
-                    "section": section,
-                    "text": text,
-                    "scope": scope.strip(" ()"),
-                    "evidence": f"repo_knowledge.json:{section}",
-                })
+                records.append(
+                    {
+                        "repo": repo,
+                        "source": "approved-playbook",
+                        "section": section,
+                        "text": text,
+                        "scope": scope.strip(" ()"),
+                        "evidence": f"repo_knowledge.json:{section}",
+                    }
+                )
     return records
 
 
@@ -1572,19 +1760,21 @@ def _run_memory_from_snapshot(snapshot: dict, repo: str) -> list[dict]:
         notes = _clean_note(outcome.get("notes") or "", max_chars=600)
         if not notes:
             continue
-        records.append({
-            "repo": repo,
-            "source": "feedback-outcome",
-            "section": "outcome_notes",
-            "text": notes,
-            "evidence": outcome.get("run_id"),
-            "run_id": outcome.get("run_id"),
-            "target": target,
-            "task_type": run.get("task_type"),
-            "agent": run.get("agent"),
-            "verdict": outcome.get("adjudicated_verdict") or outcome.get("verifier_verdict"),
-            "durability": outcome.get("durability"),
-        })
+        records.append(
+            {
+                "repo": repo,
+                "source": "feedback-outcome",
+                "section": "outcome_notes",
+                "text": notes,
+                "evidence": outcome.get("run_id"),
+                "run_id": outcome.get("run_id"),
+                "target": target,
+                "task_type": run.get("task_type"),
+                "agent": run.get("agent"),
+                "verdict": outcome.get("adjudicated_verdict") or outcome.get("verifier_verdict"),
+                "durability": outcome.get("durability"),
+            }
+        )
     return records
 
 
@@ -1609,19 +1799,21 @@ def _run_memory_from_feedback(repo: str, *, limit: int = 200) -> list[dict]:
                 continue
         except Exception:
             continue
-        records.append({
-            "repo": repo,
-            "source": "feedback-outcome",
-            "section": "outcome_notes",
-            "text": _clean_note(notes, max_chars=600),
-            "evidence": run_id,
-            "run_id": run_id,
-            "target": target,
-            "task_type": task_type,
-            "agent": agent,
-            "verdict": adjudicated or verifier,
-            "durability": durability,
-        })
+        records.append(
+            {
+                "repo": repo,
+                "source": "feedback-outcome",
+                "section": "outcome_notes",
+                "text": _clean_note(notes, max_chars=600),
+                "evidence": run_id,
+                "run_id": run_id,
+                "target": target,
+                "task_type": task_type,
+                "agent": agent,
+                "verdict": adjudicated or verifier,
+                "durability": durability,
+            }
+        )
     return records
 
 
@@ -1633,11 +1825,18 @@ def _memory_scope_match(record: dict, *, task_type: str | None, lane: str | None
     return True
 
 
-def search_repo_memory(repo_or_target: str, *, query: str | None = None,
-                       task_type: str | None = None, lane: str | None = None,
-                       path: Path = REG, snapshot_path: Path | str | None = None,
-                       snapshot: dict | None = None, include_runs: bool = True,
-                       max_results: int = 8) -> list[dict]:
+def search_repo_memory(
+    repo_or_target: str,
+    *,
+    query: str | None = None,
+    task_type: str | None = None,
+    lane: str | None = None,
+    path: Path = REG,
+    snapshot_path: Path | str | None = None,
+    snapshot: dict | None = None,
+    include_runs: bool = True,
+    max_results: int = 8,
+) -> list[dict]:
     """Search approved playbook rules plus retained run/outcome notes for one repo.
 
     This is read-only retrieval. It never promotes suggestions or injects unapproved text into prompts.
@@ -1648,8 +1847,11 @@ def search_repo_memory(repo_or_target: str, *, query: str | None = None,
     if include_runs:
         if snapshot is None and snapshot_path is not None:
             snapshot = json.loads(Path(snapshot_path).read_text())
-        records.extend(_run_memory_from_snapshot(snapshot, repo) if snapshot is not None
-                       else _run_memory_from_feedback(repo))
+        records.extend(
+            _run_memory_from_snapshot(snapshot, repo)
+            if snapshot is not None
+            else _run_memory_from_feedback(repo)
+        )
     idf = _memory_idf(records)
     scored: list[dict] = []
     for record in records:
@@ -1665,17 +1867,20 @@ def search_repo_memory(repo_or_target: str, *, query: str | None = None,
             enriched["matched_terms"] = match["matched_terms"]
             enriched["coverage"] = round(float(match["coverage"]), 4)
         scored.append(enriched)
-    scored.sort(key=lambda item: (
-        -float(item.get("score") or 0),
-        0 if item.get("source") == "approved-playbook" else 1,
-        str(item.get("section") or ""),
-        str(item.get("text") or ""),
-    ))
-    return scored[:max(0, max_results)]
+    scored.sort(
+        key=lambda item: (
+            -float(item.get("score") or 0),
+            0 if item.get("source") == "approved-playbook" else 1,
+            str(item.get("section") or ""),
+            str(item.get("text") or ""),
+        )
+    )
+    return scored[: max(0, max_results)]
 
 
-def approve_suggestion(suggestion: dict, *, section: str | None = None,
-                       path: Path = REG, apply: bool = False) -> dict:
+def approve_suggestion(
+    suggestion: dict, *, section: str | None = None, path: Path = REG, apply: bool = False
+) -> dict:
     """Preview or apply one suggested playbook entry.
 
     Suggestions are intentionally not auto-applied when mined from outcomes. This
@@ -1695,7 +1900,9 @@ def approve_suggestion(suggestion: dict, *, section: str | None = None,
 
     reg = load(path)
     repos = reg.setdefault("repos", {})
-    entry = repos.setdefault(repo, {"summary": "", "definition_of_done": [], "gotchas": [], "validation": []})
+    entry = repos.setdefault(
+        repo, {"summary": "", "definition_of_done": [], "gotchas": [], "validation": []}
+    )
     known = {_text(item).lower() for item in entry.get(chosen, []) or []}
     already = text.lower() in known
     result = {
@@ -1755,7 +1962,9 @@ def _selftest() -> None:
             if entry.get("base_branch"):
                 assert repo in provision.BASE_BRANCH_OVERRIDES, repo
 
-        ctx = context_for("stranske/Trend_Model_Project#123", task_type="implement", lane="opener", path=p)
+        ctx = context_for(
+            "stranske/Trend_Model_Project#123", task_type="implement", lane="opener", path=p
+        )
         assert "REPO PLAYBOOK (stranske/Trend_Model_Project)" in ctx, ctx
         assert "Base branch: phase-3" in ctx, ctx
         assert "ruff check" in ctx, ctx
@@ -1794,18 +2003,28 @@ def _selftest() -> None:
         audit_red = scope_audit(path=p)
         assert not audit_red["clean"] and audit_red["invariant_scoped_count"] == 1, audit_red
         assert audit_red["invariant_scoped"][0]["invariant_signal"] in {"black", "ruff"}, audit_red
-        assert "ruff check" not in context_for("stranske/Trend_Model_Project#1", task_type="review", path=p)
+        assert "ruff check" not in context_for(
+            "stranske/Trend_Model_Project#1", task_type="review", path=p
+        )
         broken["repos"]["stranske/Trend_Model_Project"]["gotchas"][1].pop("task_types")
         save(broken, p)
         assert scope_audit(path=p)["clean"], scope_audit(path=p)
-        assert "ruff check" in context_for("stranske/Trend_Model_Project#1", task_type="review", path=p)
+        assert "ruff check" in context_for(
+            "stranske/Trend_Model_Project#1", task_type="review", path=p
+        )
 
-        closer_ctx = context_for("stranske/Trend_Model_Project#123", task_type="implement", lane="closer", path=p)
+        closer_ctx = context_for(
+            "stranske/Trend_Model_Project#123", task_type="implement", lane="closer", path=p
+        )
         assert "Base branch: phase-3" in closer_ctx, closer_ctx
 
-        lms_ctx = context_for("stranske/learning-management-system#7", task_type="mechanical", lane="opener", path=p)
+        lms_ctx = context_for(
+            "stranske/learning-management-system#7", task_type="mechanical", lane="opener", path=p
+        )
         assert "PostgreSQL-compatible" in lms_ctx, lms_ctx
-        lms_impl = context_for("stranske/learning-management-system#7", task_type="implement", lane="opener", path=p)
+        lms_impl = context_for(
+            "stranske/learning-management-system#7", task_type="implement", lane="opener", path=p
+        )
         assert "PostgreSQL-compatible" in lms_impl, lms_impl
         # Scoping still WORKS -- it is only wrong on invariants. An instance-added, work-kind-specific
         # rule must still be filtered, or the fix above would have removed the feature, not the misuse.
@@ -1827,19 +2046,35 @@ def _selftest() -> None:
         legacy = Path("/tmp/__repo_knowledge_selftest_v1.json")
         legacy.unlink(missing_ok=True)
         try:
-            legacy.write_text(json.dumps({"schema_version": 1, "repos": {
-                "stranske/Trend_Model_Project": {
-                    "summary": "Trend opener work cuts from phase-3, not the default branch.",
-                    "base_branch": "phase-3",
-                    "gotchas": [
-                        {"text": "Use phase-3 as the base for opener work; do not assume main.",
-                         "lanes": ["opener"]},
-                        {"text": "CI convention is ruff check; do not introduce unrelated ruff format churn.",
-                         "task_types": ["mechanical", "implement", "testgen"]},
-                        {"text": "An instance rule nobody seeded.", "task_types": ["docs"]},
-                    ],
-                },
-            }}, indent=2) + "\n")
+            legacy.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "repos": {
+                            "stranske/Trend_Model_Project": {
+                                "summary": "Trend opener work cuts from phase-3, not the default branch.",
+                                "base_branch": "phase-3",
+                                "gotchas": [
+                                    {
+                                        "text": "Use phase-3 as the base for opener work; do not assume main.",
+                                        "lanes": ["opener"],
+                                    },
+                                    {
+                                        "text": "CI convention is ruff check; do not introduce unrelated ruff format churn.",
+                                        "task_types": ["mechanical", "implement", "testgen"],
+                                    },
+                                    {
+                                        "text": "An instance rule nobody seeded.",
+                                        "task_types": ["docs"],
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
             migrated = load(legacy)
             assert migrated["schema_version"] == SEED_SCHEMA_VERSION, migrated["schema_version"]
             trend = migrated["repos"]["stranske/Trend_Model_Project"]
@@ -1849,9 +2084,12 @@ def _selftest() -> None:
             assert any("black --check --line-length 100" in t for t in texts), texts
             assert "An instance rule nobody seeded." in texts, texts
             kept = [i for i in trend["gotchas"] if _text(i) == "An instance rule nobody seeded."][0]
-            assert kept["task_types"] == ["docs"], kept          # instance scope survives untouched
-            assert not any(item.get("task_types") or item.get("lanes")
-                           for item in trend["gotchas"] if _text(item) != "An instance rule nobody seeded.")
+            assert kept["task_types"] == ["docs"], kept  # instance scope survives untouched
+            assert not any(
+                item.get("task_types") or item.get("lanes")
+                for item in trend["gotchas"]
+                if _text(item) != "An instance rule nobody seeded."
+            )
             assert trend[CONTRAINDICATION_SECTION][0]["capability"] == "frontend-verifier", trend
             assert scope_audit(path=legacy)["clean"], scope_audit(path=legacy)
             before = legacy.read_text()
@@ -1861,9 +2099,16 @@ def _selftest() -> None:
             legacy.unlink(missing_ok=True)
 
         assert context_for("stranske/Unknown#1", path=p) == ""
-        appended = append_context("Do the work.", "stranske/Counter_Risk#5", task_type="implement", lane="closer", path=p)
+        appended = append_context(
+            "Do the work.", "stranske/Counter_Risk#5", task_type="implement", lane="closer", path=p
+        )
         assert appended.count("REPO PLAYBOOK") == 1 and "Black" in appended, appended
-        assert append_context(appended, "stranske/Counter_Risk#5", task_type="implement", lane="closer", path=p) == appended
+        assert (
+            append_context(
+                appended, "stranske/Counter_Risk#5", task_type="implement", lane="closer", path=p
+            )
+            == appended
+        )
 
         reg["repos"]["o/long"] = {"summary": "x" * 200, "gotchas": ["y" * 200]}
         save(reg, p)
@@ -1928,7 +2173,9 @@ def _selftest() -> None:
             assert absent["status"] == "absent" and not absent["current"], absent
             update_agents_md(export_root, repo="o/pathy", path=p, apply=True)
             agents_text = (export_root / "AGENTS.md").read_text()
-            (export_root / "AGENTS.md").write_text(agents_text.replace("Path validation repo.", "stale"))
+            (export_root / "AGENTS.md").write_text(
+                agents_text.replace("Path validation repo.", "stale")
+            )
             stale = validate_agents_md_export(export_root, repo="o/pathy", path=p)
             assert stale["ok"] and not stale["current"] and stale["status"] == "mismatched", stale
             assert any("differs from current registry" in item for item in stale["warnings"]), stale
@@ -1939,20 +2186,40 @@ def _selftest() -> None:
             export_root.rmdir()
 
         snap = Path("/tmp/__repo_knowledge_snapshot.json")
-        snap.write_text(json.dumps({
-            "runs": [
-                {"run_id": "r1", "target": "stranske/Counter_Risk#5",
-                 "task_type": "implement", "agent": "vibe"},
-                {"run_id": "r2", "target": "stranske/Unknown [exp test]",
-                 "task_type": "mechanical", "agent": "cursor"},
-            ],
-            "outcomes": [
-                {"run_id": "r1", "adjudicated_verdict": "FAIL", "durability": "pending",
-                 "notes": "Missing Black formatting check caused follow-up churn."},
-                {"run_id": "r2", "adjudicated_verdict": "PASS", "durability": "durable",
-                 "notes": "should mention narrow validation command in PR body"},
-            ],
-        }))
+        snap.write_text(
+            json.dumps(
+                {
+                    "runs": [
+                        {
+                            "run_id": "r1",
+                            "target": "stranske/Counter_Risk#5",
+                            "task_type": "implement",
+                            "agent": "vibe",
+                        },
+                        {
+                            "run_id": "r2",
+                            "target": "stranske/Unknown [exp test]",
+                            "task_type": "mechanical",
+                            "agent": "cursor",
+                        },
+                    ],
+                    "outcomes": [
+                        {
+                            "run_id": "r1",
+                            "adjudicated_verdict": "FAIL",
+                            "durability": "pending",
+                            "notes": "Missing Black formatting check caused follow-up churn.",
+                        },
+                        {
+                            "run_id": "r2",
+                            "adjudicated_verdict": "PASS",
+                            "durability": "durable",
+                            "notes": "should mention narrow validation command in PR body",
+                        },
+                    ],
+                }
+            )
+        )
         try:
             suggestions = suggest_from_snapshot(snap, path=p)
             assert suggestions and suggestions[0]["repo"] == "stranske/Counter_Risk", suggestions
@@ -1967,7 +2234,9 @@ def _selftest() -> None:
             assert dupe["already_present"] and not dupe["applied"], dupe
             refreshed = load(p)
             counter_gotchas = refreshed["repos"]["stranske/Counter_Risk"]["gotchas"]
-            assert any("Missing Black formatting" in _text(item) for item in counter_gotchas), counter_gotchas
+            assert any(
+                "Missing Black formatting" in _text(item) for item in counter_gotchas
+            ), counter_gotchas
             memory = search_repo_memory(
                 "stranske/Counter_Risk#5",
                 query="black formatting",
@@ -1976,7 +2245,9 @@ def _selftest() -> None:
                 snapshot_path=snap,
             )
             assert memory and memory[0]["source"] == "approved-playbook", memory
-            assert any(item["source"] == "feedback-outcome" and item["run_id"] == "r1" for item in memory), memory
+            assert any(
+                item["source"] == "feedback-outcome" and item["run_id"] == "r1" for item in memory
+            ), memory
             # The Postgres invariant is unscoped now, so retrieval reaches it at ANY task type.
             scoped_memory = search_repo_memory(
                 "stranske/learning-management-system#7",
@@ -1985,19 +2256,35 @@ def _selftest() -> None:
                 path=p,
                 snapshot={"runs": [], "outcomes": []},
             )
-            assert any("PostgreSQL-compatible" in item["text"] for item in scoped_memory), scoped_memory
+            assert any(
+                "PostgreSQL-compatible" in item["text"] for item in scoped_memory
+            ), scoped_memory
             # ...while a genuinely work-kind-specific rule is still filtered by _memory_item_visible.
             filtered_reg = load(p)
             filtered_reg["repos"]["stranske/learning-management-system"]["validation"] = [
                 {"text": "Pin the alembic revision id the issue names.", "task_types": ["testgen"]},
             ]
             save(filtered_reg, p)
-            assert not any("alembic revision id" in item["text"] for item in search_repo_memory(
-                "stranske/learning-management-system#7", query="alembic revision",
-                task_type="mechanical", path=p, snapshot={"runs": [], "outcomes": []}))
-            assert any("alembic revision id" in item["text"] for item in search_repo_memory(
-                "stranske/learning-management-system#7", query="alembic revision",
-                task_type="testgen", path=p, snapshot={"runs": [], "outcomes": []}))
+            assert not any(
+                "alembic revision id" in item["text"]
+                for item in search_repo_memory(
+                    "stranske/learning-management-system#7",
+                    query="alembic revision",
+                    task_type="mechanical",
+                    path=p,
+                    snapshot={"runs": [], "outcomes": []},
+                )
+            )
+            assert any(
+                "alembic revision id" in item["text"]
+                for item in search_repo_memory(
+                    "stranske/learning-management-system#7",
+                    query="alembic revision",
+                    task_type="testgen",
+                    path=p,
+                    snapshot={"runs": [], "outcomes": []},
+                )
+            )
             filtered_reg["repos"]["stranske/learning-management-system"].pop("validation")
             save(filtered_reg, p)
             impl_memory = search_repo_memory(
@@ -2017,7 +2304,9 @@ def _selftest() -> None:
             )
             assert workflow_memory[0]["section"] == "definition_of_done", workflow_memory
             assert "sync-manifest/template" in workflow_memory[0]["text"], workflow_memory
-            assert {"consumer", "manifest", "sync"} <= set(workflow_memory[0]["matched_terms"]), workflow_memory
+            assert {"consumer", "manifest", "sync"} <= set(
+                workflow_memory[0]["matched_terms"]
+            ), workflow_memory
         finally:
             snap.unlink(missing_ok=True)
 
@@ -2029,27 +2318,37 @@ def _selftest() -> None:
             "- Run pytest tests/workflows before opening the PR.\n"
             "- Do not use SQLite-only migrations for persistence work.\n"
         )
-        (docs_root / "NOTES.md").write_text("- Use PostgreSQL-compatible migrations before merging.\n")
+        (docs_root / "NOTES.md").write_text(
+            "- Use PostgreSQL-compatible migrations before merging.\n"
+        )
         (docs_root / "docs").mkdir(exist_ok=True)
-        (docs_root / "docs" / "testing.md").write_text("Always include the validation command in the PR body.\n")
+        (docs_root / "docs" / "testing.md").write_text(
+            "Always include the validation command in the PR body.\n"
+        )
         try:
             doc_suggestions = suggest_from_docs(docs_root, repo="stranske/Workflows", path=p)
             assert len(doc_suggestions) >= 3, doc_suggestions
             assert doc_suggestions[0]["source"] == "repo-docs", doc_suggestions
             sections = {item["suggested_section"] for item in doc_suggestions}
             assert {"definition_of_done", "validation", "gotchas"} <= sections, doc_suggestions
-            assert any(item.get("evidence", "").startswith("CONTRIBUTING.md:") for item in doc_suggestions), doc_suggestions
-            assert not any(item.get("evidence", "").startswith("NOTES.md:") for item in doc_suggestions), doc_suggestions
-            assert not any("uses Postgres" in item.get("candidate_text", "") for item in doc_suggestions), doc_suggestions
+            assert any(
+                item.get("evidence", "").startswith("CONTRIBUTING.md:") for item in doc_suggestions
+            ), doc_suggestions
+            assert not any(
+                item.get("evidence", "").startswith("NOTES.md:") for item in doc_suggestions
+            ), doc_suggestions
+            assert not any(
+                "uses Postgres" in item.get("candidate_text", "") for item in doc_suggestions
+            ), doc_suggestions
             broad_doc_suggestions = suggest_from_docs(
                 docs_root,
                 repo="stranske/Workflows",
                 path=p,
                 include_root_docs=True,
             )
-            assert any(item.get("evidence", "").startswith("NOTES.md:") for item in broad_doc_suggestions), (
-                broad_doc_suggestions
-            )
+            assert any(
+                item.get("evidence", "").startswith("NOTES.md:") for item in broad_doc_suggestions
+            ), broad_doc_suggestions
 
             # SECTION SCOPING + BULLET FOLDING, the two things that made an out-of-tree audit
             # README unusable as a source: round-history prose arrived as repo knowledge, and a
@@ -2069,18 +2368,26 @@ def _selftest() -> None:
                 "## Later section\n"
                 "- You must not read this one either.\n"
             )
-            scoped_docs = suggest_from_docs(docs_root, repo="stranske/Workflows", path=p,
-                                            sections=["Standing notes for the next round"])
+            scoped_docs = suggest_from_docs(
+                docs_root,
+                repo="stranske/Workflows",
+                path=p,
+                sections=["Standing notes for the next round"],
+            )
             texts = [item["candidate_text"] for item in scoped_docs]
             assert any("drive with a real browser instead." in t for t in texts), texts
-            assert any(t.startswith("frontend_verify.py") for t in texts), texts   # folded, not split
-            assert any("Always run the narrow gate" in t for t in texts), texts    # sub-heading kept
-            assert not any("Dropbox checkout" in t for t in texts), texts          # earlier section
-            assert not any("read this one either" in t for t in texts), texts      # later section
-            assert not any("fenced block" in t for t in texts), texts              # code fence
+            assert any(
+                t.startswith("frontend_verify.py") for t in texts
+            ), texts  # folded, not split
+            assert any("Always run the narrow gate" in t for t in texts), texts  # sub-heading kept
+            assert not any("Dropbox checkout" in t for t in texts), texts  # earlier section
+            assert not any("read this one either" in t for t in texts), texts  # later section
+            assert not any("fenced block" in t for t in texts), texts  # code fence
             # Unscoped is the previous whole-file behaviour: it sees the round history too.
-            assert any("Dropbox checkout" in item["candidate_text"]
-                       for item in suggest_from_docs(docs_root, repo="stranske/Workflows", path=p))
+            assert any(
+                "Dropbox checkout" in item["candidate_text"]
+                for item in suggest_from_docs(docs_root, repo="stranske/Workflows", path=p)
+            )
         finally:
             for child in (docs_root / "docs").glob("*"):
                 child.unlink()
@@ -2091,19 +2398,27 @@ def _selftest() -> None:
             docs_root.rmdir()
 
         review_json = Path("/tmp/__repo_knowledge_review_comments.json")
-        review_json.write_text(json.dumps({
-            "comments": [
+        review_json.write_text(
+            json.dumps(
                 {
-                    "body": "Missing Black formatting check; please run black --check before merging.",
-                    "path": "pyproject.toml",
-                    "html_url": "https://example.test/review/1",
-                    "user": {"login": "reviewer"},
+                    "comments": [
+                        {
+                            "body": "Missing Black formatting check; please run black --check before merging.",
+                            "path": "pyproject.toml",
+                            "html_url": "https://example.test/review/1",
+                            "user": {"login": "reviewer"},
+                        }
+                    ]
                 }
-            ]
-        }))
+            )
+        )
         try:
-            review_suggestions = suggest_from_review_json(review_json, repo="stranske/Counter_Risk", path=p)
-            assert review_suggestions and review_suggestions[0]["source"] == "review-comments.json", review_suggestions
+            review_suggestions = suggest_from_review_json(
+                review_json, repo="stranske/Counter_Risk", path=p
+            )
+            assert (
+                review_suggestions and review_suggestions[0]["source"] == "review-comments.json"
+            ), review_suggestions
             assert review_suggestions[0]["author"] == "reviewer", review_suggestions
             assert review_suggestions[0]["suggested_section"] == "gotchas", review_suggestions
         finally:
@@ -2112,11 +2427,19 @@ def _selftest() -> None:
         def fake_gh(command, **_kwargs):
             endpoint = command[-1]
             body = "Should update docs/ci/WORKFLOWS.md when workflow names change."
-            payload = [{"body": body, "path": ".github/workflows/ci.yml", "html_url": f"https://example.test/{endpoint}"}]
+            payload = [
+                {
+                    "body": body,
+                    "path": ".github/workflows/ci.yml",
+                    "html_url": f"https://example.test/{endpoint}",
+                }
+            ]
             return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
 
         pr_suggestions = suggest_from_pr_comments("stranske/Workflows#99", path=p, runner=fake_gh)
-        assert pr_suggestions and pr_suggestions[0]["source"] == "github-pr-comments", pr_suggestions
+        assert (
+            pr_suggestions and pr_suggestions[0]["source"] == "github-pr-comments"
+        ), pr_suggestions
         assert pr_suggestions[0]["repo"] == "stranske/Workflows", pr_suggestions
 
         def fake_gh_failure(command, **_kwargs):
@@ -2131,32 +2454,50 @@ def _selftest() -> None:
         clustered: list[dict] = []
         clustered_seen: set[str] = set()
         known_texts = {"workflow additions or renames must update docs/ci/workflows.md."}
-        _append_suggestion(clustered, clustered_seen, known_texts, {
-            "repo": "test/repo",
-            "candidate_text": "Workflow additions or renames must update docs/ci/WORKFLOWS.md",
-            "source": "repo-docs",
-            "evidence": "CONTRIBUTING.md:9",
-        }, max_per_repo=5)
+        _append_suggestion(
+            clustered,
+            clustered_seen,
+            known_texts,
+            {
+                "repo": "test/repo",
+                "candidate_text": "Workflow additions or renames must update docs/ci/WORKFLOWS.md",
+                "source": "repo-docs",
+                "evidence": "CONTRIBUTING.md:9",
+            },
+            max_per_repo=5,
+        )
         assert clustered == [], clustered
 
-        _append_suggestion(clustered, clustered_seen, known_texts, {
-            "repo": "test/repo",
-            "candidate_text": "Do not introduce unrelated ruff format churn.",
-            "source": "review-1",
-            "evidence": "pyproject.toml:5",
-            "author": "alice",
-        }, max_per_repo=5)
+        _append_suggestion(
+            clustered,
+            clustered_seen,
+            known_texts,
+            {
+                "repo": "test/repo",
+                "candidate_text": "Do not introduce unrelated ruff format churn.",
+                "source": "review-1",
+                "evidence": "pyproject.toml:5",
+                "author": "alice",
+            },
+            max_per_repo=5,
+        )
         assert len(clustered) == 1, clustered
         assert clustered[0]["cluster_key"] == "do_not_introduce_unrelated_ruff", clustered
         assert clustered[0]["occurrence_count"] == 1, clustered
 
-        _append_suggestion(clustered, clustered_seen, known_texts, {
-            "repo": "test/repo",
-            "candidate_text": "Do not introduce unrelated ruff format churn in PRs",
-            "source": "review-2",
-            "evidence": "pyproject.toml:15",
-            "author": "bob",
-        }, max_per_repo=5)
+        _append_suggestion(
+            clustered,
+            clustered_seen,
+            known_texts,
+            {
+                "repo": "test/repo",
+                "candidate_text": "Do not introduce unrelated ruff format churn in PRs",
+                "source": "review-2",
+                "evidence": "pyproject.toml:15",
+                "author": "bob",
+            },
+            max_per_repo=5,
+        )
         assert len(clustered) == 1, clustered
         assert clustered[0]["occurrence_count"] == 2, clustered
         assert clustered[0]["source"] == "review-1, review-2", clustered
@@ -2165,18 +2506,26 @@ def _selftest() -> None:
         assert clustered[0]["evidences"] == ["pyproject.toml:5", "pyproject.toml:15"], clustered
         assert clustered[0]["author"] == "alice, bob", clustered
 
-        _append_suggestion(clustered, clustered_seen, known_texts, {
-            "repo": "test/repo",
-            "candidate_text": "Always run pytest before merging changes.",
-            "source": "repo-docs",
-            "evidence": "TESTING.md:12",
-        }, max_per_repo=5)
+        _append_suggestion(
+            clustered,
+            clustered_seen,
+            known_texts,
+            {
+                "repo": "test/repo",
+                "candidate_text": "Always run pytest before merging changes.",
+                "source": "repo-docs",
+                "evidence": "TESTING.md:12",
+            },
+            max_per_repo=5,
+        )
         assert len(clustered) == 2, clustered
         assert clustered[1]["cluster_key"] == "always_run_pytest_before_merging", clustered
     finally:
         p.unlink(missing_ok=True)
-    print("repo_knowledge.py selftest: OK (seed, filters, prompt append, truncation, "
-          "snapshot/docs/review suggestions, memory search, clustering, approval)")
+    print(
+        "repo_knowledge.py selftest: OK (seed, filters, prompt append, truncation, "
+        "snapshot/docs/review suggestions, memory search, clustering, approval)"
+    )
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
@@ -2190,7 +2539,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
-        capabilities.production_heartbeat("repo-playbook", event_type, ref="repo_knowledge.append_context")
+
+        capabilities.production_heartbeat(
+            "repo-playbook", event_type, ref="repo_knowledge.append_context"
+        )
     except Exception:
         pass
 
@@ -2206,7 +2558,11 @@ def main(argv: list[str]) -> int:
         if not repo:
             print("--export-agents-md requires owner/repo", file=sys.stderr)
             return 2
-        max_lines = int(argv[argv.index("--max-lines") + 1]) if "--max-lines" in argv else AGENTS_EXPORT_MAX_LINES
+        max_lines = (
+            int(argv[argv.index("--max-lines") + 1])
+            if "--max-lines" in argv
+            else AGENTS_EXPORT_MAX_LINES
+        )
         if "--apply" in argv and "--repo-path" not in argv:
             print("--apply requires --repo-path <local-repo>", file=sys.stderr)
             return 2
@@ -2223,7 +2579,11 @@ def main(argv: list[str]) -> int:
         print(export_agents_md(repo, max_lines=max_lines), end="")
         return 0
     if "--export-all-agents-md" in argv:
-        max_lines = int(argv[argv.index("--max-lines") + 1]) if "--max-lines" in argv else AGENTS_EXPORT_MAX_LINES
+        max_lines = (
+            int(argv[argv.index("--max-lines") + 1])
+            if "--max-lines" in argv
+            else AGENTS_EXPORT_MAX_LINES
+        )
         reg = load()
         exports = {
             repo: export_agents_md(repo, max_lines=max_lines)
@@ -2236,13 +2596,19 @@ def main(argv: list[str]) -> int:
         idx = argv.index("--validate-agents-md")
         repo_path = Path(argv[idx + 1]) if len(argv) > idx + 1 else Path(".")
         repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
-        max_lines = int(argv[argv.index("--max-lines") + 1]) if "--max-lines" in argv else AGENTS_EXPORT_MAX_LINES
+        max_lines = (
+            int(argv[argv.index("--max-lines") + 1])
+            if "--max-lines" in argv
+            else AGENTS_EXPORT_MAX_LINES
+        )
         result = validate_agents_md_export(repo_path, repo=repo, max_lines=max_lines)
         print(json.dumps(result, indent=2) if "--json" in argv else result)
         return 0 if result["ok"] else 1
     if "--suggest-from-snapshot" in argv:
         idx = argv.index("--suggest-from-snapshot")
-        snapshot = Path(argv[idx + 1]) if len(argv) > idx + 1 else ORCH / "data" / "feedback-snapshot.json"
+        snapshot = (
+            Path(argv[idx + 1]) if len(argv) > idx + 1 else ORCH / "data" / "feedback-snapshot.json"
+        )
         print(json.dumps(suggest_from_snapshot(snapshot), indent=2))
         return 0
     if "--search" in argv:
@@ -2255,42 +2621,59 @@ def main(argv: list[str]) -> int:
         task_type = argv[argv.index("--task-type") + 1] if "--task-type" in argv else None
         lane = argv[argv.index("--lane") + 1] if "--lane" in argv else None
         max_results = int(argv[argv.index("--max") + 1]) if "--max" in argv else 8
-        snapshot_path = Path(argv[argv.index("--snapshot-json") + 1]) if "--snapshot-json" in argv else None
-        print(json.dumps(search_repo_memory(
-            target,
-            query=query,
-            task_type=task_type,
-            lane=lane,
-            snapshot_path=snapshot_path,
-            include_runs="--no-runs" not in argv,
-            max_results=max_results,
-        ), indent=2))
+        snapshot_path = (
+            Path(argv[argv.index("--snapshot-json") + 1]) if "--snapshot-json" in argv else None
+        )
+        print(
+            json.dumps(
+                search_repo_memory(
+                    target,
+                    query=query,
+                    task_type=task_type,
+                    lane=lane,
+                    snapshot_path=snapshot_path,
+                    include_runs="--no-runs" not in argv,
+                    max_results=max_results,
+                ),
+                indent=2,
+            )
+        )
         return 0
     if "--audit-scopes" in argv:
         result = scope_audit()
         if "--json" in argv:
             print(json.dumps(result, indent=2))
         else:
-            print(f"scoped items: {result['scoped_items']}; "
-                  f"of those, invariant (should be unscoped): {result['invariant_scoped_count']}")
+            print(
+                f"scoped items: {result['scoped_items']}; "
+                f"of those, invariant (should be unscoped): {result['invariant_scoped_count']}"
+            )
             for row in result["invariant_scoped"]:
-                print(f"  {row['repo']} [{row['section']}] signal={row['invariant_signal']!r} "
-                      f"scope={row['scope']}\n    {row['text'][:140]}")
+                print(
+                    f"  {row['repo']} [{row['section']}] signal={row['invariant_signal']!r} "
+                    f"scope={row['scope']}\n    {row['text'][:140]}"
+                )
         return 0 if result["clean"] else 1
     if "--suggest-from-docs" in argv:
         idx = argv.index("--suggest-from-docs")
         repo_path = Path(argv[idx + 1]) if len(argv) > idx + 1 else Path(".")
         repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
         max_per_repo = int(argv[argv.index("--max") + 1]) if "--max" in argv else 10
-        sections = [argv[i + 1] for i, arg in enumerate(argv)
-                    if arg == "--section" and i + 1 < len(argv)] or None
-        print(json.dumps(suggest_from_docs(
-            repo_path,
-            repo=repo,
-            max_per_repo=max_per_repo,
-            include_root_docs="--include-root-docs" in argv,
-            sections=sections,
-        ), indent=2))
+        sections = [
+            argv[i + 1] for i, arg in enumerate(argv) if arg == "--section" and i + 1 < len(argv)
+        ] or None
+        print(
+            json.dumps(
+                suggest_from_docs(
+                    repo_path,
+                    repo=repo,
+                    max_per_repo=max_per_repo,
+                    include_root_docs="--include-root-docs" in argv,
+                    sections=sections,
+                ),
+                indent=2,
+            )
+        )
         return 0
     if "--suggest-from-review-json" in argv:
         idx = argv.index("--suggest-from-review-json")
@@ -2302,11 +2685,16 @@ def main(argv: list[str]) -> int:
             print("--suggest-from-review-json requires --repo owner/repo", file=sys.stderr)
             return 2
         max_per_repo = int(argv[argv.index("--max") + 1]) if "--max" in argv else 10
-        print(json.dumps(suggest_from_review_json(
-            review_json,
-            repo=argv[argv.index("--repo") + 1],
-            max_per_repo=max_per_repo,
-        ), indent=2))
+        print(
+            json.dumps(
+                suggest_from_review_json(
+                    review_json,
+                    repo=argv[argv.index("--repo") + 1],
+                    max_per_repo=max_per_repo,
+                ),
+                indent=2,
+            )
+        )
         return 0
     if "--suggest-from-pr" in argv:
         idx = argv.index("--suggest-from-pr")
@@ -2334,19 +2722,22 @@ def main(argv: list[str]) -> int:
         return 0
     target = argv[0] if argv else ""
     if not target:
-        print("usage: repo_knowledge.py --selftest | --suggest-from-snapshot [snapshot.json] | "
-              "--search owner/repo[#N] [--query TEXT] [--task-type T] [--lane L] "
-              "[--snapshot-json snapshot.json] [--no-runs] [--max N] | "
-              "--export-agents-md owner/repo [--repo-path <local-repo> --apply] [--max-lines N] [--json] | "
-              "--export-all-agents-md [--max-lines N] [--json] | "
-              "--validate-agents-md <local-repo> [--repo owner/repo] [--max-lines N] [--json] | "
-              "--suggest-from-docs <docs-root> [--repo owner/repo] [--max N] [--include-root-docs] "
-              "[--section 'Heading text' ...] | "
-              "--audit-scopes [--json] | "
-              "--suggest-from-review-json comments.json --repo owner/repo [--max N] | "
-              "--suggest-from-pr owner/repo#N [--max N] | "
-              "--approve-suggestion suggestions.json [--index N] [--section gotchas|validation|definition_of_done] [--apply] | "
-              "<owner/repo[#N]> [task_type] [lane]", file=sys.stderr)
+        print(
+            "usage: repo_knowledge.py --selftest | --suggest-from-snapshot [snapshot.json] | "
+            "--search owner/repo[#N] [--query TEXT] [--task-type T] [--lane L] "
+            "[--snapshot-json snapshot.json] [--no-runs] [--max N] | "
+            "--export-agents-md owner/repo [--repo-path <local-repo> --apply] [--max-lines N] [--json] | "
+            "--export-all-agents-md [--max-lines N] [--json] | "
+            "--validate-agents-md <local-repo> [--repo owner/repo] [--max-lines N] [--json] | "
+            "--suggest-from-docs <docs-root> [--repo owner/repo] [--max N] [--include-root-docs] "
+            "[--section 'Heading text' ...] | "
+            "--audit-scopes [--json] | "
+            "--suggest-from-review-json comments.json --repo owner/repo [--max N] | "
+            "--suggest-from-pr owner/repo#N [--max N] | "
+            "--approve-suggestion suggestions.json [--index N] [--section gotchas|validation|definition_of_done] [--apply] | "
+            "<owner/repo[#N]> [task_type] [lane]",
+            file=sys.stderr,
+        )
         return 2
     task_type = argv[1] if len(argv) > 1 else None
     lane = argv[2] if len(argv) > 2 else None

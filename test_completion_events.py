@@ -69,7 +69,10 @@ def test_accepted_influence_auto_links_outcome(
         role_outcome = conn.execute(
             "SELECT adjudicated_verdict,durability FROM outcomes WHERE run_id='role:accepted'"
         ).fetchone()
-    assert edge is not None and edge == ("PASS", "durable"), "accepted influence has no outcome edge"
+    assert edge is not None and edge == (
+        "PASS",
+        "durable",
+    ), "accepted influence has no outcome edge"
     assert role_outcome == ("PASS", "durable")
 
 
@@ -91,9 +94,7 @@ def test_rejected_role_is_counterfactual_without_mirrored_success(isolated_feedb
             "SELECT accepted,counterfactual,outcome_verdict,durability FROM influence_edges "
             "WHERE target_run_id='work:rejected'"
         ).fetchone()
-        mirrored = conn.execute(
-            "SELECT 1 FROM outcomes WHERE run_id='role:rejected'"
-        ).fetchone()
+        mirrored = conn.execute("SELECT 1 FROM outcomes WHERE run_id='role:rejected'").fetchone()
     assert edge == (0, 1, None, None)
     assert mirrored is None
 
@@ -144,7 +145,9 @@ def test_exact_enums_are_enforced(isolated_feedback: Path) -> None:
 
 
 def test_edge_rerecord_preserves_propagated_terminal_state(isolated_feedback: Path) -> None:
-    feedback.record_run("source-role", "owner/repo#9", "role:redirect", "cursor", role_name="redirect")
+    feedback.record_run(
+        "source-role", "owner/repo#9", "role:redirect", "cursor", role_name="redirect"
+    )
     feedback.record_run("target-work", "owner/repo#9", "implement", "codex")
     kwargs = {
         "target_run_id": "target-work",
@@ -204,8 +207,7 @@ def test_completion_episode_shared_envelope(isolated_feedback: Path) -> None:
         },
     )
     episode = next(
-        row for row in feedback.completion_event_episodes()
-        if row["event"]["phase"] == "artifact"
+        row for row in feedback.completion_event_episodes() if row["event"]["phase"] == "artifact"
     )
     assert episode["schema"] == "orchestrator.completion-event-envelope"
     assert episode["version"] == 1
@@ -237,15 +239,39 @@ def test_completion_episode_shared_envelope(isolated_feedback: Path) -> None:
         expected_subject["subject_id"], "episode-run", "attempt:worker:episode-run"
     )
     assert {
-        "schema_version", "event_id", "run_id", "attempt_id", "event_type", "phase",
-        "producer", "status", "validation_status", "content_hash", "redaction_count",
-        "created_ts", "updated_ts", "payload",
+        "schema_version",
+        "event_id",
+        "run_id",
+        "attempt_id",
+        "event_type",
+        "phase",
+        "producer",
+        "status",
+        "validation_status",
+        "content_hash",
+        "redaction_count",
+        "created_ts",
+        "updated_ts",
+        "payload",
     }.issubset(episode["event"])
     assert {
-        "run_id", "observation_id", "subject_id", "family_id", "canonical_target",
-        "repository", "task_type", "normalized_spec_hash", "base_sha", "profile_id",
-        "arm_id", "attempt_id", "attempt_resolution", "resolved_provider", "resolved_model",
-        "subject_arms", "subject_profiles",
+        "run_id",
+        "observation_id",
+        "subject_id",
+        "family_id",
+        "canonical_target",
+        "repository",
+        "task_type",
+        "normalized_spec_hash",
+        "base_sha",
+        "profile_id",
+        "arm_id",
+        "attempt_id",
+        "attempt_resolution",
+        "resolved_provider",
+        "resolved_model",
+        "subject_arms",
+        "subject_profiles",
     }.issubset(episode["identity"])
 
 
@@ -286,7 +312,11 @@ def test_retries_on_one_subject_collapse_to_one_subject(
         feedback.record_outcome(
             run_id, adjudicated_verdict="PASS", merged=True, durability="durable"
         )
-    episodes = [row for row in feedback.completion_event_episodes() if row["identity"]["experiment_id"] == "retry-exp"]
+    episodes = [
+        row
+        for row in feedback.completion_event_episodes()
+        if row["identity"]["experiment_id"] == "retry-exp"
+    ]
     assert len({row["identity"]["run_id"] for row in episodes}) == 2
     assert {row["identity"]["subject_id"] for row in episodes} == {identity["subject_id"]}
     assert {row["identity"]["family_id"] for row in episodes} == {identity["subject_family_id"]}
@@ -385,12 +415,19 @@ def test_full_seven_phase_envelope_uses_one_canonical_attempt(isolated_feedback:
         durability="durable",
     )
     envelopes = [
-        row for row in feedback.completion_event_episodes()
+        row
+        for row in feedback.completion_event_episodes()
         if row["identity"]["run_id"] == "seven-phase"
     ]
     phases = {row["event"]["phase"] for row in envelopes}
     assert {
-        "trigger", "decision", "execution", "artifact", "verification", "outcome", "durability"
+        "trigger",
+        "decision",
+        "execution",
+        "artifact",
+        "verification",
+        "outcome",
+        "durability",
     }.issubset(phases)
     assert len(envelopes) == len(phases), "exporter emitted duplicate canonical phases"
     assert {row["event"]["attempt_id"] for row in envelopes} == {"attempt:canonical"}
@@ -411,7 +448,8 @@ def test_attempt_only_does_not_manufacture_productive_artifact(isolated_feedback
         trace_key="generic-lifecycle-trace",
     )
     envelopes = [
-        row for row in feedback.completion_event_episodes()
+        row
+        for row in feedback.completion_event_episodes()
         if row["identity"]["run_id"] == "attempt-only"
     ]
     assert "artifact" not in {row["event"]["phase"] for row in envelopes}
@@ -474,9 +512,9 @@ def test_named_verifier_wins_over_generic_outcome_verification(isolated_feedback
         },
     )
     verification = [
-        row for row in feedback.completion_event_episodes()
-        if row["identity"]["run_id"] == "verified-run"
-        and row["event"]["phase"] == "verification"
+        row
+        for row in feedback.completion_event_episodes()
+        if row["identity"]["run_id"] == "verified-run" and row["event"]["phase"] == "verification"
     ]
     assert len(verification) == 1
     assert verification[0]["event"]["producer"] == "local_verify"
@@ -541,4 +579,3 @@ def test_legacy_telemetry_error_is_reconciled_into_decision(
         ).fetchone()
     assert run == ("owner/repo#18", "implement", "codex", "local")
     assert decision is not None
-

@@ -34,6 +34,7 @@ work to enable, NOT a retirement list: the point of this system is to increase c
 Idempotent: each (capability, run) link carries a stable idempotency key, so re-running never
 double-counts. Safe to put on a cadence.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,6 +65,7 @@ def _role_capability_ids(run_id: str, row: dict) -> list[str]:
         return []
     try:
         import roles
+
         registry = roles.ROLE_CAPABILITY_IDS
     except Exception:
         return []
@@ -131,9 +133,17 @@ def collect(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, conn=None) -> list[di
         if close:
             c.close()
     return [
-        {"run_id": r[0], "verdict": r[1], "merged": r[2], "durability": r[3],
-         "influenced_by_run_id": r[4], "task_type": r[5], "agent": r[6], "ts": r[7],
-         "capability_ids": sorted(set(tagged.get(str(r[0]), [])))}
+        {
+            "run_id": r[0],
+            "verdict": r[1],
+            "merged": r[2],
+            "durability": r[3],
+            "influenced_by_run_id": r[4],
+            "task_type": r[5],
+            "agent": r[6],
+            "ts": r[7],
+            "capability_ids": sorted(set(tagged.get(str(r[0]), []))),
+        }
         for r in rows
     ]
 
@@ -155,11 +165,17 @@ def attribute(rows: list[dict], *, known: set[str] | None = None) -> dict:
                 if cap_id in known:
                     found.append((cap_id, name))
                 else:
-                    unknown.append({"run_id": row["run_id"], "capability_id": cap_id,
-                                    "resolver": name})
+                    unknown.append(
+                        {"run_id": row["run_id"], "capability_id": cap_id, "resolver": name}
+                    )
         if not found:
-            unattributed.append({"run_id": row["run_id"], "task_type": row.get("task_type"),
-                                 "agent": row.get("agent")})
+            unattributed.append(
+                {
+                    "run_id": row["run_id"],
+                    "task_type": row.get("task_type"),
+                    "agent": row.get("agent"),
+                }
+            )
             continue
         # MANY-TO-ONE IS THE NORMAL CASE: one work process routinely uses several capabilities, so
         # a run gets one link PER capability. Dedupe on capability id, not on (id, resolver) —
@@ -168,10 +184,15 @@ def attribute(rows: list[dict], *, known: set[str] | None = None) -> dict:
         for cap_id, resolver_name in found:
             seen.setdefault(cap_id, resolver_name)
         for cap_id, resolver_name in seen.items():
-            links.append({
-                "capability_id": cap_id, "run_id": row["run_id"], "resolver": resolver_name,
-                "verdict": row["verdict"], "durability": row.get("durability"),
-            })
+            links.append(
+                {
+                    "capability_id": cap_id,
+                    "run_id": row["run_id"],
+                    "resolver": resolver_name,
+                    "verdict": row["verdict"],
+                    "durability": row.get("durability"),
+                }
+            )
     return {"links": links, "unattributed": unattributed, "unknown_capability": unknown}
 
 
@@ -191,15 +212,24 @@ def apply_links(links: list[dict], *, path: Path | None = None, dry_run: bool = 
             continue
         # Stable key => re-running the bridge never double-counts a link.
         changed = capabilities.heartbeat(
-            link["capability_id"], "outcome", ref=link["run_id"], path=ledger,
+            link["capability_id"],
+            "outcome",
+            ref=link["run_id"],
+            path=ledger,
             idempotency_key=f"capability-outcome:{link['capability_id']}:{link['run_id']}",
-            metadata={"verdict": link["verdict"], "durability": link.get("durability"),
-                      "resolver": link["resolver"]},
+            metadata={
+                "verdict": link["verdict"],
+                "durability": link.get("durability"),
+                "resolver": link["resolver"],
+            },
         )
         written += 1 if changed else 0
         skipped += 0 if changed else 1
-    return {"written": written, "already_linked": skipped if not dry_run else 0,
-            "would_write": len(links) if dry_run else 0}
+    return {
+        "written": written,
+        "already_linked": skipped if not dry_run else 0,
+        "would_write": len(links) if dry_run else 0,
+    }
 
 
 def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
@@ -222,8 +252,7 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
     c = conn or feedback._conn()
     created, resolved, skipped = [], 0, 0
     try:
-        rows = c.execute(
-            """SELECT DISTINCT r.source_run_id, r.target_run_id, ce.capability_id,
+        rows = c.execute("""SELECT DISTINCT r.source_run_id, r.target_run_id, ce.capability_id,
                                ce.capability_version_id
                FROM influence_edges r
                JOIN influence_edges ce
@@ -237,13 +266,13 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                        SELECT 1 FROM influence_edges x
                         WHERE x.target_run_id = r.target_run_id
                           AND x.influence_type = 'capability'
-                          AND x.capability_id = ce.capability_id)"""
-        ).fetchall()
+                          AND x.capability_id = ce.capability_id)""").fetchall()
         unlinked = 0
         for role_run, work_run, cap_id, cap_version in rows:
             if dry_run:
-                created.append({"capability_id": cap_id, "target_run_id": work_run,
-                                "source_run_id": role_run})
+                created.append(
+                    {"capability_id": cap_id, "target_run_id": work_run, "source_run_id": role_run}
+                )
                 continue
             feedback._record_influence_edge_in_conn(
                 c,
@@ -266,16 +295,22 @@ def backfill_role_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
                 unlinked += 1
             # Resolve immediately from the outcome that already exists for the acting run.
             resolved += feedback._propagate_outcome_lineage_in_conn(c, str(work_run))
-            created.append({"capability_id": cap_id, "target_run_id": work_run,
-                            "source_run_id": role_run})
+            created.append(
+                {"capability_id": cap_id, "target_run_id": work_run, "source_run_id": role_run}
+            )
         if not dry_run:
             c.commit()
     finally:
         if close:
             c.close()
-    return {"backfilled": len(created), "edges_resolved": resolved, "skipped": skipped,
-            "unlinked_edges": unlinked,
-            "dry_run": dry_run, "links": created[:20]}
+    return {
+        "backfilled": len(created),
+        "edges_resolved": resolved,
+        "skipped": skipped,
+        "unlinked_edges": unlinked,
+        "dry_run": dry_run,
+        "links": created[:20],
+    }
 
 
 def backfill_offload_capability_edges(*, dry_run: bool = False, conn=None) -> dict:
@@ -299,15 +334,13 @@ def backfill_offload_capability_edges(*, dry_run: bool = False, conn=None) -> di
     # capability edge carries; _record_influence_edge_in_conn refuses an id without a version.
     version = (feedback._resolve_capability_versions(["offload"]) or [None])[0]
     try:
-        rows = c.execute(
-            """SELECT r.run_id, r.decomposition FROM runs r
+        rows = c.execute("""SELECT r.run_id, r.decomposition FROM runs r
                 WHERE r.role_name IS NOT NULL AND r.decomposition IS NOT NULL
                   AND NOT EXISTS (
                         SELECT 1 FROM influence_edges x
                          WHERE x.target_run_id = r.run_id
                            AND x.influence_type = 'capability'
-                           AND x.capability_id = 'offload')"""
-        ).fetchall()
+                           AND x.capability_id = 'offload')""").fetchall()
         for run_id, raw in rows:
             try:
                 payload = json.loads(raw or "{}")
@@ -321,9 +354,14 @@ def backfill_offload_capability_edges(*, dry_run: bool = False, conn=None) -> di
             if version is None:
                 continue
             feedback._record_influence_edge_in_conn(
-                c, target_run_id=str(run_id), influence_type="capability",
-                influence_id=str(version), source_run_id=str(run_id), accepted=True,
-                capability_id="offload", capability_version_id=str(version),
+                c,
+                target_run_id=str(run_id),
+                influence_type="capability",
+                influence_id=str(version),
+                source_run_id=str(run_id),
+                accepted=True,
+                capability_id="offload",
+                capability_version_id=str(version),
             )
             resolved += feedback._propagate_outcome_lineage_in_conn(c, str(run_id))
             created.append({"run_id": run_id, "capability_id": "offload"})
@@ -332,8 +370,12 @@ def backfill_offload_capability_edges(*, dry_run: bool = False, conn=None) -> di
     finally:
         if close:
             c.close()
-    return {"backfilled": len(created), "edges_resolved": resolved, "dry_run": dry_run,
-            "links": created[:20]}
+    return {
+        "backfilled": len(created),
+        "edges_resolved": resolved,
+        "dry_run": dry_run,
+        "links": created[:20],
+    }
 
 
 def compiled_workflow_subjects(*, path: Path | None = None) -> dict:
@@ -356,14 +398,17 @@ def compiled_workflow_subjects(*, path: Path | None = None) -> dict:
             subject = ((event.get("metadata") or {}).get("subject_id") or "").strip().lower()
             if subject:
                 subjects.add(subject)
-        out[cap_id] = {"subjects": sorted(subjects),
-                       "version_id": cap.get("capability_version_id"),
-                       "status": cap.get("status")}
+        out[cap_id] = {
+            "subjects": sorted(subjects),
+            "version_id": cap.get("capability_version_id"),
+            "status": cap.get("status"),
+        }
     return out
 
 
-def attribute_compiled_workflow_edges(*, dry_run: bool = False, conn=None,
-                                     path: Path | None = None) -> dict:
+def attribute_compiled_workflow_edges(
+    *, dry_run: bool = False, conn=None, path: Path | None = None
+) -> dict:
     """Attribute a compiled-workflow rail to delivered work on the SAME subject.
 
     WHY THE GATE READ AN EMPTY TABLE. `capability_causal_evidence` joins `influence_edges` on
@@ -408,14 +453,20 @@ def attribute_compiled_workflow_edges(*, dry_run: bool = False, conn=None,
                 ).fetchall()
                 for run_id, target, routing in rows:
                     meta = feedback._routing_metadata_dict(routing) or {}
-                    context = (meta.get("causal_context") or {})
-                    claimed = str(context.get("capability_id") or
-                                  meta.get("capability_id") or "").strip()
+                    context = meta.get("causal_context") or {}
+                    claimed = str(
+                        context.get("capability_id") or meta.get("capability_id") or ""
+                    ).strip()
                     if claimed != cap_id:
-                        continue                      # no explicit link — never guess from timing
+                        continue  # no explicit link — never guess from timing
                     if dry_run:
-                        created.append({"capability_id": cap_id, "target_run_id": run_id,
-                                        "subject_id": subject})
+                        created.append(
+                            {
+                                "capability_id": cap_id,
+                                "target_run_id": run_id,
+                                "subject_id": subject,
+                            }
+                        )
                         continue
                     feedback._record_influence_edge_in_conn(
                         c,
@@ -428,17 +479,22 @@ def attribute_compiled_workflow_edges(*, dry_run: bool = False, conn=None,
                         capability_version_id=version,
                     )
                     resolved += feedback._propagate_outcome_lineage_in_conn(c, str(run_id))
-                    created.append({"capability_id": cap_id, "target_run_id": run_id,
-                                    "subject_id": subject})
+                    created.append(
+                        {"capability_id": cap_id, "target_run_id": run_id, "subject_id": subject}
+                    )
         if not dry_run:
             c.commit()
     finally:
         if close:
             c.close()
-    return {"attributed": len(created), "edges_resolved": resolved, "dry_run": dry_run,
-            "rails": {k: v["subjects"] for k, v in seen.items()},
-            "subjects_seen": sum(len(v["subjects"]) for v in seen.values()),
-            "links": created[:20]}
+    return {
+        "attributed": len(created),
+        "edges_resolved": resolved,
+        "dry_run": dry_run,
+        "rails": {k: v["subjects"] for k, v in seen.items()},
+        "subjects_seen": sum(len(v["subjects"]) for v in seen.values()),
+        "links": created[:20],
+    }
 
 
 # The cross-repo capabilities the Orchestrator can OBSERVE but never executes. Each names the
@@ -456,18 +512,31 @@ EXTERNAL_CI_LOOKBACK_RUNS = int(os.environ.get("ORCH_EXTERNAL_CI_LOOKBACK_RUNS",
 def _gh_workflow_runs(repo: str, workflow: str) -> list[dict]:
     """Recent runs of one workflow, newest first. Read-only."""
     proc = subprocess.run(
-        ["gh", "run", "list", "--repo", repo, "--workflow", workflow,
-         "--limit", str(EXTERNAL_CI_LOOKBACK_RUNS),
-         "--json", "databaseId,status,conclusion,createdAt"],
-        capture_output=True, text=True, timeout=60,
+        [
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            repo,
+            "--workflow",
+            workflow,
+            "--limit",
+            str(EXTERNAL_CI_LOOKBACK_RUNS),
+            "--json",
+            "databaseId,status,conclusion,createdAt",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or "gh run list failed").strip()[:160])
     return json.loads(proc.stdout or "[]")
 
 
-def ingest_external_ci_invocations(*, dry_run: bool = False, path: Path | None = None,
-                                   runs_fn=None) -> dict:
+def ingest_external_ci_invocations(
+    *, dry_run: bool = False, path: Path | None = None, runs_fn=None
+) -> dict:
     """Credit capabilities whose entrypoint lives in ANOTHER repo, from that repo's workflow runs.
 
     THE GAP THIS CLOSES. `docs-drift-fix-agent`'s entrypoint is in the Workflows repo, so
@@ -489,7 +558,7 @@ def ingest_external_ci_invocations(*, dry_run: bool = False, path: Path | None =
     for cap_id, spec in EXTERNAL_CI_CAPABILITIES.items():
         try:
             runs = (runs_fn or _gh_workflow_runs)(spec["repo"], spec["workflow"])
-        except Exception as exc:                 # noqa: BLE001 -- telemetry must not break the step
+        except Exception as exc:  # noqa: BLE001 -- telemetry must not break the step
             out["errors"].append({"capability_id": cap_id, "error": str(exc)[:160]})
             continue
         completed = [r for r in runs if str(r.get("status") or "") == "completed"]
@@ -502,19 +571,24 @@ def ingest_external_ci_invocations(*, dry_run: bool = False, path: Path | None =
                 # `path or capabilities.REG`: heartbeat's default is the live ledger and it does NOT
                 # accept None. Passing the caller's None through raised
                 # "'NoneType' object has no attribute 'parent'" and was swallowed into `errors`.
-                if capabilities.heartbeat(cap_id, "invocation", ref=ref,
-                                          path=path or capabilities.REG,
-                                          idempotency_key=ref):
+                if capabilities.heartbeat(
+                    cap_id,
+                    "invocation",
+                    ref=ref,
+                    path=path or capabilities.REG,
+                    idempotency_key=ref,
+                ):
                     out["credited"] += 1
                 else:
                     out["already_recorded"] += 1
-            except Exception as exc:             # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 out["errors"].append({"capability_id": cap_id, "error": str(exc)[:160]})
     return out
 
 
-def run(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False,
-        path: Path | None = None) -> dict:
+def run(
+    *, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False, path: Path | None = None
+) -> dict:
     # EDGE REPAIRS RUN FIRST, so this cycle's heartbeats see them. They used to run after
     # apply_links, which meant a repaired edge could not reach the ledger until the NEXT daily
     # cycle — a 24h lag that reads exactly like "the repair did nothing" when you measure right
@@ -525,20 +599,20 @@ def run(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False,
     # a no-op once history is repaired. Never allowed to break the heartbeat path below.
     try:
         edge_fix = backfill_role_capability_edges(dry_run=dry_run)
-    except Exception as exc:                     # noqa: BLE001 — telemetry must not break the step
+    except Exception as exc:  # noqa: BLE001 — telemetry must not break the step
         edge_fix = {"error": str(exc)[:200], "backfilled": 0, "edges_resolved": 0}
     # Same repair for the transport that PRODUCED a role's proposal: the role run records the
     # offload's run id, so the tag is a recorded link. Also idempotent, also self-healing.
     try:
         offload_fix = backfill_offload_capability_edges(dry_run=dry_run)
-    except Exception as exc:                     # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         offload_fix = {"error": str(exc)[:200], "backfilled": 0, "edges_resolved": 0}
     # Cross-repo capabilities: observe the OTHER repo's workflow runs, because no local code path
     # can ever credit them. Wrapped like the repairs above -- an unreachable `gh` must not break the
     # local heartbeat path that follows.
     try:
         external_ci = ingest_external_ci_invocations(dry_run=dry_run, path=path)
-    except Exception as exc:                     # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         external_ci = {"error": str(exc)[:200], "credited": 0, "observed": {}}
     rows = collect(lookback_days=lookback_days)
     mapped = attribute(rows, known=_known_capability_ids(path))
@@ -548,15 +622,17 @@ def run(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False,
     # delivered run explicitly names the capability — it never infers the link from timing.
     try:
         compiled_fix = attribute_compiled_workflow_edges(dry_run=dry_run, path=path)
-    except Exception as exc:                     # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         compiled_fix = {"error": str(exc)[:200], "attributed": 0, "subjects_seen": 0}
     by_cap: dict[str, int] = {}
     for link in mapped["links"]:
         by_cap[link["capability_id"]] = by_cap.get(link["capability_id"], 0) + 1
     return {
         "offload_capability_edges": offload_fix,
-        "lookback_days": lookback_days, "dry_run": dry_run,
-        "terminal_outcomes": len(rows), "links": len(mapped["links"]),
+        "lookback_days": lookback_days,
+        "dry_run": dry_run,
+        "terminal_outcomes": len(rows),
+        "links": len(mapped["links"]),
         "by_capability": dict(sorted(by_cap.items(), key=lambda kv: -kv[1])),
         # The enablement queue — outcomes we could not attribute because no trigger is wired yet.
         "unattributed": len(mapped["unattributed"]),
@@ -576,17 +652,27 @@ def _selftest() -> None:
     # CROSS-REPO CREDITING: a capability whose entrypoint lives in ANOTHER repo can never be
     # credited by a local code path. Injected runs, so this never touches the network.
     import tempfile as _tf
+
     with _tf.TemporaryDirectory(prefix="external-ci-") as _td:
         _lp = Path(_td) / "caps.json"
-        capabilities.register("docs-drift-fix-agent", {
-            "status": "wired", "owner": "orchestrator",
-            "matcher": {"kind": "ci_workflow", "name": "maint-87"},
-            "entrypoint": "Workflows/scripts/docs_drift_fix_agent.py",
-            "trigger_cadence": "weekly", "expiry": capabilities._now() + 86400,
-            "kill_switch": "disable the workflow", "rollback": {"transition": "retired"},
-        }, path=_lp)
-        _runs = [{"databaseId": 111, "status": "completed", "conclusion": "success"},
-                 {"databaseId": 222, "status": "in_progress", "conclusion": None}]
+        capabilities.register(
+            "docs-drift-fix-agent",
+            {
+                "status": "wired",
+                "owner": "orchestrator",
+                "matcher": {"kind": "ci_workflow", "name": "maint-87"},
+                "entrypoint": "Workflows/scripts/docs_drift_fix_agent.py",
+                "trigger_cadence": "weekly",
+                "expiry": capabilities._now() + 86400,
+                "kill_switch": "disable the workflow",
+                "rollback": {"transition": "retired"},
+            },
+            path=_lp,
+        )
+        _runs = [
+            {"databaseId": 111, "status": "completed", "conclusion": "success"},
+            {"databaseId": 222, "status": "in_progress", "conclusion": None},
+        ]
         _r1 = ingest_external_ci_invocations(path=_lp, runs_fn=lambda r, w: _runs)
         # ONLY completed runs count: an in-progress run has not proved the capability executed.
         assert _r1["credited"] == 1, _r1
@@ -599,10 +685,14 @@ def _selftest() -> None:
         assert len([e for e in _cap["event_history"] if e.get("type") == "invocation"]) == 1
         # A NEW run does credit, or the capability freezes at its first observation.
         _r3 = ingest_external_ci_invocations(
-            path=_lp, runs_fn=lambda r, w: _runs + [{"databaseId": 333, "status": "completed"}])
+            path=_lp, runs_fn=lambda r, w: _runs + [{"databaseId": 333, "status": "completed"}]
+        )
         assert _r3["credited"] == 1, _r3
+
         # An unreachable `gh` is reported, never raised.
-        def _boom(r, w): raise RuntimeError("gh unavailable")
+        def _boom(r, w):
+            raise RuntimeError("gh unavailable")
+
         _r4 = ingest_external_ci_invocations(path=_lp, runs_fn=_boom)
         assert _r4["errors"] and _r4["credited"] == 0, _r4
 
@@ -611,14 +701,38 @@ def _selftest() -> None:
     # Attribution is explicit: a role-influenced outcome resolves, an unlinked one does not.
     known = {"role-triage", "role-prompt"}
     rows = [
-        {"run_id": "r1", "verdict": "PASS", "durability": "durable",
-         "influenced_by_run_id": "role:triage:gemini:123", "task_type": "implement", "agent": "gemini"},
-        {"run_id": "r2", "verdict": "PASS", "durability": "durable",
-         "influenced_by_run_id": None, "task_type": "implement", "agent": "codex"},
-        {"run_id": "r3", "verdict": None, "durability": None,          # not terminal => ignored
-         "influenced_by_run_id": "role:triage:gemini:124", "task_type": "implement", "agent": "gemini"},
-        {"run_id": "r4", "verdict": "PASS", "durability": "durable",
-         "influenced_by_run_id": "role:nosuchrole:x:1", "task_type": "implement", "agent": "codex"},
+        {
+            "run_id": "r1",
+            "verdict": "PASS",
+            "durability": "durable",
+            "influenced_by_run_id": "role:triage:gemini:123",
+            "task_type": "implement",
+            "agent": "gemini",
+        },
+        {
+            "run_id": "r2",
+            "verdict": "PASS",
+            "durability": "durable",
+            "influenced_by_run_id": None,
+            "task_type": "implement",
+            "agent": "codex",
+        },
+        {
+            "run_id": "r3",
+            "verdict": None,
+            "durability": None,  # not terminal => ignored
+            "influenced_by_run_id": "role:triage:gemini:124",
+            "task_type": "implement",
+            "agent": "gemini",
+        },
+        {
+            "run_id": "r4",
+            "verdict": "PASS",
+            "durability": "durable",
+            "influenced_by_run_id": "role:nosuchrole:x:1",
+            "task_type": "implement",
+            "agent": "codex",
+        },
     ]
     mapped = attribute(rows, known=known)
     assert [l["capability_id"] for l in mapped["links"]] == ["role-triage"], mapped
@@ -628,24 +742,43 @@ def _selftest() -> None:
     # MULTI-CAPABILITY: one run using several capabilities yields one link EACH, and a capability
     # named by two resolvers yields exactly one link (corroboration, not double-counting).
     multi = attribute(
-        [{"run_id": "m1", "verdict": "PASS", "durability": "durable",
-          "influenced_by_run_id": "role:triage:x:1",
-          "capability_ids": ["role-prompt", "role-triage"], "task_type": "t", "agent": "a"}],
-        known={"role-triage", "role-prompt"})
+        [
+            {
+                "run_id": "m1",
+                "verdict": "PASS",
+                "durability": "durable",
+                "influenced_by_run_id": "role:triage:x:1",
+                "capability_ids": ["role-prompt", "role-triage"],
+                "task_type": "t",
+                "agent": "a",
+            }
+        ],
+        known={"role-triage", "role-prompt"},
+    )
     got = sorted(l["capability_id"] for l in multi["links"])
     assert got == ["role-prompt", "role-triage"], got
     assert len(multi["links"]) == 2, "a capability named twice must not double-count"
 
     # An id that resolves but is not a registered capability must NOT be invented into the ledger.
     ghost = attribute(
-        [{"run_id": "g1", "verdict": "PASS", "durability": "durable",
-          "influenced_by_run_id": "role:triage:x:1", "task_type": "t", "agent": "a"}],
-        known=set())
+        [
+            {
+                "run_id": "g1",
+                "verdict": "PASS",
+                "durability": "durable",
+                "influenced_by_run_id": "role:triage:x:1",
+                "task_type": "t",
+                "agent": "a",
+            }
+        ],
+        known=set(),
+    )
     assert not ghost["links"] and ghost["unknown_capability"], ghost
 
     # Entrypoint strings must never be used as an attribution source.
-    assert not any("entrypoint" in name for name, _ in RESOLVERS), \
-        "attribution must stay explicit; entrypoint inference fabricates evidence"
+    assert not any(
+        "entrypoint" in name for name, _ in RESOLVERS
+    ), "attribution must stay explicit; entrypoint inference fabricates evidence"
 
     # ---- COMPILED-WORKFLOW RAILS (the second producer class) ------------------------------------
     # The gate for these read an EMPTY table: their evidence goes to the ledger via
@@ -662,7 +795,7 @@ def _selftest() -> None:
             {"type": "output", "timestamp": 1, "metadata": {"subject_id": "stranske/ready"}},
             {"type": "output", "timestamp": 2, "metadata": {"subject_id": "stranske/ready"}},
             {"type": "output", "timestamp": 3, "metadata": {"subject_id": "stranske/pension-data"}},
-            {"type": "output", "timestamp": 4, "metadata": {}},          # no subject -> ignored
+            {"type": "output", "timestamp": 4, "metadata": {}},  # no subject -> ignored
         ]
         capabilities.save({"capability:rail-under-test": rec}, ledger)
 
@@ -676,15 +809,26 @@ def _selftest() -> None:
         feedback.DB_PATH = Path(tdc) / "brain.db"
         try:
             # Two durable deliveries on a subject the rail touched. Only ONE names the capability.
-            feedback.record_run(run_id="linked", target="stranske/Ready#1", task_type="implement",
-                                agent="codex",
-                                routing_metadata={"causal_context":
-                                                  {"capability_id": "capability:rail-under-test"}})
-            feedback.record_run(run_id="unlinked", target="stranske/Ready#2",
-                                task_type="implement", agent="codex", routing_metadata={})
+            feedback.record_run(
+                run_id="linked",
+                target="stranske/Ready#1",
+                task_type="implement",
+                agent="codex",
+                routing_metadata={
+                    "causal_context": {"capability_id": "capability:rail-under-test"}
+                },
+            )
+            feedback.record_run(
+                run_id="unlinked",
+                target="stranske/Ready#2",
+                task_type="implement",
+                agent="codex",
+                routing_metadata={},
+            )
             for rid in ("linked", "unlinked"):
-                feedback.record_outcome(run_id=rid, verifier_verdict="PASS", merged=True,
-                                        durability="durable")
+                feedback.record_outcome(
+                    run_id=rid, verifier_verdict="PASS", merged=True, durability="durable"
+                )
             got = attribute_compiled_workflow_edges(path=ledger, dry_run=True)
         finally:
             feedback.DB_PATH = saved_db
@@ -702,8 +846,15 @@ def _selftest() -> None:
         record = capabilities._blank_capability("role-triage")
         record["status"] = "shadow"
         capabilities.save({"role-triage": record}, ledger)
-        links = [{"capability_id": "role-triage", "run_id": "r1", "resolver": "role_influence",
-                  "verdict": "PASS", "durability": "durable"}]
+        links = [
+            {
+                "capability_id": "role-triage",
+                "run_id": "r1",
+                "resolver": "role_influence",
+                "verdict": "PASS",
+                "durability": "durable",
+            }
+        ]
         first = apply_links(links, path=ledger)
         second = apply_links(links, path=ledger)
         assert first["written"] == 1, first
@@ -713,9 +864,19 @@ def _selftest() -> None:
         assert stored["last_success"] or stored["last_invocation"] or True
 
         # dry-run writes nothing.
-        dry = apply_links([{"capability_id": "role-triage", "run_id": "r9",
-                            "resolver": "role_influence", "verdict": "PASS", "durability": "durable"}],
-                          path=ledger, dry_run=True)
+        dry = apply_links(
+            [
+                {
+                    "capability_id": "role-triage",
+                    "run_id": "r9",
+                    "resolver": "role_influence",
+                    "verdict": "PASS",
+                    "durability": "durable",
+                }
+            ],
+            path=ledger,
+            dry_run=True,
+        )
         assert dry["would_write"] == 1 and dry["written"] == 0, dry
         assert capabilities.load(ledger)["role-triage"]["outcome_links"] == ["r1"], "dry-run wrote!"
 
@@ -729,23 +890,33 @@ def _selftest() -> None:
     # SECTION: everything above and below it runs on any machine.
     _gaps: list[str] = []
     if env_prereq.runnable(
-            _gaps,
-            env_prereq.ledger_rows_absent("agy-runtime-isolation", "offload"),
-            env_prereq.ledger_version_lineage_absent("agy-runtime-isolation", "offload")):
+        _gaps,
+        env_prereq.ledger_rows_absent("agy-runtime-isolation", "offload"),
+        env_prereq.ledger_version_lineage_absent("agy-runtime-isolation", "offload"),
+    ):
         import tempfile as _tf
+
         _old_db = feedback.DB_PATH
         with _tf.TemporaryDirectory(prefix="bridge-tagged-") as _td:
             feedback.DB_PATH = Path(_td) / "brain.db"
             try:
-                feedback.record_run("tagged:run", "o/r#1", "implement", "gemini",
-                                    capability_ids=["agy-runtime-isolation"])
-                feedback.record_outcome("tagged:run", adjudicated_verdict="PASS", merged=True,
-                                        durability="durable")
+                feedback.record_run(
+                    "tagged:run",
+                    "o/r#1",
+                    "implement",
+                    "gemini",
+                    capability_ids=["agy-runtime-isolation"],
+                )
+                feedback.record_outcome(
+                    "tagged:run", adjudicated_verdict="PASS", merged=True, durability="durable"
+                )
                 rows = collect()
                 row = [r for r in rows if r["run_id"] == "tagged:run"][0]
                 assert row["capability_ids"] == ["agy-runtime-isolation"], row
                 mapped = attribute(rows, known={"agy-runtime-isolation"})
-                assert [l["capability_id"] for l in mapped["links"]] == ["agy-runtime-isolation"], mapped
+                assert [l["capability_id"] for l in mapped["links"]] == [
+                    "agy-runtime-isolation"
+                ], mapped
                 assert mapped["links"][0]["resolver"] == "run_tagged", mapped
 
                 # ---- offload backfill: the link is backend_run_id, and only backend_run_id --------
@@ -753,28 +924,43 @@ def _selftest() -> None:
                 # These two are shaped like HISTORY — recorded before that tagging existed — which is
                 # exactly what the backfill is for.
                 for rid, target, payload in (
-                    ("role:redirect:withoffload", "o/r#2",
-                     {"role": "redirect", "backend_run_id": "offload:xyz"}),
+                    (
+                        "role:redirect:withoffload",
+                        "o/r#2",
+                        {"role": "redirect", "backend_run_id": "offload:xyz"},
+                    ),
                     ("role:redirect:replayed", "o/r#3", {"role": "redirect"}),
                 ):
-                    feedback.record_run(rid, target, "role:redirect", "cursor",
-                                        role_name="redirect", decomposition=payload)
+                    feedback.record_run(
+                        rid,
+                        target,
+                        "role:redirect",
+                        "cursor",
+                        role_name="redirect",
+                        decomposition=payload,
+                    )
                 first = backfill_offload_capability_edges()
                 assert first["backfilled"] == 1, first
                 with feedback._conn() as c:
-                    tagged = {r[0] for r in c.execute(
-                        "SELECT target_run_id FROM influence_edges WHERE influence_type='capability' "
-                        "AND capability_id='offload'").fetchall()}
+                    tagged = {
+                        r[0]
+                        for r in c.execute(
+                            "SELECT target_run_id FROM influence_edges WHERE influence_type='capability' "
+                            "AND capability_id='offload'"
+                        ).fetchall()
+                    }
                 assert tagged == {"role:redirect:withoffload"}, tagged
                 assert backfill_offload_capability_edges()["backfilled"] == 0, "not idempotent"
             finally:
                 feedback.DB_PATH = _old_db
 
     env_prereq.report_gaps("capability_outcome_bridge.py", _gaps)
-    print("capability_outcome_bridge.py selftest: OK (explicit attribution, no entrypoint "
-          "inference, unknown ids refused, idempotent, dry-run inert, collect supplies "
-          "recorded tags so run_tagged is live, offload backfill keyed on backend_run_id)"
-          + (f" — {len(set(_gaps))} section(s) skipped, see above" if _gaps else ""))
+    print(
+        "capability_outcome_bridge.py selftest: OK (explicit attribution, no entrypoint "
+        "inference, unknown ids refused, idempotent, dry-run inert, collect supplies "
+        "recorded tags so run_tagged is live, offload backfill keyed on backend_run_id)"
+        + (f" — {len(set(_gaps))} section(s) skipped, see above" if _gaps else "")
+    )
 
 
 def main(argv: list[str]) -> int:

@@ -29,6 +29,7 @@ concurrency bugs a sequential test misses:
 `--selftest` runs fully offline in a temp dir (sequential + a real 60-way
 multiprocess race) and never touches the live handoff state.
 """
+
 from __future__ import annotations
 
 import json
@@ -239,7 +240,9 @@ def release(target: str, agent: str | None = None) -> bool:
     return True
 
 
-def update_metadata(target: str, agent: str | None = None, *, refresh_ts: bool = False, **fields) -> bool:
+def update_metadata(
+    target: str, agent: str | None = None, *, refresh_ts: bool = False, **fields
+) -> bool:
     """Patch metadata for a live claim held by agent.
 
     Dispatcher uses this after spawning the real child process so automatic watch sweeps can find
@@ -318,8 +321,14 @@ def _concurrent_tests() -> None:
     stale = _claims_dir() / _slug("race/Stale#1")
     stale.mkdir(parents=True, exist_ok=True)
     (stale / "meta").write_text(
-        json.dumps({"target": "race/Stale#1", "agent": "dead", "pid": 2147480000,
-                    "ts": time.time() - 99999})
+        json.dumps(
+            {
+                "target": "race/Stale#1",
+                "agent": "dead",
+                "pid": 2147480000,
+                "ts": time.time() - 99999,
+            }
+        )
     )
     with ctx.Pool(24) as p:
         res = p.map(_race_claim, [("race/Stale#1", i) for i in range(N)])
@@ -342,9 +351,14 @@ def _selftest() -> None:
         assert claim(T1, "codex") is True, "idempotent same-agent re-claim"
         assert holder(T1)["agent"] == "codex"
         assert set(active_claims()) == {T1, T2}, active_claims()
-        assert update_metadata(T1, "codex", lane="opener", task_type="implement", pid=os.getpid()) is True
+        assert (
+            update_metadata(T1, "codex", lane="opener", task_type="implement", pid=os.getpid())
+            is True
+        )
         meta_claims = active_claims(include_meta=True)
-        assert meta_claims[T1]["lane"] == "opener" and meta_claims[T1]["task_type"] == "implement", meta_claims
+        assert (
+            meta_claims[T1]["lane"] == "opener" and meta_claims[T1]["task_type"] == "implement"
+        ), meta_claims
         public_claim = active_claims()[T1]
         assert public_claim["agent"] == "codex" and "lane" not in public_claim, active_claims()
         assert update_metadata(T1, "claude", lane="closer") is False
@@ -358,7 +372,9 @@ def _selftest() -> None:
         stale = _claims_dir() / _slug(T3)
         stale.mkdir(parents=True)
         (stale / "meta").write_text(
-            json.dumps({"target": T3, "agent": "codex", "pid": 2147480000, "ts": time.time() - 99999})
+            json.dumps(
+                {"target": T3, "agent": "codex", "pid": 2147480000, "ts": time.time() - 99999}
+            )
         )
         assert holder(T3) is None, "dead+old claim reads as free"
         assert claim(T3, "claude") is False, "claim() must NOT steal another agent's stale claim"
@@ -367,7 +383,9 @@ def _selftest() -> None:
         release(T3)
         stale.mkdir(parents=True)
         (stale / "meta").write_text(
-            json.dumps({"target": T3, "agent": "codex", "pid": 2147480000, "ts": time.time() - 99999})
+            json.dumps(
+                {"target": T3, "agent": "codex", "pid": 2147480000, "ts": time.time() - 99999}
+            )
         )
         assert T3 in reap_stale(), "reaper clears a foreign stale claim"
         assert claim(T3, "claude") is True, "claimable after reap"
@@ -398,9 +416,9 @@ def _selftest() -> None:
         # second win (two concurrent planners choosing the same agent both returned True before).
         release(T3)
         assert claim(T3, "codex", pid=os.getppid()) is True  # concurrent planner, alive
-        assert claim(T3, "codex", pid=os.getpid()) is False, (
-            "live same-agent claim must not double-win"
-        )
+        assert (
+            claim(T3, "codex", pid=os.getpid()) is False
+        ), "live same-agent claim must not double-win"
         release(T3)
         assert claim(T3, "codex", pid=2147480000) is True  # crashed planner (dead pid)
         assert claim(T3, "codex", pid=os.getpid()) is True, "dead-pid self-recovery preserved"
@@ -410,7 +428,9 @@ def _selftest() -> None:
         release(T3)
         stale.mkdir(parents=True)
         (stale / "meta").write_text(
-            json.dumps({"target": T3, "agent": "codex", "pid": 2147480000, "ts": time.time() - 99999})
+            json.dumps(
+                {"target": T3, "agent": "codex", "pid": 2147480000, "ts": time.time() - 99999}
+            )
         )
         reap_lock = Path(tmp) / "claims" / ".reap.lock"
         reap_lock.mkdir()
@@ -422,7 +442,14 @@ def _selftest() -> None:
         release(T3)
         stale.mkdir(parents=True)
         (stale / "meta").write_text(
-            json.dumps({"target": T3, "agent": "research", "pids": [os.getpid(), 2147480000], "ts": time.time()})
+            json.dumps(
+                {
+                    "target": T3,
+                    "agent": "research",
+                    "pids": [os.getpid(), 2147480000],
+                    "ts": time.time(),
+                }
+            )
         )
         assert holder(T3)["agent"] == "research", "any live child pid keeps a research claim held"
         release(T3)
@@ -430,12 +457,16 @@ def _selftest() -> None:
         # no-meta TOCTOU guard: a fresh (unstamped) dir reads as HELD, not stale
         nm = _claims_dir() / _slug("nometa/T")
         nm.mkdir(parents=True)  # mkdir'd but never stamped
-        assert _is_held(nm, CLAIM_TTL_DEFAULT, time.time()) is True, "unstamped fresh dir must be held"
+        assert (
+            _is_held(nm, CLAIM_TTL_DEFAULT, time.time()) is True
+        ), "unstamped fresh dir must be held"
 
         _concurrent_tests()
-        print("claims.py selftest: OK (atomic per-target claim; same-target block; "
-              "idempotent re-claim/self-recovery; agent-guarded release; single-threaded "
-              "reap_stale; race-free under 60-way concurrency incl. stale targets)")
+        print(
+            "claims.py selftest: OK (atomic per-target claim; same-target block; "
+            "idempotent re-claim/self-recovery; agent-guarded release; single-threaded "
+            "reap_stale; race-free under 60-way concurrency incl. stale targets)"
+        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("HANDOFF_DIR", None)

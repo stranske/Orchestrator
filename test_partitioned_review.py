@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import dispatcher
 import partitioned_review as review
-import pytest
 
 
 def _corpus(items: list[dict]) -> dict:
@@ -24,9 +25,7 @@ def _item(item_id: str, group: str, *, assertion_key: str | None = None) -> dict
         "assertion_key": assertion_key or item_id,
         "group_key": group,
         "assertion": f"Determine the current disposition of {item_id}.",
-        "source_refs": [
-            {"kind": "pull_request", "ref": f"owner/repo#{group.rsplit('-', 1)[-1]}"}
-        ],
+        "source_refs": [{"kind": "pull_request", "ref": f"owner/repo#{group.rsplit('-', 1)[-1]}"}],
     }
 
 
@@ -268,8 +267,9 @@ def test_timeout_provenance_is_retained_and_synthesis_fails_closed(tmp_path: Pat
     )
     synthesis = review.synthesize_results(plan, results_dir=tmp_path / "results")
     timeout_envelope = json.loads(
-        review._partition_path(tmp_path / "results", plan["partitions"][1]["partition_id"])
-        .read_text()
+        review._partition_path(
+            tmp_path / "results", plan["partitions"][1]["partition_id"]
+        ).read_text()
     )
 
     assert run["coverage_status"] == "incomplete"
@@ -293,17 +293,20 @@ def test_timeout_provenance_is_retained_and_synthesis_fails_closed(tmp_path: Pat
     assert incomplete_with_queue["adjudication"]["status"] == "needed"
     assert incomplete_with_queue["adjudicator"]["status"] == "skipped_incomplete_coverage"
     (tmp_path / "timeout-plan.json").write_text(json.dumps(plan))
-    assert review.main(
-        [
-            "synthesize",
-            "--plan",
-            str(tmp_path / "timeout-plan.json"),
-            "--results-dir",
-            str(tmp_path / "results"),
-            "--output",
-            str(tmp_path / "incomplete-synthesis.json"),
-        ]
-    ) == 1
+    assert (
+        review.main(
+            [
+                "synthesize",
+                "--plan",
+                str(tmp_path / "timeout-plan.json"),
+                "--results-dir",
+                str(tmp_path / "results"),
+                "--output",
+                str(tmp_path / "incomplete-synthesis.json"),
+            ]
+        )
+        == 1
+    )
 
 
 def test_synthesis_flags_cross_partition_conflict_and_adjudicates_advisory(
@@ -372,17 +375,20 @@ def test_synthesis_flags_cross_partition_conflict_and_adjudicates_advisory(
     assert synthesis["adjudicator"]["status"] == "complete"
     assert synthesis["adjudicator"]["provenance"]["run_id"] == "offload:gemini:99"
     (tmp_path / "plan.json").write_text(json.dumps(plan))
-    assert review.main(
-        [
-            "synthesize",
-            "--plan",
-            str(tmp_path / "plan.json"),
-            "--results-dir",
-            str(tmp_path / "results"),
-            "--output",
-            str(tmp_path / "synthesis.json"),
-        ]
-    ) == 1
+    assert (
+        review.main(
+            [
+                "synthesize",
+                "--plan",
+                str(tmp_path / "plan.json"),
+                "--results-dir",
+                str(tmp_path / "results"),
+                "--output",
+                str(tmp_path / "synthesis.json"),
+            ]
+        )
+        == 1
+    )
 
 
 def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
@@ -416,8 +422,7 @@ def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
     wrong_schema = review.synthesize_results(plan, results_dir=results_dir)
     assert wrong_schema["coverage_status"] == "incomplete"
     assert any(
-        "schema_version" in error
-        for error in wrong_schema["partition_statuses"][0]["errors"]
+        "schema_version" in error for error in wrong_schema["partition_statuses"][0]["errors"]
     )
     envelope["schema_version"] = 1
     envelope["partition_digest"] = "stale-digest"
@@ -427,8 +432,7 @@ def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
     assert stale["coverage_status"] == "incomplete"
     assert stale["verdict"] == "INCOMPLETE"
     assert any(
-        "partition_digest mismatch" in error
-        for error in stale["partition_statuses"][0]["errors"]
+        "partition_digest mismatch" in error for error in stale["partition_statuses"][0]["errors"]
     )
 
     resumed = review.run_plan(
@@ -441,18 +445,192 @@ def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
     assert resumed["coverage_status"] == "complete"
     assert calls == 2, "a stale envelope must be re-run, not reused"
     (tmp_path / "complete-plan.json").write_text(json.dumps(plan))
-    assert review.main(
-        [
-            "synthesize",
-            "--plan",
-            str(tmp_path / "complete-plan.json"),
-            "--results-dir",
-            str(results_dir),
-            "--output",
-            str(tmp_path / "complete-synthesis.json"),
-        ]
-    ) == 0
+    assert (
+        review.main(
+            [
+                "synthesize",
+                "--plan",
+                str(tmp_path / "complete-plan.json"),
+                "--results-dir",
+                str(results_dir),
+                "--output",
+                str(tmp_path / "complete-synthesis.json"),
+            ]
+        )
+        == 0
+    )
 
 
 def test_dispatcher_exposes_partitioned_review_selftest() -> None:
     assert dispatcher.main(["review-corpus", "--selftest"]) == 0
+
+
+def test_review_round_is_registered_as_one_subject_and_stamped_on_every_partition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A corpus review fans one scope out to several agents — the same shape as a UX panel.
+
+    Nothing bound those offloads together, so each partition was an unrelated run against an
+    ephemeral temp path and thousands of offload runs across six agents produced nothing the
+    learner could compare. The round id is what makes them ONE subject with a real arm set.
+
+    Written because the existing test doubles take `**kwargs`: they would have swallowed
+    `research_round` silently, so a binding that never happened would look identical to one that
+    did — this repo's founding defect wearing a different hat.
+    """
+    import feedback
+    import research_subjects
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    plan = review.partition_corpus(
+        _corpus([_item("CW-71", "source-pr-71"), _item("CW-72", "source-pr-72")]),
+        max_items=1,
+        max_prompt_chars=12_000,
+    )
+    seen_rounds: list = []
+    calls = 0
+
+    def fake_offload(agent, prompt, **kwargs):
+        nonlocal calls
+        seen_rounds.append(kwargs.get("research_round"))
+        partition = plan["partitions"][calls]
+        calls += 1
+        return _success_offload(
+            _result(
+                plan,
+                partition,
+                {partition["items"][0]["item_id"]: "unresolved_design_dispositions"},
+            ),
+            calls,
+        )
+
+    run = review.run_plan(
+        plan,
+        agent="gemini",
+        cwd=tmp_path,
+        results_dir=tmp_path / "results",
+        timeout=30,
+        offload_fn=fake_offload,
+        round_agents=["gemini", "cursor", "codex"],
+        round_date="2026-08-22",
+    )
+
+    info = run["research_round"]
+    assert info["registered"] is True, info
+    expected_target = research_subjects.domain_target(plan["review_id"])
+    assert info["round_id"] == f"{expected_target}:review-corpus:2026-08-22", info
+    # THE ARM SET IS THE AGENTS THAT DID THE WORK, in the order the round declared them.
+    assert info["arms"] == ["gemini", "cursor", "codex"], info
+
+    # Every partition offload carries the round, so the attempts join back to one subject.
+    assert seen_rounds and all(r == info["round_id"] for r in seen_rounds), seen_rounds
+
+    # The subject really landed, and it is ONE subject for the whole round.
+    subject = research_subjects  # readability
+    rows = (
+        __import__("sqlite3")
+        .connect(feedback.DB_PATH)
+        .execute("SELECT subject_id, canonical_target, task_type, base_sha FROM research_subjects")
+        .fetchall()
+    )
+    assert len(rows) == 1, rows
+    assert rows[0][0] == info["subject_id"]
+    assert rows[0][1] == expected_target
+    # base_sha is INAPPLICABLE, not missing: a corpus review is not cut from a commit.
+    assert rows[0][3] in (None, ""), rows[0]
+    assert subject.is_domain_target(rows[0][1])
+
+    # A ONE-AGENT ROUND IS ONE ARM. Padding it would make one opinion look like a panel's
+    # agreement, so the default must never invent companions.
+    solo = review.register_review_round(plan, ["gemini"], date="2026-08-23")
+    assert solo["arms"] == ["gemini"], solo
+    assert solo["subject_id"] != info["subject_id"], "arm set must change the subject identity"
+
+    # Capture is SUBORDINATE to the review: a Brain failure is reported, never fatal, never silent.
+    monkeypatch.setattr(
+        research_subjects,
+        "record_research_round",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("brain offline")),
+    )
+    broken = review.register_review_round(plan, ["gemini"], date="2026-08-24")
+    assert broken["registered"] is False
+    assert "brain offline" in broken["reason"], broken
+
+
+def test_audit_round_inherits_downstream_durability_and_never_infers_it(tmp_path, monkeypatch):
+    """B's durability half: the round inherits what the issues its findings produced achieved.
+
+    Everything downstream already existed — an issue becomes a PR, a merged PR gets a durability
+    label from `durability_sweep`, and `influence_edges` back-propagates it. The missing fact was
+    "round R, arm A produced issue N", which CANNOT be inferred: the only written trace is a
+    free-form prose line (`_Surfaced by the maint-69 outage investigated in #3007._`), and parsing
+    a sentence into a causal edge attributes work to an agent on the strength of grammar.
+
+    The label is un-gameable because the finding's author decides neither half: whether it is filed
+    is the filer's call, and whether the fix HOLDS is decided later by real work landing on top.
+    """
+    import feedback
+    import research_subjects
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    round_id, identity = research_subjects.record_research_round(
+        research_subjects.domain_target("audit-x"),
+        "review-corpus",
+        "2026-08-22",
+        "the objective",
+        ["codex", "cursor"],
+        task_type="review",
+    )
+
+    # The round's own arm runs, bound by experiment_id exactly as offload binds them.
+    for agent in ("codex", "cursor"):
+        feedback.record_run(
+            f"round:{agent}", f"offload:/tmp/{agent}", "review", agent, experiment_id=round_id
+        )
+
+    # Two issues the findings produced. One landed durably, one was abandoned, one never landed.
+    for target, durability in (("stranske/Repo#11", "durable"), ("stranske/Repo#12", "abandoned")):
+        feedback.record_run(f"impl{target[-2:]}", target, "implement", "claude")
+        feedback.record_outcome(
+            f"impl{target[-2:]}", verifier_verdict="PASS", merged=True, durability=durability
+        )
+    research_subjects.record_finding_issue(
+        round_id, "stranske/Repo#11", arm="codex", identity=identity
+    )
+    research_subjects.record_finding_issue(
+        round_id, "stranske/Repo#12", arm="cursor", identity=identity
+    )
+    research_subjects.record_finding_issue(
+        round_id, "stranske/Repo#99", arm="codex", identity=identity
+    )  # never implemented
+
+    got = research_subjects.resolve_round_durability(round_id, apply_edges=True)
+    assert got["findings_filed"] == 3, got
+    # INHERITED, not judged: each arm carries what its own issue actually achieved.
+    assert got["per_arm_durability"]["codex"] == {"durable": 1}, got
+    assert got["per_arm_durability"]["cursor"] == {"abandoned": 1}, got
+    # Resolved AND unresolved together — 1 durable alone would read as a verdict on the round.
+    assert (got["resolved"], got["unresolved"]) == (2, 1), got
+    assert got["edges_written"] == 2, got
+
+    # The edge rides the EXISTING propagation, so durability arrives on the edge itself rather
+    # than through a second durability path growing beside `influence_edges`.
+    import sqlite3
+
+    edges = (
+        sqlite3.connect(feedback.DB_PATH)
+        .execute(
+            "SELECT source_run_id, durability FROM influence_edges WHERE influence_type='experiment' "
+            "AND influence_id=? ORDER BY source_run_id",
+            (round_id,),
+        )
+        .fetchall()
+    )
+    assert edges == [("round:codex", "durable"), ("round:cursor", "abandoned")], edges
+
+    # NEVER INFERRED: a finding with no recorded issue contributes nothing, and reading without
+    # `apply_edges` writes no edge at all.
+    empty = research_subjects.resolve_round_durability("round:nonexistent")
+    assert empty["findings_filed"] == 0 and empty["edges_written"] == 0, empty
+    readonly = research_subjects.resolve_round_durability(round_id)
+    assert readonly["edges_written"] == 0, "reading must not write"

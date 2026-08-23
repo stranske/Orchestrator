@@ -44,12 +44,16 @@ genuinely absent, so it is new. This module is test-applicability infrastructure
 orchestrator capability: it has no dispatch path, no outcome and no ledger row, so the
 admission gate does not bind on it.
 """
+
 from __future__ import annotations
 
 import os
+import pathlib
 import shutil
 import unittest
 from pathlib import Path
+
+import tomllib
 
 # The single token verify.py greps for in a selftest's or gate's output to classify it as
 # SKIPPED rather than passed. Defined once here and consumed by both sides, so the writer and
@@ -72,10 +76,12 @@ class MissingPrerequisite(unittest.SkipTest):
 # absence produce three distinct failures, so each gets its own named detector rather than one
 # vague "ledger looks empty".
 
+
 def _ledger() -> dict:
     # Imported lazily: `capabilities` imports `feedback`, and `feedback`'s own selftest imports
     # this module — a module-level import here would close that cycle.
     import capabilities
+
     return capabilities.load_declared(capabilities.REG)
 
 
@@ -83,15 +89,18 @@ def ledger_rows_absent(*capability_ids: str) -> str | None:
     """Reason string when any named capability has no row in the ledger at all."""
     try:
         ledger = _ledger()
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return f"capability ledger unreadable ({type(exc).__name__}: {exc})"
     missing = sorted(c for c in capability_ids if c not in ledger)
     if not missing:
         return None
     import capabilities
-    return (f"capability ledger has no row for {', '.join(missing)} — the ledger is "
-            f"machine-local state ({capabilities.REG}); it holds {len(ledger)} row(s) here, "
-            f"and these are registered by running the system, not by checking out the tree")
+
+    return (
+        f"capability ledger has no row for {', '.join(missing)} — the ledger is "
+        f"machine-local state ({capabilities.REG}); it holds {len(ledger)} row(s) here, "
+        f"and these are registered by running the system, not by checking out the tree"
+    )
 
 
 def ledger_version_lineage_absent(*capability_ids: str) -> str | None:
@@ -103,30 +112,34 @@ def ledger_version_lineage_absent(*capability_ids: str) -> str | None:
     """
     try:
         ledger = _ledger()
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return f"capability ledger unreadable ({type(exc).__name__}: {exc})"
-    unversioned = sorted(c for c in capability_ids
-                         if not (ledger.get(c) or {}).get("capability_version_id"))
+    unversioned = sorted(
+        c for c in capability_ids if not (ledger.get(c) or {}).get("capability_version_id")
+    )
     if not unversioned:
         return None
-    return (f"capability ledger carries no version lineage for {', '.join(unversioned)} "
-            f"(capability_version_id is unset) — lineage is established by real registration "
-            f"on the running instance, so a fresh bootstrap has none")
+    return (
+        f"capability ledger carries no version lineage for {', '.join(unversioned)} "
+        f"(capability_version_id is unset) — lineage is established by real registration "
+        f"on the running instance, so a fresh bootstrap has none"
+    )
 
 
 def ledger_invocation_history_absent(*capability_ids: str) -> str | None:
     """Reason string when a row has never recorded an invocation on this machine."""
     try:
         ledger = _ledger()
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return f"capability ledger unreadable ({type(exc).__name__}: {exc})"
-    silent = sorted(c for c in capability_ids
-                    if not (ledger.get(c) or {}).get("last_invocation"))
+    silent = sorted(c for c in capability_ids if not (ledger.get(c) or {}).get("last_invocation"))
     if not silent:
         return None
-    return (f"capability ledger records no invocation for {', '.join(silent)} "
-            f"(last_invocation is unset) — liveness classification reads that history, which "
-            f"only accrues on the running instance")
+    return (
+        f"capability ledger records no invocation for {', '.join(silent)} "
+        f"(last_invocation is unset) — liveness classification reads that history, which "
+        f"only accrues on the running instance"
+    )
 
 
 def ledger_legacy_rows_absent() -> str | None:
@@ -138,17 +151,21 @@ def ledger_legacy_rows_absent() -> str | None:
     """
     try:
         import capability_admission as admission
+
         rows = admission.report()["rows"]
-    except Exception as exc:                                        # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return f"admission report unavailable ({type(exc).__name__}: {exc})"
     if any(r.get("legacy") for r in rows):
         return None
-    return ("capability ledger holds no pre-admission-gate (legacy) capability — legacy debt "
-            "accrues from this instance's registration history, and a ledger bootstrapped "
-            "from the committed tree has none")
+    return (
+        "capability ledger holds no pre-admission-gate (legacy) capability — legacy debt "
+        "accrues from this instance's registration history, and a ledger bootstrapped "
+        "from the committed tree has none"
+    )
 
 
 # --------------------------------------------------------------------------- local files & CLIs
+
 
 def skill_resource_absent() -> str | None:
     """Reason string when the reference skill's bundled script is not installed.
@@ -158,17 +175,26 @@ def skill_resource_absent() -> str | None:
     nothing to compile when the skill is not installed.
     """
     import capability_compiler
+
     try:
         resource = Path(capability_compiler.reference_skill_source()["resources"][0]["source_path"])
     except (OSError, KeyError, IndexError):
         # reference_skill_source() hashes the file as it builds the dict, so an absent resource
         # raises here — which is the answer, not an error.
-        resource = (Path.home() / ".codex" / "skills" / "code-workspace-hygiene"
-                    / "scripts" / "audit_code_root.sh")
+        resource = (
+            Path.home()
+            / ".codex"
+            / "skills"
+            / "code-workspace-hygiene"
+            / "scripts"
+            / "audit_code_root.sh"
+        )
     if resource.is_file():
         return None
-    return (f"reference skill resource not installed: {resource} — the skill compiler is "
-            f"deliberately exercised against a real installed skill, not a fixture")
+    return (
+        f"reference skill resource not installed: {resource} — the skill compiler is "
+        f"deliberately exercised against a real installed skill, not a fixture"
+    )
 
 
 def codex_profile_binary_absent() -> str | None:
@@ -179,16 +205,20 @@ def codex_profile_binary_absent() -> str | None:
     default location is inside a macOS app bundle, so it cannot exist on a Linux runner.
     """
     import adapters
+
     if adapters.CODEX_PROFILE_BIN.is_file():
         return None
-    return (f"exact-profile Codex binary absent: {adapters.CODEX_PROFILE_BIN} "
-            f"(set ORCH_CODEX_PROFILE_BIN to a version-capable Codex binary) — "
-            f"adapters.profile_codex_binary() fails closed rather than using PATH")
+    return (
+        f"exact-profile Codex binary absent: {adapters.CODEX_PROFILE_BIN} "
+        f"(set ORCH_CODEX_PROFILE_BIN to a version-capable Codex binary) — "
+        f"adapters.profile_codex_binary() fails closed rather than using PATH"
+    )
 
 
 def agent_cli_absent(*agents: str) -> str | None:
     """Reason string when a seat's CLI is not installed, so its auth probe cannot run."""
     import adapters
+
     missing = []
     for agent in agents:
         probe = (adapters.AUTH_PROBES.get(agent) or {}).get("cmd") or []
@@ -197,14 +227,17 @@ def agent_cli_absent(*agents: str) -> str | None:
             missing.append(f"{agent} ({binary})")
     if not missing:
         return None
-    return (f"agent CLI not installed for {', '.join(missing)} — with no CLI and no credential "
-            f"file there is genuinely no free signal for the seat, which is the documented "
-            f"UNKNOWN case, not a broken credential")
+    return (
+        f"agent CLI not installed for {', '.join(missing)} — with no CLI and no credential "
+        f"file there is genuinely no free signal for the seat, which is the documented "
+        f"UNKNOWN case, not a broken credential"
+    )
 
 
 def credential_file_absent(*agents: str) -> str | None:
     """Reason string when the credential FILE the fleet sources at dispatch time is absent."""
     import agent_auth_check
+
     missing = []
     for agent in agents:
         entry = agent_auth_check.CREDENTIAL_FILES.get(agent)
@@ -214,8 +247,10 @@ def credential_file_absent(*agents: str) -> str | None:
             missing.append(f"{agent} ({entry[0]})")
     if not missing:
         return None
-    return (f"credential file absent for {', '.join(missing)} — the fleet authenticates by "
-            f"sourcing that file, so without it the seat's verdict is BROKEN by design")
+    return (
+        f"credential file absent for {', '.join(missing)} — the fleet authenticates by "
+        f"sourcing that file, so without it the seat's verdict is BROKEN by design"
+    )
 
 
 def seat_has_no_free_signal() -> str | None:
@@ -228,6 +263,7 @@ def seat_has_no_free_signal() -> str | None:
     """
     import adapters
     import agent_auth_check
+
     blind = []
     for agent in agent_auth_check.AGENTS:
         probe = (adapters.AUTH_PROBES.get(agent) or {}).get("cmd") or []
@@ -239,12 +275,47 @@ def seat_has_no_free_signal() -> str | None:
             blind.append(agent)
     if not blind:
         return None
-    return (f"no free auth signal on this machine for {', '.join(sorted(blind))}: neither an "
-            f"installed CLI probe nor a credential file — agent_auth_check's documented "
-            f"UNKNOWN case")
+    return (
+        f"no free auth signal on this machine for {', '.join(sorted(blind))}: neither an "
+        f"installed CLI probe nor a credential file — agent_auth_check's documented "
+        f"UNKNOWN case"
+    )
 
 
 # --------------------------------------------------------------------------- harness glue
+
+
+def vibe_config_absent() -> str | None:
+    """Reason string when vibe's local config is not readable, so its active model cannot be read.
+
+    The model identity below is a FACT about this machine's configuration, not a vendor constant, so
+    the check that guards it must skip with the missing file named on a runner that has no vibe
+    install rather than fail for an environmental reason.
+    """
+    path = pathlib.Path(os.environ.get("VIBE_HOME", pathlib.Path.home() / ".vibe")) / "config.toml"
+    if path.is_file():
+        return None
+    return f"vibe config absent: {path} — active_model cannot be read to check for drift"
+
+
+def vibe_active_model() -> str | None:
+    """vibe's configured active model, read from its own config. None when unreadable."""
+    path = pathlib.Path(os.environ.get("VIBE_HOME", pathlib.Path.home() / ".vibe")) / "config.toml"
+    # Parsed as TOML, not scanned line-by-line. The previous prefix match had three failure modes
+    # on a valid config: `active_model = "x"  # why` returned `x"  # why` (an inline comment is not
+    # quote-stripped), any key merely STARTING with the name matched (`active_model_fallback`), and
+    # a nested table's key matched as though it were top-level. A drift detector that misreads the
+    # value it compares reports drift that is not there.
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        value = tomllib.loads(raw.decode("utf-8", errors="replace")).get("active_model")
+    except tomllib.TOMLDecodeError:
+        return None
+    return str(value) or None if value is not None else None
+
 
 def require(*reasons: str | None) -> None:
     """Raise `MissingPrerequisite` for the first named absence, or return.
@@ -297,7 +368,7 @@ def _selftest() -> None:
     assert issubclass(MissingPrerequisite, unittest.SkipTest)
     try:
         require(None, None)
-    except MissingPrerequisite:                                     # pragma: no cover
+    except MissingPrerequisite:  # pragma: no cover
         raise AssertionError("require() must not raise when nothing is absent")
     try:
         require(None, "the named thing is missing", "a later reason")
@@ -311,10 +382,14 @@ def _selftest() -> None:
     # reason is indistinguishable from a pass.
     detectors = [
         ("ledger_rows_absent", lambda: ledger_rows_absent("definitely-not-a-capability")),
-        ("ledger_version_lineage_absent",
-         lambda: ledger_version_lineage_absent("definitely-not-a-capability")),
-        ("ledger_invocation_history_absent",
-         lambda: ledger_invocation_history_absent("definitely-not-a-capability")),
+        (
+            "ledger_version_lineage_absent",
+            lambda: ledger_version_lineage_absent("definitely-not-a-capability"),
+        ),
+        (
+            "ledger_invocation_history_absent",
+            lambda: ledger_invocation_history_absent("definitely-not-a-capability"),
+        ),
         ("ledger_legacy_rows_absent", ledger_legacy_rows_absent),
         ("skill_resource_absent", skill_resource_absent),
         ("codex_profile_binary_absent", codex_profile_binary_absent),
@@ -333,8 +408,9 @@ def _selftest() -> None:
 
     # A skipped selftest must SPEAK, and its line must carry the shared mark verify.py greps
     # for. A skip that prints nothing is a silent zero-exit by another name.
-    import io
     import contextlib
+    import io
+
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         assert selftest_skipped("mod", None, "thing X is absent") is True
@@ -343,8 +419,47 @@ def _selftest() -> None:
     assert PREREQ_ABSENT_MARK in text and "thing X is absent" in text, text
     assert text.count(PREREQ_ABSENT_MARK) == 1, text
 
-    print("env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, "
-          "marked selftest skip speaks)")
+    # The vibe readers, against an ISOLATED VIBE_HOME so the verdict never depends on whether the
+    # owner happens to have vibe installed. Each case is one the previous prefix-match got wrong.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        home = pathlib.Path(td)
+        old = os.environ.get("VIBE_HOME")
+        os.environ["VIBE_HOME"] = str(home)
+        try:
+            # absent file: named reason, and no value
+            assert vibe_config_absent(), "an absent config must name itself"
+            assert vibe_active_model() is None
+            cfg = home / "config.toml"
+            # plain value
+            cfg.write_text('active_model = "gpt-5"\n', encoding="utf-8")
+            assert not vibe_config_absent()
+            assert vibe_active_model() == "gpt-5", vibe_active_model()
+            # INLINE COMMENT -- the prefix match returned `gpt-5"  # pinned` here
+            cfg.write_text('active_model = "gpt-5"  # pinned\n', encoding="utf-8")
+            assert vibe_active_model() == "gpt-5", vibe_active_model()
+            # empty value reads as absent, not as the empty string
+            cfg.write_text('active_model = ""\n', encoding="utf-8")
+            assert vibe_active_model() is None, vibe_active_model()
+            # a LONGER key must not match, and neither must a nested table's key
+            cfg.write_text('active_model_fallback = "wrong"\n', encoding="utf-8")
+            assert vibe_active_model() is None, vibe_active_model()
+            cfg.write_text('[nested]\nactive_model = "wrong"\n', encoding="utf-8")
+            assert vibe_active_model() is None, vibe_active_model()
+            # malformed TOML is unreadable, not a crash
+            cfg.write_text("active_model = \n", encoding="utf-8")
+            assert vibe_active_model() is None
+        finally:
+            if old is None:
+                os.environ.pop("VIBE_HOME", None)
+            else:
+                os.environ["VIBE_HOME"] = old
+
+    print(
+        "env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, "
+        "marked selftest skip speaks, vibe readers)"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -360,10 +475,13 @@ def main(argv: list[str]) -> int:
         "ledger legacy rows": ledger_legacy_rows_absent(),
     }
     for name, reason in checks.items():
-        print(f"{'ABSENT ' if reason else 'present'} {name}" + (f"\n    {reason}" if reason else ""))
+        print(
+            f"{'ABSENT ' if reason else 'present'} {name}" + (f"\n    {reason}" if reason else "")
+        )
     return 0
 
 
 if __name__ == "__main__":
     import sys
+
     raise SystemExit(main(sys.argv[1:]))

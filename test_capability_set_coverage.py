@@ -20,6 +20,7 @@ So this is not a promise to do better. It is a gate that FAILS when the set is t
 Run it directly (`python3 test_capability_set_coverage.py`) or under pytest. It is deliberately part
 of the standard suite so a normal verification run cannot pass while the set is under-covered.
 """
+
 from __future__ import annotations
 
 import sys
@@ -83,23 +84,26 @@ def test_every_capability_appears_in_the_activation_audit():
         for field in ("entry_class", "defects", "reachable"):
             assert field in row, f"{cap_id} audit row missing {field!r}"
         assert row["entry_class"] in (
-            audit.ENTRY_TASK_ROUTED, audit.ENTRY_DIRECT, audit.ENTRY_GATED, audit.ENTRY_UNKNOWN
+            audit.ENTRY_TASK_ROUTED,
+            audit.ENTRY_DIRECT,
+            audit.ENTRY_GATED,
+            audit.ENTRY_UNKNOWN,
         ), (cap_id, row["entry_class"])
 
 
 def test_unreachable_capabilities_state_a_reason():
-    """"Cannot fire" is allowed. "Cannot fire, unexplained" is not."""
+    """ "Cannot fire" is allowed. "Cannot fire, unexplained" is not."""
     rep = audit.audit(use_cache=True)
-    silent = [r["capability_id"] for r in rep["rows"]
-              if not r["reachable"] and not r["defects"]]
+    silent = [r["capability_id"] for r in rep["rows"] if not r["reachable"] and not r["defects"]]
     assert not silent, f"capabilities blocked with no named defect: {silent}"
 
 
 def test_every_defect_is_a_known_class():
     """A defect string with no entry in DEFECT_CLASSES cannot be aimed at or counted."""
     rep = audit.audit(use_cache=True)
-    unknown = sorted({d for r in rep["rows"] for d in r["defects"]
-                      if d not in audit.DEFECT_CLASSES})
+    unknown = sorted(
+        {d for r in rep["rows"] for d in r["defects"] if d not in audit.DEFECT_CLASSES}
+    )
     assert not unknown, f"defects with no DEFECT_CLASSES description: {unknown}"
 
 
@@ -120,34 +124,63 @@ def roster() -> str:
     ledger count by construction.
     """
     import capability_recurrence_check as rc
+
     ledger = capabilities.load_declared(capabilities.REG)
     covered = _fixture_capabilities()
     rep = audit.audit(use_cache=True)
     rows = {r["capability_id"]: r for r in rep["rows"]}
+    # A MISSING PREREQUISITE is the one expected failure and it names itself; anything else is a
+    # real recurrence-check defect and must be printed. Catching bare Exception into `fired = {}`
+    # made the roster show a dash for every capability and still report success, so a broken
+    # replay was indistinguishable from a replay that found nothing -- the founding defect again.
+    replay_error: str | None = None
+    fired: dict[str, bool] = {}
     try:
         rec = rc.replay(offline=True)
-        fired: dict[str, bool] = {}
         for row in rec["rows"]:
             cap = row.get("capability")
             if cap and not str(cap).endswith("-flag"):
                 fired[cap] = fired.get(cap, True) and bool(row["fires"])
-    except Exception:                                          # noqa: BLE001
-        fired = {}
+    except env_prereq.MissingPrerequisite as exc:
+        replay_error = f"prerequisite absent: {exc}"
+    except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
+        replay_error = f"{type(exc).__name__}: {exc}"
 
-    out = [f"# Capability set roster — all {len(ledger)} capabilities", "",
-           "| Capability | Fixture | Can fire | Recurrence | Blocker |",
-           "|---|---|---|---|---|"]
+    out = (
+        [
+            f"# Capability set roster — all {len(ledger)} capabilities",
+            "",
+        ]
+        + (
+            [
+                f"> RECURRENCE REPLAY DID NOT RUN — {replay_error}. Every 'Recurrence' cell below is "
+                f"UNKNOWN, not empty.",
+                "",
+            ]
+            if replay_error
+            else []
+        )
+        + [
+            "| Capability | Fixture | Can fire | Recurrence | Blocker |",
+            "|---|---|---|---|---|",
+        ]
+    )
     for cap_id in sorted(ledger):
         row = rows.get(cap_id) or {}
         fx = "yes" if cap_id in covered else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
         can = "yes" if row.get("reachable") else "NO"
         fire = {True: "fires", False: "miss"}.get(fired.get(cap_id), "—")
-        out.append(f"| {cap_id} | {fx} | {can} | {fire} | "
-                   f"{', '.join(row.get('defects') or []) or '—'} |")
+        out.append(
+            f"| {cap_id} | {fx} | {can} | {fire} | "
+            f"{', '.join(row.get('defects') or []) or '—'} |"
+        )
     uncovered = sorted(set(ledger) - covered - set(FIXTURE_EXEMPT))
     blocked = sorted(c for c in ledger if not (rows.get(c) or {}).get("reachable"))
-    out += ["", f"  fixtures: {len(covered)}/{len(ledger)}   "
-                f"uncovered: {len(uncovered)}   blocked: {len(blocked)}"]
+    out += [
+        "",
+        f"  fixtures: {len(covered)}/{len(ledger)}   "
+        f"uncovered: {len(uncovered)}   blocked: {len(blocked)}",
+    ]
     return "\n".join(out) + "\n"
 
 
@@ -181,13 +214,17 @@ def main() -> int:
         return 1
     ledger = capabilities.load_declared(capabilities.REG)
     if skipped:
-        print(f"\n{len(tests) - len(skipped)} of {len(tests)} capability-set coverage checks "
-              f"passed over {len(ledger)} ledger capabilities, {len(skipped)} skipped: "
-              + "; ".join(f"{n} ({r[:80]})" for n, r in skipped))
+        print(
+            f"\n{len(tests) - len(skipped)} of {len(tests)} capability-set coverage checks "
+            f"passed over {len(ledger)} ledger capabilities, {len(skipped)} skipped: "
+            + "; ".join(f"{n} ({r[:80]})" for n, r in skipped)
+        )
         return 0
-    print(f"\nall {len(tests)} capability-set coverage checks passed "
-          f"over ALL {len(ledger)} ledger capabilities "
-          f"(--roster for the per-capability table)")
+    print(
+        f"\nall {len(tests)} capability-set coverage checks passed "
+        f"over ALL {len(ledger)} ledger capabilities "
+        f"(--roster for the per-capability table)"
+    )
     return 0
 
 

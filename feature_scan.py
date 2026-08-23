@@ -26,6 +26,7 @@ never claims maturity the code has not earned. Reporting is the default; `--appl
     python3 feature_scan.py --apply     # log the unlogged at ad-hoc maturity
     python3 feature_scan.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,8 +63,8 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     for capability_id in ("feature-scan", "feature-reflection-cli"):
         try:
             import capabilities
-            capabilities.production_heartbeat(capability_id, event_type,
-                                              ref="feature_scan.scan")
+
+            capabilities.production_heartbeat(capability_id, event_type, ref="feature_scan.scan")
         except Exception:
             pass
 
@@ -77,8 +78,10 @@ def is_reusable_structure(path: Path) -> tuple[bool, str]:
     except (OSError, SyntaxError) as exc:
         return False, f"unparseable ({type(exc).__name__})"
     has_doc = bool(ast.get_docstring(tree))
-    has_selftest = any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                       and n.name == "_selftest" for n in ast.walk(tree))
+    has_selftest = any(
+        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "_selftest"
+        for n in ast.walk(tree)
+    )
     if has_doc and has_selftest:
         return True, "module docstring + _selftest"
     missing = []
@@ -108,9 +111,13 @@ def scan(*, path=None, root: Path | None = None) -> dict:
         if file.name in known_modules or stem in known_names or file.stem.lower() in known_names:
             continue
         unlogged.append({"name": stem, "module": file.name})
-    return {"registry_entries": len(reg), "qualifying_modules": len(qualifying),
-            "unlogged": unlogged, "unlogged_count": len(unlogged),
-            "skipped_sample": skipped[:5]}
+    return {
+        "registry_entries": len(reg),
+        "qualifying_modules": len(qualifying),
+        "unlogged": unlogged,
+        "unlogged_count": len(unlogged),
+        "skipped_sample": skipped[:5],
+    }
 
 
 def apply_scan(rep: dict, *, dry_run: bool = True, path=None) -> dict:
@@ -127,18 +134,25 @@ def apply_scan(rep: dict, *, dry_run: bool = True, path=None) -> dict:
             else:
                 features.record_use(row["name"], "feature_scan", **kwargs)
             recorded.append(row["name"])
-        except Exception as exc:                       # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             recorded.append(f"{row['name']}: ERROR {str(exc)[:60]}")
     return {"recorded": recorded, "dry_run": dry_run}
 
 
 def format_report(rep: dict) -> str:
-    lines = ["# Feature scan — reusable structures the registry has never seen", "",
-             f"  registry entries:    {rep['registry_entries']}",
-             f"  qualifying modules:  {rep['qualifying_modules']}",
-             f"  UNLOGGED:            {rep['unlogged_count']}", ""]
+    lines = [
+        "# Feature scan — reusable structures the registry has never seen",
+        "",
+        f"  registry entries:    {rep['registry_entries']}",
+        f"  qualifying modules:  {rep['qualifying_modules']}",
+        f"  UNLOGGED:            {rep['unlogged_count']}",
+        "",
+    ]
     if not rep["unlogged"]:
-        lines += ["  Every reusable structure in the tree is logged. This is the healthy state.", ""]
+        lines += [
+            "  Every reusable structure in the tree is logged. This is the healthy state.",
+            "",
+        ]
     else:
         lines += ["  These will be reinvented unless logged (RULE OF THREE):", ""]
         for row in rep["unlogged"]:
@@ -157,7 +171,7 @@ def _selftest() -> None:
         (root / "good_thing.py").write_text('"""A reusable thing."""\ndef _selftest():\n    pass\n')
         # Non-qualifying: no selftest, and no docstring.
         (root / "no_selftest.py").write_text('"""Has docs only."""\ndef go():\n    pass\n')
-        (root / "no_docs.py").write_text('def _selftest():\n    pass\n')
+        (root / "no_docs.py").write_text("def _selftest():\n    pass\n")
         # Excluded by name.
         (root / "test_thing.py").write_text('"""t."""\ndef _selftest():\n    pass\n')
         (root / "features.py").write_text('"""registry itself."""\ndef _selftest():\n    pass\n')
@@ -188,8 +202,10 @@ def _selftest() -> None:
         assert rep2["unlogged_count"] == 0, rep2
         assert "healthy state" in format_report(rep2)
 
-    print("feature_scan.py selftest: OK (docstring+_selftest bar, exclusions reported, records at "
-          "ad-hoc never hardened, idempotent)")
+    print(
+        "feature_scan.py selftest: OK (docstring+_selftest bar, exclusions reported, records at "
+        "ad-hoc never hardened, idempotent)"
+    )
 
 
 def main(argv: list[str]) -> int:

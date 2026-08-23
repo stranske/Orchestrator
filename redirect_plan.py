@@ -6,6 +6,7 @@ turns that decision into concrete next steps while staying read-only by default.
 An explicit --apply path can run the mutating redirect/decompose steps, but only
 with an exact target confirmation and a fully specified next delegate.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -70,7 +71,9 @@ def _step(
         "detail": detail,
         "commands": commands or [],
         "mutates_state": bool(mutates_state),
-        "requires_confirmation": bool(mutates_state if requires_confirmation is None else requires_confirmation),
+        "requires_confirmation": bool(
+            mutates_state if requires_confirmation is None else requires_confirmation
+        ),
     }
 
 
@@ -151,7 +154,9 @@ def _prompt_text(report: dict, action: str, reason: str) -> str:
     target = report.get("target") or "<target>"
     agent = report.get("agent") or "<previous-agent>"
     state = report.get("state") or "<unknown>"
-    expected = ", ".join(str(p) for p in _as_list(report.get("expected_paths"))) or "(not specified)"
+    expected = (
+        ", ".join(str(p) for p in _as_list(report.get("expected_paths"))) or "(not specified)"
+    )
     lines = [
         f"Take over {target} after a prior {agent} attempt was classified as {state}.",
         "",
@@ -173,12 +178,14 @@ def _prompt_text(report: dict, action: str, reason: str) -> str:
     if tail:
         lines.extend(["", "Prior log tail:", tail[-1000:]])
     if action == "decompose":
-        lines.extend([
-            "",
-            "Before coding, split the work into 2-3 independently verifiable slices. Start with the",
-            "smallest slice that can produce a real acceptance-criteria signal, and report the remaining",
-            "slices explicitly so the orchestrator can assign them separately if useful.",
-        ])
+        lines.extend(
+            [
+                "",
+                "Before coding, split the work into 2-3 independently verifiable slices. Start with the",
+                "smallest slice that can produce a real acceptance-criteria signal, and report the remaining",
+                "slices explicitly so the orchestrator can assign them separately if useful.",
+            ]
+        )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -202,21 +209,23 @@ def _delegate_commands(
     selected_agent = next_agent or "<next-agent>"
     selected_lane = lane or report.get("lane") or "<lane>"
     selected_type = task_type or report.get("task_type") or "implement"
-    return [[
-        "python3",
-        str(ORCH_DIR / "dispatcher.py"),
-        "delegate",
-        "--agent",
-        selected_agent,
-        "--target",
-        str(target),
-        "--lane",
-        str(selected_lane),
-        "--task-type",
-        str(selected_type),
-        "--prompt-file",
-        str(prompt_file),
-    ]]
+    return [
+        [
+            "python3",
+            str(ORCH_DIR / "dispatcher.py"),
+            "delegate",
+            "--agent",
+            selected_agent,
+            "--target",
+            str(target),
+            "--lane",
+            str(selected_lane),
+            "--task-type",
+            str(selected_type),
+            "--prompt-file",
+            str(prompt_file),
+        ]
+    ]
 
 
 def _common_inspection_step(report: dict) -> dict[str, Any]:
@@ -263,78 +272,92 @@ def plan(
     steps: list[dict[str, Any]] = []
 
     if action == "wait":
-        steps.append(_step(
-            "wait-and-recheck",
-            "Wait and recheck",
-            "Lane is active without drift/root-cause signals; re-run watch after the stale interval.",
-            commands=_monitor_commands(report),
-        ))
+        steps.append(
+            _step(
+                "wait-and-recheck",
+                "Wait and recheck",
+                "Lane is active without drift/root-cause signals; re-run watch after the stale interval.",
+                commands=_monitor_commands(report),
+            )
+        )
     elif action == "collect":
-        steps.append(_step(
-            "collect-result",
-            "Collect produced work",
-            "Agent appears done or idle after producing changes; inspect the diff and validation notes.",
-            commands=_inspect_commands(report),
-        ))
+        steps.append(
+            _step(
+                "collect-result",
+                "Collect produced work",
+                "Agent appears done or idle after producing changes; inspect the diff and validation notes.",
+                commands=_inspect_commands(report),
+            )
+        )
     elif action == "inspect":
         steps.append(_common_inspection_step(report))
     elif action in {"redirect", "decompose"}:
         steps.append(_common_inspection_step(report))
         pid = report.get("pid")
         if pid is not None:
-            steps.append(_step(
-                "stop-process",
-                "Stop current process",
-                "Only stop the lane after confirming it is still the stale/drifting process from this report.",
-                commands=[["kill", str(pid)]],
-                mutates_state=True,
-            ))
+            steps.append(
+                _step(
+                    "stop-process",
+                    "Stop current process",
+                    "Only stop the lane after confirming it is still the stale/drifting process from this report.",
+                    commands=[["kill", str(pid)]],
+                    mutates_state=True,
+                )
+            )
         if report.get("target"):
             release_cmd = ["python3", str(ORCH_DIR / "claims.py"), "release", str(report["target"])]
             if report.get("agent"):
                 release_cmd.append(str(report["agent"]))
-            steps.append(_step(
-                "release-claim",
-                "Release target claim",
-                "Release the claim only after the current process is stopped or confirmed exited.",
-                commands=[release_cmd],
-                mutates_state=True,
-            ))
+            steps.append(
+                _step(
+                    "release-claim",
+                    "Release target claim",
+                    "Release the claim only after the current process is stopped or confirmed exited.",
+                    commands=[release_cmd],
+                    mutates_state=True,
+                )
+            )
         if action == "redirect":
-            steps.append(_step(
-                "delegate-retry",
-                "Delegate retry",
-                "Write prompt_text to prompt_file, choose a suitable next agent, then delegate the retry.",
-                commands=_delegate_commands(
-                    report,
-                    next_agent=next_agent,
-                    lane=lane,
-                    task_type=task_type,
-                    prompt_file=prompt_path,
-                ),
-                mutates_state=True,
-            ))
+            steps.append(
+                _step(
+                    "delegate-retry",
+                    "Delegate retry",
+                    "Write prompt_text to prompt_file, choose a suitable next agent, then delegate the retry.",
+                    commands=_delegate_commands(
+                        report,
+                        next_agent=next_agent,
+                        lane=lane,
+                        task_type=task_type,
+                        prompt_file=prompt_path,
+                    ),
+                    mutates_state=True,
+                )
+            )
         else:
-            steps.append(_step(
-                "delegate-subtasks",
-                "Delegate decomposed slice",
-                "Use prompt_text as the decomposition brief; delegate the first independently verifiable slice.",
-                commands=_delegate_commands(
-                    report,
-                    next_agent=next_agent,
-                    lane=lane,
-                    task_type=task_type,
-                    prompt_file=prompt_path,
-                ),
-                mutates_state=True,
-            ))
+            steps.append(
+                _step(
+                    "delegate-subtasks",
+                    "Delegate decomposed slice",
+                    "Use prompt_text as the decomposition brief; delegate the first independently verifiable slice.",
+                    commands=_delegate_commands(
+                        report,
+                        next_agent=next_agent,
+                        lane=lane,
+                        task_type=task_type,
+                        prompt_file=prompt_path,
+                    ),
+                    mutates_state=True,
+                )
+            )
     else:
-        steps.append(_step(
-            "inspect-current-state",
-            "Inspect current state",
-            f"Unknown policy action {action!r}; fall back to manual inspection.",
-            commands=_inspect_commands(report),
-        ))
+        steps.append(
+            _step(
+                "inspect-current-state",
+                "Inspect current state",
+                f"Unknown policy action {action!r}; fall back to manual inspection.",
+                commands=_inspect_commands(report),
+            )
+        )
 
     mutates = any(step["mutates_state"] for step in steps)
     requires = any(step["requires_confirmation"] for step in steps)
@@ -409,7 +432,9 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _command_result(proc: subprocess.CompletedProcess[str], *, step_id: str, command: list[str]) -> dict[str, Any]:
+def _command_result(
+    proc: subprocess.CompletedProcess[str], *, step_id: str, command: list[str]
+) -> dict[str, Any]:
     return {
         "step_id": step_id,
         "command": command,
@@ -485,11 +510,13 @@ def apply_plan(
                 except (IndexError, TypeError, ValueError):
                     raise ValueError(f"invalid stop-process command: {command!r}") from None
                 if not pid_checker(pid):
-                    result["skipped"].append({
-                        "step_id": step_id,
-                        "command": command,
-                        "reason": "pid is not alive",
-                    })
+                    result["skipped"].append(
+                        {
+                            "step_id": step_id,
+                            "command": command,
+                            "reason": "pid is not alive",
+                        }
+                    )
                     continue
 
             proc = runner(command, capture_output=True, text=True, check=False)
@@ -533,35 +560,67 @@ def _selftest() -> None:
         "log_tail": "HTTP 401 Unauthorized\n",
     }
 
-    wait_report = {**base, "state": "progress", "policy_decision": {"action": "wait", "reason": "active", "confidence": "high"}}
+    wait_report = {
+        **base,
+        "state": "progress",
+        "policy_decision": {"action": "wait", "reason": "active", "confidence": "high"},
+    }
     wait = plan(wait_report)
     assert wait["action"] == "wait" and not wait["mutates_state"], wait
     assert wait["steps"][0]["commands"][0][0:2] == ["python3", str(ORCH_DIR / "watch.py")], wait
 
-    collect_report = {**base, "policy_decision": {"action": "collect", "reason": "done", "confidence": "high"}}
+    collect_report = {
+        **base,
+        "policy_decision": {"action": "collect", "reason": "done", "confidence": "high"},
+    }
     collect = plan(collect_report)
     assert collect["action"] == "collect" and not collect["requires_confirmation"], collect
-    assert any(cmd[:3] == ["git", "-C", "/tmp/worktree"] for cmd in collect["steps"][0]["commands"]), collect
+    assert any(
+        cmd[:3] == ["git", "-C", "/tmp/worktree"] for cmd in collect["steps"][0]["commands"]
+    ), collect
 
-    redirect_report = {**base, "policy_decision": {"action": "redirect", "reason": "auth root cause", "confidence": "high"}}
+    redirect_report = {
+        **base,
+        "policy_decision": {
+            "action": "redirect",
+            "reason": "auth root cause",
+            "confidence": "high",
+        },
+    }
     redirect = plan(redirect_report, next_agent="vibe")
     assert redirect["requires_confirmation"] and redirect["mutates_state"], redirect
     ids = [step["id"] for step in redirect["steps"]]
     assert "stop-process" in ids and "release-claim" in ids and "delegate-retry" in ids, redirect
-    assert any(cmd == ["kill", "12345"] for step in redirect["steps"] for cmd in step["commands"]), redirect
-    assert "auth root cause" in redirect["prompt_text"] and "401 Unauthorized" in redirect["prompt_text"], redirect
-    assert "--agent" in redirect["steps"][-1]["commands"][0] and "vibe" in redirect["steps"][-1]["commands"][0], redirect
+    assert any(
+        cmd == ["kill", "12345"] for step in redirect["steps"] for cmd in step["commands"]
+    ), redirect
+    assert (
+        "auth root cause" in redirect["prompt_text"]
+        and "401 Unauthorized" in redirect["prompt_text"]
+    ), redirect
+    assert (
+        "--agent" in redirect["steps"][-1]["commands"][0]
+        and "vibe" in redirect["steps"][-1]["commands"][0]
+    ), redirect
 
     decompose_report = {
         **base,
-        "policy_decision": {"action": "decompose", "reason": "repeated stalls", "confidence": "medium"},
+        "policy_decision": {
+            "action": "decompose",
+            "reason": "repeated stalls",
+            "confidence": "medium",
+        },
         "drift": {
             "severity": "medium",
-            "findings": [{"kind": "unexpected_paths", "detail": "outside scope", "paths": ["infra.yml"]}],
+            "findings": [
+                {"kind": "unexpected_paths", "detail": "outside scope", "paths": ["infra.yml"]}
+            ],
         },
     }
     decompose = plan(decompose_report, prompt_file="/tmp/decompose.md")
-    assert decompose["action"] == "decompose" and decompose["prompt_file"] == "/tmp/decompose.md", decompose
+    assert (
+        decompose["action"] == "decompose" and decompose["prompt_file"] == "/tmp/decompose.md"
+    ), decompose
     assert "split the work" in decompose["prompt_text"].lower(), decompose["prompt_text"]
     assert "unexpected_paths" in decompose["prompt_text"], decompose["prompt_text"]
 
@@ -569,7 +628,9 @@ def _selftest() -> None:
     # and is ignored for non-mutating actions.
     override = plan(redirect_report, next_agent="vibe", prompt_override="AGENT CORRECTED PROMPT")
     assert override["prompt_text"] == "AGENT CORRECTED PROMPT", override
-    assert plan(wait_report, prompt_override="ignored").get("prompt_text") == "", "override must not apply to wait"
+    assert (
+        plan(wait_report, prompt_override="ignored").get("prompt_text") == ""
+    ), "override must not apply to wait"
 
     import tempfile
 
@@ -624,20 +685,35 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         _selftest()
         return 0
-    parser = argparse.ArgumentParser(description="Build a safe dry-run redirect/decompose plan from a watch report.")
-    parser.add_argument("--report-json", default="", help="watch.py JSON report; stdin is used when omitted")
+    parser = argparse.ArgumentParser(
+        description="Build a safe dry-run redirect/decompose plan from a watch report."
+    )
+    parser.add_argument(
+        "--report-json", default="", help="watch.py JSON report; stdin is used when omitted"
+    )
     parser.add_argument("--next-agent", default="")
     parser.add_argument("--lane", default="")
     parser.add_argument("--task-type", default="")
     parser.add_argument("--prompt-file", default="")
-    parser.add_argument("--apply", action="store_true",
-                        help=("execute guarded mutating redirect/decompose steps; requires "
-                              "--confirm-target and --next-agent; writes prompt first, refuses "
-                              "placeholders, skips dead PIDs, and aborts on delegate failure"))
-    parser.add_argument("--dry-run", action="store_true",
-                        help="default behavior: print the plan without executing mutating steps")
-    parser.add_argument("--confirm-target", default="",
-                        help="required with --apply; must exactly match the plan target")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "execute guarded mutating redirect/decompose steps; requires "
+            "--confirm-target and --next-agent; writes prompt first, refuses "
+            "placeholders, skips dead PIDs, and aborts on delegate failure"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="default behavior: print the plan without executing mutating steps",
+    )
+    parser.add_argument(
+        "--confirm-target",
+        default="",
+        help="required with --apply; must exactly match the plan target",
+    )
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv)
     if args.apply and not args.confirm_target:
@@ -662,7 +738,11 @@ def main(argv: list[str]) -> int:
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
-        print(json.dumps(applied, indent=2) if args.as_json else format_human(out) + "\n--- apply_result ---\n" + json.dumps(applied, indent=2))
+        print(
+            json.dumps(applied, indent=2)
+            if args.as_json
+            else format_human(out) + "\n--- apply_result ---\n" + json.dumps(applied, indent=2)
+        )
         return 0 if applied.get("applied") else 1
     if args.as_json:
         print(json.dumps(out, indent=2))
@@ -673,4 +753,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

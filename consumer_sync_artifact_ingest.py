@@ -16,8 +16,9 @@ import sys
 import tempfile
 import time
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import capabilities
 import consumer_sync_shadow
@@ -27,9 +28,7 @@ GH_COMMAND_MOCK: Callable[[list[str]], Any] | None = None
 
 
 def _stable_hash(namespace: str, value: Any) -> str:
-    encoded = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode()
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     return "sha256:" + hashlib.sha256(namespace.encode() + b"\0" + encoded).hexdigest()
 
 
@@ -86,9 +85,7 @@ def run_gh_bytes(args: list[str]) -> bytes:
                 pass
     r = subprocess.run(args, capture_output=True, env=env)
     if r.returncode != 0:
-        raise Exception(
-            f"gh command failed: {r.stderr.decode('utf-8', errors='ignore')}"
-        )
+        raise Exception(f"gh command failed: {r.stderr.decode('utf-8', errors='ignore')}")
     return r.stdout
 
 
@@ -109,9 +106,7 @@ def make_tree_responses(
     directories: set[str] = set()
     for path, content in sorted(files.items()):
         data = content.encode("utf-8") if isinstance(content, str) else content
-        sha = hashlib.sha1(
-            b"blob " + str(len(data)).encode() + b"\0" + data
-        ).hexdigest()
+        sha = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
         tree.append(
             {
                 "path": path,
@@ -186,9 +181,7 @@ def safe_extract_zip(
             # 4. Reject absolute / traversal paths
             filename = member.filename
             if filename.startswith("/") or ".." in Path(filename).parts:
-                raise ValueError(
-                    f"Unsafe zip entry path (absolute/traversal): {filename}"
-                )
+                raise ValueError(f"Unsafe zip entry path (absolute/traversal): {filename}")
 
             # 5. Reject symlinks (Unix external attribute S_IFLNK)
             is_symlink = (member.external_attr >> 16) & 0o170000 == 0o120000
@@ -252,9 +245,7 @@ def validate_artifact_members(infolist: list[zipfile.ZipInfo]) -> set[str]:
 
     missing = sorted(ARTIFACT_REQUIRED_MEMBERS - names)
     if missing:
-        raise ValueError(
-            f"Artifact is missing required member(s) {missing}; got: {sorted(names)}"
-        )
+        raise ValueError(f"Artifact is missing required member(s) {missing}; got: {sorted(names)}")
 
     extras = sorted(names - ARTIFACT_REQUIRED_MEMBERS)
     if len(extras) > ARTIFACT_MAX_EXTRA_MEMBERS:
@@ -357,7 +348,7 @@ class BlobReader:
         return blob_sha256(repo, node, self)
 
 
-def blob_sha256(repo: str, node: dict[str, Any], reader: "BlobReader") -> str:
+def blob_sha256(repo: str, node: dict[str, Any], reader: BlobReader) -> str:
     """sha256 hexdigest of one blob's bytes, memoised on the content-addressed git blob id."""
     sha = str(node.get("sha") or "")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
@@ -368,9 +359,7 @@ def blob_sha256(repo: str, node: dict[str, Any], reader: "BlobReader") -> str:
         return cached
 
     if reader.fetches >= reader.max_fetches:
-        raise ValueError(
-            f"repo_read_blob_fetch_budget_exhausted:{repo}:{reader.max_fetches}"
-        )
+        raise ValueError(f"repo_read_blob_fetch_budget_exhausted:{repo}:{reader.max_fetches}")
     reader.fetches += 1
 
     size = node.get("size")
@@ -393,9 +382,7 @@ def blob_sha256(repo: str, node: dict[str, Any], reader: "BlobReader") -> str:
     # Verify the git object id over the bytes we received. This is what makes the memo sound: the
     # key is only a valid cache key if it really addresses this content. (SHA-1 here is git's
     # object id, not a security primitive.)
-    recomputed = hashlib.sha1(
-        b"blob " + str(len(content)).encode() + b"\0" + content
-    ).hexdigest()
+    recomputed = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
     if recomputed != sha:
         raise ValueError(f"blob_content_sha_mismatch:{repo}:{sha}!={recomputed}")
 
@@ -418,9 +405,7 @@ def _tree_node_kind(repo: str, path: str, node: dict[str, Any]) -> str:
         return "dir"
     if node_type == "blob" and mode in REPO_TREE_BLOB_MODES:
         return "file"
-    raise ValueError(
-        f"unsupported_tree_entry:{repo}:{path}:type={node_type}:mode={mode}"
-    )
+    raise ValueError(f"unsupported_tree_entry:{repo}:{path}:type={node_type}:mode={mode}")
 
 
 def observed_targets_from_tree(
@@ -618,9 +603,7 @@ def repo_hygiene(repo: str, nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:
         )
 
     findings = findings[:HYGIENE_MAX_REPORTED]
-    reclaimable = sum(
-        row["bytes"] for row in findings if row["disposition"] == "untrack"
-    )
+    reclaimable = sum(row["bytes"] for row in findings if row["disposition"] == "untrack")
     return {
         "schema": "orchestrator.consumer-sync-repo-hygiene/v1",
         "repository": repo.lower(),
@@ -825,14 +808,10 @@ def get_maint_68_repos(fallback_allowed: bool = True) -> list[str]:
                     repos.append(cleaned)
         if repos:
             return repos
-        raise Exception(
-            "Registry file contents did not contain any valid consumer repositories"
-        )
+        raise Exception("Registry file contents did not contain any valid consumer repositories")
     except Exception as e:
         if not fallback_allowed:
-            raise Exception(
-                f"Failed to load registry during active ingestion: {e}"
-            ) from e
+            raise Exception(f"Failed to load registry during active ingestion: {e}") from e
         print(
             f"Warning: failed to fetch maint-68 workflow from GitHub: {e}",
             file=sys.stderr,
@@ -921,9 +900,7 @@ def discover_artifact() -> dict[str, Any] | None:
             continue
 
         for art in artifacts:
-            if art.get("name") == expected_artifact_name and not art.get(
-                "expired", False
-            ):
+            if art.get("name") == expected_artifact_name and not art.get("expired", False):
                 return {
                     "run_id": run_id,
                     "run_attempt": run_attempt,
@@ -936,8 +913,8 @@ def discover_artifact() -> dict[str, Any] | None:
 
 
 def run_selftests():
-    import tempfile
     import io
+    import tempfile
 
     # 1. Test exact directory/file hashing
     print("Running selftest: Directory hashing...", end="")
@@ -1064,15 +1041,13 @@ def run_selftests():
         "capabilities-state.json",
         "runtime-report.json",
     )
-    assert validate_artifact_members(_members(*producer_members)) == set(
-        producer_members
-    )
+    assert validate_artifact_members(_members(*producer_members)) == set(producer_members)
 
     # The bare required pair still ingests, and a sidecar the producer has not invented yet must
     # not break ingest either — pinning today's six would only relocate the same failure.
-    assert validate_artifact_members(
-        _members("consumer-sync-plan.json", "handoff.json")
-    ) == set(ARTIFACT_REQUIRED_MEMBERS)
+    assert validate_artifact_members(_members("consumer-sync-plan.json", "handoff.json")) == set(
+        ARTIFACT_REQUIRED_MEMBERS
+    )
     assert "future-sidecar.json" in validate_artifact_members(
         _members(*producer_members, "future-sidecar.json")
     )
@@ -1080,9 +1055,7 @@ def run_selftests():
     # Required members stay mandatory, one at a time.
     for dropped in sorted(ARTIFACT_REQUIRED_MEMBERS):
         try:
-            validate_artifact_members(
-                _members(*[n for n in producer_members if n != dropped])
-            )
+            validate_artifact_members(_members(*[n for n in producer_members if n != dropped]))
             raise AssertionError(f"Should have rejected artifact missing {dropped}")
         except ValueError as e:
             assert "missing required member" in str(e), e
@@ -1153,8 +1126,7 @@ def run_selftests():
                     "template_sync": None,
                     "delivery": "copy",
                     "requires": [],
-                    "content_sha256": "sha256:"
-                    + hashlib.sha256(b"desired").hexdigest(),
+                    "content_sha256": "sha256:" + hashlib.sha256(b"desired").hexdigest(),
                     "effect_fingerprint": "sha256:" + "e" * 64,
                 }
             ],
@@ -1165,9 +1137,7 @@ def run_selftests():
         effect_fields = {
             k: entry[k] for k in entry if k not in ("effect_fingerprint", "description")
         }
-        entry["effect_fingerprint"] = _stable_hash(
-            "consumer-sync-source-effect", effect_fields
-        )
+        entry["effect_fingerprint"] = _stable_hash("consumer-sync-source-effect", effect_fields)
         plan["plan_id"] = _stable_hash("consumer-sync-plan", plan)
 
         handoff = {
@@ -1208,14 +1178,10 @@ def run_selftests():
 
         # Mock repo contents, served the way the targeted read asks for them: one tree, then
         # blobs. No zipball is downloaded any more.
-        repo_tree, repo_blobs = make_tree_responses(
-            {".github/workflows/new.yml": "current"}
-        )
+        repo_tree, repo_blobs = make_tree_responses({".github/workflows/new.yml": "current"})
 
         # Mock GH API command responses
-        run_list = {
-            "workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]
-        }
+        run_list = {"workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]}
         artifact_list = {
             "artifacts": [
                 {
@@ -1270,9 +1236,7 @@ def run_selftests():
             )
             assert rc_preview == 0
             assert not (state_dir / "consumer-sync-ingest-state.json").exists()
-            assert not (
-                state_dir / "consumer-sync-artifact-ingest-report.json"
-            ).exists()
+            assert not (state_dir / "consumer-sync-artifact-ingest-report.json").exists()
             assert not capabilities.load(ledger_path, create=False)
 
             # B. Test run-attempt mismatch (should reject)
@@ -1433,9 +1397,7 @@ def run_selftests():
             report_file = state_dir / "consumer-sync-artifact-ingest-report.json"
             assert report_file.exists()
             report_data = json.loads(report_file.read_text(encoding="utf-8"))
-            assert (
-                report_data["repositories"]["stranske/template"]["status"] == "success"
-            )
+            assert report_data["repositories"]["stranske/template"]["status"] == "success"
 
             ledger_data = capabilities.load(ledger_path, create=False)
             cap = ledger_data[consumer_sync_shadow.CAPABILITY_ID]
@@ -1462,9 +1424,9 @@ def run_selftests():
             ledger_data2 = capabilities.load(ledger_path, create=False)
             cap2 = ledger_data2[consumer_sync_shadow.CAPABILITY_ID]
             outcomes2 = len(cap2.get("event_history") or [])
-            assert outcomes1 == outcomes2, (
-                f"Ledger events count changed: {outcomes1} vs {outcomes2}"
-            )
+            assert (
+                outcomes1 == outcomes2
+            ), f"Ledger events count changed: {outcomes1} vs {outcomes2}"
 
             state_data2 = load_state(state_file)
             assert len(state_data["records"]) == len(state_data2["records"])
@@ -1532,9 +1494,7 @@ def main(argv: list[str] | None = None) -> int:
     ingest_parser = subparsers.add_parser("ingest", help="Run active ingestion")
 
     for sub in (preview_parser, ingest_parser):
-        sub.add_argument(
-            "--state-dir", type=Path, default=Path.home() / ".codex/orchestrator"
-        )
+        sub.add_argument("--state-dir", type=Path, default=Path.home() / ".codex/orchestrator")
         sub.add_argument(
             "--repository",
             action="append",
@@ -1562,9 +1522,7 @@ def main(argv: list[str] | None = None) -> int:
             default=5,
             help="Max repositories to process (hard cap 5)",
         )
-        sub.add_argument(
-            "--phase-id", default="importer-shadow", help="Importer phase identifier"
-        )
+        sub.add_argument("--phase-id", default="importer-shadow", help="Importer phase identifier")
 
     args = parser.parse_args(argv)
     command = args.command
@@ -1584,9 +1542,7 @@ def main(argv: list[str] | None = None) -> int:
 
     write_enabled = command == "ingest"
     current_time = time.time() if args.now is None else float(args.now)
-    current_date = datetime.datetime.fromtimestamp(
-        current_time, tz=datetime.timezone.utc
-    ).date()
+    current_date = datetime.datetime.fromtimestamp(current_time, tz=datetime.timezone.utc).date()
 
     supervision_mode = args.mode
     if supervision_mode == "human-on-exception":
@@ -1611,9 +1567,7 @@ def main(argv: list[str] | None = None) -> int:
     phase_id = args.phase_id
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", phase_id):
         raise ValueError("phase-id must be a short, safe identifier")
-    if supervision_mode == "human-on-exception" and not phase_id.startswith(
-        "importer-"
-    ):
+    if supervision_mode == "human-on-exception" and not phase_id.startswith("importer-"):
         raise ValueError("human-on-exception phase-id must start with importer-")
 
     state_dir = args.state_dir
@@ -1632,9 +1586,7 @@ def main(argv: list[str] | None = None) -> int:
     # 4. Discover runs and artifacts
     art_meta = discover_artifact()
     if art_meta is None:
-        print(
-            "No successful, non-expired consumer-sync-shadow-evidence artifacts found. Exiting."
-        )
+        print("No successful, non-expired consumer-sync-shadow-evidence artifacts found. Exiting.")
         return 0
 
     artifact_id = art_meta["artifact_id"]
@@ -1666,9 +1618,7 @@ def main(argv: list[str] | None = None) -> int:
         if not re.fullmatch(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
             raise ValueError(f"Invalid repository format: {repo}")
         if repo.lower() not in registry_set:
-            raise ValueError(
-                f"Repository {repo} is not in the registered consumer repos list."
-            )
+            raise ValueError(f"Repository {repo} is not in the registered consumer repos list.")
         validated_cohort.append(repo)
 
     # Deduplicate case-insensitively while preserving order
@@ -1740,9 +1690,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             plan = consumer_sync_shadow.validate_consumer_sync_plan(plan)
             # The producer handoff supervision_mode is always "shadow"
-            handoff = consumer_sync_shadow.validate_shadow_handoff(
-                handoff_data, plan=plan
-            )
+            handoff = consumer_sync_shadow.validate_shadow_handoff(handoff_data, plan=plan)
         except Exception as e:
             print(f"Validation of plan/handoff failed: {e}", file=sys.stderr)
             return 1

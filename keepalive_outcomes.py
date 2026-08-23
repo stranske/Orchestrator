@@ -5,6 +5,7 @@ This complements outcomes.py: orchestrator-delegated remote runs already have
 run rows. Keepalive can also drive agent PRs without an orchestrator decision,
 so this records source-tagged, decision-light evidence under stable run ids.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,6 +52,7 @@ def _resolve_registry_path() -> Path:
         except OSError:
             continue  # EPERM probing a CloudStorage path under launchd — try the next
     return DROPBOX_REGISTRY_PATH
+
 
 PR_LIST_FIELDS = (
     "number,state,title,labels,createdAt,updatedAt,mergedAt,closedAt,"
@@ -115,11 +117,23 @@ def _since_date(lookback_days: int, now: int | None = None) -> str:
 def _fetch_prs(repo: str, lookback_days: int, *, now: int | None = None) -> list[dict]:
     """Live GitHub fetch: broad PR metadata, filtered locally by agent labels."""
     since = _since_date(lookback_days, now=now)
-    arr = _run_json([
-        "gh", "pr", "list", "-R", repo, "--state", "all",
-        "--search", f"updated:>={since}", "--limit", "300",
-        "--json", PR_LIST_FIELDS,
-    ])
+    arr = _run_json(
+        [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "all",
+            "--search",
+            f"updated:>={since}",
+            "--limit",
+            "300",
+            "--json",
+            PR_LIST_FIELDS,
+        ]
+    )
     return arr if isinstance(arr, list) else []
 
 
@@ -257,9 +271,9 @@ def _work_type(labels: list[str], title: str, author: str | None = None) -> str:
         or re.search(r"\bupdate\b.*\bdependenc", title_low)
     ):
         return "renovate"
-    if (
-        lowered & {"sync", "template-sync", "consumer-sync", "consumer-hygiene"}
-        or any(term in title_low for term in ("sync", "template sync", "consumer hygiene", "mirror", "drift"))
+    if lowered & {"sync", "template-sync", "consumer-sync", "consumer-hygiene"} or any(
+        term in title_low
+        for term in ("sync", "template sync", "consumer hygiene", "mirror", "drift")
     ):
         return "sync"
     if (
@@ -268,10 +282,7 @@ def _work_type(labels: list[str], title: str, author: str | None = None) -> str:
         or re.search(r"\bchore\s*\(\s*(?:ci|workflow)\s*\)", title_low)
     ):
         return "tooling"
-    if (
-        lowered & {"docs", "documentation"}
-        or re.search(r"\bdocs\s*(?::|\()", title_low)
-    ):
+    if lowered & {"docs", "documentation"} or re.search(r"\bdocs\s*(?::|\()", title_low):
         return "docs"
     return "issue"
 
@@ -342,13 +353,21 @@ def _gh_throttle(resource: str) -> None:
     no-op + fail-open otherwise so the ingest never breaks on a missing/erroring module."""
     try:
         import gh_capacity
+
         gh_capacity.throttle_if_enabled(resource)
     except Exception:
         pass
 
 
-def _outcome_for_pr(repo: str, pr: dict, run: dict, *, now: int | None = None,
-                    _revert_fn=None, revert_cache: dict | None = None) -> dict | None:
+def _outcome_for_pr(
+    repo: str,
+    pr: dict,
+    run: dict,
+    *,
+    now: int | None = None,
+    _revert_fn=None,
+    revert_cache: dict | None = None,
+) -> dict | None:
     oc = outcomes.state_to_outcome(pr)
     if not oc:
         return None
@@ -374,19 +393,24 @@ def _should_record_outcome(existing: dict | None, oc: dict | None) -> bool:
     new_durability = oc.get("durability")
     if existing_durability in (None, "pending") and new_durability not in (None, "pending"):
         return True
-    if (
-        process_suppression_reason(oc.get("notes"))
-        and not process_suppression_reason(existing.get("notes"))
+    if process_suppression_reason(oc.get("notes")) and not process_suppression_reason(
+        existing.get("notes")
     ):
         return True
     return False
 
 
-def ingest_keepalive_outcomes(repos: list[str] | None = None, *, lookback_days: int = 30,
-                              dry_run: bool = False, _pr_fetch_fn=None,
-                              _now: int | None = None, _revert_fn=None,
-                              include_non_agent: bool = False,
-                              _closure_context_fn=None) -> dict:
+def ingest_keepalive_outcomes(
+    repos: list[str] | None = None,
+    *,
+    lookback_days: int = 30,
+    dry_run: bool = False,
+    _pr_fetch_fn=None,
+    _now: int | None = None,
+    _revert_fn=None,
+    include_non_agent: bool = False,
+    _closure_context_fn=None,
+) -> dict:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
     closure_context_fn = _closure_context_fn or _fetch_pr_context
@@ -428,8 +452,9 @@ def ingest_keepalive_outcomes(repos: list[str] | None = None, *, lookback_days: 
                     "mode": "remote",
                     "pr_number": pr_number,
                 }
-                oc = _outcome_for_pr(repo, pr, run, now=_now, _revert_fn=revert_fn,
-                                     revert_cache=revert_cache)
+                oc = _outcome_for_pr(
+                    repo, pr, run, now=_now, _revert_fn=revert_fn, revert_cache=revert_cache
+                )
                 # Non-agent rows are process evidence, not active assignments; skip open PRs until
                 # they become terminal so the Brain does not accumulate unlabeled in-flight noise.
                 if oc is None:
@@ -450,10 +475,17 @@ def ingest_keepalive_outcomes(repos: list[str] | None = None, *, lookback_days: 
                     summary["skipped_existing"] += 1
                 elif not dry_run:
                     feedback.record_run(
-                        run_id, target, task_type, NON_AGENT, mode="remote",
+                        run_id,
+                        target,
+                        task_type,
+                        NON_AGENT,
+                        mode="remote",
                         rationale="keepalive-discovered non-agent PR",
-                        pr_number=pr_number, ts=_run_ts(pr), model=None,
-                        source="keepalive", assignment=NON_AGENT,
+                        pr_number=pr_number,
+                        ts=_run_ts(pr),
+                        model=None,
+                        source="keepalive",
+                        assignment=NON_AGENT,
                         work_type=work_type,
                     )
                     summary["runs_recorded"] += 1
@@ -485,8 +517,9 @@ def ingest_keepalive_outcomes(repos: list[str] | None = None, *, lookback_days: 
                     "pr_number": pr_number,
                 }
                 run_already_exists = _run_exists(run_id)
-                oc = _outcome_for_pr(repo, pr, run, now=_now, _revert_fn=revert_fn,
-                                     revert_cache=revert_cache)
+                oc = _outcome_for_pr(
+                    repo, pr, run, now=_now, _revert_fn=revert_fn, revert_cache=revert_cache
+                )
                 oc = _maybe_mark_process_ignore(repo, pr, work_type, oc, closure_context_fn)
                 existing_oc = _existing_outcome(run_id)
 
@@ -494,10 +527,17 @@ def ingest_keepalive_outcomes(repos: list[str] | None = None, *, lookback_days: 
                     summary["skipped_existing"] += 1
                 elif not dry_run:
                     feedback.record_run(
-                        run_id, target, task_type, agent, mode="remote",
+                        run_id,
+                        target,
+                        task_type,
+                        agent,
+                        mode="remote",
                         rationale="keepalive-discovered agent PR",
-                        pr_number=pr_number, ts=_run_ts(pr), model=None,
-                        source="keepalive", assignment="assigned",
+                        pr_number=pr_number,
+                        ts=_run_ts(pr),
+                        model=None,
+                        source="keepalive",
+                        assignment="assigned",
                         work_type=work_type,
                     )
                     summary["runs_recorded"] += 1
@@ -543,38 +583,93 @@ def _selftest() -> None:
         assert not _should_record_outcome(tagged_notes, tagged_notes)
         prs = {
             "o/r": [
-                {"number": 1, "state": "MERGED", "labels": [{"name": "agent:codex"}],
-                 "title": "Fix durable issue", "createdAt": old, "mergedAt": old, "baseRefName": "main",
-                 "mergeCommit": {"oid": "aaa"}, "reverted": False},
-                {"number": 2, "state": "MERGED", "labels": [{"name": "agent:claude"}],
-                 "title": "chore(deps): update requests", "author": {"login": "renovate[bot]"},
-                 "createdAt": young, "mergedAt": young, "baseRefName": "main",
-                 "mergeCommit": {"oid": "bbb"}, "reverted": False},
-                {"number": 3, "state": "CLOSED", "labels": [{"name": "agent:cursor"}],
-                 "title": "Fix abandoned issue", "createdAt": old, "closedAt": old},
-                {"number": 4, "state": "MERGED", "labels": [{"name": "agent:vibe"}],
-                 "title": "Fix skipped remote", "createdAt": old, "mergedAt": old, "baseRefName": "main",
-                 "mergeCommit": {"oid": "ccc"}, "reverted": False},
-                {"number": 5, "state": "MERGED", "labels": [],
-                 "title": "chore(deps): update requests", "author": {"login": "renovate[bot]"},
-                 "createdAt": old, "mergedAt": old, "baseRefName": "main",
-                 "mergeCommit": {"oid": "ddd"}, "reverted": False},
-                {"number": 6, "state": "CLOSED", "labels": [{"name": "template-sync"}],
-                 "title": "Sync templates", "author": {"login": "github-actions[bot]"},
-                 "createdAt": old, "closedAt": old},
-                {"number": 7, "state": "OPEN", "labels": [],
-                 "title": "Open human PR", "author": {"login": "teacher"},
-                 "createdAt": young},
+                {
+                    "number": 1,
+                    "state": "MERGED",
+                    "labels": [{"name": "agent:codex"}],
+                    "title": "Fix durable issue",
+                    "createdAt": old,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "aaa"},
+                    "reverted": False,
+                },
+                {
+                    "number": 2,
+                    "state": "MERGED",
+                    "labels": [{"name": "agent:claude"}],
+                    "title": "chore(deps): update requests",
+                    "author": {"login": "renovate[bot]"},
+                    "createdAt": young,
+                    "mergedAt": young,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "bbb"},
+                    "reverted": False,
+                },
+                {
+                    "number": 3,
+                    "state": "CLOSED",
+                    "labels": [{"name": "agent:cursor"}],
+                    "title": "Fix abandoned issue",
+                    "createdAt": old,
+                    "closedAt": old,
+                },
+                {
+                    "number": 4,
+                    "state": "MERGED",
+                    "labels": [{"name": "agent:vibe"}],
+                    "title": "Fix skipped remote",
+                    "createdAt": old,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "ccc"},
+                    "reverted": False,
+                },
+                {
+                    "number": 5,
+                    "state": "MERGED",
+                    "labels": [],
+                    "title": "chore(deps): update requests",
+                    "author": {"login": "renovate[bot]"},
+                    "createdAt": old,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "ddd"},
+                    "reverted": False,
+                },
+                {
+                    "number": 6,
+                    "state": "CLOSED",
+                    "labels": [{"name": "template-sync"}],
+                    "title": "Sync templates",
+                    "author": {"login": "github-actions[bot]"},
+                    "createdAt": old,
+                    "closedAt": old,
+                },
+                {
+                    "number": 7,
+                    "state": "OPEN",
+                    "labels": [],
+                    "title": "Open human PR",
+                    "author": {"login": "teacher"},
+                    "createdAt": young,
+                },
             ]
         }
 
         feedback.record_run(
-            "remote:o/r#4:vibe", "o/r#4", "implement", "vibe", mode="remote",
-            pr_number=4, source="orchestrator_remote",
+            "remote:o/r#4:vibe",
+            "o/r#4",
+            "implement",
+            "vibe",
+            mode="remote",
+            pr_number=4,
+            source="orchestrator_remote",
         )
 
         res = ingest_keepalive_outcomes(
-            ["o/r"], _pr_fetch_fn=lambda repo, days: prs.get(repo, []),
+            ["o/r"],
+            _pr_fetch_fn=lambda repo, days: prs.get(repo, []),
             _now=now,
         )
         assert res["prs_seen"] == 4, res
@@ -589,15 +684,34 @@ def _selftest() -> None:
                     "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id"
                 ).fetchall()
             }
-            source_cols = [row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()
-                           if row[1] == "source"]
-            assignment_cols = [row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()
-                               if row[1] == "assignment"]
-            work_type_cols = [row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()
-                              if row[1] == "work_type"]
+            source_cols = [
+                row[1]
+                for row in c.execute("PRAGMA table_info(runs)").fetchall()
+                if row[1] == "source"
+            ]
+            assignment_cols = [
+                row[1]
+                for row in c.execute("PRAGMA table_info(runs)").fetchall()
+                if row[1] == "assignment"
+            ]
+            work_type_cols = [
+                row[1]
+                for row in c.execute("PRAGMA table_info(runs)").fetchall()
+                if row[1] == "work_type"
+            ]
         assert rows["keepalive:o/r#1:codex"] == ("keepalive", "assigned", "issue", "durable"), rows
-        assert rows["keepalive:o/r#2:claude"] == ("keepalive", "assigned", "renovate", "pending"), rows
-        assert rows["keepalive:o/r#3:cursor"] == ("keepalive", "assigned", "issue", "abandoned"), rows
+        assert rows["keepalive:o/r#2:claude"] == (
+            "keepalive",
+            "assigned",
+            "renovate",
+            "pending",
+        ), rows
+        assert rows["keepalive:o/r#3:cursor"] == (
+            "keepalive",
+            "assigned",
+            "issue",
+            "abandoned",
+        ), rows
         assert "keepalive:o/r#4:vibe" not in rows, rows
         assert rows["remote:o/r#4:vibe"][:2] == ("orchestrator_remote", "experimental"), rows
         assert len(source_cols) == 1, source_cols
@@ -605,13 +719,16 @@ def _selftest() -> None:
         assert len(work_type_cols) == 1, work_type_cols
 
         res2 = ingest_keepalive_outcomes(
-            ["o/r"], _pr_fetch_fn=lambda repo, days: prs.get(repo, []),
+            ["o/r"],
+            _pr_fetch_fn=lambda repo, days: prs.get(repo, []),
             _now=now,
         )
         assert res2["runs_recorded"] == 0 and res2["outcomes_recorded"] == 0, res2
 
         with feedback._conn() as c:
-            before = [row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()].count("source")
+            before = [row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()].count(
+                "source"
+            )
             before_assignment = [
                 row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()
             ].count("assignment")
@@ -619,7 +736,9 @@ def _selftest() -> None:
                 row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()
             ].count("work_type")
             feedback._migrate_schema(c)
-            after = [row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()].count("source")
+            after = [row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()].count(
+                "source"
+            )
             after_assignment = [
                 row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()
             ].count("assignment")
@@ -627,15 +746,19 @@ def _selftest() -> None:
                 row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()
             ].count("work_type")
         assert before == 1 and after == 1, (before, after)
-        assert before_assignment == 1 and after_assignment == 1, (before_assignment, after_assignment)
+        assert before_assignment == 1 and after_assignment == 1, (
+            before_assignment,
+            after_assignment,
+        )
         assert before_work_type == 1 and after_work_type == 1, (before_work_type, after_work_type)
 
         res3 = ingest_keepalive_outcomes(
-            ["o/r"], _pr_fetch_fn=lambda repo, days: prs.get(repo, []),
-            _now=now, include_non_agent=True,
+            ["o/r"],
+            _pr_fetch_fn=lambda repo, days: prs.get(repo, []),
+            _now=now,
+            include_non_agent=True,
             _closure_context_fn=lambda _repo, pr_number: (
-                "Closing as duplicate: PR #5 is the canonical opener."
-                if pr_number == 6 else ""
+                "Closing as duplicate: PR #5 is the canonical opener." if pr_number == 6 else ""
             ),
         )
         assert res3["non_agent_prs_seen"] == 2, res3
@@ -653,11 +776,21 @@ def _selftest() -> None:
                 ).fetchall()
             }
         assert non_agent_rows["keepalive:o/r#5:none"][:5] == (
-            "none", "keepalive", "none", "renovate", "durable",
+            "none",
+            "keepalive",
+            "none",
+            "renovate",
+            "durable",
         ), non_agent_rows
-        assert PROCESS_IGNORE_MARKER not in non_agent_rows["keepalive:o/r#5:none"][5], non_agent_rows
+        assert (
+            PROCESS_IGNORE_MARKER not in non_agent_rows["keepalive:o/r#5:none"][5]
+        ), non_agent_rows
         assert non_agent_rows["keepalive:o/r#6:none"][:5] == (
-            "none", "keepalive", "none", "sync", "abandoned",
+            "none",
+            "keepalive",
+            "none",
+            "sync",
+            "abandoned",
         ), non_agent_rows
         assert PROCESS_IGNORE_MARKER in non_agent_rows["keepalive:o/r#6:none"][5], non_agent_rows
         assert "keepalive:o/r#7:none" not in non_agent_rows, non_agent_rows
@@ -670,7 +803,9 @@ def _selftest() -> None:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Ingest keepalive PR outcomes into feedback.db.")
-    parser.add_argument("--repos", nargs="+", help="owner/repo values; defaults to active registry repos")
+    parser.add_argument(
+        "--repos", nargs="+", help="owner/repo values; defaults to active registry repos"
+    )
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -687,7 +822,9 @@ def main(argv: list[str]) -> int:
         return 0
 
     res = ingest_keepalive_outcomes(
-        args.repos, lookback_days=args.lookback_days, dry_run=args.dry_run,
+        args.repos,
+        lookback_days=args.lookback_days,
+        dry_run=args.dry_run,
         include_non_agent=args.include_non_agent,
     )
     if args.json:

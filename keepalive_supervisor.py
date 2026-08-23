@@ -33,17 +33,13 @@ DEFAULT_AC = (
     "Post-escalation keepalive recovery only: inspect the PR after keepalive has escalated, "
     "preserve the original PR acceptance criteria, and do not act if the escalation label is gone."
 )
-DEFAULT_STAGE2_REPORT_DIR = (
-    Path.home() / ".codex" / "orchestrator" / "keepalive-supervisor-stage2"
-)
+DEFAULT_STAGE2_REPORT_DIR = Path.home() / ".codex" / "orchestrator" / "keepalive-supervisor-stage2"
 DEFAULT_HISTORICAL_LIMIT = 10
 
 
 def _label_set(signals: dict) -> set[str]:
     return {
-        str(label).strip().lower()
-        for label in signals.get("labels") or []
-        if str(label).strip()
+        str(label).strip().lower() for label in signals.get("labels") or [] if str(label).strip()
     }
 
 
@@ -120,12 +116,12 @@ def plan_for_signals(
         reason = "target is not in the post-escalation single-authority state"
     elif action in PROPOSAL_ACTIONS:
         next_step = "review_redirectagent_proposal"
-        reason = (
-            "eligible for an operator-reviewed proposal; live apply remains disabled"
-        )
+        reason = "eligible for an operator-reviewed proposal; live apply remains disabled"
     else:
         next_step = "operator_inspect"
-        reason = "post-escalation target is eligible, but the shadow policy does not recommend recovery"
+        reason = (
+            "post-escalation target is eligible, but the shadow policy does not recommend recovery"
+        )
 
     proposal_command = None
     stage2_record_command = None
@@ -179,9 +175,7 @@ def plan_for_signals(
     }
 
 
-def _gh_search_targets(
-    owner: str, label: str, limit: int, *, runner=subprocess.run
-) -> list[str]:
+def _gh_search_targets(owner: str, label: str, limit: int, *, runner=subprocess.run) -> list[str]:
     result = runner(
         [
             "gh",
@@ -210,9 +204,7 @@ def _gh_search_targets(
     return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
 
 
-def live_targets(
-    owner: str = "stranske", limit: int = 20, *, runner=subprocess.run
-) -> list[str]:
+def live_targets(owner: str = "stranske", limit: int = 20, *, runner=subprocess.run) -> list[str]:
     seen: set[str] = set()
     targets: list[str] = []
     per_label_limit = max(limit, 1)
@@ -265,9 +257,7 @@ def _stage2_deficits(summary: dict) -> dict:
         },
         "historical_replay_analysis": {
             "valid_proposals": max(readiness_target - valid, 0),
-            "linked_or_historical_outcomes": max(
-                linked_target - (synced + historical_linked), 0
-            ),
+            "linked_or_historical_outcomes": max(linked_target - (synced + historical_linked), 0),
             "linked_or_historical_disagreements": max(
                 disagreement_target - (disagreements + historical_disagreements), 0
             ),
@@ -364,20 +354,14 @@ def stage2_acquisition_plan(
             errors.append({"target": target, "error": str(exc)})
 
     all_eligible = [
-        plan
-        for plan in plans
-        if plan.get("eligible") and plan.get("stage2_record_command")
+        plan for plan in plans if plan.get("eligible") and plan.get("stage2_record_command")
     ]
     recorded_live_targets = _recorded_proposal_targets(
         corpus_path, source="live-dispatch", valid_only=True
     )
-    eligible = [
-        plan for plan in all_eligible if plan.get("target") not in recorded_live_targets
-    ]
+    eligible = [plan for plan in all_eligible if plan.get("target") not in recorded_live_targets]
     already_recorded_eligible = [
-        plan.get("target")
-        for plan in all_eligible
-        if plan.get("target") in recorded_live_targets
+        plan.get("target") for plan in all_eligible if plan.get("target") in recorded_live_targets
     ]
     summary = redirect_shadow.summarize(corpus_path)
     deficits = _stage2_deficits(summary)
@@ -399,8 +383,7 @@ def stage2_acquisition_plan(
     if (
         not include_calibration
         and int(historical_preview.get("would_collect") or 0) == 0
-        and deficits["historical_replay_analysis"]["linked_or_historical_disagreements"]
-        > 0
+        and deficits["historical_replay_analysis"]["linked_or_historical_disagreements"] > 0
         and not summary.get("ready_for_historical_replay_analysis")
     ):
         calibration_preview = redirect_shadow.collect_historical_from_keepalive(
@@ -424,9 +407,7 @@ def stage2_acquisition_plan(
                 "kind": "live_stage2_record",
                 "target": plan.get("target"),
                 "command": plan["stage2_record_command"],
-                "outcome_link_command_template": plan.get(
-                    "outcome_link_command_template"
-                ),
+                "outcome_link_command_template": plan.get("outcome_link_command_template"),
             }
             for plan in eligible
         )
@@ -494,9 +475,7 @@ def stage2_acquisition_plan(
         "live_candidate_count": len(targets),
         "eligible_live_candidate_count": len(all_eligible),
         "unrecorded_live_candidate_count": len(eligible),
-        "already_recorded_live_targets": sorted(
-            t for t in already_recorded_eligible if t
-        ),
+        "already_recorded_live_targets": sorted(t for t in already_recorded_eligible if t),
         "live_targets": targets,
         "live_plan_errors": errors,
         "plans": plans,
@@ -539,12 +518,9 @@ def _selftest() -> None:
             "operator_inspect",
         }, plan
         assert report_path.exists(), plan
+        assert plan["proposal_command"] and "--dispatch" in plan["proposal_command"], plan
         assert (
-            plan["proposal_command"] and "--dispatch" in plan["proposal_command"]
-        ), plan
-        assert (
-            plan["stage2_record_command"]
-            and "--record-corpus" in plan["stage2_record_command"]
+            plan["stage2_record_command"] and "--record-corpus" in plan["stage2_record_command"]
         ), plan
         assert plan["stage2_record_command"][-1] == "--json", plan
         assert (
@@ -565,9 +541,7 @@ def _selftest() -> None:
     )
     blocked = plan_for_signals(active_signals)
     assert blocked["eligible"] is False, blocked
-    assert (
-        "missing_human_escalation_label" in blocked["eligibility"]["blockers"]
-    ), blocked
+    assert "missing_human_escalation_label" in blocked["eligibility"]["blockers"], blocked
     assert blocked["proposal_command"] is None, blocked
     assert blocked["stage2_record_command"] is None, blocked
 
@@ -579,8 +553,7 @@ def _selftest() -> None:
     )
     closed = plan_for_signals(closed_signals)
     assert (
-        closed["eligible"] is False
-        and "pr_not_open" in closed["eligibility"]["blockers"]
+        closed["eligible"] is False and "pr_not_open" in closed["eligibility"]["blockers"]
     ), closed
 
     calls: list[list[str]] = []
@@ -744,7 +717,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
-        capabilities.production_heartbeat("live-keepalive-supervisor", event_type, ref="keepalive_supervisor.main")
+
+        capabilities.production_heartbeat(
+            "live-keepalive-supervisor", event_type, ref="keepalive_supervisor.main"
+        )
     except Exception:
         pass
 
@@ -769,9 +745,7 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="plan the next Stage 2 proposal-corpus acquisition step",
     )
-    parser.add_argument(
-        "--owner", default="stranske", help="owner/org used by --list-live"
-    )
+    parser.add_argument("--owner", default="stranske", help="owner/org used by --list-live")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument(
         "--write-report-dir",
@@ -779,9 +753,7 @@ def main(argv: list[str]) -> int:
         help="write RedirectAgent report JSON files here",
     )
     parser.add_argument("--acceptance-criteria", default=DEFAULT_AC)
-    parser.add_argument(
-        "--historical-limit", type=int, default=DEFAULT_HISTORICAL_LIMIT
-    )
+    parser.add_argument("--historical-limit", type=int, default=DEFAULT_HISTORICAL_LIMIT)
     parser.add_argument(
         "--historical-backend",
         default="",
@@ -887,14 +859,9 @@ def main(argv: list[str]) -> int:
             else:
                 print(f"post-escalation keepalive targets: {len(result['targets'])}")
             for plan in result["plans"]:
-                print(
-                    f"- {plan['target']}: eligible={plan['eligible']} next={plan['next_step']}"
-                )
+                print(f"- {plan['target']}: eligible={plan['eligible']} next={plan['next_step']}")
                 if plan.get("stage2_record_command"):
-                    print(
-                        "  stage2_record_command="
-                        + " ".join(plan["stage2_record_command"])
-                    )
+                    print("  stage2_record_command=" + " ".join(plan["stage2_record_command"]))
         else:
             print(
                 f"target={result.get('target')} eligible={result.get('eligible')} next={result.get('next_step')}"
@@ -903,9 +870,7 @@ def main(argv: list[str]) -> int:
             if result.get("proposal_command"):
                 print("proposal_command=" + " ".join(result["proposal_command"]))
             if result.get("stage2_record_command"):
-                print(
-                    "stage2_record_command=" + " ".join(result["stage2_record_command"])
-                )
+                print("stage2_record_command=" + " ".join(result["stage2_record_command"]))
             if result.get("outcome_link_command_template"):
                 print(
                     "outcome_link_command_template="

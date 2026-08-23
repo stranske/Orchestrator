@@ -8,6 +8,7 @@ results become ``model_profile_trial`` results only after strict identity,
 artifact, status, packet, and source-integrity checks.  Brain ingestion is a
 separate concern and remains disabled here.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,7 +28,6 @@ import adapters
 import capacity
 import execution_profiles
 import model_profile_trial
-
 
 BRIDGE_SCHEMA = "orchestrator.model-profile-trial-bridge"
 BRIDGE_RESULT_SCHEMA = "orchestrator.model-profile-trial-bridge-results"
@@ -52,37 +52,93 @@ DEFAULT_ARTIFACT_ROOT = Path.home() / ".codex" / "orchestrator" / "model-profile
 DEFAULT_QUALIFICATION_NAME = "transport-qualification.json"
 
 BRIDGE_RESULT_FIELDS = {
-    "schema", "version", "trial_id", "envelope_hash", "packet_hash",
-    "acknowledged", "attempts",
+    "schema",
+    "version",
+    "trial_id",
+    "envelope_hash",
+    "packet_hash",
+    "acknowledged",
+    "attempts",
 }
 TRANSPORT_ATTEMPT_FIELDS = {
-    "request_id", "request_hash", "run_id", "profile_id", "operation_role",
-    "requested_model", "selected_model", "reported_model",
-    "requested_reasoning_effort", "reported_reasoning_effort",
-    "provider_resolved_provider", "provider_resolved_model", "fallback_reason",
-    "runner_version", "cli_version", "status", "exit_code", "packet_hash",
-    "acknowledged", "artifact_ref", "artifact_sha256", "identity_authority",
-    "latency_s", "tokens_in", "tokens_out",
-    "launch_ordinal", "source_sha_before", "source_sha_after",
-    "source_manifest_sha256_before", "source_manifest_sha256_after",
-    "github_repository", "github_workflow_ref", "github_workflow_sha",
-    "github_run_id", "github_run_attempt", "github_artifact_id",
-    "github_artifact_digest", "artifact_name", "source_clean",
+    "request_id",
+    "request_hash",
+    "run_id",
+    "profile_id",
+    "operation_role",
+    "requested_model",
+    "selected_model",
+    "reported_model",
+    "requested_reasoning_effort",
+    "reported_reasoning_effort",
+    "provider_resolved_provider",
+    "provider_resolved_model",
+    "fallback_reason",
+    "runner_version",
+    "cli_version",
+    "status",
+    "exit_code",
+    "packet_hash",
+    "acknowledged",
+    "artifact_ref",
+    "artifact_sha256",
+    "identity_authority",
+    "latency_s",
+    "tokens_in",
+    "tokens_out",
+    "launch_ordinal",
+    "source_sha_before",
+    "source_sha_after",
+    "source_manifest_sha256_before",
+    "source_manifest_sha256_after",
+    "github_repository",
+    "github_workflow_ref",
+    "github_workflow_sha",
+    "github_run_id",
+    "github_run_attempt",
+    "github_artifact_id",
+    "github_artifact_digest",
+    "artifact_name",
+    "source_clean",
 }
 IDENTITY_ARTIFACT_FIELDS = {
-    "schema", "version", "trial_id", "request_id", "request_hash", "run_id",
-    "profile_id", "packet_hash", "acknowledged", "status",
-    "requested_model", "selected_model", "reported_model",
-    "requested_reasoning_effort", "reported_reasoning_effort",
-    "provider_resolved_provider", "provider_resolved_model", "fallback_reason",
-    "runner_version", "cli_version", "thread_id",
-    "launch_ordinal", "source_sha_before", "source_sha_after",
-    "source_manifest_sha256_before", "source_manifest_sha256_after",
-    "github_repository", "github_workflow_ref", "github_workflow_sha",
-    "github_run_id", "github_run_attempt", "artifact_name",
-    "identity_authority", "operation_role", "source_clean", "exit_code",
+    "schema",
+    "version",
+    "trial_id",
+    "request_id",
+    "request_hash",
+    "run_id",
+    "profile_id",
+    "packet_hash",
+    "acknowledged",
+    "status",
+    "requested_model",
+    "selected_model",
+    "reported_model",
+    "requested_reasoning_effort",
+    "reported_reasoning_effort",
+    "provider_resolved_provider",
+    "provider_resolved_model",
+    "fallback_reason",
+    "runner_version",
+    "cli_version",
+    "thread_id",
+    "launch_ordinal",
+    "source_sha_before",
+    "source_sha_after",
+    "source_manifest_sha256_before",
+    "source_manifest_sha256_after",
+    "github_repository",
+    "github_workflow_ref",
+    "github_workflow_sha",
+    "github_run_id",
+    "github_run_attempt",
+    "artifact_name",
+    "identity_authority",
+    "operation_role",
+    "source_clean",
+    "exit_code",
 }
-
 
 
 def _fleet_roots() -> list[tuple[Path, str]]:
@@ -105,8 +161,9 @@ def _fleet_roots() -> list[tuple[Path, str]]:
     if env:
         roots.append((Path(env).expanduser(), "ORCH_FLEET_ROOT"))
     roots.append((HERE.parent, "sibling-of-module"))
-    roots.append((Path.home() / "Library/CloudStorage/Dropbox/Learning/Code",
-                  "home-anchored-workspace"))
+    roots.append(
+        (Path.home() / "Library/CloudStorage/Dropbox/Learning/Code", "home-anchored-workspace")
+    )
     seen: set[str] = set()
     out: list[tuple[Path, str]] = []
     for root, origin in roots:
@@ -229,14 +286,16 @@ def _source_integrity(manifest: dict[str, Any]) -> dict[str, Any]:
         for key, value in manifest["source_before"].items()
     }
     changed = sorted(
-        key for key, value in after.items()
-        if value["aggregate_sha256"]
-        != manifest["source_before"][key]["aggregate_sha256"]
+        key
+        for key, value in after.items()
+        if value["aggregate_sha256"] != manifest["source_before"][key]["aggregate_sha256"]
     )
     return {"unchanged": not changed, "changed_sources": changed}
 
 
-def _live_capacity_reservation(manifest: dict[str, Any], snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+def _live_capacity_reservation(
+    manifest: dict[str, Any], snapshot: dict[str, Any] | None = None
+) -> dict[str, Any]:
     live = snapshot or capacity.build()
     projected = capacity.profile_capacity_snapshot(
         live,
@@ -261,9 +320,7 @@ def _live_capacity_reservation(manifest: dict[str, Any], snapshot: dict[str, Any
 
 
 def _cli_version(binary: Path) -> str:
-    proc = subprocess.run(
-        [str(binary), "--version"], capture_output=True, text=True, timeout=15
-    )
+    proc = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=15)
     value = (proc.stdout or proc.stderr or "").strip()
     if proc.returncode != 0 or not value:
         raise ValueError("app-bundled Codex CLI version probe failed")
@@ -353,7 +410,9 @@ def preflight(
             blockers.append("remote_source_not_immutable:" + str(exc)[:120])
             workflows_source_sha = None
         registry_path = registry_path or workflows_root / ".github" / "agents" / "registry.yml"
-        model_registry_path = model_registry_path or workflows_root / "config" / "model_registry.json"
+        model_registry_path = (
+            model_registry_path or workflows_root / "config" / "model_registry.json"
+        )
         try:
             registry = _load_yaml_or_json(registry_path)
             model_registry = _load_yaml_or_json(model_registry_path)
@@ -389,7 +448,11 @@ def preflight(
             if not PINNED_REF_RE.search(runner_ref):
                 blockers.append(f"remote_runner_not_immutable:{profile_id}")
             model_row = models.get(local["requested_model"])
-            if not model_row or model_row.get("worker_profile") is not True or model_row.get("lifecycle") != "trial":
+            if (
+                not model_row
+                or model_row.get("worker_profile") is not True
+                or model_row.get("lifecycle") != "trial"
+            ):
                 blockers.append(f"remote_model_registry_mismatch:{profile_id}")
         contract = registry.get("model_profile_trial_contract") or {}
         remote_runner_ref = str(contract.get("runner_ref") or "")
@@ -404,7 +467,10 @@ def preflight(
         if not PINNED_REF_RE.search(remote_runner_ref):
             blockers.append("remote_trial_runner_not_immutable")
         for profile_id, row in remote.items():
-            if profile_id in model_profile_trial.EXPECTED_PROFILE_IDS and row.get("runner_ref") != remote_runner_ref:
+            if (
+                profile_id in model_profile_trial.EXPECTED_PROFILE_IDS
+                and row.get("runner_ref") != remote_runner_ref
+            ):
                 blockers.append(f"remote_profile_runner_ref_contract_mismatch:{profile_id}")
     else:
         raise ValueError("transport must be local or remote")
@@ -482,7 +548,10 @@ def build_request_envelope(
 def validate_envelope(envelope: dict[str, Any], manifest: dict[str, Any]) -> None:
     if envelope.get("schema") != BRIDGE_SCHEMA or envelope.get("version") != BRIDGE_VERSION:
         raise ValueError("unsupported trial bridge envelope")
-    if envelope.get("trial_id") != manifest["trial_id"] or envelope.get("packet_hash") != manifest["packet_hash"]:
+    if (
+        envelope.get("trial_id") != manifest["trial_id"]
+        or envelope.get("packet_hash") != manifest["packet_hash"]
+    ):
         raise ValueError("trial bridge identity mismatch")
     replay = dict(envelope)
     supplied = replay.pop("envelope_hash", None)
@@ -499,19 +568,27 @@ def validate_envelope(envelope: dict[str, Any], manifest: dict[str, Any]) -> Non
         request_id = replay_row.pop("request_id", None)
         request_hash = replay_row.pop("request_hash", None)
         expected_hash = _hash(replay_row)
-        if request_hash != expected_hash or request_id != "trial-request:" + expected_hash.split(":", 1)[1][:24]:
+        if (
+            request_hash != expected_hash
+            or request_id != "trial-request:" + expected_hash.split(":", 1)[1][:24]
+        ):
             raise ValueError("trial bridge request is not replayable")
         if row.get("requested_model") != request["requested_model"]:
             raise ValueError("trial bridge request model drifted")
 
 
 def _identity_artifact(
-    manifest: dict[str, Any], envelope: dict[str, Any], request: dict[str, Any], attempt: dict[str, Any]
+    manifest: dict[str, Any],
+    envelope: dict[str, Any],
+    request: dict[str, Any],
+    attempt: dict[str, Any],
 ) -> dict[str, Any]:
     ref = str(attempt.get("artifact_ref") or "")
     artifact_path = Path(ref).expanduser()
     if not artifact_path.is_absolute() or not artifact_path.is_file():
-        raise ValueError(f"transport identity artifact is not a local downloaded file:{request['profile_id']}")
+        raise ValueError(
+            f"transport identity artifact is not a local downloaded file:{request['profile_id']}"
+        )
     model_profile_trial.ensure_artifact_outside_sources(
         artifact_path, [Path(row["root"]) for row in manifest["source_before"].values()]
     )
@@ -523,9 +600,13 @@ def _identity_artifact(
     try:
         artifact = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"transport identity artifact is not strict JSON:{request['profile_id']}") from exc
+        raise ValueError(
+            f"transport identity artifact is not strict JSON:{request['profile_id']}"
+        ) from exc
     if not isinstance(artifact, dict):
-        raise ValueError(f"transport identity artifact root is not an object:{request['profile_id']}")
+        raise ValueError(
+            f"transport identity artifact root is not an object:{request['profile_id']}"
+        )
     unknown = sorted(set(artifact) - IDENTITY_ARTIFACT_FIELDS)
     if unknown:
         raise ValueError(f"transport identity artifact contains unsupported fields: {unknown}")
@@ -573,23 +654,28 @@ def _identity_artifact(
         )
     for field, value in expected.items():
         if artifact.get(field) != value:
-            raise ValueError(f"transport identity artifact mismatch: {field}:{request['profile_id']}")
+            raise ValueError(
+                f"transport identity artifact mismatch: {field}:{request['profile_id']}"
+            )
     if envelope.get("transport") == "local" and not str(artifact.get("thread_id") or ""):
-        raise ValueError(f"local session identity artifact missing thread_id:{request['profile_id']}")
+        raise ValueError(
+            f"local session identity artifact missing thread_id:{request['profile_id']}"
+        )
     if envelope.get("transport") == "remote":
         before = str(artifact.get("source_manifest_sha256_before") or "")
         after = str(artifact.get("source_manifest_sha256_after") or "")
         if not SHA256_RE.fullmatch(before) or after != before:
             raise ValueError(f"transport source manifest mismatch:{request['profile_id']}")
-        if int(artifact.get("github_run_id") or 0) <= 0 or int(artifact.get("github_run_attempt") or 0) <= 0:
+        if (
+            int(artifact.get("github_run_id") or 0) <= 0
+            or int(artifact.get("github_run_attempt") or 0) <= 0
+        ):
             raise ValueError(f"transport GitHub run provenance missing:{request['profile_id']}")
     return artifact
 
 
 def _gh_json(endpoint: str) -> dict[str, Any]:
-    proc = subprocess.run(
-        ["gh", "api", endpoint], capture_output=True, text=True, timeout=60
-    )
+    proc = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True, timeout=60)
     if proc.returncode != 0:
         raise ValueError("GitHub Actions provenance query failed: " + (proc.stderr or "")[:160])
     try:
@@ -608,7 +694,9 @@ def _gh_download_artifact(artifact_id: int) -> bytes:
         timeout=60,
     )
     if proc.returncode != 0:
-        raise ValueError("GitHub Actions artifact download failed: " + proc.stderr.decode(errors="replace")[:160])
+        raise ValueError(
+            "GitHub Actions artifact download failed: " + proc.stderr.decode(errors="replace")[:160]
+        )
     if not proc.stdout or len(proc.stdout) > 256 * 1024:
         raise ValueError("GitHub Actions artifact archive size is invalid")
     return proc.stdout
@@ -654,15 +742,14 @@ def collect_remote_attempt(
     if int(run.get("id") or 0) != run_id or int(run.get("run_attempt") or 0) <= 0:
         raise ValueError("GitHub Actions run identity is incomplete")
 
-    listing = _gh_json(
-        f"repos/{REMOTE_REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100"
-    )
+    listing = _gh_json(f"repos/{REMOTE_REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100")
     expected_name = (
         f"model-profile-trial-{request['profile_id']}-{run_id}-"
         f"{int(run['run_attempt'])}-{request['launch_ordinal']}"
     )
     matches = [
-        row for row in listing.get("artifacts") or []
+        row
+        for row in listing.get("artifacts") or []
         if isinstance(row, dict) and row.get("name") == expected_name and not row.get("expired")
     ]
     if len(matches) != 1:
@@ -703,23 +790,21 @@ def collect_remote_attempt(
     artifact_path = trial_root / request["profile_id"] / "model-profile-trial-attempt.json"
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_bytes(raw)
-    attempt = {
-        key: artifact.get(key)
-        for key in TRANSPORT_ATTEMPT_FIELDS
-        if key in artifact
-    }
-    attempt.update({
-        "operation_role": "worker",
-        "exit_code": 0,
-        "artifact_ref": str(artifact_path),
-        "artifact_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
-        "identity_authority": REMOTE_IDENTITY_AUTHORITY,
-        "github_artifact_id": artifact_id,
-        "github_artifact_digest": archive_digest,
-        "latency_s": 0.0,
-        "tokens_in": 0,
-        "tokens_out": 0,
-    })
+    attempt = {key: artifact.get(key) for key in TRANSPORT_ATTEMPT_FIELDS if key in artifact}
+    attempt.update(
+        {
+            "operation_role": "worker",
+            "exit_code": 0,
+            "artifact_ref": str(artifact_path),
+            "artifact_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "identity_authority": REMOTE_IDENTITY_AUTHORITY,
+            "github_artifact_id": artifact_id,
+            "github_artifact_digest": archive_digest,
+            "latency_s": 0.0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
+    )
     return attempt
 
 
@@ -737,8 +822,11 @@ def collect_remote_results(
         raise ValueError("remote trial collection requires three serial run IDs")
     attempts = [
         collect_remote_attempt(
-            manifest, envelope, request,
-            github_run_id=run_id, artifact_root=artifact_root,
+            manifest,
+            envelope,
+            request,
+            github_run_id=run_id,
+            artifact_root=artifact_root,
         )
         for request, run_id in zip(requests, run_ids)
     ]
@@ -764,9 +852,15 @@ def _validate_transport_results(
         raise ValueError(f"transport results contain unsupported fields: {unknown}")
     if results.get("schema") != BRIDGE_RESULT_SCHEMA or results.get("version") != BRIDGE_VERSION:
         raise ValueError("unsupported transport result schema")
-    if results.get("trial_id") != manifest["trial_id"] or results.get("envelope_hash") != envelope["envelope_hash"]:
+    if (
+        results.get("trial_id") != manifest["trial_id"]
+        or results.get("envelope_hash") != envelope["envelope_hash"]
+    ):
         raise ValueError("transport result identity mismatch")
-    if results.get("packet_hash") != manifest["packet_hash"] or results.get("acknowledged") is not True:
+    if (
+        results.get("packet_hash") != manifest["packet_hash"]
+        or results.get("acknowledged") is not True
+    ):
         raise ValueError("transport did not acknowledge the frozen packet")
     attempts = results.get("attempts") or []
     by_request = {row.get("request_id"): row for row in attempts if isinstance(row, dict)}
@@ -815,31 +909,48 @@ def _validate_transport_results(
         # CLI reported, but it must not upgrade that evidence to provider
         # resolution. This keeps the trial useful for plumbing while ineligible
         # for exact-model learning.
-        if attempt.get("provider_resolved_provider") is not None or attempt.get("provider_resolved_model") is not None:
-            raise ValueError(f"transport claimed unsupported provider resolution:{request['profile_id']}")
+        if (
+            attempt.get("provider_resolved_provider") is not None
+            or attempt.get("provider_resolved_model") is not None
+        ):
+            raise ValueError(
+                f"transport claimed unsupported provider resolution:{request['profile_id']}"
+            )
         if attempt.get("fallback_reason") not in (None, ""):
             raise ValueError(f"transport fallback stopped trial:{request['profile_id']}")
-        if str(attempt.get("status") or "").lower() not in {"success", "succeeded"} or int(attempt.get("exit_code", 1)) != 0:
+        if (
+            str(attempt.get("status") or "").lower() not in {"success", "succeeded"}
+            or int(attempt.get("exit_code", 1)) != 0
+        ):
             raise ValueError(f"transport attempt failed:{request['profile_id']}")
         if attempt.get("acknowledged") is not True:
             raise ValueError(f"transport packet acknowledgement missing:{request['profile_id']}")
-        if not str(attempt.get("runner_version") or "") or not str(attempt.get("cli_version") or ""):
+        if not str(attempt.get("runner_version") or "") or not str(
+            attempt.get("cli_version") or ""
+        ):
             raise ValueError(f"transport version evidence missing:{request['profile_id']}")
-        if not str(attempt.get("artifact_ref") or "") or not SHA256_RE.fullmatch(str(attempt.get("artifact_sha256") or "")):
+        if not str(attempt.get("artifact_ref") or "") or not SHA256_RE.fullmatch(
+            str(attempt.get("artifact_sha256") or "")
+        ):
             raise ValueError(f"transport artifact evidence missing:{request['profile_id']}")
         if envelope.get("transport") == "remote":
             before = str(attempt.get("source_manifest_sha256_before") or "")
             after = str(attempt.get("source_manifest_sha256_after") or "")
             if not SHA256_RE.fullmatch(before) or after != before:
                 raise ValueError(f"transport source manifest mismatch:{request['profile_id']}")
-            if int(attempt.get("github_run_id") or 0) <= 0 or int(attempt.get("github_run_attempt") or 0) <= 0:
+            if (
+                int(attempt.get("github_run_id") or 0) <= 0
+                or int(attempt.get("github_run_attempt") or 0) <= 0
+            ):
                 raise ValueError(f"transport GitHub run provenance missing:{request['profile_id']}")
             if (
                 int(attempt.get("github_artifact_id") or 0) <= 0
                 or not SHA256_RE.fullmatch(str(attempt.get("github_artifact_digest") or ""))
                 or not str(attempt.get("artifact_name") or "")
             ):
-                raise ValueError(f"transport GitHub artifact provenance missing:{request['profile_id']}")
+                raise ValueError(
+                    f"transport GitHub artifact provenance missing:{request['profile_id']}"
+                )
         _identity_artifact(manifest, envelope, request, attempt)
         sanitized_attempt = {
             "run_id": attempt["run_id"],
@@ -866,16 +977,26 @@ def _validate_transport_results(
             "artifact_sha256": attempt["artifact_sha256"],
         }
         if envelope.get("transport") == "remote":
-            sanitized_attempt.update({
-                key: attempt[key]
-                for key in (
-                    "launch_ordinal", "source_sha_before", "source_sha_after",
-                    "source_manifest_sha256_before", "source_manifest_sha256_after",
-                    "github_repository", "github_workflow_ref", "github_workflow_sha",
-                    "github_run_id", "github_run_attempt", "github_artifact_id",
-                    "github_artifact_digest", "artifact_name",
-                )
-            })
+            sanitized_attempt.update(
+                {
+                    key: attempt[key]
+                    for key in (
+                        "launch_ordinal",
+                        "source_sha_before",
+                        "source_sha_after",
+                        "source_manifest_sha256_before",
+                        "source_manifest_sha256_after",
+                        "github_repository",
+                        "github_workflow_ref",
+                        "github_workflow_sha",
+                        "github_run_id",
+                        "github_run_attempt",
+                        "github_artifact_id",
+                        "github_artifact_digest",
+                        "artifact_name",
+                    )
+                }
+            )
         sanitized.append(sanitized_attempt)
     return sanitized
 
@@ -985,9 +1106,18 @@ def qualify_transport_contract(
 
     sanitized = _validate_transport_results(manifest, envelope, results)
     expected_quarantine_fields = {
-        "schema", "version", "trial_id", "packet_hash", "acknowledged",
-        "status", "ready", "learning_enabled", "promotion_allowed",
-        "stop_reason", "source_integrity", "attempts",
+        "schema",
+        "version",
+        "trial_id",
+        "packet_hash",
+        "acknowledged",
+        "status",
+        "ready",
+        "learning_enabled",
+        "promotion_allowed",
+        "stop_reason",
+        "source_integrity",
+        "attempts",
     }
     if set(quarantine) != expected_quarantine_fields:
         raise ValueError("quarantine artifact fields are not exact")
@@ -1012,9 +1142,7 @@ def qualify_transport_contract(
     github_artifacts = [int(row["github_artifact_id"]) for row in sanitized]
     if len(set(github_runs)) != 3 or len(set(github_artifacts)) != 3:
         raise ValueError("transport qualification requires three distinct remote attempts")
-    source_manifest_hashes = {
-        str(row["source_manifest_sha256_before"]) for row in sanitized
-    }
+    source_manifest_hashes = {str(row["source_manifest_sha256_before"]) for row in sanitized}
     if len(source_manifest_hashes) != 1:
         raise ValueError("transport qualification source attestations disagree")
 
@@ -1058,7 +1186,12 @@ def qualify_transport_contract(
             {"level": 1, "name": "sealed_artifact_integrity", "satisfied": True},
             {"level": 2, "name": "pinned_transport_and_source_attestation", "satisfied": True},
             {"level": 3, "name": "cli_reported_profile_contract", "satisfied": True},
-            {"level": 4, "name": "provider_resolved_identity", "satisfied": False, "claimed": False},
+            {
+                "level": 4,
+                "name": "provider_resolved_identity",
+                "satisfied": False,
+                "claimed": False,
+            },
             {"level": 5, "name": "accepted_task_quality", "satisfied": False, "claimed": False},
         ],
         "replay": {
@@ -1143,11 +1276,14 @@ def _selftest_workflows_root_location_independent() -> None:
             assert not sibling_guess.exists(), sibling_guess
             path, origin = resolve_workflows_root()
             if home_root.is_dir():
-                assert path == home_root, f"real Workflows root must resolve from any anchor: {path}"
+                assert (
+                    path == home_root
+                ), f"real Workflows root must resolve from any anchor: {path}"
                 assert origin == "home-anchored-workspace", origin
                 assert _default_workflows_root() == home_root, _default_workflows_root()
                 # preflight() must not have frozen a def-time default (the original defect).
                 import inspect
+
                 assert inspect.signature(preflight).parameters["workflows_root"].default is None
             else:
                 # No fleet checkout on this machine: no candidate can exist, and the resolver must
@@ -1159,7 +1295,10 @@ def _selftest_workflows_root_location_independent() -> None:
             (override / "Workflows").mkdir(parents=True)
             os.environ["ORCH_FLEET_ROOT"] = str(override)
             path2, origin2 = resolve_workflows_root()
-            assert path2 == override / "Workflows" and origin2 == "ORCH_FLEET_ROOT", (path2, origin2)
+            assert path2 == override / "Workflows" and origin2 == "ORCH_FLEET_ROOT", (
+                path2,
+                origin2,
+            )
 
             # A sibling checkout beside the module still wins over the home anchor.
             os.environ.pop("ORCH_FLEET_ROOT", None)
@@ -1178,7 +1317,8 @@ def _selftest() -> None:
     with tempfile.TemporaryDirectory(prefix="trial-bridge-") as tmp:
         root = Path(tmp)
         orch, workflows = root / "orch", root / "workflows"
-        orch.mkdir(); workflows.mkdir()
+        orch.mkdir()
+        workflows.mkdir()
         (orch / "a.py").write_text("x=1\n", encoding="utf-8")
         (workflows / "a.yml").write_text("x: 1\n", encoding="utf-8")
         manifest = model_profile_trial.build_trial_manifest(
@@ -1186,11 +1326,16 @@ def _selftest() -> None:
         )
         snapshot = {"generated_at": 1000, "agents": {"codex": {"state": "ok"}}}
         pre = preflight(
-            manifest, artifact_root=root / "artifacts", transport="local",
-            capacity_snapshot=snapshot, codex_binary=adapters.CODEX_PROFILE_BIN,
+            manifest,
+            artifact_root=root / "artifacts",
+            transport="local",
+            capacity_snapshot=snapshot,
+            codex_binary=adapters.CODEX_PROFILE_BIN,
         )
         envelope = build_request_envelope(
-            manifest, artifact_root=root / "artifacts", transport="local",
+            manifest,
+            artifact_root=root / "artifacts",
+            transport="local",
             preflight_result=pre,
         )
         validate_envelope(envelope, manifest)
@@ -1241,18 +1386,28 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("selftest")
     args = parser.parse_args(argv)
     if args.command == "selftest":
-        _selftest(); return 0
+        _selftest()
+        return 0
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if args.command in {"preflight", "prepare"}:
         result = preflight(
-            manifest, artifact_root=args.artifact_root, transport=args.transport,
-            workflows_root=args.workflows_root, registry_path=args.registry,
+            manifest,
+            artifact_root=args.artifact_root,
+            transport=args.transport,
+            workflows_root=args.workflows_root,
+            registry_path=args.registry,
             model_registry_path=args.model_registry,
             workflows_source_sha=args.workflows_source_sha,
         )
-        payload = result if args.command == "preflight" else build_request_envelope(
-            manifest, artifact_root=args.artifact_root, transport=args.transport,
-            preflight_result=result,
+        payload = (
+            result
+            if args.command == "preflight"
+            else build_request_envelope(
+                manifest,
+                artifact_root=args.artifact_root,
+                transport=args.transport,
+                preflight_result=result,
+            )
         )
         if args.command == "prepare":
             model_profile_trial.ensure_artifact_outside_sources(

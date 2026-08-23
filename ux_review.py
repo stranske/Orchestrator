@@ -15,11 +15,13 @@ supplied for now); auto-running on every PR (manual invocation first, wire to a 
 
 Pure helpers are selftested offline (`--selftest`).
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -33,8 +35,6 @@ import provision
 import research_subjects
 from exp_abcd import (
     AGENT_MODE,
-    EVALUATOR_TOPUP_ORDER,
-    MIN_EVALUATORS,
     _ensure_min_evaluators,
     _eval_command,
     _extract_json,
@@ -44,13 +44,15 @@ ORCH = Path(__file__).resolve().parent
 REVIEW_DIR = Path(os.environ.get("ORCH_UX_REVIEW_DIR", ORCH / "ux_reviews"))
 
 DIMENSIONS = ("wired", "usability", "help_clarity", "workflow_productivity")
-FAILURE_MODES = frozenset({
-    "false_success",
-    "recovery_failure",
-    "efficiency_trap",
-    "confusion",
-    "missing_help",
-})
+FAILURE_MODES = frozenset(
+    {
+        "false_success",
+        "recovery_failure",
+        "efficiency_trap",
+        "confusion",
+        "missing_help",
+    }
+)
 
 
 def median(values: list[float]) -> float:
@@ -67,7 +69,8 @@ def median(values: list[float]) -> float:
 
 def consensus_flag(scores: list[float]) -> bool:
     """True when evaluator score spread is >= 3 → route to human calibration (pure; selftested).
-    Uses >= (not >) so a 4-vs-7 split on a 0-10 dimension escalates: meaningful disagreement, not noise."""
+    Uses >= (not >) so a 4-vs-7 split on a 0-10 dimension escalates: meaningful disagreement, not noise.
+    """
     if len(scores) < 2:
         return False
     return max(scores) - min(scores) >= 3
@@ -75,7 +78,11 @@ def consensus_flag(scores: list[float]) -> bool:
 
 def has_reproducible_click_path(finding: dict) -> bool:
     click_path = finding.get("click_path")
-    return isinstance(click_path, list) and len(click_path) > 0 and all(str(s).strip() for s in click_path)
+    return (
+        isinstance(click_path, list)
+        and len(click_path) > 0
+        and all(str(s).strip() for s in click_path)
+    )
 
 
 def finding_key(finding: dict) -> tuple[str, str, str]:
@@ -100,7 +107,9 @@ def dedupe_findings(findings: list[dict]) -> list[dict]:
         if float(f.get("stuck_probability") or 0) > float(cur.get("stuck_probability") or 0):
             cur["stuck_probability"] = f.get("stuck_probability")
     out = list(merged.values())
-    out.sort(key=lambda x: (-int(x.get("severity") or 0), x.get("screen", ""), x.get("element", "")))
+    out.sort(
+        key=lambda x: (-int(x.get("severity") or 0), x.get("screen", ""), x.get("element", ""))
+    )
     return out
 
 
@@ -108,7 +117,9 @@ def _merge_finding_group(group: list[dict]) -> dict:
     base = dict(group[0])
     for f in group[1:]:
         base["severity"] = max(int(base.get("severity") or 0), int(f.get("severity") or 0))
-        base["confidence"] = max(float(base.get("confidence") or 0), float(f.get("confidence") or 0))
+        base["confidence"] = max(
+            float(base.get("confidence") or 0), float(f.get("confidence") or 0)
+        )
         if float(f.get("stuck_probability") or 0) > float(base.get("stuck_probability") or 0):
             base["stuck_probability"] = f.get("stuck_probability")
     # Preserve EVERY distinct fix_hint across the cluster — the per-evaluator improvement
@@ -176,7 +187,9 @@ def aggregate_accepted_findings(
     return dedupe_findings(accepted), non_findings
 
 
-def finding_severity_spread(evaluator_findings: dict[str, list[dict]], key: tuple[str, str, str]) -> int:
+def finding_severity_spread(
+    evaluator_findings: dict[str, list[dict]], key: tuple[str, str, str]
+) -> int:
     severities: list[int] = []
     for findings in evaluator_findings.values():
         for f in findings or []:
@@ -213,17 +226,24 @@ def severity_from_median(m: float) -> int:
     return 0
 
 
-def derive_findings(bundle: dict, dimension_medians: dict, threshold: float = DERIVE_THRESHOLD) -> list[dict]:
+def derive_findings(
+    bundle: dict, dimension_medians: dict, threshold: float = DERIVE_THRESHOLD
+) -> list[dict]:
     """Deterministically derive GROUNDED findings for low-scored dimensions from the bundle's OBSERVED
     failures. The panel reliably scores a failure low but won't restate a documented failure as a finding
     (observed across 3 real reviews), so the report otherwise carries a verdict but no findings. Each
     derived finding cites real bundle evidence and is marked source='derived'; a dimension with NO concrete
-    bundle evidence yields NO finding (left as an evidence_gap — never fabricate). Pure; selftested."""
+    bundle evidence yields NO finding (left as an evidence_gap — never fabricate). Pure; selftested.
+    """
     out: list[dict] = []
     screens = bundle.get("screens") or [{}]
     first_screen = (screens[0] or {}).get("name") or "App"
-    failed_scenarios = [s for s in (bundle.get("scenarios") or []) if s.get("goal_achieved") is False]
-    failed_wired = [f for f in ((bundle.get("wired") or {}).get("findings") or []) if f.get("passed") is False]
+    failed_scenarios = [
+        s for s in (bundle.get("scenarios") or []) if s.get("goal_achieved") is False
+    ]
+    failed_wired = [
+        f for f in ((bundle.get("wired") or {}).get("findings") or []) if f.get("passed") is False
+    ]
     help_text = bundle.get("help_surfaces") or ""
     for dim in DIMENSIONS:
         m = dimension_medians.get(dim)
@@ -242,21 +262,35 @@ def derive_findings(bundle: dict, dimension_medians: dict, threshold: float = DE
             sc = failed_scenarios[0]
             steps = sc.get("steps") or []
             element = str(sc.get("goal") or sc.get("name") or "core task")
-            click_path = [str(step.get("action") if isinstance(step, dict) else step) for step in steps] or ["open the app"]
+            click_path = [
+                str(step.get("action") if isinstance(step, dict) else step) for step in steps
+            ] or ["open the app"]
             last = steps[-1] if steps else None
-            evidence = str((last.get("observed") if isinstance(last, dict) else None) or "the workflow did not reach its goal")
+            evidence = str(
+                (last.get("observed") if isinstance(last, dict) else None)
+                or "the workflow did not reach its goal"
+            )
         elif dim == "help_clarity" and help_text:
             element = "in-app help / field labels / error messages"
             evidence = str(help_text)[:300]
             click_path = ["open the app", "read the labels and any error/help text"]
         if evidence is None:
             continue  # no concrete bundle evidence -> leave as evidence_gap; do NOT fabricate
-        out.append({
-            "dimension": dim, "severity": sev, "screen": screen, "element": element,
-            "click_path": click_path, "expected": f"{dim.replace('_', ' ')} holds for a first-time user",
-            "actual": evidence, "failure_mode": _DIM_FAILMODE.get(dim, "confusion"),
-            "confidence": 0.6, "source": "derived", "dimension_median": float(m),
-        })
+        out.append(
+            {
+                "dimension": dim,
+                "severity": sev,
+                "screen": screen,
+                "element": element,
+                "click_path": click_path,
+                "expected": f"{dim.replace('_', ' ')} holds for a first-time user",
+                "actual": evidence,
+                "failure_mode": _DIM_FAILMODE.get(dim, "confusion"),
+                "confidence": 0.6,
+                "source": "derived",
+                "dimension_median": float(m),
+            }
+        )
     return out
 
 
@@ -283,11 +317,11 @@ def build_rubric_prompt(bundle: dict) -> str:
         ' "evidence_gaps":["<bundle data that was missing to judge well>"]}\n\n'
         "HARD RULES:\n"
         "(a) For EVERY dimension you score below 8 you MUST emit at least one finding for that "
-        "dimension, citing screen + click_path + expected + actual — no abstract findings (\"feels "
-        "clunky\") allowed. A low score with no finding is invalid output.\n"
+        'dimension, citing screen + click_path + expected + actual — no abstract findings ("feels '
+        'clunky") allowed. A low score with no finding is invalid output.\n'
         "(b) severity scale 0=none, 1=cosmetic, 2=minor, 3=major, 4=blocker;\n"
         "(c) return STRICT JSON only, no prose.\n\n"
-        "OBSERVED OUTCOMES RULE: Each scenario step includes an \"observed\" field documenting what "
+        'OBSERVED OUTCOMES RULE: Each scenario step includes an "observed" field documenting what '
         "actually happened (from Gate-1 click→assert). Never infer behavior not present in observed. "
         "But an OBSERVED failure — a dead-end, an error, a cryptic message, a missing affordance — IS "
         "finding evidence: write it as a finding, citing the observed outcome as `actual` and what the "
@@ -412,7 +446,9 @@ def aggregate_panel(
     consensus_flags: dict[str, bool] = {d: consensus_flag(dimension_scores[d]) for d in DIMENSIONS}
 
     accepted, non_findings = aggregate_accepted_findings(
-        evaluator_findings, adv_findings, n_evaluators,
+        evaluator_findings,
+        adv_findings,
+        n_evaluators,
     )
 
     for f in accepted:
@@ -457,6 +493,13 @@ def resolve_panel_base_sha(bundle: dict) -> str | None:
     supplied = str(bundle.get("base_sha") or "").strip()
     if supplied:
         return supplied
+    # HISTORICAL PANELS MUST NOT BORROW TODAY'S HEAD. The git fallback below is right for a panel
+    # running NOW -- the app under review is the checkout at HEAD -- and catastrophically wrong for
+    # a backfill of a June panel, because it would stamp August's commit onto it and make two
+    # different states of the same app look like one subject. That is precisely the failure this
+    # function's docstring warns about, so a caller replaying history says so and gets None.
+    if bundle.get("base_sha_unrecoverable"):
+        return None
     app = str(bundle.get("app") or "").strip()
     if "/" not in app:
         return None
@@ -466,7 +509,10 @@ def resolve_panel_base_sha(bundle: dict) -> str | None:
             return None
         out = subprocess.run(
             ["git", "-C", str(canon), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
         sha = (out.stdout or "").strip()
         return sha or None
@@ -546,8 +592,13 @@ def review(
         run_id = f"{review_id}:eval:{ev}"
         target = f"{app} [ux_review]"
         feedback.record_run(
-            run_id, target, "ux_review", ev, mode=mode,
-            reasoning_level=mode, experiment_id=review_id,
+            run_id,
+            target,
+            "ux_review",
+            ev,
+            mode=mode,
+            reasoning_level=mode,
+            experiment_id=review_id,
             model=adapters.model_identity(ev, mode),
             rationale="Gate 2 UX review panel evaluator",
         )
@@ -576,8 +627,13 @@ def review(
     adv_run_id = f"{review_id}:adversary:{adversary}"
     adv_target = f"{app} [ux_review adversary]"
     feedback.record_run(
-        adv_run_id, adv_target, "ux_review", adversary, mode=adv_mode,
-        reasoning_level=adv_mode, experiment_id=review_id,
+        adv_run_id,
+        adv_target,
+        "ux_review",
+        adversary,
+        mode=adv_mode,
+        reasoning_level=adv_mode,
+        experiment_id=review_id,
         model=adapters.model_identity(adversary, adv_mode),
         rationale="Gate 2 UX review adversarial critic",
     )
@@ -633,7 +689,10 @@ def review(
         except (TypeError, ValueError):
             overall = 0.0
         feedback.record_evaluation(
-            review_id, app, ev, overall,
+            review_id,
+            app,
+            ev,
+            overall,
             verdict={"scores": scores, "n_findings": len(findings), "findings": findings},
         )
         # An evaluation is a SCORE; only an outcome reaches the learner. Without this the panel's
@@ -665,7 +724,10 @@ def review(
             agg["derived_findings"] = derived
             agg["findings"] = derived
             feedback.record_evaluation(
-                review_id, app, "_panel_derived", float(agg.get("overall_median") or 0.0),
+                review_id,
+                app,
+                "_panel_derived",
+                float(agg.get("overall_median") or 0.0),
                 verdict={"findings": derived, "source": "derived"},
             )
     return {
@@ -704,25 +766,29 @@ def cross_repo_patterns(window_days: int = 120, min_recurrence: int = 2) -> list
             entry["count"] += 1
             entry["max_severity"] = max(entry["max_severity"], sev)
             if len(entry["examples"]) < 5:
-                entry["examples"].append({
-                    "app": implementer,
-                    "screen": f.get("screen"),
-                    "element": f.get("element"),
-                    "severity": sev,
-                })
+                entry["examples"].append(
+                    {
+                        "app": implementer,
+                        "screen": f.get("screen"),
+                        "element": f.get("element"),
+                        "severity": sev,
+                    }
+                )
     out: list[dict] = []
     for failure_mode, data in sorted(patterns.items(), key=lambda kv: (-len(kv[1]["apps"]), kv[0])):
         if len(data["apps"]) < min_recurrence:
             continue
-        out.append({
-            "failure_mode": failure_mode,
-            "category": failure_mode,
-            "app_count": len(data["apps"]),
-            "apps": sorted(data["apps"]),
-            "occurrences": data["count"],
-            "max_severity": data["max_severity"],
-            "examples": data["examples"],
-        })
+        out.append(
+            {
+                "failure_mode": failure_mode,
+                "category": failure_mode,
+                "app_count": len(data["apps"]),
+                "apps": sorted(data["apps"]),
+                "occurrences": data["count"],
+                "max_severity": data["max_severity"],
+                "examples": data["examples"],
+            }
+        )
     return out
 
 
@@ -754,7 +820,8 @@ def gate_decision(gate1_verdict: dict, gate2_report: dict, min_overall: float = 
         reasons.append(f"overall_median_below_{min_overall}")
 
     blockers = [
-        f for f in (gate2_report.get("findings") or gate2_report.get("blockers") or [])
+        f
+        for f in (gate2_report.get("findings") or gate2_report.get("blockers") or [])
         if int(f.get("severity") or 0) >= 4
     ]
     if blockers:
@@ -774,20 +841,23 @@ def synthesize_improvements(report: dict) -> dict:
     per-evaluator output is thus a single call, not a manual re-read of rubric files. Pure.
     """
     improvements: list[dict] = []
-    for f in (report.get("findings") or []):
+    for f in report.get("findings") or []:
         hints = list(f.get("fix_hints") or [])
         if not hints and f.get("fix_hint"):
             hints = [str(f["fix_hint"])]
-        improvements.append({
-            "dimension": f.get("dimension"),
-            "failure_mode": f.get("failure_mode"),
-            "severity": int(f.get("severity") or 0),
-            "corroboration": int(f.get("corroboration") or 0),
-            "element": f.get("element"),
-            "fix_hints": hints,
-        })
+        improvements.append(
+            {
+                "dimension": f.get("dimension"),
+                "failure_mode": f.get("failure_mode"),
+                "severity": int(f.get("severity") or 0),
+                "corroboration": int(f.get("corroboration") or 0),
+                "element": f.get("element"),
+                "fix_hints": hints,
+            }
+        )
     improvements.sort(
-        key=lambda x: (x["severity"] * max(x["corroboration"], 1), x["severity"]), reverse=True,
+        key=lambda x: (x["severity"] * max(x["corroboration"], 1), x["severity"]),
+        reverse=True,
     )
     return {
         "improvements": improvements,
@@ -804,25 +874,81 @@ def _sample_bundle() -> dict:
         "url": "http://localhost:8600/",
         "wired": {"ok": True, "findings": [{"target": "Run Demo", "pass": True}]},
         "screens": [{"name": "Home", "a11y": "button Run Demo", "notes": ""}],
-        "scenarios": [{
-            "name": "Run the demo",
-            "steps": [
-                {"action": "open Home", "observed": "Home screen visible"},
-                {"action": "click Run Demo", "observed": "results table appears"},
-            ],
-            "goal": "see results",
-        }],
+        "scenarios": [
+            {
+                "name": "Run the demo",
+                "steps": [
+                    {"action": "open Home", "observed": "Home screen visible"},
+                    {"action": "click Run Demo", "observed": "results table appears"},
+                ],
+                "goal": "see results",
+            }
+        ],
     }
 
 
+def _selftest_panel_backfill() -> None:
+    """Historical panels register from what is on disk, and never from what is convenient."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # A real panel: one rubric shared by every arm, one retried seat, one failed attempt.
+        good = root / "stranske" / "Demo-App_uxreview_2026-06-01"
+        good.mkdir(parents=True)
+        for agent in ("claude", "codex", "vibe", "vibe-retry1"):
+            (good / f"rubric-prompt-{agent}.txt").write_text("IDENTICAL RUBRIC")
+            (good / f"rubric-out-{agent}.txt").write_text("scores")
+        (good / "rubric-out-vibe.FAILED-http520.txt").write_text("boom")
+        # A smoke fixture, and a panel whose arms were asked DIFFERENT questions.
+        smoke = root / "stranske" / "_gate2_smoke_uxreview_2026-06-01"
+        smoke.mkdir(parents=True)
+        (smoke / "rubric-prompt-codex.txt").write_text("SMOKE")
+        (smoke / "rubric-out-codex.txt").write_text("ok")
+        split = root / "stranske" / "Split-App_uxreview_2026-06-02"
+        split.mkdir(parents=True)
+        (split / "rubric-prompt-codex.txt").write_text("QUESTION A")
+        (split / "rubric-prompt-claude.txt").write_text("QUESTION B - DIFFERENT")
+        (split / "rubric-out-codex.txt").write_text("ok")
+        (split / "rubric-out-claude.txt").write_text("ok")
+
+        panels = discover_historical_panels(root)
+        ids = {panel["review_id"] for panel in panels}
+        assert "_gate2_smoke_uxreview_2026-06-01" not in ids, "a smoke fixture is not evidence"
+        panel = next(p for p in panels if p["review_id"].startswith("Demo-App"))
+        assert panel["app"] == "stranske/Demo-App", panel["app"]
+        # ONE AGENT IS ONE ARM: retry and failure decoration collapse, the failure is dropped.
+        assert panel["arms"] == ["claude", "codex", "vibe"], panel["arms"]
+        assert panel["base_sha_unrecoverable"] is True, "must never borrow today's HEAD"
+
+        result = backfill_panel_subjects(root, apply=False)
+        assert result["applied"] is False
+        skipped = {row["review_id"]: row["reason"] for row in result["skipped"]}
+        assert "Split-App_uxreview_2026-06-02" in skipped, result["skipped"]
+        assert "differs" in skipped["Split-App_uxreview_2026-06-02"], skipped
+        # Blocking AND drainable quantity: a registered subject with no base commit is still
+        # not minable, so both counts are reported or neither is meaningful.
+        assert "with_base_sha" in result and "without_base_sha" in result, result
+
+    # A historical bundle must not inherit the current checkout's commit.
+    assert (
+        resolve_panel_base_sha({"app": "stranske/Workflows", "base_sha_unrecoverable": True})
+        is None
+    )
+    assert resolve_panel_base_sha({"app": "x/y", "base_sha": "abc123"}) == "abc123"
+
+
 def _selftest() -> None:
+    _selftest_panel_backfill()
     bundle = _sample_bundle()
 
     rubric = build_rubric_prompt(bundle)
     for dim in DIMENSIONS:
         assert dim in rubric, dim
     assert "workflow_productivity" in rubric
-    assert '"scores":{"wired":0-10' in rubric or '"scores":{"wired":0-10,' in rubric.replace("\n", "")
+    assert '"scores":{"wired":0-10' in rubric or '"scores":{"wired":0-10,' in rubric.replace(
+        "\n", ""
+    )
     assert "HARD RULES" in rubric and "feels clunky" in rubric
     assert "severity scale 0=none" in rubric
     assert "STRICT JSON only" in rubric
@@ -835,7 +961,9 @@ def _selftest() -> None:
     assert "hostile, novice first-time user who WANTS to fail" in adv
     assert "stuck_probability" in adv
     assert "worst_case" in adv
-    assert '"dimension":"adversarial"' in adv.replace("\n", "") or '"dimension":"adversarial"' in adv
+    assert (
+        '"dimension":"adversarial"' in adv.replace("\n", "") or '"dimension":"adversarial"' in adv
+    )
 
     assert median([1, 2, 3, 4, 100]) == 3.0
     assert median([1, 2, 3, 4]) == 2.5
@@ -843,23 +971,65 @@ def _selftest() -> None:
     assert consensus_flag([5, 6, 7]) is False
     assert consensus_flag([5, 6, 10]) is True
 
-    f1 = {"screen": "Home", "element": "Run", "failure_mode": "confusion",
-          "severity": 2, "confidence": 0.6, "click_path": ["a"]}
-    f2 = {"screen": "Home", "element": "Run", "failure_mode": "confusion",
-          "severity": 4, "confidence": 0.8, "click_path": ["a"]}
-    f3 = {"screen": "Home", "element": "Help", "failure_mode": "missing_help",
-          "severity": 3, "confidence": 0.5, "click_path": ["b"]}
+    f1 = {
+        "screen": "Home",
+        "element": "Run",
+        "failure_mode": "confusion",
+        "severity": 2,
+        "confidence": 0.6,
+        "click_path": ["a"],
+    }
+    f2 = {
+        "screen": "Home",
+        "element": "Run",
+        "failure_mode": "confusion",
+        "severity": 4,
+        "confidence": 0.8,
+        "click_path": ["a"],
+    }
+    f3 = {
+        "screen": "Home",
+        "element": "Help",
+        "failure_mode": "missing_help",
+        "severity": 3,
+        "confidence": 0.5,
+        "click_path": ["b"],
+    }
     deduped = dedupe_findings([f1, f2, f3])
     assert deduped[0]["severity"] == 4 and deduped[0]["confidence"] == 0.8
     assert len(deduped) == 2
 
     ev_findings = {
-        "claude": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
-                    "click_path": ["x"], "confidence": 0.5}],
-        "codex": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
-                   "click_path": ["x"], "confidence": 0.6}],
-        "cursor": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
-                    "click_path": ["x"], "confidence": 0.4}],
+        "claude": [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 2,
+                "click_path": ["x"],
+                "confidence": 0.5,
+            }
+        ],
+        "codex": [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 3,
+                "click_path": ["x"],
+                "confidence": 0.6,
+            }
+        ],
+        "cursor": [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 2,
+                "click_path": ["x"],
+                "confidence": 0.4,
+            }
+        ],
         "gemini": [],
     }
     accepted, non = aggregate_accepted_findings(ev_findings, [], n_evaluators=4)
@@ -868,24 +1038,60 @@ def _selftest() -> None:
     # fix_hints are collected across the whole cluster (not just the first member) and
     # surfaced by synthesize_improvements, with evidence_gaps carried as coverage_gaps.
     fh_findings = {
-        "claude": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
-                    "click_path": ["x"], "fix_hint": "hide empty state"}],
-        "codex": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
-                   "click_path": ["x"], "fix_hint": "show completed-state line"}],
-        "cursor": [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 2,
-                    "click_path": ["x"], "fix_hint": "hide empty state"}],
+        "claude": [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 3,
+                "click_path": ["x"],
+                "fix_hint": "hide empty state",
+            }
+        ],
+        "codex": [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 2,
+                "click_path": ["x"],
+                "fix_hint": "show completed-state line",
+            }
+        ],
+        "cursor": [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 2,
+                "click_path": ["x"],
+                "fix_hint": "hide empty state",
+            }
+        ],
         "gemini": [],
     }
     fh_acc, _ = aggregate_accepted_findings(fh_findings, [], n_evaluators=4)
-    assert fh_acc and set(fh_acc[0]["fix_hints"]) == {"hide empty state", "show completed-state line"}
+    assert fh_acc and set(fh_acc[0]["fix_hints"]) == {
+        "hide empty state",
+        "show completed-state line",
+    }
     syn = synthesize_improvements({"findings": fh_acc, "evidence_gaps": ["tabs not driven"]})
     assert syn["n_findings"] == 1 and syn["n_with_hints"] == 1
     assert syn["coverage_gaps"] == ["tabs not driven"]
 
     adv_only, _ = aggregate_accepted_findings(
         {"claude": [], "codex": [], "cursor": [], "gemini": []},
-        [{"screen": "H", "element": "E", "failure_mode": "confusion", "severity": 3,
-          "click_path": ["x"], "stuck_probability": 0.7, "dimension": "adversarial"}],
+        [
+            {
+                "screen": "H",
+                "element": "E",
+                "failure_mode": "confusion",
+                "severity": 3,
+                "click_path": ["x"],
+                "stuck_probability": 0.7,
+                "dimension": "adversarial",
+            }
+        ],
         n_evaluators=4,
     )
     assert len(adv_only) == 1
@@ -900,16 +1106,56 @@ def _selftest() -> None:
     assert compute_overall_median([8.0, 8.5, 9.0], []) == 8.5
     assert compute_overall_median([8.0, 8.5, 9.0], [{"severity": 4}]) == 3.0
 
-    agg = aggregate_panel({
-        "claude": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8, "workflow_productivity": 8},
-                   "overall": 8, "findings": [], "evidence_gaps": ["missing tooltip text"]},
-        "codex": {"scores": {"wired": 9, "usability": 4, "help_clarity": 8, "workflow_productivity": 8},
-                  "overall": 7, "findings": [], "evidence_gaps": []},
-        "cursor": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8, "workflow_productivity": 8},
-                   "overall": 8, "findings": [], "evidence_gaps": []},
-        "gemini": {"scores": {"wired": 9, "usability": 7, "help_clarity": 8, "workflow_productivity": 8},
-                   "overall": 8, "findings": [], "evidence_gaps": []},
-    }, {"worst_case": "Run Demo", "findings": []}, n_evaluators=4)
+    agg = aggregate_panel(
+        {
+            "claude": {
+                "scores": {
+                    "wired": 9,
+                    "usability": 7,
+                    "help_clarity": 8,
+                    "workflow_productivity": 8,
+                },
+                "overall": 8,
+                "findings": [],
+                "evidence_gaps": ["missing tooltip text"],
+            },
+            "codex": {
+                "scores": {
+                    "wired": 9,
+                    "usability": 4,
+                    "help_clarity": 8,
+                    "workflow_productivity": 8,
+                },
+                "overall": 7,
+                "findings": [],
+                "evidence_gaps": [],
+            },
+            "cursor": {
+                "scores": {
+                    "wired": 9,
+                    "usability": 7,
+                    "help_clarity": 8,
+                    "workflow_productivity": 8,
+                },
+                "overall": 8,
+                "findings": [],
+                "evidence_gaps": [],
+            },
+            "gemini": {
+                "scores": {
+                    "wired": 9,
+                    "usability": 7,
+                    "help_clarity": 8,
+                    "workflow_productivity": 8,
+                },
+                "overall": 8,
+                "findings": [],
+                "evidence_gaps": [],
+            },
+        },
+        {"worst_case": "Run Demo", "findings": []},
+        n_evaluators=4,
+    )
     assert agg["dimension_medians"]["usability"] == 7.0
     assert agg["consensus_flags"]["usability"] is True
     assert "missing tooltip text" in agg["evidence_gaps"]
@@ -926,25 +1172,187 @@ def _selftest() -> None:
     assert "blockers_present" in gate_decision(g1_ok, rep_block)["reasons"]
 
     # derive_findings: grounded synthesis for low dimensions; no evidence -> no finding (never fabricate)
-    assert severity_from_median(2) == 3 and severity_from_median(5) == 2 and severity_from_median(8) == 0
+    assert (
+        severity_from_median(2) == 3
+        and severity_from_median(5) == 2
+        and severity_from_median(8) == 0
+    )
     _db = {
         "screens": [{"name": "Home"}],
         "wired": {"findings": [{"interaction": "Run", "passed": False, "note": "dead-ends"}]},
-        "scenarios": [{"name": "Run it", "goal": "see results", "goal_achieved": False,
-                       "steps": [{"action": "click Run", "observed": "error, no results"}]}],
+        "scenarios": [
+            {
+                "name": "Run it",
+                "goal": "see results",
+                "goal_achieved": False,
+                "steps": [{"action": "click Run", "observed": "error, no results"}],
+            }
+        ],
         "help_surfaces": "no tooltips; cryptic error",
     }
-    _der = derive_findings(_db, {"wired": 5, "usability": 2, "help_clarity": 1, "workflow_productivity": 3})
-    assert {"wired", "usability", "help_clarity", "workflow_productivity"} <= {f["dimension"] for f in _der}
+    _der = derive_findings(
+        _db, {"wired": 5, "usability": 2, "help_clarity": 1, "workflow_productivity": 3}
+    )
+    assert {"wired", "usability", "help_clarity", "workflow_productivity"} <= {
+        f["dimension"] for f in _der
+    }
     assert all(f["source"] == "derived" and f.get("click_path") and f.get("actual") for f in _der)
-    assert derive_findings({"screens": [{"name": "X"}]}, {"usability": 2}) == []   # no evidence -> no finding
-    assert derive_findings(_db, {"usability": 9}) == []                            # above threshold -> none
+    assert (
+        derive_findings({"screens": [{"name": "X"}]}, {"usability": 2}) == []
+    )  # no evidence -> no finding
+    assert derive_findings(_db, {"usability": 9}) == []  # above threshold -> none
 
     print(
         "ux_review.py selftest: OK (rubric+adversarial prompts, median, consensus_flag, finding "
         "dedupe+acceptance+non_findings, blocker-capped overall, gate_decision, evidence-gap passthrough, "
         "fix_hint collection + improvement synthesis, derive_findings grounded synthesis)"
     )
+
+
+ARM_RETRY_RE = re.compile(
+    r"^(?P<agent>[a-z0-9]+)(?:[-.](?:retry\d*|attempt\d*|FAILED.*))?$", re.IGNORECASE
+)
+
+
+def _arm_agent(raw: str) -> str:
+    """The agent behind an on-disk arm filename, with retry/failure decoration removed."""
+    match = ARM_RETRY_RE.match(raw.strip())
+    return (match.group("agent") if match else raw.strip()).lower()
+
+
+PANEL_DIR_RE = re.compile(r"^(?P<app>.+)_uxreview_(?P<date>\d{4}-\d{2}-\d{2})(?P<suffix>.*)$")
+
+
+def discover_historical_panels(root: Path | None = None) -> list[dict]:
+    """Every panel already on disk, as a bundle the live registrar can consume.
+
+    Reads only what the panel actually recorded. The rubric prompt IS the spec -- byte-identical
+    across a panel's arms, which is what makes one spec hash per panel correct -- and the arm set is
+    the agents that actually produced output, never the agents that were asked.
+
+    `base_sha_unrecoverable` is set on every panel, because none of them captured the commit under
+    review and inferring one from today's checkout would fuse two states of the same app into one
+    subject. A panel whose evidence DOES name a commit gets it; see `--base-sha`.
+    """
+    root = Path(root or REVIEW_DIR)
+    if not root.is_dir():
+        return []
+    panels: list[dict] = []
+    for prompt in sorted(root.rglob("rubric-prompt-*.txt")):
+        directory = prompt.parent
+        match = PANEL_DIR_RE.match(directory.name)
+        if not match:
+            continue
+        # The app is owner/name when the panel sits under an owner directory, and a bare local
+        # name otherwise -- `local-Reader` is a tool, not a repo, and must not be given a slash.
+        owner = directory.parent.name if directory.parent != root else ""
+        app_part = match.group("app")
+        app = f"{owner}/{app_part}" if owner else app_part
+        review_id = directory.name
+        if any(existing["review_id"] == review_id for existing in panels):
+            continue
+        # A SMOKE FIXTURE IS NOT EVIDENCE. `_gate2_smoke` is an underscore-prefixed harness run
+        # (2.5KB rubric against a real panel's 8.7KB) that exists to prove the pipeline executes.
+        # Registering it as a research subject would put a self-test into the population the miner
+        # learns from, which is worse than leaving it out -- the learner cannot tell a rehearsal
+        # from a review.
+        if app_part.startswith("_"):
+            continue
+        specs = {
+            candidate.read_bytes() for candidate in sorted(directory.glob("rubric-prompt-*.txt"))
+        }
+        # ONE AGENT IS ONE ARM, however many times it was asked. On disk a retried seat leaves
+        # `rubric-out-vibe.txt`, `rubric-out-vibe-retry1.txt` AND
+        # `rubric-out-vibe.FAILED-http520.txt`; taken literally that is three arms, which would
+        # manufacture independence the evidence does not have and treble that seat's weight in
+        # every comparison drawn from the subject. A `.FAILED-*` attempt produced no usable output
+        # and is not an arm at all.
+        arms = sorted(
+            {
+                _arm_agent(out.name[len("rubric-out-") : -len(".txt")])
+                for out in directory.glob("rubric-out-*.txt")
+                if out.stat().st_size > 0 and ".FAILED-" not in out.name
+            }
+        )
+        panels.append(
+            {
+                "app": app,
+                "review_id": review_id,
+                "date": match.group("date"),
+                "spec": prompt.read_text(errors="ignore"),
+                "spec_variants": len(specs),
+                "arms": arms,
+                "path": str(directory),
+                "base_sha_unrecoverable": True,
+            }
+        )
+    return panels
+
+
+def backfill_panel_subjects(root: Path | None = None, *, apply: bool = False, conn=None) -> dict:
+    """Register the panels already on disk as research subjects. Idempotent; dry-run by default.
+
+    WHY THIS IS NOT A FABRICATION. Every field comes off disk: the target is the app directory, the
+    spec is the panel's own rubric bytes, the arm set is the agents that actually returned output.
+    Nothing is imputed. The one field that CANNOT be recovered -- the commit the app was running --
+    is left null rather than borrowed from today's checkout, so these subjects are honestly
+    identified but most of them stay non-minable, and this reports exactly how many.
+
+    A panel whose rubric prompts are not byte-identical across arms is SKIPPED, not merged: a
+    differing spec means the arms were not asked the same question, so one spec hash would claim a
+    comparison the evidence does not support.
+    """
+    panels = discover_historical_panels(root)
+    registered: list[dict] = []
+    skipped: list[dict] = []
+    for panel in panels:
+        if not panel["arms"]:
+            skipped.append({"review_id": panel["review_id"], "reason": "no arm produced output"})
+            continue
+        if panel["spec_variants"] != 1:
+            skipped.append(
+                {
+                    "review_id": panel["review_id"],
+                    "reason": f"rubric differs across arms ({panel['spec_variants']} variants)",
+                }
+            )
+            continue
+        if not apply:
+            registered.append(
+                {
+                    "review_id": panel["review_id"],
+                    "app": panel["app"],
+                    "arms": panel["arms"],
+                    "would_register": True,
+                }
+            )
+            continue
+        identity = register_panel_subject(panel, panel["arms"], spec=panel["spec"], conn=conn)
+        if identity is None:
+            skipped.append({"review_id": panel["review_id"], "reason": "registration failed"})
+            continue
+        registered.append(
+            {
+                "review_id": panel["review_id"],
+                "app": panel["app"],
+                "arms": panel["arms"],
+                "subject_id": identity["subject_id"],
+                "base_sha": identity.get("base_sha"),
+            }
+        )
+    minable = [row for row in registered if row.get("base_sha")]
+    return {
+        "applied": apply,
+        "panels_found": len(panels),
+        "registered": len(registered),
+        "skipped": skipped,
+        # BLOCKING AND DRAINABLE QUANTITY IN ONE PLACE. "26 subjects registered" would read as
+        # "mining unblocked"; it is not, because a repo-scoped subject with no base commit still
+        # cannot produce an acceptable completion event. Say both numbers or say neither.
+        "with_base_sha": len(minable),
+        "without_base_sha": len(registered) - len(minable),
+        "detail": registered,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -958,7 +1366,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evaluators", help="Comma-separated evaluator agents")
     parser.add_argument("--adversary", default="claude", help="Adversarial critic agent")
     parser.add_argument("--timeout", type=int, default=1500, help="Per-agent timeout seconds")
+    parser.add_argument(
+        "--backfill-panels",
+        action="store_true",
+        help="register panels already on disk as research subjects (dry-run)",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="with --backfill-panels, actually write the subjects"
+    )
     args = parser.parse_args(argv)
+    if args.backfill_panels:
+        print(json.dumps(backfill_panel_subjects(apply=args.apply), indent=2, default=str))
+        return 0
     if args.selftest:
         _selftest()
         return 0
@@ -967,8 +1386,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     bundle = json.loads(Path(args.bundle).read_text())
     evs = args.evaluators.split(",") if args.evaluators else None
-    print(json.dumps(review(bundle, evaluators=evs, adversary=args.adversary, timeout=args.timeout),
-                     indent=2, default=str))
+    print(
+        json.dumps(
+            review(bundle, evaluators=evs, adversary=args.adversary, timeout=args.timeout),
+            indent=2,
+            default=str,
+        )
+    )
     return 0
 
 

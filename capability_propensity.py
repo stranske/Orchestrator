@@ -109,6 +109,7 @@ rather than adding an eighth event type or a second table.
     python3 capability_propensity.py --json report
     python3 capability_propensity.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -120,7 +121,6 @@ import sys
 import time
 
 import capabilities
-import env_prereq
 
 # KILL SWITCH. Off means the advisor stops ranking by propensity and falls back to its previous
 # order; the recording edges still work, so turning this off never destroys evidence -- it only
@@ -157,8 +157,10 @@ DECLINE_KINDS: dict[str, dict] = {
     # declined at all 9, always structurally, because a one-subsystem audit has no read big enough
     # to pay for a dispatch. Narrowing the declaration IS a demotion, so this counts -- and the
     # proposal carries the fix text, because "add a precondition" is the other valid answer.
-    "scope_too_small": {"demotable": True,
-                        "fix": "a precondition or a narrower declaration, not a lower rank"},
+    "scope_too_small": {
+        "demotable": True,
+        "fix": "a precondition or a narrower declaration, not a lower rank",
+    },
     # A CORRECT match whose declared PRECONDITION does not hold here: the instrument is aimed at
     # another system (`switch-review` audits THIS repo's switches; the gate under audit was in
     # another), or at a surface this repo does not have (`frontend-verifier` on a repo with no UI).
@@ -167,15 +169,19 @@ DECLINE_KINDS: dict[str, dict] = {
     # produced the second-strongest finding of that audit -- one the code-reading path had missed.
     # Down-weighting it on the two negatives alone would have cost that finding. THE FIX IS TO
     # EVALUATE THE CONDITION, NOT TO WEAKEN THE BINDING.
-    "precondition_unmet": {"demotable": False,
-                           "fix": "declare and EVALUATE the capability's precondition (applies_to, "
-                                  "an observable surface); the binding is right where it holds"},
+    "precondition_unmet": {
+        "demotable": False,
+        "fix": "declare and EVALUATE the capability's precondition (applies_to, "
+        "an observable surface); the binding is right where it holds",
+    },
     # A CORRECT match the deliverable shape made impossible: `testgen-lane` matched correctly three
     # times in a read-only audit with no commit target. THE FIX IS NOTHING, so this must never
     # demote -- down-weighting here would punish a capability for being right.
-    "no_landing_zone": {"demotable": False,
-                        "fix": "nothing — the match was correct and the deliverable had nowhere to "
-                               "put the result"},
+    "no_landing_zone": {
+        "demotable": False,
+        "fix": "nothing — the match was correct and the deliverable had nowhere to "
+        "put the result",
+    },
     # Correct match held behind a deliberate default-OFF switch or a shadow status. The gate is the
     # subject, and it moves on its own evidence, not on this.
     "gated_off": {"demotable": False, "fix": "the capability's own gate, on its own evidence"},
@@ -192,6 +198,8 @@ DECLINE_KIND_DEFAULT = "unspecified"
 def decline_kind_demotable(kind: str) -> bool:
     """Whether a decline of this kind may drive a demotion. One lookup, so it cannot drift."""
     return bool((DECLINE_KINDS.get(str(kind)) or DECLINE_KINDS[DECLINE_KIND_DEFAULT])["demotable"])
+
+
 # The surface a decline (or a match) was recorded for. Attribution has to be on the EVENT: the
 # advisor's own consults recorded `skill=None` for every `--surface` call, so the control arm of the
 # two 2026-08-23 audit rounds was unattributable to `repo-audit:*` at all.
@@ -229,10 +237,20 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
             exp = _experiment_id(event)
             if not exp or not _within_window(event, now=now, window_days=window_days):
                 continue
-            trial = trials.setdefault(exp, {"experiment_id": exp, "candidates": [], "triggered": [],
-                                            "useful": [], "not_useful": [], "declined": [],
-                                            "decline_reasons": {}, "decline_kinds": {},
-                                            "skills": set()})
+            trial = trials.setdefault(
+                exp,
+                {
+                    "experiment_id": exp,
+                    "candidates": [],
+                    "triggered": [],
+                    "useful": [],
+                    "not_useful": [],
+                    "declined": [],
+                    "decline_reasons": {},
+                    "decline_kinds": {},
+                    "skills": set(),
+                },
+            )
             meta = event.get("metadata") or {}
             # SURFACE and SKILL are the same attribution axis read from two keys. `--surface` calls
             # recorded no `skill` at all, so a surface-attributed run was invisible to
@@ -255,7 +273,8 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     if reason:
                         trial["decline_reasons"].setdefault(cap_id, reason)
                     trial["decline_kinds"].setdefault(
-                        cap_id, str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT))
+                        cap_id, str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT)
+                    )
             elif etype == "invocation" and cap_id not in trial["triggered"]:
                 trial["triggered"].append(cap_id)
             elif etype == "outcome":
@@ -272,19 +291,24 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
         # A capability that was declined and LATER triggered in the same trial ran; the trigger
         # wins. Otherwise a change of mind would be counted as a rejection forever.
         trial["declined"] = sorted(set(trial["declined"]) - set(trial["triggered"]))
-        trial["decline_reasons"] = {c: r for c, r in sorted(trial["decline_reasons"].items())
-                                    if c in trial["declined"]}
-        trial["decline_kinds"] = {c: k for c, k in sorted(trial["decline_kinds"].items())
-                                  if c in trial["declined"]}
+        trial["decline_reasons"] = {
+            c: r for c, r in sorted(trial["decline_reasons"].items()) if c in trial["declined"]
+        }
+        trial["decline_kinds"] = {
+            c: k for c, k in sorted(trial["decline_kinds"].items()) if c in trial["declined"]
+        }
         # THE DEMOTABLE SUBSET, separated here so no downstream reader has to remember which kinds
         # are the binding's fault. `no_landing_zone` was a CORRECT match; it belongs in `declined`
         # and must never appear here.
         trial["declined_demotable"] = sorted(
-            c for c in trial["declined"] if decline_kind_demotable(trial["decline_kinds"].get(c)))
+            c for c in trial["declined"] if decline_kind_demotable(trial["decline_kinds"].get(c))
+        )
         # THE THIRD STATE, named. `triggered` + `declined` + `not_triggered_silently` partition
         # `candidates` exactly, which is the property that makes "rejected on stated grounds"
         # distinguishable from "offered and ignored" from "never considered" (not a candidate).
-        trial["not_triggered_silently"] = sorted(set(trial["not_triggered"]) - set(trial["declined"]))
+        trial["not_triggered_silently"] = sorted(
+            set(trial["not_triggered"]) - set(trial["declined"])
+        )
         # RESOLVED means an OUTCOME landed. A decline resolves nothing -- the capability never ran,
         # so there is nothing to have been useful or useless about.
         trial["resolved"] = bool(trial["useful"] or trial["not_useful"])
@@ -300,9 +324,17 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
     """
     caps = capabilities.load_declared(path or capabilities.REG)
     rows: dict[str, dict] = {
-        cap_id: {"capability_id": cap_id, "candidates": 0, "triggered": 0,
-                 "useful": 0, "not_useful": 0, "declined": 0, "declined_demotable": 0,
-                 "declines_by_kind": {}, "status": cap.get("status")}
+        cap_id: {
+            "capability_id": cap_id,
+            "candidates": 0,
+            "triggered": 0,
+            "useful": 0,
+            "not_useful": 0,
+            "declined": 0,
+            "declined_demotable": 0,
+            "declines_by_kind": {},
+            "status": cap.get("status"),
+        }
         for cap_id, cap in sorted(caps.items())
     }
     for trial in experiments(path=path, window_days=window_days, now=now):
@@ -318,8 +350,9 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
             if cap_id in rows:
                 rows[cap_id]["declined"] += 1
                 kind = trial["decline_kinds"].get(cap_id, DECLINE_KIND_DEFAULT)
-                rows[cap_id]["declines_by_kind"][kind] = \
+                rows[cap_id]["declines_by_kind"][kind] = (
                     rows[cap_id]["declines_by_kind"].get(kind, 0) + 1
+                )
         for cap_id in trial["declined_demotable"]:
             if cap_id in rows:
                 rows[cap_id]["declined_demotable"] += 1
@@ -333,12 +366,16 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
         row["resolved"] = resolved
         row["trigger_rate"] = (row["triggered"] / row["candidates"]) if row["candidates"] else None
         row["usefulness_rate"] = (row["useful"] / resolved) if resolved else None
-    return {"window_days": window_days, "capability_count": len(rows),
-            "rows": {k: v for k, v in sorted(rows.items())}}
+    return {
+        "window_days": window_days,
+        "capability_count": len(rows),
+        "rows": {k: v for k, v in sorted(rows.items())},
+    }
 
 
-def propensity(capability_id: str, *, path=None, window_days: int = WINDOW_DAYS,
-               now: int | None = None) -> dict:
+def propensity(
+    capability_id: str, *, path=None, window_days: int = WINDOW_DAYS, now: int | None = None
+) -> dict:
     """How strongly should this capability be recommended when it matches? With BOTH quantities.
 
     Posterior mean of a Beta(1,1)-Bernoulli over resolved outcomes, floored so evidence can always
@@ -376,13 +413,19 @@ def propensity(capability_id: str, *, path=None, window_days: int = WINDOW_DAYS,
         # decoration, and decoration is exactly what this repo's prose rules turned out to be.
         "explorable": value >= EXPLORATION_FLOOR,
         "exploration_floor": EXPLORATION_FLOOR,
-        "basis": ("no resolved outcomes yet — optimistic prior plus an unconditional floor, so this "
-                  "can still be sampled and can therefore still earn evidence"
-                  if not resolved else
-                  f"{row['useful']} of {resolved} resolved trials were useful")
-                 + (f"; declined with a stated reason {row['declined']} time(s) "
-                    f"({row['declined_demotable']} of them attributable to the binding), which is "
-                    f"recorded but never scored — it never ran" if row["declined"] else ""),
+        "basis": (
+            "no resolved outcomes yet — optimistic prior plus an unconditional floor, so this "
+            "can still be sampled and can therefore still earn evidence"
+            if not resolved
+            else f"{row['useful']} of {resolved} resolved trials were useful"
+        )
+        + (
+            f"; declined with a stated reason {row['declined']} time(s) "
+            f"({row['declined_demotable']} of them attributable to the binding), which is "
+            f"recorded but never scored — it never ran"
+            if row["declined"]
+            else ""
+        ),
         "window_days": window_days,
     }
 
@@ -423,7 +466,7 @@ def _capability_heartbeat(event_type: str, ref: str) -> None:
     usefulness -- the exact defect `issue-readiness` and `switch-review` both shipped with."""
     try:
         capabilities.production_heartbeat("capability-propensity", event_type, ref=ref)
-    except Exception:                                              # noqa: BLE001
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -434,8 +477,14 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
     ranked = []
     for cap_id, row in stats["rows"].items():
         prop = propensity(cap_id, path=path, window_days=window_days, now=now)
-        ranked.append({**row, "propensity": prop["propensity"],
-                       "floored": prop["floored"], "basis": prop["basis"]})
+        ranked.append(
+            {
+                **row,
+                "propensity": prop["propensity"],
+                "floored": prop["floored"],
+                "basis": prop["basis"],
+            }
+        )
     ranked.sort(key=lambda r: (-r["propensity"], -r["resolved"], r["capability_id"]))
     resolved_caps = [r["capability_id"] for r in ranked if r["resolved"]]
     return {
@@ -456,10 +505,11 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # Both quantities again: how many declines exist, and how many of them are actually a
         # statement about the binding rather than about the work's shape.
         "decline_demotable_count": sum(len(t["declined_demotable"]) for t in trials),
-        "declines_by_kind": {k: sum(v for r in ranked
-                                    for kk, v in r["declines_by_kind"].items() if kk == k)
-                             for k in sorted(DECLINE_KINDS)
-                             if any(k in r["declines_by_kind"] for r in ranked)},
+        "declines_by_kind": {
+            k: sum(v for r in ranked for kk, v in r["declines_by_kind"].items() if kk == k)
+            for k in sorted(DECLINE_KINDS)
+            if any(k in r["declines_by_kind"] for r in ranked)
+        },
         "ranked": ranked,
         "experiments": trials,
     }
@@ -468,19 +518,32 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
 # --------------------------------------------------------------------------- recording the two
 # missing edges. Thin on purpose: the advisor already writes `match`.
 
-def record_trigger(capability_id: str, experiment_id: str, *, path=None,
-                   metadata: dict | None = None) -> bool:
+
+def record_trigger(
+    capability_id: str, experiment_id: str, *, path=None, metadata: dict | None = None
+) -> bool:
     """This candidate was actually triggered. Idempotent per (capability, experiment)."""
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
     return capabilities.heartbeat(
-        capability_id, "invocation", ref=experiment_id, path=path or capabilities.REG,
+        capability_id,
+        "invocation",
+        ref=experiment_id,
+        path=path or capabilities.REG,
         idempotency_key=f"trigger:{capability_id}:{experiment_id}",
-        metadata={"source": "capability_propensity", **(metadata or {})})
+        metadata={"source": "capability_propensity", **(metadata or {})},
+    )
 
 
-def record_usefulness(capability_id: str, experiment_id: str, *, useful: bool, evidence: str,
-                      path=None, metadata: dict | None = None) -> bool:
+def record_usefulness(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    useful: bool,
+    evidence: str,
+    path=None,
+    metadata: dict | None = None,
+) -> bool:
     """Did triggering it help? `evidence` is required: an unevidenced verdict is an opinion.
 
     The verdict must describe what the capability CHANGED, not that it ran. "It fired" is the
@@ -497,10 +560,18 @@ def record_usefulness(capability_id: str, experiment_id: str, *, useful: bool, e
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
     return capabilities.heartbeat(
-        capability_id, "outcome", ref=experiment_id, path=path or capabilities.REG,
+        capability_id,
+        "outcome",
+        ref=experiment_id,
+        path=path or capabilities.REG,
         idempotency_key=f"useful:{capability_id}:{experiment_id}",
-        metadata={"source": "capability_propensity", USEFUL_KEY: bool(useful),
-                  "evidence": str(evidence)[:400], **(metadata or {})})
+        metadata={
+            "source": "capability_propensity",
+            USEFUL_KEY: bool(useful),
+            "evidence": str(evidence)[:400],
+            **(metadata or {}),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -611,12 +682,12 @@ TICK_FINDING_FIELDS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "capability-firing-monitor": {
         "regressed": ("capability_id",),
-        "overdue": ("capability_id",),        # NOT silent_days / tolerance_days: counters, not findings
+        "overdue": ("capability_id",),  # NOT silent_days / tolerance_days: counters, not findings
         "never_fired": (),
         "no_cadence_declared": (),
     },
     "capability-activation-audit": {
-        "by_defect": (),                      # {defect class: [capability ids]}
+        "by_defect": (),  # {defect class: [capability ids]}
         "reachable_ids": (),
     },
     # DELIBERATELY EMPTY, and a verdict rather than an omission: this module IS the grader, so
@@ -631,19 +702,19 @@ TICK_FINDING_FIELDS: dict[str, dict[str, tuple[str, ...]]] = {
 # happened". Reasons are computed, not stored; these are just the words.
 TICK_SKIP_REASONS = {
     "no_cadence_artifact": "no cadence step declares an artifact for it, so it produces no report "
-                           "this can read",
+    "this can read",
     "artifact_missing": "its declared cadence artifact does not exist yet; the step has not run here",
     "not_an_observer": "capabilities.is_observer() is False, so its deliverable is not a report and "
-                       "an output-change verdict would mix two different questions in one rate",
+    "an output-change verdict would mix two different questions in one rate",
     "no_finding_projection": "no finding projection is declared for it, so 'did the output change' "
-                             "has no defined answer",
+    "has no defined answer",
     "unprojectable": "its artifact carried none of the declared finding keys -- a SHAPE CHANGE, "
-                     "reported rather than scored, because a broken parse must not read as 'nothing "
-                     "new'",
+    "reported rather than scored, because a broken parse must not read as 'nothing "
+    "new'",
     "not_in_ledger": "it has no row in this machine's capability ledger, so there is nothing to "
-                     "record against",
+    "record against",
     "budget_exhausted": "the run hit its wall-clock budget before reaching it; nothing is recorded "
-                        "rather than recorded late",
+    "rather than recorded late",
 }
 
 
@@ -661,11 +732,14 @@ def tick_evidence_disabled() -> bool:
 
 
 def _tick_state_dir() -> pathlib.Path:
-    return pathlib.Path(os.environ.get("ORCH_STATE_DIR",
-                                       str(pathlib.Path.home() / ".codex/orchestrator")))
+    return pathlib.Path(
+        os.environ.get("ORCH_STATE_DIR", str(pathlib.Path.home() / ".codex/orchestrator"))
+    )
 
 
-def tick_artifact(capability_id: str, *, state_dir: pathlib.Path, steps=None) -> pathlib.Path | None:
+def tick_artifact(
+    capability_id: str, *, state_dir: pathlib.Path, steps=None
+) -> pathlib.Path | None:
     """The report artifact this capability's cadence step publishes. ONE source: the registry.
 
     Read from `cadence_registry.STEP_BY_KEY` rather than re-listed here, because the tick-bound
@@ -676,8 +750,9 @@ def tick_artifact(capability_id: str, *, state_dir: pathlib.Path, steps=None) ->
     if steps is None:
         try:
             import cadence_registry
+
             steps = cadence_registry.STEP_BY_KEY
-        except Exception:                                              # noqa: BLE001
+        except Exception:  # noqa: BLE001
             return None
     name = ((steps or {}).get(capability_id) or {}).get("artifact")
     return (state_dir / str(name)) if name else None
@@ -688,8 +763,10 @@ def _finding_identity(value, fields: tuple[str, ...]) -> str:
     if isinstance(value, dict):
         if fields:
             return "|".join(f"{f}={value.get(f)!r}" for f in fields)
-        return "|".join(f"{k}={sorted(map(str, v))!r}" if isinstance(v, list) else f"{k}={v!r}"
-                        for k, v in sorted(value.items()))
+        return "|".join(
+            f"{k}={sorted(map(str, v))!r}" if isinstance(v, list) else f"{k}={v!r}"
+            for k, v in sorted(value.items())
+        )
     return str(value)
 
 
@@ -714,7 +791,8 @@ def project_findings(capability_id: str, report) -> dict[str, list[str]] | None:
         elif isinstance(value, dict):
             out[key] = sorted(
                 f"{k}={sorted(map(str, v))!r}" if isinstance(v, list) else f"{k}={v!r}"
-                for k, v in value.items())
+                for k, v in value.items()
+            )
         else:
             out[key] = [str(value)]
     return out or None
@@ -750,7 +828,7 @@ def tick_task(day: str) -> str:
 def _load_tick_state(state_dir: pathlib.Path) -> dict:
     try:
         data = json.loads((state_dir / TICK_EVIDENCE_STATE).read_text(encoding="utf-8"))
-    except Exception:                                                  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return {"schema": 1, "capabilities": {}, "last_consult_day": None}
     if not isinstance(data, dict):
         return {"schema": 1, "capabilities": {}, "last_consult_day": None}
@@ -761,6 +839,7 @@ def _load_tick_state(state_dir: pathlib.Path) -> dict:
 
 def _write_json_atomic(path: pathlib.Path, payload: dict) -> None:
     import tempfile
+
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
@@ -773,9 +852,15 @@ def _write_json_atomic(path: pathlib.Path, payload: dict) -> None:
             os.unlink(tmp)
 
 
-def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = None,
-                  path=None, steps=None, record: bool = True,
-                  budget_s: float | None = None) -> dict:
+def tick_evidence(
+    *,
+    now: int | None = None,
+    state_dir: pathlib.Path | None = None,
+    path=None,
+    steps=None,
+    record: bool = True,
+    budget_s: float | None = None,
+) -> dict:
     """Consult the advisor for the `tick` surface and record earned usefulness verdicts.
 
     Called every tick from `orchestrate.sh`, BELOW `ORCH-ANCHOR: heartbeat-export` (a producer above
@@ -790,15 +875,25 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
     base = {"generated_at": now, "day": day, "surface": TICK_SURFACE}
     if tick_evidence_disabled():
         # EXACTLY as before this wiring existed: nothing read, nothing written, nothing recorded.
-        return {**base, "disabled": True,
-                "reason": "ORCH_TICK_EVIDENCE_DISABLED=1", "bound": [], "evaluated": [],
-                "verdicts_recorded": 0, "triggers_recorded": 0, "matches_recorded": 0,
-                "gradable": [], "awaiting_regeneration": [], "skipped": []}
+        return {
+            **base,
+            "disabled": True,
+            "reason": "ORCH_TICK_EVIDENCE_DISABLED=1",
+            "bound": [],
+            "evaluated": [],
+            "verdicts_recorded": 0,
+            "triggers_recorded": 0,
+            "matches_recorded": 0,
+            "gradable": [],
+            "awaiting_regeneration": [],
+            "skipped": [],
+        }
 
     state_dir = _tick_state_dir() if state_dir is None else pathlib.Path(state_dir)
     ledger = path or capabilities.REG
 
     import capability_advisor
+
     bound = sorted(capability_advisor.binding_for(TICK_SURFACE, path=path))
     caps = capabilities.load_declared(ledger)
     state = _load_tick_state(state_dir)
@@ -812,37 +907,68 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
     for cap_id in bound:
         artifact = tick_artifact(cap_id, state_dir=state_dir, steps=steps)
         if artifact is None:
-            skipped.append({"capability_id": cap_id, "reason": "no_cadence_artifact",
-                            "detail": TICK_SKIP_REASONS["no_cadence_artifact"]})
+            skipped.append(
+                {
+                    "capability_id": cap_id,
+                    "reason": "no_cadence_artifact",
+                    "detail": TICK_SKIP_REASONS["no_cadence_artifact"],
+                }
+            )
             continue
         try:
             mtime = int(artifact.stat().st_mtime)
         except OSError:
-            skipped.append({"capability_id": cap_id, "reason": "artifact_missing",
-                            "detail": TICK_SKIP_REASONS["artifact_missing"],
-                            "artifact": str(artifact)})
+            skipped.append(
+                {
+                    "capability_id": cap_id,
+                    "reason": "artifact_missing",
+                    "detail": TICK_SKIP_REASONS["artifact_missing"],
+                    "artifact": str(artifact),
+                }
+            )
             continue
         prior = per_cap.get(cap_id) or {}
         seen = int(prior.get("artifact_mtime") or 0)
         if not prior:
-            plans.append({"capability_id": cap_id, "action": "baseline", "artifact": artifact,
-                          "mtime": mtime})
+            plans.append(
+                {
+                    "capability_id": cap_id,
+                    "action": "baseline",
+                    "artifact": artifact,
+                    "mtime": mtime,
+                }
+            )
         elif mtime > seen:
-            plans.append({"capability_id": cap_id, "action": "evaluate", "artifact": artifact,
-                          "mtime": mtime, "prior": prior})
+            plans.append(
+                {
+                    "capability_id": cap_id,
+                    "action": "evaluate",
+                    "artifact": artifact,
+                    "mtime": mtime,
+                    "prior": prior,
+                }
+            )
         # else: stale. No fresh production, so there is no concrete reason to record anything.
 
     consult_due = state.get("last_consult_day") != day
     if not plans and not consult_due:
         # THE HOT PATH: 23 of 24 ticks. One small file read, zero ledger touches, zero writes.
-        return {**base, "bound": bound, "evaluated": [], "baselined": [],
-                "stale": [c for c in bound if c not in {s["capability_id"] for s in skipped}],
-                "skipped": skipped, "consulted": False,
-                "verdicts_recorded": 0, "triggers_recorded": 0, "matches_recorded": 0,
-                "gradable": sorted(_tick_gradable(bound, caps)),
-                "awaiting_regeneration": sorted(_tick_gradable(bound, caps)),
-                "reason": "no cadence artifact was regenerated since the last evaluation, and "
-                          "today's consult is already recorded — nothing to add"}
+        return {
+            **base,
+            "bound": bound,
+            "evaluated": [],
+            "baselined": [],
+            "stale": [c for c in bound if c not in {s["capability_id"] for s in skipped}],
+            "skipped": skipped,
+            "consulted": False,
+            "verdicts_recorded": 0,
+            "triggers_recorded": 0,
+            "matches_recorded": 0,
+            "gradable": sorted(_tick_gradable(bound, caps)),
+            "awaiting_regeneration": sorted(_tick_gradable(bound, caps)),
+            "reason": "no cadence artifact was regenerated since the last evaluation, and "
+            "today's consult is already recorded — nothing to add",
+        }
 
     # ---- the CONSULT. This is the thing the tick never did. `record=True` writes the `match` edge
     #      each verdict below is attached to; it is idempotent per (capability, day).
@@ -851,17 +977,27 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
     if record:
         try:
             advice = capability_advisor.advise(
-                tick_task(day), surface=TICK_SURFACE, skill=TICK_SURFACE, lane="tick",
-                path=path, record=True)
+                tick_task(day),
+                surface=TICK_SURFACE,
+                skill=TICK_SURFACE,
+                lane="tick",
+                path=path,
+                record=True,
+            )
             matches = int(advice.get("recorded_matches") or 0)
-        except Exception as exc:                                       # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             advice = {"error": f"{type(exc).__name__}: {exc}"}
     else:
         try:
             advice = capability_advisor.advise(
-                tick_task(day), surface=TICK_SURFACE, skill=TICK_SURFACE, lane="tick",
-                path=path, record=False)
-        except Exception as exc:                                       # noqa: BLE001
+                tick_task(day),
+                surface=TICK_SURFACE,
+                skill=TICK_SURFACE,
+                lane="tick",
+                path=path,
+                record=False,
+            )
+        except Exception as exc:  # noqa: BLE001
             advice = {"error": f"{type(exc).__name__}: {exc}"}
     experiment = advice.get("experiment_id") or capability_advisor.experiment_id(tick_task(day))
 
@@ -872,19 +1008,34 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
     for plan in plans:
         cap_id = plan["capability_id"]
         if time.monotonic() - started > budget:
-            skipped.append({"capability_id": cap_id, "reason": "budget_exhausted",
-                            "detail": TICK_SKIP_REASONS["budget_exhausted"]})
+            skipped.append(
+                {
+                    "capability_id": cap_id,
+                    "reason": "budget_exhausted",
+                    "detail": TICK_SKIP_REASONS["budget_exhausted"],
+                }
+            )
             continue
         cap_row = caps.get(cap_id)
         if cap_row is None:
-            skipped.append({"capability_id": cap_id, "reason": "not_in_ledger",
-                            "detail": TICK_SKIP_REASONS["not_in_ledger"]})
+            skipped.append(
+                {
+                    "capability_id": cap_id,
+                    "reason": "not_in_ledger",
+                    "detail": TICK_SKIP_REASONS["not_in_ledger"],
+                }
+            )
             continue
         try:
             report = json.loads(plan["artifact"].read_text(encoding="utf-8"))
-        except Exception as exc:                                       # noqa: BLE001
-            skipped.append({"capability_id": cap_id, "reason": "unreadable_artifact",
-                            "detail": f"{type(exc).__name__}: {exc}"})
+        except Exception as exc:  # noqa: BLE001
+            skipped.append(
+                {
+                    "capability_id": cap_id,
+                    "reason": "unreadable_artifact",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                }
+            )
             continue
         findings = project_findings(cap_id, report)
         fingerprint = finding_fingerprint(findings) if findings else None
@@ -894,18 +1045,29 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
         # skipped" just because this module declines to grade it.
         if record:
             try:
-                if record_trigger(cap_id, experiment, path=path,
-                                  metadata={"surface": TICK_SURFACE,
-                                            "artifact": plan["artifact"].name}):
+                if record_trigger(
+                    cap_id,
+                    experiment,
+                    path=path,
+                    metadata={"surface": TICK_SURFACE, "artifact": plan["artifact"].name},
+                ):
                     triggers += 1
-            except Exception as exc:                                   # noqa: BLE001
-                skipped.append({"capability_id": cap_id, "reason": "trigger_failed",
-                                "detail": f"{type(exc).__name__}: {exc}"})
+            except Exception as exc:  # noqa: BLE001
+                skipped.append(
+                    {
+                        "capability_id": cap_id,
+                        "reason": "trigger_failed",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                    }
+                )
                 continue
 
-        entry = {"capability_id": cap_id, "artifact": plan["artifact"].name,
-                 "fingerprint": fingerprint,
-                 "finding_count": sum(len(v) for v in (findings or {}).values())}
+        entry = {
+            "capability_id": cap_id,
+            "artifact": plan["artifact"].name,
+            "fingerprint": fingerprint,
+            "finding_count": sum(len(v) for v in (findings or {}).values()),
+        }
         reason = _tick_ungradable_reason(cap_id, cap_row, findings)
         if plan["action"] == "baseline":
             # FIRST SIGHT ESTABLISHES THE BASELINE AND RECORDS NO VERDICT. There is nothing to
@@ -914,41 +1076,79 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
             # `capability_firing_monitor`: the first run only establishes the baseline.
             baselined.append({**entry, "reason": "first observation — baseline only, no verdict"})
         elif reason:
-            evaluated.append({**entry, "graded": False, "reason": reason,
-                              "detail": TICK_SKIP_REASONS.get(reason, reason)})
+            evaluated.append(
+                {
+                    **entry,
+                    "graded": False,
+                    "reason": reason,
+                    "detail": TICK_SKIP_REASONS.get(reason, reason),
+                }
+            )
         else:
-            previous = (plan["prior"].get("findings") or {})
+            previous = plan["prior"].get("findings") or {}
             prev_fp = plan["prior"].get("fingerprint")
             changed = fingerprint != prev_fp
             delta = _finding_delta(findings or {}, previous)
             if changed:
-                evidence = (f"{TICK_VERDICT_KIND}: report changed since "
-                            f"{plan['prior'].get('day', 'the previous run')} — "
-                            + ("; ".join(delta) if delta else "finding set differs"))
+                evidence = (
+                    f"{TICK_VERDICT_KIND}: report changed since "
+                    f"{plan['prior'].get('day', 'the previous run')} — "
+                    + ("; ".join(delta) if delta else "finding set differs")
+                )
             else:
-                evidence = (f"{TICK_VERDICT_KIND}: ran and re-emitted an IDENTICAL finding set "
-                            f"({entry['finding_count']} finding(s) across {len(findings or {})} "
-                            f"key(s)) last seen {plan['prior'].get('day', 'previously')}; nothing "
-                            f"new was reported, and silence is not usefulness")
+                evidence = (
+                    f"{TICK_VERDICT_KIND}: ran and re-emitted an IDENTICAL finding set "
+                    f"({entry['finding_count']} finding(s) across {len(findings or {})} "
+                    f"key(s)) last seen {plan['prior'].get('day', 'previously')}; nothing "
+                    f"new was reported, and silence is not usefulness"
+                )
             recorded = False
             if record:
                 try:
                     recorded = record_usefulness(
-                        cap_id, experiment, useful=changed, evidence=evidence, path=path,
-                        metadata={"verdict_kind": TICK_VERDICT_KIND, "surface": TICK_SURFACE,
-                                  "fingerprint": fingerprint, "previous_fingerprint": prev_fp})
-                except Exception as exc:                               # noqa: BLE001
-                    evaluated.append({**entry, "graded": False, "reason": "verdict_failed",
-                                      "detail": f"{type(exc).__name__}: {exc}"})
+                        cap_id,
+                        experiment,
+                        useful=changed,
+                        evidence=evidence,
+                        path=path,
+                        metadata={
+                            "verdict_kind": TICK_VERDICT_KIND,
+                            "surface": TICK_SURFACE,
+                            "fingerprint": fingerprint,
+                            "previous_fingerprint": prev_fp,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    evaluated.append(
+                        {
+                            **entry,
+                            "graded": False,
+                            "reason": "verdict_failed",
+                            "detail": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
                     continue
                 verdicts += 1 if recorded else 0
-            evaluated.append({**entry, "graded": True, "useful": changed,
-                              "previous_fingerprint": prev_fp, "changed_keys": delta,
-                              "recorded": recorded, "evidence": evidence})
+            evaluated.append(
+                {
+                    **entry,
+                    "graded": True,
+                    "useful": changed,
+                    "previous_fingerprint": prev_fp,
+                    "changed_keys": delta,
+                    "recorded": recorded,
+                    "evidence": evidence,
+                }
+            )
 
-        per_cap[cap_id] = {"artifact_mtime": plan["mtime"], "fingerprint": fingerprint,
-                           "findings": findings or {}, "evaluated_at": now, "day": day,
-                           "experiment_id": experiment}
+        per_cap[cap_id] = {
+            "artifact_mtime": plan["mtime"],
+            "fingerprint": fingerprint,
+            "findings": findings or {},
+            "evaluated_at": now,
+            "day": day,
+            "experiment_id": experiment,
+        }
 
     state["last_consult_day"] = day
     state["schema"] = 1
@@ -964,8 +1164,9 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
         "advice_capabilities": [c["capability_id"] for c in (advice.get("capabilities") or [])],
         "evaluated": evaluated,
         "baselined": baselined,
-        "stale": [c for c in bound
-                  if c not in acted and c not in {s["capability_id"] for s in skipped}],
+        "stale": [
+            c for c in bound if c not in acted and c not in {s["capability_id"] for s in skipped}
+        ],
         "skipped": skipped,
         "matches_recorded": matches,
         "triggers_recorded": triggers,
@@ -981,15 +1182,23 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
             "ticks_per_day": 24,
             "structural_verdicts_per_day": len(bound),
             "structural_basis": "the experiment id is scoped to the UTC day, so the "
-                                "record_usefulness idempotency key admits at most one verdict per "
-                                "bound capability per day however many ticks run",
+            "record_usefulness idempotency key admits at most one verdict per "
+            "bound capability per day however many ticks run",
             "graded_verdicts_per_day_ceiling": round(
-                sum(1.0 / max(1.0, float(((steps or _tick_steps()).get(c) or {})
-                                         .get("cadence_days") or 0) + 1.0)
-                    for c in gradable), 2),
+                sum(
+                    1.0
+                    / max(
+                        1.0,
+                        float(((steps or _tick_steps()).get(c) or {}).get("cadence_days") or 0)
+                        + 1.0,
+                    )
+                    for c in gradable
+                ),
+                2,
+            ),
             "graded_basis": "a verdict additionally requires the capability's own cadence artifact "
-                            "to have been regenerated, so the rate is bounded by each step's "
-                            "declared cadence, not by the tick",
+            "to have been regenerated, so the rate is bounded by each step's "
+            "declared cadence, not by the tick",
             "naive_unconditional_per_day": 24 * len(bound),
         },
     }
@@ -997,7 +1206,7 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
         try:
             _write_json_atomic(state_dir / TICK_EVIDENCE_STATE, state)
             _write_json_atomic(state_dir / TICK_EVIDENCE_REPORT, report_out)
-        except Exception as exc:                                       # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             report_out["state_write_error"] = f"{type(exc).__name__}: {exc}"
     return report_out
 
@@ -1005,13 +1214,13 @@ def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = No
 def _tick_steps() -> dict:
     try:
         import cadence_registry
+
         return cadence_registry.STEP_BY_KEY
-    except Exception:                                                  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return {}
 
 
-def _tick_ungradable_reason(capability_id: str, cap_row: dict,
-                            findings: dict | None) -> str | None:
+def _tick_ungradable_reason(capability_id: str, cap_row: dict, findings: dict | None) -> str | None:
     """Why this capability gets no output-change verdict, or None when it gets one."""
     if not TICK_FINDING_FIELDS.get(capability_id):
         return "no_finding_projection"
@@ -1070,15 +1279,24 @@ def tick_evidence_guarded(**kwargs) -> dict:
         signal.alarm(max(1, budget) + 5)
         armed = True
     except (ValueError, AttributeError, OSError):
-        armed = False                      # not the main thread, or no SIGALRM: run unbounded
+        armed = False  # not the main thread, or no SIGALRM: run unbounded
     try:
         return tick_evidence(**kwargs)
-    except BaseException as exc:                                       # noqa: BLE001
-        return {"generated_at": int(time.time()), "surface": TICK_SURFACE,
-                "error": f"{type(exc).__name__}: {exc}", "verdicts_recorded": 0,
-                "triggers_recorded": 0, "matches_recorded": 0, "bound": [], "evaluated": [],
-                "gradable": [], "awaiting_regeneration": [], "skipped": [],
-                "reason": "tick capability evidence failed; the tick is unaffected"}
+    except BaseException as exc:  # noqa: BLE001
+        return {
+            "generated_at": int(time.time()),
+            "surface": TICK_SURFACE,
+            "error": f"{type(exc).__name__}: {exc}",
+            "verdicts_recorded": 0,
+            "triggers_recorded": 0,
+            "matches_recorded": 0,
+            "bound": [],
+            "evaluated": [],
+            "gradable": [],
+            "awaiting_regeneration": [],
+            "skipped": [],
+            "reason": "tick capability evidence failed; the tick is unaffected",
+        }
     finally:
         if armed:
             try:
@@ -1096,17 +1314,27 @@ def format_tick_evidence(rep: dict) -> str:
     if rep.get("error"):
         return f"  [tick-evidence] error: {rep['error']} (tick unaffected)"
     if not rep.get("consulted") and not rep.get("evaluated") and not rep.get("baselined"):
-        return ("  [tick-evidence] nothing regenerated since the last evaluation; "
-                f"{len(rep.get('gradable') or [])} gradable, awaiting their cadence")
-    useful = [e["capability_id"] for e in rep.get("evaluated") or []
-              if e.get("graded") and e.get("useful")]
-    quiet = [e["capability_id"] for e in rep.get("evaluated") or []
-             if e.get("graded") and not e.get("useful")]
-    lines = [f"  [tick-evidence] advisor consulted for surface 'tick': "
-             f"{len(rep.get('advice_capabilities') or [])} bound capability(ies); "
-             f"verdicts {rep.get('verdicts_recorded', 0)}, "
-             f"gradable {len(rep.get('gradable') or [])}, "
-             f"awaiting regeneration {len(rep.get('awaiting_regeneration') or [])}"]
+        return (
+            "  [tick-evidence] nothing regenerated since the last evaluation; "
+            f"{len(rep.get('gradable') or [])} gradable, awaiting their cadence"
+        )
+    useful = [
+        e["capability_id"]
+        for e in rep.get("evaluated") or []
+        if e.get("graded") and e.get("useful")
+    ]
+    quiet = [
+        e["capability_id"]
+        for e in rep.get("evaluated") or []
+        if e.get("graded") and not e.get("useful")
+    ]
+    lines = [
+        f"  [tick-evidence] advisor consulted for surface 'tick': "
+        f"{len(rep.get('advice_capabilities') or [])} bound capability(ies); "
+        f"verdicts {rep.get('verdicts_recorded', 0)}, "
+        f"gradable {len(rep.get('gradable') or [])}, "
+        f"awaiting regeneration {len(rep.get('awaiting_regeneration') or [])}"
+    ]
     if useful or quiet or rep.get("baselined"):
         detail = []
         if useful:
@@ -1114,8 +1342,7 @@ def format_tick_evidence(rep: dict) -> str:
         if quiet:
             detail.append("not useful(identical output): " + ", ".join(quiet))
         if rep.get("baselined"):
-            detail.append("baselined: "
-                          + ", ".join(b["capability_id"] for b in rep["baselined"]))
+            detail.append("baselined: " + ", ".join(b["capability_id"] for b in rep["baselined"]))
         lines.append("    " + " | ".join(detail))
     return "\n".join(lines)
 
@@ -1129,6 +1356,7 @@ def _selftest_tick_evidence() -> None:
     """
     import tempfile
     from pathlib import Path
+
     import capability_advisor
 
     now = 1_800_000_000
@@ -1136,7 +1364,9 @@ def _selftest_tick_evidence() -> None:
 
     # ---- PART 1: THE REAL TABLE, code vs code. Runs on any machine: no ledger, no state dir.
     real_bound = capability_advisor.binding_for(TICK_SURFACE)
-    assert real_bound, "the tick surface must have a declared bound set, or there is nothing to wire"
+    assert (
+        real_bound
+    ), "the tick surface must have a declared bound set, or there is nothing to wire"
     steps = _tick_steps()
     assert steps, "cadence registry unreadable; the artifact resolver would silently find nothing"
     # THE CONSULT TEXT MUST STAY UNCLASSIFIABLE, so the tick's answer is exactly its DECLARED bound
@@ -1146,22 +1376,34 @@ def _selftest_tick_evidence() -> None:
     assert capability_advisor.classify_task(tick_task(day)) == [], (
         f"the tick's consult text now hits the keyword classifier "
         f"({capability_advisor.classify_task(tick_task(day))}); pick a phrase that does not, or the "
-        f"declared binding stops being the whole answer")
+        f"declared binding stops being the whole answer"
+    )
     assert tick_artifact("no-such-capability", state_dir=Path("/nonexistent")) is None
     for cap_id in TICK_FINDING_FIELDS:
         assert cap_id in real_bound, (
             f"{cap_id} has a finding projection but is not bound to the tick surface, so nothing "
-            f"will ever read it: {sorted(real_bound)}")
+            f"will ever read it: {sorted(real_bound)}"
+        )
         if not TICK_FINDING_FIELDS[cap_id]:
-            continue                       # deliberately not graded; see the table's own comment
+            continue  # deliberately not graded; see the table's own comment
         art = tick_artifact(cap_id, state_dir=Path("/nonexistent"))
         assert art is not None, (
             f"{cap_id} is graded on an artifact, but no cadence step declares one for it — the "
-            f"registry and this projection have drifted")
+            f"registry and this projection have drifted"
+        )
     # The projection must never name a field that moves on its own. Enumerated, because this is the
     # one mistake that would turn every run into a "useful" verdict.
-    moving = {"silent_days", "tolerance_days", "generated_at", "timestamp", "last_invocation",
-              "unchanged_for_days", "snapshots_stored", "propensity", "raise_count"}
+    moving = {
+        "silent_days",
+        "tolerance_days",
+        "generated_at",
+        "timestamp",
+        "last_invocation",
+        "unchanged_for_days",
+        "snapshots_stored",
+        "propensity",
+        "raise_count",
+    }
     for cap_id, spec in TICK_FINDING_FIELDS.items():
         for key, fields in spec.items():
             assert not (set(fields) & moving), (cap_id, key, fields)
@@ -1179,20 +1421,24 @@ def _selftest_tick_evidence() -> None:
     driver = pathlib.Path(__file__).resolve().parent / "orchestrate.sh"
     if driver.exists():
         text = driver.read_text(errors="ignore")
-        call = text.find("capability_propensity.py\" tick-evidence")
-        assert call > 0, ("orchestrate.sh no longer invokes `capability_propensity.py "
-                          "tick-evidence`; the tick has stopped consulting the advisor and stopped "
-                          "recording usefulness, which is this project's #1 defect class")
+        call = text.find('capability_propensity.py" tick-evidence')
+        assert call > 0, (
+            "orchestrate.sh no longer invokes `capability_propensity.py "
+            "tick-evidence`; the tick has stopped consulting the advisor and stopped "
+            "recording usefulness, which is this project's #1 defect class"
+        )
         export = text.find("export ORCH_CAPABILITY_HEARTBEATS=1")
         assert 0 < export < call, (
             "the tick-evidence step is invoked ABOVE the ORCH_CAPABILITY_HEARTBEATS export, so "
-            f"every heartbeat it emits is discarded (export at {export}, call at {call})")
+            f"every heartbeat it emits is discarded (export at {export}, call at {call})"
+        )
         # ...and below every step it grades, or a step that ran THIS tick is graded a tick late.
         for graded in sorted(TICK_FINDING_FIELDS):
             step = text.find(f"_cadence_due {graded} ")
             assert step == -1 or step < call, (
                 f"the tick-evidence step runs BEFORE the `{graded}` cadence step, so it can only "
-                f"ever grade the previous tick's artifact")
+                f"ever grade the previous tick's artifact"
+            )
 
     with tempfile.TemporaryDirectory(prefix="tick-evidence-") as td:
         root = Path(td)
@@ -1202,8 +1448,12 @@ def _selftest_tick_evidence() -> None:
 
         # ---- PART 2: THE MECHANISM, on a wholly synthetic surface + registry + ledger.
         rows = {}
-        for cid, kind in (("obs-daily", "tick_phase"), ("obs-weekly", "tick_phase"),
-                          ("deliverer", "closer_gate"), ("no-projection", "tick_phase")):
+        for cid, kind in (
+            ("obs-daily", "tick_phase"),
+            ("obs-weekly", "tick_phase"),
+            ("deliverer", "closer_gate"),
+            ("no-projection", "tick_phase"),
+        ):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "wired"
             cap["matcher"] = {"kind": kind, "name": cid}
@@ -1219,12 +1469,14 @@ def _selftest_tick_evidence() -> None:
         real_fields = dict(TICK_FINDING_FIELDS)
         real_binding = capability_advisor.SURFACE_BINDINGS.get(TICK_SURFACE)
         TICK_FINDING_FIELDS.clear()
-        TICK_FINDING_FIELDS.update({
-            "obs-daily": {"overdue": ("capability_id",), "regressed": ("capability_id",)},
-            "obs-weekly": {"held_off": ("flag", "state")},
-            "deliverer": {"findings": ("id",)},
-            # `no-projection` deliberately absent: the "declared empty" case.
-        })
+        TICK_FINDING_FIELDS.update(
+            {
+                "obs-daily": {"overdue": ("capability_id",), "regressed": ("capability_id",)},
+                "obs-weekly": {"held_off": ("flag", "state")},
+                "deliverer": {"findings": ("id",)},
+                # `no-projection` deliberately absent: the "declared empty" case.
+            }
+        )
         capability_advisor.SURFACE_BINDINGS[TICK_SURFACE] = {
             "obs-daily": "synthetic observer, daily",
             "obs-weekly": "synthetic observer, weekly",
@@ -1232,6 +1484,7 @@ def _selftest_tick_evidence() -> None:
             "no-projection": "synthetic observer with no projection declared",
         }
         try:
+
             def write(name: str, payload: dict, mtime: int) -> None:
                 p = state_dir / name
                 p.write_text(json.dumps(payload), encoding="utf-8")
@@ -1240,17 +1493,32 @@ def _selftest_tick_evidence() -> None:
             # `silent_days` and `generated_at` MOVE between the two writes below; the finding
             # identities do not. That pairing is the trap the projection exists to survive.
             def daily(overdue, regressed, tick):
-                return {"generated_at": now + tick,
-                        "overdue": [{"capability_id": c, "silent_days": 1.0 + tick,
-                                     "tolerance_days": 2.0} for c in overdue],
-                        "regressed": [{"capability_id": c, "unchanged_for_days": tick}
-                                      for c in regressed]}
+                return {
+                    "generated_at": now + tick,
+                    "overdue": [
+                        {"capability_id": c, "silent_days": 1.0 + tick, "tolerance_days": 2.0}
+                        for c in overdue
+                    ],
+                    "regressed": [
+                        {"capability_id": c, "unchanged_for_days": tick} for c in regressed
+                    ],
+                }
 
             write("obs-daily.json", daily(["range-lane-rollout"], [], 1), now - 100)
-            write("obs-weekly.json", {"generated_at": now,
-                                      "held_off": [{"flag": "ORCH_X", "state": "off",
-                                                    "criterion": "long prose that never changes"}]},
-                  now - 100)
+            write(
+                "obs-weekly.json",
+                {
+                    "generated_at": now,
+                    "held_off": [
+                        {
+                            "flag": "ORCH_X",
+                            "state": "off",
+                            "criterion": "long prose that never changes",
+                        }
+                    ],
+                },
+                now - 100,
+            )
             write("deliverer.json", {"findings": [{"id": "d1"}]}, now - 100)
             write("np.json", {"anything": 1}, now - 100)
 
@@ -1260,15 +1528,24 @@ def _selftest_tick_evidence() -> None:
             #    observation is exactly the manufactured evidence this design forbids.
             r1 = tick_evidence(now=now, **common)
             assert r1["consulted"] is True, r1
-            assert r1["verdicts_recorded"] == 0, \
-                f"a FIRST observation produced a verdict; there was nothing to compare against: {r1}"
-            assert sorted(b["capability_id"] for b in r1["baselined"]) == \
-                ["deliverer", "no-projection", "obs-daily", "obs-weekly"], r1["baselined"]
+            assert (
+                r1["verdicts_recorded"] == 0
+            ), f"a FIRST observation produced a verdict; there was nothing to compare against: {r1}"
+            assert sorted(b["capability_id"] for b in r1["baselined"]) == [
+                "deliverer",
+                "no-projection",
+                "obs-daily",
+                "obs-weekly",
+            ], r1["baselined"]
             assert r1["triggers_recorded"] == 4, r1
             # THE CONSULT MUST RETURN THE BOUND SET, asserted on what the CALLER receives rather
             # than on the binding table -- a suppression bug hid behind exactly that shortcut once.
-            assert sorted(r1["advice_capabilities"]) == \
-                ["deliverer", "no-projection", "obs-daily", "obs-weekly"], r1["advice_capabilities"]
+            assert sorted(r1["advice_capabilities"]) == [
+                "deliverer",
+                "no-projection",
+                "obs-daily",
+                "obs-weekly",
+            ], r1["advice_capabilities"]
             assert r1["gradable"] == ["obs-daily", "obs-weekly"], r1["gradable"]
 
             # 2. NO FRESH ARTIFACT -> NOTHING RECORDED AT ALL. This is the bound that keeps 24
@@ -1291,13 +1568,13 @@ def _selftest_tick_evidence() -> None:
             assert r3["verdicts_recorded"] == 1, r3
 
             # 4. A NEW FINDING IS USEFUL, and the evidence names what moved.
-            write("obs-daily.json", daily(["range-lane-rollout", "new-defect"], [], 5),
-                  now + 2000)
+            write("obs-daily.json", daily(["range-lane-rollout", "new-defect"], [], 5), now + 2000)
             r4 = tick_evidence(now=now + 2 * 86400, **common)
             got = {e["capability_id"]: e for e in r4["evaluated"]}
             assert got["obs-daily"]["useful"] is True, got["obs-daily"]
-            assert any(d.startswith("overdue +1") for d in got["obs-daily"]["changed_keys"]), \
-                got["obs-daily"]["changed_keys"]
+            assert any(d.startswith("overdue +1") for d in got["obs-daily"]["changed_keys"]), got[
+                "obs-daily"
+            ]["changed_keys"]
             # ...and a finding that RESOLVED is also a change worth reporting.
             write("obs-daily.json", daily([], [], 7), now + 3000)
             r4b = tick_evidence(now=now + 3 * 86400, **common)
@@ -1321,7 +1598,9 @@ def _selftest_tick_evidence() -> None:
             write("np.json", {"anything": 2}, now + 5000)
             r5b = tick_evidence(now=now + 5 * 86400 + 1, **common)
             got = {e["capability_id"]: e for e in r5b["evaluated"]}
-            assert got["no-projection"].get("reason") == "no_finding_projection", got["no-projection"]
+            assert got["no-projection"].get("reason") == "no_finding_projection", got[
+                "no-projection"
+            ]
 
             # 6. A SHAPE CHANGE IS REPORTED, NEVER SCORED. A broken parse must not read as
             #    "nothing new" -- that is this repo's founding defect wearing a different hat.
@@ -1345,18 +1624,21 @@ def _selftest_tick_evidence() -> None:
             # The trial carries a real control arm: a bound candidate that did not run that day.
             trials = {t["experiment_id"]: t for t in experiments(path=ledger)}
             assert trials, "the tick produced no natural experiment at all"
-            assert any(t["not_triggered"] for t in trials.values()), \
-                "every trial triggered everything, so there is no control arm"
-            assert any(TICK_SURFACE in (t["skills"] or []) for t in trials.values()), \
-                "trials are not attributable to the tick surface, so demotion could never drain it"
+            assert any(
+                t["not_triggered"] for t in trials.values()
+            ), "every trial triggered everything, so there is no control arm"
+            assert any(
+                TICK_SURFACE in (t["skills"] or []) for t in trials.values()
+            ), "trials are not attributable to the tick surface, so demotion could never drain it"
 
             # 8. THE DAY CEILING IS STRUCTURAL. Force a second same-day evaluation and prove the
             #    idempotency key refuses it, so a bug in the freshness gate still cannot inflate.
             write("obs-daily.json", daily(["seed"], [], 0), now + 7000)
-            tick_evidence(now=now + 6 * 86400, **common)   # consumes day 6's single allowance
+            tick_evidence(now=now + 6 * 86400, **common)  # consumes day 6's single allowance
             before = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
-            assert before >= 1, (
-                f"the fixture produced no verdicts, so 'no further verdicts' is vacuous: {before}")
+            assert (
+                before >= 1
+            ), f"the fixture produced no verdicts, so 'no further verdicts' is vacuous: {before}"
             for bump in range(1, 6):
                 # Each write moves the mtime forward AND changes the findings, so the freshness gate
                 # and the change test both say "record a verdict". Only the day-scoped idempotency
@@ -1366,7 +1648,8 @@ def _selftest_tick_evidence() -> None:
             after = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
             assert after == before, (
                 f"five more same-day evaluations added {after - before} verdict(s); the day-scoped "
-                f"experiment id must admit at most one per capability per day")
+                f"experiment id must admit at most one per capability per day"
+            )
 
             # 9. THE KILL SWITCH. Off means the tick behaves exactly as before this existed: no
             #    consult, no ledger event, no state write.
@@ -1381,10 +1664,12 @@ def _selftest_tick_evidence() -> None:
                 assert off["evaluated"] == [] and off["bound"] == [], off
             finally:
                 os.environ.pop("ORCH_TICK_EVIDENCE_DISABLED", None)
-            assert (state_dir / TICK_EVIDENCE_STATE).read_text(encoding="utf-8") == state_before, \
-                "a disabled run wrote state"
-            assert usefulness(path=ledger)["rows"] == resolved_before, \
-                "a disabled run wrote ledger evidence"
+            assert (state_dir / TICK_EVIDENCE_STATE).read_text(
+                encoding="utf-8"
+            ) == state_before, "a disabled run wrote state"
+            assert (
+                usefulness(path=ledger)["rows"] == resolved_before
+            ), "a disabled run wrote ledger evidence"
             # ...and with the switch back off, the same fresh artifact IS evaluated, so the
             # assertion above discriminates rather than describing an inert path.
             on = tick_evidence(now=now + 9 * 86400, **common)
@@ -1396,17 +1681,23 @@ def _selftest_tick_evidence() -> None:
             os.utime(state_dir / "obs-daily.json", (now + 10_000, now + 10_000))
             r10 = tick_evidence_guarded(now=now + 10 * 86400, **common)
             assert "unreadable_artifact" in {s["reason"] for s in r10["skipped"]}, r10["skipped"]
-            broken = tick_evidence_guarded(now=now + 11 * 86400, state_dir=state_dir, path=ledger,
-                                            steps={"obs-daily": {"artifact": None}})
+            broken = tick_evidence_guarded(
+                now=now + 11 * 86400,
+                state_dir=state_dir,
+                path=ledger,
+                steps={"obs-daily": {"artifact": None}},
+            )
             assert "no_cadence_artifact" in {s["reason"] for s in broken["skipped"]}, broken
             assert format_tick_evidence(r10), "the tick log line must never be empty"
             assert "DISABLED" in format_tick_evidence({"disabled": True})
             # A ZERO BUDGET MUST MEAN ZERO WORK, not a silent promotion to the default. A control
             # that quietly does something other than what it says is worse than no control.
-            write("obs-weekly.json", {"held_off": [{"flag": "ORCH_Y", "state": "off"}]},
-                  now + 12_000)
-            starved = tick_evidence_guarded(now=now + 12 * 86400, state_dir=state_dir, path=ledger,
-                                            steps=t_steps, budget_s=0)
+            write(
+                "obs-weekly.json", {"held_off": [{"flag": "ORCH_Y", "state": "off"}]}, now + 12_000
+            )
+            starved = tick_evidence_guarded(
+                now=now + 12 * 86400, state_dir=state_dir, path=ledger, steps=t_steps, budget_s=0
+            )
             assert "budget_exhausted" in {s["reason"] for s in starved["skipped"]}, starved
             assert starved["verdicts_recorded"] == 0, starved
         finally:
@@ -1417,14 +1708,23 @@ def _selftest_tick_evidence() -> None:
             else:
                 capability_advisor.SURFACE_BINDINGS[TICK_SURFACE] = real_binding
 
-    print("capability_propensity tick-evidence selftest: OK (baseline first, identical output is "
-          "NOT useful, moving counters are projected away, non-observers get no output verdict, "
-          "shape change reported not scored, one verdict per capability per day, kill switch inert)")
+    print(
+        "capability_propensity tick-evidence selftest: OK (baseline first, identical output is "
+        "NOT useful, moving counters are projected away, non-observers get no output verdict, "
+        "shape change reported not scored, one verdict per capability per day, kill switch inert)"
+    )
 
 
-def record_decline(capability_id: str, experiment_id: str, *, reason: str, surface: str = "",
-                   kind: str = DECLINE_KIND_DEFAULT, path=None,
-                   metadata: dict | None = None) -> bool:
+def record_decline(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    reason: str,
+    surface: str = "",
+    kind: str = DECLINE_KIND_DEFAULT,
+    path=None,
+    metadata: dict | None = None,
+) -> bool:
     """This candidate was OFFERED and deliberately NOT used, for a stated reason.
 
     THE THIRD STATE. `record_trigger` says it ran; `record_usefulness` says whether running helped.
@@ -1451,18 +1751,28 @@ def record_decline(capability_id: str, experiment_id: str, *, reason: str, surfa
     Idempotent per (capability, experiment), so replaying a backfill cannot inflate the count.
     """
     if not str(reason).strip():
-        raise ValueError("a decline requires a reason naming why this capability was not the right "
-                         "tool here; an unexplained decline is indistinguishable from inattention")
+        raise ValueError(
+            "a decline requires a reason naming why this capability was not the right "
+            "tool here; an unexplained decline is indistinguishable from inattention"
+        )
     if str(kind) not in DECLINE_KINDS:
         raise ValueError(f"unknown decline kind {kind!r}; expected one of {sorted(DECLINE_KINDS)}")
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
     return capabilities.heartbeat(
-        capability_id, "match", ref=experiment_id, path=path or capabilities.REG,
+        capability_id,
+        "match",
+        ref=experiment_id,
+        path=path or capabilities.REG,
         idempotency_key=f"decline:{capability_id}:{experiment_id}",
-        metadata={"source": DECLINE_SOURCE, DECLINE_REASON_KEY: str(reason)[:400],
-                  DECLINE_KIND_KEY: str(kind), SURFACE_KEY: surface or None,
-                  **(metadata or {})})
+        metadata={
+            "source": DECLINE_SOURCE,
+            DECLINE_REASON_KEY: str(reason)[:400],
+            DECLINE_KIND_KEY: str(kind),
+            SURFACE_KEY: surface or None,
+            **(metadata or {}),
+        },
+    )
 
 
 def _selftest_declines() -> None:
@@ -1482,6 +1792,7 @@ def _selftest_declines() -> None:
     """
     import tempfile
     from pathlib import Path
+
     import capability_advisor
 
     with tempfile.TemporaryDirectory(prefix="decline-selftest-") as td:
@@ -1496,8 +1807,14 @@ def _selftest_declines() -> None:
 
         exp = "advice:decline000001"
         for cid in ("helper", "wrong-tool"):
-            capabilities.heartbeat(cid, "match", ref=exp, path=ledger,
-                                   idempotency_key=f"m:{cid}", metadata={"skill": "t-dec"})
+            capabilities.heartbeat(
+                cid,
+                "match",
+                ref=exp,
+                path=ledger,
+                idempotency_key=f"m:{cid}",
+                metadata={"skill": "t-dec"},
+            )
         record_trigger("helper", exp, path=ledger)
         record_usefulness("helper", exp, useful=True, evidence="found a real defect", path=ledger)
 
@@ -1508,8 +1825,14 @@ def _selftest_declines() -> None:
         assert before["evidence_count"] == 1 and before["propensity"] == 0.6667, before
         for i in range(3):
             e = f"advice:helperdecl{i:03d}"
-            assert record_decline("helper", e, reason=f"wrong phase for this work ({i})",
-                                  surface="t-dec", kind="wrong_match", path=ledger)
+            assert record_decline(
+                "helper",
+                e,
+                reason=f"wrong phase for this work ({i})",
+                surface="t-dec",
+                kind="wrong_match",
+                path=ledger,
+            )
         after = propensity("helper", path=ledger)
         assert after["propensity"] == before["propensity"], (before, after)
         assert after["posterior_mean"] == before["posterior_mean"], (before, after)
@@ -1522,17 +1845,29 @@ def _selftest_declines() -> None:
         assert "never scored" in after["basis"], after["basis"]
         u = usefulness(path=ledger)["rows"]["helper"]
         assert u["declined"] == 3 and u["useful"] == 1 and u["not_useful"] == 0, u
-        assert u["usefulness_rate"] == 1.0, u        # not 0.25 — declines are not failures
+        assert u["usefulness_rate"] == 1.0, u  # not 0.25 — declines are not failures
 
         # ---- 2. THE THREE STATES PARTITION THE CANDIDATE SET. This is what makes "declined with a
         # reason", "offered and ignored" and "never considered" three different findings.
         d_exp = "advice:decline000002"
         for cid in ("helper", "wrong-tool", "used-here"):
-            capabilities.heartbeat(cid, "match", ref=d_exp, path=ledger,
-                                   idempotency_key=f"m2:{cid}", metadata={"surface": "t-dec"})
+            capabilities.heartbeat(
+                cid,
+                "match",
+                ref=d_exp,
+                path=ledger,
+                idempotency_key=f"m2:{cid}",
+                metadata={"surface": "t-dec"},
+            )
         record_trigger("used-here", d_exp, path=ledger)
-        record_decline("wrong-tool", d_exp, reason="this repo has no front end", surface="t-dec",
-                       kind="wrong_match", path=ledger)
+        record_decline(
+            "wrong-tool",
+            d_exp,
+            reason="this repo has no front end",
+            surface="t-dec",
+            kind="wrong_match",
+            path=ledger,
+        )
         trial = next(t for t in experiments(path=ledger) if t["experiment_id"] == d_exp)
         assert trial["declined"] == ["wrong-tool"], trial
         assert trial["decline_reasons"]["wrong-tool"] == "this repo has no front end", trial
@@ -1540,8 +1875,9 @@ def _selftest_declines() -> None:
         assert trial["declined_demotable"] == ["wrong-tool"], trial
         assert trial["triggered"] == ["used-here"], trial
         assert trial["not_triggered_silently"] == ["helper"], trial
-        assert (set(trial["triggered"]) | set(trial["declined"])
-                | set(trial["not_triggered_silently"])) == set(trial["candidates"]), trial
+        assert (
+            set(trial["triggered"]) | set(trial["declined"]) | set(trial["not_triggered_silently"])
+        ) == set(trial["candidates"]), trial
         assert not (set(trial["triggered"]) & set(trial["declined"])), trial
         assert not (set(trial["declined"]) & set(trial["not_triggered_silently"])), trial
         # A DECLINE RESOLVES NOTHING. `resolved` gates the usefulness population, so a decline that
@@ -1555,10 +1891,22 @@ def _selftest_declines() -> None:
 
         # ---- 3. THE TRIGGER WINS. Declining and then using it is a change of mind, not a rejection.
         both = "advice:decline000003"
-        capabilities.heartbeat("helper", "match", ref=both, path=ledger,
-                               idempotency_key="m3:helper", metadata={"surface": "t-dec"})
-        record_decline("helper", both, reason="looked wrong at first", surface="t-dec",
-                       kind="wrong_match", path=ledger)
+        capabilities.heartbeat(
+            "helper",
+            "match",
+            ref=both,
+            path=ledger,
+            idempotency_key="m3:helper",
+            metadata={"surface": "t-dec"},
+        )
+        record_decline(
+            "helper",
+            both,
+            reason="looked wrong at first",
+            surface="t-dec",
+            kind="wrong_match",
+            path=ledger,
+        )
         record_trigger("helper", both, path=ledger)
         t3 = next(t for t in experiments(path=ledger) if t["experiment_id"] == both)
         assert t3["declined"] == [] and t3["triggered"] == ["helper"], t3
@@ -1584,28 +1932,38 @@ def _selftest_declines() -> None:
         # hide the classification the caller believed it had made, and `unspecified` cannot demote —
         # so the coercion would quietly discard the one signal the taxonomy exists to carry.
         try:
-            record_decline("helper", "advice:decline0000ff", reason="x", kind="wrong-match",
-                           path=ledger)
+            record_decline(
+                "helper", "advice:decline0000ff", reason="x", kind="wrong-match", path=ledger
+            )
         except ValueError:
             pass
         else:
             raise AssertionError("an unknown decline kind must be refused, not coerced")
         # Omitting the kind is allowed and yields the non-demotable default: no silence, no wrong
         # correction. Failing toward motion, not toward a demotion nobody classified.
-        assert record_decline("helper", "advice:decline0000aa", reason="did not classify it",
-                              surface="t-dec", path=ledger)
+        assert record_decline(
+            "helper",
+            "advice:decline0000aa",
+            reason="did not classify it",
+            surface="t-dec",
+            path=ledger,
+        )
         assert decline_kind_demotable(DECLINE_KIND_DEFAULT) is False
         # IDEMPOTENT per (capability, experiment): replaying a backfill cannot inflate the count.
-        assert record_decline("wrong-tool", d_exp, reason="repeat", surface="t-dec",
-                              path=ledger) is False
+        assert (
+            record_decline("wrong-tool", d_exp, reason="repeat", surface="t-dec", path=ledger)
+            is False
+        )
         assert usefulness(path=ledger)["rows"]["wrong-tool"]["declined"] == 1
 
         # ---- 5. DEMOTION CONSUMES DECLINES. A binding rejected repeatedly at one surface is the
         # drain the binding table needs, and it must carry the caller's own words.
         real = capability_advisor.SURFACE_BINDINGS.get("t-dec")
-        capability_advisor.SURFACE_BINDINGS["t-dec"] = {"wrong-tool": "bound for now",
-                                                       "used-here": "bound and used",
-                                                       "helper": "bound and used"}
+        capability_advisor.SURFACE_BINDINGS["t-dec"] = {
+            "wrong-tool": "bound for now",
+            "used-here": "bound and used",
+            "helper": "bound and used",
+        }
         try:
             # LITERAL boundary, deliberately not `DEMOTION_MIN_DECLINES - 1`: an assertion written
             # in terms of the constant it guards moves with the constant and can never fail.
@@ -1616,9 +1974,14 @@ def _selftest_declines() -> None:
             assert propose_demotions("t-dec", path=ledger) == [], "1 decline must not demote"
             counts = surface_decline_counts("t-dec", path=ledger)
             assert counts["declined"]["wrong-tool"] == 1, counts
-            record_decline("wrong-tool", "advice:decline000005",
-                           reason="code-mutating tool offered inside a read-only audit",
-                           surface="t-dec", kind="wrong_match", path=ledger)
+            record_decline(
+                "wrong-tool",
+                "advice:decline000005",
+                reason="code-mutating tool offered inside a read-only audit",
+                surface="t-dec",
+                kind="wrong_match",
+                path=ledger,
+            )
             dem = propose_demotions("t-dec", path=ledger)
             assert [d["capability_id"] for d in dem] == ["wrong-tool"], dem
             assert dem[0]["basis"] == "declined_with_reason", dem[0]
@@ -1635,23 +1998,35 @@ def _selftest_declines() -> None:
             # over. Enough declines to clear the floor on its own, or removing the trigger guard
             # would leave this below the floor and the assertion could not discriminate.
             for i in range(DEMOTION_MIN_DECLINES + 1):
-                record_decline("used-here", f"advice:usedheredec{i:02d}",
-                               reason="not this time", surface="t-dec", kind="wrong_match",
-                               path=ledger)
-            assert surface_decline_counts("t-dec", path=ledger)["declined"]["used-here"] > \
-                DEMOTION_MIN_DECLINES
-            assert "used-here" not in [d["capability_id"] for d in
-                                       propose_demotions("t-dec", path=ledger)], \
-                "a capability triggered at this surface is not a demotion candidate"
+                record_decline(
+                    "used-here",
+                    f"advice:usedheredec{i:02d}",
+                    reason="not this time",
+                    surface="t-dec",
+                    kind="wrong_match",
+                    path=ledger,
+                )
+            assert (
+                surface_decline_counts("t-dec", path=ledger)["declined"]["used-here"]
+                > DEMOTION_MIN_DECLINES
+            )
+            assert "used-here" not in [
+                d["capability_id"] for d in propose_demotions("t-dec", path=ledger)
+            ], "a capability triggered at this surface is not a demotion candidate"
 
             # ATTRIBUTION IS ON THE EVENT. A decline with no surface is still recorded and still
             # readable, and it must not feed a demotion for a surface it never named.
-            record_decline("helper", "advice:decline000006", reason="no surface given",
-                           kind="wrong_match", path=ledger)
+            record_decline(
+                "helper",
+                "advice:decline000006",
+                reason="no surface given",
+                kind="wrong_match",
+                path=ledger,
+            )
             assert usefulness(path=ledger)["rows"]["helper"]["declined"] >= 4
-            assert "helper" not in [d["capability_id"] for d in
-                                    propose_demotions("t-dec", path=ledger)], \
-                "an unattributed decline must not demote a surface it never named"
+            assert "helper" not in [
+                d["capability_id"] for d in propose_demotions("t-dec", path=ledger)
+            ], "an unattributed decline must not demote a surface it never named"
 
             # ---- THE TAXONOMY'S WHOLE POINT: A CORRECT MATCH MUST NOT BE PUNISHED FOR BEING
             # RIGHT. `testgen-lane` matched correctly three times in one read-only audit and was
@@ -1664,16 +2039,24 @@ def _selftest_declines() -> None:
             # apart from "the floor was not reached".
             right_but_impossible = capabilities._blank_capability("right-but-impossible")
             right_but_impossible["status"] = "generated"
-            right_but_impossible["matcher"] = {"field": "task_type", "operator": "in",
-                                               "value": ["testgen"]}
+            right_but_impossible["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["testgen"],
+            }
             all_rows = capabilities.load_declared(ledger)
             all_rows["right-but-impossible"] = right_but_impossible
             capabilities.save(all_rows, ledger)
             capability_advisor.SURFACE_BINDINGS["t-dec"]["right-but-impossible"] = "bound, correct"
             for i in range(DEMOTION_MIN_DECLINES * 4):
-                record_decline("right-but-impossible", f"advice:nolanding{i:04d}",
-                               reason="correct match, read-only run has no commit target",
-                               surface="t-dec", kind="no_landing_zone", path=ledger)
+                record_decline(
+                    "right-but-impossible",
+                    f"advice:nolanding{i:04d}",
+                    reason="correct match, read-only run has no commit target",
+                    surface="t-dec",
+                    kind="no_landing_zone",
+                    path=ledger,
+                )
             counts = surface_decline_counts("t-dec", path=ledger)
             # The decline IS recorded and IS visible -- inert must not mean invisible.
             assert counts["declined"]["right-but-impossible"] == DEMOTION_MIN_DECLINES * 4, counts
@@ -1682,15 +2065,19 @@ def _selftest_declines() -> None:
             # floor as well, so it proves the never-triggered rule cannot be reached through
             # declines. Without that, eight honest declines demote a correct match via the other
             # rule -- which is what the first draft of this function actually did.
-            assert DEMOTION_MIN_DECLINES * 4 >= DEMOTION_MIN_TRIALS, (
-                "this probe must exceed the silent-offer floor too, or it cannot discriminate")
+            assert (
+                DEMOTION_MIN_DECLINES * 4 >= DEMOTION_MIN_TRIALS
+            ), "this probe must exceed the silent-offer floor too, or it cannot discriminate"
             assert counts["silent"].get("right-but-impossible", 0) == 0, counts
-            assert counts["declines_by_kind"]["right-but-impossible"] == \
-                {"no_landing_zone": DEMOTION_MIN_DECLINES * 4}, counts
+            assert counts["declines_by_kind"]["right-but-impossible"] == {
+                "no_landing_zone": DEMOTION_MIN_DECLINES * 4
+            }, counts
             assert "right-but-impossible" not in [
-                d["capability_id"] for d in propose_demotions("t-dec", path=ledger)], \
-                ("a CORRECT match blocked by the deliverable's shape must never be demoted — the "
-                 "fix for no_landing_zone is nothing")
+                d["capability_id"] for d in propose_demotions("t-dec", path=ledger)
+            ], (
+                "a CORRECT match blocked by the deliverable's shape must never be demoted — the "
+                "fix for no_landing_zone is nothing"
+            )
             # ...and it must not reach the posterior either, on any kind.
             prop = propensity("right-but-impossible", path=ledger)
             assert prop["evidence_count"] == 0 and prop["declines"] == DEMOTION_MIN_DECLINES * 4
@@ -1709,16 +2096,22 @@ def _selftest_declines() -> None:
             capabilities.save(rows2, ledger)
             capability_advisor.SURFACE_BINDINGS["t-dec"]["surface-gated"] = "bound, conditional"
             for i in range(DEMOTION_MIN_DECLINES):
-                record_decline("surface-gated", f"advice:precond{i:05d}",
-                               reason="this repository has no observable surface at all",
-                               surface="t-dec", kind="precondition_unmet", path=ledger)
+                record_decline(
+                    "surface-gated",
+                    f"advice:precond{i:05d}",
+                    reason="this repository has no observable surface at all",
+                    surface="t-dec",
+                    kind="precondition_unmet",
+                    path=ledger,
+                )
             pc = surface_decline_counts("t-dec", path=ledger)
             assert pc["declined"]["surface-gated"] == DEMOTION_MIN_DECLINES, pc
             assert pc["declined_demotable"].get("surface-gated", 0) == 0, pc
             dem_ids = [d["capability_id"] for d in propose_demotions("t-dec", path=ledger)]
             assert "surface-gated" not in dem_ids, (
                 "an unmet PRECONDITION must never demote the binding — the fix is to evaluate the "
-                "condition, and two negatives are not a verdict on a binding that fires elsewhere")
+                "condition, and two negatives are not a verdict on a binding that fires elsewhere"
+            )
             assert DECLINE_KINDS["precondition_unmet"]["demotable"] is False
 
             # EVERY non-demotable kind behaves the same way, so the guarantee is a property of the
@@ -1736,22 +2129,34 @@ def _selftest_declines() -> None:
                 capabilities.save(rows_now, ledger)
                 capability_advisor.SURFACE_BINDINGS["t-dec"][cid] = f"bound to probe {kind}"
                 for i in range(DEMOTION_MIN_DECLINES * 3):
-                    record_decline(cid, f"advice:{kind[:6]}nd{i:04d}",
-                                   reason=f"declined as {kind}", surface="t-dec", kind=kind,
-                                   path=ledger)
-                assert cid not in [d["capability_id"]
-                                   for d in propose_demotions("t-dec", path=ledger)], \
-                    f"a non-demotable kind ({kind}) demoted a binding"
+                    record_decline(
+                        cid,
+                        f"advice:{kind[:6]}nd{i:04d}",
+                        reason=f"declined as {kind}",
+                        surface="t-dec",
+                        kind=kind,
+                        path=ledger,
+                    )
+                assert cid not in [
+                    d["capability_id"] for d in propose_demotions("t-dec", path=ledger)
+                ], f"a non-demotable kind ({kind}) demoted a binding"
 
             # `detect()` prints the drainable quantity for the surface even when nothing fires --
             # and it must find a surface that has EVIDENCE BUT NO TABLE ENTRY, because the surfaces
             # most likely to be over-bound are the ones that only inherit a binding. `t-dec` has a
             # stubbed entry, so assert the derived path on a surface that has none.
             assert "t-dec" in observed_surfaces(path=ledger), sorted(observed_surfaces(path=ledger))
-            record_decline("helper", "advice:inherited0001", reason="inherited-surface probe",
-                           surface="t-inherited-only", kind="wrong_match", path=ledger)
-            assert "t-inherited-only" in observed_surfaces(path=ledger), \
-                "a surface with evidence and no table entry must still be enumerated"
+            record_decline(
+                "helper",
+                "advice:inherited0001",
+                reason="inherited-surface probe",
+                surface="t-inherited-only",
+                kind="wrong_match",
+                path=ledger,
+            )
+            assert "t-inherited-only" in observed_surfaces(
+                path=ledger
+            ), "a surface with evidence and no table entry must still be enumerated"
             assert "t-inherited-only" not in capability_advisor.SURFACE_BINDINGS
             rep = detect(path=ledger)
             assert "t-dec" in rep["surfaces"], sorted(rep["surfaces"])
@@ -1761,9 +2166,11 @@ def _selftest_declines() -> None:
             # this project's most-repeated testing mistake.
             assert "t-inherited-only" in rep["surfaces"], (
                 "detect() must REPORT a surface that has decline evidence and no table entry; "
-                f"it reported {sorted(rep['surfaces'])}")
-            assert rep["surfaces"]["t-inherited-only"]["declines"] == {"helper": 1}, \
-                rep["surfaces"]["t-inherited-only"]
+                f"it reported {sorted(rep['surfaces'])}"
+            )
+            assert rep["surfaces"]["t-inherited-only"]["declines"] == {"helper": 1}, rep[
+                "surfaces"
+            ]["t-inherited-only"]
             assert rep["surfaces"]["t-dec"]["declines"]["wrong-tool"] == 2, rep["surfaces"]["t-dec"]
             assert rep["surfaces"]["t-dec"]["declines_floor"] == DEMOTION_MIN_DECLINES
             assert "wrong-tool" in [d["capability_id"] for d in rep["demotions"]], rep["demotions"]
@@ -1783,8 +2190,10 @@ def _selftest_declines() -> None:
         assert rep_now["decline_count"] >= 6, rep_now
         assert rep_now["capabilities_declined_with_reason"] >= 3, rep_now
 
-    print("capability_propensity decline selftest: OK (a decline is a candidate, never an outcome, "
-          "never moves the posterior, partitions the third state, and drains a binding)")
+    print(
+        "capability_propensity decline selftest: OK (a decline is a candidate, never an outcome, "
+        "never moves the posterior, partitions the third state, and drains a binding)"
+    )
 
 
 def _selftest_detection() -> None:
@@ -1797,6 +2206,7 @@ def _selftest_detection() -> None:
     """
     import tempfile
     from pathlib import Path
+
     import capability_advisor
 
     with tempfile.TemporaryDirectory(prefix="detect-selftest-") as td:
@@ -1824,7 +2234,9 @@ def _selftest_detection() -> None:
             # LITERAL boundary, deliberately not `PROMOTION_MIN_HAND_WORK - 1`: an assertion
             # written in terms of the constant it guards moves with the constant and can never fail.
             assert PROMOTION_MIN_HAND_WORK == 3, "boundary cases below assume the floor is 3"
-            assert propose_bindings("t-surf", recs[:2], path=ledger) == [], "2 records must not promote"
+            assert (
+                propose_bindings("t-surf", recs[:2], path=ledger) == []
+            ), "2 records must not promote"
             assert propose_bindings("t-surf", recs[:3], path=ledger), "3 records must promote"
 
             # ALREADY BOUND is never re-proposed.
@@ -1837,26 +2249,48 @@ def _selftest_detection() -> None:
             # ENOUGH of them to clear the promotion floor on their own, or a break that counted the
             # control arm would stay under the floor and the assertion could not discriminate.
             for i in range(PROMOTION_MIN_HAND_WORK + 2):
-                capabilities.heartbeat("adversarial-review", "match", ref=f"advice:ratchet{i:07d}",
-                                       path=ledger, idempotency_key=f"m:ar{i}",
-                                       metadata={"skill": "t-surf"})
+                capabilities.heartbeat(
+                    "adversarial-review",
+                    "match",
+                    ref=f"advice:ratchet{i:07d}",
+                    path=ledger,
+                    idempotency_key=f"m:ar{i}",
+                    metadata={"skill": "t-surf"},
+                )
             ms = missed_selection("t-surf", ["nothing here"] * 9, path=ledger)
             ar = next(r for r in ms["rows"] if r["capability_id"] == "adversarial-review")
             assert ar["named_not_triggered"] >= PROMOTION_MIN_HAND_WORK, ar
             assert ar["hand_work"] == 0, ar
-            promoted = [p["capability_id"] for p in
-                        propose_bindings("t-surf", ["nothing here"] * 9, path=ledger)]
-            assert "adversarial-review" not in promoted, (
-                "the control arm must never promote on its own — that is the ratchet")
+            promoted = [
+                p["capability_id"]
+                for p in propose_bindings("t-surf", ["nothing here"] * 9, path=ledger)
+            ]
+            assert (
+                "adversarial-review" not in promoted
+            ), "the control arm must never promote on its own — that is the ratchet"
 
             # DEMOTION is the drain: bindings that could only grow end at 43 per surface.
             for i in range(DEMOTION_MIN_TRIALS):
-                capabilities.heartbeat("bound-idle", "match", ref=f"advice:idle{i:08d}", path=ledger,
-                                       idempotency_key=f"m:idle{i}", metadata={"skill": "t-surf"})
-                capabilities.heartbeat("bound-idle", "outcome", ref=f"advice:idle{i:08d}",
-                                       path=ledger, idempotency_key=f"o:idle{i}",
-                                       metadata={"skill": "t-surf", USEFUL_KEY: False,
-                                                 "evidence": "resolved so the trial counts"})
+                capabilities.heartbeat(
+                    "bound-idle",
+                    "match",
+                    ref=f"advice:idle{i:08d}",
+                    path=ledger,
+                    idempotency_key=f"m:idle{i}",
+                    metadata={"skill": "t-surf"},
+                )
+                capabilities.heartbeat(
+                    "bound-idle",
+                    "outcome",
+                    ref=f"advice:idle{i:08d}",
+                    path=ledger,
+                    idempotency_key=f"o:idle{i}",
+                    metadata={
+                        "skill": "t-surf",
+                        USEFUL_KEY: False,
+                        "evidence": "resolved so the trial counts",
+                    },
+                )
             dem = propose_demotions("t-surf", path=ledger)
             assert [d["capability_id"] for d in dem] == ["bound-idle"], dem
             assert dem[0]["triggered"] == 0 and dem[0]["offered"] >= DEMOTION_MIN_TRIALS, dem[0]
@@ -1874,8 +2308,10 @@ def _selftest_detection() -> None:
                 capability_advisor.SURFACE_BINDINGS.pop("t-surf", None)
             else:
                 capability_advisor.SURFACE_BINDINGS["t-surf"] = real
-    print("capability_propensity detection selftest: OK (hand work promotes above a floor, the "
-          "control arm never promotes, demotion drains, promotions must state why)")
+    print(
+        "capability_propensity detection selftest: OK (hand work promotes above a floor, the "
+        "control arm never promotes, demotion drains, promotions must state why)"
+    )
 
 
 def _selftest() -> None:
@@ -1897,12 +2333,20 @@ def _selftest() -> None:
 
         exp = "advice:deadbeef1234"
         for cid in ("helper", "dud", "never-tried"):
-            capabilities.heartbeat(cid, "match", ref=exp, path=ledger,
-                                   idempotency_key=f"m:{cid}", metadata={"skill": "repo-audit"})
+            capabilities.heartbeat(
+                cid,
+                "match",
+                ref=exp,
+                path=ledger,
+                idempotency_key=f"m:{cid}",
+                metadata={"skill": "repo-audit"},
+            )
         record_trigger("helper", exp, path=ledger)
         record_trigger("dud", exp, path=ledger)
         record_usefulness("helper", exp, useful=True, evidence="found 3 real defects", path=ledger)
-        record_usefulness("dud", exp, useful=False, evidence="no findings, cost a round", path=ledger)
+        record_usefulness(
+            "dud", exp, useful=False, evidence="no findings, cost a round", path=ledger
+        )
 
         trials = experiments(path=ledger)
         assert len(trials) == 1, trials
@@ -1970,6 +2414,7 @@ def _selftest() -> None:
     # depend on are pinned here. A loop that can only be closed from Python cannot be closed by an
     # automation, and an experiment id the caller never receives cannot be passed back.
     import capability_advisor
+
     task = "resolve the unresolved review threads on this PR"
     eid = capability_advisor.experiment_id(task)
     assert eid.startswith(ADVICE_REF_PREFIX), eid
@@ -1980,71 +2425,120 @@ def _selftest() -> None:
     got = capability_advisor.advise(task, lane="closer", record=False)
     assert got["experiment_id"] == eid, (got.get("experiment_id"), eid)
     blank = capability_advisor.advise("xyzzy plugh frobnicate", record=False)
-    assert blank["experiment_id"] == capability_advisor.experiment_id("xyzzy plugh frobnicate"), blank
-    print("capability_propensity.py selftest: OK (natural experiments with a reported control arm, "
-          "usefulness orders recommendation, no-evidence stays drainable, window shared)")
+    assert blank["experiment_id"] == capability_advisor.experiment_id(
+        "xyzzy plugh frobnicate"
+    ), blank
+    print(
+        "capability_propensity.py selftest: OK (natural experiments with a reported control arm, "
+        "usefulness orders recommendation, no-evidence stays drainable, window shared)"
+    )
 
 
 def _fmt(rep: dict) -> str:
-    lines = [f"capability propensity — {rep['window_days']}d window",
-             f"  experiments: {rep['experiment_count']} "
-             f"({rep['resolved_experiment_count']} resolved)",
-             f"  capabilities with usefulness evidence: {rep['capabilities_with_evidence']} "
-             f"of {rep['capability_count']}",
-             f"  reasoned declines recorded: {rep['decline_count']} across "
-             f"{rep['capabilities_declined_with_reason']} capability(ies) — counted, never scored; "
-             f"{rep['decline_demotable_count']} attributable to a binding",
-             f"  decline kinds: {rep['declines_by_kind'] or '(none)'}"]
+    lines = [
+        f"capability propensity — {rep['window_days']}d window",
+        f"  experiments: {rep['experiment_count']} "
+        f"({rep['resolved_experiment_count']} resolved)",
+        f"  capabilities with usefulness evidence: {rep['capabilities_with_evidence']} "
+        f"of {rep['capability_count']}",
+        f"  reasoned declines recorded: {rep['decline_count']} across "
+        f"{rep['capabilities_declined_with_reason']} capability(ies) — counted, never scored; "
+        f"{rep['decline_demotable_count']} attributable to a binding",
+        f"  decline kinds: {rep['declines_by_kind'] or '(none)'}",
+    ]
     if not rep["capabilities_with_evidence"]:
-        lines.append("  NOTE: no resolved outcomes yet — every propensity below is the PRIOR, "
-                     "not a measurement")
+        lines.append(
+            "  NOTE: no resolved outcomes yet — every propensity below is the PRIOR, "
+            "not a measurement"
+        )
     lines.append("")
-    lines.append(f"  {'capability':34s} {'prop':>6s} {'cand':>5s} {'trig':>5s} {'use':>4s} {'no':>3s}"
-                 f" {'decl':>5s}")
+    lines.append(
+        f"  {'capability':34s} {'prop':>6s} {'cand':>5s} {'trig':>5s} {'use':>4s} {'no':>3s}"
+        f" {'decl':>5s}"
+    )
     for row in rep["ranked"][:60]:
-        lines.append(f"  {row['capability_id']:34s} {row['propensity']:6.3f} "
-                     f"{row['candidates']:5d} {row['triggered']:5d} {row['useful']:4d} "
-                     f"{row['not_useful']:3d} {row['declined']:5d}"
-                     + ("  (floored)" if row["floored"] else ""))
+        lines.append(
+            f"  {row['capability_id']:34s} {row['propensity']:6.3f} "
+            f"{row['candidates']:5d} {row['triggered']:5d} {row['useful']:4d} "
+            f"{row['not_useful']:3d} {row['declined']:5d}"
+            + ("  (floored)" if row["floored"] else "")
+        )
     return "\n".join(lines) + "\n"
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("command", nargs="?", default="report",
-                    choices=["report", "experiments", "trigger", "useful", "decline", "detect",
-                             "tick-evidence"])
+    ap.add_argument(
+        "command",
+        nargs="?",
+        default="report",
+        choices=[
+            "report",
+            "experiments",
+            "trigger",
+            "useful",
+            "decline",
+            "detect",
+            "tick-evidence",
+        ],
+    )
     # A loop that can only be closed from Python cannot be closed by a lane, which runs bash. These
     # two subcommands are the whole reason the recording edges are reachable from an automation.
     ap.add_argument("--capability", default="", help="capability id, for trigger/useful")
     ap.add_argument("--experiment", default="", help="advice:<digest> from capability_advice")
-    ap.add_argument("--evidence", default="", help="what the capability CHANGED (required by useful)")
-    ap.add_argument("--not-useful", action="store_true",
-                    help="record that triggering it did NOT help")
+    ap.add_argument(
+        "--evidence", default="", help="what the capability CHANGED (required by useful)"
+    )
+    ap.add_argument(
+        "--not-useful", action="store_true", help="record that triggering it did NOT help"
+    )
     # THE CALLERS ARE BASH. Both lane automations and every skill reach this module from a shell, so
     # a verb that exists only in Python is a verb the surfaces that make these decisions cannot use.
-    ap.add_argument("--reason", default="",
-                    help="decline: why this capability was NOT the right tool here (required)")
-    ap.add_argument("--surface", default="",
-                    help="decline: the surface that declined (e.g. repo-audit:phase-2). Optional, "
-                         "but a decline without it cannot feed propose_demotions")
-    ap.add_argument("--kind", default=DECLINE_KIND_DEFAULT, choices=sorted(DECLINE_KINDS),
-                    help="decline: WHICH KIND of decline. The kinds imply opposite fixes, and only "
-                         "wrong_match/scope_too_small can ever demote a binding")
+    ap.add_argument(
+        "--reason",
+        default="",
+        help="decline: why this capability was NOT the right tool here (required)",
+    )
+    ap.add_argument(
+        "--surface",
+        default="",
+        help="decline: the surface that declined (e.g. repo-audit:phase-2). Optional, "
+        "but a decline without it cannot feed propose_demotions",
+    )
+    ap.add_argument(
+        "--kind",
+        default=DECLINE_KIND_DEFAULT,
+        choices=sorted(DECLINE_KINDS),
+        help="decline: WHICH KIND of decline. The kinds imply opposite fixes, and only "
+        "wrong_match/scope_too_small can ever demote a binding",
+    )
     # ISOLATION FOR PROOFS. Wiring this up, I recorded a trial into the LIVE ledger whose evidence
     # described the wiring rather than the capability's review value -- a mislabeled trial, and the
     # system's first data point. A proof belongs on a throwaway ledger; without this flag the only
     # way to demonstrate the path was to pollute the thing being demonstrated.
-    ap.add_argument("--apply", action="store_true",
-                    help="detect: write the proposed promotions (default is report-only)")
-    ap.add_argument("--ledger", default="",
-                    help="write to this ledger instead of the live one (use for demos and proofs)")
+    ap.add_argument(
+        "--apply",
+        action="store_true",
+        help="detect: write the proposed promotions (default is report-only)",
+    )
+    ap.add_argument(
+        "--ledger",
+        default="",
+        help="write to this ledger instead of the live one (use for demos and proofs)",
+    )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--window-days", type=int, default=WINDOW_DAYS)
-    ap.add_argument("--dry-run", action="store_true",
-                    help="tick-evidence: consult and classify but record nothing")
-    ap.add_argument("--budget-seconds", type=int, default=TICK_EVIDENCE_BUDGET_S,
-                    help="tick-evidence: wall-clock ceiling; the tick must never wait longer")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="tick-evidence: consult and classify but record nothing",
+    )
+    ap.add_argument(
+        "--budget-seconds",
+        type=int,
+        default=TICK_EVIDENCE_BUDGET_S,
+        help="tick-evidence: wall-clock ceiling; the tick must never wait longer",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
@@ -2057,8 +2551,10 @@ def main(argv: list[str]) -> int:
         # ALWAYS EXIT 0 on a handled failure. The tick calls this every hour and drives real
         # dispatch; an advisory evidence step is not permitted to change the tick's control flow.
         rep = tick_evidence_guarded(
-            record=not args.dry_run, budget_s=args.budget_seconds,
-            path=pathlib.Path(args.ledger) if args.ledger else None)
+            record=not args.dry_run,
+            budget_s=args.budget_seconds,
+            path=pathlib.Path(args.ledger) if args.ledger else None,
+        )
         print(json.dumps(rep, indent=2) if args.json else format_tick_evidence(rep))
         return 0
     if args.command == "detect":
@@ -2067,12 +2563,19 @@ def main(argv: list[str]) -> int:
         if args.json:
             print(json.dumps(rep, indent=2))
         else:
-            print(f"capability selection detection — {len(rep['surfaces'])} surface(s) with records")
+            print(
+                f"capability selection detection — {len(rep['surfaces'])} surface(s) with records"
+            )
             for s_, info in rep["surfaces"].items():
                 print(f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])}")
-            print(f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
-                  + ("  (report-only; pass --apply to write them)" if rep["promotions"]
-                     and not args.apply else ""))
+            print(
+                f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
+                + (
+                    "  (report-only; pass --apply to write them)"
+                    if rep["promotions"] and not args.apply
+                    else ""
+                )
+            )
             for pr in rep["promotions"]:
                 print(f"    + {pr['surface']} -> {pr['capability_id']}: {pr['reason'][:88]}")
             print(f"  DEMOTIONS proposed: {len(rep['demotions'])} (never auto-applied)")
@@ -2087,48 +2590,83 @@ def main(argv: list[str]) -> int:
         ledger = pathlib.Path(args.ledger) if args.ledger else None
         if args.command == "decline":
             if not args.reason.strip():
-                ap.error("--reason is required: an unexplained decline is indistinguishable from "
-                         "inattention, which is the state this verb exists to replace")
-            ok = record_decline(args.capability, args.experiment, reason=args.reason,
-                                surface=args.surface, kind=args.kind, path=ledger)
-            print(json.dumps({"recorded": bool(ok), "command": "decline",
-                              "ledger": str(ledger) if ledger else "live",
-                              "capability": args.capability, "experiment": args.experiment,
-                              "surface": args.surface or None,
-                              "kind": args.kind,
-                              "kind_implies_fix": DECLINE_KINDS[args.kind]["fix"],
-                              "can_demote_the_binding": decline_kind_demotable(args.kind),
-                              # SAY WHAT THIS DID NOT DO. A decline is not a verdict, and a caller
-                              # that thinks it scored the capability has been misled.
-                              "affects_propensity": False,
-                              "attributable_to_surface": bool(args.surface)}))
+                ap.error(
+                    "--reason is required: an unexplained decline is indistinguishable from "
+                    "inattention, which is the state this verb exists to replace"
+                )
+            ok = record_decline(
+                args.capability,
+                args.experiment,
+                reason=args.reason,
+                surface=args.surface,
+                kind=args.kind,
+                path=ledger,
+            )
+            print(
+                json.dumps(
+                    {
+                        "recorded": bool(ok),
+                        "command": "decline",
+                        "ledger": str(ledger) if ledger else "live",
+                        "capability": args.capability,
+                        "experiment": args.experiment,
+                        "surface": args.surface or None,
+                        "kind": args.kind,
+                        "kind_implies_fix": DECLINE_KINDS[args.kind]["fix"],
+                        "can_demote_the_binding": decline_kind_demotable(args.kind),
+                        # SAY WHAT THIS DID NOT DO. A decline is not a verdict, and a caller
+                        # that thinks it scored the capability has been misled.
+                        "affects_propensity": False,
+                        "attributable_to_surface": bool(args.surface),
+                    }
+                )
+            )
             return 0
         if args.command == "trigger":
             ok = record_trigger(args.capability, args.experiment, path=ledger)
         else:
             if not args.evidence.strip():
-                ap.error("--evidence is required: an unevidenced verdict is an opinion, and "
-                         "'it ran' is not usefulness")
-            ok = record_usefulness(args.capability, args.experiment,
-                                   useful=not args.not_useful, evidence=args.evidence,
-                                   path=ledger)
-        print(json.dumps({"recorded": bool(ok), "command": args.command,
-                          "ledger": str(ledger) if ledger else "live",
-                          "capability": args.capability, "experiment": args.experiment}))
+                ap.error(
+                    "--evidence is required: an unevidenced verdict is an opinion, and "
+                    "'it ran' is not usefulness"
+                )
+            ok = record_usefulness(
+                args.capability,
+                args.experiment,
+                useful=not args.not_useful,
+                evidence=args.evidence,
+                path=ledger,
+            )
+        print(
+            json.dumps(
+                {
+                    "recorded": bool(ok),
+                    "command": args.command,
+                    "ledger": str(ledger) if ledger else "live",
+                    "capability": args.capability,
+                    "experiment": args.experiment,
+                }
+            )
+        )
         return 0
     if args.command == "experiments":
         data = experiments(window_days=args.window_days)
-        print(json.dumps(data, indent=2) if args.json else
-              "\n".join(f"{t['experiment_id']}  candidates={len(t['candidates'])} "
-                        f"triggered={len(t['triggered'])} not_triggered={len(t['not_triggered'])} "
-                        f"useful={t['useful']} skills={t['skills']}" for t in data) + "\n")
+        print(
+            json.dumps(data, indent=2)
+            if args.json
+            else "\n".join(
+                f"{t['experiment_id']}  candidates={len(t['candidates'])} "
+                f"triggered={len(t['triggered'])} not_triggered={len(t['not_triggered'])} "
+                f"useful={t['useful']} skills={t['skills']}"
+                for t in data
+            )
+            + "\n"
+        )
         return 0
     rep = report(window_days=args.window_days)
     _capability_heartbeat("invocation", f"cli:report:{rep['experiment_count']}")
     print(json.dumps(rep, indent=2) if args.json else _fmt(rep), end="")
     return 0
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -2177,8 +2715,8 @@ HAND_WORK_SIGNATURES: dict[str, str] = {
     "partitioned-review": r"partition(ed)? (the )?review|split the review",
     "offload": r"offload(ed)? (to|the)|hand(ed)? off the read",
 }
-PROMOTION_MIN_HAND_WORK = 3        # below this, one anecdote could widen a bound set
-DEMOTION_MIN_TRIALS = 8            # resolved experiments a binding gets before non-use counts
+PROMOTION_MIN_HAND_WORK = 3  # below this, one anecdote could widen a bound set
+DEMOTION_MIN_TRIALS = 8  # resolved experiments a binding gets before non-use counts
 # A REASONED DECLINE IS MUCH STRONGER EVIDENCE THAN SILENT NON-USE, so its floor is much lower. A
 # phase surface is consulted at most ONCE per run, so two declines are two independent runs by
 # construction, where `DEMOTION_MIN_TRIALS` trials can all come from one high-volume lane.
@@ -2211,8 +2749,10 @@ def surface_records(surface: str) -> list[str]:
     import os
     import re
     from pathlib import Path
-    pattern = os.environ.get(f"ORCH_RECORDS_{surface.replace('-', '_').upper()}") \
-        or SURFACE_RECORD_GLOBS.get(surface)
+
+    pattern = os.environ.get(
+        f"ORCH_RECORDS_{surface.replace('-', '_').upper()}"
+    ) or SURFACE_RECORD_GLOBS.get(surface)
     if not pattern:
         return []
     root = Path(pattern).expanduser()
@@ -2224,7 +2764,7 @@ def surface_records(surface: str) -> list[str]:
             continue
     if not text:
         return []
-    return [r for r in re.split(RECORD_SPLIT, text, flags=re.M) if r.strip()]
+    return [r for r in re.split(RECORD_SPLIT, text, flags=re.MULTILINE) if r.strip()]
 
 
 def observed_surfaces(*, path=None, window_days: int = WINDOW_DAYS) -> set[str]:
@@ -2233,8 +2773,11 @@ def observed_surfaces(*, path=None, window_days: int = WINDOW_DAYS) -> set[str]:
     Derived, never a second list: a declared table of surfaces would drift from the surfaces that
     exist, and the ones that only INHERIT a binding would never appear in it at all.
     """
-    return {surface for trial in experiments(path=path, window_days=window_days)
-            for surface in (trial.get("skills") or [])}
+    return {
+        surface
+        for trial in experiments(path=path, window_days=window_days)
+        for surface in (trial.get("skills") or [])
+    }
 
 
 def detect(*, path=None, apply_promotions: bool = False) -> dict:
@@ -2245,14 +2788,18 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
     without a diff anyone saw is how a narrowing mechanism quietly stops narrowing.
     """
     import capability_advisor
+
     out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": []}
     # EVERY SURFACE THAT HAS EITHER A DECLARATION OR EVIDENCE. Enumerating only the declared keys
     # missed the inherited ones entirely: `repo-audit:dimension-1` has no table entry of its own --
     # it inherits `offload` surface-wide -- so three independent audits declining `offload` there
     # were recorded and never read. A drain that cannot see a surface cannot drain it, and the
     # surfaces most likely to be over-bound are exactly the ones that only inherit.
-    for surface in sorted(set(SURFACE_RECORD_GLOBS) | set(capability_advisor.SURFACE_BINDINGS)
-                          | observed_surfaces(path=path)):
+    for surface in sorted(
+        set(SURFACE_RECORD_GLOBS)
+        | set(capability_advisor.SURFACE_BINDINGS)
+        | observed_surfaces(path=path)
+    ):
         recs = surface_records(surface)
         proms = propose_bindings(surface, recs, path=path) if recs else []
         dems = propose_demotions(surface, path=path)
@@ -2266,8 +2813,10 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
                 # proposals" beside nothing at all, and only one of those is a healthy silence.
                 "declines": dict(sorted(counts["declined"].items())),
                 "declines_demotable": dict(sorted(counts["declined_demotable"].items())),
-                "declines_by_kind": {c: dict(sorted(k.items()))
-                                     for c, k in sorted(counts["declines_by_kind"].items())},
+                "declines_by_kind": {
+                    c: dict(sorted(k.items()))
+                    for c, k in sorted(counts["declines_by_kind"].items())
+                },
                 "declines_floor": DEMOTION_MIN_DECLINES,
             }
         out["promotions"].extend(proms)
@@ -2281,8 +2830,9 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
                 prom["skipped"] = "surface already at the safe-zone ceiling"
                 continue
             if record_promotion(prom["capability_id"], prom["surface"], prom["reason"], path=path):
-                out["applied"].append({"capability_id": prom["capability_id"],
-                                       "surface": prom["surface"]})
+                out["applied"].append(
+                    {"capability_id": prom["capability_id"], "surface": prom["surface"]}
+                )
     return out
 
 
@@ -2290,8 +2840,9 @@ def _under_use() -> dict[str, int]:
     """Capabilities the Brain says work existed for and which never ran. Consumed, not recomputed."""
     try:
         import capability_matcher_proposals as proposals
+
         rep = proposals.evaluate()
-    except Exception:                                              # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return {}
     out: dict[str, int] = {}
     for row in rep.get("rows") or []:
@@ -2307,20 +2858,23 @@ def hand_work(surface: str, records: list, *, capability_ids=None) -> dict[str, 
     discovered, because their locations are instance evidence and this module is tool.
     """
     import re
+
     wanted = set(capability_ids or HAND_WORK_SIGNATURES)
     out: dict[str, int] = {}
     for cap_id in sorted(wanted & set(HAND_WORK_SIGNATURES)):
-        rx = re.compile(HAND_WORK_SIGNATURES[cap_id], re.I)
+        rx = re.compile(HAND_WORK_SIGNATURES[cap_id], re.IGNORECASE)
         n = sum(1 for text in records if rx.search(str(text)))
         if n:
             out[cap_id] = n
     return out
 
 
-def missed_selection(surface: str, records: list, *, path=None,
-                     window_days: int = WINDOW_DAYS) -> dict:
+def missed_selection(
+    surface: str, records: list, *, path=None, window_days: int = WINDOW_DAYS
+) -> dict:
     """Evidence that this surface passed over a capability it should have chosen."""
     import capability_advisor
+
     bound = set(capability_advisor.binding_for(surface, path=path))
     hands = hand_work(surface, records)
     under = _under_use()
@@ -2335,14 +2889,16 @@ def missed_selection(surface: str, records: list, *, path=None,
 
     rows = []
     for cap_id in sorted(set(hands) | set(control)):
-        rows.append({
-            "capability_id": cap_id,
-            "surface": surface,
-            "hand_work": hands.get(cap_id, 0),
-            "named_not_triggered": control.get(cap_id, 0),
-            "under_use_runs": under.get(cap_id, 0),
-            "already_bound": cap_id in bound,
-        })
+        rows.append(
+            {
+                "capability_id": cap_id,
+                "surface": surface,
+                "hand_work": hands.get(cap_id, 0),
+                "named_not_triggered": control.get(cap_id, 0),
+                "under_use_runs": under.get(cap_id, 0),
+                "already_bound": cap_id in bound,
+            }
+        )
     return {"surface": surface, "record_count": len(records), "bound": sorted(bound), "rows": rows}
 
 
@@ -2352,14 +2908,22 @@ def propose_bindings(surface: str, records: list, *, path=None) -> list[dict]:
     for row in missed_selection(surface, records, path=path)["rows"]:
         if row["already_bound"] or row["hand_work"] < PROMOTION_MIN_HAND_WORK:
             continue
-        out.append({
-            **row,
-            "action": "promote",
-            "reason": (f"{row['hand_work']} of {len(records)} records show this surface doing the "
-                       f"capability's work by hand"
-                       + (f"; the Brain shows {row['under_use_runs']} runs of matching work that "
-                          f"never invoked it" if row["under_use_runs"] else "")),
-        })
+        out.append(
+            {
+                **row,
+                "action": "promote",
+                "reason": (
+                    f"{row['hand_work']} of {len(records)} records show this surface doing the "
+                    f"capability's work by hand"
+                    + (
+                        f"; the Brain shows {row['under_use_runs']} runs of matching work that "
+                        f"never invoked it"
+                        if row["under_use_runs"]
+                        else ""
+                    )
+                ),
+            }
+        )
     return sorted(out, key=lambda r: -r["hand_work"])
 
 
@@ -2399,13 +2963,19 @@ def surface_decline_counts(surface: str, *, path=None, window_days: int = WINDOW
                 reasons[cap_id].append(why)
         for cap_id in trial.get("declined_demotable") or []:
             demotable[cap_id] = demotable.get(cap_id, 0) + 1
-    return {"surface": surface, "offered": seen, "triggered": used, "silent": silent,
-            "declined": declined,
-            # BOTH QUANTITIES. `declined` is how often it was turned down; `demotable` is how much of
-            # that is a statement about the BINDING. Reporting only the first is what would license
-            # unbinding `testgen-lane` for matching correctly three times.
-            "declined_demotable": demotable, "declines_by_kind": kinds,
-            "decline_reasons": reasons}
+    return {
+        "surface": surface,
+        "offered": seen,
+        "triggered": used,
+        "silent": silent,
+        "declined": declined,
+        # BOTH QUANTITIES. `declined` is how often it was turned down; `demotable` is how much of
+        # that is a statement about the BINDING. Reporting only the first is what would license
+        # unbinding `testgen-lane` for matching correctly three times.
+        "declined_demotable": demotable,
+        "declines_by_kind": kinds,
+        "decline_reasons": reasons,
+    }
 
 
 def propose_demotions(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> list[dict]:
@@ -2434,6 +3004,7 @@ def propose_demotions(surface: str, *, path=None, window_days: int = WINDOW_DAYS
     actually gets used here is not a demotion candidate however often it is passed over.
     """
     import capability_advisor
+
     bound = capability_advisor.binding_for(surface, path=path)
     counts = surface_decline_counts(surface, path=path, window_days=window_days)
     seen, used, silent = counts["offered"], counts["triggered"], counts["silent"]
@@ -2449,29 +3020,43 @@ def propose_demotions(surface: str, *, path=None, window_days: int = WINDOW_DAYS
         fixes = sorted({DECLINE_KINDS[k]["fix"] for k in kinds if k in DECLINE_KINDS})
         if n_dem >= DEMOTION_MIN_DECLINES:
             basis = "declined_with_reason"
-            why = (f"declined with a stated reason in {n_dec} of {n_seen} offers at this surface, "
-                   f"{n_dem} of them attributable to the binding (floor "
-                   f"{DEMOTION_MIN_DECLINES}), never triggered: "
-                   + " | ".join(reasons.get(c, [])[:3]))
+            why = (
+                f"declined with a stated reason in {n_dec} of {n_seen} offers at this surface, "
+                f"{n_dem} of them attributable to the binding (floor "
+                f"{DEMOTION_MIN_DECLINES}), never triggered: " + " | ".join(reasons.get(c, [])[:3])
+            )
         elif n_silent >= DEMOTION_MIN_TRIALS:
             basis = "never_triggered"
-            why = (f"bound and offered in {n_seen} experiments for this surface, "
-                   f"{n_silent} of them passed over with nothing said, triggered "
-                   f"{used.get(c, 0)} times")
+            why = (
+                f"bound and offered in {n_seen} experiments for this surface, "
+                f"{n_silent} of them passed over with nothing said, triggered "
+                f"{used.get(c, 0)} times"
+            )
         else:
             continue
-        out.append({"capability_id": c, "surface": surface, "offered": n_seen,
-                    "triggered": used.get(c, 0), "silent": n_silent, "declined": n_dec,
-                    # THE QUALIFIED COUNT, beside the raw one, plus the fix each kind implies -- so
-                    # a reader can choose "add a precondition" over "unbind" where that is the
-                    # correct answer, instead of inferring one action from one number.
-                    "declined_demotable": n_dem, "declines_by_kind": kinds,
-                    "implied_fixes": fixes,
-                    "decline_reasons": reasons.get(c, []), "basis": basis,
-                    # BLOCKING quantity and the floor it is measured against, together.
-                    "declines_floor": DEMOTION_MIN_DECLINES,
-                    "silent_offers_floor": DEMOTION_MIN_TRIALS,
-                    "action": "demote", "reason": why})
+        out.append(
+            {
+                "capability_id": c,
+                "surface": surface,
+                "offered": n_seen,
+                "triggered": used.get(c, 0),
+                "silent": n_silent,
+                "declined": n_dec,
+                # THE QUALIFIED COUNT, beside the raw one, plus the fix each kind implies -- so
+                # a reader can choose "add a precondition" over "unbind" where that is the
+                # correct answer, instead of inferring one action from one number.
+                "declined_demotable": n_dem,
+                "declines_by_kind": kinds,
+                "implied_fixes": fixes,
+                "decline_reasons": reasons.get(c, []),
+                "basis": basis,
+                # BLOCKING quantity and the floor it is measured against, together.
+                "declines_floor": DEMOTION_MIN_DECLINES,
+                "silent_offers_floor": DEMOTION_MIN_TRIALS,
+                "action": "demote",
+                "reason": why,
+            }
+        )
     return sorted(out, key=lambda r: (-r["declined_demotable"], -r["offered"], r["capability_id"]))
 
 
@@ -2485,9 +3070,14 @@ def record_promotion(capability_id: str, surface: str, reason: str, *, path=None
     if not reason.strip():
         raise ValueError("a binding promotion must record why")
     return capabilities.heartbeat(
-        capability_id, "match", ref=f"{ADVICE_REF_PREFIX}promotion", path=path or capabilities.REG,
+        capability_id,
+        "match",
+        ref=f"{ADVICE_REF_PREFIX}promotion",
+        path=path or capabilities.REG,
         idempotency_key=f"binding_promotion:{surface}:{capability_id}",
-        metadata={"source": "binding_promotion", "surface": surface, "reason": reason})
+        metadata={"source": "binding_promotion", "surface": surface, "reason": reason},
+    )
+
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))

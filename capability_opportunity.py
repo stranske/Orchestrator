@@ -22,6 +22,7 @@ Trigger kinds are read from each capability's declared `matcher`. Only the task_
 replayed against history exactly; the others are reported by kind with their real status, never
 guessed at.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -55,14 +56,18 @@ def classify_trigger(cap: dict) -> dict:
     if kind == "role":
         return {"kind": TRIGGER_ROLE, "detail": matcher.get("equals")}
     if kind == "env":
-        return {"kind": TRIGGER_ENV_FLAG,
-                "detail": {"name": matcher.get("name"), "equals": matcher.get("equals")}}
+        return {
+            "kind": TRIGGER_ENV_FLAG,
+            "detail": {"name": matcher.get("name"), "equals": matcher.get("equals")},
+        }
     if kind:
         return {"kind": TRIGGER_INTERNAL, "detail": {"kind": kind, "name": matcher.get("name")}}
     if matcher.get("field") == "task_type" or "task_type" in matcher:
         values = matcher.get("value") or matcher.get("task_type")
-        return {"kind": TRIGGER_TASK_TYPE,
-                "detail": [values] if isinstance(values, str) else list(values or [])}
+        return {
+            "kind": TRIGGER_TASK_TYPE,
+            "detail": [values] if isinstance(values, str) else list(values or []),
+        }
     return {"kind": TRIGGER_INTERNAL, "detail": dict(matcher)}
 
 
@@ -70,8 +75,10 @@ def _task_type_counts(conn=None) -> dict[str, int]:
     close = conn is None
     c = conn or feedback._conn()
     try:
-        return {str(t): int(n) for t, n in
-                c.execute("SELECT task_type, COUNT(*) FROM runs GROUP BY task_type")}
+        return {
+            str(t): int(n)
+            for t, n in c.execute("SELECT task_type, COUNT(*) FROM runs GROUP BY task_type")
+        }
     finally:
         if close:
             c.close()
@@ -91,8 +98,9 @@ def _role_invocation_counts(conn=None) -> dict[str, int]:
     return {str(t).split(":", 1)[1]: int(n) for t, n in rows if ":" in str(t)}
 
 
-def assess(cap_id: str, cap: dict, *, task_counts: dict, role_counts: dict,
-           env: dict | None = None) -> dict:
+def assess(
+    cap_id: str, cap: dict, *, task_counts: dict, role_counts: dict, env: dict | None = None
+) -> dict:
     """One capability: its trigger, the work that matched it, and the resulting verdict."""
     env = os.environ if env is None else env
     trigger = classify_trigger(cap)
@@ -122,8 +130,7 @@ def assess(cap_id: str, cap: dict, *, task_counts: dict, role_counts: dict,
     if trigger["kind"] == TRIGGER_ENV_FLAG:
         name = (trigger["detail"] or {}).get("name")
         want = str((trigger["detail"] or {}).get("equals"))
-        verdict = (VERDICT_IN_USE if str(env.get(str(name))) == want
-                   else VERDICT_DELIBERATELY_OFF)
+        verdict = VERDICT_IN_USE if str(env.get(str(name))) == want else VERDICT_DELIBERATELY_OFF
     elif outcome_links:
         verdict = VERDICT_IN_USE
     elif opportunities is None:
@@ -134,10 +141,15 @@ def assess(cap_id: str, cap: dict, *, task_counts: dict, role_counts: dict,
         verdict = VERDICT_NO_MATCHING_WORK
 
     return {
-        "capability_id": cap_id, "status": cap.get("status"),
-        "trigger_kind": trigger["kind"], "trigger_detail": trigger["detail"],
-        "opportunities": opportunities, "ever_invoked": bool(invocations),
-        "outcome_links": outcome_links, "verdict": verdict, "note": note,
+        "capability_id": cap_id,
+        "status": cap.get("status"),
+        "trigger_kind": trigger["kind"],
+        "trigger_detail": trigger["detail"],
+        "opportunities": opportunities,
+        "ever_invoked": bool(invocations),
+        "outcome_links": outcome_links,
+        "verdict": verdict,
+        "note": note,
     }
 
 
@@ -145,8 +157,10 @@ def report(*, path=None, env: dict | None = None) -> dict:
     caps = capabilities.load(path or capabilities.REG)
     task_counts = _task_type_counts()
     role_counts = _role_invocation_counts()
-    rows = [assess(cid, cap, task_counts=task_counts, role_counts=role_counts, env=env)
-            for cid, cap in sorted(caps.items())]
+    rows = [
+        assess(cid, cap, task_counts=task_counts, role_counts=role_counts, env=env)
+        for cid, cap in sorted(caps.items())
+    ]
     by_verdict: dict[str, list[str]] = {}
     for row in rows:
         by_verdict.setdefault(row["verdict"], []).append(row["capability_id"])
@@ -160,7 +174,8 @@ def report(*, path=None, env: dict | None = None) -> dict:
 
 def format_report(rep: dict) -> str:
     lines = [
-        "# Capability opportunity — not useful, or never considered?", "",
+        "# Capability opportunity — not useful, or never considered?",
+        "",
         f"{rep['total']} capabilities assessed against {rep['total_runs_considered']} recorded runs.",
         "",
     ]
@@ -171,20 +186,28 @@ def format_report(rep: dict) -> str:
         VERDICT_UNKNOWN: "UNKNOWN — trigger cannot be replayed from run history",
         VERDICT_IN_USE: "IN USE",
     }
-    for verdict in (VERDICT_NEVER_CONSIDERED, VERDICT_DELIBERATELY_OFF, VERDICT_UNKNOWN,
-                    VERDICT_NO_MATCHING_WORK, VERDICT_IN_USE):
+    for verdict in (
+        VERDICT_NEVER_CONSIDERED,
+        VERDICT_DELIBERATELY_OFF,
+        VERDICT_UNKNOWN,
+        VERDICT_NO_MATCHING_WORK,
+        VERDICT_IN_USE,
+    ):
         names = rep["by_verdict"].get(verdict) or []
         lines.append(f"## {labels[verdict]}: {len(names)}")
         lines.extend(f"- {n}" for n in names)
         lines.append("")
-    lines += ["| Capability | Trigger | Opportunities | Invoked | Links | Verdict | Note |",
-              "|---|---|---:|:--:|---:|---|---|"]
+    lines += [
+        "| Capability | Trigger | Opportunities | Invoked | Links | Verdict | Note |",
+        "|---|---|---:|:--:|---:|---|---|",
+    ]
     for row in rep["rows"]:
         opp = "—" if row["opportunities"] is None else row["opportunities"]
         lines.append(
             f"| {row['capability_id']} | {row['trigger_kind']} | {opp} | "
             f"{'yes' if row['ever_invoked'] else 'no'} | {row['outcome_links']} | "
-            f"{row['verdict']} | {row['note']} |")
+            f"{row['verdict']} | {row['note']} |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -198,15 +221,30 @@ def _selftest() -> None:
         return base
 
     # task_type trigger with real matching work + never invoked => NEVER CONSIDERED.
-    a = assess("a", cap(matcher={"field": "task_type", "operator": "in",
-                                 "value": ["maintenance", "consumer_sync_drift"]}),
-               task_counts=tasks, role_counts=roles, env={})
+    a = assess(
+        "a",
+        cap(
+            matcher={
+                "field": "task_type",
+                "operator": "in",
+                "value": ["maintenance", "consumer_sync_drift"],
+            }
+        ),
+        task_counts=tasks,
+        role_counts=roles,
+        env={},
+    )
     assert a["trigger_kind"] == TRIGGER_TASK_TYPE and a["opportunities"] == 15, a
     assert a["verdict"] == VERDICT_NEVER_CONSIDERED, a
 
     # Same trigger but no such work in history => NO MATCHING WORK, not a failure to consider.
-    b = assess("b", cap(matcher={"field": "task_type", "operator": "in", "value": ["nonesuch"]}),
-               task_counts=tasks, role_counts=roles, env={})
+    b = assess(
+        "b",
+        cap(matcher={"field": "task_type", "operator": "in", "value": ["nonesuch"]}),
+        task_counts=tasks,
+        role_counts=roles,
+        env={},
+    )
     assert b["opportunities"] == 0 and b["verdict"] == VERDICT_NO_MATCHING_WORK, b
 
     # Env-gated: OFF is a deliberate decision, ON counts as in use.
@@ -218,11 +256,21 @@ def _selftest() -> None:
 
     # A role that ran many times but never linked an outcome is still "never considered" for
     # OUTCOME purposes only if it was never invoked; invocation counts as use.
-    r = assess("d", cap(matcher={"kind": "role", "equals": "triage"}, last_invocation=123),
-               task_counts=tasks, role_counts=roles, env={})
+    r = assess(
+        "d",
+        cap(matcher={"kind": "role", "equals": "triage"}, last_invocation=123),
+        task_counts=tasks,
+        role_counts=roles,
+        env={},
+    )
     assert r["opportunities"] == 478 and r["verdict"] == VERDICT_IN_USE, r
-    r2 = assess("e", cap(matcher={"kind": "role", "equals": "triage"}),
-                task_counts=tasks, role_counts=roles, env={})
+    r2 = assess(
+        "e",
+        cap(matcher={"kind": "role", "equals": "triage"}),
+        task_counts=tasks,
+        role_counts=roles,
+        env={},
+    )
     assert r2["verdict"] == VERDICT_NEVER_CONSIDERED, r2
 
     # No matcher at all => nothing can route work here; opportunities are UNKNOWN, never zero,
@@ -235,11 +283,19 @@ def _selftest() -> None:
     verdicts = {a["verdict"], b["verdict"], off["verdict"], r["verdict"], n["verdict"]}
     assert not any("retire" in v for v in verdicts), verdicts
 
-    text = format_report({"total": 1, "total_runs_considered": 5,
-                          "by_verdict": {VERDICT_NEVER_CONSIDERED: ["a"]}, "rows": [a]})
+    text = format_report(
+        {
+            "total": 1,
+            "total_runs_considered": 5,
+            "by_verdict": {VERDICT_NEVER_CONSIDERED: ["a"]},
+            "rows": [a],
+        }
+    )
     assert "NEVER CONSIDERED" in text and "a" in text
-    print("capability_opportunity.py selftest: OK (task_type replay, env-gate, role, "
-          "unknown-not-zero, never proposes retirement)")
+    print(
+        "capability_opportunity.py selftest: OK (task_type replay, env-gate, role, "
+        "unknown-not-zero, never proposes retirement)"
+    )
 
 
 def main(argv: list[str]) -> int:
