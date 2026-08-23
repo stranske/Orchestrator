@@ -212,6 +212,35 @@ keepalive / orchestrator_local / orchestrator_remote), so run history says a cap
 OVERALL and cannot say which surface passed it over. That is why signal 1 exists and why a promotion
 is never derived from run history alone.
 
+### Where layer 2's evidence comes from
+
+Layer 2 needs resolved trials, and until 2026-08-22 nothing produced any: `advise()` recorded the
+`match` edge, and the `invocation`/`outcome` edges had no production caller at all, so every
+propensity was the prior and the cadence step said so on every run. **The tick is now that
+producer** (`capability_propensity.py tick-evidence`, every tick, below the heartbeat export and
+below the four steps it grades) — chosen because it is the highest-volume unattended surface, so
+coverage accrues hourly with no further attention.
+
+An observer's verdict is **not** a delivery verdict — a cadence report can never merge a PR, and
+demanding one is the category error that parked eight capabilities in a measurement gap they could
+not leave. For the tick-bound capabilities that `capabilities.is_observer()` confirms, *helped* means
+**its report's finding set changed since its own previous run**: a defect newly reported, a
+regression flagged, a switch verdict that moved, a finding resolved. Re-emitting an identical finding
+set is *not* useful, and an empty set that stays empty is explicitly not useful — silence is not
+usefulness. Capabilities the observer test does not confirm record that they ran and get no verdict,
+because averaging an output-change question with a delivery question would violate the never-average
+rule two paragraphs up.
+
+The bounding is a correctness requirement, not a nicety: 24 ticks a day over four bound capabilities
+is 96 potential data points, and a verdict written on every run would make the ranking measure the
+cadence. Two independent bounds — the experiment id is scoped to the UTC day, so the ledger's
+idempotency keys admit at most one verdict per capability per day whatever happens; and a verdict
+additionally requires that capability's own cadence artifact to have been regenerated since the last
+evaluation, which ties one verdict to one production and bounds the graded rate to ~1.3/day. The
+finding projection keeps identity and verdict fields only, because `overdue`'s `silent_days` rises
+daily on its own and hashing a row whole would score the monitor useful on every run it will ever
+make.
+
 **Demotion is the drain.** Bindings that could only grow end with every surface holding all 43 —
 the exact condition binding prevents. A capability bound to a surface that never triggers it across
 `DEMOTION_MIN_TRIALS` resolved experiments is proposed for removal.

@@ -63,10 +63,12 @@ authority to trigger, so a bad propensity can misorder a recommendation list and
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
 import sys
+import time
 
 import capabilities
 import env_prereq
@@ -294,11 +296,17 @@ def record_trigger(capability_id: str, experiment_id: str, *, path=None,
 
 
 def record_usefulness(capability_id: str, experiment_id: str, *, useful: bool, evidence: str,
-                      path=None) -> bool:
+                      path=None, metadata: dict | None = None) -> bool:
     """Did triggering it help? `evidence` is required: an unevidenced verdict is an opinion.
 
     The verdict must describe what the capability CHANGED, not that it ran. "It fired" is the
     un-gameable-label failure this project's learning rules exist to prevent.
+
+    `metadata` carries the verdict's PROVENANCE — which surface judged it and by which question.
+    Added for the tick wiring: an observer graded on "did your report change" and a lane capability
+    graded on "did the delivery survive" answer different questions, and CLAUDE.md's learning rules
+    forbid averaging across the two kinds. Without a durable `verdict_kind` on the row, a later
+    reader could only average them.
     """
     if not str(evidence).strip():
         raise ValueError("a usefulness verdict requires evidence naming what changed")
@@ -308,7 +316,926 @@ def record_usefulness(capability_id: str, experiment_id: str, *, useful: bool, e
         capability_id, "outcome", ref=experiment_id, path=path or capabilities.REG,
         idempotency_key=f"useful:{capability_id}:{experiment_id}",
         metadata={"source": "capability_propensity", USEFUL_KEY: bool(useful),
-                  "evidence": str(evidence)[:400]})
+                  "evidence": str(evidence)[:400], **(metadata or {})})
+
+
+# ---------------------------------------------------------------------------
+# TICK EVIDENCE — the tick consults the front door, and records whether a capability HELPED.
+#
+# DEDUP FINDING (2026-08-22, before writing this; recorded in the ledger `notes` of
+# `capability-propensity` as well as here, because a plan is not durable).
+#   * `capability_advisor.advise()` EXISTS, and `SURFACE_BINDINGS["tick"]` has bound four
+#     capabilities to the tick since the binding table was written — but a tree-wide grep for
+#     `capability_advisor` finds NO caller outside the module's own selftests and this module's.
+#     Nothing in `orchestrate.sh` or `tick.py` has ever consulted it.
+#   * `record_trigger` / `record_usefulness` EXIST (above) and likewise have no production caller:
+#     only the two CLI subcommands and the selftests. So the natural experiment has never had a
+#     producer for its `invocation` and `outcome` edges, which is exactly why the propensity step
+#     prints PRIOR-ONLY on every run.
+#   * `capability_firing_monitor` stores per-capability firing HISTORY — did it RUN. It does not and
+#     should not ask whether the run said anything new.
+#   * `capability_effectiveness` measures delivery (`influence_edges` accepted vs counterfactual),
+#     which no observer can ever populate.
+#   So: the capability exists and is dormant for want of a caller. This is the caller. The one
+#   genuinely new part is the observer verdict below, because nothing compared an observer's own
+#   output across runs.
+#
+# WHAT "IT HELPED" MEANS FOR AN OBSERVER, and why a delivery verdict would be a category error.
+# Three of the four tick-bound capabilities carry `{"kind": "tick_phase"}` matchers, so
+# `capabilities.is_observer()` is True for them: they emit a report and can never merge a PR. Asking
+# them for a delivery outcome is the mistake that parked eight capabilities in a measurement gap they
+# could not leave. Their deliverable is INFORMATION, so the verdict is:
+#
+#     USEFUL      — its report's FINDING SET changed since its previous run: a defect newly
+#                   reported, a regression flagged, a switch verdict that moved, or a finding that
+#                   resolved. The run told the system something it did not already know.
+#     NOT USEFUL  — it ran and re-emitted an identical finding set. SILENCE IS NOT USEFULNESS, and
+#                   an empty finding set that stays empty is explicitly not useful, not "fine".
+#
+# It is deliberately un-gameable in the one direction that matters: a capability cannot improve its
+# score by running MORE, because a verdict is tied to one artifact PRODUCTION (below) and is measured
+# against that capability's own previous output.
+#
+# THE INFLATION BOUND — the single biggest risk here, treated as a correctness requirement. The tick
+# runs 24x/day and binds four capabilities, so an unconditional verdict per run would write 96
+# unearned data points a day and the ranking would then measure the cadence, not usefulness. Two
+# INDEPENDENT bounds, both enforced in code below:
+#
+#   1. STRUCTURAL (cannot be exceeded even if bound 2 is buggy): the experiment id is scoped to the
+#      UTC DAY, so `advise()`'s `advice:<cap>:<digest>` and `record_trigger`/`record_usefulness`'s
+#      `trigger:`/`useful:` idempotency keys are all day-unique. Ceiling: 4 match + 4 trigger + 4
+#      outcome events per day, whatever happens. Ticks 2..24 of a day write nothing.
+#   2. SUBSTANTIVE (what actually happens): a verdict requires the capability's own cadence ARTIFACT
+#      to have been regenerated since the last evaluation. The four steps' declared cadences are
+#      daily (`capability-activation-audit`) and 6-day (`switch-review`, `capability-firing-monitor`,
+#      `capability-propensity`, the last of which is not graded at all — see below). So the graded
+#      ceiling is 1/day + 2 x 1/7 per day = 1.29 verdicts/day against the naive 4 x 24 = 96. A 74x
+#      reduction, and the realised rate is lower still because an unchanged projection is only
+#      recorded once per production, not once per tick.
+#
+# LATCHED-GATE ANSWERS for the freshness gate (it is a gate, so it owes all three in writing):
+#   1. WHAT DECREMENTS IT? The capability's own cadence step regenerating its artifact — a mechanism
+#      that already runs on `_cadence_due`, not "time passes" and not "someone notices".
+#   2. CAN THE DRAIN RUN WHILE CLOSED? Yes. This gate suppresses only RECORDING; it never gates the
+#      cadence step itself, which runs on its own schedule whether or not anything is recorded.
+#   3. SAME WINDOW BOTH WAYS? Yes, by construction: the measuring quantity and the draining quantity
+#      are the SAME artifact mtime, produced by the SAME step the cadence registry declares. There is
+#      no second literal to drift.
+#   And the runtime rule: every run reports `verdicts_recorded` (the blocking quantity) beside
+#   `gradable` and `awaiting_regeneration` (the drainable quantity), so "0 verdicts" can never read as
+#   patience when it should read as deadlock.
+#
+# THE TICK MUST NOT BE ABLE TO STALL. Everything here is advisory and read-only apart from the
+# capability ledger events it exists to write: no gh, no network, no subprocess, no dispatch. Every
+# per-capability step is individually guarded, the whole run is wrapped, and the CLI arms a SIGALRM
+# budget so a blocked ledger flock cannot hold the tick. Any failure returns a report and exit 0.
+
+# NOT A SECOND STORE, and the distinction matters because `CLAUDE.md` forbids one. All EVIDENCE goes
+# to the existing capability ledger through `record_trigger`/`record_usefulness` and the advisor's
+# `match` heartbeat -- no new event log, no second inventory, no parallel lifecycle. The state file
+# below holds one thing the ledger cannot: the artifact mtime and finding fingerprint LAST SEEN, so
+# "did the output change" has something to compare against. Same shape and same reason as
+# `capability_firing_monitor`'s `capability-firing-history.json`, which is a comparison baseline
+# rather than a store of record.
+TICK_SURFACE = "tick"
+TICK_EVIDENCE_STATE = "tick-capability-evidence-state.json"
+TICK_EVIDENCE_REPORT = "tick-capability-evidence.json"
+# Wall-clock budget for the whole run. The only unbounded wait in here is `capabilities._locked`'s
+# blocking flock; SIGALRM interrupts it, and ledger writes are tmp+os.replace so an interrupt cannot
+# leave a torn ledger.
+TICK_EVIDENCE_BUDGET_S = 30
+TICK_VERDICT_KIND = "observer_output_change"
+
+# What counts as a FINDING in each capability's own report, and what IDENTIFIES one.
+#
+# THIS FIELD LIST IS THE WHOLE SAFETY MECHANISM. `capability-firing-monitor`'s `overdue` rows carry
+# `silent_days`, which rises every day on its own; hashing a row whole would score the monitor
+# "useful" on every run it will ever make -- a 100% usefulness rate that measures the calendar. So a
+# projection keeps IDENTITY and VERDICT fields and drops everything else, and
+# `_selftest_tick_evidence` re-feeds identical findings with moved counters and timestamps and
+# asserts the verdict is NOT useful.
+#
+# An empty tuple means the value needs no field selection: a list of ids, or a map of id lists, is
+# already identity-only.
+TICK_FINDING_FIELDS: dict[str, dict[str, tuple[str, ...]]] = {
+    "switch-review": {
+        # (flag, state), so a switch that MOVED reads as a change while the long stored `criterion`
+        # prose -- which is documentation, not a finding -- does not.
+        "held_off": ("flag", "state"),
+        "on_but_idle": ("flag", "state"),
+        "unconditioned": ("flag", "state"),
+    },
+    "capability-firing-monitor": {
+        "regressed": ("capability_id",),
+        "overdue": ("capability_id",),        # NOT silent_days / tolerance_days: counters, not findings
+        "never_fired": (),
+        "no_cadence_declared": (),
+    },
+    "capability-activation-audit": {
+        "by_defect": (),                      # {defect class: [capability ids]}
+        "reachable_ids": (),
+    },
+    # DELIBERATELY EMPTY, and a verdict rather than an omission: this module IS the grader, so
+    # grading it on its own report is the circular-measurement failure mode (FM7). Its usefulness
+    # report and its selection-detect output both move BECAUSE of the rows written here, so a
+    # self-verdict would ratchet. It stays a bound candidate and its production is still recorded as
+    # a trigger -- what it does not get is a verdict from itself.
+    "capability-propensity": {},
+}
+
+# Why a bound capability is not graded, stated once so "not graded" can never look like "nothing
+# happened". Reasons are computed, not stored; these are just the words.
+TICK_SKIP_REASONS = {
+    "no_cadence_artifact": "no cadence step declares an artifact for it, so it produces no report "
+                           "this can read",
+    "artifact_missing": "its declared cadence artifact does not exist yet; the step has not run here",
+    "not_an_observer": "capabilities.is_observer() is False, so its deliverable is not a report and "
+                       "an output-change verdict would mix two different questions in one rate",
+    "no_finding_projection": "no finding projection is declared for it, so 'did the output change' "
+                             "has no defined answer",
+    "unprojectable": "its artifact carried none of the declared finding keys -- a SHAPE CHANGE, "
+                     "reported rather than scored, because a broken parse must not read as 'nothing "
+                     "new'",
+    "not_in_ledger": "it has no row in this machine's capability ledger, so there is nothing to "
+                     "record against",
+    "budget_exhausted": "the run hit its wall-clock budget before reaching it; nothing is recorded "
+                        "rather than recorded late",
+}
+
+
+def tick_evidence_disabled() -> bool:
+    """THE KILL SWITCH, read at call time so the switch itself is testable as a switch.
+
+    `ORCH_TICK_EVIDENCE_DISABLED=1` makes the tick behave EXACTLY as it did before this wiring
+    existed: no consult, no ledger event, no state file, no report. Read here rather than captured in
+    a module constant at import so a selftest exercises the real environment round-trip -- an
+    untested kill switch is theatre, and this repo has said so in `orchestrate.sh` since 2026-08-21.
+    `ORCH_DISABLE_STEPS=tick-capability-evidence` is the second, shell-side lever; either alone is
+    sufficient.
+    """
+    return os.environ.get("ORCH_TICK_EVIDENCE_DISABLED", "").strip() == "1"
+
+
+def _tick_state_dir() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("ORCH_STATE_DIR",
+                                       str(pathlib.Path.home() / ".codex/orchestrator")))
+
+
+def tick_artifact(capability_id: str, *, state_dir: pathlib.Path, steps=None) -> pathlib.Path | None:
+    """The report artifact this capability's cadence step publishes. ONE source: the registry.
+
+    Read from `cadence_registry.STEP_BY_KEY` rather than re-listed here, because the tick-bound
+    capability ids ARE cadence step keys and a second table of filenames would be free to drift from
+    the step that writes them. `_selftest_tick_evidence` pins the agreement as code-vs-code, so it
+    holds on a clean runner with no ledger and no state directory.
+    """
+    if steps is None:
+        try:
+            import cadence_registry
+            steps = cadence_registry.STEP_BY_KEY
+        except Exception:                                              # noqa: BLE001
+            return None
+    name = ((steps or {}).get(capability_id) or {}).get("artifact")
+    return (state_dir / str(name)) if name else None
+
+
+def _finding_identity(value, fields: tuple[str, ...]) -> str:
+    """One finding reduced to identity. Anything not declared is DROPPED -- that is the point."""
+    if isinstance(value, dict):
+        if fields:
+            return "|".join(f"{f}={value.get(f)!r}" for f in fields)
+        return "|".join(f"{k}={sorted(map(str, v))!r}" if isinstance(v, list) else f"{k}={v!r}"
+                        for k, v in sorted(value.items()))
+    return str(value)
+
+
+def project_findings(capability_id: str, report) -> dict[str, list[str]] | None:
+    """This report's findings, identity-only. None when nothing declared could be read.
+
+    None is a distinct answer from `{}` on purpose. `{}` cannot happen here (a key that is present
+    but empty yields `{key: []}`), so None means the artifact carried NONE of the declared keys --
+    a shape change. Scoring that as "unchanged" would let a broken parse read as a clean answer,
+    which is this repo's founding defect.
+    """
+    spec = TICK_FINDING_FIELDS.get(capability_id)
+    if not spec or not isinstance(report, dict):
+        return None
+    out: dict[str, list[str]] = {}
+    for key, fields in spec.items():
+        if key not in report:
+            continue
+        value = report[key]
+        if isinstance(value, list):
+            out[key] = sorted(_finding_identity(v, fields) for v in value)
+        elif isinstance(value, dict):
+            out[key] = sorted(
+                f"{k}={sorted(map(str, v))!r}" if isinstance(v, list) else f"{k}={v!r}"
+                for k, v in value.items())
+        else:
+            out[key] = [str(value)]
+    return out or None
+
+
+def finding_fingerprint(findings: dict[str, list[str]]) -> str:
+    return hashlib.sha1(json.dumps(findings, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _finding_delta(now: dict[str, list[str]], before: dict[str, list[str]]) -> list[str]:
+    """Which finding keys moved, and by how much. The evidence string for a USEFUL verdict."""
+    out = []
+    for key in sorted(set(now) | set(before)):
+        cur, prev = set(now.get(key) or []), set(before.get(key) or [])
+        if cur != prev:
+            out.append(f"{key} +{len(cur - prev)}/-{len(prev - cur)}")
+    return out
+
+
+def tick_task(day: str) -> str:
+    """The advisory question the tick asks, stable per UTC day.
+
+    Stable per day is what coalesces the consult: `advise()`'s match heartbeat is idempotent per
+    (capability, task digest), so 24 ticks a day produce at most one match event per bound
+    capability. Deliberately carries NO word from `capability_advisor.TASK_SIGNALS`: the tick is a
+    cadence, not one free-text task, so the DECLARED binding is the right answer and the keyword
+    classifier must not add to it. `_selftest_tick_evidence` asserts what the CALLER receives is
+    exactly the bound set, so a stray keyword fails a test instead of quietly widening the consult.
+    """
+    return f"orchestrator tick cadence pass {day}"
+
+
+def _load_tick_state(state_dir: pathlib.Path) -> dict:
+    try:
+        data = json.loads((state_dir / TICK_EVIDENCE_STATE).read_text(encoding="utf-8"))
+    except Exception:                                                  # noqa: BLE001
+        return {"schema": 1, "capabilities": {}, "last_consult_day": None}
+    if not isinstance(data, dict):
+        return {"schema": 1, "capabilities": {}, "last_consult_day": None}
+    data.setdefault("capabilities", {})
+    data.setdefault("last_consult_day", None)
+    return data
+
+
+def _write_json_atomic(path: pathlib.Path, payload: dict) -> None:
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(payload, handle, indent=1, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def tick_evidence(*, now: int | None = None, state_dir: pathlib.Path | None = None,
+                  path=None, steps=None, record: bool = True,
+                  budget_s: float | None = None) -> dict:
+    """Consult the advisor for the `tick` surface and record earned usefulness verdicts.
+
+    Called every tick from `orchestrate.sh`, BELOW `ORCH-ANCHOR: heartbeat-export` (a producer above
+    it records nothing, and `capability_activation_audit.heartbeat_env_gate` fails the suite if one
+    ever moves there). Cheap by construction: on the 23 ticks a day with no freshly-regenerated
+    cadence artifact and the consult already recorded, it reads one small state file and returns.
+    """
+    now = int(time.time()) if now is None else int(now)
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    started = time.monotonic()
+    budget = TICK_EVIDENCE_BUDGET_S if budget_s is None else float(budget_s)
+    base = {"generated_at": now, "day": day, "surface": TICK_SURFACE}
+    if tick_evidence_disabled():
+        # EXACTLY as before this wiring existed: nothing read, nothing written, nothing recorded.
+        return {**base, "disabled": True,
+                "reason": "ORCH_TICK_EVIDENCE_DISABLED=1", "bound": [], "evaluated": [],
+                "verdicts_recorded": 0, "triggers_recorded": 0, "matches_recorded": 0,
+                "gradable": [], "awaiting_regeneration": [], "skipped": []}
+
+    state_dir = _tick_state_dir() if state_dir is None else pathlib.Path(state_dir)
+    ledger = path or capabilities.REG
+
+    import capability_advisor
+    bound = sorted(capability_advisor.binding_for(TICK_SURFACE, path=path))
+    caps = capabilities.load_declared(ledger)
+    state = _load_tick_state(state_dir)
+    per_cap = state["capabilities"]
+
+    # ---- classify every bound capability BEFORE writing anything. Three outcomes only:
+    #      evaluate (its artifact was regenerated since we last looked), baseline (we have never
+    #      looked), stale (unchanged -> nothing at all, not a negative verdict).
+    plans: list[dict] = []
+    skipped: list[dict] = []
+    for cap_id in bound:
+        artifact = tick_artifact(cap_id, state_dir=state_dir, steps=steps)
+        if artifact is None:
+            skipped.append({"capability_id": cap_id, "reason": "no_cadence_artifact",
+                            "detail": TICK_SKIP_REASONS["no_cadence_artifact"]})
+            continue
+        try:
+            mtime = int(artifact.stat().st_mtime)
+        except OSError:
+            skipped.append({"capability_id": cap_id, "reason": "artifact_missing",
+                            "detail": TICK_SKIP_REASONS["artifact_missing"],
+                            "artifact": str(artifact)})
+            continue
+        prior = per_cap.get(cap_id) or {}
+        seen = int(prior.get("artifact_mtime") or 0)
+        if not prior:
+            plans.append({"capability_id": cap_id, "action": "baseline", "artifact": artifact,
+                          "mtime": mtime})
+        elif mtime > seen:
+            plans.append({"capability_id": cap_id, "action": "evaluate", "artifact": artifact,
+                          "mtime": mtime, "prior": prior})
+        # else: stale. No fresh production, so there is no concrete reason to record anything.
+
+    consult_due = state.get("last_consult_day") != day
+    if not plans and not consult_due:
+        # THE HOT PATH: 23 of 24 ticks. One small file read, zero ledger touches, zero writes.
+        return {**base, "bound": bound, "evaluated": [], "baselined": [],
+                "stale": [c for c in bound if c not in {s["capability_id"] for s in skipped}],
+                "skipped": skipped, "consulted": False,
+                "verdicts_recorded": 0, "triggers_recorded": 0, "matches_recorded": 0,
+                "gradable": sorted(_tick_gradable(bound, caps)),
+                "awaiting_regeneration": sorted(_tick_gradable(bound, caps)),
+                "reason": "no cadence artifact was regenerated since the last evaluation, and "
+                          "today's consult is already recorded — nothing to add"}
+
+    # ---- the CONSULT. This is the thing the tick never did. `record=True` writes the `match` edge
+    #      each verdict below is attached to; it is idempotent per (capability, day).
+    advice = {}
+    matches = 0
+    if record:
+        try:
+            advice = capability_advisor.advise(
+                tick_task(day), surface=TICK_SURFACE, skill=TICK_SURFACE, lane="tick",
+                path=path, record=True)
+            matches = int(advice.get("recorded_matches") or 0)
+        except Exception as exc:                                       # noqa: BLE001
+            advice = {"error": f"{type(exc).__name__}: {exc}"}
+    else:
+        try:
+            advice = capability_advisor.advise(
+                tick_task(day), surface=TICK_SURFACE, skill=TICK_SURFACE, lane="tick",
+                path=path, record=False)
+        except Exception as exc:                                       # noqa: BLE001
+            advice = {"error": f"{type(exc).__name__}: {exc}"}
+    experiment = advice.get("experiment_id") or capability_advisor.experiment_id(tick_task(day))
+
+    evaluated: list[dict] = []
+    baselined: list[dict] = []
+    triggers = 0
+    verdicts = 0
+    for plan in plans:
+        cap_id = plan["capability_id"]
+        if time.monotonic() - started > budget:
+            skipped.append({"capability_id": cap_id, "reason": "budget_exhausted",
+                            "detail": TICK_SKIP_REASONS["budget_exhausted"]})
+            continue
+        cap_row = caps.get(cap_id)
+        if cap_row is None:
+            skipped.append({"capability_id": cap_id, "reason": "not_in_ledger",
+                            "detail": TICK_SKIP_REASONS["not_in_ledger"]})
+            continue
+        try:
+            report = json.loads(plan["artifact"].read_text(encoding="utf-8"))
+        except Exception as exc:                                       # noqa: BLE001
+            skipped.append({"capability_id": cap_id, "reason": "unreadable_artifact",
+                            "detail": f"{type(exc).__name__}: {exc}"})
+            continue
+        findings = project_findings(cap_id, report)
+        fingerprint = finding_fingerprint(findings) if findings else None
+
+        # IT RAN. Recorded for every fresh production, gradable or not, so the control arm stays
+        # honest: a bound capability that really did produce output must not read as "offered and
+        # skipped" just because this module declines to grade it.
+        if record:
+            try:
+                if record_trigger(cap_id, experiment, path=path,
+                                  metadata={"surface": TICK_SURFACE,
+                                            "artifact": plan["artifact"].name}):
+                    triggers += 1
+            except Exception as exc:                                   # noqa: BLE001
+                skipped.append({"capability_id": cap_id, "reason": "trigger_failed",
+                                "detail": f"{type(exc).__name__}: {exc}"})
+                continue
+
+        entry = {"capability_id": cap_id, "artifact": plan["artifact"].name,
+                 "fingerprint": fingerprint,
+                 "finding_count": sum(len(v) for v in (findings or {}).values())}
+        reason = _tick_ungradable_reason(cap_id, cap_row, findings)
+        if plan["action"] == "baseline":
+            # FIRST SIGHT ESTABLISHES THE BASELINE AND RECORDS NO VERDICT. There is nothing to
+            # compare against, and inventing a verdict from a single observation is the manufactured
+            # evidence this whole design exists to prevent. Same discipline as
+            # `capability_firing_monitor`: the first run only establishes the baseline.
+            baselined.append({**entry, "reason": "first observation — baseline only, no verdict"})
+        elif reason:
+            evaluated.append({**entry, "graded": False, "reason": reason,
+                              "detail": TICK_SKIP_REASONS.get(reason, reason)})
+        else:
+            previous = (plan["prior"].get("findings") or {})
+            prev_fp = plan["prior"].get("fingerprint")
+            changed = fingerprint != prev_fp
+            delta = _finding_delta(findings or {}, previous)
+            if changed:
+                evidence = (f"{TICK_VERDICT_KIND}: report changed since "
+                            f"{plan['prior'].get('day', 'the previous run')} — "
+                            + ("; ".join(delta) if delta else "finding set differs"))
+            else:
+                evidence = (f"{TICK_VERDICT_KIND}: ran and re-emitted an IDENTICAL finding set "
+                            f"({entry['finding_count']} finding(s) across {len(findings or {})} "
+                            f"key(s)) last seen {plan['prior'].get('day', 'previously')}; nothing "
+                            f"new was reported, and silence is not usefulness")
+            recorded = False
+            if record:
+                try:
+                    recorded = record_usefulness(
+                        cap_id, experiment, useful=changed, evidence=evidence, path=path,
+                        metadata={"verdict_kind": TICK_VERDICT_KIND, "surface": TICK_SURFACE,
+                                  "fingerprint": fingerprint, "previous_fingerprint": prev_fp})
+                except Exception as exc:                               # noqa: BLE001
+                    evaluated.append({**entry, "graded": False, "reason": "verdict_failed",
+                                      "detail": f"{type(exc).__name__}: {exc}"})
+                    continue
+                verdicts += 1 if recorded else 0
+            evaluated.append({**entry, "graded": True, "useful": changed,
+                              "previous_fingerprint": prev_fp, "changed_keys": delta,
+                              "recorded": recorded, "evidence": evidence})
+
+        per_cap[cap_id] = {"artifact_mtime": plan["mtime"], "fingerprint": fingerprint,
+                           "findings": findings or {}, "evaluated_at": now, "day": day,
+                           "experiment_id": experiment}
+
+    state["last_consult_day"] = day
+    state["schema"] = 1
+    gradable = sorted(_tick_gradable(bound, caps))
+    acted = {e["capability_id"] for e in evaluated} | {b["capability_id"] for b in baselined}
+    report_out = {
+        **base,
+        "experiment_id": experiment,
+        "bound": bound,
+        "consulted": bool(advice) and "error" not in advice,
+        "advice_confidence": advice.get("confidence"),
+        "advice_error": advice.get("error"),
+        "advice_capabilities": [c["capability_id"] for c in (advice.get("capabilities") or [])],
+        "evaluated": evaluated,
+        "baselined": baselined,
+        "stale": [c for c in bound
+                  if c not in acted and c not in {s["capability_id"] for s in skipped}],
+        "skipped": skipped,
+        "matches_recorded": matches,
+        "triggers_recorded": triggers,
+        # BOTH QUANTITIES, ALWAYS, IN ONE PLACE. `verdicts_recorded` is what landed;
+        # `gradable`/`awaiting_regeneration` is what CAN still land. "0 verdicts" beside "3 gradable,
+        # awaiting regeneration" reads as cadence; "0 verdicts, 0 gradable" reads as a deadlock, and
+        # that difference is the whole point of printing them together.
+        "verdicts_recorded": verdicts,
+        "gradable": gradable,
+        "awaiting_regeneration": [c for c in gradable if c not in acted],
+        "not_gradable": {s["capability_id"]: s["reason"] for s in skipped},
+        "ceiling": {
+            "ticks_per_day": 24,
+            "structural_verdicts_per_day": len(bound),
+            "structural_basis": "the experiment id is scoped to the UTC day, so the "
+                                "record_usefulness idempotency key admits at most one verdict per "
+                                "bound capability per day however many ticks run",
+            "graded_verdicts_per_day_ceiling": round(
+                sum(1.0 / max(1.0, float(((steps or _tick_steps()).get(c) or {})
+                                         .get("cadence_days") or 0) + 1.0)
+                    for c in gradable), 2),
+            "graded_basis": "a verdict additionally requires the capability's own cadence artifact "
+                            "to have been regenerated, so the rate is bounded by each step's "
+                            "declared cadence, not by the tick",
+            "naive_unconditional_per_day": 24 * len(bound),
+        },
+    }
+    if record:
+        try:
+            _write_json_atomic(state_dir / TICK_EVIDENCE_STATE, state)
+            _write_json_atomic(state_dir / TICK_EVIDENCE_REPORT, report_out)
+        except Exception as exc:                                       # noqa: BLE001
+            report_out["state_write_error"] = f"{type(exc).__name__}: {exc}"
+    return report_out
+
+
+def _tick_steps() -> dict:
+    try:
+        import cadence_registry
+        return cadence_registry.STEP_BY_KEY
+    except Exception:                                                  # noqa: BLE001
+        return {}
+
+
+def _tick_ungradable_reason(capability_id: str, cap_row: dict,
+                            findings: dict | None) -> str | None:
+    """Why this capability gets no output-change verdict, or None when it gets one."""
+    if not TICK_FINDING_FIELDS.get(capability_id):
+        return "no_finding_projection"
+    if not capabilities.is_observer(cap_row):
+        # DERIVED from the one existing source of the observer/deliverer distinction, never
+        # re-declared here. Widening `OBSERVER_MATCHER_KINDS` to sweep a capability in would hide a
+        # real linkage gap for the other capabilities sharing that kind; `capabilities.py` says so
+        # at the set itself.
+        return "not_an_observer"
+    if findings is None:
+        return "unprojectable"
+    return None
+
+
+def _tick_gradable(bound: list[str], caps: dict) -> set[str]:
+    """Bound capabilities that COULD earn a verdict. The drainable quantity."""
+    out = set()
+    for cap_id in bound:
+        row = caps.get(cap_id)
+        if row is None:
+            continue
+        if not TICK_FINDING_FIELDS.get(cap_id):
+            continue
+        if not capabilities.is_observer(row):
+            continue
+        out.add(cap_id)
+    return out
+
+
+def tick_evidence_guarded(**kwargs) -> dict:
+    """`tick_evidence` that cannot take the tick down. THE ONLY entry point the shell calls.
+
+    A capability-evaluation feature that can break the hourly tick is unacceptable: the tick drives
+    real dispatch on real repositories. So the SIGALRM budget bounds the one blocking wait in the
+    path (the ledger flock), and any exception at all becomes a reported field rather than a
+    non-zero exit.
+    """
+    import signal
+
+    # `is None`, not falsy: `--budget-seconds 0` means "do nothing", and silently promoting it to 30
+    # would make a control lie about what it does.
+    budget = kwargs.pop("budget_s", None)
+    budget = TICK_EVIDENCE_BUDGET_S if budget is None else int(budget)
+    kwargs["budget_s"] = budget
+
+    def _expired(_signum, _frame):
+        raise TimeoutError(f"tick capability evidence exceeded {budget}s")
+
+    armed = False
+    previous = None
+    try:
+        previous = signal.signal(signal.SIGALRM, _expired)
+        # The in-loop budget check stops between capabilities; the alarm is the backstop for the one
+        # syscall that can block indefinitely (the ledger flock). Ledger writes are tmp+os.replace,
+        # so an interrupt cannot leave a torn ledger.
+        signal.alarm(max(1, budget) + 5)
+        armed = True
+    except (ValueError, AttributeError, OSError):
+        armed = False                      # not the main thread, or no SIGALRM: run unbounded
+    try:
+        return tick_evidence(**kwargs)
+    except BaseException as exc:                                       # noqa: BLE001
+        return {"generated_at": int(time.time()), "surface": TICK_SURFACE,
+                "error": f"{type(exc).__name__}: {exc}", "verdicts_recorded": 0,
+                "triggers_recorded": 0, "matches_recorded": 0, "bound": [], "evaluated": [],
+                "gradable": [], "awaiting_regeneration": [], "skipped": [],
+                "reason": "tick capability evidence failed; the tick is unaffected"}
+    finally:
+        if armed:
+            try:
+                signal.alarm(0)
+                if previous is not None:
+                    signal.signal(signal.SIGALRM, previous)
+            except (ValueError, OSError):
+                pass
+
+
+def format_tick_evidence(rep: dict) -> str:
+    """One or two lines, in the tick log's own style. Always states both quantities."""
+    if rep.get("disabled"):
+        return "  [tick-evidence] DISABLED by ORCH_TICK_EVIDENCE_DISABLED=1 (no consult, no record)"
+    if rep.get("error"):
+        return f"  [tick-evidence] error: {rep['error']} (tick unaffected)"
+    if not rep.get("consulted") and not rep.get("evaluated") and not rep.get("baselined"):
+        return ("  [tick-evidence] nothing regenerated since the last evaluation; "
+                f"{len(rep.get('gradable') or [])} gradable, awaiting their cadence")
+    useful = [e["capability_id"] for e in rep.get("evaluated") or []
+              if e.get("graded") and e.get("useful")]
+    quiet = [e["capability_id"] for e in rep.get("evaluated") or []
+             if e.get("graded") and not e.get("useful")]
+    lines = [f"  [tick-evidence] advisor consulted for surface 'tick': "
+             f"{len(rep.get('advice_capabilities') or [])} bound capability(ies); "
+             f"verdicts {rep.get('verdicts_recorded', 0)}, "
+             f"gradable {len(rep.get('gradable') or [])}, "
+             f"awaiting regeneration {len(rep.get('awaiting_regeneration') or [])}"]
+    if useful or quiet or rep.get("baselined"):
+        detail = []
+        if useful:
+            detail.append("USEFUL(output changed): " + ", ".join(useful))
+        if quiet:
+            detail.append("not useful(identical output): " + ", ".join(quiet))
+        if rep.get("baselined"):
+            detail.append("baselined: "
+                          + ", ".join(b["capability_id"] for b in rep["baselined"]))
+        lines.append("    " + " | ".join(detail))
+    return "\n".join(lines)
+
+
+def _selftest_tick_evidence() -> None:
+    """The tick wiring: an earned verdict, a bounded one, and no manufactured evidence.
+
+    SYNTHETIC LEDGER AND SYNTHETIC STATE DIR THROUGHOUT. This machine's ledger holds 43 rows and a
+    clean runner holds 14; an assertion against the live one passes here and fails in CI, which has
+    already happened twice in this subsystem. Every number below comes from fixtures.
+    """
+    import tempfile
+    from pathlib import Path
+    import capability_advisor
+
+    now = 1_800_000_000
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+
+    # ---- PART 1: THE REAL TABLE, code vs code. Runs on any machine: no ledger, no state dir.
+    real_bound = capability_advisor.binding_for(TICK_SURFACE)
+    assert real_bound, "the tick surface must have a declared bound set, or there is nothing to wire"
+    steps = _tick_steps()
+    assert steps, "cadence registry unreadable; the artifact resolver would silently find nothing"
+    # THE CONSULT TEXT MUST STAY UNCLASSIFIABLE, so the tick's answer is exactly its DECLARED bound
+    # set. The tick is a cadence, not one free-text task; a stray keyword would silently widen both
+    # the consult and the recorded matches to whatever the classifier happened to hit. This fails a
+    # test instead of drifting.
+    assert capability_advisor.classify_task(tick_task(day)) == [], (
+        f"the tick's consult text now hits the keyword classifier "
+        f"({capability_advisor.classify_task(tick_task(day))}); pick a phrase that does not, or the "
+        f"declared binding stops being the whole answer")
+    assert tick_artifact("no-such-capability", state_dir=Path("/nonexistent")) is None
+    for cap_id in TICK_FINDING_FIELDS:
+        assert cap_id in real_bound, (
+            f"{cap_id} has a finding projection but is not bound to the tick surface, so nothing "
+            f"will ever read it: {sorted(real_bound)}")
+        if not TICK_FINDING_FIELDS[cap_id]:
+            continue                       # deliberately not graded; see the table's own comment
+        art = tick_artifact(cap_id, state_dir=Path("/nonexistent"))
+        assert art is not None, (
+            f"{cap_id} is graded on an artifact, but no cadence step declares one for it — the "
+            f"registry and this projection have drifted")
+    # The projection must never name a field that moves on its own. Enumerated, because this is the
+    # one mistake that would turn every run into a "useful" verdict.
+    moving = {"silent_days", "tolerance_days", "generated_at", "timestamp", "last_invocation",
+              "unchanged_for_days", "snapshots_stored", "propensity", "raise_count"}
+    for cap_id, spec in TICK_FINDING_FIELDS.items():
+        for key, fields in spec.items():
+            assert not (set(fields) & moving), (cap_id, key, fields)
+
+    # ---- A CALLER MUST EXIST, and it must sit in the right place. This project's #1 defect class is
+    # built-and-forgotten, and the two ways this wiring could become inert are both checkable from
+    # source with no ledger and no state directory:
+    #   (a) the tick stops invoking it at all — every dormant subsystem here had exactly that defect;
+    #   (b) the invocation drifts ABOVE `ORCH-ANCHOR: heartbeat-export`, where it would run and
+    #       record nothing, which is the defect that had `frontend-verifier` reading `never fired`
+    #       while working. `heartbeat_env_gate` catches (b) for heartbeat-emitting modules; this
+    #       catches it for THIS subcommand specifically, and catches (a), which nothing else does.
+    # Resolved relative to THIS module's own directory on purpose: the check must verify the driver
+    # in the same tree as the code, which is right in both the repo and the exec mirror.
+    driver = pathlib.Path(__file__).resolve().parent / "orchestrate.sh"
+    if driver.exists():
+        text = driver.read_text(errors="ignore")
+        call = text.find("capability_propensity.py\" tick-evidence")
+        assert call > 0, ("orchestrate.sh no longer invokes `capability_propensity.py "
+                          "tick-evidence`; the tick has stopped consulting the advisor and stopped "
+                          "recording usefulness, which is this project's #1 defect class")
+        export = text.find("export ORCH_CAPABILITY_HEARTBEATS=1")
+        assert 0 < export < call, (
+            "the tick-evidence step is invoked ABOVE the ORCH_CAPABILITY_HEARTBEATS export, so "
+            f"every heartbeat it emits is discarded (export at {export}, call at {call})")
+        # ...and below every step it grades, or a step that ran THIS tick is graded a tick late.
+        for graded in sorted(TICK_FINDING_FIELDS):
+            step = text.find(f"_cadence_due {graded} ")
+            assert step == -1 or step < call, (
+                f"the tick-evidence step runs BEFORE the `{graded}` cadence step, so it can only "
+                f"ever grade the previous tick's artifact")
+
+    with tempfile.TemporaryDirectory(prefix="tick-evidence-") as td:
+        root = Path(td)
+        ledger = root / "capabilities.json"
+        state_dir = root / "state"
+        state_dir.mkdir()
+
+        # ---- PART 2: THE MECHANISM, on a wholly synthetic surface + registry + ledger.
+        rows = {}
+        for cid, kind in (("obs-daily", "tick_phase"), ("obs-weekly", "tick_phase"),
+                          ("deliverer", "closer_gate"), ("no-projection", "tick_phase")):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "wired"
+            cap["matcher"] = {"kind": kind, "name": cid}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        t_steps = {
+            "obs-daily": {"key": "obs-daily", "artifact": "obs-daily.json", "cadence_days": 0},
+            "obs-weekly": {"key": "obs-weekly", "artifact": "obs-weekly.json", "cadence_days": 6},
+            "deliverer": {"key": "deliverer", "artifact": "deliverer.json", "cadence_days": 0},
+            "no-projection": {"key": "no-projection", "artifact": "np.json", "cadence_days": 0},
+        }
+        real_fields = dict(TICK_FINDING_FIELDS)
+        real_binding = capability_advisor.SURFACE_BINDINGS.get(TICK_SURFACE)
+        TICK_FINDING_FIELDS.clear()
+        TICK_FINDING_FIELDS.update({
+            "obs-daily": {"overdue": ("capability_id",), "regressed": ("capability_id",)},
+            "obs-weekly": {"held_off": ("flag", "state")},
+            "deliverer": {"findings": ("id",)},
+            # `no-projection` deliberately absent: the "declared empty" case.
+        })
+        capability_advisor.SURFACE_BINDINGS[TICK_SURFACE] = {
+            "obs-daily": "synthetic observer, daily",
+            "obs-weekly": "synthetic observer, weekly",
+            "deliverer": "synthetic non-observer",
+            "no-projection": "synthetic observer with no projection declared",
+        }
+        try:
+            def write(name: str, payload: dict, mtime: int) -> None:
+                p = state_dir / name
+                p.write_text(json.dumps(payload), encoding="utf-8")
+                os.utime(p, (mtime, mtime))
+
+            # `silent_days` and `generated_at` MOVE between the two writes below; the finding
+            # identities do not. That pairing is the trap the projection exists to survive.
+            def daily(overdue, regressed, tick):
+                return {"generated_at": now + tick,
+                        "overdue": [{"capability_id": c, "silent_days": 1.0 + tick,
+                                     "tolerance_days": 2.0} for c in overdue],
+                        "regressed": [{"capability_id": c, "unchanged_for_days": tick}
+                                      for c in regressed]}
+
+            write("obs-daily.json", daily(["range-lane-rollout"], [], 1), now - 100)
+            write("obs-weekly.json", {"generated_at": now,
+                                      "held_off": [{"flag": "ORCH_X", "state": "off",
+                                                    "criterion": "long prose that never changes"}]},
+                  now - 100)
+            write("deliverer.json", {"findings": [{"id": "d1"}]}, now - 100)
+            write("np.json", {"anything": 1}, now - 100)
+
+            common = dict(state_dir=state_dir, path=ledger, steps=t_steps)
+
+            # 1. FIRST RUN IS A BASELINE AND RECORDS NO VERDICT. Inventing one from a single
+            #    observation is exactly the manufactured evidence this design forbids.
+            r1 = tick_evidence(now=now, **common)
+            assert r1["consulted"] is True, r1
+            assert r1["verdicts_recorded"] == 0, \
+                f"a FIRST observation produced a verdict; there was nothing to compare against: {r1}"
+            assert sorted(b["capability_id"] for b in r1["baselined"]) == \
+                ["deliverer", "no-projection", "obs-daily", "obs-weekly"], r1["baselined"]
+            assert r1["triggers_recorded"] == 4, r1
+            # THE CONSULT MUST RETURN THE BOUND SET, asserted on what the CALLER receives rather
+            # than on the binding table -- a suppression bug hid behind exactly that shortcut once.
+            assert sorted(r1["advice_capabilities"]) == \
+                ["deliverer", "no-projection", "obs-daily", "obs-weekly"], r1["advice_capabilities"]
+            assert r1["gradable"] == ["obs-daily", "obs-weekly"], r1["gradable"]
+
+            # 2. NO FRESH ARTIFACT -> NOTHING RECORDED AT ALL. This is the bound that keeps 24
+            #    ticks a day from becoming 96 data points.
+            for tick in range(2, 25):
+                rn = tick_evidence(now=now + tick, **common)
+                assert rn["verdicts_recorded"] == 0, (tick, rn)
+                assert rn["triggers_recorded"] == 0, (tick, rn)
+                assert rn["matches_recorded"] == 0, (tick, rn)
+
+            # 3. AN IDENTICAL REPORT IS NOT USEFUL, even though every counter and timestamp in it
+            #    moved. THE central assertion: without the field projection this is `useful=True`
+            #    and the ranking measures the calendar.
+            write("obs-daily.json", daily(["range-lane-rollout"], [], 99), now + 1000)
+            r3 = tick_evidence(now=now + 86400, **common)
+            got = {e["capability_id"]: e for e in r3["evaluated"]}
+            assert got["obs-daily"]["graded"] is True, got
+            assert got["obs-daily"]["useful"] is False, got["obs-daily"]
+            assert "IDENTICAL" in got["obs-daily"]["evidence"], got["obs-daily"]["evidence"]
+            assert r3["verdicts_recorded"] == 1, r3
+
+            # 4. A NEW FINDING IS USEFUL, and the evidence names what moved.
+            write("obs-daily.json", daily(["range-lane-rollout", "new-defect"], [], 5),
+                  now + 2000)
+            r4 = tick_evidence(now=now + 2 * 86400, **common)
+            got = {e["capability_id"]: e for e in r4["evaluated"]}
+            assert got["obs-daily"]["useful"] is True, got["obs-daily"]
+            assert any(d.startswith("overdue +1") for d in got["obs-daily"]["changed_keys"]), \
+                got["obs-daily"]["changed_keys"]
+            # ...and a finding that RESOLVED is also a change worth reporting.
+            write("obs-daily.json", daily([], [], 7), now + 3000)
+            r4b = tick_evidence(now=now + 3 * 86400, **common)
+            got = {e["capability_id"]: e for e in r4b["evaluated"]}
+            assert got["obs-daily"]["useful"] is True, got["obs-daily"]
+            # SILENCE IS NOT USEFULNESS: an empty finding set that STAYS empty is not useful.
+            write("obs-daily.json", daily([], [], 8), now + 4000)
+            r4c = tick_evidence(now=now + 4 * 86400, **common)
+            got = {e["capability_id"]: e for e in r4c["evaluated"]}
+            assert got["obs-daily"]["useful"] is False, got["obs-daily"]
+
+            # 5. A NON-OBSERVER GETS NO OUTPUT-CHANGE VERDICT, but its production IS recorded, so it
+            #    never reads as "offered and skipped" when it really ran.
+            write("deliverer.json", {"findings": [{"id": "d2"}]}, now + 5000)
+            r5 = tick_evidence(now=now + 5 * 86400, **common)
+            got = {e["capability_id"]: e for e in r5["evaluated"]}
+            assert got["deliverer"]["graded"] is False, got["deliverer"]
+            assert got["deliverer"].get("reason") == "not_an_observer", got["deliverer"]
+            assert "deliverer" not in r5["gradable"], r5["gradable"]
+            # ...and a bound observer with NO declared projection is a stated verdict, not silence.
+            write("np.json", {"anything": 2}, now + 5000)
+            r5b = tick_evidence(now=now + 5 * 86400 + 1, **common)
+            got = {e["capability_id"]: e for e in r5b["evaluated"]}
+            assert got["no-projection"].get("reason") == "no_finding_projection", got["no-projection"]
+
+            # 6. A SHAPE CHANGE IS REPORTED, NEVER SCORED. A broken parse must not read as
+            #    "nothing new" -- that is this repo's founding defect wearing a different hat.
+            write("obs-weekly.json", {"generated_at": now, "renamed_bucket": []}, now + 6000)
+            r6 = tick_evidence(now=now + 6 * 86400, **common)
+            got = {e["capability_id"]: e for e in r6["evaluated"]}
+            assert got["obs-weekly"].get("reason") == "unprojectable", got["obs-weekly"]
+            assert got["obs-weekly"]["graded"] is False, got["obs-weekly"]
+
+            # 7. THE VERDICT LANDS AS REAL PROPENSITY EVIDENCE — assert through the PUBLIC surface
+            #    the ranking actually reads, not through the state file this module wrote.
+            # REAL clock, deliberately: `capabilities.heartbeat` stamps events with `_now()`, so
+            # the 90-day window must be evaluated against the same clock that wrote them. Passing
+            # the fixture clock here reads every event as out-of-window and the assertions below
+            # would pass vacuously against zeroes.
+            u = usefulness(path=ledger)["rows"]
+            assert u["obs-daily"]["resolved"] >= 3, u["obs-daily"]
+            assert u["obs-daily"]["useful"] >= 2, u["obs-daily"]
+            assert u["obs-daily"]["usefulness_rate"] is not None, u["obs-daily"]
+            assert u["deliverer"]["resolved"] == 0, "a non-observer must earn no output verdict"
+            # The trial carries a real control arm: a bound candidate that did not run that day.
+            trials = {t["experiment_id"]: t for t in experiments(path=ledger)}
+            assert trials, "the tick produced no natural experiment at all"
+            assert any(t["not_triggered"] for t in trials.values()), \
+                "every trial triggered everything, so there is no control arm"
+            assert any(TICK_SURFACE in (t["skills"] or []) for t in trials.values()), \
+                "trials are not attributable to the tick surface, so demotion could never drain it"
+
+            # 8. THE DAY CEILING IS STRUCTURAL. Force a second same-day evaluation and prove the
+            #    idempotency key refuses it, so a bug in the freshness gate still cannot inflate.
+            write("obs-daily.json", daily(["seed"], [], 0), now + 7000)
+            tick_evidence(now=now + 6 * 86400, **common)   # consumes day 6's single allowance
+            before = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
+            assert before >= 1, (
+                f"the fixture produced no verdicts, so 'no further verdicts' is vacuous: {before}")
+            for bump in range(1, 6):
+                # Each write moves the mtime forward AND changes the findings, so the freshness gate
+                # and the change test both say "record a verdict". Only the day-scoped idempotency
+                # key stands between that and five more rows.
+                write("obs-daily.json", daily([f"x{bump}"], [], bump), now + 7000 + bump)
+                tick_evidence(now=now + 6 * 86400 + bump, **common)
+            after = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
+            assert after == before, (
+                f"five more same-day evaluations added {after - before} verdict(s); the day-scoped "
+                f"experiment id must admit at most one per capability per day")
+
+            # 9. THE KILL SWITCH. Off means the tick behaves exactly as before this existed: no
+            #    consult, no ledger event, no state write.
+            write("obs-daily.json", daily(["kill-switch-probe"], [], 3), now + 9000)
+            state_before = (state_dir / TICK_EVIDENCE_STATE).read_text(encoding="utf-8")
+            resolved_before = usefulness(path=ledger)["rows"]
+            os.environ["ORCH_TICK_EVIDENCE_DISABLED"] = "1"
+            try:
+                off = tick_evidence(now=now + 9 * 86400, **common)
+                assert off.get("disabled") is True, f"a disabled run still did work: {off}"
+                assert off["verdicts_recorded"] == 0, off
+                assert off["evaluated"] == [] and off["bound"] == [], off
+            finally:
+                os.environ.pop("ORCH_TICK_EVIDENCE_DISABLED", None)
+            assert (state_dir / TICK_EVIDENCE_STATE).read_text(encoding="utf-8") == state_before, \
+                "a disabled run wrote state"
+            assert usefulness(path=ledger)["rows"] == resolved_before, \
+                "a disabled run wrote ledger evidence"
+            # ...and with the switch back off, the same fresh artifact IS evaluated, so the
+            # assertion above discriminates rather than describing an inert path.
+            on = tick_evidence(now=now + 9 * 86400, **common)
+            assert on["verdicts_recorded"] == 1, on
+
+            # 10. IT CANNOT TAKE THE TICK DOWN. A guarded run over a corrupt artifact and a broken
+            #     registry must still return a report.
+            (state_dir / "obs-daily.json").write_text("{not json", encoding="utf-8")
+            os.utime(state_dir / "obs-daily.json", (now + 10_000, now + 10_000))
+            r10 = tick_evidence_guarded(now=now + 10 * 86400, **common)
+            assert "unreadable_artifact" in {s["reason"] for s in r10["skipped"]}, r10["skipped"]
+            broken = tick_evidence_guarded(now=now + 11 * 86400, state_dir=state_dir, path=ledger,
+                                            steps={"obs-daily": {"artifact": None}})
+            assert "no_cadence_artifact" in {s["reason"] for s in broken["skipped"]}, broken
+            assert format_tick_evidence(r10), "the tick log line must never be empty"
+            assert "DISABLED" in format_tick_evidence({"disabled": True})
+            # A ZERO BUDGET MUST MEAN ZERO WORK, not a silent promotion to the default. A control
+            # that quietly does something other than what it says is worse than no control.
+            write("obs-weekly.json", {"held_off": [{"flag": "ORCH_Y", "state": "off"}]},
+                  now + 12_000)
+            starved = tick_evidence_guarded(now=now + 12 * 86400, state_dir=state_dir, path=ledger,
+                                            steps=t_steps, budget_s=0)
+            assert "budget_exhausted" in {s["reason"] for s in starved["skipped"]}, starved
+            assert starved["verdicts_recorded"] == 0, starved
+        finally:
+            TICK_FINDING_FIELDS.clear()
+            TICK_FINDING_FIELDS.update(real_fields)
+            if real_binding is None:
+                capability_advisor.SURFACE_BINDINGS.pop(TICK_SURFACE, None)
+            else:
+                capability_advisor.SURFACE_BINDINGS[TICK_SURFACE] = real_binding
+
+    print("capability_propensity tick-evidence selftest: OK (baseline first, identical output is "
+          "NOT useful, moving counters are projected away, non-observers get no output verdict, "
+          "shape change reported not scored, one verdict per capability per day, kill switch inert)")
 
 
 def _selftest_detection() -> None:
@@ -530,7 +1457,8 @@ def _fmt(rep: dict) -> str:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("command", nargs="?", default="report",
-                    choices=["report", "experiments", "trigger", "useful", "detect"])
+                    choices=["report", "experiments", "trigger", "useful", "detect",
+                             "tick-evidence"])
     # A loop that can only be closed from Python cannot be closed by a lane, which runs bash. These
     # two subcommands are the whole reason the recording edges are reachable from an automation.
     ap.add_argument("--capability", default="", help="capability id, for trigger/useful")
@@ -548,11 +1476,24 @@ def main(argv: list[str]) -> int:
                     help="write to this ledger instead of the live one (use for demos and proofs)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--window-days", type=int, default=WINDOW_DAYS)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="tick-evidence: consult and classify but record nothing")
+    ap.add_argument("--budget-seconds", type=int, default=TICK_EVIDENCE_BUDGET_S,
+                    help="tick-evidence: wall-clock ceiling; the tick must never wait longer")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
         _selftest_detection()
+        _selftest_tick_evidence()
+        return 0
+    if args.command == "tick-evidence":
+        # ALWAYS EXIT 0 on a handled failure. The tick calls this every hour and drives real
+        # dispatch; an advisory evidence step is not permitted to change the tick's control flow.
+        rep = tick_evidence_guarded(
+            record=not args.dry_run, budget_s=args.budget_seconds,
+            path=pathlib.Path(args.ledger) if args.ledger else None)
+        print(json.dumps(rep, indent=2) if args.json else format_tick_evidence(rep))
         return 0
     if args.command == "detect":
         rep = detect(apply_promotions=args.apply)

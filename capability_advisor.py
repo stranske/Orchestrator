@@ -257,7 +257,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
                 entries = capability_propensity.rank(entries, path=path)
             except Exception:                                          # noqa: BLE001
                 pass
-            return {
+            result = {
                 "task": text, "experiment_id": experiment_id(text),
                 "useful": True, "confidence": "binding_only", "skill": skill or None,
                 "surface": (surface or skill) or None, "repository": repository,
@@ -271,6 +271,19 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
                            f"DECLARED for surface {surface or skill!r} and apply regardless of "
                            f"classification"),
             }
+            if record and entries:
+                # A BINDING-ONLY ANSWER IS STILL AN OBSERVATION. This branch used to return real
+                # capabilities with `useful: true` and record NOTHING, so the fix that made a
+                # declared binding survive a classification miss covered the ANSWER and not the
+                # EVIDENCE. The consequence is a latched gate one layer down: a surface whose words
+                # never hit the keyword vocabulary — the tick's cadence pass is exactly that — could
+                # never accumulate a candidate set, so `capability_propensity.experiments()` saw
+                # triggers and outcomes belonging to trials with zero candidates, no control arm and
+                # no attributable skill. Found 2026-08-22 while wiring the tick: the trial existed
+                # and was unreadable. Same call as the classified branch, same idempotency, so a
+                # repeated identical question still does not inflate anything.
+                result["recorded_matches"] = _record_matches(result, skill=skill, path=path)
+            return result
         return {
             "task": text, "experiment_id": experiment_id(text),
             "useful": False, "confidence": "none", "skill": skill or None,
@@ -1092,6 +1105,33 @@ def _selftest_bindings() -> None:
             # made the difference rather than a loosened classifier.
             bare = advise("xyzzy plugh frobnicate", path=ledger, record=False)
             assert bare["capabilities"] == [], bare
+
+            # 1b. AND IT MUST RECORD. A binding-only answer that records nothing is a latched gate
+            # one layer down: the surface gets its capabilities, but `capability_propensity` sees a
+            # trial with no candidates, so it has no control arm, no attributable skill, and no
+            # denominator for a trigger rate. Measured 2026-08-22 while wiring the tick — whose
+            # cadence text classifies as nothing, so it takes this branch on EVERY consult.
+            # Asserted through the LEDGER, which is what a downstream reader actually sees.
+            rec = advise("plugh xyzzy nothing classifies here", surface="t-surface", skill="t-surface",
+                         path=ledger)
+            assert rec["confidence"] == "binding_only", rec["confidence"]
+            assert rec.get("recorded_matches") == 2, rec.get("recorded_matches")
+            import capability_propensity as _prop
+            trial = next(t for t in _prop.experiments(path=ledger)
+                         if t["experiment_id"] == rec["experiment_id"])
+            assert sorted(trial["candidates"]) == ["bound-a", "bound-b"], trial
+            assert trial["skills"] == ["t-surface"], trial
+            # ...and the same question again must not inflate the count.
+            again = advise("plugh xyzzy nothing classifies here", surface="t-surface",
+                           skill="t-surface", path=ledger)
+            assert again.get("recorded_matches") == 0, again.get("recorded_matches")
+            # record=False stays a pure query on this branch too.
+            pure = advise("plugh xyzzy nothing classifies here either", surface="t-surface",
+                          path=ledger, record=False)
+            assert "recorded_matches" not in pure, pure
+            assert not any(t["experiment_id"] == pure["experiment_id"]
+                           for t in _prop.experiments(path=ledger)), \
+                "record=False wrote a trial on the binding-only branch"
 
             # 2. NEVER CONCEAL. A classifying task must still return the unbound match, ranked after
             # the bound ones -- a hidden capability can never earn the evidence that would bind it.

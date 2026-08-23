@@ -546,6 +546,42 @@ if _cadence_due capability-activation-audit && _attempt_ok capability-activation
     _mark_fail capability-activation-audit "see $STAMP_DIR/capability-activation-audit.log"
   fi
 fi
+# ORCH-ANCHOR: tick-capability-evidence ----------------------------------------------------------
+# THE TICK NOW CONSULTS THE FRONT DOOR AND RECORDS WHETHER A CAPABILITY HELPED. 21 of the 43
+# capabilities live on this tick and four of them are bound to the `tick` surface in
+# `capability_advisor.SURFACE_BINDINGS`, yet nothing here had ever called `advise()` and nothing had
+# ever recorded an `invocation`/`outcome` edge against an advisory `match`. That is why the
+# capability-propensity step above prints PRIOR-ONLY every run: the loop had a measurement and no
+# producer. This is the producer, and it accrues hourly with no further human attention.
+#
+# PLACED HERE, BELOW `ORCH-ANCHOR: heartbeat-export` AND BELOW ALL FOUR STEPS IT GRADES
+# (switch-review, capability-firing-monitor, capability-propensity, capability-activation-audit), so
+# a step that ran THIS tick is graded on THIS tick. A producer above the heartbeat export runs and
+# records nothing; `capability_activation_audit.heartbeat_env_gate` plus
+# `test_capabilities.test_no_tick_producer_runs_above_the_heartbeat_export` fail the suite if this
+# ever moves up there.
+#
+# IT CANNOT MANUFACTURE EVIDENCE, which is the real risk at 24 runs/day x 4 capabilities = 96
+# potential data points. Two independent bounds, both in `capability_propensity.tick_evidence`:
+# the experiment id is scoped to the UTC day (so the ledger idempotency keys admit at most ONE
+# verdict per capability per day however many ticks run), and a verdict additionally requires the
+# graded capability's own cadence ARTIFACT to have been regenerated since the last evaluation. Those
+# cadences are daily and 6-daily, so the graded ceiling is ~1.3 verdicts/day, not 96.
+#
+# IT CANNOT STALL THE TICK. Read-only apart from the ledger events it exists to write: no gh, no
+# network, no subprocess, no dispatch. `tick_evidence_guarded` arms a SIGALRM budget over the one
+# blocking wait in the path (the ledger flock) and turns any exception into a reported field, so the
+# subcommand exits 0 on a handled failure and the `if` below covers the rest.
+# Kill switch: ORCH_TICK_EVIDENCE_DISABLED=1 (module-side, works from any caller) or
+# ORCH_DISABLE_STEPS=tick-capability-evidence (shell-side, the repo's one mechanism). Either alone
+# makes the tick behave exactly as it did before this wiring existed.
+if _step_disabled tick-capability-evidence; then :; else
+  if python3 "$ORCH/capability_propensity.py" tick-evidence \
+       --budget-seconds "${ORCH_TICK_EVIDENCE_BUDGET_S:-30}" \
+       2>> "$STAMP_DIR/tick-capability-evidence.log"; then :; else
+    echo "  warn: tick capability evidence failed (continuing; see $STAMP_DIR/tick-capability-evidence.log)"
+  fi
+fi   # end: _step_disabled tick-capability-evidence
 if _cadence_due issue-readiness && _attempt_ok issue-readiness; then
   # Decide which open issues the fleet may work, WITHOUT routing that decision through the owner.
   # `backlog._is_ready` reads a label only a human ever applied, so the ready queue tracked one
