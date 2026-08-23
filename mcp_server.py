@@ -280,15 +280,21 @@ def _selftest_advice_schema_matches_advise() -> None:
         f"capability_advice does not advertise {missing}, so a caller setting them is silently "
         f"ignored. Add them to the inputSchema AND pass them through in _call_tool.")
 
-    # ...and advertised is not enough: it must actually be FORWARDED.
+    # ...and advertised is not enough: it must actually be FORWARDED. Assert the FORWARDING, never
+    # which capabilities come back -- `advise()` only returns bound capabilities that exist in the
+    # ledger, and the ledger is machine-local (43 rows on the owner's machine, 14 on a clean runner).
+    # The first version of this asserted `adversarial-review` was returned, passed locally and went
+    # red on CI: a machine-local assertion inside the guard written to stop a different recurrence.
     got = _call_tool("capability_advice", {"task": "xyzzy plugh frobnicate",
                                            "surface": "repo-audit:phase-3"})
     assert got.get("surface") == "repo-audit:phase-3", got.get("surface")
-    assert "adversarial-review" in (got.get("bound_capabilities") or []), got
-    # A phase the playbook says must bind nothing must come back empty even through the tool.
+    assert "bound_capabilities" in got, "the tool must report which capabilities were bound"
+    # A phase declared NO_BINDING must come back empty through the tool. This one is ledger-
+    # independent in the safe direction: suppression yields {} regardless of what is registered.
     empty = _call_tool("capability_advice", {"task": "xyzzy plugh frobnicate",
                                             "surface": "repo-audit:phase-1"})
     assert (empty.get("bound_capabilities") or []) == [], empty
+    assert empty.get("surface") == "repo-audit:phase-1", empty.get("surface")
     print("mcp_server advice-schema selftest: OK (every caller-settable advise() field is advertised "
           "and forwarded)")
 
