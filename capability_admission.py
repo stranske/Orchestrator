@@ -872,6 +872,76 @@ def _probe_commitments(probe: pathlib.Path) -> None:
     assert not commitments(root=probe)["overdue_without_record"]
 
 
+def _probe_live_root(probe: pathlib.Path) -> None:
+    """Prove the DEFAULT-root scan reaches THIS TREE, and reports what it finds accurately.
+
+    Called with `AUDITS` already pointed at the synthetic empty record set, so every dated record
+    cited in the tree dangles by construction and the verdicts are identical on every machine.
+
+    WHY THIS EXISTS, and why it is not a second copy of `_probe_commitments`. `_selftest` used to
+    compute `cited = {d["record"] for d in commitments()["dangling_citations"]}` and assert nothing
+    on it; the dead binding was removed as an unused local, leaving the section header's claim —
+    "the real historical failure must be detected, not hypothetically detectable" — unenforced.
+    The assertion it once carried named the range-lane record cited by `orchestrate.sh`, and it
+    CANNOT be restored as it stood: that record was eventually written, so the live dangling set is
+    now empty where the ledger exists. Nor is `assert not cited` worth restoring — that is a weaker
+    copy of `test_capability_admission.test_dated_promises_left_an_artifact`, which already asserts
+    the strongest available claim on the live set, that BOTH lists are empty.
+
+    What neither of those covers is the hole this closes. `_probe_commitments` always passes an
+    explicit `root=`, so nothing in the suite exercises `root or HERE`. A default that stopped
+    resolving to the checkout — module relocated, `SCAN_SUFFIXES` narrowed, `SKIP_NAMES` widened,
+    `iterdir` over the wrong directory — returns `clean: True` over ZERO files. The live selftest
+    assertion (`isinstance(com["clean"], bool)`) and the pytest emptiness assertion would BOTH stay
+    green forever on a scan that examined nothing, which is `verify.py`'s vacuous zero-exit one
+    level up: the check runs, reads green, and looks at nothing. So what has to surface here is the
+    real tree's own citations — `orchestrate.sh`'s among them — not a synthetic `fake.sh`.
+    """
+    live = commitments()["dangling_citations"]
+    # NON-VACUITY. Against a record set where nothing exists, every dated citation in the tree
+    # dangles, so this set is empty only if the scan read no files. Should the tree ever
+    # legitimately stop citing dated records, the live check has genuinely become vacuous and this
+    # anchor needs re-pointing — that is the loud failure, and it is the intended one.
+    assert live, (
+        "the default-root scan surfaced no dated-record citations, against a record set in which "
+        f"every one of them dangles — so `commitments()` examined nothing under {HERE}. Check "
+        "`root or HERE`, SCAN_SUFFIXES and SKIP_NAMES before touching this assertion."
+    )
+    # PROVENANCE. `_probe_commitments` only ever checks `record`, so a report that names the right
+    # record at the wrong file:line passes it. That report is unactionable — the whole output of
+    # this gate is "go look here" — and misattribution is invisible from the record name alone.
+    for d in live:
+        src = HERE / d["file"]
+        assert src.is_file(), f"dangling report names a file that is not in this tree: {d}"
+        lines = src.read_text(encoding="utf-8", errors="ignore").splitlines()
+        assert 1 <= d["line"] <= len(lines), f"line number falls outside {d['file']}: {d}"
+        assert d["record"] in lines[d["line"] - 1], f"citation misattributed to a line: {d}"
+    # THE SKIP MUST STILL HOLD on the live path, stated as a LITERAL rather than as
+    # `reported & SKIP_NAMES` — that first draft compared the report against the very set whose
+    # failure it was meant to catch, so emptying SKIP_NAMES made it vacuously true and the break
+    # test caught nothing. This file cites two dated records in its own docstring because it
+    # documents the detector; were it ever scanned it would report ITSELF, and a finding that can
+    # only be cleared by deleting the detector's documentation is a permanently-red gate, which
+    # gets switched off. So the concrete fact is asserted, independent of the mechanism.
+    reported = {d["file"] for d in live}
+    assert pathlib.Path(__file__).name not in reported, (
+        f"the detector reported its own documented examples: {sorted(reported)}. "
+        f"SKIP_NAMES must keep {pathlib.Path(__file__).name} out of its own scan."
+    )
+    # NO LEDGER, NO VERDICT — the other reason a live-set assertion cannot be restored, pinned so
+    # it stays a deliberate fail-open rather than an accident. Absence must return "nothing found",
+    # never a verdict it could not compute. Pointed at a path that does not exist, so this runs on
+    # the ledger machine too instead of only where the ledger happens to be missing.
+    saved = globals()["AUDITS"]
+    globals()["AUDITS"] = probe / "no-such-ledger"
+    try:
+        absent = commitments()
+    finally:
+        globals()["AUDITS"] = saved
+    assert absent.get("skipped") and absent["clean"], absent
+    assert not absent["dangling_citations"] and not absent["overdue_without_record"], absent
+
+
 def _selftest() -> None:
     ledger = capabilities.load_declared(capabilities.REG)
     assert ledger, "ledger must load"
@@ -983,11 +1053,16 @@ def _selftest() -> None:
         assert cid in ledger, f"waiver names unknown capability {cid}"
 
     # COMMITMENTS: the real historical failure must be detected, not hypothetically detectable.
+    # The LIVE verdict is asserted in test_capability_admission.test_dated_promises_left_an_artifact
+    # (both lists empty); here the live call only has to answer at all.
     com = commitments()
     assert isinstance(com["clean"], bool)
-    # orchestrate.sh cites the range-lane review record that was never written. If someone fixes
-    # that line, this assertion should be updated — but it must never be quietly dropped, so the
-    # check below proves the DETECTOR works using a synthetic file either way.
+    # `orchestrate.sh` cites the range-lane review record. That record HAS since been written, so
+    # the assertion that once named it here is retired on purpose rather than quietly dropped —
+    # `_probe_live_root` carries what it was actually protecting: that the default-root scan reads
+    # the real tree and attributes what it finds correctly. Read its docstring before changing
+    # either block; between them they cover the detector (synthetic input) and the live wiring
+    # (real input), and dropping one leaves the other passing over nothing.
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="cap-adm-") as td:
@@ -1000,6 +1075,9 @@ def _selftest() -> None:
         #      has no audit ledger: the first CI run died right here.
         #   2. Even where the ledger exists, the verdicts below depended on which records happen
         #      to be in it. A synthetic empty set makes all four deterministic everywhere.
+        # `_probe_live_root` runs off the SAME swap for the same reason, one input further out: it
+        # scans the real tree, and only an empty record set makes "every dated citation dangles"
+        # true on the owner's machine and a bare runner alike.
         # This is the harness, not an assertion: every assert below is unchanged, and now runs on
         # any machine instead of only on this one.
         audits_probe = probe / "audits"
@@ -1008,6 +1086,7 @@ def _selftest() -> None:
         globals()["AUDITS"] = audits_probe
         try:
             _probe_commitments(probe)
+            _probe_live_root(probe)
         finally:
             globals()["AUDITS"] = saved_audits
 
@@ -1050,7 +1129,8 @@ def _selftest() -> None:
     print(
         "capability_admission.py selftest: OK (every requirement can fail and can pass, "
         "grandfathering visible, per-requirement cutoffs are in the past, findability is "
-        "declarable pre-build, waivers expire, dangling + overdue commitments detected)"
+        "declarable pre-build, waivers expire, dangling + overdue commitments detected, "
+        "live-tree scan proven non-vacuous and correctly attributed)"
         + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
     )
 
