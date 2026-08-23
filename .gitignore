@@ -38,12 +38,18 @@ gh-rate-ledger.ndjson
 # reads the path -- the emitters here are langsmith_*.py (underscores) and they read
 # langsmith-fleet.ndjson out of $ORCH_STATE_DIR.
 #
-# It was TRACKED on main until 2026-08-23, holding PR #61's run: a tool-vs-evidence
-# violation (CLAUDE.md 1), and a second unmanaged store of the `operation_role: worker`
-# provenance that is supposed to reach the learner through feedback.py's tables
-# (CLAUDE.md 2). It also broke PR #66 -- the autofix bot's `git add -A` re-emitted it
-# with pr_number 66 against main's 61, an add/add conflict on a path neither side had a
-# reason to touch.
+# It was TRACKED from 2118f57 until 2026-08-23, holding whichever run merged last: a
+# tool-vs-evidence violation (CLAUDE.md 1), and a second unmanaged store of the
+# `operation_role: worker` provenance that is supposed to reach the learner through
+# feedback.py's tables (CLAUDE.md 2). Ten commits across PRs #59/#61/#62/#63 rewrote it,
+# producing one add/add conflict per concurrent PR and silently widening diffs that had
+# nothing to do with their change -- that is what broke PR #66 (pr_number 66 against
+# main's 61) and what turned this branch's own rebase into a modify/delete conflict when
+# #68 merged underneath it.
+#
+# Untracking loses no provenance: the producer already uploads the same bytes as Actions
+# artifact `langsmith-fleet-v1-worker-attempt-<pr>` with 30-day retention, and that upload
+# is the only reason the file is written at all.
 #
 # UNTRACKING is what makes these patterns bite, and the order is not interchangeable:
 # `git add -A` skips an ignored UNTRACKED path but stages an ignored TRACKED one, so
@@ -115,27 +121,6 @@ venv/
 LOCAL_POLICY.md
 CAPABILITY_USEFULNESS.md
 *.local.md
-
-# --- per-run CI provenance: an artifact, not source ---
-# langsmith-fleet-worker-attempt.json is rewritten on EVERY reusable-codex-run
-# invocation (one langsmith-fleet/v1 record for that run's worker model attempt).
-# It was tracked from 2118f57 onward, and gitignore does not apply to an
-# already-tracked path — so the runner's `git add -A` commit step staged it every
-# time regardless of this file. Ten commits across PRs #59/#61/#62/#63 rewrote
-# it, producing one add/add conflict per concurrent PR and silently widening
-# diffs that had nothing to do with their change.
-#
-# Nothing reads it from the tree. This repo's langsmith-fleet/v1 consumers
-# (langsmith_pull.py, langsmith_fetch.py) ingest the NDJSON Actions artifact
-# `langsmith-fleet.ndjson`; neither one names this path. The producer already
-# uploads it as artifact `langsmith-fleet-v1-worker-attempt-<pr>` (30-day
-# retention), so untracking loses no provenance. stranske/Workflows reached the
-# same verdict for its own copy — same filename, same reason, see its .gitignore.
-#
-# Deliberately OUTSIDE the synced block below: that block mirrors Workflows'
-# templates/consumer-repo/.gitignore, which does NOT carry this pattern, so an
-# entry placed inside it would be dropped when the block is next rewritten.
-langsmith-fleet-worker-attempt.json
 
 # =============================================================================
 # Workflows Consumer Repo - Shared Status Files
