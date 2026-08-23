@@ -158,3 +158,42 @@ def test_coverage_never_changes_the_exit_code():
     assert (
         "code =" not in tail and "code +=" not in tail
     ), "the coverage branch must not touch the exit code"
+
+
+def test_the_cli_help_actually_renders():
+    """`verify.py --help` must not crash. This test exists because my own change broke it.
+
+    argparse interpolates every help string with `% params` when it FORMATS help, so a literal `%`
+    must be written `%%`. The first version of the --coverage help said "cannot see ~80% of this
+    codebase"; argparse read `% o` as an `%o` octal conversion and `verify.py --help` died with
+    `TypeError: %o format: an integer is required, not dict`, reported as
+    `ValueError: badly formed help string`.
+
+    The twelve tests written alongside that change all passed, because not one of them RENDERED the
+    help — they inspected source text and monkeypatched a flag. CI caught it instead, on the
+    `verify.py` gate, which is the check of last resort doing its job. A construction-time test that
+    never exercises the constructed thing is the same defect this repository is named for, one layer
+    up: it looked at the parts and never ran the whole.
+
+    Rendering is also the only honest check here. Grepping for `%` in help strings would miss
+    `%(default)s`, which is legitimate, and would flag it as a bug.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "verify.py", "--help"],
+        cwd=HERE,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    assert proc.returncode == 0, (
+        f"`verify.py --help` exited {proc.returncode}. An unescaped `%` in a help string is the "
+        f"likely cause — write it `%%`. Output:\n{combined[-600:]}"
+    )
+    assert (
+        "badly formed help string" not in combined
+    ), "argparse could not format a help string. A literal `%` in help= must be escaped as `%%`."
+    assert "--coverage" in combined, "--help no longer documents --coverage"

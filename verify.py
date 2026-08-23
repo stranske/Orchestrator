@@ -874,7 +874,7 @@ def main() -> int:
         help=(
             "also measure coverage, by running each child under `coverage run --parallel-mode` "
             "and combining. Much slower; OFF by default. Needed because the per-module "
-            "--selftest is a SUBPROCESS, so a pytest-only coverage run cannot see ~80% of this "
+            "--selftest is a SUBPROCESS, so a pytest-only coverage run cannot see ~80%% of this "
             "codebase and reports the blind spot as a score."
         ),
     )
