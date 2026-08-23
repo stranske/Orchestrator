@@ -13,7 +13,6 @@ import hashlib
 import json
 from typing import Any, Literal
 
-
 IR_SCHEMA = "orchestrator.capability-ir"
 IR_VERSION = 2
 
@@ -189,9 +188,7 @@ class CapabilityIR:
             for item in raw.get("counterexamples") or ()
         )
         payload["independent_subjects"] = tuple(raw.get("independent_subjects") or ())
-        payload["independent_repositories"] = tuple(
-            raw.get("independent_repositories") or ()
-        )
+        payload["independent_repositories"] = tuple(raw.get("independent_repositories") or ())
         payload["artifact_refs"] = tuple(raw.get("artifact_refs") or ())
         payload["aliases"] = tuple(raw.get("aliases") or ())
         payload["lifecycle"] = Lifecycle(**raw["lifecycle"])
@@ -222,4 +219,3 @@ class CandidateTombstone:
         if tombstone.schema != "orchestrator.capability-tombstone" or tombstone.version != 1:
             raise ValueError("unsupported persisted capability tombstone schema")
         return tombstone
-

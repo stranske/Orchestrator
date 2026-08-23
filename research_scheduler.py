@@ -26,9 +26,7 @@ import feedback
 import research_subjects
 
 ORCH = Path(__file__).resolve().parent
-HYP_PATH = Path(
-    os.environ.get("ORCH_HYP_PATH", ORCH / "experiments" / "hypotheses.json")
-)
+HYP_PATH = Path(os.environ.get("ORCH_HYP_PATH", ORCH / "experiments" / "hypotheses.json"))
 
 # Spare-capacity budget per tier when a seat is `ok` (use-it-or-lose-it: free/flat are cheap to spend on
 # science; metered reasoning is spent cautiously; paygo not at all by default). Scaled down on `warn`.
@@ -90,9 +88,9 @@ def route_n_obs(
     if rows is None and conn is not None:
         placeholders = ",".join("?" for _ in names)
         try:
-            version = conn.execute(
-                "SELECT COALESCE(MAX(version),0) FROM route_weights"
-            ).fetchone()[0]
+            version = conn.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[
+                0
+            ]
             rows = [
                 {"agent": a, "n_obs": n}
                 for a, n in conn.execute(
@@ -148,9 +146,7 @@ def _feedback_conn(conn):
         return None, False
 
 
-def staleness_days(
-    task_type: str, agent: str, *, conn=None, now: int | None = None
-) -> float:
+def staleness_days(task_type: str, agent: str, *, conn=None, now: int | None = None) -> float:
     """Days since the latest eval or outcome observation for this (task_type, agent) cell."""
     db, close = _feedback_conn(conn)
     if db is None:
@@ -242,17 +238,13 @@ def acquisition_hunger(
     """Combined 0..1 acquisition pressure from n_obs deficit, staleness, and model drift."""
     if not agents:
         return 0.0
-    data = data_hunger(
-        task_type, agents, conn=conn, weights=weights, prior_strength=prior_strength
-    )
+    data = data_hunger(task_type, agents, conn=conn, weights=weights, prior_strength=prior_strength)
     stale = max(
         (staleness_hunger(task_type, a, conn=conn) for a in _unique_agents(agents)),
         default=0.0,
     )
     drift = (
-        1.0
-        if any(model_drifted(task_type, a, conn=conn) for a in _unique_agents(agents))
-        else 0.0
+        1.0 if any(model_drifted(task_type, a, conn=conn) for a in _unique_agents(agents)) else 0.0
     )
     return max(data, stale, drift)
 
@@ -383,9 +375,7 @@ def select_jobs(jobs: list, budget: int) -> list:
     """Greedy knapsack by info/cost ratio under the capacity budget -> variable intensity: abundant
     budget runs the intense jobs, scarce budget runs only the cheapest-highest-value spot-check.
     job: {id, info_value, capacity_cost}. Returns the chosen jobs (order = priority)."""
-    ranked = sorted(
-        jobs, key=lambda j: j["info_value"] / max(1, j["capacity_cost"]), reverse=True
-    )
+    ranked = sorted(jobs, key=lambda j: j["info_value"] / max(1, j["capacity_cost"]), reverse=True)
     chosen, spent = [], 0
     for j in ranked:
         if spent + j["capacity_cost"] <= budget:
@@ -415,9 +405,7 @@ def select_arms(
     self-confirming blind spot; Top-Two seeding keeps it efficient (~35% fewer trials than vanilla TS).
     """
     rng = rng or random.Random()
-    plausible = [
-        a for a in plausible if n_units.get(a, 0) > 0
-    ]  # only seats with spare capacity
+    plausible = [a for a in plausible if n_units.get(a, 0) > 0]  # only seats with spare capacity
     if len(plausible) < 2:
         return plausible
     observed = n_obs or {}
@@ -447,9 +435,7 @@ def select_arms(
     if hunger > 0:
         # While acquisition pressure is hot, spend extras on least-fresh cells first: under-observed,
         # stale, or model-drifted cells all surface through the same score.
-        extras.sort(
-            key=lambda a: (-hunger_scores.get(a, 0.0), observed.get(a, 0), rng.random())
-        )
+        extras.sort(key=lambda a: (-hunger_scores.get(a, 0.0), observed.get(a, 0), rng.random()))
     for a in extras:
         if len(arms) >= target_n:
             break
@@ -480,9 +466,7 @@ def should_test(
     ]
     if matches:
         h = matches[0]
-        runnable = [
-            a for a in h["arms"] if all(spare.get(g, 0) > 0 for g in arm_agents(a))
-        ]
+        runnable = [a for a in h["arms"] if all(spare.get(g, 0) > 0 for g in arm_agents(a))]
         if len(runnable) >= 2:
             dh = data_hunger(task_type, runnable, conn=conn, weights=weights)
             hunger = acquisition_hunger(task_type, runnable, conn=conn, weights=weights)
@@ -490,20 +474,14 @@ def should_test(
                 "trigger": "hypothesis",
                 "hypothesis": h["id"],
                 "arms": runnable,
-                "kind": (
-                    "strategy"
-                    if any(not isinstance(a, str) for a in runnable)
-                    else "agent"
-                ),
+                "kind": ("strategy" if any(not isinstance(a, str) for a in runnable) else "agent"),
                 "data_hunger": dh,
                 "acquisition_hunger": hunger,
             }
     # opportunistic: lots of free seats sitting idle -> spend them on a comparison (free information)
     free_seats = [a for a, u in spare.items() if u > 0]
     dh = data_hunger(task_type or "implement", free_seats, conn=conn, weights=weights)
-    hunger = acquisition_hunger(
-        task_type or "implement", free_seats, conn=conn, weights=weights
-    )
+    hunger = acquisition_hunger(task_type or "implement", free_seats, conn=conn, weights=weights)
     min_seats = 2 if hunger >= 0.75 else 3
     min_spare = 2 if hunger >= 0.75 else 6
     if len(free_seats) >= min_seats and sum(spare.values()) >= min_spare:
@@ -523,11 +501,7 @@ def capacity_state_from_snapshot(
 ) -> dict:
     """Adapt capacity.py's live JSON shape into spare_capacity()'s small pure input shape."""
     tiers = tiers or DEFAULT_AGENT_TIERS
-    agents = (
-        capacity_snapshot.get("agents", {})
-        if isinstance(capacity_snapshot, dict)
-        else {}
-    )
+    agents = capacity_snapshot.get("agents", {}) if isinstance(capacity_snapshot, dict) else {}
     out = {}
     for agent, meta in agents.items():
         meta = meta or {}
@@ -697,9 +671,7 @@ def research_job_candidates(
             continue
         posteriors = learned_posteriors(task_type, candidate_arms, learned)
         n_obs = route_n_obs(task_type, candidate_arms, conn=conn, weights=weights)
-        hunger = acquisition_hunger(
-            task_type, candidate_arms, conn=conn, weights=weights
-        )
+        hunger = acquisition_hunger(task_type, candidate_arms, conn=conn, weights=weights)
         arms = select_arms(
             candidate_arms,
             posteriors,
@@ -761,9 +733,7 @@ def research_job_candidates(
                 )
             continue
         seen_subject_families.add(identity["subject_family_id"])
-        prior_subject_experiments = research_subjects.prior_experiment_count(
-            identity, conn=conn
-        )
+        prior_subject_experiments = research_subjects.prior_experiment_count(identity, conn=conn)
         repetition_weight = 1.0 / (1.0 + prior_subject_experiments)
         hyp = hyp_by_id.get(str(decision.get("hypothesis")))
         uncertainty = max(
@@ -771,10 +741,7 @@ def research_job_candidates(
             float(decision.get("data_hunger") or 0.0),
             hunger,
         )
-        value = (
-            info_value(uncertainty, _item_stakes(item), max(0.10, hunger))
-            * repetition_weight
-        )
+        value = info_value(uncertainty, _item_stakes(item), max(0.10, hunger)) * repetition_weight
         jobs.append(
             {
                 "id": target,
@@ -937,9 +904,7 @@ def _selftest():
     }
     sp = spare_capacity(cap)
     assert sp["cursor"] == 3 and sp["vibe"] == 3, sp  # free/flat idle -> generous spare
-    assert (
-        sp["codex"] == 0 and sp["claude"] == 0
-    ), sp  # warn metered halves to 0; shed -> 0
+    assert sp["codex"] == 0 and sp["claude"] == 0, sp  # warn metered halves to 0; shed -> 0
     assert sp["gpt"] == 0, sp  # paygo not spent on science by default
 
     # knapsack: with a tight budget, take the best info/cost jobs only (variable intensity)
@@ -952,9 +917,7 @@ def _selftest():
         "cheap-eval"
     ], "scarce -> cheapest high-value"
     big = select_jobs(jobs, budget=8)
-    assert (
-        "big-experiment" in [j["id"] for j in big] and len(big) >= 2
-    ), "abundant -> intense set"
+    assert "big-experiment" in [j["id"] for j in big] and len(big) >= 2, "abundant -> intense set"
 
     # Top-Two variable-N: leader + most-uncertain challenger always; extras scale with spare; deterministic rng
     posteriors = {"cursor": 0.8, "codex": 0.55, "claude": 0.5, "vibe": 0.45}
@@ -979,18 +942,13 @@ def _selftest():
     assert set(scarce) == {"cursor", "codex"}, "no-spare seats excluded -> 2 arms"
 
     weights_empty = [
-        {"agent": a, "n_obs": 0}
-        for a in ["cursor", "codex", "claude", "gemini", "vibe"]
+        {"agent": a, "n_obs": 0} for a in ["cursor", "codex", "claude", "gemini", "vibe"]
     ]
     assert data_hunger("implement", ["cursor", "codex"], weights=weights_empty) == 1.0
     weights_full = [
-        {"agent": a, "n_obs": int(DATA_HUNGER_THRESHOLD)}
-        for a in ["cursor", "codex", "claude"]
+        {"agent": a, "n_obs": int(DATA_HUNGER_THRESHOLD)} for a in ["cursor", "codex", "claude"]
     ]
-    assert (
-        data_hunger("implement", ["cursor", "codex", "claude"], weights=weights_full)
-        == 0.0
-    )
+    assert data_hunger("implement", ["cursor", "codex", "claude"], weights=weights_full) == 0.0
 
     now = int(time.time())
     freshness_db = sqlite3.connect(":memory:")
@@ -1047,19 +1005,14 @@ def _selftest():
     add_run("null-current", "driftcheck", "null_agent", now - 1000, None, outcome=False)
     assert model_drifted("driftcheck", "null_agent", conn=freshness_db) is False
     full_fresh_weights = [
-        {"agent": a, "n_obs": int(DATA_HUNGER_THRESHOLD)}
-        for a in ["cursor", "codex", "vibe"]
+        {"agent": a, "n_obs": int(DATA_HUNGER_THRESHOLD)} for a in ["cursor", "codex", "vibe"]
     ]
     assert (
-        acquisition_hunger(
-            "freshness", ["cursor"], conn=freshness_db, weights=full_fresh_weights
-        )
+        acquisition_hunger("freshness", ["cursor"], conn=freshness_db, weights=full_fresh_weights)
         == 0.0
     )
     assert (
-        acquisition_hunger(
-            "freshness", ["vibe"], conn=freshness_db, weights=full_fresh_weights
-        )
+        acquisition_hunger("freshness", ["vibe"], conn=freshness_db, weights=full_fresh_weights)
         == 1.0
     )
 
@@ -1107,9 +1060,7 @@ def _selftest():
 
     # should_test: hypothesis-driven match vs nothing-when-no-capacity
     hyps = load_hypotheses(Path("/tmp/__hyp_selftest.json"))
-    plan = should_test(
-        {"task_type": "implement"}, hyps, {"cursor": 3, "codex": 3, "claude": 1}
-    )
+    plan = should_test({"task_type": "implement"}, hyps, {"cursor": 3, "codex": 3, "claude": 1})
     assert plan and plan["trigger"] == "hypothesis", plan
     assert (
         should_test({"task_type": "implement"}, hyps, {"cursor": 0, "codex": 0}) is None
@@ -1117,9 +1068,10 @@ def _selftest():
 
     # strategy arms (multi-agent value stays learnable): describe/normalize + strategy-vs-single comparison
     para = {"strategy": "parallel", "agents": ["claude", "cursor"], "synthesize": True}
-    assert describe_arm(para) == "parallel(claude+cursor+synth)" and arm_agents(
-        para
-    ) == ["claude", "cursor"]
+    assert describe_arm(para) == "parallel(claude+cursor+synth)" and arm_agents(para) == [
+        "claude",
+        "cursor",
+    ]
     assert describe_arm("codex") == "codex" and arm_agents("codex") == ["codex"]
     strat = [
         {
@@ -1166,9 +1118,7 @@ def _selftest():
         )
         is None
     )
-    assert any(
-        h["id"] == "H4" for h in SEED_HYPOTHESES
-    ), "multi-agent-value hypothesis seeded"
+    assert any(h["id"] == "H4" for h in SEED_HYPOTHESES), "multi-agent-value hypothesis seeded"
 
     live_cap = {
         "agents": {
@@ -1179,9 +1129,7 @@ def _selftest():
         }
     }
     cap_state = capacity_state_from_snapshot(live_cap)
-    assert (
-        cap_state["cursor"]["status"] == "ok" and cap_state["vibe"]["tier"] == "flat"
-    ), cap_state
+    assert cap_state["cursor"]["status"] == "ok" and cap_state["vibe"]["tier"] == "flat", cap_state
     learned = {
         "implement": {
             "cursor": {"posterior": 0.55, "n_obs": 1},
@@ -1240,20 +1188,15 @@ def _selftest():
         rng=random.Random(0),
         conn=freshness_db,
     )
-    assert (
-        strategy_plan["status"] == "no_subject" and strategy_plan["skipped"]
-    ), strategy_plan
-    assert (
-        strategy_plan["skipped"][0]["reason"] == "strategy_arms_not_launchable"
-    ), strategy_plan
+    assert strategy_plan["status"] == "no_subject" and strategy_plan["skipped"], strategy_plan
+    assert strategy_plan["skipped"][0]["reason"] == "strategy_arms_not_launchable", strategy_plan
     strategy_skip = strategy_plan["skipped"][0]
     assert (
         strategy_skip["strategy_experiment_plan_command_template"][1].endswith(
             "strategy_experiment.py"
         )
         and "--hypothesis" in strategy_skip["strategy_experiment_plan_command_template"]
-        and "ORCH_STRATEGY_EXPERIMENT=1"
-        in strategy_skip["strategy_experiment_prepare_guard"]
+        and "ORCH_STRATEGY_EXPERIMENT=1" in strategy_skip["strategy_experiment_prepare_guard"]
     ), strategy_skip
 
     # Subject control: identical target/spec/base rows yield one candidate in a plan;
@@ -1278,8 +1221,7 @@ def _selftest():
     )
     assert len(duplicate_plan["candidates"]) == 1, duplicate_plan
     assert any(
-        row.get("reason") == "duplicate_candidate_in_plan"
-        for row in duplicate_plan["skipped"]
+        row.get("reason") == "duplicate_candidate_in_plan" for row in duplicate_plan["skipped"]
     ), duplicate_plan
     admitted_job = duplicate_plan["planned"][0]
     admitted_identity = research_subjects.subject_identity(
@@ -1335,9 +1277,7 @@ def _selftest():
         unevaluated_cap=99,
     )
     assert reserved_plan["status"] == "no_spare", reserved_plan
-    assert reserved_plan["blocked_reasons"] == [
-        "no_spare_after_production_reserve"
-    ], reserved_plan
+    assert reserved_plan["blocked_reasons"] == ["no_spare_after_production_reserve"], reserved_plan
 
     freshness_db.close()
     Path("/tmp/__hyp_selftest.json").unlink(missing_ok=True)
@@ -1375,8 +1315,7 @@ def _demo() -> None:
             (run_id, None, "PASS", 1, "green", "durable", ts, None),
         )
     weights = [
-        {"agent": a, "n_obs": int(DATA_HUNGER_THRESHOLD)}
-        for a in ["cursor", "codex", "vibe"]
+        {"agent": a, "n_obs": int(DATA_HUNGER_THRESHOLD)} for a in ["cursor", "codex", "vibe"]
     ]
     hunger = acquisition_hunger("implement", ["vibe"], conn=conn, weights=weights)
     arms = select_arms(
@@ -1402,7 +1341,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     outside an active tick (ORCH_CAPABILITY_HEARTBEATS). (2026-08-09)"""
     try:
         import capabilities
-        capabilities.production_heartbeat("research-scheduler", event_type, ref="research_scheduler.main")
+
+        capabilities.production_heartbeat(
+            "research-scheduler", event_type, ref="research_scheduler.main"
+        )
     except Exception:
         pass
 
@@ -1418,9 +1360,7 @@ def main(argv):
     hyps = load_hypotheses()
     print(f"{len(hyps)} hypotheses at {HYP_PATH}")
     for h in hyps:
-        print(
-            f"  [{h['id']}] {h['evidence']['status']:12} n={h['evidence']['n']} :: {h['claim']}"
-        )
+        print(f"  [{h['id']}] {h['evidence']['status']:12} n={h['evidence']['n']} :: {h['claim']}")
     return 0
 
 

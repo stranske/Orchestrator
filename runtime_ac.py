@@ -7,6 +7,7 @@ review-before-run commands that route frontend checks through frontend_verify.py
 and deliberate-break checks through local_verify.py. Execution is opt-in via
 --confirm-run and never mutates repositories.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,7 +36,16 @@ VALID_EVIDENCE_TYPES = {
 VALID_RISK_LEVELS = {"low", "medium", "high"}
 VALID_EXPECTED = {"exit_0", "contains", "regex", "manual_review"}
 MUTATING_FLAGS = {"--apply", "--write", "--in-place", "--inplace", "--fix", "--force"}
-MUTATING_GIT_SUBCOMMANDS = {"reset", "checkout", "restore", "clean", "commit", "push", "merge", "rebase"}
+MUTATING_GIT_SUBCOMMANDS = {
+    "reset",
+    "checkout",
+    "restore",
+    "clean",
+    "commit",
+    "push",
+    "merge",
+    "rebase",
+}
 MUTATING_GH_PR_SUBCOMMANDS = {"create", "merge", "close", "edit", "ready"}
 SHELL_REVIEW_MARKERS = ("|", "&&", "||", ";", ">", "<", "`", "$(")
 SHELL_EXPANSION_MARKERS = ("*", "$", "~")
@@ -65,6 +75,7 @@ def command_execution_gated(check_type: str | None) -> bool:
     """Does ORCH_RUNTIME_AC_ALLOW_COMMANDS decide whether this check type may execute?"""
     return check_type in COMMAND_EXEC_GATED_TYPES
 
+
 BLOCKING_STATUSES = {"FAIL", "ERROR", "UNSAFE"}
 INCOMPLETE_STATUSES = {"MISSING", "NEEDS_REVIEW", "SKIP"}
 VERDICT_BY_GATE = {
@@ -81,6 +92,7 @@ def capture_evidence_contract(plan: dict[str, Any], result: dict[str, Any]) -> d
     from capability_compiler import capture_named_test_evidence
 
     return capture_named_test_evidence(plan, result)
+
 
 RUNTIME_AC_SCHEMA_EXAMPLE = {
     "verification": {
@@ -178,7 +190,9 @@ def build_authoring_prompt(
 
     file_context = _read_optional(context_file)
     context_parts = [part.strip() for part in (context, file_context) if part and part.strip()]
-    context_block = "\n\nAdditional context:\n" + "\n\n".join(context_parts) if context_parts else ""
+    context_block = (
+        "\n\nAdditional context:\n" + "\n\n".join(context_parts) if context_parts else ""
+    )
     repo_block = f"\nRepository: {repo}" if repo else ""
     target_block = f"\nTarget: {target}" if target else ""
     schema = json.dumps(RUNTIME_AC_SCHEMA_EXAMPLE, indent=2)
@@ -270,7 +284,9 @@ def _command_review_warnings(command: str, path: str) -> list[str]:
     warnings = []
     for marker in SHELL_REVIEW_MARKERS:
         if marker in command:
-            warnings.append(f"{path} contains shell marker {marker!r}; review carefully before running")
+            warnings.append(
+                f"{path} contains shell marker {marker!r}; review carefully before running"
+            )
             break
     for marker in SHELL_EXPANSION_MARKERS:
         if marker in command:
@@ -291,7 +307,10 @@ def _evidence_for_check(check: dict[str, Any]) -> set[str]:
         return {"manual_review"}
     if check_type == "command":
         command = str(check.get("command", "")).lower()
-        if any(marker in command for marker in ("pytest", " unittest", "npm test", "vitest", "playwright test")):
+        if any(
+            marker in command
+            for marker in ("pytest", " unittest", "npm test", "vitest", "playwright test")
+        ):
             return {"test_output"}
         return {"command_output"}
     return set()
@@ -308,7 +327,9 @@ def _validate_check(check: Any, path: str, known_check_ids: set[str]) -> tuple[l
     if not _is_nonempty_string(check_id):
         errors.append(f"{path}.id must be a non-empty string")
     elif not _looks_like_id(check_id.strip()):
-        errors.append(f"{path}.id must start with a letter and contain only letters, numbers, dots, underscores, or hyphens")
+        errors.append(
+            f"{path}.id must start with a letter and contain only letters, numbers, dots, underscores, or hyphens"
+        )
     elif check_id in known_check_ids:
         errors.append(f"{path}.id duplicates {check_id!r}")
     else:
@@ -342,12 +363,18 @@ def _validate_check(check: Any, path: str, known_check_ids: set[str]) -> tuple[l
         errors.extend(_validate_required_mapping(check, path, ("url", "assertions")))
         if not _is_nonempty_string(check.get("url")):
             errors.append(f"{path}.url must be a non-empty string")
-        errors.extend(_validate_string_list(check.get("assertions"), f"{path}.assertions", nonempty=True))
+        errors.extend(
+            _validate_string_list(check.get("assertions"), f"{path}.assertions", nonempty=True)
+        )
         for idx, assertion in enumerate(check.get("assertions") or []):
             if isinstance(assertion, str) and not assertion.startswith(("text:", "role:")):
                 errors.append(f"{path}.assertions[{idx}] must start with 'text:' or 'role:'")
         for optional in ("click_text", "then_text", "screenshot", "browser_endpoint"):
-            if optional in check and check[optional] is not None and not isinstance(check[optional], str):
+            if (
+                optional in check
+                and check[optional] is not None
+                and not isinstance(check[optional], str)
+            ):
                 errors.append(f"{path}.{optional} must be a string or null")
 
     if check_type == "deliberate_break":
@@ -359,9 +386,15 @@ def _validate_check(check: Any, path: str, known_check_ids: set[str]) -> tuple[l
             unsafe = _unsafe_command_reason(test_cmd)
             if unsafe:
                 errors.append(f"{path}.test_cmd {unsafe}")
-        errors.extend(_validate_string_list(check.get("test_paths"), f"{path}.test_paths", nonempty=True))
+        errors.extend(
+            _validate_string_list(check.get("test_paths"), f"{path}.test_paths", nonempty=True)
+        )
         for optional in ("worktree", "base_ref"):
-            if optional in check and check[optional] is not None and not isinstance(check[optional], str):
+            if (
+                optional in check
+                and check[optional] is not None
+                and not isinstance(check[optional], str)
+            ):
                 errors.append(f"{path}.{optional} must be a string or null")
 
     if check_type == "manual":
@@ -385,7 +418,9 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
         return errors
 
     meta = spec["verification"]
-    errors.extend(_validate_required_mapping(meta, "verification", ("id", "title", "goal", "risk_level")))
+    errors.extend(
+        _validate_required_mapping(meta, "verification", ("id", "title", "goal", "risk_level"))
+    )
     if isinstance(meta, dict):
         verification_id = meta.get("id")
         if not _is_nonempty_string(verification_id):
@@ -406,9 +441,17 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
         errors.append("runtime_context must be an object when present")
         runtime_context = {}
     for key in ("worktree", "serve_command", "health_url", "base_ref", "browser_endpoint"):
-        if key in runtime_context and runtime_context[key] is not None and not isinstance(runtime_context[key], str):
+        if (
+            key in runtime_context
+            and runtime_context[key] is not None
+            and not isinstance(runtime_context[key], str)
+        ):
             errors.append(f"runtime_context.{key} must be a string or null")
-    errors.extend(_validate_string_list(runtime_context.get("notes", []), "runtime_context.notes", nonempty=False))
+    errors.extend(
+        _validate_string_list(
+            runtime_context.get("notes", []), "runtime_context.notes", nonempty=False
+        )
+    )
     if _is_nonempty_string(runtime_context.get("serve_command")):
         unsafe = _unsafe_command_reason(runtime_context["serve_command"])
         if unsafe:
@@ -427,25 +470,33 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     has_deliberate_break = False
     for idx, criterion in enumerate(criteria):
         path = f"acceptance_criteria[{idx}]"
-        errors.extend(_validate_required_mapping(
-            criterion,
-            path,
-            ("id", "statement", "evidence_required", "checks"),
-        ))
+        errors.extend(
+            _validate_required_mapping(
+                criterion,
+                path,
+                ("id", "statement", "evidence_required", "checks"),
+            )
+        )
         if not isinstance(criterion, dict):
             continue
         ac_id = criterion.get("id")
         if not _is_nonempty_string(ac_id):
             errors.append(f"{path}.id must be a non-empty string")
         elif not _looks_like_id(ac_id.strip()):
-            errors.append(f"{path}.id must start with a letter and contain only letters, numbers, dots, underscores, or hyphens")
+            errors.append(
+                f"{path}.id must start with a letter and contain only letters, numbers, dots, underscores, or hyphens"
+            )
         elif ac_id in known_ac_ids:
             errors.append(f"{path}.id duplicates {ac_id!r}")
         else:
             known_ac_ids.add(ac_id)
         if not _is_nonempty_string(criterion.get("statement")):
             errors.append(f"{path}.statement must be a non-empty string")
-        errors.extend(_validate_string_list(criterion.get("evidence_required"), f"{path}.evidence_required", nonempty=True))
+        errors.extend(
+            _validate_string_list(
+                criterion.get("evidence_required"), f"{path}.evidence_required", nonempty=True
+            )
+        )
         checks = criterion.get("checks")
         if not isinstance(checks, list):
             errors.append(f"{path}.checks must be a list")
@@ -454,14 +505,19 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
             errors.append(f"{path}.checks must be a non-empty list")
         criterion_evidence: set[str] = set()
         for check_idx, check in enumerate(checks):
-            check_errors, evidence = _validate_check(check, f"{path}.checks[{check_idx}]", known_check_ids)
+            check_errors, evidence = _validate_check(
+                check, f"{path}.checks[{check_idx}]", known_check_ids
+            )
             errors.extend(check_errors)
             criterion_evidence |= evidence
             all_evidence |= evidence
             if isinstance(check, dict) and check.get("type") == "deliberate_break":
                 has_deliberate_break = True
 
-        missing = sorted(set(criterion.get("evidence_required") or []) & VALID_EVIDENCE_TYPES - criterion_evidence)
+        missing = sorted(
+            set(criterion.get("evidence_required") or [])
+            & VALID_EVIDENCE_TYPES - criterion_evidence
+        )
         if missing:
             errors.append(f"{path}.checks do not provide required evidence types: {missing}")
 
@@ -489,24 +545,46 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
             errors.append(f"{path} must be a string command or object")
 
     policy = spec["verdict_policy"]
-    errors.extend(_validate_required_mapping(
-        policy,
-        "verdict_policy",
-        ("require_runtime_evidence", "require_deliberate_break_for_tests", "fail_on_missing_checks"),
-    ))
+    errors.extend(
+        _validate_required_mapping(
+            policy,
+            "verdict_policy",
+            (
+                "require_runtime_evidence",
+                "require_deliberate_break_for_tests",
+                "fail_on_missing_checks",
+            ),
+        )
+    )
     if isinstance(policy, dict):
-        for key in ("require_runtime_evidence", "require_deliberate_break_for_tests", "fail_on_missing_checks"):
+        for key in (
+            "require_runtime_evidence",
+            "require_deliberate_break_for_tests",
+            "fail_on_missing_checks",
+        ):
             if not isinstance(policy.get(key), bool):
                 errors.append(f"verdict_policy.{key} must be a boolean")
         if policy.get("require_runtime_evidence") and "runtime_behavior" not in all_evidence:
-            errors.append("verdict_policy.require_runtime_evidence is true but no frontend/runtime check is present")
+            errors.append(
+                "verdict_policy.require_runtime_evidence is true but no frontend/runtime check is present"
+            )
         if policy.get("require_deliberate_break_for_tests") and not has_deliberate_break:
-            errors.append("verdict_policy.require_deliberate_break_for_tests is true but no deliberate_break check is present")
+            errors.append(
+                "verdict_policy.require_deliberate_break_for_tests is true but no deliberate_break check is present"
+            )
         required_check_ids = policy.get("required_check_ids", [])
-        errors.extend(_validate_string_list(required_check_ids, "verdict_policy.required_check_ids", nonempty=False))
-        for idx, check_id in enumerate(required_check_ids if isinstance(required_check_ids, list) else []):
+        errors.extend(
+            _validate_string_list(
+                required_check_ids, "verdict_policy.required_check_ids", nonempty=False
+            )
+        )
+        for idx, check_id in enumerate(
+            required_check_ids if isinstance(required_check_ids, list) else []
+        ):
             if isinstance(check_id, str) and check_id not in known_check_ids:
-                errors.append(f"verdict_policy.required_check_ids[{idx}] references unknown check id {check_id!r}")
+                errors.append(
+                    f"verdict_policy.required_check_ids[{idx}] references unknown check id {check_id!r}"
+                )
         if "min_pass_ratio" in policy:
             ratio = policy["min_pass_ratio"]
             if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
@@ -547,7 +625,9 @@ def _frontend_command(check: dict[str, Any], runtime_context: dict[str, Any] | N
         parts.extend(["--then-text", check["then_text"]])
     if check.get("screenshot"):
         parts.extend(["--screenshot", check["screenshot"]])
-    browser_endpoint = check.get("browser_endpoint") or (runtime_context or {}).get("browser_endpoint")
+    browser_endpoint = check.get("browser_endpoint") or (runtime_context or {}).get(
+        "browser_endpoint"
+    )
     if browser_endpoint:
         parts.extend(["--browser-endpoint", browser_endpoint])
     return _quote_args(parts)
@@ -575,7 +655,11 @@ def _local_verify_command(check: dict[str, Any], runtime_context: dict[str, Any]
 def _non_regression_command(entry: str | dict[str, Any], idx: int) -> dict[str, Any]:
     if isinstance(entry, str):
         return {"id": f"NR{idx + 1}", "name": f"Non-regression check {idx + 1}", "command": entry}
-    return {"id": entry.get("id") or f"NR{idx + 1}", "name": entry["name"], "command": entry["command"]}
+    return {
+        "id": entry.get("id") or f"NR{idx + 1}",
+        "name": entry["name"],
+        "command": entry["command"],
+    }
 
 
 def build_dry_run_plan(spec: dict[str, Any]) -> dict[str, Any]:
@@ -592,18 +676,26 @@ def build_dry_run_plan(spec: dict[str, Any]) -> dict[str, Any]:
 
     if runtime_context.get("serve_command"):
         server_id = "runtime:start-server"
-        planned_checks.append({
-            "id": server_id,
-            "type": "runtime_context",
-            "name": "Start runtime server",
-            "command": runtime_context["serve_command"],
-            "health_url": runtime_context.get("health_url"),
-            "review_before_run": True,
-            "mutates_repos": False,
-            "manual_stop_required": True,
-            "supports_acceptance_criteria": [criterion["id"] for criterion in spec["acceptance_criteria"]],
-        })
-        warnings.extend(_command_review_warnings(runtime_context["serve_command"], "runtime_context.serve_command"))
+        planned_checks.append(
+            {
+                "id": server_id,
+                "type": "runtime_context",
+                "name": "Start runtime server",
+                "command": runtime_context["serve_command"],
+                "health_url": runtime_context.get("health_url"),
+                "review_before_run": True,
+                "mutates_repos": False,
+                "manual_stop_required": True,
+                "supports_acceptance_criteria": [
+                    criterion["id"] for criterion in spec["acceptance_criteria"]
+                ],
+            }
+        )
+        warnings.extend(
+            _command_review_warnings(
+                runtime_context["serve_command"], "runtime_context.serve_command"
+            )
+        )
 
     for criterion in spec["acceptance_criteria"]:
         ac_id = criterion["id"]
@@ -632,7 +724,9 @@ def build_dry_run_plan(spec: dict[str, Any]) -> dict[str, Any]:
                     planned["contains"] = check["contains"]
                 if "pattern" in check:
                     planned["pattern"] = check["pattern"]
-                warnings.extend(_command_review_warnings(check["command"], f"{ac_id}.{check['id']}.command"))
+                warnings.extend(
+                    _command_review_warnings(check["command"], f"{ac_id}.{check['id']}.command")
+                )
             elif check_type == "deliberate_break":
                 planned["command"] = _local_verify_command(check, runtime_context)
                 planned["test_cmd"] = check["test_cmd"]
@@ -657,13 +751,17 @@ def build_dry_run_plan(spec: dict[str, Any]) -> dict[str, Any]:
     non_regression: list[dict[str, Any]] = []
     for idx, entry in enumerate(spec.get("non_regression") or []):
         command_entry = _non_regression_command(entry, idx)
-        non_regression.append({
-            **command_entry,
-            "type": "non_regression",
-            "review_before_run": True,
-            "mutates_repos": False,
-        })
-        warnings.extend(_command_review_warnings(command_entry["command"], f"non_regression[{idx}].command"))
+        non_regression.append(
+            {
+                **command_entry,
+                "type": "non_regression",
+                "review_before_run": True,
+                "mutates_repos": False,
+            }
+        )
+        warnings.extend(
+            _command_review_warnings(command_entry["command"], f"non_regression[{idx}].command")
+        )
 
     return {
         "verification_id": meta["id"],
@@ -765,7 +863,9 @@ def _coerce_result_doc(result_doc: dict[str, Any] | list[dict[str, Any]]) -> lis
     raise ValueError("result JSON must be a list or object with check_results/results")
 
 
-def evaluate_results(spec: dict[str, Any], result_doc: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+def evaluate_results(
+    spec: dict[str, Any], result_doc: dict[str, Any] | list[dict[str, Any]]
+) -> dict[str, Any]:
     """Map check results back to ACs and return PASS/FAIL/NEEDS_REVIEW.
 
     Result rows must include `{id, status}`. Recognized statuses are PASS, FAIL,
@@ -821,35 +921,58 @@ def evaluate_results(spec: dict[str, Any], result_doc: dict[str, Any] | list[dic
             counted_checks += 1
             if status == "PASS":
                 passed_checks += 1
-            if status in BLOCKING_STATUSES or (required and status in {"MISSING", "SKIP"} and fail_on_missing):
+            if status in BLOCKING_STATUSES or (
+                required and status in {"MISSING", "SKIP"} and fail_on_missing
+            ):
                 ac_status = "FAIL"
-                blocking.append({"ac_id": ac_id, "check_id": check_id, "status": status,
-                                 "reason": result.get("reason") or result.get("error")})
+                blocking.append(
+                    {
+                        "ac_id": ac_id,
+                        "check_id": check_id,
+                        "status": status,
+                        "reason": result.get("reason") or result.get("error"),
+                    }
+                )
             elif status in INCOMPLETE_STATUSES and ac_status != "FAIL":
                 ac_status = "NEEDS_REVIEW"
-                needs_review.append({"ac_id": ac_id, "check_id": check_id, "status": status,
-                                     "reason": result.get("reason") or result.get("error")})
-            check_summaries.append({
-                "id": check_id,
-                "type": check["type"],
-                "required": required,
-                "status": status,
-                "reason": result.get("reason") or result.get("error"),
-            })
+                needs_review.append(
+                    {
+                        "ac_id": ac_id,
+                        "check_id": check_id,
+                        "status": status,
+                        "reason": result.get("reason") or result.get("error"),
+                    }
+                )
+            check_summaries.append(
+                {
+                    "id": check_id,
+                    "type": check["type"],
+                    "required": required,
+                    "status": status,
+                    "reason": result.get("reason") or result.get("error"),
+                }
+            )
 
-        criterion_summaries.append({
-            "id": ac_id,
-            "statement": criterion["statement"],
-            "status": ac_status,
-            "checks": check_summaries,
-        })
+        criterion_summaries.append(
+            {
+                "id": ac_id,
+                "statement": criterion["statement"],
+                "status": ac_status,
+                "checks": check_summaries,
+            }
+        )
 
     for result in results:
         if str(result.get("type")) == "non_regression":
             status = str(result.get("status") or "NEEDS_REVIEW").upper()
             if status != "PASS":
-                blocking.append({"check_id": result.get("id"), "status": status,
-                                 "reason": result.get("reason") or result.get("error")})
+                blocking.append(
+                    {
+                        "check_id": result.get("id"),
+                        "status": status,
+                        "reason": result.get("reason") or result.get("error"),
+                    }
+                )
 
     pass_ratio = (passed_checks / counted_checks) if counted_checks else 0.0
     min_ratio = float(policy.get("min_pass_ratio", 1.0))
@@ -885,7 +1008,9 @@ def evaluate_results(spec: dict[str, Any], result_doc: dict[str, Any] | list[dic
 
 
 def record_gate_verdict(run_id: str, gate: dict[str, Any]) -> dict[str, Any]:
-    verifier_verdict = gate.get("verifier_verdict") or VERDICT_BY_GATE.get(gate.get("verdict"), "NEEDS_REVIEW_RUNTIME_AC")
+    verifier_verdict = gate.get("verifier_verdict") or VERDICT_BY_GATE.get(
+        gate.get("verdict"), "NEEDS_REVIEW_RUNTIME_AC"
+    )
     feedback.record_outcome(
         run_id,
         verifier_verdict=verifier_verdict,
@@ -911,7 +1036,9 @@ def record_gate_verdict(run_id: str, gate: dict[str, Any]) -> dict[str, Any]:
     return {"run_id": run_id, "verifier_verdict": verifier_verdict, "recorded": True}
 
 
-def _completed_result(check: dict[str, Any], completed: subprocess.CompletedProcess[str], duration_s: float) -> dict[str, Any]:
+def _completed_result(
+    check: dict[str, Any], completed: subprocess.CompletedProcess[str], duration_s: float
+) -> dict[str, Any]:
     stdout = completed.stdout or ""
     stderr = completed.stderr or ""
     combined = stdout + "\n" + stderr
@@ -924,7 +1051,15 @@ def _completed_result(check: dict[str, Any], completed: subprocess.CompletedProc
         except Exception:
             parsed = None
         status = "PASS" if isinstance(parsed, dict) and parsed.get("ok") else "FAIL"
-        reason = None if status == "PASS" else (parsed or {}).get("error") if isinstance(parsed, dict) else "frontend verifier output was not JSON"
+        reason = (
+            None
+            if status == "PASS"
+            else (
+                (parsed or {}).get("error")
+                if isinstance(parsed, dict)
+                else "frontend verifier output was not JSON"
+            )
+        )
     elif check.get("type") == "deliberate_break":
         try:
             parsed = json.loads(stdout or "{}")
@@ -932,7 +1067,13 @@ def _completed_result(check: dict[str, Any], completed: subprocess.CompletedProc
             parsed = None
         verdict = parsed.get("verdict") if isinstance(parsed, dict) else None
         status = "PASS" if verdict == "PASS" else "FAIL"
-        reason = None if status == "PASS" else (parsed or {}).get("reason") or (parsed or {}).get("error") or f"local_verify verdict {verdict!r}"
+        reason = (
+            None
+            if status == "PASS"
+            else (parsed or {}).get("reason")
+            or (parsed or {}).get("error")
+            or f"local_verify verdict {verdict!r}"
+        )
     elif check.get("type") == "command":
         expected = check.get("expected") or "exit_0"
         if expected == "exit_0":
@@ -1010,7 +1151,9 @@ def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dic
     return _completed_result(check, completed, time.time() - started)
 
 
-def _planned_checks_for_run(plan: dict[str, Any], check_ids: set[str] | None) -> list[dict[str, Any]]:
+def _planned_checks_for_run(
+    plan: dict[str, Any], check_ids: set[str] | None
+) -> list[dict[str, Any]]:
     checks = [check for check in plan["planned_checks"] if check.get("type") != "runtime_context"]
     checks.extend(plan.get("non_regression") or [])
     if check_ids is None:
@@ -1037,27 +1180,38 @@ def run_verification(
     for check in _planned_checks_for_run(plan, selected):
         check_type = check.get("type")
         if check_type == "manual":
-            results.append({
-                "id": check["id"],
-                "type": check_type,
-                "status": "NEEDS_REVIEW",
-                "reason": "manual evidence must be supplied externally",
-            })
+            results.append(
+                {
+                    "id": check["id"],
+                    "type": check_type,
+                    "status": "NEEDS_REVIEW",
+                    "reason": "manual evidence must be supplied externally",
+                }
+            )
             continue
         # See ORCH-ANCHOR: runtime-ac-command-exec-gate for which types this holds, and why
         # deliberate_break is not one of them.
         if command_execution_gated(check_type) and not allow_command_checks:
-            results.append({
-                "id": check["id"],
-                "type": check_type,
-                "status": "SKIP",
-                "reason": "--allow-command-checks is required for command/non_regression checks",
-                "command": check.get("command"),
-            })
+            results.append(
+                {
+                    "id": check["id"],
+                    "type": check_type,
+                    "status": "SKIP",
+                    "reason": "--allow-command-checks is required for command/non_regression checks",
+                    "command": check.get("command"),
+                }
+            )
             continue
         command = check.get("command")
         if not _is_nonempty_string(command):
-            results.append({"id": check["id"], "type": check_type, "status": "ERROR", "reason": "no command to run"})
+            results.append(
+                {
+                    "id": check["id"],
+                    "type": check_type,
+                    "status": "ERROR",
+                    "reason": "no command to run",
+                }
+            )
             continue
         shell_candidate = ""
         if check_type in {"command", "non_regression"}:
@@ -1065,13 +1219,15 @@ def run_verification(
         elif check_type == "deliberate_break":
             shell_candidate = check.get("test_cmd") or ""
         if shell_candidate and _has_shell_marker(shell_candidate):
-            results.append({
-                "id": check["id"],
-                "type": check_type,
-                "status": "UNSAFE",
-                "reason": "command contains shell control markers; shell execution is not supported by this runner",
-                "command": command,
-            })
+            results.append(
+                {
+                    "id": check["id"],
+                    "type": check_type,
+                    "status": "UNSAFE",
+                    "reason": "command contains shell control markers; shell execution is not supported by this runner",
+                    "command": command,
+                }
+            )
             continue
         results.append(_run_command_check(check, cwd=cwd, timeout=timeout))
 
@@ -1110,14 +1266,24 @@ def _selftest() -> None:
     assert plan["verdict_policy"]["advisory_only"] is True, plan
     assert plan["evidence_matrix"]["AC1"]["missing_known"] == [], plan["evidence_matrix"]
     commands = [check.get("command") or "" for check in plan["planned_checks"]]
-    assert any("frontend_verify.py" in command and "--assert text:Progress" in command for command in commands), commands
-    assert any("local_verify.py" in command and "--test-path tests/test_course_progress.py" in command for command in commands), commands
-    assert plan["non_regression"] and plan["non_regression"][0]["review_before_run"] is True, plan["non_regression"]
+    assert any(
+        "frontend_verify.py" in command and "--assert text:Progress" in command
+        for command in commands
+    ), commands
+    assert any(
+        "local_verify.py" in command and "--test-path tests/test_course_progress.py" in command
+        for command in commands
+    ), commands
+    assert plan["non_regression"] and plan["non_regression"][0]["review_before_run"] is True, plan[
+        "non_regression"
+    ]
     endpoint_spec = _valid_spec()
     endpoint_spec["runtime_context"]["browser_endpoint"] = "http://127.0.0.1:9222"
     endpoint_plan = build_dry_run_plan(endpoint_spec)
     endpoint_commands = [check.get("command") or "" for check in endpoint_plan["planned_checks"]]
-    assert any("--browser-endpoint http://127.0.0.1:9222" in command for command in endpoint_commands), endpoint_commands
+    assert any(
+        "--browser-endpoint http://127.0.0.1:9222" in command for command in endpoint_commands
+    ), endpoint_commands
 
     duplicate_ac = _valid_spec()
     duplicate_ac["acceptance_criteria"][1]["id"] = "AC1"
@@ -1140,7 +1306,7 @@ def _selftest() -> None:
     no_break["acceptance_criteria"][0]["evidence_required"] = ["runtime_behavior", "test_output"]
     assert any("require_deliberate_break_for_tests" in err for err in validate_spec(no_break))
 
-    parsed = parse_spec_json("```json\n{\"verification\": {\"id\": \"x\"}}\n```")
+    parsed = parse_spec_json('```json\n{"verification": {"id": "x"}}\n```')
     assert parsed == {"verification": {"id": "x"}}, parsed
 
     text = format_plan_text(plan, emit_commands=True)
@@ -1154,19 +1320,23 @@ def _selftest() -> None:
             "risk_level": "low",
         },
         "runtime_context": {"worktree": str(ORCH_DIR)},
-        "acceptance_criteria": [{
-            "id": "AC1",
-            "statement": "The check prints ok.",
-            "evidence_required": ["command_output"],
-            "checks": [{
-                "id": "AC1-CMD",
-                "type": "command",
-                "name": "Print ok",
-                "command": f"{shlex.quote(sys.executable)} -c 'print(\"ok\")'",
-                "expected": "contains",
-                "contains": "ok",
-            }],
-        }],
+        "acceptance_criteria": [
+            {
+                "id": "AC1",
+                "statement": "The check prints ok.",
+                "evidence_required": ["command_output"],
+                "checks": [
+                    {
+                        "id": "AC1-CMD",
+                        "type": "command",
+                        "name": "Print ok",
+                        "command": f"{shlex.quote(sys.executable)} -c 'print(\"ok\")'",
+                        "expected": "contains",
+                        "contains": "ok",
+                    }
+                ],
+            }
+        ],
         "verdict_policy": {
             "require_runtime_evidence": False,
             "require_deliberate_break_for_tests": False,
@@ -1175,9 +1345,15 @@ def _selftest() -> None:
             "min_pass_ratio": 1.0,
         },
     }
-    gate_pass = evaluate_results(command_spec, {"check_results": [{"id": "AC1-CMD", "status": "PASS"}]})
-    assert gate_pass["verdict"] == "PASS" and gate_pass["verifier_verdict"] == "PASS_RUNTIME_AC", gate_pass
-    gate_fail = evaluate_results(command_spec, {"check_results": [{"id": "AC1-CMD", "status": "FAIL"}]})
+    gate_pass = evaluate_results(
+        command_spec, {"check_results": [{"id": "AC1-CMD", "status": "PASS"}]}
+    )
+    assert (
+        gate_pass["verdict"] == "PASS" and gate_pass["verifier_verdict"] == "PASS_RUNTIME_AC"
+    ), gate_pass
+    gate_fail = evaluate_results(
+        command_spec, {"check_results": [{"id": "AC1-CMD", "status": "FAIL"}]}
+    )
     assert gate_fail["verdict"] == "FAIL" and gate_fail["blocking"], gate_fail
     try:
         run_verification(command_spec, confirm_run=False, allow_command_checks=True)
@@ -1195,8 +1371,9 @@ def _selftest() -> None:
     # `deliberate-break-verifier` in the held-switch bucket.
     assert command_execution_gated("command"), "agent-authored commands must stay opt-in"
     assert command_execution_gated("non_regression"), "agent-authored commands must stay opt-in"
-    assert not command_execution_gated("deliberate_break"), (
-        "deliberate_break is template-built; gating it here is what made the switch look unflippable")
+    assert not command_execution_gated(
+        "deliberate_break"
+    ), "deliberate_break is template-built; gating it here is what made the switch look unflippable"
     assert not command_execution_gated("frontend") and not command_execution_gated("manual")
     assert not command_execution_gated(None)
     # And prove it through the RUNTIME path, not just the predicate: with the flag OFF a
@@ -1205,40 +1382,58 @@ def _selftest() -> None:
     marker_break = {
         "verification": {"id": "break-not-gated", "title": "t", "goal": "g", "risk_level": "low"},
         "runtime_context": {"worktree": str(ORCH_DIR)},
-        "acceptance_criteria": [{
-            "id": "AC1",
-            "statement": "s",
-            "evidence_required": ["test_output", "deliberate_break"],
-            "checks": [{"id": "AC1-BREAK", "type": "deliberate_break", "name": "n",
-                        "test_cmd": "pytest x && echo y", "test_paths": ["t.py"],
-                        "target_paths": ["m.py"]}],
-        }],
-        "verdict_policy": {"require_runtime_evidence": False,
-                           "require_deliberate_break_for_tests": True,
-                           "fail_on_missing_checks": True,
-                           "required_check_ids": ["AC1-BREAK"], "min_pass_ratio": 1.0},
+        "acceptance_criteria": [
+            {
+                "id": "AC1",
+                "statement": "s",
+                "evidence_required": ["test_output", "deliberate_break"],
+                "checks": [
+                    {
+                        "id": "AC1-BREAK",
+                        "type": "deliberate_break",
+                        "name": "n",
+                        "test_cmd": "pytest x && echo y",
+                        "test_paths": ["t.py"],
+                        "target_paths": ["m.py"],
+                    }
+                ],
+            }
+        ],
+        "verdict_policy": {
+            "require_runtime_evidence": False,
+            "require_deliberate_break_for_tests": True,
+            "fail_on_missing_checks": True,
+            "required_check_ids": ["AC1-BREAK"],
+            "min_pass_ratio": 1.0,
+        },
     }
     not_gated = run_verification(marker_break, confirm_run=True, allow_command_checks=False)
     assert not_gated["check_results"][0]["status"] == "UNSAFE", not_gated["check_results"]
-    executed = run_verification(command_spec, confirm_run=True, allow_command_checks=True, timeout=30)
+    executed = run_verification(
+        command_spec, confirm_run=True, allow_command_checks=True, timeout=30
+    )
     assert executed["check_results"][0]["status"] == "PASS", executed
     assert executed["gate"]["verdict"] == "PASS", executed["gate"]
 
     nonzero_contains = json.loads(json.dumps(command_spec))
     nonzero_contains["verification"]["id"] = "nonzero-contains-runtime-ac"
-    nonzero_contains["acceptance_criteria"][0]["checks"][0]["command"] = (
-        f"{shlex.quote(sys.executable)} -c 'raise SystemExit(\"ok\")'"
+    nonzero_contains["acceptance_criteria"][0]["checks"][0][
+        "command"
+    ] = f"{shlex.quote(sys.executable)} -c 'raise SystemExit(\"ok\")'"
+    nonzero_run = run_verification(
+        nonzero_contains, confirm_run=True, allow_command_checks=True, timeout=30
     )
-    nonzero_run = run_verification(nonzero_contains, confirm_run=True, allow_command_checks=True, timeout=30)
     assert nonzero_run["check_results"][0]["status"] == "FAIL", nonzero_run
     assert nonzero_run["gate"]["verdict"] == "FAIL", nonzero_run["gate"]
 
     timeout_spec = json.loads(json.dumps(command_spec))
     timeout_spec["verification"]["id"] = "timeout-runtime-ac"
-    timeout_spec["acceptance_criteria"][0]["checks"][0]["command"] = (
-        f"{shlex.quote(sys.executable)} -c '__import__(\"time\").sleep(2)'"
+    timeout_spec["acceptance_criteria"][0]["checks"][0][
+        "command"
+    ] = f"{shlex.quote(sys.executable)} -c '__import__(\"time\").sleep(2)'"
+    timeout_run = run_verification(
+        timeout_spec, confirm_run=True, allow_command_checks=True, timeout=1
     )
-    timeout_run = run_verification(timeout_spec, confirm_run=True, allow_command_checks=True, timeout=1)
     assert timeout_run["check_results"][0]["status"] == "ERROR", timeout_run
     assert "timed out" in timeout_run["check_results"][0]["reason"], timeout_run
 
@@ -1246,27 +1441,35 @@ def _selftest() -> None:
     expansion_spec["verification"]["id"] = "expansion-warning-runtime-ac"
     expansion_spec["acceptance_criteria"][0]["checks"][0]["command"] = "printf $HOME"
     expansion_plan = build_dry_run_plan(expansion_spec)
-    assert any("shell expansion marker" in warning for warning in expansion_plan["warnings"]), expansion_plan
+    assert any(
+        "shell expansion marker" in warning for warning in expansion_plan["warnings"]
+    ), expansion_plan
 
     manual_spec = json.loads(json.dumps(command_spec))
     manual_spec["verification"]["id"] = "manual-runtime-ac"
     manual_spec["acceptance_criteria"][0]["evidence_required"] = ["manual_review"]
-    manual_spec["acceptance_criteria"][0]["checks"] = [{
-        "id": "AC1-MANUAL",
-        "type": "manual",
-        "name": "Manual evidence",
-        "instructions": "Inspect the staged environment.",
-    }]
+    manual_spec["acceptance_criteria"][0]["checks"] = [
+        {
+            "id": "AC1-MANUAL",
+            "type": "manual",
+            "name": "Manual evidence",
+            "instructions": "Inspect the staged environment.",
+        }
+    ]
     manual_spec["verdict_policy"]["required_check_ids"] = ["AC1-MANUAL"]
     manual_gate = run_verification(manual_spec, confirm_run=True)
     assert manual_gate["gate"]["verdict"] == "NEEDS_REVIEW", manual_gate
 
-    print("runtime_ac.py selftest: OK (authoring prompt, AC-bound schema validation, dry-run plan, "
-          "command emission, opt-in execution, result gate)")
+    print(
+        "runtime_ac.py selftest: OK (authoring prompt, AC-bound schema validation, dry-run plan, "
+        "command emission, opt-in execution, result gate)"
+    )
 
 
 def main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(description="Build or validate an Orchestrator runtime AC verification spec.")
+    parser = argparse.ArgumentParser(
+        description="Build or validate an Orchestrator runtime AC verification spec."
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--goal", help="goal/issue to turn into an authoring prompt")
     group.add_argument("--goal-file", help="file containing the goal/issue")
@@ -1277,17 +1480,32 @@ def main(argv: Sequence[str]) -> int:
     group.add_argument("--selftest", action="store_true", help="run offline selftests")
     parser.add_argument("--repo", help="optional owner/repo context")
     parser.add_argument("--target", help="optional issue/PR target context")
-    parser.add_argument("--context", default="", help="inline context to include in the authoring prompt")
-    parser.add_argument("--context-file", help="extra context file to include in the authoring prompt")
+    parser.add_argument(
+        "--context", default="", help="inline context to include in the authoring prompt"
+    )
+    parser.add_argument(
+        "--context-file", help="extra context file to include in the authoring prompt"
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
-    parser.add_argument("--emit-commands", action="store_true", help="include planned commands in text output")
-    parser.add_argument("--confirm-run", action="store_true", help="required before --run executes any checks")
-    parser.add_argument("--allow-command-checks", action="store_true",
-                        help="allow --run to execute command and non_regression checks")
+    parser.add_argument(
+        "--emit-commands", action="store_true", help="include planned commands in text output"
+    )
+    parser.add_argument(
+        "--confirm-run", action="store_true", help="required before --run executes any checks"
+    )
+    parser.add_argument(
+        "--allow-command-checks",
+        action="store_true",
+        help="allow --run to execute command and non_regression checks",
+    )
     parser.add_argument("--timeout", type=int, default=120, help="per-check timeout for --run")
-    parser.add_argument("--check-id", action="append", default=[], help="run only this check id; repeatable")
+    parser.add_argument(
+        "--check-id", action="append", default=[], help="run only this check id; repeatable"
+    )
     parser.add_argument("--result-json", help="result JSON file for --results")
-    parser.add_argument("--record-run-id", help="optional feedback.run_id to patch with runtime AC verifier verdict")
+    parser.add_argument(
+        "--record-run-id", help="optional feedback.run_id to patch with runtime AC verifier verdict"
+    )
     args = parser.parse_args(list(argv))
 
     if args.selftest:
@@ -1375,4 +1593,3 @@ def main(argv: Sequence[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

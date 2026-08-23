@@ -11,7 +11,6 @@ from runner_effect_bridge import (
     runner_outputs_to_effect,
 )
 
-
 CAPABILITY_ID = "capability:reference-sync-hygiene-test-gate"
 
 

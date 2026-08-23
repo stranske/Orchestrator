@@ -23,6 +23,7 @@ A fixture whose expected capability is None asserts the machinery must NOT fire 
     python3 capability_recurrence_check.py --offline  # frozen fixtures only, no GitHub
     python3 capability_recurrence_check.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,29 +51,59 @@ import env_prereq
 #
 FIXTURES = (
     # ---- task-routed lanes, replayed against the real issues that occurred -------------------
-    {"capability": "codemod-campaign", "kind": "classify", "expect_task_type": "codemod",
-     "repo": "Trend_Model_Project", "issue": 5856, "live": True,
-     "source": "Legacy removal Phase 6b -> PR #5911 (192 files). Campaign of 6+ issues.",
-     "apply_label_repair": True},
-    {"capability": "testgen-lane", "kind": "classify", "expect_task_type": "testgen",
-     "repo": "trip-planner", "issue": 1694, "live": True,
-     "source": "dispatched as testgen 2026-08; agent:gemini worked and closed it."},
-    {"capability": "cross-repo-coordination", "kind": "classify", "expect_task_type": "cross_repo",
-     "repo": "Workflows", "issue": 2879, "live": True,
-     "source": "one of the #2879-2883 consumer-sync series."},
-    {"capability": "epic-decomposition", "kind": "classify", "expect_task_type": "epic",
-     "repo": "Inv-Man-Intake", "issue": 845, "live": True, "apply_label_repair": True,
-     "source": "[Epic] Export layer — decomposed BY THE OWNER into 8 child issues by hand."},
+    {
+        "capability": "codemod-campaign",
+        "kind": "classify",
+        "expect_task_type": "codemod",
+        "repo": "Trend_Model_Project",
+        "issue": 5856,
+        "live": True,
+        "source": "Legacy removal Phase 6b -> PR #5911 (192 files). Campaign of 6+ issues.",
+        "apply_label_repair": True,
+    },
+    {
+        "capability": "testgen-lane",
+        "kind": "classify",
+        "expect_task_type": "testgen",
+        "repo": "trip-planner",
+        "issue": 1694,
+        "live": True,
+        "source": "dispatched as testgen 2026-08; agent:gemini worked and closed it.",
+    },
+    {
+        "capability": "cross-repo-coordination",
+        "kind": "classify",
+        "expect_task_type": "cross_repo",
+        "repo": "Workflows",
+        "issue": 2879,
+        "live": True,
+        "source": "one of the #2879-2883 consumer-sync series.",
+    },
+    {
+        "capability": "epic-decomposition",
+        "kind": "classify",
+        "expect_task_type": "epic",
+        "repo": "Inv-Man-Intake",
+        "issue": 845,
+        "live": True,
+        "apply_label_repair": True,
+        "source": "[Epic] Export layer — decomposed BY THE OWNER into 8 child issues by hand.",
+    },
     # runtime-ac is a CLOSER GATE, not an opener task_type — my first fixture tested the wrong
     # mechanism. Fixed 2026-08-20 to replay the real shape: a closer PR whose SOURCE issue carries a
     # runtime-AC label must make the gate REQUIRED. (Applying that label automatically is NOT safe
     # and is deliberately not attempted — see the sequencing note in IMPROVEMENT_BACKLOG: the label
     # diverts the opener to spec-authoring instead of implementation, and blocks the closer merge
     # until a spec exists. That is an owner workflow decision, not a wiring fix.)
-    {"capability": "runtime-ac-checks", "kind": "gate_required", "lane": "closer",
-     "labels": ["agent:codex"], "source_labels": ["bug", "runtime-ac", "priority:high"],
-     "title": "Codex bootstrap for #5889",
-     "source": "Trend_Model_Project#5889 — merged PR #5888 returned CONCERNS; ACs unverified."},
+    {
+        "capability": "runtime-ac-checks",
+        "kind": "gate_required",
+        "lane": "closer",
+        "labels": ["agent:codex"],
+        "source_labels": ["bug", "runtime-ac", "priority:high"],
+        "title": "Codex bootstrap for #5889",
+        "source": "Trend_Model_Project#5889 — merged PR #5888 returned CONCERNS; ACs unverified.",
+    },
     # docs-drift-fix-agent lives in the Workflows repo and consumes a DRIFT DETECTOR's output, not a
     # labelled issue — `task_type=docs` was always the wrong matcher shape, and its fleet `docs`
     # label is broader than drift (in-app help, tutorials, a GPU backend removal), so routing
@@ -81,46 +112,67 @@ FIXTURES = (
     # merged maint-87-docs-drift-fix-agent.yml (weekly, report-only by default) and run
     # 32435031188 succeeded. This fixture no longer asserts a frozen miss; it CHECKS the caller
     # (see _external_caller_state), so it tracks reality in both directions.
-    {"capability": "docs-drift-fix-agent", "kind": "predicate_note",
-     "source": "Workflows#3134/#3133 + continuous drift; caller landed via Workflows PR #3138."},
-
+    {
+        "capability": "docs-drift-fix-agent",
+        "kind": "predicate_note",
+        "source": "Workflows#3134/#3133 + continuous drift; caller landed via Workflows PR #3138.",
+    },
     # ---- vocabulary-gated ---------------------------------------------------------------------
     # These replay the REAL closer shape: the PR carries only `agent:*`, and the risk label lives on
     # the SOURCE issue. My first version of these fixtures put the risk label directly on the item
     # and tested the opener lane, which tested a mechanism that does not exist — at opener time
     # there is no PR to review. Verified 2026-08-20: 0 PRs in the fleet carry a `risk:*` label.
-    {"capability": "adversarial-review", "kind": "high_stakes", "lane": "closer",
-     "labels": ["agent:gemini"],
-     "source_labels": ["bug", "type:policy", "risk:major", "validation"],
-     "title": "Gemini bootstrap for #1429",
-     "source": "Travel-Plan-Permission#1429 (Policy fails open) reaching the closer as a PR."},
-    {"capability": "adversarial-review", "kind": "high_stakes", "lane": "closer",
-     "labels": ["agent:codex"],
-     "source_labels": ["bug", "risk:major", "architecture"],
-     "title": "Codex bootstrap for #1436",
-     "source": "Travel-Plan-Permission#1436 (non-atomic audit record) reaching the closer."},
-
+    {
+        "capability": "adversarial-review",
+        "kind": "high_stakes",
+        "lane": "closer",
+        "labels": ["agent:gemini"],
+        "source_labels": ["bug", "type:policy", "risk:major", "validation"],
+        "title": "Gemini bootstrap for #1429",
+        "source": "Travel-Plan-Permission#1429 (Policy fails open) reaching the closer as a PR.",
+    },
+    {
+        "capability": "adversarial-review",
+        "kind": "high_stakes",
+        "lane": "closer",
+        "labels": ["agent:codex"],
+        "source_labels": ["bug", "risk:major", "architecture"],
+        "title": "Codex bootstrap for #1436",
+        "source": "Travel-Plan-Permission#1436 (non-atomic audit record) reaching the closer.",
+    },
     # ---- must NOT fire (guards against false routing) ------------------------------------------
-    {"capability": None, "kind": "classify", "expect_task_type": "implement",
-     "labels": [], "title": "[Epic #845][P1] Export panel UI + Gate 1 + Gate 2",
-     "source": "an already-decomposed CHILD subtask must stay implement, not go to the epic lane."},
-    {"capability": None, "kind": "high_stakes", "lane": "closer",
-     "labels": ["bug", "priority:normal", "risk:low"], "title": "ordinary fix",
-     "source": "routine work must not spend multiple reviewer seats."},
+    {
+        "capability": None,
+        "kind": "classify",
+        "expect_task_type": "implement",
+        "labels": [],
+        "title": "[Epic #845][P1] Export panel UI + Gate 1 + Gate 2",
+        "source": "an already-decomposed CHILD subtask must stay implement, not go to the epic lane.",
+    },
+    {
+        "capability": None,
+        "kind": "high_stakes",
+        "lane": "closer",
+        "labels": ["bug", "priority:normal", "risk:low"],
+        "title": "ordinary fix",
+        "source": "routine work must not spend multiple reviewer seats.",
+    },
 )
 
 
 # --------------------------------------------------------------------------- machinery predicates
+
 
 def _predicate_heartbeat(capability_id: str) -> dict:
     """Would this capability be CREDITED when its code path runs? (audit's reachability check)"""
     try:
         import capability_activation_audit as audit
         import capabilities as caps_mod
+
         cap = caps_mod.load(caps_mod.REG).get(capability_id) or {}
         hb = audit.heartbeat_reachable(cap)
         return {"fires": hb.get("status") == "reachable", "detail": hb}
-    except Exception as exc:                                   # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
 
 
@@ -135,8 +187,9 @@ TICK_ENV_TIMEOUT = 60
 TICK_ENV_BACKOFF = 0.25
 # Reasons whose cause is the MACHINE, not the tree: a retry can clear them. Reporting one of these
 # as "the prologue does not evaluate" is exactly the confusion this taxonomy exists to prevent.
-TICK_ENV_RETRYABLE = frozenset({"spawn_failed", "timeout", "nonzero_exit", "empty_output",
-                                "script_unreadable"})
+TICK_ENV_RETRYABLE = frozenset(
+    {"spawn_failed", "timeout", "nonzero_exit", "empty_output", "script_unreadable"}
+)
 # Which bucket each reason lands in, i.e. WHERE TO LOOK when it happens.
 #   defect       — the tree is wrong: no script, or it ran clean and exported nothing.
 #   script_error — bash ran and the prologue itself aborted; rc + stderr are attached, because a
@@ -172,8 +225,11 @@ def _classify_tick_env(returncode: int, stdout: str, stderr: str) -> tuple[dict[
         if ln.startswith("ORCH_") and "=" in ln:
             k, v = ln.split("=", 1)
             resolved[k] = v
-    rec: dict = {"returncode": returncode, "stdout_lines": len((stdout or "").splitlines()),
-                 "keys": len(resolved)}
+    rec: dict = {
+        "returncode": returncode,
+        "stdout_lines": len((stdout or "").splitlines()),
+        "keys": len(resolved),
+    }
     tail = [ln for ln in (stderr or "").splitlines() if ln.strip()][-2:]
     if tail:
         rec["stderr_tail"] = tail
@@ -196,18 +252,19 @@ def _tick_env_attempt() -> tuple[dict[str, str], dict]:
         return {}, {"reason": "script_missing", "detail": str(ORCHESTRATE)}
     try:
         lines = ORCHESTRATE.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:              # a cloud-sync mount can fail a read that then succeeds
+    except OSError as exc:  # a cloud-sync mount can fail a read that then succeeds
         return {}, {"reason": "script_unreadable", "detail": f"{type(exc).__name__}: {exc}"[:120]}
     end = next((i for i, ln in enumerate(lines) if ln.startswith("_gh_gate()")), len(lines))
     script = "\n".join(lines[:end]) + "\nenv | grep '^ORCH_' || true\n"
     try:
-        proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                              timeout=TICK_ENV_TIMEOUT)
+        proc = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, timeout=TICK_ENV_TIMEOUT
+        )
     except FileNotFoundError:
         return {}, {"reason": "bash_missing", "detail": "no `bash` on PATH"}
     except subprocess.TimeoutExpired:
         return {}, {"reason": "timeout", "detail": f"bash exceeded {TICK_ENV_TIMEOUT}s"}
-    except OSError as exc:              # fork/spawn refused: EAGAIN or ENOMEM under tick load
+    except OSError as exc:  # fork/spawn refused: EAGAIN or ENOMEM under tick load
         return {}, {"reason": "spawn_failed", "detail": f"{type(exc).__name__}: {exc}"[:120]}
     return _classify_tick_env(proc.returncode, proc.stdout or "", proc.stderr or "")
 
@@ -254,13 +311,18 @@ def tick_env(refresh: bool = False, *, log: bool = True) -> dict[str, str]:
             resolved = env
             break
         if rec["reason"] not in TICK_ENV_RETRYABLE:
-            break                      # retrying a deterministic fault would only hide it
+            break  # retrying a deterministic fault would only hide it
         if i + 1 < ceiling:
             time.sleep(TICK_ENV_BACKOFF * (i + 1))
     reason = attempts[-1]["reason"]
     _TICK_ENV = resolved
-    _TICK_ENV_DIAG = {"reason": reason, "outcome": TICK_ENV_OUTCOME.get(reason, "environment"),
-                      "keys": len(resolved), "retried": len(attempts) - 1, "attempts": attempts}
+    _TICK_ENV_DIAG = {
+        "reason": reason,
+        "outcome": TICK_ENV_OUTCOME.get(reason, "environment"),
+        "keys": len(resolved),
+        "retried": len(attempts) - 1,
+        "attempts": attempts,
+    }
     if _TICK_ENV_DIAG["outcome"] != "ok" and log:
         # LOG IT. Silence is how one degraded resolution read as a tree defect once and as nothing
         # at all on the re-run. `log=False` exists only for the selftest's own fixtures: an
@@ -284,26 +346,49 @@ def tick_env_failure_message(diag: dict) -> str:
     attempts = diag.get("attempts") or [{}]
     last = attempts[-1]
     tried = f"{len(attempts)} attempt(s)"
-    ev = "; ".join(part for part in (
-        f"rc={last['returncode']}" if last.get("returncode") is not None else "",
-        f"{last['stdout_lines']} stdout line(s)" if last.get("stdout_lines") is not None else "",
-        f"stderr: {' | '.join(last.get('stderr_tail') or [])}" if last.get("stderr_tail") else "",
-        str(last.get("detail") or ""),
-    ) if part) or "no evidence captured"
+    ev = (
+        "; ".join(
+            part
+            for part in (
+                f"rc={last['returncode']}" if last.get("returncode") is not None else "",
+                (
+                    f"{last['stdout_lines']} stdout line(s)"
+                    if last.get("stdout_lines") is not None
+                    else ""
+                ),
+                (
+                    f"stderr: {' | '.join(last.get('stderr_tail') or [])}"
+                    if last.get("stderr_tail")
+                    else ""
+                ),
+                str(last.get("detail") or ""),
+            )
+            if part
+        )
+        or "no evidence captured"
+    )
     if outcome == "defect":
         if reason == "script_missing":
-            return (f"DEFECT (tree): orchestrate.sh is not there — {ev}. There is no prologue to "
-                    "evaluate, so every flag verdict falls back to ambient.")
-        return ("DEFECT (tree): the prologue evaluated CLEANLY and exported no ORCH_ flag "
-                f"({ev}) — the exports were renamed or removed, so flag verdicts fall back to "
-                "ambient and range-lane would score as FIRING on its naive default of 1.")
+            return (
+                f"DEFECT (tree): orchestrate.sh is not there — {ev}. There is no prologue to "
+                "evaluate, so every flag verdict falls back to ambient."
+            )
+        return (
+            "DEFECT (tree): the prologue evaluated CLEANLY and exported no ORCH_ flag "
+            f"({ev}) — the exports were renamed or removed, so flag verdicts fall back to "
+            "ambient and range-lane would score as FIRING on its naive default of 1."
+        )
     if outcome == "script_error":
-        return (f"PROLOGUE ABORTED after {tried} ({ev}). `set -euo pipefail` ends the prologue at "
-                "the first failing command — the stderr above says whether that was a raced "
-                "credential read (machine) or a script fault (tree).")
-    return (f"ENVIRONMENT, not the tree: {reason} after {tried} ({ev}). bash never produced the "
-            "prologue's env, so this says NOTHING about orchestrate.sh — the flag rows are "
-            "UNRESOLVED, not disproved.")
+        return (
+            f"PROLOGUE ABORTED after {tried} ({ev}). `set -euo pipefail` ends the prologue at "
+            "the first failing command — the stderr above says whether that was a raced "
+            "credential read (machine) or a script fault (tree)."
+        )
+    return (
+        f"ENVIRONMENT, not the tree: {reason} after {tried} ({ev}). bash never produced the "
+        "prologue's env, so this says NOTHING about orchestrate.sh — the flag rows are "
+        "UNRESOLVED, not disproved."
+    )
 
 
 def _external_caller_state(capability_id: str) -> dict:
@@ -318,17 +403,25 @@ def _external_caller_state(capability_id: str) -> dict:
     try:
         import capability_activation_audit as audit
         import capabilities as caps_mod
+
         cap = caps_mod.load(caps_mod.REG).get(capability_id) or {}
         caller = audit.external_caller(cap)
-    except Exception as exc:                                   # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "external_blocker": True, "detail": {"error": str(exc)[:90]}}
     if not caller:
-        return {"fires": False, "external_blocker": True,
-                "detail": {"error": f"{capability_id} has no ci_workflow matcher — "
-                                    "predicate_note is the wrong fixture kind for it"}}
-    return {"fires": bool(caller.get("exists")),
-            "external_blocker": not caller.get("exists"),
-            "detail": caller}
+        return {
+            "fires": False,
+            "external_blocker": True,
+            "detail": {
+                "error": f"{capability_id} has no ci_workflow matcher — "
+                "predicate_note is the wrong fixture kind for it"
+            },
+        }
+    return {
+        "fires": bool(caller.get("exists")),
+        "external_blocker": not caller.get("exists"),
+        "detail": caller,
+    }
 
 
 def _predicate_flag(flag: str, want: str = "1") -> dict:
@@ -344,10 +437,15 @@ def _predicate_flag(flag: str, want: str = "1") -> dict:
         # An UNRESOLVED tick and a genuinely-unset flag are not the same claim. Name the reason, so
         # a degraded run is visible in the row instead of reading as a real "unset".
         _diag = _TICK_ENV_DIAG or {}
-        source = ("unset" if _diag.get("outcome") in (None, "ok")
-                  else f"tick-unresolved:{_diag.get('reason')}")
-    out = {"fires": actual == want,
-           "detail": {"flag": flag, "value": actual, "needs": want, "value_source": source}}
+        source = (
+            "unset"
+            if _diag.get("outcome") in (None, "ok")
+            else f"tick-unresolved:{_diag.get('reason')}"
+        )
+    out = {
+        "fires": actual == want,
+        "detail": {"flag": flag, "value": actual, "needs": want, "value_source": source},
+    }
     criterion = SWITCH_ON_CRITERIA.get(flag)
     if criterion and not out["fires"]:
         out["detail"]["switch_on_when"] = criterion
@@ -358,63 +456,57 @@ def _predicate_flag(flag: str, want: str = "1") -> dict:
 # measurable condition, not a standing judgement call, or it never gets revisited. Each entry names
 # the machine-checkable precondition and why the switch is held.
 SWITCH_ON_CRITERIA = {
-    "ORCH_REDIRECT_APPLY_BOOTSTRAP":
-        "all three hold at once: (a) `redirect_apply.py --status` reports bootstrap_needed=true "
-        "(the gate still has a synced_role_outcomes or linked_disagreements deficit); (b) the "
-        "keepalive supervisor's stage-2 status is `historical_replay_ready_wait_for_live_links`, "
-        "i.e. the non-mutating historical route is EXHAUSTED (124 replays, "
-        "ready_for_historical_replay_analysis=true) so applied advice is the only remaining "
-        "source; and (c) `redirect_apply.py --apply --dry-run` authorises >=1 candidate, which "
-        "requires a dead prior process, no foreign claim, and a lineage-stamped plan. When all "
-        "three hold, arming it adds no destructive power the rails do not already exercise on a "
-        "dead lane: no kill runs, and the apply reduces to release-claim + delegate. It disarms "
-        "itself when bootstrap_needed goes false.",
-    "ORCH_RANGE_LANE_ROLLOUT":
-        "the daily range-rollout PREVIEW reports >=1 eligible candidate with a provisionable "
-        "worktree on >=3 consecutive days. The 2026-07-08 trial failed on THIN EVIDENCE, not bad "
-        "outcomes: 2 dispatches, both transient_infra rc=137, 5 days skipped by a stale worktree. "
-        "Routing for codemod/epic/cross_repo only started working 2026-08-20, so eligible work is "
-        "new. Read the criterion from range-rollout.json, not from a calendar.",
-    "ORCH_FRONTEND_VERIFY_START_BROWSER":
-        "operator policy, not evidence: this lets cron/launchd start a GUI Chrome for the CDP "
-        "endpoint. Turn it on only if you want a browser process kept alive on this machine. The "
-        "ordering defect that made flipping it pointless is FIXED (2026-08-22): the doctor used to "
-        "run above the ORCH_CAPABILITY_HEARTBEATS export, so the switch would have recorded "
-        "nothing and read as 'the switch did not help'. See `ORCH-ANCHOR: heartbeat-export` and "
-        "`ORCH-ANCHOR: frontend-verify-doctor` in orchestrate.sh — the doctor now runs below the "
-        "export, so flipping this WILL produce a frontend-verifier invocation. Enforced by "
-        "capability_activation_audit.heartbeat_env_gate, whose `heartbeat_env_suppressed` defect "
-        "re-raises the ordering if it regresses. This criterion used to cite two orchestrate.sh "
-        "line numbers, 133 and 152, and both had rotted to 171 and 190 by the time anyone read "
-        "them — cite anchors, never line numbers.",
-    "ORCH_STRATEGY_EXPERIMENT":
-        "no demand yet: all 365 recorded experiments were single-agent-per-arm, so there is no "
-        "strategy comparison waiting to run. Switch on when a multi-agent strategy question is "
-        "actually being asked (e.g. 'is claude+cursor with synthesis better than claude alone' "
-        "appears as real work), not before.",
-    "ORCH_EXPLORATION_MODE":
-        "REVIEWED 2026-08-22 — this is a DECISION, not a wait. The previous text said the blocker "
-        "was the review rather than the data, which was right; the review was then run. "
-        "`exploration_review` returns status=`epsilon_still_preferred`, "
-        "recommendation=`keep_epsilon_greedy`: the evidence gates ARE met (ready_tasks 5/9, "
-        "zero-cell rate 16.2%, 727 instrumented runs, 65 direct exploration outcomes) and "
-        "Thompson-hybrid still does not improve BOTH simulated challenger quality and direct "
-        "exploration outcomes. So epsilon-greedy is kept on merit, not for lack of data. The "
-        "criterion is no longer prose: `_check_thompson` runs the review and reports its own "
-        "recommendation, so the switch re-raises by itself if that flips to "
-        "`switch_to_thompson_hybrid`. The review already runs weekly inside periodic_report.",
-    "ORCH_RUNTIME_AC_ALLOW_COMMANDS":
-        "CORRECTED 2026-08-22 after running the code. The previous text said this gated BOTH the "
-        "template-built deliberate-break command AND agent-authored `command`/`non_regression` "
-        "checks, and that the actionable step was to SPLIT the flag. The split already existed: see "
-        "`ORCH-ANCHOR: runtime-ac-command-exec-gate` in runtime_ac.py — COMMAND_EXEC_GATED_TYPES is "
-        "{command, non_regression} and has never included deliberate_break. Measured by executing a "
-        "real deliberate_break spec both ways: identical results with allow_command_checks False "
-        "and True. So this flag holds exactly one thing — an agent-authored argv reaching "
-        "shlex.split — and there is nothing to un-split. It should stay OFF: a spec's "
-        "`command`/`non_regression` string is written by an agent, and the machine gate that "
-        "matters (deliberate_break, the sole producer of FAIL_HOLLOW) already runs without it. "
-        "Flip it only for a bounded supervised run on a specific spec you have read.",
+    "ORCH_REDIRECT_APPLY_BOOTSTRAP": "all three hold at once: (a) `redirect_apply.py --status` reports bootstrap_needed=true "
+    "(the gate still has a synced_role_outcomes or linked_disagreements deficit); (b) the "
+    "keepalive supervisor's stage-2 status is `historical_replay_ready_wait_for_live_links`, "
+    "i.e. the non-mutating historical route is EXHAUSTED (124 replays, "
+    "ready_for_historical_replay_analysis=true) so applied advice is the only remaining "
+    "source; and (c) `redirect_apply.py --apply --dry-run` authorises >=1 candidate, which "
+    "requires a dead prior process, no foreign claim, and a lineage-stamped plan. When all "
+    "three hold, arming it adds no destructive power the rails do not already exercise on a "
+    "dead lane: no kill runs, and the apply reduces to release-claim + delegate. It disarms "
+    "itself when bootstrap_needed goes false.",
+    "ORCH_RANGE_LANE_ROLLOUT": "the daily range-rollout PREVIEW reports >=1 eligible candidate with a provisionable "
+    "worktree on >=3 consecutive days. The 2026-07-08 trial failed on THIN EVIDENCE, not bad "
+    "outcomes: 2 dispatches, both transient_infra rc=137, 5 days skipped by a stale worktree. "
+    "Routing for codemod/epic/cross_repo only started working 2026-08-20, so eligible work is "
+    "new. Read the criterion from range-rollout.json, not from a calendar.",
+    "ORCH_FRONTEND_VERIFY_START_BROWSER": "operator policy, not evidence: this lets cron/launchd start a GUI Chrome for the CDP "
+    "endpoint. Turn it on only if you want a browser process kept alive on this machine. The "
+    "ordering defect that made flipping it pointless is FIXED (2026-08-22): the doctor used to "
+    "run above the ORCH_CAPABILITY_HEARTBEATS export, so the switch would have recorded "
+    "nothing and read as 'the switch did not help'. See `ORCH-ANCHOR: heartbeat-export` and "
+    "`ORCH-ANCHOR: frontend-verify-doctor` in orchestrate.sh — the doctor now runs below the "
+    "export, so flipping this WILL produce a frontend-verifier invocation. Enforced by "
+    "capability_activation_audit.heartbeat_env_gate, whose `heartbeat_env_suppressed` defect "
+    "re-raises the ordering if it regresses. This criterion used to cite two orchestrate.sh "
+    "line numbers, 133 and 152, and both had rotted to 171 and 190 by the time anyone read "
+    "them — cite anchors, never line numbers.",
+    "ORCH_STRATEGY_EXPERIMENT": "no demand yet: all 365 recorded experiments were single-agent-per-arm, so there is no "
+    "strategy comparison waiting to run. Switch on when a multi-agent strategy question is "
+    "actually being asked (e.g. 'is claude+cursor with synthesis better than claude alone' "
+    "appears as real work), not before.",
+    "ORCH_EXPLORATION_MODE": "REVIEWED 2026-08-22 — this is a DECISION, not a wait. The previous text said the blocker "
+    "was the review rather than the data, which was right; the review was then run. "
+    "`exploration_review` returns status=`epsilon_still_preferred`, "
+    "recommendation=`keep_epsilon_greedy`: the evidence gates ARE met (ready_tasks 5/9, "
+    "zero-cell rate 16.2%, 727 instrumented runs, 65 direct exploration outcomes) and "
+    "Thompson-hybrid still does not improve BOTH simulated challenger quality and direct "
+    "exploration outcomes. So epsilon-greedy is kept on merit, not for lack of data. The "
+    "criterion is no longer prose: `_check_thompson` runs the review and reports its own "
+    "recommendation, so the switch re-raises by itself if that flips to "
+    "`switch_to_thompson_hybrid`. The review already runs weekly inside periodic_report.",
+    "ORCH_RUNTIME_AC_ALLOW_COMMANDS": "CORRECTED 2026-08-22 after running the code. The previous text said this gated BOTH the "
+    "template-built deliberate-break command AND agent-authored `command`/`non_regression` "
+    "checks, and that the actionable step was to SPLIT the flag. The split already existed: see "
+    "`ORCH-ANCHOR: runtime-ac-command-exec-gate` in runtime_ac.py — COMMAND_EXEC_GATED_TYPES is "
+    "{command, non_regression} and has never included deliberate_break. Measured by executing a "
+    "real deliberate_break spec both ways: identical results with allow_command_checks False "
+    "and True. So this flag holds exactly one thing — an agent-authored argv reaching "
+    "shlex.split — and there is nothing to un-split. It should stay OFF: a spec's "
+    "`command`/`non_regression` string is written by an agent, and the machine gate that "
+    "matters (deliberate_break, the sole producer of FAIL_HOLLOW) already runs without it. "
+    "Flip it only for a bounded supervised run on a specific spec you have read.",
 }
 
 
@@ -432,31 +524,41 @@ def _check_deliberate_break_executable() -> dict:
     """
     try:
         import runtime_ac
+
         exempt = not runtime_ac.command_execution_gated("deliberate_break")
         gated_types = sorted(runtime_ac.COMMAND_EXEC_GATED_TYPES)
-    except Exception as exc:                                   # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
     gate = _predicate_flag("ORCH_RUN_RUNTIME_AC")
-    return {"fires": bool(exempt and gate["fires"]),
-            "detail": {"deliberate_break_exempt_from_command_gate": exempt,
-                       "command_exec_gated_types": gated_types,
-                       "runtime_ac_gate_enabled": gate["fires"],
-                       "runtime_ac_gate_source": gate["detail"].get("value_source"),
-                       "non_use_means": ("no closer item carries a runtime-AC spec with a "
-                                         "deliberate_break check (no matching work), NOT a held "
-                                         "switch")}}
+    return {
+        "fires": bool(exempt and gate["fires"]),
+        "detail": {
+            "deliberate_break_exempt_from_command_gate": exempt,
+            "command_exec_gated_types": gated_types,
+            "runtime_ac_gate_enabled": gate["fires"],
+            "runtime_ac_gate_source": gate["detail"].get("value_source"),
+            "non_use_means": (
+                "no closer item carries a runtime-AC spec with a "
+                "deliberate_break check (no matching work), NOT a held "
+                "switch"
+            ),
+        },
+    }
 
 
 def _check_gemini_isolation() -> dict:
     """A gemini offload must carry --add-dir pointing at the exact worktree."""
     try:
         import adapters
+
         argv = adapters.build_command("gemini", "probe", "mid", cwd="/tmp/wt-probe")
         ok = "--add-dir" in argv
         target = argv[argv.index("--add-dir") + 1] if ok else None
-        return {"fires": bool(ok and target),
-                "detail": {"add_dir": target, "note": "writes confined to the target worktree"}}
-    except Exception as exc:                                   # noqa: BLE001
+        return {
+            "fires": bool(ok and target),
+            "detail": {"add_dir": target, "note": "writes confined to the target worktree"},
+        }
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
 
 
@@ -464,10 +566,11 @@ def _check_keepalive_escalation() -> dict:
     """A PR carrying an escalation label must be selectable by the supervisor."""
     try:
         import keepalive_supervisor as ks
+
         labels = set(getattr(ks, "ESCALATION_LABELS", set()))
         ok = bool({"agent:needs-attention", "needs-human"} & labels)
         return {"fires": ok, "detail": {"escalation_labels": sorted(labels)}}
-    except Exception as exc:                                   # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
 
 
@@ -476,26 +579,34 @@ def _check_adjudicator() -> dict:
     flag = _predicate_flag("ORCH_ROLE_SHADOW")
     try:
         import feedback
+
         c = feedback._conn()
-        n = c.execute("SELECT COUNT(*) FROM outcomes WHERE verifier_verdict IS NOT NULL "
-                      "AND adjudicated_verdict IS NOT NULL "
-                      "AND verifier_verdict<>adjudicated_verdict").fetchone()[0]
+        n = c.execute(
+            "SELECT COUNT(*) FROM outcomes WHERE verifier_verdict IS NOT NULL "
+            "AND adjudicated_verdict IS NOT NULL "
+            "AND verifier_verdict<>adjudicated_verdict"
+        ).fetchone()[0]
         c.close()
     except Exception:
         n = 0
-    return {"fires": bool(flag["fires"]) and n > 0,
-            "detail": {**flag["detail"], "recorded_disagreements": n}}
+    return {
+        "fires": bool(flag["fires"]) and n > 0,
+        "detail": {**flag["detail"], "recorded_disagreements": n},
+    }
 
 
 def _check_synthesis_gate() -> dict:
     """Its gate must be ENCODED and free of unobtainable requires, so evidence can lift it."""
     try:
         import capabilities as caps_mod
+
         cap = caps_mod.load(caps_mod.REG)["synthesis-promotion"]
         spec = caps_mod.gate_policy(cap)
-        return {"fires": bool(spec["encoded"]) and not spec["requires"],
-                "detail": {"encoded": spec["encoded"], "requires": spec["requires"]}}
-    except Exception as exc:                                   # noqa: BLE001
+        return {
+            "fires": bool(spec["encoded"]) and not spec["requires"],
+            "detail": {"encoded": spec["encoded"], "requires": spec["requires"]},
+        }
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
 
 
@@ -503,13 +614,18 @@ def _check_model_trial_gate() -> dict:
     """DELIBERATELY unliftable: firing means the quarantine is correctly DECLARED."""
     try:
         import capabilities as caps_mod
+
         cap = caps_mod.load(caps_mod.REG)["local-model-profile-trial"]
         spec = caps_mod.gate_policy(cap)
         held = "atomic_brain_ingestion" in (spec["requires"] or [])
-        return {"fires": held,
-                "detail": {"requires": spec["requires"],
-                           "note": "quarantine correctly declared; NOT a request to lift it"}}
-    except Exception as exc:                                   # noqa: BLE001
+        return {
+            "fires": held,
+            "detail": {
+                "requires": spec["requires"],
+                "note": "quarantine correctly declared; NOT a request to lift it",
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
 
 
@@ -527,12 +643,14 @@ def _check_thompson() -> dict:
     """
     try:
         import router
+
         mode = router._exploration_mode()
-    except Exception as exc:                                   # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
     detail: dict = {"mode": mode, "needs": "thompson-hybrid"}
     try:
         import exploration_review
+
         review = exploration_review.build_report()
         detail["review_recommendation"] = review.get("recommendation")
         detail["review_status"] = review.get("status")
@@ -540,13 +658,15 @@ def _check_thompson() -> dict:
         detail["switch_on_when"] = (
             "exploration_review's own recommendation turns to `switch_to_thompson_hybrid`; it "
             f"currently says {review.get('recommendation')!r} "
-            f"({review.get('status')!r}), which is a DECISION, not a wait for data")
-    except Exception as exc:                                   # noqa: BLE001
+            f"({review.get('status')!r}), which is a DECISION, not a wait for data"
+        )
+    except Exception as exc:  # noqa: BLE001
         # Named prerequisite, never an `error` key: on a machine with no Brain the review cannot
         # run, and reporting that as a blocked capability would be a false miss.
         detail["review_unavailable"] = (
             f"exploration_review could not run here ({type(exc).__name__}); it needs the local "
-            "route_weights/outcomes store")
+            "route_weights/outcomes store"
+        )
         detail["switch_on_when"] = "exploration_review recommends it (review not runnable here)"
     return {"fires": mode == "thompson-hybrid", "detail": detail}
 
@@ -582,10 +702,11 @@ def _check_reference_sync_gate() -> dict:
         import capabilities as caps_mod
         import capability_outcome_bridge as bridge
         import feedback as fb
+
         cap = caps_mod.load(caps_mod.REG).get(CID) or {}
         vid = str(cap.get("capability_version_id") or "")
         rows = fb.capability_causal_evidence(CID, vid) if vid else []
-        readiness = ((cap.get("causal_evidence") or {}).get("readiness") or {})
+        readiness = (cap.get("causal_evidence") or {}).get("readiness") or {}
         attributed = len(rows)
         # FIXED 2026-08-21. `fires` asks the question that actually matters for a shadow rail:
         # does an evidence path EXIST by which its gate could ever become ready? Before, the answer
@@ -596,52 +717,75 @@ def _check_reference_sync_gate() -> dict:
         # produced yet, and claiming otherwise would be the wiring-only victory this file exists to
         # prevent. Read `subjects_seen` / `attributed_edges` for the actual progress.
         covered = CID in (bridge.attribute_compiled_workflow_edges(dry_run=True)["rails"])
-        return {"fires": covered,
-                "detail": {"status": cap.get("status"),
-                           "attributed_edges": attributed,
-                           "durable_subjects": readiness.get("durable_subjects") or [],
-                           "needs_distinct_subjects":
-                               caps_mod.DEFAULT_PROMOTION_POLICY[
-                                   "min_independent_durable_reuse"],
-                           "gate_reason": cap.get("gate_reason"),
-                           "in_bridge_coverage": covered,
-                           "blocker": "none structural: attribution now covers compiled-workflow "
-                                      "rails and subject identity (consumer repo) flows through "
-                                      "effect schema v2. Remaining is EVIDENCE, not wiring - the "
-                                      "gate needs 3 distinct consumer repos with durable "
-                                      "deliveries that explicitly name the capability",
-                           "switch_on_when":
-                               "nothing to switch. The gate is evidence-driven and now fed: "
-                               "watch capability_outcome_bridge's compiled_workflow_edges report "
-                               "(subjects_seen, then attributed). subjects_seen stays 0 until the "
-                               "rail records a new shadow result, because the 367 historical "
-                               "events predate the subject field and are NOT backfilled - "
-                               "attributing the July pilot's 3 same-day PRs would have faked the "
-                               "3 independent subjects the gate requires."}}
-    except Exception as exc:                                   # noqa: BLE001
+        return {
+            "fires": covered,
+            "detail": {
+                "status": cap.get("status"),
+                "attributed_edges": attributed,
+                "durable_subjects": readiness.get("durable_subjects") or [],
+                "needs_distinct_subjects": caps_mod.DEFAULT_PROMOTION_POLICY[
+                    "min_independent_durable_reuse"
+                ],
+                "gate_reason": cap.get("gate_reason"),
+                "in_bridge_coverage": covered,
+                "blocker": "none structural: attribution now covers compiled-workflow "
+                "rails and subject identity (consumer repo) flows through "
+                "effect schema v2. Remaining is EVIDENCE, not wiring - the "
+                "gate needs 3 distinct consumer repos with durable "
+                "deliveries that explicitly name the capability",
+                "switch_on_when": "nothing to switch. The gate is evidence-driven and now fed: "
+                "watch capability_outcome_bridge's compiled_workflow_edges report "
+                "(subjects_seen, then attributed). subjects_seen stays 0 until the "
+                "rail records a new shadow result, because the 367 historical "
+                "events predate the subject field and are NOT backfilled - "
+                "attributing the July pilot's 3 same-day PRs would have faked the "
+                "3 independent subjects the gate requires.",
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
 
 
 # Non-routing machinery: these capabilities are entered directly or gated, so "would it fire"
 # means "is it on the executed path / is its switch on".
 PREDICATE_FIXTURES = (
-    {"capability": "offload", "check": lambda: _predicate_heartbeat("offload"),
-     "source": "196 runs/week; NameError fixed 2026-08-19."},
-    {"capability": "repo-playbook", "check": lambda: _predicate_heartbeat("repo-playbook"),
-     "source": "runs on every dispatch via repo_knowledge.append_context."},
-    {"capability": "stall-watcher", "check": lambda: _predicate_heartbeat("stall-watcher"),
-     "source": "78-day opener_cap_pressure latch; 24 of 30 blockers expired-but-blocking."},
-    {"capability": "redirect-policy", "check": lambda: _predicate_heartbeat("redirect-policy"),
-     "source": "PAEM#2043: 4 attempts, 1 agent, never switched."},
-    {"capability": "redirect-plan", "check": lambda: _predicate_heartbeat("redirect-plan"),
-     "source": "143 role:redirect shadow runs accumulating corpus."},
-    {"capability": "redirect-apply-bootstrap",
-     "check": lambda: _predicate_flag("ORCH_REDIRECT_APPLY_BOOTSTRAP"),
-     "source": "apply_plan had 0 callers; the Stage-2 gate needs 5 more synced_role_outcomes and "
-               "3 linked_disagreements, and only APPLIED advice can supply either (measured "
-               "2026-08-21: 143 proposals, 124 historical replays exhausted, 5 hand-made links)."},
-    {"capability": "research-scheduler", "check": lambda: _predicate_heartbeat("research-scheduler"),
-     "source": "runs every tick via research_scheduler.build_research_plan."},
+    {
+        "capability": "offload",
+        "check": lambda: _predicate_heartbeat("offload"),
+        "source": "196 runs/week; NameError fixed 2026-08-19.",
+    },
+    {
+        "capability": "repo-playbook",
+        "check": lambda: _predicate_heartbeat("repo-playbook"),
+        "source": "runs on every dispatch via repo_knowledge.append_context.",
+    },
+    {
+        "capability": "stall-watcher",
+        "check": lambda: _predicate_heartbeat("stall-watcher"),
+        "source": "78-day opener_cap_pressure latch; 24 of 30 blockers expired-but-blocking.",
+    },
+    {
+        "capability": "redirect-policy",
+        "check": lambda: _predicate_heartbeat("redirect-policy"),
+        "source": "PAEM#2043: 4 attempts, 1 agent, never switched.",
+    },
+    {
+        "capability": "redirect-plan",
+        "check": lambda: _predicate_heartbeat("redirect-plan"),
+        "source": "143 role:redirect shadow runs accumulating corpus.",
+    },
+    {
+        "capability": "redirect-apply-bootstrap",
+        "check": lambda: _predicate_flag("ORCH_REDIRECT_APPLY_BOOTSTRAP"),
+        "source": "apply_plan had 0 callers; the Stage-2 gate needs 5 more synced_role_outcomes and "
+        "3 linked_disagreements, and only APPLIED advice can supply either (measured "
+        "2026-08-21: 143 proposals, 124 historical replays exhausted, 5 hand-made links).",
+    },
+    {
+        "capability": "research-scheduler",
+        "check": lambda: _predicate_heartbeat("research-scheduler"),
+        "source": "runs every tick via research_scheduler.build_research_plan.",
+    },
     # REPLACED 2026-08-22 — this fixture asserted a blocker that does not exist. It tested
     # `_predicate_flag("ORCH_RUNTIME_AC_ALLOW_COMMANDS")`, on the recorded belief that shell-check
     # execution gated the deliberate-break command too. It does not: `COMMAND_EXEC_GATED_TYPES`
@@ -656,136 +800,225 @@ PREDICATE_FIXTURES = (
     # starts gating deliberate_break flips this fixture instead of being invisible. Non-use is then
     # correctly classified as NO MATCHING WORK — no closer item carries a runtime-AC spec with a
     # deliberate_break check — which has the opposite fix from a held switch.
-    {"capability": "deliberate-break-verifier",
-     "check": lambda: _check_deliberate_break_executable(),
-     "source": "9 FAIL_HOLLOW verdicts; the sole producer of that verdict, and NOT switch-held."},
-    {"capability": "feature-reflection-cli",
-     "check": lambda: _predicate_heartbeat("feature-reflection-cli"),
-     "source": "4 new reusable structures created 2026-08-19, none logged."},
-    {"capability": "range-lane-rollout",
-     "check": lambda: _predicate_flag("ORCH_RANGE_LANE_ROLLOUT"),
-     "source": "the mechanism behind every specialized-lane dispatch ever made."},
+    {
+        "capability": "deliberate-break-verifier",
+        "check": lambda: _check_deliberate_break_executable(),
+        "source": "9 FAIL_HOLLOW verdicts; the sole producer of that verdict, and NOT switch-held.",
+    },
+    {
+        "capability": "feature-reflection-cli",
+        "check": lambda: _predicate_heartbeat("feature-reflection-cli"),
+        "source": "4 new reusable structures created 2026-08-19, none logged.",
+    },
+    {
+        "capability": "range-lane-rollout",
+        "check": lambda: _predicate_flag("ORCH_RANGE_LANE_ROLLOUT"),
+        "source": "the mechanism behind every specialized-lane dispatch ever made.",
+    },
     # The condition this replays actually happened, on 2026-08-22, and is why the lane exists in
     # shadow: `unblock()` marked range-lane-rollout and synthesis-promotion feedable while BOTH were
     # held by a documented default-off switch. Feeding either would have manufactured work they
     # cannot execute, so the durable reuse their gate needs could never be produced and the same two
     # would be fed every cycle forever. Testing the flag tests the real condition -- the lane is held
     # by a safety switch, not by a defect, and `feedable 0` behind it is the honest state.
-    {"capability": "evidence-acquisition",
-     "check": lambda: _predicate_flag("ORCH_EVIDENCE_ACQUISITION"),
-     "source": "2026-08-22: unblock() called 2 default-off capabilities feedable; the feed guard "
-               "closed that and the feedable set went to 0 of 42. Lane is shadow until a switch flips."},
-    {"capability": "adversarial-review-flag",
-     "check": lambda: _predicate_flag("ORCH_RUN_ADVERSARIAL_REVIEW"),
-     "source": "orchestrate.sh exports this; checked here as the tick would see it."},
-    {"capability": "runtime-ac-flag", "check": lambda: _predicate_flag("ORCH_RUN_RUNTIME_AC"),
-     "source": "orchestrate.sh exports this; checked here as the tick would see it."},
+    {
+        "capability": "evidence-acquisition",
+        "check": lambda: _predicate_flag("ORCH_EVIDENCE_ACQUISITION"),
+        "source": "2026-08-22: unblock() called 2 default-off capabilities feedable; the feed guard "
+        "closed that and the feedable set went to 0 of 42. Lane is shadow until a switch flips.",
+    },
+    {
+        "capability": "adversarial-review-flag",
+        "check": lambda: _predicate_flag("ORCH_RUN_ADVERSARIAL_REVIEW"),
+        "source": "orchestrate.sh exports this; checked here as the tick would see it.",
+    },
+    {
+        "capability": "runtime-ac-flag",
+        "check": lambda: _predicate_flag("ORCH_RUN_RUNTIME_AC"),
+        "source": "orchestrate.sh exports this; checked here as the tick would see it.",
+    },
     # ---- the 19 previously-uncovered capabilities ------------------------------------------------
     # Added 2026-08-20 under the test_capability_set_coverage gate, which FAILS while any ledger
     # capability lacks a fixture. Each names the real historical condition it replays.
-    {"capability": "abcd-experiment", "check": lambda: _predicate_heartbeat("abcd-experiment"),
-     "source": "365 distinct experiments ran; implement routing is spread unevenly across 7 agents "
-               "(codex 1248 / gemini 129) — the selection bias it exists to correct."},
-    {"capability": "agy-runtime-isolation", "check": _check_gemini_isolation,
-     "source": "every gemini offload (196/wk). Without --add-dir, agy trusts the wrong cwd and "
-               "writes land outside the target worktree."},
-    {"capability": "capability-activation-audit",
-     "check": lambda: _predicate_heartbeat("capability-activation-audit"),
-     "source": "daily cadence step; it flagged ITSELF no_heartbeat on its first run."},
-    {"capability": "partitioned-review",
-     "check": lambda: _predicate_heartbeat("partitioned-review"),
-     "source": "the recurring shape behind it: a corpus too large for one prompt, where a "
-               "timeout or a truncated answer is indistinguishable from a successful review. "
-               "Registered 2026-08-22 — it merged in PR #2 with no ledger record, no heartbeat and "
-               "a CLI-only caller, so the firing monitor could only ever have reported it as "
-               "never-fired no matter how often it ran."},
-    {"capability": "capability-propensity",
-     "check": lambda: _predicate_heartbeat("capability-propensity"),
-     "source": "every capability_advisor.advise call ranks its candidates by propensity, plus the "
-               "CLI. Registered 2026-08-22 to close the loop the advisor left open: it recorded a "
-               "`match` for each candidate and nothing recorded whether the candidate was then "
-               "TRIGGERED or whether triggering HELPED, so 'recommend the useful ones more often' "
-               "had no signal. First live read: 13 natural experiments already in the ledger, 0 "
-               "resolved, 0 of 41 capabilities carrying usefulness evidence — the propensities are "
-               "all prior, and the report says so rather than looking informative."},
-    {"capability": "capability-firing-monitor",
-     "check": lambda: _predicate_heartbeat("capability-firing-monitor"),
-     "source": "weekly cadence step. Its first live run flagged range-lane-rollout silent 29.9d "
-               "against its own 'daily preview' cadence, and separated 17 never-fired-in-a-tick "
-               "capabilities from those whose caller is the suite, where production_heartbeat is a "
-               "no-op and the firing record says nothing either way."},
-    {"capability": "capability-admission-gate",
-     "check": lambda: _predicate_heartbeat("capability-admission-gate"),
-     "source": "every suite run. Its first live report found 26 of 37 capabilities short of the "
-               "required parts, a dangling citation in orchestrate.sh:95 to a decision record "
-               "nobody wrote, and two expired trial windows with no record — one of which "
-               "(consumer-sync ingest) turned out to be failing every run with 0 accepted "
-               "artifacts."},
-    {"capability": "capability:reference-sync-hygiene-test-gate",
-     "check": _check_reference_sync_gate,
-     "source": "20 consumer-sync-drift issues (Workflows#2753/#2750/#2878/#2210) — real demand. "
-               "Matcher fixed 2026-08-20; the live blocker is zero capability-attributed "
-               "influence_edges, so its promotion gate is unsatisfiable by construction."},
-    {"capability": "completion-event-lineage",
-     "check": lambda: _predicate_heartbeat("completion-event-lineage"),
-     "source": "every record_run; 2.25 inv/wk, continuous."},
-    {"capability": "feedback-store", "check": lambda: _predicate_heartbeat("feedback-store"),
-     "source": "every recorded run — the Brain itself."},
-    {"capability": "frontend-verifier",
-     "check": lambda: _predicate_flag("ORCH_FRONTEND_VERIFY_START_BROWSER"),
-     "source": "2 real UX-evaluation sessions in the transcripts; the browser keepalive is off by "
-               "operator policy, so this is a held switch, not a defect."},
-    {"capability": "issue-readiness", "check": lambda: _predicate_heartbeat("issue-readiness"),
-     "source": "94 open issues against a backlog of 1 — the condition it was built for."},
-    {"capability": "live-keepalive-supervisor", "check": _check_keepalive_escalation,
-     "source": "5 real agent:needs-attention items (Workflows#3123/#1023/#869/#848, MD#239) — that "
-               "label is precisely its input."},
-    {"capability": "local-model-profile-trial", "check": _check_model_trial_gate,
-     "source": "gpt-5.6-sol (15 runs) and terra (14) are in live use, so the identity question is "
-               "real; promotion stays quarantined until Brain ingestion is atomic."},
-    {"capability": "role-adjudicator", "check": _check_adjudicator,
-     "source": "13 outcomes where verifier_verdict != adjudicated_verdict, incl. 9 FAIL_HOLLOW."},
-    {"capability": "role-decomposer", "check": lambda: _predicate_flag("ORCH_ROLE_SHADOW"),
-     "source": "0 instances in any corpus; redundant with epic-decomposition until epic routing "
-               "works. Shadow-gated, so the flag is the honest condition."},
-    {"capability": "role-prompt", "check": lambda: _predicate_heartbeat("role-prompt"),
-     "source": "1 run ever; its circumstance occurs on every dispatch but is served "
-               "deterministically by PROMPT_TEMPLATES + repo_knowledge."},
-    {"capability": "role-redirect",
-     "check": lambda: _predicate_flag("ORCH_REDIRECT_SWEEP_RECORD_CORPUS"),
-     "source": "143 role:redirect shadow runs; PAEM#2043 had 4 attempts with 1 agent, never "
-               "switched."},
-    {"capability": "role-triage", "check": lambda: _predicate_heartbeat("role-triage"),
-     "source": "688 role:triage runs, ~98/wk — the most-used role."},
-    {"capability": "strategy-experiments",
-     "check": lambda: _predicate_flag("ORCH_STRATEGY_EXPERIMENT"),
-     "source": "0 instances: all 365 experiments were single-agent-per-arm. The question AFTER "
-               "abcd, not a current gap."},
-    {"capability": "synthesis-promotion", "check": _check_synthesis_gate,
-     "source": "6 synthesize runs and 2 FAIL_SYNTHESIS_PROMOTION verdicts — two real promotion "
-               "attempts that failed validation."},
-    {"capability": "thompson-hybrid-routing", "check": _check_thompson,
-     "source": "5,371 implement runs across 7 agents — enough evidence for sampling to differ "
-               "materially from epsilon-greedy."},
-    {"capability": "windowed-capacity-policy",
-     "check": lambda: _predicate_heartbeat("windowed-capacity-policy"),
-     "source": "every tick — it gates whether dispatch happens at all."},
-    {"capability": "switch-review", "check": lambda: _predicate_heartbeat("switch-review"),
-     "source": "ORCH_RANGE_LANE_ROLLOUT was enabled 2026-07-08, reviewed 07-15, extended to 07-22, "
-               "then silently ended up off with no recorded decision — the exact deferral this "
-               "re-raises."},
-    {"capability": "feature-scan", "check": lambda: _predicate_heartbeat("feature-scan"),
-     "source": "60 of 74 reusable modules were unlogged, including four created the day before."},
-
+    {
+        "capability": "abcd-experiment",
+        "check": lambda: _predicate_heartbeat("abcd-experiment"),
+        "source": "365 distinct experiments ran; implement routing is spread unevenly across 7 agents "
+        "(codex 1248 / gemini 129) — the selection bias it exists to correct.",
+    },
+    {
+        "capability": "agy-runtime-isolation",
+        "check": _check_gemini_isolation,
+        "source": "every gemini offload (196/wk). Without --add-dir, agy trusts the wrong cwd and "
+        "writes land outside the target worktree.",
+    },
+    {
+        "capability": "capability-activation-audit",
+        "check": lambda: _predicate_heartbeat("capability-activation-audit"),
+        "source": "daily cadence step; it flagged ITSELF no_heartbeat on its first run.",
+    },
+    {
+        "capability": "partitioned-review",
+        "check": lambda: _predicate_heartbeat("partitioned-review"),
+        "source": "the recurring shape behind it: a corpus too large for one prompt, where a "
+        "timeout or a truncated answer is indistinguishable from a successful review. "
+        "Registered 2026-08-22 — it merged in PR #2 with no ledger record, no heartbeat and "
+        "a CLI-only caller, so the firing monitor could only ever have reported it as "
+        "never-fired no matter how often it ran.",
+    },
+    {
+        "capability": "capability-propensity",
+        "check": lambda: _predicate_heartbeat("capability-propensity"),
+        "source": "every capability_advisor.advise call ranks its candidates by propensity, plus the "
+        "CLI. Registered 2026-08-22 to close the loop the advisor left open: it recorded a "
+        "`match` for each candidate and nothing recorded whether the candidate was then "
+        "TRIGGERED or whether triggering HELPED, so 'recommend the useful ones more often' "
+        "had no signal. First live read: 13 natural experiments already in the ledger, 0 "
+        "resolved, 0 of 41 capabilities carrying usefulness evidence — the propensities are "
+        "all prior, and the report says so rather than looking informative.",
+    },
+    {
+        "capability": "capability-firing-monitor",
+        "check": lambda: _predicate_heartbeat("capability-firing-monitor"),
+        "source": "weekly cadence step. Its first live run flagged range-lane-rollout silent 29.9d "
+        "against its own 'daily preview' cadence, and separated 17 never-fired-in-a-tick "
+        "capabilities from those whose caller is the suite, where production_heartbeat is a "
+        "no-op and the firing record says nothing either way.",
+    },
+    {
+        "capability": "capability-admission-gate",
+        "check": lambda: _predicate_heartbeat("capability-admission-gate"),
+        "source": "every suite run. Its first live report found 26 of 37 capabilities short of the "
+        "required parts, a dangling citation in orchestrate.sh:95 to a decision record "
+        "nobody wrote, and two expired trial windows with no record — one of which "
+        "(consumer-sync ingest) turned out to be failing every run with 0 accepted "
+        "artifacts.",
+    },
+    {
+        "capability": "capability:reference-sync-hygiene-test-gate",
+        "check": _check_reference_sync_gate,
+        "source": "20 consumer-sync-drift issues (Workflows#2753/#2750/#2878/#2210) — real demand. "
+        "Matcher fixed 2026-08-20; the live blocker is zero capability-attributed "
+        "influence_edges, so its promotion gate is unsatisfiable by construction.",
+    },
+    {
+        "capability": "completion-event-lineage",
+        "check": lambda: _predicate_heartbeat("completion-event-lineage"),
+        "source": "every record_run; 2.25 inv/wk, continuous.",
+    },
+    {
+        "capability": "feedback-store",
+        "check": lambda: _predicate_heartbeat("feedback-store"),
+        "source": "every recorded run — the Brain itself.",
+    },
+    {
+        "capability": "frontend-verifier",
+        "check": lambda: _predicate_flag("ORCH_FRONTEND_VERIFY_START_BROWSER"),
+        "source": "2 real UX-evaluation sessions in the transcripts; the browser keepalive is off by "
+        "operator policy, so this is a held switch, not a defect.",
+    },
+    {
+        "capability": "issue-readiness",
+        "check": lambda: _predicate_heartbeat("issue-readiness"),
+        "source": "94 open issues against a backlog of 1 — the condition it was built for.",
+    },
+    {
+        "capability": "live-keepalive-supervisor",
+        "check": _check_keepalive_escalation,
+        "source": "5 real agent:needs-attention items (Workflows#3123/#1023/#869/#848, MD#239) — that "
+        "label is precisely its input.",
+    },
+    {
+        "capability": "local-model-profile-trial",
+        "check": _check_model_trial_gate,
+        "source": "gpt-5.6-sol (15 runs) and terra (14) are in live use, so the identity question is "
+        "real; promotion stays quarantined until Brain ingestion is atomic.",
+    },
+    {
+        "capability": "role-adjudicator",
+        "check": _check_adjudicator,
+        "source": "13 outcomes where verifier_verdict != adjudicated_verdict, incl. 9 FAIL_HOLLOW.",
+    },
+    {
+        "capability": "role-decomposer",
+        "check": lambda: _predicate_flag("ORCH_ROLE_SHADOW"),
+        "source": "0 instances in any corpus; redundant with epic-decomposition until epic routing "
+        "works. Shadow-gated, so the flag is the honest condition.",
+    },
+    {
+        "capability": "role-prompt",
+        "check": lambda: _predicate_heartbeat("role-prompt"),
+        "source": "1 run ever; its circumstance occurs on every dispatch but is served "
+        "deterministically by PROMPT_TEMPLATES + repo_knowledge.",
+    },
+    {
+        "capability": "role-redirect",
+        "check": lambda: _predicate_flag("ORCH_REDIRECT_SWEEP_RECORD_CORPUS"),
+        "source": "143 role:redirect shadow runs; PAEM#2043 had 4 attempts with 1 agent, never "
+        "switched.",
+    },
+    {
+        "capability": "role-triage",
+        "check": lambda: _predicate_heartbeat("role-triage"),
+        "source": "688 role:triage runs, ~98/wk — the most-used role.",
+    },
+    {
+        "capability": "strategy-experiments",
+        "check": lambda: _predicate_flag("ORCH_STRATEGY_EXPERIMENT"),
+        "source": "0 instances: all 365 experiments were single-agent-per-arm. The question AFTER "
+        "abcd, not a current gap.",
+    },
+    {
+        "capability": "synthesis-promotion",
+        "check": _check_synthesis_gate,
+        "source": "6 synthesize runs and 2 FAIL_SYNTHESIS_PROMOTION verdicts — two real promotion "
+        "attempts that failed validation.",
+    },
+    {
+        "capability": "thompson-hybrid-routing",
+        "check": _check_thompson,
+        "source": "5,371 implement runs across 7 agents — enough evidence for sampling to differ "
+        "materially from epsilon-greedy.",
+    },
+    {
+        "capability": "windowed-capacity-policy",
+        "check": lambda: _predicate_heartbeat("windowed-capacity-policy"),
+        "source": "every tick — it gates whether dispatch happens at all.",
+    },
+    {
+        "capability": "switch-review",
+        "check": lambda: _predicate_heartbeat("switch-review"),
+        "source": "ORCH_RANGE_LANE_ROLLOUT was enabled 2026-07-08, reviewed 07-15, extended to 07-22, "
+        "then silently ended up off with no recorded decision — the exact deferral this "
+        "re-raises.",
+    },
+    {
+        "capability": "feature-scan",
+        "check": lambda: _predicate_heartbeat("feature-scan"),
+        "source": "60 of 74 reusable modules were unlogged, including four created the day before.",
+    },
 )
 
 
 # --------------------------------------------------------------------------- replay
 
+
 def _fetch_issue(repo: str, number: int) -> dict | None:
-    proc = subprocess.run(["gh", "issue", "view", str(number), "--repo", f"stranske/{repo}",
-                           "--json", "number,title,labels,body"],
-                          capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(
+        [
+            "gh",
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            f"stranske/{repo}",
+            "--json",
+            "number,title,labels,body",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     if proc.returncode != 0:
         return None
     try:
@@ -799,20 +1032,34 @@ def _labels_of(fixture: dict, *, offline: bool) -> tuple[list[str], str, str]:
     if fixture.get("live") and not offline:
         got = _fetch_issue(fixture["repo"], fixture["issue"])
         if got:
-            return ([l["name"] for l in got.get("labels", [])], got.get("title") or "",
-                    f"live {fixture['repo']}#{fixture['issue']}")
-    return (list(fixture.get("labels") or []), fixture.get("title") or "",
-            "frozen fixture" if not fixture.get("live")
-            else f"frozen (live read failed) {fixture.get('repo')}#{fixture.get('issue')}")
+            return (
+                [l["name"] for l in got.get("labels", [])],
+                got.get("title") or "",
+                f"live {fixture['repo']}#{fixture['issue']}",
+            )
+    return (
+        list(fixture.get("labels") or []),
+        fixture.get("title") or "",
+        (
+            "frozen fixture"
+            if not fixture.get("live")
+            else f"frozen (live read failed) {fixture.get('repo')}#{fixture.get('issue')}"
+        ),
+    )
 
 
 def replay(*, offline: bool = False) -> dict:
     rows = []
     for fixture in FIXTURES:
         labels, title, prov = _labels_of(fixture, offline=offline)
-        row = {"capability": fixture["capability"], "kind": fixture["kind"],
-               "source": fixture["source"], "provenance": prov,
-               "labels": labels, "title": title[:80]}
+        row = {
+            "capability": fixture["capability"],
+            "kind": fixture["kind"],
+            "source": fixture["source"],
+            "provenance": prov,
+            "labels": labels,
+            "title": title[:80],
+        }
 
         if fixture["kind"] == "predicate_note":
             row.update(_external_caller_state(fixture["capability"]))
@@ -823,64 +1070,99 @@ def replay(*, offline: bool = False) -> dict:
             if fixture.get("apply_label_repair"):
                 try:
                     import issue_readiness
+
                     repaired = issue_readiness.task_label_for(
-                        {"labels": [{"name": l} for l in labels], "title": title})
+                        {"labels": [{"name": l} for l in labels], "title": title}
+                    )
                 except Exception:
                     repaired = None
                 if repaired:
                     effective = labels + [repaired]
             got = backlog.classify(effective)
-            row.update({"expected": fixture["expect_task_type"], "actual": got,
-                        "label_repair_applied": repaired,
-                        "fires": got == fixture["expect_task_type"]})
+            row.update(
+                {
+                    "expected": fixture["expect_task_type"],
+                    "actual": got,
+                    "label_repair_applied": repaired,
+                    "fires": got == fixture["expect_task_type"],
+                }
+            )
 
         elif fixture["kind"] == "gate_required":
             try:
                 import runtime_ac_gate
                 from pathlib import Path as _P
-                item = {"target": "o/r#1", "lane": fixture.get("lane", "closer"),
-                        "labels": labels,
-                        "source_labels": list(fixture.get("source_labels") or [])}
+
+                item = {
+                    "target": "o/r#1",
+                    "lane": fixture.get("lane", "closer"),
+                    "labels": labels,
+                    "source_labels": list(fixture.get("source_labels") or []),
+                }
                 # No spec file on disk, so this tests LABEL-driven eligibility only.
                 elig = runtime_ac_gate.eligibility(item, _P("/nonexistent/spec.json"))
                 row.update({"eligibility": elig, "fires": bool(elig.get("required"))})
-            except Exception as exc:                              # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 row.update({"fires": False, "eligibility": {"error": str(exc)[:80]}})
 
         elif fixture["kind"] == "high_stakes":
             try:
                 import adversarial
-                item = {"target": "o/r#1", "labels": labels, "title": title,
-                        "source_labels": list(fixture.get("source_labels") or []),
-                        "lane": fixture.get("lane", "closer")}
+
+                item = {
+                    "target": "o/r#1",
+                    "labels": labels,
+                    "title": title,
+                    "source_labels": list(fixture.get("source_labels") or []),
+                    "lane": fixture.get("lane", "closer"),
+                }
                 reason = adversarial.high_stakes_reason(item)
-            except Exception as exc:                              # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 reason = f"ERROR {exc}"
-            row.update({"lane": fixture.get("lane"), "reason": reason,
-                        "fires": bool(reason) and not str(reason).startswith("ERROR")})
+            row.update(
+                {
+                    "lane": fixture.get("lane"),
+                    "reason": reason,
+                    "fires": bool(reason) and not str(reason).startswith("ERROR"),
+                }
+            )
             if fixture["capability"] is None:
-                row["fires"] = not row["fires"]      # this fixture asserts it must NOT fire
+                row["fires"] = not row["fires"]  # this fixture asserts it must NOT fire
                 row["expected"] = "must not fire"
         rows.append(row)
 
     for fixture in PREDICATE_FIXTURES:
         try:
             got = fixture["check"]()
-        except Exception as exc:                                  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             got = {"fires": False, "detail": {"error": str(exc)[:80]}}
-        rows.append({"capability": fixture["capability"], "kind": "predicate",
-                     "source": fixture["source"], "fires": bool(got.get("fires")),
-                     "detail": got.get("detail")})
+        rows.append(
+            {
+                "capability": fixture["capability"],
+                "kind": "predicate",
+                "source": fixture["source"],
+                "fires": bool(got.get("fires")),
+                "detail": got.get("detail"),
+            }
+        )
 
     firing = [r for r in rows if r["fires"]]
-    return {"total": len(rows), "would_fire": len(firing),
-            "would_miss": len(rows) - len(firing), "rows": rows}
+    return {
+        "total": len(rows),
+        "would_fire": len(firing),
+        "would_miss": len(rows) - len(firing),
+        "rows": rows,
+    }
 
 
 def format_report(rep: dict) -> str:
-    lines = ["# Recurrence check — if the conditions happened again today, would it fire?", "",
-             f"  WOULD FIRE:  {rep['would_fire']:>2} of {rep['total']}",
-             f"  WOULD MISS:  {rep['would_miss']:>2}", ""]
+    lines = [
+        "# Recurrence check — if the conditions happened again today, would it fire?",
+        "",
+        f"  WOULD FIRE:  {rep['would_fire']:>2} of {rep['total']}",
+        f"  WOULD MISS:  {rep['would_miss']:>2}",
+        "",
+    ]
     miss = [r for r in rep["rows"] if not r["fires"]]
     if miss:
         lines += ["## Would still MISS — the condition recurs and nothing routes it", ""]
@@ -889,11 +1171,15 @@ def format_report(rep: dict) -> str:
             lines.append(f"  {name}  [{r['kind']}]")
             lines.append(f"     instance: {r['source']}")
             if r["kind"] == "classify":
-                lines.append(f"     expected task_type={r.get('expected')} "
-                             f"but classify() gives '{r.get('actual')}'  labels={r['labels']}")
+                lines.append(
+                    f"     expected task_type={r.get('expected')} "
+                    f"but classify() gives '{r.get('actual')}'  labels={r['labels']}"
+                )
             elif r["kind"] == "high_stakes":
-                lines.append(f"     lane={r.get('lane')} labels={r['labels']} -> "
-                             f"reason={r.get('reason')}")
+                lines.append(
+                    f"     lane={r.get('lane')} labels={r['labels']} -> "
+                    f"reason={r.get('reason')}"
+                )
             else:
                 lines.append(f"     detail: {json.dumps(r.get('detail'))[:150]}")
             lines.append("")
@@ -921,7 +1207,8 @@ def _selftest() -> None:
     # the reason says which. Two places need it, so it is computed once.
     gaps: list[str] = []
     _docs_drift_ok = env_prereq.runnable(
-        gaps, env_prereq.ledger_rows_absent("docs-drift-fix-agent"))
+        gaps, env_prereq.ledger_rows_absent("docs-drift-fix-agent")
+    )
 
     # The must-not-fire guards are the ones that keep this honest: a check that only ever says
     # "yes" would pass trivially and tell us nothing.
@@ -965,8 +1252,10 @@ def _selftest() -> None:
         # tell the reader to go there. The distinction is the word "until"/"cited" in the same
         # clause, so keep the rule blunt instead: no live citation, and the historical note spells
         # the numbers without a file prefix.
-        assert not bad, (f"{flag}'s criterion cites {bad} by line number; line citations rot — "
-                         f"cite an ORCH-ANCHOR instead")
+        assert not bad, (
+            f"{flag}'s criterion cites {bad} by line number; line citations rot — "
+            f"cite an ORCH-ANCHOR instead"
+        )
         for name in _anchor.findall(criterion):
             _anchors_cited += 1
             # THE ANCHOR MUST BE A DEFINING COMMENT LINE, not merely the substring appearing
@@ -975,13 +1264,16 @@ def _selftest() -> None:
             # which is the circular-measurement mode (FM7) in three lines of code. Requiring
             # `^# ORCH-ANCHOR: <name>` also excludes a "See ORCH-ANCHOR: x" back-reference from
             # standing in for the definition.
-            assert re.search(rf"^\s*#\s*ORCH-ANCHOR: {re.escape(name)}\b", _tree_text,
-                             re.MULTILINE), (
+            assert re.search(
+                rf"^\s*#\s*ORCH-ANCHOR: {re.escape(name)}\b", _tree_text, re.MULTILINE
+            ), (
                 f"{flag}'s criterion cites `ORCH-ANCHOR: {name}`, but no file defines that anchor "
-                f"on its own comment line")
+                f"on its own comment line"
+            )
     assert _anchors_cited >= 3, (
         f"only {_anchors_cited} anchor citations found; the anchor rule is not being exercised, so "
-        "this assertion would pass on a table full of prose")
+        "this assertion would pass on a table full of prose"
+    )
 
     # NO FIXTURE MAY ERROR. A check that raises reports `fires=False` with an {"error": ...}
     # detail, which reads like a blocked capability but is actually a broken test — exactly how a
@@ -990,7 +1282,7 @@ def _selftest() -> None:
     for row in rep["rows"]:
         det = row.get("detail")
         if not _docs_drift_ok and row["capability"] == "docs-drift-fix-agent":
-            continue                       # the ONE excused row, named in `gaps` above
+            continue  # the ONE excused row, named in `gaps` above
         if isinstance(det, dict):
             assert "error" not in det, f"fixture for {row['capability']} ERRORED: {det['error']}"
 
@@ -1001,6 +1293,7 @@ def _selftest() -> None:
     # verdict fails here rather than quietly under-reporting forever.
     if _docs_drift_ok:
         import capability_activation_audit as _audit
+
         _stub = {"repo": "R", "workflow": "w", "path": "/p"}
         _real = _audit.external_caller
         try:
@@ -1036,12 +1329,19 @@ def _selftest() -> None:
     assert "ORCH_RUN_ADVERSARIAL_REVIEW" in tenv, (
         f"the prologue DID evaluate ({tdiag['keys']} ORCH_ flags resolved in "
         f"{tdiag['retried'] + 1} attempt(s)) but ORCH_RUN_ADVERSARIAL_REVIEW was not among them — "
-        "that export was renamed or removed, so its flag verdict falls back to ambient")
-    _m = re.search(r"ORCH_RANGE_LANE_TRIAL_UNTIL:-([0-9-]+)", ORCHESTRATE.read_text(encoding="utf-8"))
-    if _m and datetime.date.today().isoformat() > _m.group(1) \
-            and not os.environ.get("ORCH_RANGE_LANE_ROLLOUT"):
-        assert tenv.get("ORCH_RANGE_LANE_ROLLOUT") == "0", \
-            "trial window elapsed but tick_env reports the naive default — conditional not evaluated"
+        "that export was renamed or removed, so its flag verdict falls back to ambient"
+    )
+    _m = re.search(
+        r"ORCH_RANGE_LANE_TRIAL_UNTIL:-([0-9-]+)", ORCHESTRATE.read_text(encoding="utf-8")
+    )
+    if (
+        _m
+        and datetime.date.today().isoformat() > _m.group(1)
+        and not os.environ.get("ORCH_RANGE_LANE_ROLLOUT")
+    ):
+        assert (
+            tenv.get("ORCH_RANGE_LANE_ROLLOUT") == "0"
+        ), "trial window elapsed but tick_env reports the naive default — conditional not evaluated"
 
     # THE FAILURE-REASON TAXONOMY ITSELF. Each shape below really happens on this machine, and the
     # point is that they must NOT collapse into one verdict. `_classify_tick_env` is pure, so these
@@ -1061,10 +1361,20 @@ def _selftest() -> None:
         assert TICK_ENV_OUTCOME[_rec["reason"]] == _outcome, _rec
         assert bool(_env) is (_reason == "ok"), _rec
     # A machine-side reason must never be REPORTABLE as the tree's fault, and vice versa.
-    _env_msg = tick_env_failure_message({"reason": "timeout", "outcome": "environment",
-                                         "attempts": [{"detail": "bash exceeded 60s"}] * 3})
-    _tree_msg = tick_env_failure_message({"reason": "no_orch_keys", "outcome": "defect",
-                                          "attempts": [{"returncode": 0, "stdout_lines": 4}]})
+    _env_msg = tick_env_failure_message(
+        {
+            "reason": "timeout",
+            "outcome": "environment",
+            "attempts": [{"detail": "bash exceeded 60s"}] * 3,
+        }
+    )
+    _tree_msg = tick_env_failure_message(
+        {
+            "reason": "no_orch_keys",
+            "outcome": "defect",
+            "attempts": [{"returncode": 0, "stdout_lines": 4}],
+        }
+    )
     assert _env_msg.startswith("ENVIRONMENT") and "3 attempt" in _env_msg, _env_msg
     assert "orchestrate.sh" in _env_msg and "NOTHING" in _env_msg, _env_msg
     assert _tree_msg.startswith("DEFECT") and "range-lane" in _tree_msg, _tree_msg
@@ -1075,7 +1385,7 @@ def _selftest() -> None:
     _real_attempt = globals()["_tick_env_attempt"]
     _saved = (_TICK_ENV, _TICK_ENV_DIAG, TICK_ENV_BACKOFF)
     try:
-        globals()["TICK_ENV_BACKOFF"] = 0.0        # the sleep is a constant, not logic under test
+        globals()["TICK_ENV_BACKOFF"] = 0.0  # the sleep is a constant, not logic under test
         _calls: list[int] = []
 
         def _flaky() -> tuple[dict, dict]:
@@ -1129,41 +1439,50 @@ def _selftest() -> None:
     # truncation at `_gh_gate()`, the parse, and each verdict class end to end. ORCH_* is scrubbed
     # from the environment so `env | grep` cannot inherit ambient flags and blur the no-exports case.
     import tempfile
+
     _saved_path, _saved_cache = ORCHESTRATE, (_TICK_ENV, _TICK_ENV_DIAG)
     _scrubbed = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("ORCH_")}
     try:
         with tempfile.TemporaryDirectory(prefix="tickenv-") as _td:
             _dir = pathlib.Path(_td)
             _good = _dir / "orchestrate.sh"
-            _good.write_text('set -euo pipefail\n'
-                             'export ORCH_FIXTURE_FLAG="${ORCH_FIXTURE_FLAG:-7}"\n'
-                             '_gh_gate() { :; }\nexport ORCH_AFTER_THE_GATE=9\n')
+            _good.write_text(
+                "set -euo pipefail\n"
+                'export ORCH_FIXTURE_FLAG="${ORCH_FIXTURE_FLAG:-7}"\n'
+                "_gh_gate() { :; }\nexport ORCH_AFTER_THE_GATE=9\n"
+            )
             globals()["ORCHESTRATE"] = _good
             _env = tick_env(refresh=True, log=False)
             assert _env.get("ORCH_FIXTURE_FLAG") == "7", _env
             assert "ORCH_AFTER_THE_GATE" not in _env, "evaluation must stop at _gh_gate()"
             assert tick_env_status(log=False)["outcome"] == "ok", tick_env_status(log=False)
             _aborts = _dir / "aborts.sh"
-            _aborts.write_text('set -euo pipefail\ncat /no/such/credential\n_gh_gate() { :; }\n')
+            _aborts.write_text("set -euo pipefail\ncat /no/such/credential\n_gh_gate() { :; }\n")
             globals()["ORCHESTRATE"] = _aborts
             assert tick_env(refresh=True, log=False) == {}
-            assert tick_env_status(log=False)["reason"] == "nonzero_exit", tick_env_status(log=False)
+            assert tick_env_status(log=False)["reason"] == "nonzero_exit", tick_env_status(
+                log=False
+            )
             _silent = _dir / "no-exports.sh"
-            _silent.write_text('set -euo pipefail\necho "prologue with no ORCH_ exports"\n'
-                               '_gh_gate() { :; }\n')
+            _silent.write_text(
+                'set -euo pipefail\necho "prologue with no ORCH_ exports"\n' "_gh_gate() { :; }\n"
+            )
             globals()["ORCHESTRATE"] = _silent
             assert tick_env(refresh=True, log=False) == {}
             assert tick_env_status(log=False)["outcome"] == "defect", tick_env_status(log=False)
             globals()["ORCHESTRATE"] = _dir / "deleted.sh"
             assert tick_env(refresh=True, log=False) == {}
-            assert tick_env_status(log=False)["reason"] == "script_missing", tick_env_status(log=False)
+            assert tick_env_status(log=False)["reason"] == "script_missing", tick_env_status(
+                log=False
+            )
     finally:
         globals()["ORCHESTRATE"] = _saved_path
         os.environ.update(_scrubbed)
         globals()["_TICK_ENV"], globals()["_TICK_ENV_DIAG"] = _saved_cache
     # classify() still cannot emit `docs`; if that ever changes, the routing decision was taken.
-    assert backlog.classify(["documentation"]) == "mechanical", \
-        "docs became emittable — revisit the docs-drift matcher"
+    assert (
+        backlog.classify(["documentation"]) == "mechanical"
+    ), "docs became emittable — revisit the docs-drift matcher"
 
     # Offline mode must not reach the network.
     for row in rep["rows"]:
@@ -1171,9 +1490,11 @@ def _selftest() -> None:
     text = format_report(rep)
     assert "WOULD FIRE" in text and "WOULD MISS" in text
     env_prereq.report_gaps("capability_recurrence_check.py", gaps)
-    print("capability_recurrence_check.py selftest: OK (must-not-fire guards hold, unemittable "
-          "task_type reads as a miss, offline stays offline)"
-          + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else ""))
+    print(
+        "capability_recurrence_check.py selftest: OK (must-not-fire guards hold, unemittable "
+        "task_type reads as a miss, offline stays offline)"
+        + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
+    )
 
 
 def main(argv: list[str]) -> int:

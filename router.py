@@ -25,6 +25,7 @@ Nothing here learns yet — it applies the prior under three policies:
 `--selftest` runs offline with mocked capacity+backlog. `--dry-run` prints the
 plan it WOULD dispatch without claiming or writing.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,14 +43,16 @@ import feedback
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
 CAPACITY_JSON = HANDOFF / "capacity.json"
-BACKLOG_JSON = HANDOFF / "backlog.json"        # written by the (gh-backed) discovery step
+BACKLOG_JSON = HANDOFF / "backlog.json"  # written by the (gh-backed) discovery step
 DECISION_JSON = HANDOFF / "routing-decision.json"
 
-MAX_CONCURRENT_DEFAULT = 4                       # tunable lane cap; LangSmith may adjust
-PER_AGENT_TICK_CAP = 1                            # spread load: each agent takes ≤N/tick before doubling
-EXPLORATION_RATE_DEFAULT = 0.05                   # sustained exploration rate; override with ORCH_EXPLORATION_RATE
-EXPLORATION_MODE_DEFAULT = "epsilon-greedy"      # keeps the same ε safety cap; override with thompson-hybrid
-SCARCE_AGENTS = ("codex", "claude")              # review yields when these are pressured
+MAX_CONCURRENT_DEFAULT = 4  # tunable lane cap; LangSmith may adjust
+PER_AGENT_TICK_CAP = 1  # spread load: each agent takes ≤N/tick before doubling
+EXPLORATION_RATE_DEFAULT = 0.05  # sustained exploration rate; override with ORCH_EXPLORATION_RATE
+EXPLORATION_MODE_DEFAULT = (
+    "epsilon-greedy"  # keeps the same ε safety cap; override with thompson-hybrid
+)
+SCARCE_AGENTS = ("codex", "claude")  # review yields when these are pressured
 # Agents the GitHub keepalive can run REMOTELY via an `agent:<X>` label (must match dispatcher.REMOTE_AGENTS).
 # vibe/aider are LOCAL-only (no keepalive lane), so remote delegation can't choose them.
 KEEPALIVE_AGENTS = {"cursor", "codex", "claude", "gemini"}
@@ -83,82 +86,117 @@ ROUTE_TABLE = {
     # read-heavy, stage 2), full = implement/epic/cross_repo/runtime_ac (a mistake is expensive to
     # unwind). Modes map to adapters.MODEL_TIERS; unpinned agents (vibe/aider/cursor) ignore the
     # tier and use their single lane, so a tier token there is documentation, not behaviour.
-    "mechanical": {"role": "code", "agents": [        # NO gemini — wasteful for low-reasoning work
-        {"agent": "cursor", "mode": "composer", "late": False},
-        {"agent": "vibe",   "mode": "cheap",    "late": False},
-        {"agent": "codex",  "mode": "cheap",    "late": False},
-        {"agent": "aider",  "mode": "cheap",    "late": True},   # paygo credit -> late
-        {"agent": "claude", "mode": "cheap",    "late": False},
-    ]},
-    "implement": {"role": "code", "agents": [
-        {"agent": "claude", "mode": "full",      "late": False},
-        {"agent": "codex",  "mode": "full",      "late": False},
-        {"agent": "gemini", "mode": "full",      "late": False},  # reasoning seat; shines when codex/claude 5h-shed
-        {"agent": "cursor", "mode": "composer",  "late": False},
-        {"agent": "vibe",   "mode": "full",      "late": False},
-        # REMOVED 2026-08-08 (owner policy): the late cursor/frontier lane. Cursor runs Composer
-        # ONLY — see adapters.CURSOR_COMPOSER_MODEL. Cursor already appears above on composer, so
-        # this entry only ever offered a second, pricier way to reach the same seat.
-        {"agent": "aider",  "mode": "full",      "late": True},
-    ]},
+    "mechanical": {
+        "role": "code",
+        "agents": [  # NO gemini — wasteful for low-reasoning work
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "cheap", "late": False},
+            {"agent": "codex", "mode": "cheap", "late": False},
+            {"agent": "aider", "mode": "cheap", "late": True},  # paygo credit -> late
+            {"agent": "claude", "mode": "cheap", "late": False},
+        ],
+    },
+    "implement": {
+        "role": "code",
+        "agents": [
+            {"agent": "claude", "mode": "full", "late": False},
+            {"agent": "codex", "mode": "full", "late": False},
+            {
+                "agent": "gemini",
+                "mode": "full",
+                "late": False,
+            },  # reasoning seat; shines when codex/claude 5h-shed
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "full", "late": False},
+            # REMOVED 2026-08-08 (owner policy): the late cursor/frontier lane. Cursor runs Composer
+            # ONLY — see adapters.CURSOR_COMPOSER_MODEL. Cursor already appears above on composer, so
+            # this entry only ever offered a second, pricier way to reach the same seat.
+            {"agent": "aider", "mode": "full", "late": True},
+        ],
+    },
     # STAGE 2 (2026-08-10): testgen -> mid. `testgen_gate.py` must pass before a PR, so a generated
     # test that is wrong is caught by machine ground truth rather than by model horsepower — the
     # flagship tier was buying little here. codex Sol->Terra and gemini Pro->Flash-high.
-    "testgen": {"role": "code_bounded", "agents": [  # generated tests must pass testgen_gate.py before PR
-        {"agent": "codex",  "mode": "mid",       "late": False},
-        {"agent": "cursor", "mode": "composer",  "late": False},
-        {"agent": "vibe",   "mode": "mid",       "late": False},
-        {"agent": "gemini", "mode": "mid",       "late": False},
-        {"agent": "aider",  "mode": "mid",       "late": True},
-    ]},
-    "epic": {"role": "planning", "agents": [  # vague goal -> structured subtask plan; avoid Claude by default
-        {"agent": "gemini", "mode": "full",      "late": False},
-        {"agent": "codex",  "mode": "full",      "late": False},
-        {"agent": "cursor", "mode": "composer",  "late": False},
-        {"agent": "vibe",   "mode": "full",      "late": False},
-        {"agent": "aider",  "mode": "full",      "late": True},
-    ]},
-    "cross_repo": {"role": "planning", "agents": [  # coordinated source+consumer planning
-        {"agent": "gemini", "mode": "full",      "late": False},
-        {"agent": "codex",  "mode": "full",      "late": False},
-        {"agent": "cursor", "mode": "composer",  "late": False},
-        {"agent": "vibe",   "mode": "full",      "late": False},
-        {"agent": "aider",  "mode": "full",      "late": True},
-    ]},
-    "runtime_ac": {"role": "planning", "agents": [  # runtime acceptance-criteria evidence planning
-        {"agent": "gemini", "mode": "full",      "late": False},
-        {"agent": "codex",  "mode": "full",      "late": False},
-        {"agent": "cursor", "mode": "composer",  "late": False},
-        {"agent": "vibe",   "mode": "full",      "late": False},
-        {"agent": "aider",  "mode": "full",      "late": True},
-    ]},
-    "codemod": {"role": "code_bounded", "agents": [  # cross-file structural campaigns; cheap lanes first
-        {"agent": "cursor", "mode": "composer",  "late": False},
-        {"agent": "vibe",   "mode": "cheap",     "late": False},
-        {"agent": "codex",  "mode": "cheap",     "late": False},
-        # gemini full->cheap is the one real behaviour change in stage 1 (3.1 Pro -> 3.6 Flash-low).
-        # Watch this cell: if codemod diff quality drops, promote gemini here to 'mid' (Flash-high)
-        # rather than reverting the whole tier.
-        {"agent": "gemini", "mode": "cheap",     "late": False},
-        {"agent": "aider",  "mode": "cheap",     "late": True},
-    ]},
-    "polish": {"role": "code_bounded", "agents": [    # NO gemini — bounded follow-ups are cheap work
-        {"agent": "cursor", "mode": "composer", "late": False},
-        {"agent": "vibe",   "mode": "cheap",    "late": False},
-        {"agent": "codex",  "mode": "cheap",    "late": False},
-        {"agent": "aider",  "mode": "cheap",    "late": True},
-    ]},
+    "testgen": {
+        "role": "code_bounded",
+        "agents": [  # generated tests must pass testgen_gate.py before PR
+            {"agent": "codex", "mode": "mid", "late": False},
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "mid", "late": False},
+            {"agent": "gemini", "mode": "mid", "late": False},
+            {"agent": "aider", "mode": "mid", "late": True},
+        ],
+    },
+    "epic": {
+        "role": "planning",
+        "agents": [  # vague goal -> structured subtask plan; avoid Claude by default
+            {"agent": "gemini", "mode": "full", "late": False},
+            {"agent": "codex", "mode": "full", "late": False},
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "full", "late": False},
+            {"agent": "aider", "mode": "full", "late": True},
+        ],
+    },
+    "cross_repo": {
+        "role": "planning",
+        "agents": [  # coordinated source+consumer planning
+            {"agent": "gemini", "mode": "full", "late": False},
+            {"agent": "codex", "mode": "full", "late": False},
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "full", "late": False},
+            {"agent": "aider", "mode": "full", "late": True},
+        ],
+    },
+    "runtime_ac": {
+        "role": "planning",
+        "agents": [  # runtime acceptance-criteria evidence planning
+            {"agent": "gemini", "mode": "full", "late": False},
+            {"agent": "codex", "mode": "full", "late": False},
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "full", "late": False},
+            {"agent": "aider", "mode": "full", "late": True},
+        ],
+    },
+    "codemod": {
+        "role": "code_bounded",
+        "agents": [  # cross-file structural campaigns; cheap lanes first
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "cheap", "late": False},
+            {"agent": "codex", "mode": "cheap", "late": False},
+            # gemini full->cheap is the one real behaviour change in stage 1 (3.1 Pro -> 3.6 Flash-low).
+            # Watch this cell: if codemod diff quality drops, promote gemini here to 'mid' (Flash-high)
+            # rather than reverting the whole tier.
+            {"agent": "gemini", "mode": "cheap", "late": False},
+            {"agent": "aider", "mode": "cheap", "late": True},
+        ],
+    },
+    "polish": {
+        "role": "code_bounded",
+        "agents": [  # NO gemini — bounded follow-ups are cheap work
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "cheap", "late": False},
+            {"agent": "codex", "mode": "cheap", "late": False},
+            {"agent": "aider", "mode": "cheap", "late": True},
+        ],
+    },
     # STAGE 2 (2026-08-10): review -> mid, deliberately in BOTH directions. gemini drops Pro ->
     # Flash-high (cheaper on a compute-metered seat), while codex Luna->Terra and claude
     # Haiku->Sonnet 5 go UP: review quality feeds the durability labels the whole learner depends
     # on, so it is the one place worth paying more rather than less.
-    "review": {"role": "review", "agents": [
-        {"agent": "cursor", "mode": "composer", "late": False},
-        {"agent": "vibe",   "mode": "mid",      "late": False},
-        {"agent": "gemini", "mode": "mid",      "late": False},  # Google = a 5th family; reasoning review is unit-worthy
-        {"agent": "codex",  "mode": "mid",      "late": False},  # only-if-idle enforced below
-        {"agent": "claude", "mode": "mid",      "late": False},
-    ]},
+    "review": {
+        "role": "review",
+        "agents": [
+            {"agent": "cursor", "mode": "composer", "late": False},
+            {"agent": "vibe", "mode": "mid", "late": False},
+            {
+                "agent": "gemini",
+                "mode": "mid",
+                "late": False,
+            },  # Google = a 5th family; reasoning review is unit-worthy
+            {"agent": "codex", "mode": "mid", "late": False},  # only-if-idle enforced below
+            {"agent": "claude", "mode": "mid", "late": False},
+        ],
+    },
 }
 
 
@@ -223,7 +261,11 @@ def _exploration_rate(rate: float | None) -> float:
 
 
 def _exploration_mode(mode: str | None = None) -> str:
-    raw = (mode or os.environ.get("ORCH_EXPLORATION_MODE") or EXPLORATION_MODE_DEFAULT).strip().lower()
+    raw = (
+        (mode or os.environ.get("ORCH_EXPLORATION_MODE") or EXPLORATION_MODE_DEFAULT)
+        .strip()
+        .lower()
+    )
     raw = raw.replace("_", "-")
     aliases = {
         "epsilon": "epsilon-greedy",
@@ -254,14 +296,18 @@ def _learned_n_obs(learned: dict | None, agent: str) -> int:
     return 0
 
 
-def _learned_posterior_score(learned: dict | None, agent: str, fallback: float) -> tuple[float, float, int]:
+def _learned_posterior_score(
+    learned: dict | None, agent: str, fallback: float
+) -> tuple[float, float, int]:
     posterior = fallback
     score = fallback
     n_obs = 0
     if learned and agent in learned and isinstance(learned[agent], dict):
         row = learned[agent]
         try:
-            posterior = float(row.get("posterior")) if row.get("posterior") is not None else fallback
+            posterior = (
+                float(row.get("posterior")) if row.get("posterior") is not None else fallback
+            )
         except (TypeError, ValueError):
             posterior = fallback
         try:
@@ -312,6 +358,7 @@ def _capability_heartbeat(capability_id: str, event_type: str, *, ref: str = "")
     lazy import, never raises, inert outside an active tick. (2026-08-09)"""
     try:
         import capabilities
+
         capabilities.daily_heartbeat(capability_id, event_type, ref=ref or None)
     except Exception:
         pass
@@ -331,7 +378,9 @@ def _thompson_exploration_choice(scored: list, learned: dict | None, rng) -> tup
     if not pool:
         return None
     total = len(scored)
-    best = max(pool, key=lambda row: (_thompson_sample(row, learned, rng, total_candidates=total), -row[3]))
+    best = max(
+        pool, key=lambda row: (_thompson_sample(row, learned, rng, total_candidates=total), -row[3])
+    )
     return best
 
 
@@ -353,12 +402,23 @@ def _exploration_choice(scored: list, learned: dict | None, rng) -> tuple | None
     return rng.choice(least_observed)
 
 
-def select_agent(task_type: str, cap: dict, *, allow_warn: bool = True,
-                 load: dict | None = None, per_agent_cap: int = PER_AGENT_TICK_CAP,
-                 learned: dict | None = None, only: set | None = None,
-                 exploration_rate: float | None = None, exploration_mode: str | None = None, rng=None,
-                 profile_seed: int | None = None, profile_scores: dict[str, float] | None = None,
-                 causal_context: dict | None = None, profile_transport: str = "local"):
+def select_agent(
+    task_type: str,
+    cap: dict,
+    *,
+    allow_warn: bool = True,
+    load: dict | None = None,
+    per_agent_cap: int = PER_AGENT_TICK_CAP,
+    learned: dict | None = None,
+    only: set | None = None,
+    exploration_rate: float | None = None,
+    exploration_mode: str | None = None,
+    rng=None,
+    profile_seed: int | None = None,
+    profile_scores: dict[str, float] | None = None,
+    causal_context: dict | None = None,
+    profile_transport: str = "local",
+):
     """Pick the best available agent entry for a task, or None if none have capacity.
 
     Selectable: state in {ok, warn(if allow_warn)}; shed/unknown skipped. Ranked by
@@ -395,9 +455,7 @@ def select_agent(task_type: str, cap: dict, *, allow_warn: bool = True,
         )
         if agent_profiles and not any(
             (
-                cap.get("profiles", {})
-                .get(profile["profile_id"], {})
-                .get("state", st)
+                cap.get("profiles", {}).get(profile["profile_id"], {}).get("state", st)
                 not in ("shed", "unknown")
             )
             for profile in agent_profiles
@@ -408,15 +466,19 @@ def select_agent(task_type: str, cap: dict, *, allow_warn: bool = True,
             # next agent instead of selecting profile=None and crashing.
             continue
         over_cap = 1 if load.get(entry["agent"], 0) >= per_agent_cap else 0
-        score = (over_cap, 0 if not entry["late"] else 1, 0 if st == "ok" else 1,
-                 _capacity_policy_bias(task_type, entry["agent"], cap),
-                 _drain_urgency(entry["agent"], cap))  # 16(e): continuous pacing within the tier
-        if learned:                          # feedback-learned reorder WITHIN the tier (opt-in via data)
+        score = (
+            over_cap,
+            0 if not entry["late"] else 1,
+            0 if st == "ok" else 1,
+            _capacity_policy_bias(task_type, entry["agent"], cap),
+            _drain_urgency(entry["agent"], cap),
+        )  # 16(e): continuous pacing within the tier
+        if learned:  # feedback-learned reorder WITHIN the tier (opt-in via data)
             score = score + (_learned_rank(learned, entry["agent"], len(learned) + idx),)
         scored.append((score, entry, st, idx))
     if not scored:
         return None
-    scored.sort(key=lambda x: x[0])           # stable -> preserves table order within a score
+    scored.sort(key=lambda x: x[0])  # stable -> preserves table order within a score
     picked = scored[0]
     explored = False
     rng = rng or random
@@ -435,25 +497,38 @@ def select_agent(task_type: str, cap: dict, *, allow_warn: bool = True,
                 # Records when Thompson sampling ACTUALLY chose a challenger — not merely when the
                 # flag is set — so the capability's evidence reflects real use. Daily-coalesced:
                 # routing runs many times per tick. (2026-08-09)
-                _capability_heartbeat("thompson-hybrid-routing", "invocation",
-                                      ref=f"{task_type}:{entry_agent(challenger)}")
+                _capability_heartbeat(
+                    "thompson-hybrid-routing",
+                    "invocation",
+                    ref=f"{task_type}:{entry_agent(challenger)}",
+                )
     _, entry, st, _idx = picked
-    result = {**entry, "state": st, "capacity_policy": _policy(cap, entry["agent"]),
-            "exploration": explored,
-            "exploration_mode": _exploration_mode(exploration_mode) if explored else ""}
+    result = {
+        **entry,
+        "state": st,
+        "capacity_policy": _policy(cap, entry["agent"]),
+        "exploration": explored,
+        "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
+    }
     profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=profile_transport)
     if profiles:
         candidate_ids = [profile["profile_id"] for profile in profiles]
         gates = {
             profile_id: {
-                "eligible": (cap.get("profiles", {}).get(profile_id, {}).get("state", st) not in ("shed", "unknown")),
+                "eligible": (
+                    cap.get("profiles", {}).get(profile_id, {}).get("state", st)
+                    not in ("shed", "unknown")
+                ),
                 "capacity_state": cap.get("profiles", {}).get(profile_id, {}).get("state", st),
             }
             for profile_id in candidate_ids
         }
         static_scores = {
-            profile["profile_id"]: float(profile_scores.get(profile["profile_id"], 0.0))
-            if profile_scores else float(profile.get("prior_offset") or 0.0)
+            profile["profile_id"]: (
+                float(profile_scores.get(profile["profile_id"], 0.0))
+                if profile_scores
+                else float(profile.get("prior_offset") or 0.0)
+            )
             for profile in profiles
         }
         envelope = execution_profiles.select_profile(
@@ -465,7 +540,9 @@ def select_agent(task_type: str, cap: dict, *, allow_warn: bool = True,
             gate_results=gates,
             exploration=explored,
             exploration_policy=(
-                f"{_exploration_mode(exploration_mode)}-profile" if explored else "deterministic-profile-prior"
+                f"{_exploration_mode(exploration_mode)}-profile"
+                if explored
+                else "deterministic-profile-prior"
             ),
             causal_context=causal_context,
         )
@@ -505,14 +582,26 @@ def learned_ranks() -> dict | None:
         except Exception:
             w = []
         if w:
-            out[tt] = {row["agent"]: {"rank": i, "n_obs": row.get("n_obs") or 0,
-                                      "posterior": row.get("posterior"), "score": row.get("score")}
-                       for i, row in enumerate(w)}
+            out[tt] = {
+                row["agent"]: {
+                    "rank": i,
+                    "n_obs": row.get("n_obs") or 0,
+                    "posterior": row.get("posterior"),
+                    "score": row.get("score"),
+                }
+                for i, row in enumerate(w)
+            }
     return out or None
 
 
-def select_remote_agent(task_type: str, cap: dict, *, load: dict | None = None,
-                        learned: dict | None = None, high_leverage: bool = False):
+def select_remote_agent(
+    task_type: str,
+    cap: dict,
+    *,
+    load: dict | None = None,
+    learned: dict | None = None,
+    high_leverage: bool = False,
+):
     """Gate #2: choose which `agent:<X>` label to apply for REMOTE keepalive delegation. Route-table +
     learned-weights + capacity ranking, restricted to keepalive-runnable lanes (KEEPALIVE_AGENTS;
     vibe/aider have no remote lane). RESERVE_AGENTS (claude) are EXCLUDED for routine work — Claude's
@@ -521,12 +610,22 @@ def select_remote_agent(task_type: str, cap: dict, *, load: dict | None = None,
     agent to dispatcher.delegate_remote()."""
     pool = KEEPALIVE_AGENTS if high_leverage else (KEEPALIVE_AGENTS - RESERVE_AGENTS)
     pick = select_agent(
-        task_type, cap, load=load, learned=learned, only=pool,
+        task_type,
+        cap,
+        load=load,
+        learned=learned,
+        only=pool,
         profile_transport="remote",
     )
-    if pick is None and not high_leverage:        # last resort: nothing cheaper has capacity -> allow reserve
+    if (
+        pick is None and not high_leverage
+    ):  # last resort: nothing cheaper has capacity -> allow reserve
         pick = select_agent(
-            task_type, cap, load=load, learned=learned, only=KEEPALIVE_AGENTS,
+            task_type,
+            cap,
+            load=load,
+            learned=learned,
+            only=KEEPALIVE_AGENTS,
             profile_transport="remote",
         )
     return pick
@@ -539,17 +638,28 @@ def _pressure(cap: dict) -> bool:
 
 def _lane_cap(cap: dict, max_concurrent: int) -> int:
     """How many concurrent lanes capacity allows: non-shed code agents, capped."""
-    code_agents = {e["agent"] for spec in ROUTE_TABLE.values() if spec.get("role") != "review"
-                   for e in spec["agents"]}
+    code_agents = {
+        e["agent"]
+        for spec in ROUTE_TABLE.values()
+        if spec.get("role") != "review"
+        for e in spec["agents"]
+    }
     available = sum(1 for a in code_agents if _state(cap, a) not in ("shed", "unknown"))
     return max(1, min(max_concurrent, available)) if available else 0
 
 
-def plan(backlog: list[dict], cap: dict, *, max_concurrent: int = MAX_CONCURRENT_DEFAULT,
-         dry_run: bool = False, learned: dict | None = None,
-         capability_records: dict | None = None) -> dict:
+def plan(
+    backlog: list[dict],
+    cap: dict,
+    *,
+    max_concurrent: int = MAX_CONCURRENT_DEFAULT,
+    dry_run: bool = False,
+    learned: dict | None = None,
+    capability_records: dict | None = None,
+) -> dict:
     """Build the dispatch plan. backlog item = {target, task_type, lane}. `learned` (optional) =
-    {task_type: {agent: rank}} from the feedback store; reorders within capacity tiers when present."""
+    {task_type: {agent: rank}} from the feedback store; reorders within capacity tiers when present.
+    """
     if not dry_run:
         reaped = claims.reap_stale()
     else:
@@ -561,7 +671,9 @@ def plan(backlog: list[dict], cap: dict, *, max_concurrent: int = MAX_CONCURRENT
             capability_records = {}
 
     code_items = [b for b in backlog if ROUTE_TABLE.get(b["task_type"], {}).get("role") != "review"]
-    review_items = [b for b in backlog if ROUTE_TABLE.get(b["task_type"], {}).get("role") == "review"]
+    review_items = [
+        b for b in backlog if ROUTE_TABLE.get(b["task_type"], {}).get("role") == "review"
+    ]
 
     cap_lanes = _lane_cap(cap, max_concurrent)
     pressure = _pressure(cap)
@@ -575,7 +687,7 @@ def plan(backlog: list[dict], cap: dict, *, max_concurrent: int = MAX_CONCURRENT
     }
     capacity_rejections: list[dict] = []
     already_routed: list[dict] = []
-    load: dict[str, int] = {}                          # per-agent assignments THIS tick (spread)
+    load: dict[str, int] = {}  # per-agent assignments THIS tick (spread)
     notes: list[str] = []
     if reaped:
         notes.append(f"reaped stale claims: {reaped}")
@@ -622,8 +734,12 @@ def plan(backlog: list[dict], cap: dict, *, max_concurrent: int = MAX_CONCURRENT
                 "big",
             )
             entry = select_agent(
-                b["task_type"], cap, allow_warn=allow_warn, load=load,
-                learned=(learned or {}).get(b["task_type"]), profile_seed=profile_seed,
+                b["task_type"],
+                cap,
+                allow_warn=allow_warn,
+                load=load,
+                learned=(learned or {}).get(b["task_type"]),
+                profile_seed=profile_seed,
                 causal_context={
                     "target": b.get("target"),
                     **({"subject_id": b["subject_id"]} if b.get("subject_id") else {}),
@@ -678,45 +794,52 @@ def plan(backlog: list[dict], cap: dict, *, max_concurrent: int = MAX_CONCURRENT
                 capabilities_by_id=capability_records,
                 seed=capability_seed,
             )
-            assignments.append({
-                "agent": entry["agent"], "mode": entry["mode"],
-                "target": tgt, "task_type": b["task_type"],
-                "lane": b.get("lane"), "capacity_state": entry["state"],
-                "capacity_policy": policy,
-                "reason": f"{b['task_type']}→{entry['agent']}/{entry['mode']} ({capacity_tag})"
-                          f"{(' via ' + entry.get('exploration_mode', 'epsilon-greedy') + ' exploration') if entry.get('exploration') else ''}",
-                "exploration": bool(entry.get("exploration")),
-                "exploration_mode": entry.get("exploration_mode") or "",
-                "selected_profile_id": entry.get("selected_profile_id"),
-                "requested_model": entry.get("requested_model"),
-                "reasoning_effort": entry.get("reasoning_effort"),
-                "permission_mode": entry.get("permission_mode"),
-                "transport": entry.get("transport"),
-                "candidate_profile_ids": entry.get("candidate_profile_ids") or [],
-                "profile_policy_version": entry.get("profile_policy_version"),
-                "profile_assignment_probability": entry.get("profile_assignment_probability"),
-                "profile_rng_seed": entry.get("profile_rng_seed"),
-                "profile_decision": entry.get("profile_decision"),
-                "capability_decision": capability_decision,
-                "eligible_capability_ids": capability_decision["eligible_capability_ids"],
-                "capability_rejection_reasons": capability_decision["rejection_reasons"],
-                "selected_capability_id": capability_decision["selected_capability_id"],
-                "selected_capability_version_id": capability_decision[
-                    "selected_capability_version_id"
-                ],
-                "capability_policy_version": capability_decision["policy_version"],
-                "capability_rng_seed": capability_decision["seed"],
-                "capability_assignment_probability": capability_decision["propensity"],
-                "capability_fallback": capability_decision["fallback"],
-                "capability_ids": (
-                    [capability_decision["selected_capability_id"]]
-                    if capability_decision["selected_capability_id"] else []
-                ),
-                "capability_version_ids": (
-                    [capability_decision["selected_capability_version_id"]]
-                    if capability_decision["selected_capability_version_id"] else []
-                ),
-            })
+            assignments.append(
+                {
+                    "agent": entry["agent"],
+                    "mode": entry["mode"],
+                    "target": tgt,
+                    "task_type": b["task_type"],
+                    "lane": b.get("lane"),
+                    "capacity_state": entry["state"],
+                    "capacity_policy": policy,
+                    "reason": f"{b['task_type']}→{entry['agent']}/{entry['mode']} ({capacity_tag})"
+                    f"{(' via ' + entry.get('exploration_mode', 'epsilon-greedy') + ' exploration') if entry.get('exploration') else ''}",
+                    "exploration": bool(entry.get("exploration")),
+                    "exploration_mode": entry.get("exploration_mode") or "",
+                    "selected_profile_id": entry.get("selected_profile_id"),
+                    "requested_model": entry.get("requested_model"),
+                    "reasoning_effort": entry.get("reasoning_effort"),
+                    "permission_mode": entry.get("permission_mode"),
+                    "transport": entry.get("transport"),
+                    "candidate_profile_ids": entry.get("candidate_profile_ids") or [],
+                    "profile_policy_version": entry.get("profile_policy_version"),
+                    "profile_assignment_probability": entry.get("profile_assignment_probability"),
+                    "profile_rng_seed": entry.get("profile_rng_seed"),
+                    "profile_decision": entry.get("profile_decision"),
+                    "capability_decision": capability_decision,
+                    "eligible_capability_ids": capability_decision["eligible_capability_ids"],
+                    "capability_rejection_reasons": capability_decision["rejection_reasons"],
+                    "selected_capability_id": capability_decision["selected_capability_id"],
+                    "selected_capability_version_id": capability_decision[
+                        "selected_capability_version_id"
+                    ],
+                    "capability_policy_version": capability_decision["policy_version"],
+                    "capability_rng_seed": capability_decision["seed"],
+                    "capability_assignment_probability": capability_decision["propensity"],
+                    "capability_fallback": capability_decision["fallback"],
+                    "capability_ids": (
+                        [capability_decision["selected_capability_id"]]
+                        if capability_decision["selected_capability_id"]
+                        else []
+                    ),
+                    "capability_version_ids": (
+                        [capability_decision["selected_capability_version_id"]]
+                        if capability_decision["selected_capability_version_id"]
+                        else []
+                    ),
+                }
+            )
 
     if cap_lanes == 0:
         notes.append("no non-shed coding capacity; nothing dispatched")
@@ -733,14 +856,14 @@ def plan(backlog: list[dict], cap: dict, *, max_concurrent: int = MAX_CONCURRENT
             capacity_rejections.append(row)
             rejections.append(row)
     else:
-        _assign(code_items, allow_warn=True)              # coding first
+        _assign(code_items, allow_warn=True)  # coding first
         if pressure:
             notes.append("scarce seat under pressure → review tasks dropped this tick")
         else:
-            _assign(review_items, allow_warn=False)       # review only on idle capacity
+            _assign(review_items, allow_warn=False)  # review only on idle capacity
 
     actionable = len(code_items) + (0 if pressure else len(review_items))
-    backoff_ticks = 1 if actionable == 0 else 0           # empty backlog → idle backoff hint
+    backoff_ticks = 1 if actionable == 0 else 0  # empty backlog → idle backoff hint
 
     return {
         "generated_at": int(time.time()),
@@ -793,10 +916,20 @@ def _selftest() -> None:
     # point claims at the same temp dir
     claims._handoff_dir = lambda: Path(tmp)  # type: ignore
     try:
+
         def cap(states: dict) -> dict:
             return {"agents": {a: {"state": s} for a, s in states.items()}}
 
-        all_ok = cap({"cursor": "ok", "vibe": "ok", "codex": "ok", "claude": "ok", "gemini": "ok", "aider": "ok"})
+        all_ok = cap(
+            {
+                "cursor": "ok",
+                "vibe": "ok",
+                "codex": "ok",
+                "claude": "ok",
+                "gemini": "ok",
+                "aider": "ok",
+            }
+        )
         bk = [
             {"target": "r/Repo#1", "task_type": "mechanical", "lane": "closer"},
             {"target": "r/Repo#2", "task_type": "implement", "lane": "opener"},
@@ -804,21 +937,41 @@ def _selftest() -> None:
         ]
         p = plan(bk, all_ok, dry_run=True)
         by_t = {a["target"]: a for a in p["assignments"]}
-        assert by_t["r/Repo#1"]["agent"] == "cursor", by_t["r/Repo#1"]   # mechanical → composer leads (cheap lane)
+        assert by_t["r/Repo#1"]["agent"] == "cursor", by_t[
+            "r/Repo#1"
+        ]  # mechanical → composer leads (cheap lane)
         assert by_t["r/Repo#1"]["mode"] == "composer"
-        assert by_t["r/Repo#2"]["agent"] == "claude", by_t["r/Repo#2"]   # implement → claude leads (hand-set prior)
-        assert by_t["r/Repo#3"]["task_type"] == "review"                 # review runs (no pressure)
+        assert by_t["r/Repo#2"]["agent"] == "claude", by_t[
+            "r/Repo#2"
+        ]  # implement → claude leads (hand-set prior)
+        assert by_t["r/Repo#3"]["task_type"] == "review"  # review runs (no pressure)
 
         # learned-weights wiring: a learned rank reorders WITHIN the capacity tier (feedback loop closing)
-        assert select_agent("implement", all_ok, learned={"cursor": 0, "claude": 1})["agent"] == "cursor", \
-            "learned weights should reorder cursor ahead of claude"
-        assert select_agent("implement", all_ok)["agent"] == "claude", "no learned data => hand-set prior unchanged"
-        assert select_agent("testgen", all_ok)["agent"] == "codex", "testgen lane should not default to claude"
-        assert select_agent("epic", all_ok)["agent"] == "gemini", "epic lane should default to Gemini/AGY, not Claude"
-        assert select_agent("cross_repo", all_ok)["agent"] == "gemini", "cross_repo lane should default to Gemini/AGY"
-        assert select_agent("runtime_ac", all_ok)["agent"] == "gemini", "runtime_ac lane should default to Gemini/AGY"
-        assert select_agent("codemod", all_ok)["agent"] == "cursor", "codemod lane should default to composer"
-        assert select_agent("codemod", all_ok)["mode"] == "composer", "codemod lane should use cursor composer"
+        assert (
+            select_agent("implement", all_ok, learned={"cursor": 0, "claude": 1})["agent"]
+            == "cursor"
+        ), "learned weights should reorder cursor ahead of claude"
+        assert (
+            select_agent("implement", all_ok)["agent"] == "claude"
+        ), "no learned data => hand-set prior unchanged"
+        assert (
+            select_agent("testgen", all_ok)["agent"] == "codex"
+        ), "testgen lane should not default to claude"
+        assert (
+            select_agent("epic", all_ok)["agent"] == "gemini"
+        ), "epic lane should default to Gemini/AGY, not Claude"
+        assert (
+            select_agent("cross_repo", all_ok)["agent"] == "gemini"
+        ), "cross_repo lane should default to Gemini/AGY"
+        assert (
+            select_agent("runtime_ac", all_ok)["agent"] == "gemini"
+        ), "runtime_ac lane should default to Gemini/AGY"
+        assert (
+            select_agent("codemod", all_ok)["agent"] == "cursor"
+        ), "codemod lane should default to composer"
+        assert (
+            select_agent("codemod", all_ok)["mode"] == "composer"
+        ), "codemod lane should use cursor composer"
         learned_meta = {
             "claude": {"rank": 0, "n_obs": 9},
             "codex": {"rank": 1, "n_obs": 0},
@@ -827,24 +980,42 @@ def _selftest() -> None:
             "vibe": {"rank": 4, "n_obs": 1},
             "aider": {"rank": 5, "n_obs": 0},
         }
-        explore = select_agent("implement", all_ok, learned=learned_meta,
-                               exploration_rate=1.0, rng=random.Random(7))
+        explore = select_agent(
+            "implement", all_ok, learned=learned_meta, exploration_rate=1.0, rng=random.Random(7)
+        )
         assert explore["exploration"] is True, explore
         assert explore["exploration_mode"] == "epsilon-greedy", explore
         assert explore["agent"] == "codex", explore
-        assert explore["agent"] != "aider", "exploration must not jump to a late/paygo tier while non-late is available"
-        epsilon_explore = select_agent("implement", all_ok, learned=learned_meta,
-                                       exploration_rate=1.0, exploration_mode="epsilon-greedy",
-                                       rng=random.Random(7))
-        assert epsilon_explore["agent"] == "codex" and epsilon_explore["exploration"] is True, epsilon_explore
+        assert (
+            explore["agent"] != "aider"
+        ), "exploration must not jump to a late/paygo tier while non-late is available"
+        epsilon_explore = select_agent(
+            "implement",
+            all_ok,
+            learned=learned_meta,
+            exploration_rate=1.0,
+            exploration_mode="epsilon-greedy",
+            rng=random.Random(7),
+        )
+        assert (
+            epsilon_explore["agent"] == "codex" and epsilon_explore["exploration"] is True
+        ), epsilon_explore
         assert epsilon_explore["exploration_mode"] == "epsilon-greedy", epsilon_explore
         assert _exploration_mode("thompson") == "thompson-hybrid"
         assert _exploration_mode("invalid") == "epsilon-greedy"
-        assert _learned_posterior_score({"edge": {"posterior": 1.0, "score": 1.0, "n_obs": 2}},
-                                        "edge", 0.5)[0] == 0.999
+        assert (
+            _learned_posterior_score(
+                {"edge": {"posterior": 1.0, "score": 1.0, "n_obs": 2}}, "edge", 0.5
+            )[0]
+            == 0.999
+        )
         edge_row = ((0, 0, 0, 0, 0), {"agent": "edge"}, "ok", 0)
-        edge_sample = _thompson_sample(edge_row, {"edge": {"posterior": 1.0, "score": 1.0, "n_obs": 2}},
-                                       random.Random(0), total_candidates=1)
+        edge_sample = _thompson_sample(
+            edge_row,
+            {"edge": {"posterior": 1.0, "score": 1.0, "n_obs": 2}},
+            random.Random(0),
+            total_candidates=1,
+        )
         assert edge_sample >= 0.0, edge_sample
         thompson_learned = {
             "claude": {"rank": 0, "n_obs": 20, "posterior": 0.80, "score": 0.80},
@@ -854,55 +1025,104 @@ def _selftest() -> None:
             "vibe": {"rank": 4, "n_obs": 1, "posterior": 0.30, "score": 0.30},
             "aider": {"rank": 5, "n_obs": 0, "posterior": 0.95, "score": 0.95},
         }
-        th = select_agent("implement", all_ok, learned=thompson_learned,
-                          exploration_rate=1.0, exploration_mode="thompson-hybrid",
-                          rng=random.Random(11))
+        th = select_agent(
+            "implement",
+            all_ok,
+            learned=thompson_learned,
+            exploration_rate=1.0,
+            exploration_mode="thompson-hybrid",
+            rng=random.Random(11),
+        )
         assert th["exploration"] is True and th["exploration_mode"] == "thompson-hybrid", th
         assert th["agent"] in {"codex", "gemini", "cursor", "vibe"}, th
-        assert th["agent"] != "aider", "Thompson hybrid must stay in the winner's non-late policy tier"
+        assert (
+            th["agent"] != "aider"
+        ), "Thompson hybrid must stay in the winner's non-late policy tier"
 
         # gate #2: select_remote_agent restricts to keepalive lanes AND reserves claude (weekly-cap scarce)
         all_keep = cap({"cursor": "ok", "codex": "ok", "claude": "ok", "gemini": "ok"})
-        assert select_remote_agent("testgen", all_keep)["agent"] == "codex", "remote testgen uses non-reserve lane"
-        assert select_remote_agent("epic", all_keep)["agent"] == "gemini", "remote epic uses Gemini/AGY, not Claude"
-        assert select_remote_agent("cross_repo", all_keep)["agent"] == "gemini", "remote cross_repo uses Gemini/AGY"
-        assert select_remote_agent("runtime_ac", all_keep)["agent"] == "gemini", "remote runtime_ac uses Gemini/AGY"
-        assert select_remote_agent("codemod", all_keep)["agent"] == "cursor", "remote codemod uses cheap cursor, not Claude"
+        assert (
+            select_remote_agent("testgen", all_keep)["agent"] == "codex"
+        ), "remote testgen uses non-reserve lane"
+        assert (
+            select_remote_agent("epic", all_keep)["agent"] == "gemini"
+        ), "remote epic uses Gemini/AGY, not Claude"
+        assert (
+            select_remote_agent("cross_repo", all_keep)["agent"] == "gemini"
+        ), "remote cross_repo uses Gemini/AGY"
+        assert (
+            select_remote_agent("runtime_ac", all_keep)["agent"] == "gemini"
+        ), "remote runtime_ac uses Gemini/AGY"
+        assert (
+            select_remote_agent("codemod", all_keep)["agent"] == "cursor"
+        ), "remote codemod uses cheap cursor, not Claude"
         rr = select_remote_agent("implement", all_keep)
-        assert rr["agent"] in (KEEPALIVE_AGENTS - RESERVE_AGENTS), rr     # routine: NOT claude
-        assert rr["agent"] == "codex", rr                                # codex leads the non-reserve implement pool
-        assert select_remote_agent("implement", all_keep, high_leverage=True)["agent"] == "claude", "high-leverage allows claude"
+        assert rr["agent"] in (KEEPALIVE_AGENTS - RESERVE_AGENTS), rr  # routine: NOT claude
+        assert rr["agent"] == "codex", rr  # codex leads the non-reserve implement pool
+        assert (
+            select_remote_agent("implement", all_keep, high_leverage=True)["agent"] == "claude"
+        ), "high-leverage allows claude"
         claude_only = cap({"claude": "ok", "cursor": "shed", "codex": "shed", "gemini": "shed"})
-        assert select_remote_agent("implement", claude_only)["agent"] == "claude", "last-resort: claude when nothing cheaper"
-        vibe_only = cap({"vibe": "ok", "cursor": "shed", "codex": "shed", "claude": "shed", "gemini": "shed"})
-        assert select_remote_agent("implement", vibe_only) is None, "vibe is local-only, not keepalive-runnable"
-        assert select_remote_agent("implement", all_keep, learned={"gemini": 0})["agent"] == "gemini", \
-            "learned weights reorder within the non-reserve pool"
+        assert (
+            select_remote_agent("implement", claude_only)["agent"] == "claude"
+        ), "last-resort: claude when nothing cheaper"
+        vibe_only = cap(
+            {"vibe": "ok", "cursor": "shed", "codex": "shed", "claude": "shed", "gemini": "shed"}
+        )
+        assert (
+            select_remote_agent("implement", vibe_only) is None
+        ), "vibe is local-only, not keepalive-runnable"
+        assert (
+            select_remote_agent("implement", all_keep, learned={"gemini": 0})["agent"] == "gemini"
+        ), "learned weights reorder within the non-reserve pool"
 
         # sequencing: claude shed → implement falls to codex
-        p2 = plan([bk[1]], cap({"claude": "shed", "codex": "ok", "cursor": "ok", "vibe": "ok"}), dry_run=True)
+        p2 = plan(
+            [bk[1]],
+            cap({"claude": "shed", "codex": "ok", "cursor": "ok", "vibe": "ok"}),
+            dry_run=True,
+        )
         assert p2["assignments"][0]["agent"] == "codex", p2["assignments"]
         profile_assignment = p2["assignments"][0]
         assert profile_assignment["selected_profile_id"] in execution_profiles.PROFILE_REGISTRY
         replayed = replay_profile_choice(profile_assignment)
-        assert replayed and replayed["selected_profile_id"] == profile_assignment["selected_profile_id"]
+        assert (
+            replayed
+            and replayed["selected_profile_id"] == profile_assignment["selected_profile_id"]
+        )
         assert replayed["rng_seed"] == profile_assignment["profile_rng_seed"]
         assert replayed["policy_version"] == profile_assignment["profile_policy_version"]
 
         # mechanical with composer+vibe shed → codex (cheap) BEFORE aider (paygo/late)
-        p3 = plan([bk[0]], cap({"cursor": "shed", "vibe": "shed", "codex": "ok", "aider": "ok"}), dry_run=True)
-        assert p3["assignments"][0]["agent"] == "codex" and p3["assignments"][0]["mode"] == "cheap", p3["assignments"]
+        p3 = plan(
+            [bk[0]],
+            cap({"cursor": "shed", "vibe": "shed", "codex": "ok", "aider": "ok"}),
+            dry_run=True,
+        )
+        assert (
+            p3["assignments"][0]["agent"] == "codex" and p3["assignments"][0]["mode"] == "cheap"
+        ), p3["assignments"]
 
         # backup-only (owner 2026-06-21): everything non-late shed → aider is NOT auto-selected; it is
         # held as explicit backup capacity, reachable only via `only={"aider"}`, never routine routing.
-        cap_all_shed = cap({"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed", "aider": "ok"})
+        cap_all_shed = cap(
+            {"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed", "aider": "ok"}
+        )
         p3b = plan([bk[0]], cap_all_shed, dry_run=True)
-        assert not p3b["assignments"], ("aider must not auto-fill as last resort", p3b["assignments"])
-        assert select_agent("mechanical", cap_all_shed, only={"aider"})["agent"] == "aider", \
-            "aider stays reachable as explicit backup capacity"
+        assert not p3b["assignments"], (
+            "aider must not auto-fill as last resort",
+            p3b["assignments"],
+        )
+        assert (
+            select_agent("mechanical", cap_all_shed, only={"aider"})["agent"] == "aider"
+        ), "aider stays reachable as explicit backup capacity"
 
         # priority: scarce seat (codex) warn → review dropped, code still runs
-        p4 = plan(bk, cap({"cursor": "ok", "vibe": "ok", "codex": "warn", "claude": "ok", "aider": "ok"}), dry_run=True)
+        p4 = plan(
+            bk,
+            cap({"cursor": "ok", "vibe": "ok", "codex": "warn", "claude": "ok", "aider": "ok"}),
+            dry_run=True,
+        )
         assert p4["pressure"] is True
         assert all(a["task_type"] != "review" for a in p4["assignments"]), p4["assignments"]
         assert any(a["task_type"] == "mechanical" for a in p4["assignments"])
@@ -910,30 +1130,49 @@ def _selftest() -> None:
         # review never pushes a NON-scarce agent into warn: composer(cursor)=warn is skipped
         # (allow_warn=False); vibe shed; codex/claude idle (no pressure) → review falls to codex.
         # (codex=warn here would instead trigger the pressure rule and drop review — covered by p4.)
-        p4b = plan([bk[2]], cap({"cursor": "warn", "vibe": "shed", "codex": "ok", "claude": "ok"}), dry_run=True)
+        p4b = plan(
+            [bk[2]],
+            cap({"cursor": "warn", "vibe": "shed", "codex": "ok", "claude": "ok"}),
+            dry_run=True,
+        )
         assert p4b["assignments"] and p4b["assignments"][0]["agent"] == "codex", p4b["assignments"]
 
         # load-spread: 4 implement tasks must FAN OUT across ranked agents, not dogpile
         # claude (the integration-test bug). With all ok: claude, codex, gemini, cursor/vibe.
-        four_impl = [{"target": f"i/Repo#{i}", "task_type": "implement", "lane": "opener"} for i in range(4)]
+        four_impl = [
+            {"target": f"i/Repo#{i}", "task_type": "implement", "lane": "opener"} for i in range(4)
+        ]
         ps = plan(four_impl, all_ok, dry_run=True)
         agents_used = [a["agent"] for a in ps["assignments"]]
-        assert len(set(agents_used)) == 4, f"4 implement tasks must spread to 4 agents, got {agents_used}"
-        assert agents_used[0] == "claude", agents_used   # highest-priority task still gets the best agent (hand-set prior)
+        assert (
+            len(set(agents_used)) == 4
+        ), f"4 implement tasks must spread to 4 agents, got {agents_used}"
+        assert (
+            agents_used[0] == "claude"
+        ), agents_used  # highest-priority task still gets the best agent (hand-set prior)
         # cap also prevents dogpiling: 2 implement tasks but only claude up -> lane_cap=1, so
         # ONE runs this tick (claude), the other waits — no two concurrent claude rounds.
-        ps2 = plan(four_impl[:2], cap({"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed", "aider": "shed"}), dry_run=True)
-        assert [a["agent"] for a in ps2["assignments"]] == ["claude"] and ps2["lane_cap"] == 1, ps2["assignments"]
+        ps2 = plan(
+            four_impl[:2],
+            cap(
+                {"claude": "ok", "codex": "shed", "cursor": "shed", "vibe": "shed", "aider": "shed"}
+            ),
+            dry_run=True,
+        )
+        assert [a["agent"] for a in ps2["assignments"]] == ["claude"] and ps2["lane_cap"] == 1, ps2[
+            "assignments"
+        ]
 
         # concurrency: real claims prevent double-assigning an in-flight target
         claims.claim("r/Repo#1", "someone")
         p5 = plan(bk, all_ok, dry_run=False)
-        assert all(a["target"] != "r/Repo#1" for a in p5["assignments"]), "claimed target must be skipped"
+        assert all(
+            a["target"] != "r/Repo#1" for a in p5["assignments"]
+        ), "claimed target must be skipped"
         assert any(a["target"] == "r/Repo#2" for a in p5["assignments"])
         assert p5["claimed_by"]["r/Repo#1"] == "someone", p5
         assert any(
-            row["target"] == "r/Repo#1" and row["reason"] == "claimed"
-            for row in p5["rejections"]
+            row["target"] == "r/Repo#1" and row["reason"] == "claimed" for row in p5["rejections"]
         ), p5
 
         duplicate_item = {
@@ -952,80 +1191,168 @@ def _selftest() -> None:
         ], duplicate
 
         # lane cap bounds concurrency
-        many = [{"target": f"r/Repo#{i}", "task_type": "mechanical", "lane": "closer"} for i in range(20)]
+        many = [
+            {"target": f"r/Repo#{i}", "task_type": "mechanical", "lane": "closer"}
+            for i in range(20)
+        ]
         claims.reap_stale()
         for t in list(claims.active_claims()):
             claims.release(t)
         p6 = plan(many, all_ok, max_concurrent=3, dry_run=False)
-        assert len(p6["assignments"]) == 3, f"lane cap should bound to 3, got {len(p6['assignments'])}"
+        assert (
+            len(p6["assignments"]) == 3
+        ), f"lane cap should bound to 3, got {len(p6['assignments'])}"
 
         # gemini (Antigravity) is routable when ok; existing tests leave it unset (=>unknown=>skipped),
         # so it only participates when capacity explicitly says ok — here it's the only one available.
-        gem = cap({"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed", "gemini": "ok", "aider": "shed"})
-        pg = plan([{"target": "g/r#1", "task_type": "implement", "lane": "opener"}], gem, dry_run=True)
+        gem = cap(
+            {
+                "cursor": "shed",
+                "vibe": "shed",
+                "codex": "shed",
+                "claude": "shed",
+                "gemini": "ok",
+                "aider": "shed",
+            }
+        )
+        pg = plan(
+            [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}], gem, dry_run=True
+        )
         assert pg["assignments"] and pg["assignments"][0]["agent"] == "gemini", pg["assignments"]
 
         # Gemini Policy routing tests
         # 1. Promotion during drain: gemini is chosen ahead of claude/codex
-        cap_drain = {"agents": {
-            "claude": {"state": "ok"}, "codex": {"state": "ok"},
-            "gemini": {"state": "ok", "policy": "drain"},
-            "cursor": {"state": "ok"}, "vibe": {"state": "ok"}, "aider": {"state": "ok"}
-        }}
-        pg_prom = plan([{"target": "g/r#1", "task_type": "implement", "lane": "opener"}], cap_drain, dry_run=True)
-        assert pg_prom["assignments"] and pg_prom["assignments"][0]["agent"] == "gemini", pg_prom["assignments"]
+        cap_drain = {
+            "agents": {
+                "claude": {"state": "ok"},
+                "codex": {"state": "ok"},
+                "gemini": {"state": "ok", "policy": "drain"},
+                "cursor": {"state": "ok"},
+                "vibe": {"state": "ok"},
+                "aider": {"state": "ok"},
+            }
+        }
+        pg_prom = plan(
+            [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}],
+            cap_drain,
+            dry_run=True,
+        )
+        assert pg_prom["assignments"] and pg_prom["assignments"][0]["agent"] == "gemini", pg_prom[
+            "assignments"
+        ]
         assert pg_prom["assignments"][0]["capacity_policy"] == "drain", pg_prom["assignments"][0]
-        assert select_agent("testgen", cap_drain)["agent"] == "gemini", "drain should spend AGY on good-fit testgen"
-        assert select_agent("review", cap_drain)["agent"] == "gemini", "drain should spend AGY on reasoning review"
+        assert (
+            select_agent("testgen", cap_drain)["agent"] == "gemini"
+        ), "drain should spend AGY on good-fit testgen"
+        assert (
+            select_agent("review", cap_drain)["agent"] == "gemini"
+        ), "drain should spend AGY on reasoning review"
 
         # 2. Demotion during reserve: gemini is deferred behind non-late agents
-        cap_reserve = {"agents": {
-            "claude": {"state": "shed"}, "codex": {"state": "shed"},
-            "gemini": {"state": "ok", "policy": "reserve"},
-            "cursor": {"state": "ok"}, "vibe": {"state": "ok"}, "aider": {"state": "ok"}
-        }}
-        pg_dem = plan([{"target": "g/r#1", "task_type": "implement", "lane": "opener"}], cap_reserve, dry_run=True)
-        assert pg_dem["assignments"] and pg_dem["assignments"][0]["agent"] in ("cursor", "vibe"), pg_dem["assignments"]
+        cap_reserve = {
+            "agents": {
+                "claude": {"state": "shed"},
+                "codex": {"state": "shed"},
+                "gemini": {"state": "ok", "policy": "reserve"},
+                "cursor": {"state": "ok"},
+                "vibe": {"state": "ok"},
+                "aider": {"state": "ok"},
+            }
+        }
+        pg_dem = plan(
+            [{"target": "g/r#1", "task_type": "implement", "lane": "opener"}],
+            cap_reserve,
+            dry_run=True,
+        )
+        assert pg_dem["assignments"] and pg_dem["assignments"][0]["agent"] in (
+            "cursor",
+            "vibe",
+        ), pg_dem["assignments"]
 
         # 3. Reserve remains a fallback before paygo/late capacity for good-fit work.
-        cap_reserve_late = {"agents": {
-            "claude": {"state": "shed"}, "codex": {"state": "shed"},
-            "gemini": {"state": "ok", "policy": "reserve"},
-            "cursor": {"state": "ok"}, "vibe": {"state": "shed"}, "aider": {"state": "ok"}
-        }}
+        cap_reserve_late = {
+            "agents": {
+                "claude": {"state": "shed"},
+                "codex": {"state": "shed"},
+                "gemini": {"state": "ok", "policy": "reserve"},
+                "cursor": {"state": "ok"},
+                "vibe": {"state": "shed"},
+                "aider": {"state": "ok"},
+            }
+        }
         pick_last = select_agent("implement", cap_reserve_late, load={"cursor": 1})
-        assert pick_last["agent"] == "gemini" and pick_last["capacity_policy"] == "reserve", pick_last
+        assert (
+            pick_last["agent"] == "gemini" and pick_last["capacity_policy"] == "reserve"
+        ), pick_last
 
         # empty backlog → backoff hint, no assignments
         p7 = plan([], all_ok, dry_run=True)
         assert p7["assignments"] == [] and p7["backoff_ticks"] == 1, p7
 
         # all shed → nothing dispatched
-        p8 = plan(bk, cap({"cursor": "shed", "vibe": "shed", "codex": "shed", "claude": "shed", "aider": "shed"}), dry_run=True)
+        p8 = plan(
+            bk,
+            cap(
+                {
+                    "cursor": "shed",
+                    "vibe": "shed",
+                    "codex": "shed",
+                    "claude": "shed",
+                    "aider": "shed",
+                }
+            ),
+            dry_run=True,
+        )
         assert p8["assignments"] == [] and p8["lane_cap"] == 0, p8
         assert p8["selected_count"] == len(bk) and p8["assigned_count"] == 0, p8
 
         # 16(e) continuous drain urgency: unused expiring quota near refresh reads as cheaper;
         # fresh windows and field-less (flat) seats contribute 0 — ranking unchanged for them.
-        urgent = {"agents": {"gemini": {"state": "ok", "soft_units_5h": 8.0,
-                                        "estimated_units_5h": 0.0,
-                                        "minutes_to_window_refresh": 30}}}
-        fresh = {"agents": {"gemini": {"state": "ok", "soft_units_5h": 8.0,
-                                       "estimated_units_5h": 0.0,
-                                       "minutes_to_window_refresh": 290}}}
-        spent = {"agents": {"gemini": {"state": "ok", "soft_units_5h": 8.0,
-                                       "estimated_units_5h": 8.0,
-                                       "minutes_to_window_refresh": 30}}}
+        urgent = {
+            "agents": {
+                "gemini": {
+                    "state": "ok",
+                    "soft_units_5h": 8.0,
+                    "estimated_units_5h": 0.0,
+                    "minutes_to_window_refresh": 30,
+                }
+            }
+        }
+        fresh = {
+            "agents": {
+                "gemini": {
+                    "state": "ok",
+                    "soft_units_5h": 8.0,
+                    "estimated_units_5h": 0.0,
+                    "minutes_to_window_refresh": 290,
+                }
+            }
+        }
+        spent = {
+            "agents": {
+                "gemini": {
+                    "state": "ok",
+                    "soft_units_5h": 8.0,
+                    "estimated_units_5h": 8.0,
+                    "minutes_to_window_refresh": 30,
+                }
+            }
+        }
         assert _drain_urgency("gemini", urgent) < _drain_urgency("gemini", fresh) <= 0, (
-            _drain_urgency("gemini", urgent), _drain_urgency("gemini", fresh))
+            _drain_urgency("gemini", urgent),
+            _drain_urgency("gemini", fresh),
+        )
         assert _drain_urgency("gemini", spent) == 0.0
         assert _drain_urgency("cursor", urgent) == 0.0, "field-less seats unaffected"
 
-        print("router.py selftest: OK (route-table prior, capacity sequencing, code>review "
-              "priority, ε/Thompson-hybrid exploration, only-if-idle review, claims-gated concurrency, "
-              "lane cap, idle backoff)")
+        print(
+            "router.py selftest: OK (route-table prior, capacity sequencing, code>review "
+            "priority, ε/Thompson-hybrid exploration, only-if-idle review, claims-gated concurrency, "
+            "lane cap, idle backoff)"
+        )
     finally:
         import shutil
+
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("HANDOFF_DIR", None)
         if old_exploration_rate is None:
@@ -1049,7 +1376,9 @@ def main(argv: list[str]) -> int:
         mx = int(os.environ.get("ORCH_MAX_CONCURRENT", "") or MAX_CONCURRENT_DEFAULT)
     except ValueError:
         mx = MAX_CONCURRENT_DEFAULT
-    decision = plan(backlog, cap, max_concurrent=mx, dry_run=dry, learned=learned_ranks())  # learning reorders within tiers; ORCH_MAX_CONCURRENT=1 throttles the first supervised tick
+    decision = plan(
+        backlog, cap, max_concurrent=mx, dry_run=dry, learned=learned_ranks()
+    )  # learning reorders within tiers; ORCH_MAX_CONCURRENT=1 throttles the first supervised tick
     if dry:
         print(json.dumps(decision, indent=2))
     else:

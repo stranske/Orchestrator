@@ -12,6 +12,7 @@ answer_owner_question (feeds the 16h decision loop), record_owner_question, and 
 claims, no config mutation through this door; steering that mutates the fleet stays with the CLIs.
 `--selftest` drives the server as a subprocess through a real initialize/tools/list/tools/call
 round-trip."""
+
 from __future__ import annotations
 
 import json
@@ -29,6 +30,7 @@ HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")
 STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
 PROTOCOL_VERSION = "2025-06-18"
 
+
 def _decline_kinds() -> list[str]:
     """The decline vocabulary, read from its owner so the MCP enum cannot drift from it.
 
@@ -38,8 +40,9 @@ def _decline_kinds() -> list[str]:
     """
     try:
         import capability_propensity
+
         return sorted(capability_propensity.DECLINE_KINDS)
-    except Exception:                                                      # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return []
 
 
@@ -76,30 +79,38 @@ TOOLS = [
             "properties": {
                 "task": {"type": "string", "description": "the task in plain words"},
                 "repository": {"type": "string"},
-                "skill": {"type": "string",
-                          "description": "skill that surfaced this work, if any; recorded so the "
-                                         "skill->capability association is learned over time"},
-                "surface": {"type": "string",
-                            "description": "the skill or automation asking, optionally with a phase "
-                                           "(e.g. 'repo-audit:phase-3'). Selects that surface's "
-                                           "DECLARED capability binding — a small named set that "
-                                           "answers even when the task wording does not classify. "
-                                           "A long multi-phase process should pass its phase, "
-                                           "because the capabilities that apply differ per phase."},
-                "repo_path": {"type": "string",
-                              "description": "an absolute path to a checkout of `repository`, if "
-                                             "you have one. Lets a capability's declared repo-fact "
-                                             "precondition actually be EVALUATED — e.g. whether "
-                                             "this repository has an observable surface at all, "
-                                             "which is what frontend-verifier requires. Without it "
-                                             "the answer says the precondition was NOT EVALUATED "
-                                             "and names this field as the missing input; it never "
-                                             "guesses, and a failed precondition never withholds "
-                                             "or reorders the offer."},
-                "previous": {"type": "object",
-                             "description": "the prior capability_advice result; when supplied, the "
-                                            "response adds reask{} saying whether the work has "
-                                            "changed enough to be worth re-consulting"},
+                "skill": {
+                    "type": "string",
+                    "description": "skill that surfaced this work, if any; recorded so the "
+                    "skill->capability association is learned over time",
+                },
+                "surface": {
+                    "type": "string",
+                    "description": "the skill or automation asking, optionally with a phase "
+                    "(e.g. 'repo-audit:phase-3'). Selects that surface's "
+                    "DECLARED capability binding — a small named set that "
+                    "answers even when the task wording does not classify. "
+                    "A long multi-phase process should pass its phase, "
+                    "because the capabilities that apply differ per phase.",
+                },
+                "repo_path": {
+                    "type": "string",
+                    "description": "an absolute path to a checkout of `repository`, if "
+                    "you have one. Lets a capability's declared repo-fact "
+                    "precondition actually be EVALUATED — e.g. whether "
+                    "this repository has an observable surface at all, "
+                    "which is what frontend-verifier requires. Without it "
+                    "the answer says the precondition was NOT EVALUATED "
+                    "and names this field as the missing input; it never "
+                    "guesses, and a failed precondition never withholds "
+                    "or reorders the offer.",
+                },
+                "previous": {
+                    "type": "object",
+                    "description": "the prior capability_advice result; when supplied, the "
+                    "response adds reask{} saying whether the work has "
+                    "changed enough to be worth re-consulting",
+                },
             },
             "required": ["task"],
         },
@@ -117,31 +128,41 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "capability_id": {"type": "string",
-                                  "description": "the offered capability you are turning down"},
-                "experiment_id": {"type": "string",
-                                  "description": "the `experiment_id` from the capability_advice "
-                                                 "response (an 'advice:<digest>' string)"},
-                "reason": {"type": "string",
-                           "description": "why this capability was the wrong tool for THIS work. "
-                                          "Refused when blank — an unexplained decline is "
-                                          "indistinguishable from inattention"},
-                "surface": {"type": "string",
-                            "description": "the surface declining, matching the one you passed to "
-                                           "capability_advice (e.g. 'repo-audit:phase-2'). Optional, "
-                                           "but a decline without it cannot feed demotion"},
-                "kind": {"type": "string",
-                         "enum": sorted(_decline_kinds()),
-                         "description": "WHICH KIND of decline, because the kinds imply opposite "
-                                        "fixes. wrong_match = it does not fit this work (the "
-                                        "binding is wrong). scope_too_small = a correct match "
-                                        "declared too broadly. no_landing_zone = a CORRECT match "
-                                        "the deliverable shape made impossible (e.g. a test "
-                                        "generator in a read-only audit) — this never counts "
-                                        "against the capability. gated_off = held behind a "
-                                        "deliberate switch or shadow status. deferred = wanted, "
-                                        "not affordable. Omitted means 'unspecified', which is "
-                                        "recorded and can never demote a binding."},
+                "capability_id": {
+                    "type": "string",
+                    "description": "the offered capability you are turning down",
+                },
+                "experiment_id": {
+                    "type": "string",
+                    "description": "the `experiment_id` from the capability_advice "
+                    "response (an 'advice:<digest>' string)",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "why this capability was the wrong tool for THIS work. "
+                    "Refused when blank — an unexplained decline is "
+                    "indistinguishable from inattention",
+                },
+                "surface": {
+                    "type": "string",
+                    "description": "the surface declining, matching the one you passed to "
+                    "capability_advice (e.g. 'repo-audit:phase-2'). Optional, "
+                    "but a decline without it cannot feed demotion",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": sorted(_decline_kinds()),
+                    "description": "WHICH KIND of decline, because the kinds imply opposite "
+                    "fixes. wrong_match = it does not fit this work (the "
+                    "binding is wrong). scope_too_small = a correct match "
+                    "declared too broadly. no_landing_zone = a CORRECT match "
+                    "the deliverable shape made impossible (e.g. a test "
+                    "generator in a read-only audit) — this never counts "
+                    "against the capability. gated_off = held behind a "
+                    "deliberate switch or shadow status. deferred = wanted, "
+                    "not affordable. Omitted means 'unspecified', which is "
+                    "recorded and can never demote a binding.",
+                },
             },
             "required": ["capability_id", "experiment_id", "reason"],
         },
@@ -210,12 +231,24 @@ def _fleet_summary() -> dict:
     with feedback._conn() as c:
         volumes = {
             table: c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("runs", "outcomes", "costs", "evaluations",
-                          "human_calibration", "owner_questions", "resume_tokens")
+            for table in (
+                "runs",
+                "outcomes",
+                "costs",
+                "evaluations",
+                "human_calibration",
+                "owner_questions",
+                "resume_tokens",
+            )
         }
     stamps = {}
-    for stamp in ("last-relearn", "last-periodic-report", "last-range-rollout",
-                  "last-ship-gate", "last-ledger-reconcile"):
+    for stamp in (
+        "last-relearn",
+        "last-periodic-report",
+        "last-range-rollout",
+        "last-ship-gate",
+        "last-ledger-reconcile",
+    ):
         p = STATE_DIR / f".{stamp}"
         stamps[stamp] = int(p.stat().st_mtime) if p.exists() else None
     return {
@@ -231,11 +264,14 @@ def _call_tool(name: str, args: dict):
     if name == "fleet_summary":
         return _fleet_summary()
     if name == "route_weights":
-        return {"task_type": args["task_type"],
-                "weights": feedback.current_weights(str(args["task_type"]))}
+        return {
+            "task_type": args["task_type"],
+            "weights": feedback.current_weights(str(args["task_type"])),
+        }
     if name == "capability_advice":
         # Imported lazily so a capability-registry problem can never take down capacity/fleet reads.
         import capability_advisor
+
         result = capability_advisor.advise(
             str(args["task"]),
             repository=str(args.get("repository") or ""),
@@ -250,38 +286,49 @@ def _call_tool(name: str, args: dict):
         previous = args.get("previous")
         if isinstance(previous, dict):
             # Answers "was this worth re-asking?" so a caller can stay quiet when nothing changed.
-            result["reask"] = capability_advisor.should_reask(previous, {
-                "task": str(args["task"]),
-                "repository": str(args.get("repository") or ""),
-                "skill": str(args.get("skill") or ""),
-                "surface": str(args.get("surface") or ""),
-                "capabilities_ready": result.get("dispatch_ready_count") or 0,
-            })
+            result["reask"] = capability_advisor.should_reask(
+                previous,
+                {
+                    "task": str(args["task"]),
+                    "repository": str(args.get("repository") or ""),
+                    "skill": str(args.get("skill") or ""),
+                    "surface": str(args.get("surface") or ""),
+                    "capabilities_ready": result.get("dispatch_ready_count") or 0,
+                },
+            )
         return result
     if name == "capability_decline":
         import capability_propensity
+
         recorded = capability_propensity.record_decline(
-            str(args["capability_id"]), str(args["experiment_id"]),
+            str(args["capability_id"]),
+            str(args["experiment_id"]),
             reason=str(args.get("reason") or ""),
             surface=str(args.get("surface") or ""),
             kind=str(args.get("kind") or capability_propensity.DECLINE_KIND_DEFAULT),
         )
         kind = str(args.get("kind") or capability_propensity.DECLINE_KIND_DEFAULT)
-        return {"recorded": bool(recorded), "capability_id": str(args["capability_id"]),
-                "experiment_id": str(args["experiment_id"]),
-                "surface": str(args.get("surface") or "") or None,
-                # SAY WHAT IT DID NOT DO, in the response. A caller that believes it just scored the
-                # capability has been misinformed by a successful call.
-                "affects_propensity": False,
-                "attributable_to_surface": bool(args.get("surface")),
-                "kind": kind,
-                "can_demote_the_binding": capability_propensity.decline_kind_demotable(kind),
-                "kind_implies_fix": capability_propensity.DECLINE_KINDS[kind]["fix"],
-                "note": ("recorded as a reasoned rejection; the usefulness posterior is untouched "
-                         "because the capability never ran"),
-                "already_recorded": not recorded}
+        return {
+            "recorded": bool(recorded),
+            "capability_id": str(args["capability_id"]),
+            "experiment_id": str(args["experiment_id"]),
+            "surface": str(args.get("surface") or "") or None,
+            # SAY WHAT IT DID NOT DO, in the response. A caller that believes it just scored the
+            # capability has been misinformed by a successful call.
+            "affects_propensity": False,
+            "attributable_to_surface": bool(args.get("surface")),
+            "kind": kind,
+            "can_demote_the_binding": capability_propensity.decline_kind_demotable(kind),
+            "kind_implies_fix": capability_propensity.DECLINE_KINDS[kind]["fix"],
+            "note": (
+                "recorded as a reasoned rejection; the usefulness posterior is untouched "
+                "because the capability never ran"
+            ),
+            "already_recorded": not recorded,
+        }
     if name == "capability_associations":
         import capability_advisor
+
         return capability_advisor.learned_associations()
     if name == "owner_questions":
         feedback.expire_owner_questions()
@@ -291,8 +338,10 @@ def _call_tool(name: str, args: dict):
         return {"answered": ok}
     if name == "record_owner_question":
         return feedback.record_owner_question(
-            str(args["question"]), str(args["default"]),
-            repo=args.get("repo"), expires_days=float(args.get("expires_days") or 7),
+            str(args["question"]),
+            str(args["default"]),
+            repo=args.get("repo"),
+            expires_days=float(args.get("expires_days") or 7),
         )
     if name == "resume_hint":
         hint = feedback.resume_hint(str(args["run_id"]))
@@ -305,11 +354,15 @@ def _handle(msg: dict):
     msg_id = msg.get("id")
     if method == "initialize":
         client_version = (msg.get("params") or {}).get("protocolVersion") or PROTOCOL_VERSION
-        return {"jsonrpc": "2.0", "id": msg_id, "result": {
-            "protocolVersion": client_version,
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "orchestrator", "version": "1.0.0"},
-        }}
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": client_version,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "orchestrator", "version": "1.0.0"},
+            },
+        }
     if method == "notifications/initialized":
         return None
     if method == "tools/list":
@@ -318,18 +371,32 @@ def _handle(msg: dict):
         params = msg.get("params") or {}
         try:
             result = _call_tool(params.get("name") or "", params.get("arguments") or {})
-            return {"jsonrpc": "2.0", "id": msg_id, "result": {
-                "content": [{"type": "text", "text": json.dumps(result, indent=2, default=str)}],
-            }}
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [
+                        {"type": "text", "text": json.dumps(result, indent=2, default=str)}
+                    ],
+                },
+            }
         except Exception as exc:
-            return {"jsonrpc": "2.0", "id": msg_id, "result": {
-                "content": [{"type": "text", "text": f"error: {exc}"}], "isError": True,
-            }}
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [{"type": "text", "text": f"error: {exc}"}],
+                    "isError": True,
+                },
+            }
     if method == "ping":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
     if msg_id is not None:
-        return {"jsonrpc": "2.0", "id": msg_id,
-                "error": {"code": -32601, "message": f"method not found: {method}"}}
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": -32601, "message": f"method not found: {method}"},
+        }
     return None
 
 
@@ -365,12 +432,14 @@ def _selftest_advice_schema_matches_advise() -> None:
     sig = inspect.signature(capability_advisor.advise)
     # Caller-settable = keyword-only, minus the internals a remote caller must never drive.
     internal = {"record", "path", "lane", "context"}
-    callable_kw = {n for n, prm in sig.parameters.items()
-                   if prm.kind is prm.KEYWORD_ONLY and n not in internal}
+    callable_kw = {
+        n for n, prm in sig.parameters.items() if prm.kind is prm.KEYWORD_ONLY and n not in internal
+    }
     missing = sorted(callable_kw - advertised)
     assert not missing, (
         f"capability_advice does not advertise {missing}, so a caller setting them is silently "
-        f"ignored. Add them to the inputSchema AND pass them through in _call_tool.")
+        f"ignored. Add them to the inputSchema AND pass them through in _call_tool."
+    )
 
     # ADVERTISED IS NOT FORWARDED, read off the AST of the handler's own `advise(...)` call. The
     # spot-check below covers `surface`; this covers EVERY caller-settable field at once, so the next
@@ -380,25 +449,30 @@ def _selftest_advice_schema_matches_advise() -> None:
     unforwarded = sorted((callable_kw | {"task"}) - forwarded)
     assert not unforwarded, (
         f"capability_advice advertises {unforwarded} and never passes them to advise(); the request "
-        f"succeeds and the field vanishes, which is exactly the failure this selftest exists for.")
+        f"succeeds and the field vanishes, which is exactly the failure this selftest exists for."
+    )
 
     # ...and advertised is not enough: it must actually be FORWARDED. Assert the FORWARDING, never
     # which capabilities come back -- `advise()` only returns bound capabilities that exist in the
     # ledger, and the ledger is machine-local (43 rows on the owner's machine, 14 on a clean runner).
     # The first version of this asserted `adversarial-review` was returned, passed locally and went
     # red on CI: a machine-local assertion inside the guard written to stop a different recurrence.
-    got = _call_tool("capability_advice", {"task": "xyzzy plugh frobnicate",
-                                           "surface": "repo-audit:phase-3"})
+    got = _call_tool(
+        "capability_advice", {"task": "xyzzy plugh frobnicate", "surface": "repo-audit:phase-3"}
+    )
     assert got.get("surface") == "repo-audit:phase-3", got.get("surface")
     assert "bound_capabilities" in got, "the tool must report which capabilities were bound"
     # A phase declared NO_BINDING must come back empty through the tool. This one is ledger-
     # independent in the safe direction: suppression yields {} regardless of what is registered.
-    empty = _call_tool("capability_advice", {"task": "xyzzy plugh frobnicate",
-                                            "surface": "repo-audit:phase-1"})
+    empty = _call_tool(
+        "capability_advice", {"task": "xyzzy plugh frobnicate", "surface": "repo-audit:phase-1"}
+    )
     assert (empty.get("bound_capabilities") or []) == [], empty
     assert empty.get("surface") == "repo-audit:phase-1", empty.get("surface")
-    print("mcp_server advice-schema selftest: OK (every caller-settable advise() field is advertised "
-          "and forwarded)")
+    print(
+        "mcp_server advice-schema selftest: OK (every caller-settable advise() field is advertised "
+        "and forwarded)"
+    )
 
 
 def _forwarded_args(handler, callee: str) -> set[str]:
@@ -410,13 +484,18 @@ def _forwarded_args(handler, callee: str) -> set[str]:
     """
     import ast
     import inspect as _inspect
+
     tree = ast.parse(_inspect.getsource(handler))
     keys: set[str] = set()
 
     def _subscript_key(node) -> str | None:
         for sub in ast.walk(node):
-            if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name) \
-                    and sub.value.id == "args" and isinstance(sub.slice, ast.Constant):
+            if (
+                isinstance(sub, ast.Subscript)
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id == "args"
+                and isinstance(sub.slice, ast.Constant)
+            ):
                 return str(sub.slice.value)
         return None
 
@@ -458,15 +537,21 @@ def _selftest_decline_schema_matches_record_decline() -> None:
     advertised = set(tool["inputSchema"]["properties"])
     sig = inspect.signature(capability_propensity.record_decline)
     internal = {"path", "metadata"}
-    callable_kw = {n for n, prm in sig.parameters.items()
-                   if prm.kind is prm.KEYWORD_ONLY and n not in internal}
+    callable_kw = {
+        n for n, prm in sig.parameters.items() if prm.kind is prm.KEYWORD_ONLY and n not in internal
+    }
     missing = sorted(callable_kw - advertised)
     assert not missing, (
         f"capability_decline does not advertise {missing}, so a caller setting them is silently "
-        f"ignored. Add them to the inputSchema AND pass them through in _call_tool.")
+        f"ignored. Add them to the inputSchema AND pass them through in _call_tool."
+    )
     # The positional arguments must be reachable too, under the names the tool advertises.
     assert {"capability_id", "experiment_id"} <= advertised, sorted(advertised)
-    assert set(tool["inputSchema"]["required"]) == {"capability_id", "experiment_id", "reason"}, tool
+    assert set(tool["inputSchema"]["required"]) == {
+        "capability_id",
+        "experiment_id",
+        "reason",
+    }, tool
 
     # ADVERTISED IS NOT FORWARDED. `surface` is the dangerous one: dropping it still returns a
     # SUCCESSFUL call that writes a weaker decline, so no refusal probe can see the loss. Assert it
@@ -479,30 +564,39 @@ def _selftest_decline_schema_matches_record_decline() -> None:
     forwarded = _forwarded_args(_call_tool, "record_decline")
     assert forwarded == advertised, (
         f"capability_decline advertises {sorted(advertised)} and forwards {sorted(forwarded)} to "
-        f"record_decline; the difference is silently dropped and the call still succeeds")
+        f"record_decline; the difference is silently dropped and the call still succeeds"
+    )
 
     def _fails(args) -> str:
         try:
             _call_tool("capability_decline", args)
-        except Exception as exc:                                       # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             return str(exc)
         raise AssertionError(f"capability_decline accepted {args!r}")
 
     # `reason` is forwarded: blank reaches record_decline's own refusal, which names the reason.
     assert "requires a reason" in _fails(
-        {"capability_id": "x", "experiment_id": "advice:abc", "reason": "   "})
+        {"capability_id": "x", "experiment_id": "advice:abc", "reason": "   "}
+    )
     # `experiment_id` is forwarded: a non-advisory id reaches the prefix check.
     assert "advice:" in _fails(
-        {"capability_id": "x", "experiment_id": "not-an-advice-ref", "reason": "why"})
+        {"capability_id": "x", "experiment_id": "not-an-advice-ref", "reason": "why"}
+    )
     # `capability_id` is forwarded: an id no ledger can hold reaches the ledger's own guard. This
     # deliberately does NOT assert which capabilities exist -- the ledger is machine-local (43 rows
     # on the owner's machine, 14 on a clean runner) and asserting its contents inside a guard about
     # schema agreement is the exact cross-machine mistake the sibling selftest documents.
     assert "unknown capability" in _fails(
-        {"capability_id": "__mcp-selftest-absent-capability__",
-         "experiment_id": "advice:0000000000ff", "reason": "probe, writes nothing"})
-    print("mcp_server decline-schema selftest: OK (every caller-settable record_decline field is "
-          "advertised AND read by the handler; every probe is a refusal, so nothing was written)")
+        {
+            "capability_id": "__mcp-selftest-absent-capability__",
+            "experiment_id": "advice:0000000000ff",
+            "reason": "probe, writes nothing",
+        }
+    )
+    print(
+        "mcp_server decline-schema selftest: OK (every caller-settable record_decline field is "
+        "advertised AND read by the handler; every probe is a refusal, so nothing was written)"
+    )
 
 
 def _selftest() -> None:
@@ -510,38 +604,74 @@ def _selftest() -> None:
     import tempfile
 
     tmp = Path(tempfile.mkdtemp(prefix="mcp-selftest-"))
-    env = dict(os.environ, ORCH_FEEDBACK_DB=str(tmp / "t.db"),
-               HANDOFF_DIR=str(tmp), ORCH_STATE_DIR=str(tmp))
+    env = dict(
+        os.environ,
+        ORCH_FEEDBACK_DB=str(tmp / "t.db"),
+        HANDOFF_DIR=str(tmp),
+        ORCH_STATE_DIR=str(tmp),
+    )
     requests = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-         "params": {"protocolVersion": "2025-06-18"}},
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18"},
+        },
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-         "params": {"name": "record_owner_question",
-                    "arguments": {"question": "Ship it?", "default": "yes"}}},
-        {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
-         "params": {"name": "owner_questions", "arguments": {}}},
-        {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
-         "params": {"name": "no_such_tool", "arguments": {}}},
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "record_owner_question",
+                "arguments": {"question": "Ship it?", "default": "yes"},
+            },
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {"name": "owner_questions", "arguments": {}},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "no_such_tool", "arguments": {}},
+        },
     ]
     payload = "".join(json.dumps(r) + "\n" for r in requests)
-    proc = subprocess.run([sys.executable, str(Path(__file__).resolve())],
-                          input=payload, capture_output=True, text=True,
-                          env=env, timeout=60)
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve())],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
     lines = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
     by_id = {m.get("id"): m for m in lines}
     assert by_id[1]["result"]["serverInfo"]["name"] == "orchestrator", by_id[1]
     names = {t["name"] for t in by_id[2]["result"]["tools"]}
-    assert {"capacity_status", "fleet_summary", "owner_questions",
-            "answer_owner_question", "resume_hint", "route_weights"} <= names, names
+    assert {
+        "capacity_status",
+        "fleet_summary",
+        "owner_questions",
+        "answer_owner_question",
+        "resume_hint",
+        "route_weights",
+    } <= names, names
     assert '"status": "open"' in by_id[3]["result"]["content"][0]["text"], by_id[3]
     assert "Ship it?" in by_id[4]["result"]["content"][0]["text"], by_id[4]
     assert by_id[5]["result"].get("isError") is True, by_id[5]
     import shutil
+
     shutil.rmtree(tmp, ignore_errors=True)
-    print("mcp_server.py selftest: OK (initialize, tools/list, tools/call round-trip, "
-          "question record/list through the MCP door, unknown-tool isError)")
+    print(
+        "mcp_server.py selftest: OK (initialize, tools/list, tools/call round-trip, "
+        "question record/list through the MCP door, unknown-tool isError)"
+    )
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ change the default?" without mutating router policy. It reads latest
 route_weights, simulates both challenger selectors, and emits a conservative
 recommendation.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,7 +51,7 @@ def _route_agents(task_type: str, route_table: dict | None = None) -> list[str]:
 
 def _all_route_agents(route_table: dict | None = None) -> list[str]:
     agents: list[str] = []
-    for task_type in (route_table or router.ROUTE_TABLE):
+    for task_type in route_table or router.ROUTE_TABLE:
         for agent in _route_agents(task_type, route_table):
             if agent not in agents:
                 agents.append(agent)
@@ -64,7 +65,9 @@ def _neutral_capacity(route_table: dict | None = None) -> dict:
 def _latest_version() -> int:
     try:
         with feedback._conn() as c:
-            return int(c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0])
+            return int(
+                c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]
+            )
     except Exception:
         return 0
 
@@ -148,8 +151,12 @@ def _task_summary(
     rows_by_agent = {str(row["agent"]): row for row in rows if row.get("agent")}
     learned = _learned(rows)
     total_obs = sum(int((rows_by_agent.get(agent) or {}).get("n_obs") or 0) for agent in agents)
-    observed_agents = sum(1 for agent in agents if int((rows_by_agent.get(agent) or {}).get("n_obs") or 0) > 0)
-    zero_agents = [agent for agent in agents if int((rows_by_agent.get(agent) or {}).get("n_obs") or 0) == 0]
+    observed_agents = sum(
+        1 for agent in agents if int((rows_by_agent.get(agent) or {}).get("n_obs") or 0) > 0
+    )
+    zero_agents = [
+        agent for agent in agents if int((rows_by_agent.get(agent) or {}).get("n_obs") or 0) == 0
+    ]
     ordered = [agent for agent in [row.get("agent") for row in rows] if agent in agents]
     top_agents = ordered[:2]
     top_agent_min_obs = min(
@@ -437,7 +444,9 @@ def format_human(report: dict) -> str:
     return "\n".join(lines)
 
 
-def _insert_weight(c, version: int, task_type: str, agent: str, posterior: float, n_obs: int, rank: int) -> None:
+def _insert_weight(
+    c, version: int, task_type: str, agent: str, posterior: float, n_obs: int, rank: int
+) -> None:
     now = int(time.time())
     score = posterior
     c.execute(
@@ -504,7 +513,9 @@ def _selftest() -> None:
                         "exploration_mode": mode,
                     },
                 )
-                feedback.record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
+                feedback.record_outcome(
+                    rid, adjudicated_verdict="PASS", merged=True, durability="durable"
+                )
         direct_ready = build_report(
             route_table={
                 "implement": router.ROUTE_TABLE["implement"],
@@ -517,8 +528,14 @@ def _selftest() -> None:
         recorded = direct_ready["recorded_exploration_evidence"]
         assert recorded["ready_for_direct_comparison"] is True, recorded
         mode_counts = {row["mode"]: row for row in recorded["mode_counts"]}
-        assert mode_counts["epsilon-greedy"]["outcome_runs"] == MIN_RECORDED_EXPLORATION_OUTCOMES_PER_MODE
-        assert mode_counts["thompson-hybrid"]["outcome_runs"] == MIN_RECORDED_EXPLORATION_OUTCOMES_PER_MODE
+        assert (
+            mode_counts["epsilon-greedy"]["outcome_runs"]
+            == MIN_RECORDED_EXPLORATION_OUTCOMES_PER_MODE
+        )
+        assert (
+            mode_counts["thompson-hybrid"]["outcome_runs"]
+            == MIN_RECORDED_EXPLORATION_OUTCOMES_PER_MODE
+        )
         print("exploration_review.py selftest: OK")
     finally:
         feedback.DB_PATH = old_db

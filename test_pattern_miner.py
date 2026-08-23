@@ -138,15 +138,15 @@ def completion_episode(
             "schema_version": 1,
             "run_id": run_id,
             # Terra run-level rows may omit this; joined identity binds the attempt.
-            "attempt_id": attempt_id if phase in {"execution", "artifact", "verification"} else None,
+            "attempt_id": (
+                attempt_id if phase in {"execution", "artifact", "verification"} else None
+            ),
             "event_type": "completion",
             "phase": phase,
             "producer": (
                 entrypoint
                 if phase == "execution"
-                else "runtime_ac"
-                if phase == "verification"
-                else "dispatcher"
+                else "runtime_ac" if phase == "verification" else "dispatcher"
             ),
             "status": "success" if phase != "durability" else durability,
             "validation_status": "accepted",
@@ -231,9 +231,7 @@ def test_three_independent_episodes_emit_one_candidate():
 def test_retries_and_same_subject_do_not_inflate_evidence(repeated_subject_events):
     result = PatternMiner().mine(repeated_subject_events, now=200)
     progress = result.status["threshold_progress"][0]
-    assert progress["positive_distinct_subjects"] == 1, (
-        "repeated subject counted as independent"
-    )
+    assert progress["positive_distinct_subjects"] == 1, "repeated subject counted as independent"
     assert not result.candidates
     assert progress["required_positive_distinct_subjects"] == 3
 
@@ -265,9 +263,7 @@ def test_failed_retry_then_terminal_success_counts_subject_once_and_keeps_audit(
             verification="FAIL",
             durability="reverted",
         )
-        failed_artifact = next(
-            row for row in failed_retry if row["event"]["phase"] == "artifact"
-        )
+        failed_artifact = next(row for row in failed_retry if row["event"]["phase"] == "artifact")
         failed_payload = json.loads(failed_artifact["event"]["payload_json"])
         failed_payload["changed_path_classes"] = ["discarded-retry-output"]
         failed_artifact["event"]["payload_json"] = json.dumps(failed_payload)
@@ -389,13 +385,8 @@ def test_candidate_without_new_evidence_expires_to_tombstone():
     expiry = result.candidates[0].lifecycle.expires_at
     expired = miner.sweep(now=expiry)
     assert expired.candidates[0].lifecycle.state == "retired"
-    assert (
-        expired.candidates[0].lifecycle.expiry_reason
-        == "no_new_evidence_before_candidate_ttl"
-    )
-    tombstone = next(
-        item for item in expired.tombstones if item.capability_id is not None
-    )
+    assert expired.candidates[0].lifecycle.expiry_reason == "no_new_evidence_before_candidate_ttl"
+    tombstone = next(item for item in expired.tombstones if item.capability_id is not None)
     assert tombstone.fingerprint == expired.candidates[0].fingerprint
     assert expired.status["expired_candidate_count"] == 1
 
@@ -469,13 +460,24 @@ def test_valid_spec_hash_still_derives_identity_and_is_not_skipped():
 def _strip_identity(row: dict) -> dict:
     """Make a row look like ordinary production delivery: no research design set at all."""
     row = json.loads(json.dumps(row))
-    row["identity"].update({
-        "normalized_spec_hash": None, "base_sha": None, "subject_id": None,
-        "family_id": None, "observation_id": None, "attempt_id": None,
-        "attempt_resolution": "unresolved", "subject_arms": [], "subject_profiles": [],
-        "resolved_provider": None, "resolved_model": None, "profile_id": None,
-        "arm_id": None, "experiment_id": None,
-    })
+    row["identity"].update(
+        {
+            "normalized_spec_hash": None,
+            "base_sha": None,
+            "subject_id": None,
+            "family_id": None,
+            "observation_id": None,
+            "attempt_id": None,
+            "attempt_resolution": "unresolved",
+            "subject_arms": [],
+            "subject_profiles": [],
+            "resolved_provider": None,
+            "resolved_model": None,
+            "profile_id": None,
+            "arm_id": None,
+            "experiment_id": None,
+        }
+    )
     row["event"]["attempt_id"] = None
     return row
 
@@ -567,28 +569,46 @@ def test_every_declared_subjectless_producer_has_a_stated_reason():
 def test_issue_scoped_targets_are_unchanged():
     """KEEPALIVE GUARD. Extending the grammar must not move `owner/repo#N` by one character."""
     assert _canonical_target("stranske/trip-planner#12") == (
-        "stranske/trip-planner#12", "stranske/trip-planner")
+        "stranske/trip-planner#12",
+        "stranske/trip-planner",
+    )
     # Numeric normalisation is part of the old contract and must survive.
     assert _canonical_target("stranske/trip-planner#007") == (
-        "stranske/trip-planner#7", "stranske/trip-planner")
+        "stranske/trip-planner#7",
+        "stranske/trip-planner",
+    )
     assert _canonical_target("Stranske/Trip-Planner#3") == (
-        "stranske/trip-planner#3", "stranske/trip-planner")
+        "stranske/trip-planner#3",
+        "stranske/trip-planner",
+    )
 
 
 def test_research_scopes_without_an_issue_now_parse():
     """Most research is not done on a GitHub issue; requiring one rejected all of it."""
     assert _canonical_target("stranske/trip-planner") == (
-        "stranske/trip-planner", "stranske/trip-planner")
+        "stranske/trip-planner",
+        "stranske/trip-planner",
+    )
     assert _canonical_target("domain/luminar-editing") == (
-        "domain/luminar-editing", "domain/luminar-editing")
+        "domain/luminar-editing",
+        "domain/luminar-editing",
+    )
     assert _canonical_target("local/Reader") == ("local/reader", "local/reader")
     assert _canonical_target("JobSearch.2026") == ("jobsearch.2026", "jobsearch.2026")
 
 
 def test_transport_noise_and_sentinels_are_still_rejected():
     """Widening scope must not admit things that name no scope at all."""
-    for bad in ("offload:/private/tmp", "triage:20-items",
-                "stranske/trip-planner [ux_review]", "unknown", "none", "-", "", "   "):
+    for bad in (
+        "offload:/private/tmp",
+        "triage:20-items",
+        "stranske/trip-planner [ux_review]",
+        "unknown",
+        "none",
+        "-",
+        "",
+        "   ",
+    ):
         assert _canonical_target(bad) is None, bad
 
 
@@ -597,17 +617,20 @@ def test_status_command_is_machine_readable_and_queue_free(tmp_path, capsys):
     path = tmp_path / "completion-events.json"
     path.write_text(json.dumps(events))
     status_path = tmp_path / "status.json"
-    assert main(
-        [
-            "status",
-            "--events",
-            str(path),
-            "--now",
-            "200",
-            "--write",
-            str(status_path),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "status",
+                "--events",
+                str(path),
+                "--now",
+                "200",
+                "--write",
+                str(status_path),
+            ]
+        )
+        == 0
+    )
     report = json.loads(capsys.readouterr().out)
     assert json.loads(status_path.read_text()) == report
     assert report["schema"] == "orchestrator.pattern-miner-status"
@@ -620,9 +643,7 @@ def test_status_command_is_machine_readable_and_queue_free(tmp_path, capsys):
     assert "candidates" not in report
 
 
-def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
-    tmp_path, capsys
-):
+def test_cadence_runner_restores_state_and_persists_expiry_tombstone(tmp_path, capsys):
     events = [row for index in range(1, 4) for row in completion_episode(index)]
     events_path = tmp_path / "completion-events.jsonl"
     events_path.write_text("".join(json.dumps(row) + "\n" for row in events))
@@ -632,23 +653,26 @@ def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
     status_path = tmp_path / "pattern-miner-status.json"
     inventory_path = tmp_path / "pattern-miner-inventory.json"
 
-    assert main(
-        [
-            "run",
-            "--events",
-            str(events_path),
-            "--state",
-            str(state_path),
-            "--status-out",
-            str(status_path),
-            "--inventory-out",
-            str(inventory_path),
-            "--ttl-days",
-            "1",
-            "--now",
-            "200",
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "run",
+                "--events",
+                str(events_path),
+                "--state",
+                str(state_path),
+                "--status-out",
+                str(status_path),
+                "--inventory-out",
+                str(inventory_path),
+                "--ttl-days",
+                "1",
+                "--now",
+                "200",
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
     first_state = json.loads(state_path.read_text())
     assert first_state["schema"] == "orchestrator.pattern-miner-state"
@@ -656,23 +680,26 @@ def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
     assert len(first_state["candidates"]) == 1
     expiry = first_state["candidates"][0]["lifecycle"]["expires_at"]
 
-    assert main(
-        [
-            "run",
-            "--events",
-            str(empty_path),
-            "--state",
-            str(state_path),
-            "--status-out",
-            str(status_path),
-            "--inventory-out",
-            str(inventory_path),
-            "--ttl-days",
-            "1",
-            "--now",
-            str(expiry),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "run",
+                "--events",
+                str(empty_path),
+                "--state",
+                str(state_path),
+                "--status-out",
+                str(status_path),
+                "--inventory-out",
+                str(inventory_path),
+                "--ttl-days",
+                "1",
+                "--now",
+                str(expiry),
+            ]
+        )
+        == 0
+    )
     report = json.loads(capsys.readouterr().out)
     persisted = json.loads(state_path.read_text())
     inventory = json.loads(inventory_path.read_text())
@@ -687,10 +714,7 @@ def test_cadence_runner_restores_state_and_persists_expiry_tombstone(
         if item["reason"] == "no_new_evidence_before_candidate_ttl"
     ]
     assert len(expiry_tombstones) == 1
-    assert (
-        expiry_tombstones[0]["fingerprint"]
-        == persisted["candidates"][0]["fingerprint"]
-    )
+    assert expiry_tombstones[0]["fingerprint"] == persisted["candidates"][0]["fingerprint"]
 
 
 def test_result_metadata_schema_is_strict():
@@ -701,4 +725,3 @@ def test_result_metadata_schema_is_strict():
     result = PatternMiner().mine([event], now=200)
     reasons = {reason for rejection in result.rejections for reason in rejection.reasons}
     assert "result_field_not_allowlisted:arbitrary_llm_claim" in reasons
-

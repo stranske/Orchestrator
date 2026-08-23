@@ -73,8 +73,9 @@ def test_conservative_migration_does_not_infer_activation(tmp_path):
     assert all(cap["status"] != "active" for cap in migrated.values())
     assert migrated["range-lane-rollout"]["status"] == "canary"
     assert (
-        migrated["range-lane-rollout"]["flags_defaults"]["orchestrate_default"]
-        ["ORCH_RANGE_LANE_ROLLOUT"]
+        migrated["range-lane-rollout"]["flags_defaults"]["orchestrate_default"][
+            "ORCH_RANGE_LANE_ROLLOUT"
+        ]
         == "1"
     )
     assert migrated["range-lane-rollout"]["next_transition"] == "retired"
@@ -253,9 +254,15 @@ def test_liveness_classifications_use_capability_events():
 
     # ...and the same shape with the outcome evidence REMOVED is still a genuine gap, so the fix
     # did not simply delete the class.
-    no_outcome_evidence = {**reinvoked, "outcome_links": [], "event_history": [],
-                           "last_success": None}
-    assert capabilities.classify_liveness(no_outcome_evidence, now=100) == "invoked_without_outcomes"
+    no_outcome_evidence = {
+        **reinvoked,
+        "outcome_links": [],
+        "event_history": [],
+        "last_success": None,
+    }
+    assert (
+        capabilities.classify_liveness(no_outcome_evidence, now=100) == "invoked_without_outcomes"
+    )
 
     gated_but_broken = {**gated, "last_match": 90}
     assert capabilities.classify_liveness(gated_but_broken, now=100) == "matched_not_invoked"
@@ -273,24 +280,39 @@ def test_gate_blocks_execution_is_opt_in_and_narrow():
     the opener picks. So the rule is opt-in: absent the declaration, behaviour is unchanged.
     """
     base = capabilities._blank_capability("gated-fixture")
-    base.update({"status": "shadow", "gate_reason": "switch is off", "last_invocation": 95,
-                 "last_match": 90, "event_history": []})
+    base.update(
+        {
+            "status": "shadow",
+            "gate_reason": "switch is off",
+            "last_invocation": 95,
+            "last_match": 90,
+            "event_history": [],
+        }
+    )
 
     # Undeclared: still a measurement question, exactly as before.
     assert capabilities.classify_liveness(base, now=100) == "invoked_without_outcomes"
     # Declared: the honest answer is that it cannot run at all.
-    assert capabilities.classify_liveness(
-        {**base, "gate_blocks_execution": True}, now=100) == "deliberately_gated"
+    assert (
+        capabilities.classify_liveness({**base, "gate_blocks_execution": True}, now=100)
+        == "deliberately_gated"
+    )
     # The flag alone is not enough — it needs a real gate and a gateable status.
-    assert capabilities.classify_liveness(
-        {**base, "gate_blocks_execution": True, "gate_reason": None},
-        now=100) == "invoked_without_outcomes"
+    assert (
+        capabilities.classify_liveness(
+            {**base, "gate_blocks_execution": True, "gate_reason": None}, now=100
+        )
+        == "invoked_without_outcomes"
+    )
 
     # From here the check reads the LIVE ledger, which is machine-local state: `issue-readiness`
     # is registered by running the system, not by checking out the tree, so on a machine that has
     # never run it there is nothing to classify. Skip with the row named — never silently pass.
-    env_prereq.require(env_prereq.ledger_rows_absent(
-        "thompson-hybrid-routing", "range-lane-rollout", "issue-readiness", "role-triage"))
+    env_prereq.require(
+        env_prereq.ledger_rows_absent(
+            "thompson-hybrid-routing", "range-lane-rollout", "issue-readiness", "role-triage"
+        )
+    )
 
     # `load_declared`, not `load(create=False)`: `gate_blocks_execution` is a DECLARATION-owned
     # field, so a raw read answers with whatever is on disk at that instant. Both of these rows had
@@ -344,7 +366,8 @@ def test_evidence_gate_kind_is_not_blanket_observer():
     # the invocation history, and its absence is named rather than asserted around.
     env_prereq.require(
         env_prereq.ledger_rows_absent("live-keepalive-supervisor", "redirect-apply-bootstrap"),
-        env_prereq.ledger_invocation_history_absent("live-keepalive-supervisor"))
+        env_prereq.ledger_invocation_history_absent("live-keepalive-supervisor"),
+    )
     ledger = capabilities.load_declared(capabilities.REG)
 
     supervisor = ledger["live-keepalive-supervisor"]
@@ -385,7 +408,8 @@ def test_observers_are_not_a_measurement_gap():
     # And a delivery-linked capability must still get the linkage advice, not the observer's pass.
     delivery_advice = capabilities.unblock(
         {**base, "matcher": {"kind": "transport", "name": "offload"}},
-        liveness="invoked_without_outcomes")
+        liveness="invoked_without_outcomes",
+    )
     assert "MEASUREMENT gap" in delivery_advice["action"], delivery_advice
 
     # A DELIVERY-LINKED capability with no outcome is still a real gap — the fix must not swallow it.
@@ -423,7 +447,9 @@ def test_non_gate_declarations_are_code_seeded_and_read_only(tmp_path):
     ledger = tmp_path / "capabilities.json"
     capabilities.save(stripped, ledger)
     on_disk = json.loads(ledger.read_text())["capabilities"]
-    assert not any(f in on_disk[cid] for cid in stripped for f in fields), "fixture was not stripped"
+    assert not any(
+        f in on_disk[cid] for cid in stripped for f in fields
+    ), "fixture was not stripped"
 
     loaded = capabilities.load_declared(ledger)
     for cid, declared in capabilities.KNOWN_DECLARATIONS.items():
@@ -440,7 +466,8 @@ def test_non_gate_declarations_are_code_seeded_and_read_only(tmp_path):
         assert cid not in capabilities.KNOWN_GATES, cid
         assert not (set(declared) - set(capabilities.DECLARATION_FIELDS)), (
             f"{cid} declares non-declaration-owned fields: "
-            f"{sorted(set(declared) - set(capabilities.DECLARATION_FIELDS))}")
+            f"{sorted(set(declared) - set(capabilities.DECLARATION_FIELDS))}"
+        )
         assert loaded[cid].get("expires_at") in (None, ""), (cid, loaded[cid].get("expires_at"))
 
     # And a writing load must reach the same state, so the two paths cannot disagree.
@@ -480,13 +507,14 @@ def test_verifying_the_system_never_writes_the_live_ledger():
     for path in sorted(root.glob("*.py")):
         text = path.read_text(encoding="utf-8", errors="replace")
         if not (path.name.startswith("test_") or "_selftest" in text):
-            continue          # production code may legitimately persist; verification may not.
+            continue  # production code may legitimately persist; verification may not.
         for num, line in enumerate(text.splitlines(), 1):
             if forbidden.search(line):
                 offenders.append(f"{path.name}:{num}: {line.strip()}")
     assert not offenders, (
         "verification code takes a writing load of the live ledger; use load_declared():\n  "
-        + "\n  ".join(offenders))
+        + "\n  ".join(offenders)
+    )
 
 
 def test_no_tick_producer_runs_above_the_heartbeat_export():
@@ -509,19 +537,23 @@ def test_no_tick_producer_runs_above_the_heartbeat_export():
     control = audit.shell_heartbeat_gate(
         'python3 "$ORCH/early.py" --run\n'
         "export ORCH_CAPABILITY_HEARTBEATS=1\n"
-        'python3 "$ORCH/late.py" --run\n')
+        'python3 "$ORCH/late.py" --run\n'
+    )
     assert [m for _, m in control["before"]] == ["early.py"], control
     assert [m for _, m in control["after"]] == ["late.py"], control
 
     gate = audit.heartbeat_env_gate()
     assert gate["anchor_present"], (
         f"orchestrate.sh no longer carries `{audit.HEARTBEAT_EXPORT_ANCHOR}`; the stored switch "
-        "criteria cite that anchor because line numbers rot")
+        "criteria cite that anchor because line numbers rot"
+    )
     # BOTH numbers, per the latched-gate runtime rule: zero suppressed means nothing only if the
     # parse actually found invocations to classify.
-    assert gate["invocations_after"] > 0, (
-        f"parsed no post-export invocations at all, so `suppressed_modules` proves nothing: {gate}")
+    assert (
+        gate["invocations_after"] > 0
+    ), f"parsed no post-export invocations at all, so `suppressed_modules` proves nothing: {gate}"
     assert gate["suppressed_modules"] == [], (
         "these modules emit a capability heartbeat but are invoked above the "
         f"{audit.HEARTBEAT_ENV_FLAG} export, so they record nothing: "
-        f"{gate['suppressed_by_driver']}")
+        f"{gate['suppressed_by_driver']}"
+    )

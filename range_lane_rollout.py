@@ -225,9 +225,7 @@ def build_rollout(
             dry_run=dry_run,
             learned=router.learned_ranks(),
         )
-        decision, rejected_assignments = _sanitize_decision(
-            decision, selected_task_types
-        )
+        decision, rejected_assignments = _sanitize_decision(decision, selected_task_types)
         if not dry_run and rejected_assignments:
             _release_rejected_claims(rejected_assignments)
         for row in rejected_assignments:
@@ -286,9 +284,7 @@ def build_rollout(
         "skipped_backlog": skipped[:20],
         "rejected_assignments": rejected_assignments,
         "decision": decision,
-        "dispatch_preview": (
-            _dispatch_preview(decision) if decision.get("assignments") else []
-        ),
+        "dispatch_preview": (_dispatch_preview(decision) if decision.get("assignments") else []),
         "safety": {
             "requires_apply": True,
             "requires_confirm_rollout": True,
@@ -321,8 +317,7 @@ def format_human(rollout: dict) -> str:
         for row in preview:
             marker = " missing-worktree" if row.get("worktree_missing") else ""
             lines.append(
-                f"  {row['target']}: {row['task_type']} -> "
-                f"{row['agent']}/{row['mode']}{marker}"
+                f"  {row['target']}: {row['task_type']} -> " f"{row['agent']}/{row['mode']}{marker}"
             )
     lines.append(f"active dispatch requires --apply --confirm-rollout and {ENV_FLAG}=1")
     return "\n".join(lines)
@@ -368,8 +363,7 @@ def _selftest() -> None:
         ], dry
         assert all(a["lane"] == "opener" for a in dry["decision"]["assignments"]), dry
         assert all(
-            a["task_type"] in {"testgen", "epic", "codemod"}
-            for a in dry["decision"]["assignments"]
+            a["task_type"] in {"testgen", "epic", "codemod"} for a in dry["decision"]["assignments"]
         ), dry
         assert dry["dispatch_preview"], dry
         assert dry["counts"] == {"selected": 2, "assigned": 2, "dispatched": 0}, dry
@@ -384,8 +378,7 @@ def _selftest() -> None:
         assert blocked["eligible"] is False and blocked["blocked_reasons"], blocked
         assert blocked["blocked_details"], blocked
         assert any(
-            row["reason"] == "not a range-lane task type"
-            for row in blocked["skipped_backlog"]
+            row["reason"] == "not a range-lane task type" for row in blocked["skipped_backlog"]
         ), blocked
 
         no_capacity = build_rollout(
@@ -404,8 +397,7 @@ def _selftest() -> None:
         assert no_capacity["counts"]["assigned"] == 0, no_capacity
         assert no_capacity["capacity_rejections"], no_capacity
         assert any(
-            row.get("reason") == "capacity_rejected"
-            for row in no_capacity["blocked_details"]
+            row.get("reason") == "capacity_rejected" for row in no_capacity["blocked_details"]
         ), no_capacity
 
         stale = Path(tmp) / "claims" / claims._slug("o/r#1")
@@ -458,18 +450,12 @@ def _selftest() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Guarded rollout/apply surface for range lanes."
-    )
+    parser = argparse.ArgumentParser(description="Guarded rollout/apply surface for range lanes.")
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--task-type", action="append", choices=RANGE_TASK_TYPES)
     parser.add_argument("--max-dispatches", type=int, default=DEFAULT_MAX_DISPATCHES)
-    parser.add_argument(
-        "--apply", action="store_true", help="actively dispatch the rollout"
-    )
-    parser.add_argument(
-        "--confirm-rollout", action="store_true", help="required with --apply"
-    )
+    parser.add_argument("--apply", action="store_true", help="actively dispatch the rollout")
+    parser.add_argument("--confirm-rollout", action="store_true", help="required with --apply")
     parser.add_argument(
         "--cached-backlog",
         action="store_true",
@@ -483,8 +469,9 @@ def main(argv: list[str] | None = None) -> int:
         # an EXACT profile — which needs the version-capable Codex binary and fails closed rather
         # than falling back to PATH. That is the whole selftest's spine, not one section of it, so
         # the gate is the selftest. The reason names the binary; verify.py counts it and bounds it.
-        if env_prereq.selftest_skipped("range_lane_rollout.py",
-                                       env_prereq.codex_profile_binary_absent()):
+        if env_prereq.selftest_skipped(
+            "range_lane_rollout.py", env_prereq.codex_profile_binary_absent()
+        ):
             return 0
         _selftest()
         return 0
@@ -521,8 +508,11 @@ def main(argv: list[str] | None = None) -> int:
             # the capability logged 13 live invocations and zero outcome edges. (2026-08-21)
             for assignment in assignments:
                 if isinstance(assignment, dict):
-                    assignment["capability_ids"] = list(dict.fromkeys(
-                        list(assignment.get("capability_ids") or []) + ["range-lane-rollout"]))
+                    assignment["capability_ids"] = list(
+                        dict.fromkeys(
+                            list(assignment.get("capability_ids") or []) + ["range-lane-rollout"]
+                        )
+                    )
             router.HANDOFF.mkdir(parents=True, exist_ok=True)
             router.DECISION_JSON.write_text(json.dumps(decision, indent=2) + "\n")
             capabilities.production_heartbeat(

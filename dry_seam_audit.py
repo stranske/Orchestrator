@@ -131,16 +131,8 @@ def _classify_outcome_gap(row: dict[str, Any]) -> tuple[str, str, bool, str]:
         )
     if (
         mode in {"remote", "local"}
-        or (
-            task_type == "implement"
-            and "#" in target
-            and source == "orchestrator_local"
-        )
-        or (
-            mode in {"composer", "full"}
-            and "#" in target
-            and source == "orchestrator_local"
-        )
+        or (task_type == "implement" and "#" in target and source == "orchestrator_local")
+        or (mode in {"composer", "full"} and "#" in target and source == "orchestrator_local")
     ):
         return (
             "outcome_ingest_candidate",
@@ -203,14 +195,10 @@ def outcome_gap_summary(
                     "agent": row["agent"],
                     "mode": row["mode"],
                     "source": row["source"],
-                    "age_days": max(
-                        0, (generated_at - int(row["ts"] or generated_at)) // 86400
-                    ),
+                    "age_days": max(0, (generated_at - int(row["ts"] or generated_at)) // 86400),
                 }
             )
-    category_rows = sorted(
-        categories.values(), key=lambda row: (-row["count"], row["category"])
-    )
+    category_rows = sorted(categories.values(), key=lambda row: (-row["count"], row["category"]))
     actionable_count = sum(row["count"] for row in category_rows if row["actionable"])
     if not rows:
         recommendation = "No recent runs are missing outcome rows."
@@ -366,13 +354,9 @@ def audit_dry_seams(
                 recommendation="Fix trace-to-run joining before treating trace coverage as live.",
             )
 
-        outcome_gaps = outcome_gap_summary(
-            window_days=window_days, generated_at=generated_at
-        )
+        outcome_gaps = outcome_gap_summary(window_days=window_days, generated_at=generated_at)
         if outcome_gaps["total_runs_without_outcome"]:
-            status = (
-                "warn" if outcome_gaps["actionable_runs_without_outcome"] else "info"
-            )
+            status = "warn" if outcome_gaps["actionable_runs_without_outcome"] else "info"
             _finding(
                 findings,
                 sink="outcomes",
@@ -424,9 +408,9 @@ def audit_dry_seams(
                 recommendation="Confirm whether the trace rows carry zero-cost calls or the cost aggregation dropped them.",
             )
 
-        latest_version = c.execute(
-            "SELECT COALESCE(MAX(version),0) FROM route_weights"
-        ).fetchone()[0]
+        latest_version = c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[
+            0
+        ]
         zero_obs_cells: list[dict[str, Any]] = []
         missing_cells: list[dict[str, str]] = []
         if latest_version:
@@ -523,7 +507,8 @@ def audit_dry_seams(
                     },
                     recommendation=(
                         "Allow the ledger's expiry/next-transition policy to proceed."
-                        if classification in {"deliberately_gated", "no_matching_work", "retired", "superseded"}
+                        if classification
+                        in {"deliberately_gated", "no_matching_work", "retired", "superseded"}
                         else "Repair the exact missing lifecycle edge before promotion."
                     ),
                 )
@@ -534,9 +519,7 @@ def audit_dry_seams(
     for item in findings:
         status_counts[item["status"]] = status_counts.get(item["status"], 0) + 1
     overall = (
-        "fail"
-        if status_counts.get("fail")
-        else "warn" if status_counts.get("warn") else "pass"
+        "fail" if status_counts.get("fail") else "warn" if status_counts.get("warn") else "pass"
     )
     return {
         "generated_at": generated_at,
@@ -559,9 +542,7 @@ def format_human(report: dict[str, Any]) -> str:
         f"dry_seam_audit: overall={report['overall']} db={report['db_path']} "
         f"window_days={report['window_days']} stale_days={report['stale_days']}",
     ]
-    counts = " ".join(
-        f"{key}={value}" for key, value in report["counts"].items() if value
-    )
+    counts = " ".join(f"{key}={value}" for key, value in report["counts"].items() if value)
     lines.append(f"counts: {counts or 'no rows'}")
     lineage = report.get("completion_event_health") or {}
     if lineage:
@@ -608,18 +589,12 @@ def _selftest() -> None:
             capabilities_path=isolated_capabilities,
         )
         assert empty["overall"] == "fail", empty
-        assert any(
-            f["sink"] == "runs" and f["status"] == "fail" for f in empty["findings"]
-        ), empty
+        assert any(f["sink"] == "runs" and f["status"] == "fail" for f in empty["findings"]), empty
 
         now = int(time.time())
         feedback.record_run("run-1", "owner/repo#1", "implement", "codex", ts=now)
-        feedback.record_outcome(
-            "run-1", adjudicated_verdict="PASS", durability="durable"
-        )
-        feedback.record_cost(
-            "run-1", tokens_in=10, tokens_out=5, cost_usd=0.01, source="langsmith"
-        )
+        feedback.record_outcome("run-1", adjudicated_verdict="PASS", durability="durable")
+        feedback.record_cost("run-1", tokens_in=10, tokens_out=5, cost_usd=0.01, source="langsmith")
         feedback.record_execution_trace(
             "run-1", trace_id="tr-1", status="success", source="langsmith"
         )
@@ -665,12 +640,10 @@ def _selftest() -> None:
             capabilities_path=isolated_capabilities,
         )
         assert advisory["overall"] == "pass", advisory
+        assert advisory["outcome_gap_summary"]["actionable_runs_without_outcome"] == 0, advisory
         assert (
-            advisory["outcome_gap_summary"]["actionable_runs_without_outcome"] == 0
+            "No outcome-ingest action" in advisory["outcome_gap_summary"]["recommendation"]
         ), advisory
-        assert "No outcome-ingest action" in advisory["outcome_gap_summary"][
-            "recommendation"
-        ], advisory
         feedback.record_run(
             "remote-missing-outcome",
             "owner/repo#2",
@@ -685,9 +658,7 @@ def _selftest() -> None:
             capabilities_path=isolated_capabilities,
         )
         assert unresolved["overall"] == "warn", unresolved
-        assert (
-            unresolved["outcome_gap_summary"]["actionable_runs_without_outcome"] == 1
-        ), unresolved
+        assert unresolved["outcome_gap_summary"]["actionable_runs_without_outcome"] == 1, unresolved
         text = format_human(unresolved)
         assert "outcome gaps:" in text and "outcome_ingest_candidate" in text, text
 
@@ -697,9 +668,7 @@ def _selftest() -> None:
         unmatched = capabilities._blank_capability("unmatched")
         unmatched.update({"status": "wired", "entrypoint": "worker.py"})
         matched = capabilities._blank_capability("matched")
-        matched.update(
-            {"status": "wired", "entrypoint": "worker.py", "last_match": now}
-        )
+        matched.update({"status": "wired", "entrypoint": "worker.py", "last_match": now})
         capabilities.save({"unmatched": unmatched, "matched": matched}, cap_path)
         cap_audit = audit_dry_seams(
             route_table={"implement": {"agents": [{"agent": "codex"}]}},
@@ -716,9 +685,7 @@ def _selftest() -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="Read-only audit for dry Orchestrator data seams."
-    )
+    parser = argparse.ArgumentParser(description="Read-only audit for dry Orchestrator data seams.")
     parser.add_argument("--window-days", type=int, default=90)
     parser.add_argument("--stale-days", type=int, default=14)
     parser.add_argument("--json", action="store_true")

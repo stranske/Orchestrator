@@ -28,6 +28,7 @@ flipping a safety switch on silence is precisely what must not happen.
     python3 switch_review.py --raise        # record owner questions (needs ORCH_SWITCH_REVIEW=1)
     python3 switch_review.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -74,6 +75,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities as _caps
+
         _caps.production_heartbeat("switch-review", event_type, ref="switch_review.review")
     except Exception:
         pass
@@ -99,31 +101,48 @@ def review(*, now: int | None = None, env: dict | None = None, path=None) -> dic
         if not on:
             # OFF: raise only when a criterion exists, so an unconditioned switch is not nagged
             # about forever. An unconditioned switch is a documentation gap, reported separately.
-            due.append({
-                "flag": flag, "capability": cap_id, "state": "off",
-                "criterion": criterion,
-                "reason": ("held off; a machine-checkable precondition is recorded, so this is a "
-                           "decision waiting to be made" if criterion
-                           else "held off with NO recorded switch-on criterion"),
-                "has_criterion": bool(criterion),
-            })
+            due.append(
+                {
+                    "flag": flag,
+                    "capability": cap_id,
+                    "state": "off",
+                    "criterion": criterion,
+                    "reason": (
+                        "held off; a machine-checkable precondition is recorded, so this is a "
+                        "decision waiting to be made"
+                        if criterion
+                        else "held off with NO recorded switch-on criterion"
+                    ),
+                    "has_criterion": bool(criterion),
+                }
+            )
             continue
 
         # ON but silent for the whole window: enabling it changed nothing observable.
         idle_days = (now - last) / 86400 if last else None
         if last == 0 or (now - last) > window:
-            quiet.append({
-                "flag": flag, "capability": cap_id, "state": "on",
-                "idle_days": None if idle_days is None else round(idle_days, 1),
-                "reason": (f"ON but {cap_id} recorded no invocation in the last {REVIEW_DAYS}d — "
-                           "an enabled switch that dispatches nothing is indistinguishable from "
-                           "one left off"),
-            })
+            quiet.append(
+                {
+                    "flag": flag,
+                    "capability": cap_id,
+                    "state": "on",
+                    "idle_days": None if idle_days is None else round(idle_days, 1),
+                    "reason": (
+                        f"ON but {cap_id} recorded no invocation in the last {REVIEW_DAYS}d — "
+                        "an enabled switch that dispatches nothing is indistinguishable from "
+                        "one left off"
+                    ),
+                }
+            )
 
-    return {"generated_at": now, "review_days": REVIEW_DAYS,
-            "held_off": due, "on_but_idle": quiet,
-            "unconditioned": [d["flag"] for d in due if not d["has_criterion"]],
-            "raise_count": len(due) + len(quiet)}
+    return {
+        "generated_at": now,
+        "review_days": REVIEW_DAYS,
+        "held_off": due,
+        "on_but_idle": quiet,
+        "unconditioned": [d["flag"] for d in due if not d["has_criterion"]],
+        "raise_count": len(due) + len(quiet),
+    }
 
 
 def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
@@ -132,31 +151,45 @@ def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
     for row in rep["held_off"] + rep["on_but_idle"]:
         flag, cap_id, state = row["flag"], row["capability"], row["state"]
         if state == "off":
-            question = (f"{flag} is off and {cap_id}'s switch-on precondition is recorded. "
-                        f"Turn it on, or restate the criterion?")
+            question = (
+                f"{flag} is off and {cap_id}'s switch-on precondition is recorded. "
+                f"Turn it on, or restate the criterion?"
+            )
             default = "keep it off; re-ask in a week"
         else:
-            question = (f"{flag} is ON but {cap_id} has recorded no invocation in "
-                        f"{REVIEW_DAYS}d. Keep it on, turn it off, or fix what feeds it?")
+            question = (
+                f"{flag} is ON but {cap_id} has recorded no invocation in "
+                f"{REVIEW_DAYS}d. Keep it on, turn it off, or fix what feeds it?"
+            )
             default = "keep the current position; re-ask in a week"
         if dry_run:
             raised.append(flag)
             continue
         try:
             import feedback
+
             res = feedback.record_owner_question(
-                question, default, repo="orchestrator", target=f"switch:{flag}",
-                options=["on", "off", "investigate"], expires_days=QUESTION_EXPIRY_DAYS)
+                question,
+                default,
+                repo="orchestrator",
+                target=f"switch:{flag}",
+                options=["on", "off", "investigate"],
+                expires_days=QUESTION_EXPIRY_DAYS,
+            )
             (deduped if res.get("deduped") else raised).append(flag)
-        except Exception as exc:                                # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             errors.append(f"{flag}: {str(exc)[:100]}")
     return {"raised": raised, "already_open": deduped, "errors": errors, "dry_run": dry_run}
 
 
 def format_report(rep: dict) -> str:
-    lines = ["# Switch review — held switches must be revisited, not forgotten", "",
-             f"  review window: {rep['review_days']}d",
-             f"  due for a decision: {rep['raise_count']}", ""]
+    lines = [
+        "# Switch review — held switches must be revisited, not forgotten",
+        "",
+        f"  review window: {rep['review_days']}d",
+        f"  due for a decision: {rep['raise_count']}",
+        "",
+    ]
     if rep["held_off"]:
         lines += ["## Held OFF", ""]
         for row in rep["held_off"]:
@@ -172,8 +205,11 @@ def format_report(rep: dict) -> str:
             lines.append(f"      {row['reason']}")
             lines.append("")
     if rep["unconditioned"]:
-        lines += ["## Held with NO recorded criterion (a documentation gap, fix in "
-                  "SWITCH_ON_CRITERIA)", ""]
+        lines += [
+            "## Held with NO recorded criterion (a documentation gap, fix in "
+            "SWITCH_ON_CRITERIA)",
+            "",
+        ]
         lines += [f"  {f}" for f in rep["unconditioned"]] + [""]
     if not rep["raise_count"]:
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
@@ -249,15 +285,21 @@ def _selftest() -> None:
         assert "ORCH_RANGE_LANE_ROLLOUT" in out["raised"], out
         assert len(out["raised"]) == len(rep4["held_off"]) + len(rep4["on_but_idle"]), out
 
-    print("switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
-          "recently-triggering stays silent, '0' is off, dry-run inert)")
+    print(
+        "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
+        "recently-triggering stays silent, '0' is off, dry-run inert)"
+    )
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--raise", dest="do_raise", action="store_true",
-                    help="record owner questions (requires ORCH_SWITCH_REVIEW=1)")
+    ap.add_argument(
+        "--raise",
+        dest="do_raise",
+        action="store_true",
+        help="record owner questions (requires ORCH_SWITCH_REVIEW=1)",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:

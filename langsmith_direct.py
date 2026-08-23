@@ -18,6 +18,7 @@ Usage:
   python3 langsmith_direct.py --ingest --json
   python3 langsmith_direct.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -78,12 +79,12 @@ def _make_client():
     key = load_api_key()
     if not key:
         raise RuntimeError(
-            f"no LANGSMITH_API_KEY in env or {CRED_PATH} "
-            "(extract from Code/Numbers/values.txt)"
+            f"no LANGSMITH_API_KEY in env or {CRED_PATH} " "(extract from Code/Numbers/values.txt)"
         )
     os.environ.setdefault("LANGCHAIN_API_KEY", key)
     try:
         from langsmith import Client
+
         return Client(api_key=key)
     except ModuleNotFoundError as exc:
         if exc.name != "langsmith":
@@ -92,8 +93,17 @@ def _make_client():
 
 
 def _api_url() -> str:
-    return (os.environ.get("LANGSMITH_ENDPOINT") or os.environ.get("LANGCHAIN_ENDPOINT")
-            or DEFAULT_API_URL).strip().strip('"').strip("'").rstrip("/")
+    return (
+        (
+            os.environ.get("LANGSMITH_ENDPOINT")
+            or os.environ.get("LANGCHAIN_ENDPOINT")
+            or DEFAULT_API_URL
+        )
+        .strip()
+        .strip('"')
+        .strip("'")
+        .rstrip("/")
+    )
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -145,9 +155,14 @@ class _StdlibLangSmithClient:
         self.host_url = _host_url(self.api_url)
         self._project_ids: dict[str, str] = {}
 
-    def _request_json(self, method: str, path: str, *,
-                      params: dict[str, Any] | None = None,
-                      body: dict[str, Any] | None = None) -> Any:
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
         query = f"?{urlparse.urlencode(params)}" if params else ""
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urlrequest.Request(
@@ -172,16 +187,23 @@ class _StdlibLangSmithClient:
 
     def _project_id(self, project_name: str) -> str:
         if project_name not in self._project_ids:
-            result = self._request_json("GET", "/sessions",
-                                        params={"limit": 1, "name": project_name,
-                                                "include_stats": "false"})
+            result = self._request_json(
+                "GET",
+                "/sessions",
+                params={"limit": 1, "name": project_name, "include_stats": "false"},
+            )
             if not isinstance(result, list) or not result:
                 raise RuntimeError(f"Project {project_name} not found")
             self._project_ids[project_name] = str(result[0]["id"])
         return self._project_ids[project_name]
 
-    def list_runs(self, *, project_name: str | Iterable[str] | None = None,
-                  start_time: datetime | None = None, **kwargs: Any):
+    def list_runs(
+        self,
+        *,
+        project_name: str | Iterable[str] | None = None,
+        start_time: datetime | None = None,
+        **kwargs: Any,
+    ):
         project_ids: list[str] = []
         if project_name is not None:
             names = [project_name] if isinstance(project_name, str) else list(project_name)
@@ -222,9 +244,7 @@ def run_to_record(run: Any) -> dict[str, Any] | None:
         return None
     operation = str(meta.get("operation") or getattr(run, "run_type", "llm"))
     try:
-        operation_role = feedback.derive_operation_role(
-            operation, meta.get("operation_role")
-        )
+        operation_role = feedback.derive_operation_role(operation, meta.get("operation_role"))
     except ValueError:
         return None
     rec: dict[str, Any] = {
@@ -251,8 +271,11 @@ def run_to_record(run: Any) -> dict[str, Any] | None:
     cost = getattr(run, "total_cost", None)
     if cost:
         rec["cost_usd"] = float(cost)
-    pt, ct, tt = (getattr(run, "prompt_tokens", None), getattr(run, "completion_tokens", None),
-                  getattr(run, "total_tokens", None))
+    pt, ct, tt = (
+        getattr(run, "prompt_tokens", None),
+        getattr(run, "completion_tokens", None),
+        getattr(run, "total_tokens", None),
+    )
     if pt is not None:
         rec["tokens_in"] = int(pt or 0)
     if ct is not None:
@@ -324,8 +347,9 @@ def fetch_and_ingest(
     dry_run: bool = False,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
 ) -> dict[str, Any]:
-    records, errors = fetch_records(client=client, projects=list(projects),
-                                    limit=limit, since_hours=since_hours)
+    records, errors = fetch_records(
+        client=client, projects=list(projects), limit=limit, since_hours=since_hours
+    )
     summary: dict[str, Any] = {
         "dry_run": dry_run,
         "projects": list(projects),
@@ -338,18 +362,25 @@ def fetch_and_ingest(
     if records:
         output_dir.mkdir(parents=True, exist_ok=True)
         combined = output_dir / "langsmith-direct.ndjson"
-        combined.write_text("\n".join(json.dumps(r, sort_keys=True) for r in records) + "\n",
-                            encoding="utf-8")
+        combined.write_text(
+            "\n".join(json.dumps(r, sort_keys=True) for r in records) + "\n", encoding="utf-8"
+        )
         summary["combined"] = str(combined)
-        summary["ingest"] = langsmith_pull.ingest_files([combined], dry_run=dry_run,
-                                                         source="langsmith")
+        summary["ingest"] = langsmith_pull.ingest_files(
+            [combined], dry_run=dry_run, source="langsmith"
+        )
     else:
-        summary["ingest"] = {"records_read": 0, "matched_records": 0,
-                             "written_cost_records": 0, "written_trace_records": 0}
+        summary["ingest"] = {
+            "records_read": 0,
+            "matched_records": 0,
+            "written_cost_records": 0,
+            "written_trace_records": 0,
+        }
     return summary
 
 
 # ---- offline selftest --------------------------------------------------------
+
 
 class _FakeRun:
     def __init__(self, **kw):
@@ -368,30 +399,68 @@ def _selftest():
     import shutil
     import tempfile
     import feedback
+
     tmp = Path(tempfile.mkdtemp(prefix="langsmith-direct-selftest-"))
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp / "orchestrator.db"
     try:
-        feedback.record_run("keepalive:stranske/Workflows#2479:codex", "stranske/Workflows#2479",
-                            "implement", "codex", mode="remote", pr_number=2479)
+        feedback.record_run(
+            "keepalive:stranske/Workflows#2479:codex",
+            "stranske/Workflows#2479",
+            "implement",
+            "codex",
+            mode="remote",
+            pr_number=2479,
+        )
         t0 = datetime(2026, 6, 19, tzinfo=timezone.utc)
         runs = [
-            _FakeRun(id="ls-1", run_type="llm", total_cost="0.0337", prompt_tokens=4000,
-                     completion_tokens=719, total_tokens=4719,
-                     start_time=t0, end_time=t0 + timedelta(seconds=2),
-                     url="https://smith.langchain.com/r/ls-1",
-                     extra={"metadata": {"repo": "stranske/Workflows", "pr_number": "2479",
-                                         "operation": "verifier", "model": "gpt-x",
-                                         "ls_provider": "openai", "run_id": "27852902373"}}),
-            _FakeRun(id="ls-2", run_type="llm", total_cost="0.011", prompt_tokens=2000,
-                     completion_tokens=300, total_tokens=2300,
-                     start_time=t0, end_time=t0 + timedelta(seconds=1),
-                     extra={"metadata": {"repo": "stranske/Workflows", "pr_number": "2479",
-                                         "operation": "verifier"}}),
-            _FakeRun(id="ls-3", run_type="llm", total_cost="0.5",
-                     extra={"metadata": {"repo": "stranske/Workflows", "pr_number": "999999"}}),  # unmatched PR
-            _FakeRun(id="ls-4", run_type="chain",
-                     extra={"metadata": {"operation": "noop"}}),  # no repo -> dropped
+            _FakeRun(
+                id="ls-1",
+                run_type="llm",
+                total_cost="0.0337",
+                prompt_tokens=4000,
+                completion_tokens=719,
+                total_tokens=4719,
+                start_time=t0,
+                end_time=t0 + timedelta(seconds=2),
+                url="https://smith.langchain.com/r/ls-1",
+                extra={
+                    "metadata": {
+                        "repo": "stranske/Workflows",
+                        "pr_number": "2479",
+                        "operation": "verifier",
+                        "model": "gpt-x",
+                        "ls_provider": "openai",
+                        "run_id": "27852902373",
+                    }
+                },
+            ),
+            _FakeRun(
+                id="ls-2",
+                run_type="llm",
+                total_cost="0.011",
+                prompt_tokens=2000,
+                completion_tokens=300,
+                total_tokens=2300,
+                start_time=t0,
+                end_time=t0 + timedelta(seconds=1),
+                extra={
+                    "metadata": {
+                        "repo": "stranske/Workflows",
+                        "pr_number": "2479",
+                        "operation": "verifier",
+                    }
+                },
+            ),
+            _FakeRun(
+                id="ls-3",
+                run_type="llm",
+                total_cost="0.5",
+                extra={"metadata": {"repo": "stranske/Workflows", "pr_number": "999999"}},
+            ),  # unmatched PR
+            _FakeRun(
+                id="ls-4", run_type="chain", extra={"metadata": {"operation": "noop"}}
+            ),  # no repo -> dropped
         ]
         client = _FakeClient(runs)
 
@@ -401,20 +470,26 @@ def _selftest():
         assert sum(1 for r in recs if "cost_usd" in r) == 3, recs
         assert {r["operation_role"] for r in recs} == {"verifier", "unknown"}, recs
 
-        dry = fetch_and_ingest(client=client, since_hours=None, dry_run=True,
-                               output_dir=tmp / "out")
+        dry = fetch_and_ingest(
+            client=client, since_hours=None, dry_run=True, output_dir=tmp / "out"
+        )
         assert dry["records_built"] == 3, dry
-        assert dry["ingest"]["matched_records"] == 2, dry["ingest"]      # both #2479 records
-        assert dry["ingest"]["cost_records"] == 1, dry["ingest"]          # aggregated to 1 run
+        assert dry["ingest"]["matched_records"] == 2, dry["ingest"]  # both #2479 records
+        assert dry["ingest"]["cost_records"] == 1, dry["ingest"]  # aggregated to 1 run
         with feedback._conn() as c:
-            assert c.execute("SELECT COUNT(*) FROM costs").fetchone()[0] == 0  # dry-run wrote nothing
+            assert (
+                c.execute("SELECT COUNT(*) FROM costs").fetchone()[0] == 0
+            )  # dry-run wrote nothing
 
-        live = fetch_and_ingest(client=client, since_hours=None, dry_run=False,
-                                output_dir=tmp / "out")
+        live = fetch_and_ingest(
+            client=client, since_hours=None, dry_run=False, output_dir=tmp / "out"
+        )
         assert live["ingest"]["written_cost_records"] == 1, live["ingest"]
         with feedback._conn() as c:
-            row = c.execute("SELECT tokens_in, tokens_out, cost_usd, source FROM costs "
-                            "WHERE run_id='keepalive:stranske/Workflows#2479:codex'").fetchone()
+            row = c.execute(
+                "SELECT tokens_in, tokens_out, cost_usd, source FROM costs "
+                "WHERE run_id='keepalive:stranske/Workflows#2479:codex'"
+            ).fetchone()
             attempt_roles = dict(
                 c.execute(
                     "SELECT operation_role,COUNT(*) FROM execution_attempts "
@@ -422,21 +497,28 @@ def _selftest():
                 ).fetchall()
             )
         # 4000+2000 in, 719+300 out, 0.0337+0.011 cost, joined by github_pr bridge
-        assert row[:2] == (6000, 1019) and abs(row[2] - 0.0447) < 1e-9 and row[3] == "langsmith", row
+        assert (
+            row[:2] == (6000, 1019) and abs(row[2] - 0.0447) < 1e-9 and row[3] == "langsmith"
+        ), row
         assert attempt_roles == {"verifier": 2}, attempt_roles
-        assert feedback.resolved_worker_model_for_run(
-            "keepalive:stranske/Workflows#2479:codex"
-        ) is None
+        assert (
+            feedback.resolved_worker_model_for_run("keepalive:stranske/Workflows#2479:codex")
+            is None
+        )
         # idempotency: re-ingest replaces (does not inflate)
         fetch_and_ingest(client=client, since_hours=None, dry_run=False, output_dir=tmp / "out")
         with feedback._conn() as c:
             assert c.execute("SELECT COUNT(*) FROM costs").fetchone()[0] == 1
-            again = c.execute("SELECT cost_usd FROM costs "
-                              "WHERE run_id='keepalive:stranske/Workflows#2479:codex'").fetchone()
+            again = c.execute(
+                "SELECT cost_usd FROM costs "
+                "WHERE run_id='keepalive:stranske/Workflows#2479:codex'"
+            ).fetchone()
         assert abs(again[0] - 0.0447) < 1e-9, again
-        print("langsmith_direct.py selftest: OK (run->record shape, github_pr bridge join, "
-              "validated operation roles, evaluator-safe attribution, cost aggregation, dry-run, "
-              "idempotent re-ingest)")
+        print(
+            "langsmith_direct.py selftest: OK (run->record shape, github_pr bridge join, "
+            "validated operation roles, evaluator-safe attribution, cost aggregation, dry-run, "
+            "idempotent re-ingest)"
+        )
     finally:
         feedback.DB_PATH = old_db
         shutil.rmtree(tmp, ignore_errors=True)
@@ -448,10 +530,12 @@ def _print(summary: dict[str, Any], *, as_json: bool):
         return
     ing = summary.get("ingest", {})
     verb = "would write" if summary["dry_run"] else "wrote"
-    print(f"langsmith_direct: built {summary['records_built']} record(s) "
-          f"({summary['with_cost']} with cost), matched {ing.get('matched_records', 0)}, "
-          f"{verb} {ing.get('written_cost_records', ing.get('cost_records', 0))} cost row(s), "
-          f"{ing.get('written_trace_records', ing.get('trace_records', 0))} trace row(s)")
+    print(
+        f"langsmith_direct: built {summary['records_built']} record(s) "
+        f"({summary['with_cost']} with cost), matched {ing.get('matched_records', 0)}, "
+        f"{verb} {ing.get('written_cost_records', ing.get('cost_records', 0))} cost row(s), "
+        f"{ing.get('written_trace_records', ing.get('trace_records', 0))} trace row(s)"
+    )
     for e in summary["errors"]:
         print(f"- error: {e}")
 

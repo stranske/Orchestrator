@@ -30,6 +30,7 @@ was already owner-approved, and it reports `nothing_to_feed` rather than looking
 doing nothing. Do NOT "fix" a persistent `nothing_to_feed` by relaxing the feed decision -- that
 decision is the safety property, and the empty set is the honest answer until a switch is flipped.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -72,18 +73,25 @@ def feedable(ledger: dict[str, Any] | None = None, *, now: int | None = None) ->
         if not verdict.get("feed"):
             continue
         debt = capabilities.evidence_debt(cap)
-        rows.append({
-            "capability_id": cap_id,
-            "remaining": int(debt.get("remaining") or 0),
-            "blocker": verdict.get("blocker"),
-            "action": verdict.get("action"),
-            "matcher": cap.get("matcher") or {},
-        })
+        rows.append(
+            {
+                "capability_id": cap_id,
+                "remaining": int(debt.get("remaining") or 0),
+                "blocker": verdict.get("blocker"),
+                "action": verdict.get("action"),
+                "matcher": cap.get("matcher") or {},
+            }
+        )
     return sorted(rows, key=lambda row: (row["remaining"], row["capability_id"]))
 
 
-def plan(candidates: list[dict] | None = None, *, ledger: dict | None = None,
-         now: int | None = None, env: dict | None = None) -> dict:
+def plan(
+    candidates: list[dict] | None = None,
+    *,
+    ledger: dict | None = None,
+    now: int | None = None,
+    env: dict | None = None,
+) -> dict:
     """What this cycle WOULD route, bounded. Pure: reads the ledger, writes nothing.
 
     `candidates` are work items the caller already has (the same dicts the tick passes around, with
@@ -96,21 +104,27 @@ def plan(candidates: list[dict] | None = None, *, ledger: dict | None = None,
     assignments: list[dict] = []
     for row in rows[:MAX_FEEDS_PER_CYCLE]:
         matched = [
-            item for item in candidates
+            item
+            for item in candidates
             if capabilities._matches_trigger(
                 {"matcher": row["matcher"]},
-                {"repository": str(item.get("target") or "").rsplit("#", 1)[0],
-                 "task_type": item.get("task_type"), "lane": item.get("lane")},
+                {
+                    "repository": str(item.get("target") or "").rsplit("#", 1)[0],
+                    "task_type": item.get("task_type"),
+                    "lane": item.get("lane"),
+                },
             )[0]
         ]
         take = min(row["remaining"] or MAX_ITEMS_PER_CAPABILITY, MAX_ITEMS_PER_CAPABILITY)
-        assignments.append({
-            "capability_id": row["capability_id"],
-            "remaining": row["remaining"],
-            "items": [item.get("target") for item in matched[:take]],
-            "matching_candidates": len(matched),
-            "reason": row["blocker"],
-        })
+        assignments.append(
+            {
+                "capability_id": row["capability_id"],
+                "remaining": row["remaining"],
+                "items": [item.get("target") for item in matched[:take]],
+                "matching_candidates": len(matched),
+                "reason": row["blocker"],
+            }
+        )
     fed = sum(1 for a in assignments if a["items"])
     if not rows:
         state = "nothing_to_feed"
@@ -128,8 +142,10 @@ def plan(candidates: list[dict] | None = None, *, ledger: dict | None = None,
         "state": state,
         # Both quantities in one place: how many capabilities are starving, and how many this cycle
         # can actually help. `feedable 0` is the answer to "why did nothing happen".
-        "summary": (f"feedable {len(rows)} / capped {MAX_FEEDS_PER_CYCLE} / "
-                    f"candidates {len(candidates)} / fed {fed}"),
+        "summary": (
+            f"feedable {len(rows)} / capped {MAX_FEEDS_PER_CYCLE} / "
+            f"candidates {len(candidates)} / fed {fed}"
+        ),
         "feedable_count": len(rows),
         "cap_per_cycle": MAX_FEEDS_PER_CYCLE,
         "max_items_per_capability": MAX_ITEMS_PER_CAPABILITY,
@@ -138,8 +154,14 @@ def plan(candidates: list[dict] | None = None, *, ledger: dict | None = None,
     }
 
 
-def run(candidates: list[dict] | None = None, *, ledger: dict | None = None,
-        now: int | None = None, env: dict | None = None, write: Path | None = None) -> dict:
+def run(
+    candidates: list[dict] | None = None,
+    *,
+    ledger: dict | None = None,
+    now: int | None = None,
+    env: dict | None = None,
+    write: Path | None = None,
+) -> dict:
     """Compute the plan, record a heartbeat, and route only when the switch is on."""
     result = plan(candidates, ledger=ledger, now=now, env=env)
     try:
@@ -169,35 +191,43 @@ def _selftest() -> None:
 
     def cap(**over):
         base = {
-            "status": "shadow", "liveness": None,
+            "status": "shadow",
+            "liveness": None,
             "evidence_threshold": {"independent_durable_reuse": 3},
             "gate_criteria": {"independent_durable_reuse": 3},
             "matcher": {"field": "task_type", "operator": "in", "value": ["implement"]},
-            "kill_switch": "disable via config", "rollback": "revert",
-            "outcome_links": [], "event_history": [],
+            "kill_switch": "disable via config",
+            "rollback": "revert",
+            "outcome_links": [],
+            "event_history": [],
         }
         base.update(over)
         return {**capabilities._blank_capability("c"), **base}
 
-    items = [{"target": "o/r#1", "task_type": "implement"},
-             {"target": "o/r#2", "task_type": "implement"},
-             {"target": "o/r#3", "task_type": "review"}]
+    items = [
+        {"target": "o/r#1", "task_type": "implement"},
+        {"target": "o/r#2", "task_type": "implement"},
+        {"target": "o/r#3", "task_type": "review"},
+    ]
 
     # A FAILURE-BLOCKED GATE IS NEVER FED — the completion gate this lane was specified against.
-    blocked = cap(gate_criteria={"independent_durable_reuse": 3},
-                  outcome_links=[{"durability": "reverted"}])
+    blocked = cap(
+        gate_criteria={"independent_durable_reuse": 3}, outcome_links=[{"durability": "reverted"}]
+    )
     led = {"capabilities": {"blocked": blocked}}
     assert not feedable(led, now=now), "a failure-blocked gate must never be fed"
     assert plan(items, ledger=led, now=now)["state"] == "nothing_to_feed"
 
     # A DEFAULT-OFF SWITCH IS NEVER FED either (guard added the same day in capabilities.unblock).
     off = cap(kill_switch="restore documented default-off gate")
-    assert not feedable({"capabilities": {"off": off}}, now=now), "default-off switch must not be fed"
+    assert not feedable(
+        {"capabilities": {"off": off}}, now=now
+    ), "default-off switch must not be fed"
 
     # THE CAP HOLDS. Three feedable capabilities, one fed, two deferred — never all at once.
     many = {"capabilities": {f"c{i}": cap() for i in range(3)}}
     rows = feedable(many, now=now)
-    if rows:                      # only meaningful if the fixture is feedable at all
+    if rows:  # only meaningful if the fixture is feedable at all
         p = plan(items, ledger=many, now=now)
         assert len(p["assignments"]) <= MAX_FEEDS_PER_CYCLE, p
         assert len(p["deferred"]) == max(0, len(rows) - MAX_FEEDS_PER_CYCLE), p
@@ -228,9 +258,11 @@ def _selftest() -> None:
     text = plan(items, ledger={"capabilities": {}}, now=now)["summary"]
     assert "feedable 0" in text and "candidates" in text, text
 
-    print("evidence_acquisition.py selftest: OK (feed obeys unblock, failure-blocked and "
-          "default-off never fed, per-cycle cap + per-capability cap, shadow by default, "
-          "distinct empty states)")
+    print(
+        "evidence_acquisition.py selftest: OK (feed obeys unblock, failure-blocked and "
+        "default-off never fed, per-cycle cap + per-capability cap, shadow by default, "
+        "distinct empty states)"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -243,8 +275,11 @@ def main(argv: list[str] | None = None) -> int:
         _selftest()
         return 0
     result = run(write=args.write)
-    print(json.dumps(result, indent=2, sort_keys=True) if args.json
-          else f"evidence-acquisition: {result['state']} — {result['summary']}")
+    print(
+        json.dumps(result, indent=2, sort_keys=True)
+        if args.json
+        else f"evidence-acquisition: {result['state']} — {result['summary']}"
+    )
     return 0
 
 

@@ -24,9 +24,7 @@ def _item(item_id: str, group: str, *, assertion_key: str | None = None) -> dict
         "assertion_key": assertion_key or item_id,
         "group_key": group,
         "assertion": f"Determine the current disposition of {item_id}.",
-        "source_refs": [
-            {"kind": "pull_request", "ref": f"owner/repo#{group.rsplit('-', 1)[-1]}"}
-        ],
+        "source_refs": [{"kind": "pull_request", "ref": f"owner/repo#{group.rsplit('-', 1)[-1]}"}],
     }
 
 
@@ -268,8 +266,9 @@ def test_timeout_provenance_is_retained_and_synthesis_fails_closed(tmp_path: Pat
     )
     synthesis = review.synthesize_results(plan, results_dir=tmp_path / "results")
     timeout_envelope = json.loads(
-        review._partition_path(tmp_path / "results", plan["partitions"][1]["partition_id"])
-        .read_text()
+        review._partition_path(
+            tmp_path / "results", plan["partitions"][1]["partition_id"]
+        ).read_text()
     )
 
     assert run["coverage_status"] == "incomplete"
@@ -293,17 +292,20 @@ def test_timeout_provenance_is_retained_and_synthesis_fails_closed(tmp_path: Pat
     assert incomplete_with_queue["adjudication"]["status"] == "needed"
     assert incomplete_with_queue["adjudicator"]["status"] == "skipped_incomplete_coverage"
     (tmp_path / "timeout-plan.json").write_text(json.dumps(plan))
-    assert review.main(
-        [
-            "synthesize",
-            "--plan",
-            str(tmp_path / "timeout-plan.json"),
-            "--results-dir",
-            str(tmp_path / "results"),
-            "--output",
-            str(tmp_path / "incomplete-synthesis.json"),
-        ]
-    ) == 1
+    assert (
+        review.main(
+            [
+                "synthesize",
+                "--plan",
+                str(tmp_path / "timeout-plan.json"),
+                "--results-dir",
+                str(tmp_path / "results"),
+                "--output",
+                str(tmp_path / "incomplete-synthesis.json"),
+            ]
+        )
+        == 1
+    )
 
 
 def test_synthesis_flags_cross_partition_conflict_and_adjudicates_advisory(
@@ -372,17 +374,20 @@ def test_synthesis_flags_cross_partition_conflict_and_adjudicates_advisory(
     assert synthesis["adjudicator"]["status"] == "complete"
     assert synthesis["adjudicator"]["provenance"]["run_id"] == "offload:gemini:99"
     (tmp_path / "plan.json").write_text(json.dumps(plan))
-    assert review.main(
-        [
-            "synthesize",
-            "--plan",
-            str(tmp_path / "plan.json"),
-            "--results-dir",
-            str(tmp_path / "results"),
-            "--output",
-            str(tmp_path / "synthesis.json"),
-        ]
-    ) == 1
+    assert (
+        review.main(
+            [
+                "synthesize",
+                "--plan",
+                str(tmp_path / "plan.json"),
+                "--results-dir",
+                str(tmp_path / "results"),
+                "--output",
+                str(tmp_path / "synthesis.json"),
+            ]
+        )
+        == 1
+    )
 
 
 def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
@@ -416,8 +421,7 @@ def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
     wrong_schema = review.synthesize_results(plan, results_dir=results_dir)
     assert wrong_schema["coverage_status"] == "incomplete"
     assert any(
-        "schema_version" in error
-        for error in wrong_schema["partition_statuses"][0]["errors"]
+        "schema_version" in error for error in wrong_schema["partition_statuses"][0]["errors"]
     )
     envelope["schema_version"] = 1
     envelope["partition_digest"] = "stale-digest"
@@ -427,8 +431,7 @@ def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
     assert stale["coverage_status"] == "incomplete"
     assert stale["verdict"] == "INCOMPLETE"
     assert any(
-        "partition_digest mismatch" in error
-        for error in stale["partition_statuses"][0]["errors"]
+        "partition_digest mismatch" in error for error in stale["partition_statuses"][0]["errors"]
     )
 
     resumed = review.run_plan(
@@ -441,17 +444,20 @@ def test_stale_partition_digest_cannot_be_reused_or_synthesized_complete(
     assert resumed["coverage_status"] == "complete"
     assert calls == 2, "a stale envelope must be re-run, not reused"
     (tmp_path / "complete-plan.json").write_text(json.dumps(plan))
-    assert review.main(
-        [
-            "synthesize",
-            "--plan",
-            str(tmp_path / "complete-plan.json"),
-            "--results-dir",
-            str(results_dir),
-            "--output",
-            str(tmp_path / "complete-synthesis.json"),
-        ]
-    ) == 0
+    assert (
+        review.main(
+            [
+                "synthesize",
+                "--plan",
+                str(tmp_path / "complete-plan.json"),
+                "--results-dir",
+                str(results_dir),
+                "--output",
+                str(tmp_path / "complete-synthesis.json"),
+            ]
+        )
+        == 0
+    )
 
 
 def test_dispatcher_exposes_partitioned_review_selftest() -> None:

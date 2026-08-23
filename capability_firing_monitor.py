@@ -30,6 +30,7 @@ promised nothing, so calling it "overdue" would be noise. Those are reported as 
 — a documentation gap, not an alarm. This is the same reason `switch_review` refuses to nag about a
 switch with no recorded switch-on criterion.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,18 +43,19 @@ from typing import Any
 
 import capabilities
 
-STATE_DIR = pathlib.Path(os.environ.get("ORCH_STATE_DIR",
-                                        str(pathlib.Path.home() / ".codex/orchestrator")))
+STATE_DIR = pathlib.Path(
+    os.environ.get("ORCH_STATE_DIR", str(pathlib.Path.home() / ".codex/orchestrator"))
+)
 HISTORY = STATE_DIR / "capability-firing-history.json"
 DISABLED = os.environ.get("ORCH_FIRING_MONITOR_DISABLED", "").strip() == "1"
-MAX_SNAPSHOTS = 52                      # a year of weekly runs; enough to see a slow decay
+MAX_SNAPSHOTS = 52  # a year of weekly runs; enough to see a slow decay
 
 # `trigger_cadence` is free prose across the ledger ("daily", "weekly (cron '0 8 * * 1')",
 # "every suite run", "supervised CLI and focused activation probe"). Parse it into a tolerance
 # rather than demanding a schema migration for 20 existing records.
 CADENCE_PATTERNS: tuple[tuple[str, float], ...] = (
     (r"every tick|hourly|per tick", 0.25),
-    (r"every suite run|every run", 7.0),      # bounded by how often anyone runs the suite
+    (r"every suite run|every run", 7.0),  # bounded by how often anyone runs the suite
     (r"\bdaily\b|every day|1 ?/ ?day", 2.0),
     (r"\bweekly\b|per week|mondays?", 10.0),
     (r"\bmonthly\b|per month", 40.0),
@@ -62,8 +64,9 @@ CADENCE_PATTERNS: tuple[tuple[str, float], ...] = (
 # Cadences that describe a HUMAN or ad-hoc trigger promise nothing about elapsed time. Treating
 # these as overdue would manufacture an alarm nobody can act on — and per the owner's attention
 # budget, a "supervised CLI" step is precisely the thing that will not happen on a schedule.
-ONDEMAND_RE = re.compile(r"supervised|on demand|ad hoc|manual|dispatch|when |focused activation",
-                         re.I)
+ONDEMAND_RE = re.compile(
+    r"supervised|on demand|ad hoc|manual|dispatch|when |focused activation", re.I
+)
 
 
 # `capabilities.production_heartbeat` is a NO-OP unless ORCH_CAPABILITY_HEARTBEATS=1, which only
@@ -104,7 +107,7 @@ def _load_history() -> list[dict]:
         return []
     try:
         data = json.loads(HISTORY.read_text(encoding="utf-8"))
-    except Exception:                                              # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return []
     return data if isinstance(data, list) else list(data.get("snapshots") or [])
 
@@ -118,9 +121,9 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         capabilities.production_heartbeat(
-            "capability-firing-monitor", event_type,
-            ref="capability_firing_monitor.review")
-    except Exception:                                              # noqa: BLE001
+            "capability-firing-monitor", event_type, ref="capability_firing_monitor.review"
+        )
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -141,10 +144,17 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
         tolerance = expected_interval_days(cap)
         liveness = capabilities.classify_liveness(cap, now=now)
         observable = heartbeat_observable(cap)
-        row = {"capability_id": cap_id, "status": cap.get("status"), "observer": observer,
-               "last_invocation": last, "silent_days": silent_days,
-               "tolerance_days": tolerance, "liveness": liveness,
-               "ever_fired": bool(last), "tick_observable": observable}
+        row = {
+            "capability_id": cap_id,
+            "status": cap.get("status"),
+            "observer": observer,
+            "last_invocation": last,
+            "silent_days": silent_days,
+            "tolerance_days": tolerance,
+            "liveness": liveness,
+            "ever_fired": bool(last),
+            "tick_observable": observable,
+        }
         rows.append(row)
         if not observable:
             # Its caller is the suite or a CLI; tick heartbeats cannot see it either way.
@@ -152,36 +162,55 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
 
         if tolerance is None:
             if cap.get("trigger_cadence"):
-                pass                       # an on-demand cadence promises nothing; not a gap
+                pass  # an on-demand cadence promises nothing; not a gap
             else:
                 no_cadence.append(cap_id)
         elif last and silent_days is not None and silent_days > tolerance:
-            overdue.append({"capability_id": cap_id, "silent_days": silent_days,
-                            "tolerance_days": tolerance,
-                            "cadence": cap.get("trigger_cadence"),
-                            "observer": observer})
+            overdue.append(
+                {
+                    "capability_id": cap_id,
+                    "silent_days": silent_days,
+                    "tolerance_days": tolerance,
+                    "cadence": cap.get("trigger_cadence"),
+                    "observer": observer,
+                }
+            )
 
         # REGRESSION: it fired by the previous snapshot and has not fired since. This is the case no
         # existing instrument covered, and the reason range-lane's 36-day silence went unremarked.
         prior = previous.get(cap_id)
-        if prior and prior.get("ever_fired") and last and last == int(prior.get("last_invocation") or 0):
+        if (
+            prior
+            and prior.get("ever_fired")
+            and last
+            and last == int(prior.get("last_invocation") or 0)
+        ):
             elapsed = (now - int(history[-1]["generated_at"])) / 86400
             if tolerance is not None and elapsed > tolerance:
-                regressed.append({"capability_id": cap_id,
-                                  "unchanged_for_days": round(elapsed, 1),
-                                  "tolerance_days": tolerance,
-                                  "last_invocation": last})
+                regressed.append(
+                    {
+                        "capability_id": cap_id,
+                        "unchanged_for_days": round(elapsed, 1),
+                        "tolerance_days": tolerance,
+                        "last_invocation": last,
+                    }
+                )
 
-    return {"generated_at": now, "total": len(rows),
-            "fired_ever": sum(1 for r in rows if r["ever_fired"]),
-            "never_fired": [r["capability_id"] for r in rows
-                            if not r["ever_fired"] and r["tick_observable"]],
-            "not_tick_observable": [r["capability_id"] for r in rows
-                                    if not r["tick_observable"]],
-            "observers": sum(1 for r in rows if r["observer"]),
-            "overdue": overdue, "regressed": regressed,
-            "no_cadence_declared": no_cadence,
-            "snapshots_stored": len(history), "rows": rows}
+    return {
+        "generated_at": now,
+        "total": len(rows),
+        "fired_ever": sum(1 for r in rows if r["ever_fired"]),
+        "never_fired": [
+            r["capability_id"] for r in rows if not r["ever_fired"] and r["tick_observable"]
+        ],
+        "not_tick_observable": [r["capability_id"] for r in rows if not r["tick_observable"]],
+        "observers": sum(1 for r in rows if r["observer"]),
+        "overdue": overdue,
+        "regressed": regressed,
+        "no_cadence_declared": no_cadence,
+        "snapshots_stored": len(history),
+        "rows": rows,
+    }
 
 
 def record(rep: dict) -> dict:
@@ -192,10 +221,15 @@ def record(rep: dict) -> dict:
     if DISABLED:
         return {"recorded": False, "reason": "ORCH_FIRING_MONITOR_DISABLED=1"}
     history = _load_history()
-    history.append({"generated_at": rep["generated_at"],
-                    "rows": [{k: r[k] for k in ("capability_id", "last_invocation", "ever_fired",
-                                                "liveness")}
-                             for r in rep["rows"]]})
+    history.append(
+        {
+            "generated_at": rep["generated_at"],
+            "rows": [
+                {k: r[k] for k in ("capability_id", "last_invocation", "ever_fired", "liveness")}
+                for r in rep["rows"]
+            ],
+        }
+    )
     history = history[-MAX_SNAPSHOTS:]
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     HISTORY.write_text(json.dumps(history, indent=1) + "\n", encoding="utf-8")
@@ -211,8 +245,13 @@ def routing_hint(cap: dict[str, Any]) -> str | None:
     """
     matcher = cap.get("matcher") or {}
     task = str(matcher.get("task_type") or matcher.get("name") or "")
-    known = {"testgen": "testgen", "epic": "epic", "codemod": "refactor",
-             "cross_repo": "cross-repo", "runtime_ac": "runtime-ac"}
+    known = {
+        "testgen": "testgen",
+        "epic": "epic",
+        "codemod": "refactor",
+        "cross_repo": "cross-repo",
+        "runtime_ac": "runtime-ac",
+    }
     for key, label in known.items():
         if key in task or key in str(cap.get("capability_id") or ""):
             return label
@@ -220,39 +259,56 @@ def routing_hint(cap: dict[str, Any]) -> str | None:
 
 
 def format_report(rep: dict) -> str:
-    out = ["# Capability firing monitor", "",
-           f"  {rep['fired_ever']} of {rep['total']} capabilities have ever fired "
-           f"({rep['observers']} are observers, judged on running rather than delivering)",
-           f"  history: {rep['snapshots_stored']} prior snapshot(s)"]
+    out = [
+        "# Capability firing monitor",
+        "",
+        f"  {rep['fired_ever']} of {rep['total']} capabilities have ever fired "
+        f"({rep['observers']} are observers, judged on running rather than delivering)",
+        f"  history: {rep['snapshots_stored']} prior snapshot(s)",
+    ]
     if rep["snapshots_stored"] == 0:
-        out.append("  NOTE: no prior snapshot, so regressions cannot be computed yet — this run "
-                   "establishes the baseline")
+        out.append(
+            "  NOTE: no prior snapshot, so regressions cannot be computed yet — this run "
+            "establishes the baseline"
+        )
     out.append("")
     if rep["regressed"]:
         out.append("  REGRESSED (fired before, unchanged since the last snapshot):")
         for r in rep["regressed"]:
-            out.append(f"    {r['capability_id']:<38} unchanged {r['unchanged_for_days']}d "
-                       f"(tolerance {r['tolerance_days']}d)")
+            out.append(
+                f"    {r['capability_id']:<38} unchanged {r['unchanged_for_days']}d "
+                f"(tolerance {r['tolerance_days']}d)"
+            )
     else:
         out.append("  no regressions: nothing that used to fire has gone quiet")
     if rep["overdue"]:
         out += ["", "  OVERDUE against its own declared cadence:"]
         for r in rep["overdue"]:
-            out.append(f"    {r['capability_id']:<38} silent {r['silent_days']}d "
-                       f"(tolerance {r['tolerance_days']}d; cadence {r['cadence']!r})")
+            out.append(
+                f"    {r['capability_id']:<38} silent {r['silent_days']}d "
+                f"(tolerance {r['tolerance_days']}d; cadence {r['cadence']!r})"
+            )
     if rep.get("not_tick_observable"):
-        out += ["", f"  not observable via tick heartbeats ({len(rep['not_tick_observable'])}) — "
-                    "their caller is the suite or a CLI, where production_heartbeat is a no-op, so "
-                    "their firing record says nothing either way:"]
+        out += [
+            "",
+            f"  not observable via tick heartbeats ({len(rep['not_tick_observable'])}) — "
+            "their caller is the suite or a CLI, where production_heartbeat is a no-op, so "
+            "their firing record says nothing either way:",
+        ]
         out.append("    " + ", ".join(rep["not_tick_observable"]))
     if rep["never_fired"]:
-        out += ["", f"  NEVER FIRED IN A TICK ({len(rep['never_fired'])}) — can-fire is not "
-                    "does-fire:"]
+        out += [
+            "",
+            f"  NEVER FIRED IN A TICK ({len(rep['never_fired'])}) — can-fire is not " "does-fire:",
+        ]
         for cap_id in rep["never_fired"]:
             out.append(f"    {cap_id}")
     if rep["no_cadence_declared"]:
-        out += ["", f"  no cadence declared ({len(rep['no_cadence_declared'])}) — silence cannot be "
-                    "judged, which is a documentation gap rather than an alarm:"]
+        out += [
+            "",
+            f"  no cadence declared ({len(rep['no_cadence_declared'])}) — silence cannot be "
+            "judged, which is a documentation gap rather than an alarm:",
+        ]
         out.append("    " + ", ".join(rep["no_cadence_declared"][:12]))
     return "\n".join(out) + "\n"
 
@@ -273,11 +329,13 @@ def _selftest() -> None:
     # cadence below contains BOTH an on-demand marker AND a period word, so only the guard can
     # produce None; without it the answer is 10.0 and a false "overdue" alarm follows.
     both = {"trigger_cadence": "supervised CLI, nominally weekly"}
-    assert expected_interval_days(both) is None, \
-        "an on-demand trigger promises no interval even when it mentions a period"
-    assert expected_interval_days({"trigger_cadence": "nominally weekly"}) == 10.0, \
-        "...and the same wording without the on-demand marker MUST still yield a tolerance, or the "\
+    assert (
+        expected_interval_days(both) is None
+    ), "an on-demand trigger promises no interval even when it mentions a period"
+    assert expected_interval_days({"trigger_cadence": "nominally weekly"}) == 10.0, (
+        "...and the same wording without the on-demand marker MUST still yield a tolerance, or the "
         "guard is just swallowing everything"
+    )
 
     # TICK-OBSERVABILITY. production_heartbeat is a no-op outside a tick, so a suite-triggered
     # capability can never accrue a firing record. Reporting it as "never fired" alongside a truly
@@ -285,50 +343,89 @@ def _selftest() -> None:
     # Each clause must be decided by ONE mechanism, or removing that mechanism goes unnoticed. The
     # first version paired `test_gate` with "every suite run", so the cadence regex answered it and
     # deleting the matcher check still passed.
-    assert not heartbeat_observable({"matcher": {"kind": "test_gate"},
-                                     "trigger_cadence": "daily"}), \
-        "a test_gate is decided by its MATCHER; pairing it with a suite cadence hides that"
-    assert not heartbeat_observable({"matcher": {"kind": "transport"},
-                                     "trigger_cadence": "every suite run"}), \
-        "...and a suite CADENCE decides it independently of the matcher"
+    assert not heartbeat_observable(
+        {"matcher": {"kind": "test_gate"}, "trigger_cadence": "daily"}
+    ), "a test_gate is decided by its MATCHER; pairing it with a suite cadence hides that"
+    assert not heartbeat_observable(
+        {"matcher": {"kind": "transport"}, "trigger_cadence": "every suite run"}
+    ), "...and a suite CADENCE decides it independently of the matcher"
     assert heartbeat_observable({"matcher": {"kind": "tick_phase"}, "trigger_cadence": "daily"})
     assert heartbeat_observable({"matcher": {"kind": "transport"}, "trigger_cadence": "weekly"})
 
     # OBSERVERS ARE JUDGED ON RUNNING, NOT DELIVERING. Guards the category error that parked 8
     # capabilities in a measurement gap they could never leave.
-    observer = {"matcher": {"kind": "tick_phase", "name": "x"}, "status": "wired",
-                "last_invocation": now - 3600, "event_history": [], "trigger_cadence": "daily"}
+    observer = {
+        "matcher": {"kind": "tick_phase", "name": "x"},
+        "status": "wired",
+        "last_invocation": now - 3600,
+        "event_history": [],
+        "trigger_cadence": "daily",
+    }
     assert capabilities.is_observer(observer)
     assert capabilities.classify_liveness(observer, now=now) == "observing"
 
     import tempfile
+
     with tempfile.TemporaryDirectory(prefix="firing-") as td:
         reg = pathlib.Path(td) / "capabilities.json"
         fresh = capabilities._blank_capability("cap-fresh")
-        fresh.update({"status": "wired", "last_invocation": now - 86400,
-                      "trigger_cadence": "daily",
-                      "matcher": {"kind": "transport", "name": "t"}})
+        fresh.update(
+            {
+                "status": "wired",
+                "last_invocation": now - 86400,
+                "trigger_cadence": "daily",
+                "matcher": {"kind": "transport", "name": "t"},
+            }
+        )
         stale = capabilities._blank_capability("cap-stale")
-        stale.update({"status": "wired", "last_invocation": now - 30 * 86400,
-                      "trigger_cadence": "daily",
-                      "matcher": {"kind": "transport", "name": "t"}})
+        stale.update(
+            {
+                "status": "wired",
+                "last_invocation": now - 30 * 86400,
+                "trigger_cadence": "daily",
+                "matcher": {"kind": "transport", "name": "t"},
+            }
+        )
         silent = capabilities._blank_capability("cap-never")
-        silent.update({"status": "generated", "last_invocation": None,
-                       "matcher": {"kind": "transport", "name": "t"}})
+        silent.update(
+            {
+                "status": "generated",
+                "last_invocation": None,
+                "matcher": {"kind": "transport", "name": "t"},
+            }
+        )
         # Fired once, promises NOTHING about cadence. It must never be called a regression: the
         # `tolerance is not None` guard is the only thing preventing that, and a first-run
         # assertion cannot reach the guard at all, so this fixture is what makes it testable.
         nocadence = capabilities._blank_capability("cap-nocadence")
-        nocadence.update({"status": "wired", "last_invocation": now - 86400,
-                          "matcher": {"kind": "transport", "name": "t"}})
+        nocadence.update(
+            {
+                "status": "wired",
+                "last_invocation": now - 86400,
+                "matcher": {"kind": "transport", "name": "t"},
+            }
+        )
         # Fired once, promises MONTHLY. Eight days of silence is well inside its tolerance, so it
         # must not regress either — that exercises the `elapsed > tolerance` half.
         monthly = capabilities._blank_capability("cap-monthly")
-        monthly.update({"status": "wired", "last_invocation": now - 86400,
-                        "trigger_cadence": "monthly",
-                        "matcher": {"kind": "transport", "name": "t"}})
-        capabilities.save({"cap-fresh": fresh, "cap-stale": stale, "cap-never": silent,
-                           "cap-nocadence": nocadence, "cap-monthly": monthly}, reg)
+        monthly.update(
+            {
+                "status": "wired",
+                "last_invocation": now - 86400,
+                "trigger_cadence": "monthly",
+                "matcher": {"kind": "transport", "name": "t"},
+            }
+        )
+        capabilities.save(
+            {
+                "cap-fresh": fresh,
+                "cap-stale": stale,
+                "cap-never": silent,
+                "cap-nocadence": nocadence,
+                "cap-monthly": monthly,
+            },
+            reg,
+        )
 
         saved_hist = globals()["HISTORY"]
         globals()["HISTORY"] = pathlib.Path(td) / "hist.json"
@@ -336,8 +433,7 @@ def _selftest() -> None:
             # Scope every assertion to the fixtures. `capabilities.load` reconciles DECLARED gated
             # capabilities into the ledger, so a temp file with three rows loads as ~17 — asserting
             # on totals would be asserting about the ambient ledger, not about this mechanism.
-            mine = {"cap-fresh", "cap-stale", "cap-never", "cap-nocadence",
-                    "cap-monthly"}
+            mine = {"cap-fresh", "cap-stale", "cap-never", "cap-nocadence", "cap-monthly"}
             rep = review(now=now, path=reg)
             rows = {r["capability_id"]: r for r in rep["rows"] if r["capability_id"] in mine}
             assert set(rows) == mine, rows
@@ -358,16 +454,19 @@ def _selftest() -> None:
             later = now + 8 * 86400
             rep2 = review(now=later, path=reg)
             reg_ids = {r["capability_id"] for r in rep2["regressed"]} & mine
-            assert "cap-fresh" in reg_ids, \
-                f"a capability that fired then went quiet must regress: {rep2['regressed']}"
+            assert (
+                "cap-fresh" in reg_ids
+            ), f"a capability that fired then went quiet must regress: {rep2['regressed']}"
             # cap-never never fired, so it cannot REGRESS — it is a never-fired, not a regression.
             assert "cap-never" not in reg_ids, rep2
             # A capability that promised no cadence cannot be late for anything.
-            assert "cap-nocadence" not in reg_ids, \
-                f"no declared cadence means no promise to break: {rep2['regressed']}"
+            assert (
+                "cap-nocadence" not in reg_ids
+            ), f"no declared cadence means no promise to break: {rep2['regressed']}"
             # ...and one still inside its tolerance is not late either.
-            assert "cap-monthly" not in reg_ids, \
-                f"8d of silence is inside a monthly tolerance: {rep2['regressed']}"
+            assert (
+                "cap-monthly" not in reg_ids
+            ), f"8d of silence is inside a monthly tolerance: {rep2['regressed']}"
 
             # The kill switch must stop writes, not just reads.
             globals()["DISABLED"] = True
@@ -378,16 +477,21 @@ def _selftest() -> None:
         finally:
             globals()["HISTORY"] = saved_hist
 
-    print("capability_firing_monitor.py selftest: OK (cadence parsing incl. on-demand refusal, "
-          "observers judged on running, regression needs history, kill switch blocks writes)")
+    print(
+        "capability_firing_monitor.py selftest: OK (cadence parsing incl. on-demand refusal, "
+        "observers judged on running, regression needs history, kill switch blocks writes)"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--record", action="store_true",
-                    help="append this review to history (the weekly cadence step does this)")
+    ap.add_argument(
+        "--record",
+        action="store_true",
+        help="append this review to history (the weekly cadence step does this)",
+    )
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()

@@ -32,9 +32,7 @@ from urllib.parse import quote
 import langsmith_pull
 
 ORCH_DIR = Path(__file__).resolve().parent
-DEFAULT_REGISTRY = (
-    ORCH_DIR.parent / "Workflows" / "config" / "langsmith_fleet_registry.json"
-)
+DEFAULT_REGISTRY = ORCH_DIR.parent / "Workflows" / "config" / "langsmith_fleet_registry.json"
 DEFAULT_OUTPUT_DIR = Path.home() / ".codex" / "orchestrator" / "langsmith-artifacts"
 DEFAULT_ARTIFACT_NAME = "langsmith-fleet.ndjson"
 DEFAULT_REGISTRY_REPO = "stranske/Workflows"
@@ -74,12 +72,8 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
 
 
 DEFAULT_ARTIFACT_LOOKUP_PAGES = _env_int("ORCH_LANGSMITH_ARTIFACT_LOOKUP_PAGES", 50)
-DEFAULT_MISSING_RUN_LOOKUP_LIMIT = _env_int(
-    "ORCH_LANGSMITH_MISSING_RUN_LOOKUP_LIMIT", 20
-)
-DEFAULT_MISSING_RUN_DETAIL_LIMIT = _env_int(
-    "ORCH_LANGSMITH_MISSING_RUN_DETAIL_LIMIT", 5
-)
+DEFAULT_MISSING_RUN_LOOKUP_LIMIT = _env_int("ORCH_LANGSMITH_MISSING_RUN_LOOKUP_LIMIT", 20)
+DEFAULT_MISSING_RUN_DETAIL_LIMIT = _env_int("ORCH_LANGSMITH_MISSING_RUN_DETAIL_LIMIT", 5)
 
 
 def _runner(cmd: list[str], text: bool) -> GhResult:
@@ -189,9 +183,7 @@ def _latest_artifact(
         candidates.extend(
             a
             for a in artifacts
-            if isinstance(a, dict)
-            and a.get("name") == lookup_name
-            and not a.get("expired")
+            if isinstance(a, dict) and a.get("name") == lookup_name and not a.get("expired")
         )
     if not candidates:
         return None
@@ -270,10 +262,7 @@ def _latest_producer_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
     for run in runs:
         path = str(run.get("path") or "")
         name = str(run.get("name") or "")
-        if (
-            path in DEFAULT_PRODUCER_WORKFLOW_PATHS
-            or name in DEFAULT_PRODUCER_WORKFLOW_NAMES
-        ):
+        if path in DEFAULT_PRODUCER_WORKFLOW_PATHS or name in DEFAULT_PRODUCER_WORKFLOW_NAMES:
             return run
     return None
 
@@ -395,9 +384,7 @@ def _artifact_distribution_health(summary: dict[str, Any]) -> dict[str, Any]:
         row for row in missing if isinstance(row, dict) and row.get("artifact_expected")
     ]
     exempted_missing = [
-        row
-        for row in missing
-        if isinstance(row, dict) and not row.get("artifact_expected")
+        row for row in missing if isinstance(row, dict) and not row.get("artifact_expected")
     ]
     coverage = round(expected_found / expected_repos, 3) if expected_repos else None
 
@@ -434,9 +421,7 @@ def _artifact_distribution_health(summary: dict[str, Any]) -> dict[str, Any]:
             "consumer workflow artifact names before treating artifact ingestion as complete."
         )
 
-    rollup_artifact = (
-        rollup.get("artifact") if isinstance(rollup.get("artifact"), dict) else {}
-    )
+    rollup_artifact = rollup.get("artifact") if isinstance(rollup.get("artifact"), dict) else {}
     return {
         "schema_version": ARTIFACT_DISTRIBUTION_SCHEMA_VERSION,
         "status": status,
@@ -457,8 +442,7 @@ def _artifact_distribution_health(summary: dict[str, Any]) -> dict[str, Any]:
         "missing_expected_without_recent_runs": sum(
             1
             for row in expected_missing
-            if row.get("missing_reason")
-            == "artifact_lookup_empty_no_recent_actions_runs"
+            if row.get("missing_reason") == "artifact_lookup_empty_no_recent_actions_runs"
         ),
         "missing_expected_diagnostic_errors": sum(
             1 for row in expected_missing if row.get("actions_run_lookup_error")
@@ -530,9 +514,7 @@ def diagnose_artifact_distribution(
         rollup_prefix=rollup_prefix,
         runner=runner,
     )
-    return summary.get("artifact_distribution") or _artifact_distribution_health(
-        summary
-    )
+    return summary.get("artifact_distribution") or _artifact_distribution_health(summary)
 
 
 def fetch_registry(
@@ -633,9 +615,7 @@ def fetch_registry(
         if dry_run:
             continue
         if not archive_url:
-            summary["errors"].append(
-                f"{repo}: artifact {art_id} has no archive_download_url"
-            )
+            summary["errors"].append(f"{repo}: artifact {art_id} has no archive_download_url")
             continue
         try:
             zip_bytes = _gh_bytes(str(archive_url), runner=runner)
@@ -657,13 +637,9 @@ def fetch_registry(
     )
     if try_rollup:
         try:
-            rollup = _latest_artifact_by_prefix(
-                str(rollup_repo), str(rollup_prefix), runner=runner
-            )
+            rollup = _latest_artifact_by_prefix(str(rollup_repo), str(rollup_prefix), runner=runner)
         except Exception as exc:
-            summary["errors"].append(
-                f"{rollup_repo}: rollup artifact lookup failed: {exc}"
-            )
+            summary["errors"].append(f"{rollup_repo}: rollup artifact lookup failed: {exc}")
             rollup = None
         if rollup:
             summary["rollup"]["artifact_found"] = True
@@ -839,8 +815,7 @@ def _selftest():
                     ),
                 )
             if key == (
-                "repos/stranske/Two/actions/artifacts?"
-                "name=langsmith-fleet.ndjson&per_page=20"
+                "repos/stranske/Two/actions/artifacts?" "name=langsmith-fleet.ndjson&per_page=20"
             ):
                 return GhResult(0, json.dumps({"artifacts": []}))
             if key == (
@@ -863,14 +838,10 @@ def _selftest():
                         }
                     ),
                 )
-            if key == (
-                "repos/stranske/Two/actions/artifacts?"
-                "name=langsmith-fleet&per_page=20"
-            ):
+            if key == ("repos/stranske/Two/actions/artifacts?" "name=langsmith-fleet&per_page=20"):
                 return GhResult(0, json.dumps({"artifacts": []}))
             if key == (
-                "repos/stranske/Two/actions/artifacts?"
-                "name=gate-langsmith-fleet&per_page=20"
+                "repos/stranske/Two/actions/artifacts?" "name=gate-langsmith-fleet&per_page=20"
             ):
                 return GhResult(0, json.dumps({"artifacts": []}))
             if key == "https://api.fake/one.zip":
@@ -879,40 +850,27 @@ def _selftest():
                 return GhResult(0, zip_two)
             return GhResult(1, "" if text else b"", f"unexpected gh call: {cmd}")
 
-        dry = fetch_registry(
-            registry, tmp / "out-dry", dry_run=True, runner=fake_runner
-        )
+        dry = fetch_registry(registry, tmp / "out-dry", dry_run=True, runner=fake_runner)
         assert (
-            dry["artifacts_found"] == 2
-            and dry["downloaded"] == 0
-            and dry["combined"] is None
+            dry["artifacts_found"] == 2 and dry["downloaded"] == 0 and dry["combined"] is None
         ), dry
         assert dry["artifacts"][1]["artifact_name"] == "langsmith-fleet.ndjson", dry
-        assert (
-            dry["artifacts"][1]["matched_artifact_name"]
-            == "gate-langsmith-fleet.ndjson"
-        ), dry
+        assert dry["artifacts"][1]["matched_artifact_name"] == "gate-langsmith-fleet.ndjson", dry
         assert dry["artifacts"][1]["candidate_names"] == [
             "langsmith-fleet.ndjson",
             "gate-langsmith-fleet.ndjson",
             "langsmith-fleet",
             "gate-langsmith-fleet",
         ], dry
-        assert dry["artifact_distribution"]["status"] == "healthy", dry[
-            "artifact_distribution"
-        ]
+        assert dry["artifact_distribution"]["status"] == "healthy", dry["artifact_distribution"]
         assert dry["artifact_distribution"]["per_repo_coverage"] == 1.0, dry[
             "artifact_distribution"
         ]
         diagnosed = diagnose_artifact_distribution(registry, runner=fake_runner)
-        assert (
-            diagnosed["status"] == "healthy" and diagnosed["registered_repos"] == 2
-        ), diagnosed
+        assert diagnosed["status"] == "healthy" and diagnosed["registered_repos"] == 2, diagnosed
 
         summary = fetch_registry(registry, tmp / "out", runner=fake_runner)
-        assert (
-            summary["repos_checked"] == 2 and summary["artifacts_found"] == 2
-        ), summary
+        assert summary["repos_checked"] == 2 and summary["artifacts_found"] == 2, summary
         assert summary["downloaded"] == 2 and summary["combined_lines"] == 2, summary
         assert len(summary["ndjson_files"]) == 2, summary
         assert summary["rollup"]["used"] is False, summary
@@ -938,9 +896,7 @@ def _selftest():
                 dry_run=True,
                 runner=fallback_runner,
             )
-            assert (
-                fallback["repos_checked"] == 2 and fallback["artifacts_found"] == 2
-            ), fallback
+            assert fallback["repos_checked"] == 2 and fallback["artifacts_found"] == 2, fallback
         finally:
             globals()["DEFAULT_REGISTRY"] = old_default
 
@@ -1007,9 +963,9 @@ def _selftest():
                 )
             if key.startswith("repos/stranske/DirectOnly/actions/artifacts"):
                 return GhResult(0, json.dumps({"artifacts": []}))
-            if key.startswith(
-                "repos/stranske/Workflows/actions/artifacts"
-            ) and key.endswith("page=1"):
+            if key.startswith("repos/stranske/Workflows/actions/artifacts") and key.endswith(
+                "page=1"
+            ):
                 return GhResult(
                     0,
                     json.dumps(
@@ -1027,9 +983,9 @@ def _selftest():
                         }
                     ),
                 )
-            if key.startswith(
-                "repos/stranske/Workflows/actions/artifacts"
-            ) and key.endswith("page=2"):
+            if key.startswith("repos/stranske/Workflows/actions/artifacts") and key.endswith(
+                "page=2"
+            ):
                 return GhResult(
                     0,
                     json.dumps(
@@ -1050,23 +1006,15 @@ def _selftest():
                 return GhResult(0, zip_rollup)
             return GhResult(1, "" if text else b"", f"unexpected gh call: {cmd}")
 
-        rollup_summary = fetch_registry(
-            missing_registry, tmp / "out-rollup", runner=rollup_runner
-        )
+        rollup_summary = fetch_registry(missing_registry, tmp / "out-rollup", runner=rollup_runner)
         assert (
             rollup_summary["artifacts_found"] == 0 and rollup_summary["rollup"]["used"]
         ), rollup_summary
         assert rollup_summary["repos_checked"] == 2, rollup_summary
-        assert (
-            rollup_summary["artifact_distribution"]["expected_repos"] == 1
-        ), rollup_summary
-        assert (
-            rollup_summary["artifact_distribution"]["exempted_repos"] == 1
-        ), rollup_summary
+        assert rollup_summary["artifact_distribution"]["expected_repos"] == 1, rollup_summary
+        assert rollup_summary["artifact_distribution"]["exempted_repos"] == 1, rollup_summary
         assert rollup_summary["rollup"]["artifact"]["id"] == 3, rollup_summary
-        assert (
-            rollup_summary["artifact_distribution"]["status"] == "rollup_only"
-        ), rollup_summary
+        assert rollup_summary["artifact_distribution"]["status"] == "rollup_only", rollup_summary
         assert (
             rollup_summary["artifact_distribution"]["rollup_artifact_found"] is True
         ), rollup_summary
@@ -1075,42 +1023,33 @@ def _selftest():
             == "stranske/Missing"
         ), rollup_summary
         assert (
-            rollup_summary["artifact_distribution"]["missing_repos"][0][
-                "missing_reason"
-            ]
+            rollup_summary["artifact_distribution"]["missing_repos"][0]["missing_reason"]
             == "artifact_lookup_empty_recent_actions_runs_visible"
         ), rollup_summary
         assert (
-            rollup_summary["artifact_distribution"]["missing_repos"][0][
-                "latest_actions_run"
-            ]["name"]
+            rollup_summary["artifact_distribution"]["missing_repos"][0]["latest_actions_run"][
+                "name"
+            ]
             == "Auto-Label Issues"
         ), rollup_summary
         assert (
-            rollup_summary["artifact_distribution"]["missing_repos"][0][
-                "latest_producer_run"
-            ]["name"]
+            rollup_summary["artifact_distribution"]["missing_repos"][0]["latest_producer_run"][
+                "name"
+            ]
             == "CI"
         ), rollup_summary
         assert (
-            rollup_summary["artifact_distribution"]["missing_repos"][0][
-                "producer_missing_reason"
-            ]
+            rollup_summary["artifact_distribution"]["missing_repos"][0]["producer_missing_reason"]
             == "artifact_lookup_empty_producer_run_failure"
         ), rollup_summary
         assert (
-            rollup_summary["artifact_distribution"]["missing_expected_with_recent_runs"]
-            == 1
+            rollup_summary["artifact_distribution"]["missing_expected_with_recent_runs"] == 1
         ), rollup_summary
         assert (
-            rollup_summary["artifact_distribution"][
-                "missing_expected_with_recent_producer_runs"
-            ]
+            rollup_summary["artifact_distribution"]["missing_expected_with_recent_producer_runs"]
             == 1
         ), rollup_summary
-        assert (
-            len(rollup_summary["artifact_distribution"]["missing_repos"]) == 1
-        ), rollup_summary
+        assert len(rollup_summary["artifact_distribution"]["missing_repos"]) == 1, rollup_summary
         assert (
             rollup_summary["artifact_distribution"]["exempted_missing_repos"][0]["repo"]
             == "stranske/DirectOnly"
@@ -1121,18 +1060,14 @@ def _selftest():
             ]
             == "rollout_status=covered-via-langsmith-direct"
         ), rollup_summary
-        assert rollup_summary["artifact_distribution"]["missing_repos"][0][
-            "candidate_names"
-        ] == [
+        assert rollup_summary["artifact_distribution"]["missing_repos"][0]["candidate_names"] == [
             "langsmith-fleet.ndjson",
             "gate-langsmith-fleet.ndjson",
             "langsmith-fleet",
             "gate-langsmith-fleet",
         ], rollup_summary
         rollup_lines = Path(rollup_summary["combined"]).read_text().splitlines()
-        assert [json.loads(line)["run_id"] for line in rollup_lines] == [
-            "rollup-1"
-        ], rollup_lines
+        assert [json.loads(line)["run_id"] for line in rollup_lines] == ["rollup-1"], rollup_lines
         print(
             "langsmith_fetch.py selftest: OK (registry lookup, latest artifact selection, "
             "artifact-name aliases, GitHub registry fallback, expected/exempted repo classification, "
@@ -1197,9 +1132,7 @@ def main(argv: list[str]) -> int:
         rollup_prefix=None if args.no_rollup_fallback else DEFAULT_ROLLUP_PREFIX,
     )
     _print_summary(summary, as_json=args.json)
-    failed = bool(summary["errors"]) or bool(
-        summary.get("ingest", {}).get("strict_failed")
-    )
+    failed = bool(summary["errors"]) or bool(summary.get("ingest", {}).get("strict_failed"))
     return 2 if args.strict and failed else 0
 
 

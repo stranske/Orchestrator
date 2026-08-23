@@ -5,6 +5,7 @@ Profiles separate model/reasoning/permission/transport choices from the legacy
 ``runs.mode`` compatibility field.  The production router may emit profiles,
 but v2 learned weights remain shadow-only unless explicitly enabled.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -121,9 +122,17 @@ def _digest(value: Any) -> str:
 
 def validate_profile(profile: dict[str, Any]) -> dict[str, Any]:
     required = {
-        "profile_id", "agent", "provider", "requested_model", "reasoning_effort",
-        "permission_mode", "transport_support", "adapter_version", "prompt_version",
-        "capacity_pool_ids", "lifecycle_status",
+        "profile_id",
+        "agent",
+        "provider",
+        "requested_model",
+        "reasoning_effort",
+        "permission_mode",
+        "transport_support",
+        "adapter_version",
+        "prompt_version",
+        "capacity_pool_ids",
+        "lifecycle_status",
     }
     missing = sorted(required - set(profile))
     if missing:
@@ -148,7 +157,11 @@ def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def profiles_for_agent(agent: str, *, transport: str | None = None) -> list[dict[str, Any]]:
-    rows = [dict(p) for p in PROFILE_REGISTRY.values() if p["agent"] == agent and p["lifecycle_status"] == "active"]
+    rows = [
+        dict(p)
+        for p in PROFILE_REGISTRY.values()
+        if p["agent"] == agent and p["lifecycle_status"] == "active"
+    ]
     if transport:
         rows = [p for p in rows if transport in p["transport_support"]]
     return sorted(rows, key=lambda row: row["profile_id"])
@@ -174,7 +187,9 @@ def ensure_schema(conn: sqlite3.Connection, *, now: int | None = None) -> None:
     now = int(now or time.time())
     for pool_id, pool in CAPACITY_POOLS.items():
         payload = _canonical(pool)
-        existing = conn.execute("SELECT definition_json FROM capacity_pools WHERE pool_id=?", (pool_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT definition_json FROM capacity_pools WHERE pool_id=?", (pool_id,)
+        ).fetchone()
         if existing and existing[0] != payload:
             raise ValueError(f"immutable capacity pool changed: {pool_id}")
         conn.execute(
@@ -193,11 +208,21 @@ def ensure_schema(conn: sqlite3.Connection, *, now: int | None = None) -> None:
         conn.execute(
             "INSERT OR IGNORE INTO execution_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                PROFILE_SCHEMA_VERSION, p["profile_id"], p["agent"], p["provider"],
-                p["requested_model"], p["reasoning_effort"], p["permission_mode"],
-                _canonical(p["transport_support"]), p.get("legacy_adapter_mode"),
-                p["adapter_version"], p["prompt_version"], p["lifecycle_status"],
-                p.get("successor_profile_id"), payload, now,
+                PROFILE_SCHEMA_VERSION,
+                p["profile_id"],
+                p["agent"],
+                p["provider"],
+                p["requested_model"],
+                p["reasoning_effort"],
+                p["permission_mode"],
+                _canonical(p["transport_support"]),
+                p.get("legacy_adapter_mode"),
+                p["adapter_version"],
+                p["prompt_version"],
+                p["lifecycle_status"],
+                p.get("successor_profile_id"),
+                payload,
+                now,
             ),
         )
         for pool_id in p["capacity_pool_ids"]:
@@ -257,18 +282,25 @@ def select_profile(
 
 def replay_decision(envelope: dict[str, Any]) -> dict[str, Any]:
     replayed = select_profile(
-        envelope["task_type"], envelope.get("target"), envelope["candidate_profile_ids"],
-        rng_seed=int(envelope["rng_seed"]), scores=envelope.get("scores") or {},
-        gate_results=envelope.get("gate_results") or {}, exploration=bool(envelope.get("exploration")),
+        envelope["task_type"],
+        envelope.get("target"),
+        envelope["candidate_profile_ids"],
+        rng_seed=int(envelope["rng_seed"]),
+        scores=envelope.get("scores") or {},
+        gate_results=envelope.get("gate_results") or {},
+        exploration=bool(envelope.get("exploration")),
         exploration_policy=envelope.get("exploration_policy") or "deterministic-best",
-        policy_version=envelope["policy_version"], causal_context=envelope.get("causal_context") or {},
+        policy_version=envelope["policy_version"],
+        causal_context=envelope.get("causal_context") or {},
     )
     if replayed["replay_hash"] != envelope.get("replay_hash"):
         raise ValueError("profile decision envelope is not replayable")
     return replayed
 
 
-def record_decision(conn: sqlite3.Connection, envelope: dict[str, Any], *, ts: int | None = None) -> None:
+def record_decision(
+    conn: sqlite3.Connection, envelope: dict[str, Any], *, ts: int | None = None
+) -> None:
     replay_decision(envelope)
     ensure_schema(conn, now=ts)
     conn.execute(
@@ -278,13 +310,21 @@ def record_decision(conn: sqlite3.Connection, envelope: dict[str, Any], *, ts: i
         "policy_version,assignment_probability,causal_context_json,replay_hash,"
         "profile_attempt_ids_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            envelope["decision_id"], int(ts or time.time()), envelope["task_type"], envelope.get("target"),
-            _canonical(envelope["candidate_profile_ids"]), _canonical(envelope.get("gate_results") or {}),
-            _canonical(envelope.get("scores") or {}), envelope.get("selected_profile_id"),
-            int(bool(envelope.get("exploration"))), envelope.get("exploration_policy") or "",
-            int(envelope["rng_seed"]), envelope["policy_version"],
+            envelope["decision_id"],
+            int(ts or time.time()),
+            envelope["task_type"],
+            envelope.get("target"),
+            _canonical(envelope["candidate_profile_ids"]),
+            _canonical(envelope.get("gate_results") or {}),
+            _canonical(envelope.get("scores") or {}),
+            envelope.get("selected_profile_id"),
+            int(bool(envelope.get("exploration"))),
+            envelope.get("exploration_policy") or "",
+            int(envelope["rng_seed"]),
+            envelope["policy_version"],
             float(envelope.get("assignment_probability") or 0.0),
-            _canonical(envelope.get("causal_context") or {}), envelope["replay_hash"],
+            _canonical(envelope.get("causal_context") or {}),
+            envelope["replay_hash"],
             _canonical(envelope.get("profile_attempt_ids") or []),
         ),
     )
@@ -334,15 +374,23 @@ def resolved_model_coverage(conn: sqlite3.Connection, profile_id: str) -> dict[s
     fallback = int(fallback or 0)
     coverage = resolved / total if total else 0.0
     return {
-        "profile_id": profile_id, "attempts": total, "resolved_attempts": resolved,
-        "coverage": coverage, "fallback_rate": fallback / total if total else 0.0,
+        "profile_id": profile_id,
+        "attempts": total,
+        "resolved_attempts": resolved,
+        "coverage": coverage,
+        "fallback_rate": fallback / total if total else 0.0,
         "learning_ready": total >= MIN_EXACT_OBSERVATIONS and coverage >= MIN_RESOLVED_COVERAGE,
         "latest_evidence_ts": latest,
     }
 
 
-def _bounded_prior(agent_prior: float, provider_prior: float, profile: dict[str, Any]) -> tuple[float, str]:
-    offset = max(-MAX_SUCCESSOR_TRANSFER, min(MAX_SUCCESSOR_TRANSFER, float(profile.get("prior_offset") or 0.0)))
+def _bounded_prior(
+    agent_prior: float, provider_prior: float, profile: dict[str, Any]
+) -> tuple[float, str]:
+    offset = max(
+        -MAX_SUCCESSOR_TRANSFER,
+        min(MAX_SUCCESSOR_TRANSFER, float(profile.get("prior_offset") or 0.0)),
+    )
     hierarchical = 0.75 * agent_prior + 0.25 * provider_prior
     return max(0.01, min(0.99, hierarchical + offset)), "agent_provider_bounded_transfer"
 
@@ -356,7 +404,9 @@ def relearn_route_weights_v2(
     """Write shadow profile weights; legacy rows without profile IDs are never inferred."""
     ensure_schema(conn, now=now)
     now = int(now or time.time())
-    version = int(conn.execute("SELECT COALESCE(MAX(version),0)+1 FROM route_weights_v2").fetchone()[0])
+    version = int(
+        conn.execute("SELECT COALESCE(MAX(version),0)+1 FROM route_weights_v2").fetchone()[0]
+    )
     for task_type, priors in task_type_priors.items():
         # Research arms and retries are correlated within an independent subject
         # family. Reuse the issue-1 subject weights instead of allowing repeated
@@ -380,14 +430,15 @@ def relearn_route_weights_v2(
             }
             provider_prior = (
                 sum(float(priors[agent]) for agent in provider_agents) / len(provider_agents)
-                if provider_agents else agent_prior
+                if provider_agents
+                else agent_prior
             )
             transferred, source = _bounded_prior(agent_prior, provider_prior, profile)
             coverage = resolved_model_coverage(conn, profile_id)
             rows: list[tuple] = []
             if coverage["learning_ready"]:
                 rows = conn.execute(
-                    "SELECT r.run_id,o.durability,o.adjudicated_verdict," 
+                    "SELECT r.run_id,o.durability,o.adjudicated_verdict,"
                     "o.verifier_verdict,r.ts,r.experiment_id "
                     "FROM runs r JOIN outcomes o ON o.run_id=r.run_id "
                     "WHERE r.task_type=? AND COALESCE(r.assignment,'experimental')='experimental' "
@@ -415,8 +466,7 @@ def relearn_route_weights_v2(
             effective_n = sum(weight for _reward, weight, _ts in weighted_rewards)
             reward_sum = sum(reward * weight for reward, weight, _ts in weighted_rewards)
             learning_gate_passed = (
-                coverage["learning_ready"]
-                and effective_n >= MIN_EXACT_OBSERVATIONS
+                coverage["learning_ready"] and effective_n >= MIN_EXACT_OBSERVATIONS
             )
             learned_effective_n = effective_n if learning_gate_passed else 0.0
             learned_reward_sum = reward_sum if learning_gate_passed else 0.0
@@ -434,14 +484,29 @@ def relearn_route_weights_v2(
             )
             conn.execute(
                 "INSERT INTO route_weights_v2 "
-                "(version,ts,task_type,profile_id,agent,provider,agent_prior,provider_prior," 
-                "transferred_prior,posterior,n_obs,effective_n,score,prior_source," 
+                "(version,ts,task_type,profile_id,agent,provider,agent_prior,provider_prior,"
+                "transferred_prior,posterior,n_obs,effective_n,score,prior_source,"
                 "resolved_model_coverage,learning_gate_passed,evidence_age_days,rationale) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    version, now, task_type, profile_id, profile["agent"], profile["provider"],
-                    agent_prior, provider_prior, transferred, posterior, n, effective_n, posterior, source,
-                    coverage["coverage"], int(learning_gate_passed), age, rationale,
+                    version,
+                    now,
+                    task_type,
+                    profile_id,
+                    profile["agent"],
+                    profile["provider"],
+                    agent_prior,
+                    provider_prior,
+                    transferred,
+                    posterior,
+                    n,
+                    effective_n,
+                    posterior,
+                    source,
+                    coverage["coverage"],
+                    int(learning_gate_passed),
+                    age,
+                    rationale,
                 ),
             )
     return version
@@ -455,7 +520,16 @@ def current_profile_weights(conn: sqlite3.Connection, task_type: str) -> list[di
         "FROM route_weights_v2 WHERE version=? AND task_type=? ORDER BY score DESC,profile_id",
         (version, task_type),
     ).fetchall()
-    keys = ("profile_id", "agent", "posterior", "n_obs", "score", "resolved_model_coverage", "learning_gate_passed", "evidence_age_days")
+    keys = (
+        "profile_id",
+        "agent",
+        "posterior",
+        "n_obs",
+        "score",
+        "resolved_model_coverage",
+        "learning_gate_passed",
+        "evidence_age_days",
+    )
     return [dict(zip(keys, row)) for row in rows]
 
 
@@ -476,16 +550,26 @@ def report(conn: sqlite3.Connection, *, now: int | None = None) -> dict[str, Any
             or 0
         )
         instrumentation_attempts_total += instrumentation_attempts
-        profiles.append({
-            "profile_id": profile["profile_id"], "agent": profile["agent"],
-            "provider": profile["provider"], "requested_model": profile["requested_model"],
-            "reasoning_effort": profile["reasoning_effort"], "capacity_pool_ids": profile["capacity_pool_ids"],
-            "readiness": "ready" if cov["learning_ready"] else "cold",
-            "resolved_model_coverage": cov["coverage"], "fallback_rate": cov["fallback_rate"],
-            "learning_eligible_attempts": cov["attempts"],
-            "instrumentation_attempts": instrumentation_attempts,
-            "evidence_age_days": ((now - cov["latest_evidence_ts"]) / 86400.0) if cov["latest_evidence_ts"] else None,
-        })
+        profiles.append(
+            {
+                "profile_id": profile["profile_id"],
+                "agent": profile["agent"],
+                "provider": profile["provider"],
+                "requested_model": profile["requested_model"],
+                "reasoning_effort": profile["reasoning_effort"],
+                "capacity_pool_ids": profile["capacity_pool_ids"],
+                "readiness": "ready" if cov["learning_ready"] else "cold",
+                "resolved_model_coverage": cov["coverage"],
+                "fallback_rate": cov["fallback_rate"],
+                "learning_eligible_attempts": cov["attempts"],
+                "instrumentation_attempts": instrumentation_attempts,
+                "evidence_age_days": (
+                    ((now - cov["latest_evidence_ts"]) / 86400.0)
+                    if cov["latest_evidence_ts"]
+                    else None
+                ),
+            }
+        )
     decisions, mean_propensity = conn.execute(
         "SELECT COUNT(*),AVG(assignment_probability) FROM routing_decisions_v2"
     ).fetchone()

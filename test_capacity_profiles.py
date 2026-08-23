@@ -49,10 +49,24 @@ def test_capacity_build_reads_shared_pool_burn_once(tmp_path, monkeypatch, codex
     now = int(time.time())
     rows = []
     for profile_id in codex_profile_registry:
-        rows.append({"ts": now, "agent": "codex", "event": "start", "count": 1,
-                     "selected_profile_id": profile_id})
-        rows.append({"ts": now + 1, "agent": "codex", "event": "complete", "count": 0,
-                     "selected_profile_id": profile_id})
+        rows.append(
+            {
+                "ts": now,
+                "agent": "codex",
+                "event": "start",
+                "count": 1,
+                "selected_profile_id": profile_id,
+            }
+        )
+        rows.append(
+            {
+                "ts": now + 1,
+                "agent": "codex",
+                "event": "complete",
+                "count": 0,
+                "selected_profile_id": profile_id,
+            }
+        )
     ledger.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setattr(capacity, "LEDGER", ledger)
     monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "shed")
@@ -78,8 +92,12 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
         assert command[command.index("--sandbox") + 1] == "workspace-write"
         assert command[command.index("-c") + 1] == 'model_reasoning_effort="high"'
         assess = adapters.build_command(
-            "codex", "assess", mode="assess", profile=profile,
-            transport="offload", permission_mode="read-only",
+            "codex",
+            "assess",
+            mode="assess",
+            profile=profile,
+            transport="offload",
+            permission_mode="read-only",
         )
         assert assess[assess.index("--sandbox") + 1] == "read-only"
         assert "--json" not in assess
@@ -107,16 +125,22 @@ def test_router_profile_envelope_replays_exact_choice():
     cap = capacity.profile_capacity_snapshot(
         {
             "agents": {
-                "codex": {"state": "ok"}, "claude": {"state": "shed"},
-                "cursor": {"state": "shed"}, "gemini": {"state": "shed"},
-                "vibe": {"state": "shed"}, "aider": {"state": "shed"},
+                "codex": {"state": "ok"},
+                "claude": {"state": "shed"},
+                "cursor": {"state": "shed"},
+                "gemini": {"state": "shed"},
+                "vibe": {"state": "shed"},
+                "aider": {"state": "shed"},
             }
         }
     )
     cap["agents"] = {
-        "codex": {"state": "ok"}, "claude": {"state": "shed"},
-        "cursor": {"state": "shed"}, "gemini": {"state": "shed"},
-        "vibe": {"state": "shed"}, "aider": {"state": "shed"},
+        "codex": {"state": "ok"},
+        "claude": {"state": "shed"},
+        "cursor": {"state": "shed"},
+        "gemini": {"state": "shed"},
+        "vibe": {"state": "shed"},
+        "aider": {"state": "shed"},
     }
     assignment = router.plan(
         [{"target": "owner/repo#5", "task_type": "implement", "lane": "opener"}],
@@ -135,26 +159,35 @@ def test_all_profile_shed_returns_no_route():
     cap = {
         "agents": {"codex": {"state": "ok"}},
         "profiles": {
-            profile_id: {"state": "shed"}
-            for profile_id in execution_profiles.PROFILE_REGISTRY
+            profile_id: {"state": "shed"} for profile_id in execution_profiles.PROFILE_REGISTRY
         },
     }
-    assert router.select_agent(
-        "implement",
-        cap,
-        only={"codex"},
-        exploration_rate=0.0,
-        profile_seed=1,
-        causal_context={"target": "owner/repo#5"},
-    ) is None
+    assert (
+        router.select_agent(
+            "implement",
+            cap,
+            only={"codex"},
+            exploration_rate=0.0,
+            profile_seed=1,
+            causal_context={"target": "owner/repo#5"},
+        )
+        is None
+    )
 
 
 def test_profile_schema_is_additive_and_immutable(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     feedback.record_run("legacy", "o/r#1", "implement", "codex", mode="local")
     with feedback._conn() as conn:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"execution_profiles", "capacity_pools", "routing_decisions_v2", "route_weights_v2"} <= tables
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert {
+            "execution_profiles",
+            "capacity_pools",
+            "routing_decisions_v2",
+            "route_weights_v2",
+        } <= tables
         assert conn.execute("SELECT COUNT(*) FROM runs WHERE run_id='legacy'").fetchone()[0] == 1
         execution_profiles.ensure_schema(conn)
         assert conn.execute("SELECT COUNT(*) FROM execution_profiles").fetchone()[0] == 3
@@ -192,15 +225,25 @@ def test_profile_learner_cold_start_and_resolved_coverage_gate(tmp_path, monkeyp
         cold = execution_profiles.current_profile_weights(conn, "profile-task")
         assert v1 == 1 and all(row["n_obs"] == 0 for row in cold)
         assert all(row["learning_gate_passed"] == 0 for row in cold)
-        assert conn.execute("SELECT COUNT(*) FROM execution_attempts WHERE run_id='legacy'").fetchone()[0] == 0
-        assert all(abs(row["posterior"] - 0.6) <= execution_profiles.MAX_SUCCESSOR_TRANSFER for row in cold)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM execution_attempts WHERE run_id='legacy'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert all(
+            abs(row["posterior"] - 0.6) <= execution_profiles.MAX_SUCCESSOR_TRANSFER for row in cold
+        )
 
     profile = execution_profiles.get_profile("codex-5.6-terra-high")
     for index in range(3):
         _profile_run(
-            f"terra-{index}", "profile-task", profile,
+            f"terra-{index}",
+            "profile-task",
+            profile,
             resolved_model=(profile["requested_model"] if index < 2 else "gpt-fallback"),
-            verdict="PASS", tmp_ts=2_000_000_000 + index,
+            verdict="PASS",
+            tmp_ts=2_000_000_000 + index,
         )
     feedback.relearn_profiles({"profile-task": {"codex": 0.6}})
     with feedback._conn() as conn:
@@ -213,8 +256,12 @@ def test_profile_learner_cold_start_and_resolved_coverage_gate(tmp_path, monkeyp
         assert terra["n_obs"] == 0, "router accepted exact-profile learning below coverage gate"
 
     _profile_run(
-        "terra-3", "profile-task", profile, resolved_model=profile["requested_model"],
-        verdict="FAIL", tmp_ts=2_000_000_004,
+        "terra-3",
+        "profile-task",
+        profile,
+        resolved_model=profile["requested_model"],
+        verdict="FAIL",
+        tmp_ts=2_000_000_004,
     )
     feedback.relearn_profiles({"profile-task": {"codex": 0.6}})
     with feedback._conn() as conn:
@@ -227,8 +274,12 @@ def test_profile_learner_cold_start_and_resolved_coverage_gate(tmp_path, monkeyp
         assert terra["n_obs"] == 0, "router accepted exact-profile learning below coverage gate"
 
     _profile_run(
-        "terra-4", "profile-task", profile, resolved_model=profile["requested_model"],
-        verdict="PASS", tmp_ts=2_000_000_005,
+        "terra-4",
+        "profile-task",
+        profile,
+        resolved_model=profile["requested_model"],
+        verdict="PASS",
+        tmp_ts=2_000_000_005,
     )
     feedback.relearn_profiles({"profile-task": {"codex": 0.6}})
     with feedback._conn() as conn:
@@ -246,18 +297,26 @@ def test_completion_updates_selected_attempt_only_from_reported_resolution(tmp_p
     profile = execution_profiles.get_profile("codex-5.6-luna-high")
     feedback.record_run("completion", "o/r#completion", "implement", "codex")
     feedback.record_execution_attempt(
-        "completion", attempt_id="attempt:profile:completion", operation_role="worker",
-        profile_id=profile["profile_id"], requested_provider=profile["provider"],
-        requested_model=profile["requested_model"], status="started",
+        "completion",
+        attempt_id="attempt:profile:completion",
+        operation_role="worker",
+        profile_id=profile["profile_id"],
+        requested_provider=profile["provider"],
+        requested_model=profile["requested_model"],
+        status="started",
     )
     with pytest.raises(ValueError, match="actually reported"):
         feedback.complete_profile_attempt(
-            "completion", selected_profile_id=profile["profile_id"],
-            resolved_provider="openai", resolved_model="",
+            "completion",
+            selected_profile_id=profile["profile_id"],
+            resolved_provider="openai",
+            resolved_model="",
         )
     feedback.complete_profile_attempt(
-        "completion", selected_profile_id=profile["profile_id"],
-        resolved_provider="openai", resolved_model="gpt-5.6-luna",
+        "completion",
+        selected_profile_id=profile["profile_id"],
+        resolved_provider="openai",
+        resolved_model="gpt-5.6-luna",
     )
     with feedback._conn() as conn:
         rows = conn.execute(
@@ -301,9 +360,7 @@ def test_wrapper_completion_closes_unreported_model_as_unresolved(tmp_path, monk
     )
 
 
-def test_profile_dispatch_fails_before_process_when_run_row_cannot_persist(
-    tmp_path, monkeypatch
-):
+def test_profile_dispatch_fails_before_process_when_run_row_cannot_persist(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
     started = []
     ledger = []
@@ -387,8 +444,8 @@ def test_profile_learning_collapses_same_subject_retries(tmp_path, monkeypatch):
             )
             conn.execute(
                 "INSERT INTO execution_attempts "
-                "(attempt_id,run_id,attempt_ordinal,operation_role,profile_id," 
-                "requested_provider,requested_model,resolved_provider,resolved_model," 
+                "(attempt_id,run_id,attempt_ordinal,operation_role,profile_id,"
+                "requested_provider,requested_model,resolved_provider,resolved_model,"
                 "status,recorded_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     f"attempt-{index}",
@@ -422,8 +479,12 @@ def test_profile_learning_collapses_same_subject_retries(tmp_path, monkeypatch):
 def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     envelope = execution_profiles.select_profile(
-        "implement", "o/r#report", list(execution_profiles.PROFILE_REGISTRY),
-        rng_seed=7, exploration=True, exploration_policy="fixture",
+        "implement",
+        "o/r#report",
+        list(execution_profiles.PROFILE_REGISTRY),
+        rng_seed=7,
+        exploration=True,
+        exploration_policy="fixture",
     )
     feedback.record_profile_decision(envelope)
     summary = feedback.profile_routing_summary()
@@ -432,6 +493,7 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     assert summary["mean_assignment_probability"] == pytest.approx(1 / 3)
     assert summary["shared_capacity_pools"] == ["codex-subscription"]
     assert {row["requested_model"] for row in summary["profiles"]} == {
-        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
     }
-

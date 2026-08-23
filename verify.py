@@ -41,6 +41,7 @@ What makes it honest:
     ceiling, defined once in the floor file and read once here, so the measuring and draining
     windows cannot drift apart.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,7 +59,7 @@ FLOOR = HERE / ".verify-floor.json"
 # drifts, and a mark that drifts turns a skip back into a silent pass.
 try:
     from env_prereq import PREREQ_ABSENT_MARK
-except Exception:                                                  # noqa: BLE001
+except Exception:  # noqa: BLE001
     PREREQ_ABSENT_MARK = "PREREQUISITE ABSENT:"
 
 # pytest's terse summary line, e.g. "182 passed, 3 skipped in 41.20s"
@@ -82,8 +83,9 @@ def run_pytest(*, extra: list[str] | None = None) -> dict:
     for n, kind in COUNT_RE.findall(tail):
         kind = "error" if kind.startswith("error") else kind
         counts[kind] = counts.get(kind, 0) + int(n)
-    collected = sum(counts.get(k, 0) for k in
-                    ("passed", "failed", "error", "skipped", "xfailed", "xpassed"))
+    collected = sum(
+        counts.get(k, 0) for k in ("passed", "failed", "error", "skipped", "xfailed", "xpassed")
+    )
     # A usage error prints to stderr and exits 0. Absence of counts is therefore a failure, never
     # an empty success.
     usage_error = "usage: pytest" in tail or "unrecognized arguments" in tail
@@ -91,15 +93,24 @@ def run_pytest(*, extra: list[str] | None = None) -> dict:
     # EVERY failure, not the last 12 lines of output. The first CI run reported 21 failures and
     # the log named 7 of them, because this was `lines[-12:]` — a truncated red costs a whole
     # round trip to diagnose.
-    failures = [ln.strip() for ln in lines
-                if ln.startswith(("FAILED ", "ERROR ")) or ln.lstrip().startswith(("FAILED ", "ERROR "))]
+    failures = [
+        ln.strip()
+        for ln in lines
+        if ln.startswith(("FAILED ", "ERROR ")) or ln.lstrip().startswith(("FAILED ", "ERROR "))
+    ]
     skips = [ln.strip() for ln in lines if ln.lstrip().startswith("SKIPPED ")]
-    return {"counts": counts, "collected": collected, "passed": counts.get("passed", 0),
-            "skipped": counts.get("skipped", 0),
-            "failed": counts.get("failed", 0) + counts.get("error", 0),
-            "returncode": proc.returncode, "usage_error": usage_error,
-            "failures": failures, "skips": skips,
-            "tail": lines[-12:]}
+    return {
+        "counts": counts,
+        "collected": collected,
+        "passed": counts.get("passed", 0),
+        "skipped": counts.get("skipped", 0),
+        "failed": counts.get("failed", 0) + counts.get("error", 0),
+        "returncode": proc.returncode,
+        "usage_error": usage_error,
+        "failures": failures,
+        "skips": skips,
+        "tail": lines[-12:],
+    }
 
 
 def selftest_modules() -> list[str]:
@@ -110,7 +121,7 @@ def selftest_modules() -> list[str]:
             continue
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:                                          # noqa: BLE001
+        except Exception:  # noqa: BLE001
             continue
         if '"--selftest"' in text or "'--selftest'" in text:
             found.append(path.stem)
@@ -129,18 +140,23 @@ def run_selftests(modules: list[str]) -> dict:
     """
     ok, bad, skipped = [], {}, {}
     for mod in modules:
-        proc = subprocess.run([sys.executable, f"{mod}.py", "--selftest"],
-                              cwd=HERE, capture_output=True, text=True)
+        proc = subprocess.run(
+            [sys.executable, f"{mod}.py", "--selftest"], cwd=HERE, capture_output=True, text=True
+        )
         out = (proc.stdout or "") + (proc.stderr or "")
         # A selftest must both exit 0 AND say something. A silent zero-exit is the very failure
         # this module exists to catch.
         spoke = bool(out.strip())
         if proc.returncode != 0 or not spoke:
-            bad[mod] = ("silent zero-exit — did it run?" if proc.returncode == 0
-                        else out.strip()[-200:])
+            bad[mod] = (
+                "silent zero-exit — did it run?" if proc.returncode == 0 else out.strip()[-200:]
+            )
             continue
-        reasons = [ln.split(PREREQ_ABSENT_MARK, 1)[1].strip()
-                   for ln in out.splitlines() if PREREQ_ABSENT_MARK in ln]
+        reasons = [
+            ln.split(PREREQ_ABSENT_MARK, 1)[1].strip()
+            for ln in out.splitlines()
+            if PREREQ_ABSENT_MARK in ln
+        ]
         if reasons:
             skipped[mod] = reasons
         else:
@@ -160,22 +176,27 @@ GATES = (
 def run_gates() -> dict:
     out = {}
     for name, argv in GATES:
-        proc = subprocess.run([sys.executable, *argv], cwd=HERE,
-                              capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, *argv], cwd=HERE, capture_output=True, text=True)
         text = (proc.stdout or "") + (proc.stderr or "")
         # Same three-way split as the selftests: a gate that could not judge here says so with
         # the shared mark, and is reported as SKIP rather than folded into `ok`.
-        reasons = [ln.split(PREREQ_ABSENT_MARK, 1)[1].strip()
-                   for ln in text.splitlines() if PREREQ_ABSENT_MARK in ln]
-        out[name] = {"ok": proc.returncode == 0, "skipped": reasons,
-                     "line": _headline(name, text)}
+        reasons = [
+            ln.split(PREREQ_ABSENT_MARK, 1)[1].strip()
+            for ln in text.splitlines()
+            if PREREQ_ABSENT_MARK in ln
+        ]
+        out[name] = {"ok": proc.returncode == 0, "skipped": reasons, "line": _headline(name, text)}
     return out
 
 
 def _headline(name: str, text: str) -> str:
-    wanted = {"activation audit": r"CAN FIRE:.*", "recurrence replay": r"WOULD FIRE:.*",
-              "set coverage": r"all \d+ capability-set.*", "admission": r"all \d+ admission.*",
-              "ledger validate": r'"valid": \w+'}
+    wanted = {
+        "activation audit": r"CAN FIRE:.*",
+        "recurrence replay": r"WOULD FIRE:.*",
+        "set coverage": r"all \d+ capability-set.*",
+        "admission": r"all \d+ admission.*",
+        "ledger validate": r'"valid": \w+',
+    }
     pat = wanted.get(name)
     if pat:
         m = re.search(pat, text)
@@ -202,10 +223,10 @@ def absent_entrypoint_line() -> str | None:
     try:
         import capabilities
         import capability_activation_audit as audit
+
         # load_declared: read-only. verify.py must not mutate the ledger it is reporting on.
-        rep = audit.absent_entrypoint_report(
-            sorted(capabilities.load_declared(capabilities.REG)))
-    except Exception as exc:                                       # noqa: BLE001
+        rep = audit.absent_entrypoint_report(sorted(capabilities.load_declared(capabilities.REG)))
+    except Exception as exc:  # noqa: BLE001
         return f"  entrypoints: NOT CHECKED ({type(exc).__name__}: {exc})"
     return _format_absent_line(rep)
 
@@ -226,22 +247,27 @@ def _format_absent_line(rep: dict) -> str | None:
     where = []
     for row in rep["absent"]:
         found = row.get("found_in") or []
-        seen = (f"found in {found[0]['checkout']}"
-                + (f" +{len(found) - 1} more" if len(found) > 1 else "")
-                if found else "not found in any sibling checkout")
+        seen = (
+            f"found in {found[0]['checkout']}"
+            + (f" +{len(found) - 1} more" if len(found) > 1 else "")
+            if found
+            else "not found in any sibling checkout"
+        )
         where.append(f"{row['capability_id']} -> {row['entrypoint']} ({seen})")
     # Both numbers in the same place, per the house rule: "1" reads as an emergency, "1 of 43"
     # reads as one session's in-flight branch, which is what it is.
-    return (f"  entrypoints: {len(rep['absent'])} of {rep.get('total', '?')} ledger row(s) declare "
-            f"code ABSENT from this tree — {'; '.join(where)}. "
-            f"WAIT-OR-MERGE, not retire/waive.")
+    return (
+        f"  entrypoints: {len(rep['absent'])} of {rep.get('total', '?')} ledger row(s) declare "
+        f"code ABSENT from this tree — {'; '.join(where)}. "
+        f"WAIT-OR-MERGE, not retire/waive."
+    )
 
 
 def load_floor() -> dict:
     if FLOOR.exists():
         try:
             return json.loads(FLOOR.read_text(encoding="utf-8"))
-        except Exception:                                          # noqa: BLE001
+        except Exception:  # noqa: BLE001
             return {}
     return {}
 
@@ -268,12 +294,16 @@ def _floor_problems(floor: dict, py: dict) -> list[str]:
     problems = []
     fc, fp = int(floor.get("collected", 0)), int(floor.get("passed", 0))
     if fc and py["collected"] < fc:
-        problems.append(f"collection DROPPED: {py['collected']} < floor {fc} — tests stopped "
-                        f"running, which looks identical to tests passing")
+        problems.append(
+            f"collection DROPPED: {py['collected']} < floor {fc} — tests stopped "
+            f"running, which looks identical to tests passing"
+        )
     if fp and py["passed"] + py.get("skipped", 0) < fp:
-        problems.append(f"executed-or-skipped count dropped: {py['passed']} passed + "
-                        f"{py.get('skipped', 0)} skipped < floor {fp} — a test stopped being run "
-                        f"without becoming a named skip")
+        problems.append(
+            f"executed-or-skipped count dropped: {py['passed']} passed + "
+            f"{py.get('skipped', 0)} skipped < floor {fp} — a test stopped being run "
+            f"without becoming a named skip"
+        )
     return problems
 
 
@@ -292,7 +322,8 @@ def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
             problems.append(
                 f"SKIP CEILING exceeded: {actual[key]} {label} > agreed maximum {limit}. "
                 f"Skipping is bounded on purpose — either the new skip is wrong, or raise "
-                f"`{key}` in .verify-floor.json deliberately and say why.")
+                f"`{key}` in .verify-floor.json deliberately and say why."
+            )
     return problems
 
 
@@ -313,8 +344,9 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
     fc, fp = int(floor.get("collected", 0)), int(floor.get("passed", 0))
     problems += _floor_problems(floor, py)
     if st["failed"]:
-        problems.append(f"{len(st['failed'])} module selftest(s) failed: "
-                        f"{', '.join(sorted(st['failed']))}")
+        problems.append(
+            f"{len(st['failed'])} module selftest(s) failed: " f"{', '.join(sorted(st['failed']))}"
+        )
     for name, res in gates.items():
         if not res["ok"]:
             problems.append(f"gate failed: {name}")
@@ -323,9 +355,11 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
     # so a future change cannot quietly convert a red into a skip. Each ceiling reports its own
     # value against the limit in the same breath, per the house rule that a gate must always say
     # both numbers — `24/24` alone reads as "fine", `24/24 (ceiling)` reads as "at the limit".
-    actual = {"skipped_max": py["skipped"],
-              "selftest_skipped_max": len(st["skipped"]),
-              "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"])}
+    actual = {
+        "skipped_max": py["skipped"],
+        "selftest_skipped_max": len(st["skipped"]),
+        "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
+    }
     problems += _ceiling_problems(floor, actual)
 
     def _cap(key: str) -> str:
@@ -334,11 +368,15 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
         return f"{actual[key]}" + (f"/{limit} max" if limit is not None else " (no ceiling set)")
 
     lines = ["# verify.py", ""]
-    lines.append(f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
-                 f"{_cap('skipped_max')} skipped "
-                 f"({py['collected']} collected; floor {fc or 'unset'})")
-    lines.append(f"  selftests:  {len(st['ok'])} of {len(mods)} modules ran, "
-                 f"{_cap('selftest_skipped_max')} skipped")
+    lines.append(
+        f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
+        f"{_cap('skipped_max')} skipped "
+        f"({py['collected']} collected; floor {fc or 'unset'})"
+    )
+    lines.append(
+        f"  selftests:  {len(st['ok'])} of {len(mods)} modules ran, "
+        f"{_cap('selftest_skipped_max')} skipped"
+    )
     for name, res in gates.items():
         state = "SKIP" if res["skipped"] else ("ok " if res["ok"] else "FAIL")
         lines.append(f"  {name:<18} {state} {res['line']}")
@@ -378,14 +416,18 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
             lines += [f"    {ln}" for ln in py["failures"]]
             lines += ["", "  pytest tail:"] + [f"    {ln}" for ln in py["tail"]]
     else:
-        lines.append(f"  VERIFIED — {py['passed']} tests actually executed and passed, "
-                     f"{len(st['ok'])} selftests spoke, "
-                     f"{len(gates) - actual['gate_skipped_max']} of {len(gates)} gates green"
-                     + (f"; {py['skipped']} test(s), {actual['selftest_skipped_max']} selftest(s) "
-                        f"and {actual['gate_skipped_max']} gate(s) SKIPPED for a named missing "
-                        f"prerequisite, listed above"
-                        if (py["skipped"] or actual["selftest_skipped_max"]
-                            or actual["gate_skipped_max"]) else ""))
+        lines.append(
+            f"  VERIFIED — {py['passed']} tests actually executed and passed, "
+            f"{len(st['ok'])} selftests spoke, "
+            f"{len(gates) - actual['gate_skipped_max']} of {len(gates)} gates green"
+            + (
+                f"; {py['skipped']} test(s), {actual['selftest_skipped_max']} selftest(s) "
+                f"and {actual['gate_skipped_max']} gate(s) SKIPPED for a named missing "
+                f"prerequisite, listed above"
+                if (py["skipped"] or actual["selftest_skipped_max"] or actual["gate_skipped_max"])
+                else ""
+            )
+        )
 
     if update_floor and not problems:
         # `collected` and `passed` are re-measured; the CEILINGS are NOT. A ceiling re-recorded
@@ -401,13 +443,17 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
         for key, _label in CEILINGS:
             if floor.get(key) is not None:
                 blob[key] = int(floor[key])
-        blob["note"] = ("floor recorded by verify.py --update-floor; a later run collecting fewer "
-                        "tests FAILS, because silently running fewer tests looks exactly like "
-                        "passing. `passed` is compared against passed+skipped. The *_max ceilings "
-                        "bound skipping and are NOT re-measured here — edit them by hand.")
+        blob["note"] = (
+            "floor recorded by verify.py --update-floor; a later run collecting fewer "
+            "tests FAILS, because silently running fewer tests looks exactly like "
+            "passing. `passed` is compared against passed+skipped. The *_max ceilings "
+            "bound skipping and are NOT re-measured here — edit them by hand."
+        )
         FLOOR.write_text(json.dumps(blob, indent=1) + "\n", encoding="utf-8")
-        lines.append(f"  floor updated: collected={py['collected']} passed={py['passed']} "
-                     f"(ceilings preserved)")
+        lines.append(
+            f"  floor updated: collected={py['collected']} passed={py['passed']} "
+            f"(ceilings preserved)"
+        )
 
     return (1 if problems else 0), "\n".join(lines) + "\n"
 
@@ -424,8 +470,9 @@ def _selftest() -> None:
         for n, kind in COUNT_RE.findall(text):
             kind = "error" if kind.startswith("error") else kind
             counts[kind] = counts.get(kind, 0) + int(n)
-        collected = sum(counts.get(k, 0) for k in
-                        ("passed", "failed", "error", "skipped", "xfailed", "xpassed"))
+        collected = sum(
+            counts.get(k, 0) for k in ("passed", "failed", "error", "skipped", "xfailed", "xpassed")
+        )
         assert collected == expect_collected, (text, collected)
         assert counts.get("passed", 0) == expect_passed, (text, counts)
 
@@ -439,19 +486,23 @@ def _selftest() -> None:
     # read as passing: they exited 0 having executed nothing. Point run_selftests at a module that
     # does precisely that and confirm it is classified as failed, not ok.
     import tempfile
+
     saved = globals()["HERE"]
     with tempfile.TemporaryDirectory(prefix="verify-") as td:
         (pathlib.Path(td) / "silent_mod.py").write_text(
-            'import sys\nif "--selftest" in sys.argv:\n    sys.exit(0)\n')
+            'import sys\nif "--selftest" in sys.argv:\n    sys.exit(0)\n'
+        )
         (pathlib.Path(td) / "loud_mod.py").write_text(
-            'import sys\nif "--selftest" in sys.argv:\n    print("loud selftest: OK")\n')
+            'import sys\nif "--selftest" in sys.argv:\n    print("loud selftest: OK")\n'
+        )
         # A LOUD ZERO-EXIT THAT EXECUTED NOTHING MUST NOT READ AS A PASS. This is the silent
         # zero-exit's twin, and the reason `ok` had to stop meaning "exited 0 and spoke": a
         # skipped selftest speaks. It must land in `skipped`, with its reason carried out.
         (pathlib.Path(td) / "skipping_mod.py").write_text(
-            'import sys\n'
+            "import sys\n"
             'if "--selftest" in sys.argv:\n'
-            f'    print("skipping_mod selftest: {PREREQ_ABSENT_MARK} the widget is not installed")\n')
+            f'    print("skipping_mod selftest: {PREREQ_ABSENT_MARK} the widget is not installed")\n'
+        )
         try:
             globals()["HERE"] = pathlib.Path(td)
             got = run_selftests(["silent_mod", "loud_mod", "skipping_mod"])
@@ -467,26 +518,28 @@ def _selftest() -> None:
     # printed "pytest failures (0)" from the code added to stop exactly that. Assert on the flag,
     # because the symptom only shows on a red run and a green suite would never reveal it.
     import inspect
+
     src = inspect.getsource(run_pytest)
-    flag = [tok for tok in src.split() if tok.strip('",\'') .startswith("-r")]
+    flag = [tok for tok in src.split() if tok.strip("\",'").startswith("-r")]
     assert flag, "run_pytest no longer passes an -r flag; skip reasons would vanish"
-    got_flag = flag[0].strip('",\'')
+    got_flag = flag[0].strip("\",'")
     for letter, what in (("f", "failures"), ("E", "errors"), ("s", "skip reasons")):
         assert letter in got_flag[2:], (
             f"{got_flag} omits {letter!r}: {what} would not be listed. pytest's default is -rfE, "
-            f"so any -r you pass must re-include f and E as well as s")
+            f"so any -r you pass must re-include f and E as well as s"
+        )
 
     # ---- THE SKIP CEILING, in both directions -------------------------------------------------
     # Bounding skips is the whole reason skipping was allowed at all, so the bound is tested the
     # way a gate must be: it has to FAIL when exceeded and PASS when not, and the failure has to
     # name the key to raise. `_ceiling_problems` is the same code path `verify()` uses.
-    at_limit = _ceiling_problems({"skipped_max": 24}, {"skipped_max": 24,
-                                                      "selftest_skipped_max": 0,
-                                                      "gate_skipped_max": 0})
+    at_limit = _ceiling_problems(
+        {"skipped_max": 24}, {"skipped_max": 24, "selftest_skipped_max": 0, "gate_skipped_max": 0}
+    )
     assert at_limit == [], f"exactly at the ceiling must pass: {at_limit}"
-    over = _ceiling_problems({"skipped_max": 24}, {"skipped_max": 25,
-                                                   "selftest_skipped_max": 0,
-                                                   "gate_skipped_max": 0})
+    over = _ceiling_problems(
+        {"skipped_max": 24}, {"skipped_max": 25, "selftest_skipped_max": 0, "gate_skipped_max": 0}
+    )
     assert len(over) == 1 and "SKIP CEILING exceeded" in over[0], over
     assert "skipped_max" in over[0], "the failure must name the key to raise deliberately"
     # Each ceiling is independent — one slipping must not be masked by the others holding.
@@ -497,19 +550,27 @@ def _selftest() -> None:
         assert len(got_c) == 1 and key in got_c[0], (key, got_c)
     # An UNSET ceiling is not a ceiling of zero — it means nothing has been agreed yet. Reading
     # `None` as 0 would fail every machine that legitimately skips anything.
-    assert _ceiling_problems({}, {"skipped_max": 99, "selftest_skipped_max": 9,
-                                  "gate_skipped_max": 9}) == []
+    assert (
+        _ceiling_problems({}, {"skipped_max": 99, "selftest_skipped_max": 9, "gate_skipped_max": 9})
+        == []
+    )
 
     # ---- the floor counts what RAN OR WAS NAMED, and the ceiling stops that being a loophole --
     # 330 -> 300 passed with 30 named skips is fine; 300 passed with 0 skips is a test that
     # vanished. Both directions, because only having one is how a floor becomes decoration.
-    assert _floor_problems({"collected": 330, "passed": 330},
-                           {"collected": 330, "passed": 306, "skipped": 24}) == []
-    dropped = _floor_problems({"collected": 330, "passed": 330},
-                              {"collected": 330, "passed": 306, "skipped": 0})
+    assert (
+        _floor_problems(
+            {"collected": 330, "passed": 330}, {"collected": 330, "passed": 306, "skipped": 24}
+        )
+        == []
+    )
+    dropped = _floor_problems(
+        {"collected": 330, "passed": 330}, {"collected": 330, "passed": 306, "skipped": 0}
+    )
     assert len(dropped) == 1 and "dropped" in dropped[0], dropped
-    shrank = _floor_problems({"collected": 330, "passed": 330},
-                             {"collected": 320, "passed": 320, "skipped": 0})
+    shrank = _floor_problems(
+        {"collected": 330, "passed": 330}, {"collected": 320, "passed": 320, "skipped": 0}
+    )
     assert any("collection DROPPED" in p for p in shrank), shrank
 
     # ---- the absent-module summary line -------------------------------------------------------
@@ -519,33 +580,60 @@ def _selftest() -> None:
     # it stays silent when there is nothing to say, and it is NOT a skip.
     assert _format_absent_line({"absent": [], "checked": 43, "total": 43}) is None
     assert _format_absent_line({}) is None
-    one = _format_absent_line({"total": 43, "checked": 43, "absent": [
-        {"capability_id": "evidence-acquisition", "entrypoint": "evidence_acquisition.py:run",
-         "found_in": [{"checkout": ".claude/worktrees/other", "modules": ["x.py"]},
-                      {"checkout": "repo root", "modules": ["x.py"]}]}]})
-    for phrase in ("1 of 43", "evidence-acquisition", ".claude/worktrees/other", "+1 more",
-                   "WAIT-OR-MERGE"):
+    one = _format_absent_line(
+        {
+            "total": 43,
+            "checked": 43,
+            "absent": [
+                {
+                    "capability_id": "evidence-acquisition",
+                    "entrypoint": "evidence_acquisition.py:run",
+                    "found_in": [
+                        {"checkout": ".claude/worktrees/other", "modules": ["x.py"]},
+                        {"checkout": "repo root", "modules": ["x.py"]},
+                    ],
+                }
+            ],
+        }
+    )
+    for phrase in (
+        "1 of 43",
+        "evidence-acquisition",
+        ".claude/worktrees/other",
+        "+1 more",
+        "WAIT-OR-MERGE",
+    ):
         assert phrase in one, (phrase, one)
     # `PREREQ_ABSENT_MARK` is how verify.py counts a SKIP against the ceiling. Nothing was
     # skipped here, so carrying the mark would spend ceiling headroom that belongs to a real
     # missing prerequisite — and would make a diagnostic look like a narrowing of the suite.
     assert PREREQ_ABSENT_MARK not in one, one
     # A row whose module is nowhere at all must say so rather than implying a sibling has it.
-    nowhere = _format_absent_line({"total": 43, "checked": 1, "absent": [
-        {"capability_id": "ghost", "entrypoint": "ghost.py", "found_in": []}]})
+    nowhere = _format_absent_line(
+        {
+            "total": 43,
+            "checked": 1,
+            "absent": [{"capability_id": "ghost", "entrypoint": "ghost.py", "found_in": []}],
+        }
+    )
     assert "not found in any sibling checkout" in nowhere, nowhere
 
-    print("verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
-          "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
-          "not, floor counts passed+skipped, absent-module line is silent when clean and is "
-          "never counted as a skip)")
+    print(
+        "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
+        "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
+        "not, floor counts passed+skipped, absent-module line is silent when clean and is "
+        "never counted as a skip)"
+    )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--update-floor", action="store_true",
-                    help="record the current counts as the floor (only when everything passes)")
+    ap.add_argument(
+        "--update-floor",
+        action="store_true",
+        help="record the current counts as the floor (only when everything passes)",
+    )
     args = ap.parse_args()
     if args.selftest:
         _selftest()

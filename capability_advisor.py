@@ -28,6 +28,7 @@ DESIGN COMMITMENTS, each learned from a failure in this subsystem:
 
 Also exposed as the `capability_advice` MCP tool, so any session can ask at task initiation.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,16 +49,47 @@ TASK_SIGNALS: dict[str, tuple[str, ...]] = {
     # `offload` was ABSENT until 2026-08-19 while being the fleet's most-used capability by 20x
     # (196 runs/week vs 2 for the next). So the front door could never recommend the one thing the
     # Orchestrator is used for most: spending a cheap agent's context instead of this seat's.
-    "offload": ("offload", "summarise", "summarize", "read these", "large context", "200 pages",
-                "delegate this", "conserve capacity", "cheap agent", "token-heavy", "big read"),
+    "offload": (
+        "offload",
+        "summarise",
+        "summarize",
+        "read these",
+        "large context",
+        "200 pages",
+        "delegate this",
+        "conserve capacity",
+        "cheap agent",
+        "token-heavy",
+        "big read",
+    ),
     # Real campaign language, taken from the Trend_Model_Project legacy-removal issues that this
     # advisor previously failed to classify at all ("remove the legacy config shapes ... phase 6").
     # The old signals ("rename across", "mass change", "sweep") matched none of the actual work.
-    "codemod": ("codemod", "refactor", "rename across", "mass change", "sweep", "migrate all",
-                "legacy removal", "remove legacy", "remove remaining", "remove retired",
-                "remove duplicate", "consolidate", "deduplicate", "dedupe", "extract shared",
-                "across the whole repo", "phase 2", "phase 3", "phase 4", "phase 5", "phase 6",
-                "phase 7", "phase 8"),
+    "codemod": (
+        "codemod",
+        "refactor",
+        "rename across",
+        "mass change",
+        "sweep",
+        "migrate all",
+        "legacy removal",
+        "remove legacy",
+        "remove remaining",
+        "remove retired",
+        "remove duplicate",
+        "consolidate",
+        "deduplicate",
+        "dedupe",
+        "extract shared",
+        "across the whole repo",
+        "phase 2",
+        "phase 3",
+        "phase 4",
+        "phase 5",
+        "phase 6",
+        "phase 7",
+        "phase 8",
+    ),
     "review": ("review", "critique", "assess", "evaluate", "audit", "check quality"),
     # "screenshot" spelled out for the same reason as "testgen". The boundary plus the
     # no-inflection rule for initialisms is what stops `ui` matching "uid" and `ux` "uxbridge".
@@ -147,6 +179,7 @@ def _usability(cap: dict) -> dict:
 #      failure mode this project keeps re-committing. They are now reported.
 # ---------------------------------------------------------------------------
 
+
 def _dispatcher_task_type_capability() -> dict:
     """The dispatcher's task_type -> capability map, read from the dispatcher itself.
 
@@ -156,9 +189,10 @@ def _dispatcher_task_type_capability() -> dict:
     """
     try:
         import dispatcher
+
         table = getattr(dispatcher, "TASK_TYPE_CAPABILITY", None)
         return dict(table) if isinstance(table, dict) else {}
-    except Exception:                                                      # noqa: BLE001
+    except Exception:  # noqa: BLE001
         return {}
 
 
@@ -192,33 +226,60 @@ def entry_requirement(cap: dict) -> dict:
     """
     m = cap.get("matcher") or {}
     if not m:
-        return {"mode": "undeclared",
-                "detail": "declares no trigger, so nothing can route to it"}
+        return {"mode": "undeclared", "detail": "declares no trigger, so nothing can route to it"}
     if "field" in m:
         values = m.get("value")
         values = values if isinstance(values, list) else [values]
-        return {"mode": "task_routed", "field": str(m.get("field") or ""),
-                "values": [str(v) for v in values],
-                "detail": f"routed by {m.get('field')} in {[str(v) for v in values]}"}
+        return {
+            "mode": "task_routed",
+            "field": str(m.get("field") or ""),
+            "values": [str(v) for v in values],
+            "detail": f"routed by {m.get('field')} in {[str(v) for v in values]}",
+        }
     if "kind" in m:
         kind = str(m.get("kind") or "").lower()
         if kind == "env":
-            return {"mode": "env_gated", "flag": str(m.get("name") or ""),
-                    "equals": str(m.get("equals")),
-                    "detail": f"gated by {m.get('name')}={m.get('equals')}"}
+            return {
+                "mode": "env_gated",
+                "flag": str(m.get("name") or ""),
+                "equals": str(m.get("equals")),
+                "detail": f"gated by {m.get('name')}={m.get('equals')}",
+            }
         name = m.get("equals", m.get("name"))
-        return {"mode": "entered_at", "kind": kind, "name": None if name is None else str(name),
-                "detail": f"entered at {kind} {name!r}, not selected by task type"}
-    return {"mode": "legacy", "keys": sorted(str(k) for k in m),
-            "detail": f"legacy matcher over {sorted(str(k) for k in m)}"}
+        return {
+            "mode": "entered_at",
+            "kind": kind,
+            "name": None if name is None else str(name),
+            "detail": f"entered at {kind} {name!r}, not selected by task type",
+        }
+    return {
+        "mode": "legacy",
+        "keys": sorted(str(k) for k in m),
+        "detail": f"legacy matcher over {sorted(str(k) for k in m)}",
+    }
 
 
 # The trigger fields this advisor will forward from `context=` into the matcher trigger. Confined to
 # kinds actually declared in the ledger so a typo cannot silently become a new matching dimension.
-CONTEXT_FIELDS = ("closer_gate", "role", "tick_phase", "lane_event", "ci_workflow", "test_gate",
-                  "feedback_event", "experiment_phase", "prompt_phase", "adapter", "transport",
-                  "evidence_gate", "supervised_trial", "compiled_workflow", "cli_subcommand",
-                  "issue_readiness", "tick_preflight")
+CONTEXT_FIELDS = (
+    "closer_gate",
+    "role",
+    "tick_phase",
+    "lane_event",
+    "ci_workflow",
+    "test_gate",
+    "feedback_event",
+    "experiment_phase",
+    "prompt_phase",
+    "adapter",
+    "transport",
+    "evidence_gate",
+    "supervised_trial",
+    "compiled_workflow",
+    "cli_subcommand",
+    "issue_readiness",
+    "tick_preflight",
+)
 
 
 def reachable_set(*, path=None) -> dict:
@@ -235,8 +296,11 @@ def reachable_set(*, path=None) -> dict:
         advice = advise(signals[0], record=False, path=path)
         for entry in advice.get("capabilities") or []:
             out.setdefault(entry["capability_id"], []).append(task_type)
-    return {"reachable": {k: sorted(set(v)) for k, v in sorted(out.items())},
-            "reachable_count": len(out), "ledger_count": len(caps)}
+    return {
+        "reachable": {k: sorted(set(v)) for k, v in sorted(out.items())},
+        "reachable_count": len(out),
+        "ledger_count": len(caps),
+    }
 
 
 def _annotate_contraindications(entries: list[dict], repository: str) -> list[str]:
@@ -256,8 +320,9 @@ def _annotate_contraindications(entries: list[dict], repository: str) -> list[st
         return []
     try:
         import repo_knowledge
+
         notes = repo_knowledge.contraindications_for(repository)
-    except Exception:                                              # noqa: BLE001
+    except Exception:  # noqa: BLE001
         # Advice must still be given when the registry is unreadable, exactly like propensity.
         return []
     flagged = []
@@ -274,9 +339,18 @@ def _annotate_contraindications(entries: list[dict], repository: str) -> list[st
     return sorted(flagged)
 
 
-def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str = "",
-           record: bool = True, path=None, context: dict | None = None,
-           surface: str = "", repo_path: str = "") -> dict:
+def advise(
+    text: str,
+    *,
+    repository: str = "",
+    lane: str = "opener",
+    skill: str = "",
+    record: bool = True,
+    path=None,
+    context: dict | None = None,
+    surface: str = "",
+    repo_path: str = "",
+) -> dict:
     """Should the Orchestrator be used for this task, and which capabilities apply?
 
     `skill` names the skill that surfaced this work, if any; it is recorded with each match so the
@@ -301,13 +375,26 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     suppressed = binding_suppressed(surface) if surface else ""
     if suppressed:
         return {
-            "task": text, "experiment_id": experiment_id(text),
-            "useful": False, "confidence": "suppressed", "skill": skill or None,
-            "surface": surface, "repository": repository, "contraindicated": [],
-            "task_types": [], "capabilities": [], "dispatch_ready_count": 0,
-            "bound_count": 0, "bound_capabilities": [], "not_applicable": [],
-            "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
-                         "by_entry_mode": {}},
+            "task": text,
+            "experiment_id": experiment_id(text),
+            "useful": False,
+            "confidence": "suppressed",
+            "skill": skill or None,
+            "surface": surface,
+            "repository": repository,
+            "contraindicated": [],
+            "task_types": [],
+            "capabilities": [],
+            "dispatch_ready_count": 0,
+            "bound_count": 0,
+            "bound_capabilities": [],
+            "not_applicable": [],
+            "coverage": {
+                "ledger_count": len(caps),
+                "matched": 0,
+                "not_applicable": 0,
+                "by_entry_mode": {},
+            },
             "precondition": _annotate_preconditions([], repository, repo_path),
             "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
         }
@@ -320,18 +407,30 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         # classifier, which is the single thing it exists not to do. Free text that classifies badly
         # is the common case, not the edge case.
         declared = binding_for(surface or skill, path=path)
-        live = [(cid, why) for cid, why in sorted(declared.items())
-                if cid in caps and caps[cid].get("status") not in {"retired", "superseded"}]
+        live = [
+            (cid, why)
+            for cid, why in sorted(declared.items())
+            if cid in caps and caps[cid].get("status") not in {"retired", "superseded"}
+        ]
         if live:
-            entries = [{"capability_id": cid, "matched_task_type": None, "bound": True,
-                        "bound_only": True, "binding_reason": why,
-                        "entrypoint": caps[cid].get("entrypoint"), **_usability(caps[cid])}
-                       for cid, why in live]
+            entries = [
+                {
+                    "capability_id": cid,
+                    "matched_task_type": None,
+                    "bound": True,
+                    "bound_only": True,
+                    "binding_reason": why,
+                    "entrypoint": caps[cid].get("entrypoint"),
+                    **_usability(caps[cid]),
+                }
+                for cid, why in live
+            ]
             precondition = _annotate_preconditions(entries, repository, repo_path)
             try:
                 import capability_propensity
+
                 entries = capability_propensity.rank(entries, path=path)
-            except Exception:                                          # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass
             # The classification-miss path takes the SAME contraindication pass as the main one --
             # it is the path a free-text audit consult actually lands on, so annotating only the
@@ -342,20 +441,32 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
             if warned:
                 entries.sort(key=lambda e: 1 if e.get("contraindicated") else 0)
             result = {
-                "task": text, "experiment_id": experiment_id(text),
-                "useful": True, "confidence": "binding_only", "skill": skill or None,
-                "surface": (surface or skill) or None, "repository": repository,
+                "task": text,
+                "experiment_id": experiment_id(text),
+                "useful": True,
+                "confidence": "binding_only",
+                "skill": skill or None,
+                "surface": (surface or skill) or None,
+                "repository": repository,
                 "contraindicated": warned,
-                "task_types": [], "capabilities": entries,
+                "task_types": [],
+                "capabilities": entries,
                 "dispatch_ready_count": sum(1 for e in entries if e["dispatch_ready"]),
-                "bound_count": len(live), "bound_capabilities": sorted(c for c, _ in live),
+                "bound_count": len(live),
+                "bound_capabilities": sorted(c for c, _ in live),
                 "not_applicable": [],
                 "precondition": precondition,
-                "coverage": {"ledger_count": len(caps), "matched": len(entries),
-                             "not_applicable": 0, "by_entry_mode": {}},
-                "reason": (f"could not classify this task, but {len(live)} capability(ies) are "
-                           f"DECLARED for surface {surface or skill!r} and apply regardless of "
-                           f"classification"),
+                "coverage": {
+                    "ledger_count": len(caps),
+                    "matched": len(entries),
+                    "not_applicable": 0,
+                    "by_entry_mode": {},
+                },
+                "reason": (
+                    f"could not classify this task, but {len(live)} capability(ies) are "
+                    f"DECLARED for surface {surface or skill!r} and apply regardless of "
+                    f"classification"
+                ),
             }
             if record and entries:
                 # A BINDING-ONLY ANSWER IS STILL AN OBSERVATION. This branch used to return real
@@ -371,19 +482,31 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
                 result["recorded_matches"] = _record_matches(result, skill=skill, path=path)
             return result
         return {
-            "task": text, "experiment_id": experiment_id(text),
-            "useful": False, "confidence": "none", "skill": skill or None,
-            "repository": repository, "contraindicated": [],
-            "task_types": [], "capabilities": [],
+            "task": text,
+            "experiment_id": experiment_id(text),
+            "useful": False,
+            "confidence": "none",
+            "skill": skill or None,
+            "repository": repository,
+            "contraindicated": [],
+            "task_types": [],
+            "capabilities": [],
             "dispatch_ready_count": 0,
             "not_applicable": [],
             "surface": (surface or skill) or None,
-            "bound_count": 0, "bound_capabilities": [],
+            "bound_count": 0,
+            "bound_capabilities": [],
             "precondition": _annotate_preconditions([], repository, repo_path),
-            "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
-                         "by_entry_mode": {}},
-            "reason": ("could not classify this task into any work type the fleet records; "
-                       "no capability can be matched to it"),
+            "coverage": {
+                "ledger_count": len(caps),
+                "matched": 0,
+                "not_applicable": 0,
+                "by_entry_mode": {},
+            },
+            "reason": (
+                "could not classify this task into any work type the fleet records; "
+                "no capability can be matched to it"
+            ),
         }
 
     # Infrastructure capabilities are ENTERED DIRECTLY, never routed by task_type, so their
@@ -404,10 +527,15 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         direct = DIRECT_ENTRY.get(candidate["task_type"])
         if direct and direct in caps and not any(m["capability_id"] == direct for m in matched):
             cap = caps[direct]
-            matched.append({"capability_id": direct,
-                            "matched_task_type": candidate["task_type"],
-                            "entrypoint": cap.get("entrypoint"),
-                            "entered_directly": True, **_usability(cap)})
+            matched.append(
+                {
+                    "capability_id": direct,
+                    "matched_task_type": candidate["task_type"],
+                    "entrypoint": cap.get("entrypoint"),
+                    "entered_directly": True,
+                    **_usability(cap),
+                }
+            )
         trigger = {"repository": repository, "task_type": candidate["task_type"], "lane": lane}
         # Forward whatever context the CALLER actually knows. Absent context still fails closed --
         # this widens what CAN be answered, never what is assumed.
@@ -422,13 +550,19 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
             if not ok:
                 # NOT a match, and NOT silence. The reason names the entry point.
                 if cap_id not in unmatched:
-                    unmatched[cap_id] = {"capability_id": cap_id,
-                                         "why_not": sorted(set(reasons)),
-                                         "requirement": entry_requirement(cap),
-                                         "status": cap.get("status")}
+                    unmatched[cap_id] = {
+                        "capability_id": cap_id,
+                        "why_not": sorted(set(reasons)),
+                        "requirement": entry_requirement(cap),
+                        "status": cap.get("status"),
+                    }
                 continue
-            entry = {"capability_id": cap_id, "matched_task_type": candidate["task_type"],
-                     "entrypoint": cap.get("entrypoint"), **_usability(cap)}
+            entry = {
+                "capability_id": cap_id,
+                "matched_task_type": candidate["task_type"],
+                "entrypoint": cap.get("entrypoint"),
+                **_usability(cap),
+            }
             if not any(m["capability_id"] == cap_id for m in matched):
                 matched.append(entry)
 
@@ -455,9 +589,15 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
             if cap is None or cap.get("status") in {"retired", "superseded"}:
                 continue
             if cap_id not in present:
-                matched.append({"capability_id": cap_id, "matched_task_type": None,
-                                "entrypoint": cap.get("entrypoint"), "bound_only": True,
-                                **_usability(cap)})
+                matched.append(
+                    {
+                        "capability_id": cap_id,
+                        "matched_task_type": None,
+                        "entrypoint": cap.get("entrypoint"),
+                        "bound_only": True,
+                        **_usability(cap),
+                    }
+                )
                 unmatched.pop(cap_id, None)
         for entry in matched:
             entry["bound"] = entry["capability_id"] in bound
@@ -471,8 +611,9 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
     precondition = _annotate_preconditions(matched, repository, repo_path)
     try:
         import capability_propensity
+
         matched = capability_propensity.rank(matched, path=path)
-    except Exception:                                              # noqa: BLE001
+    except Exception:  # noqa: BLE001
         # Ranking is an enhancement, never a dependency: advice must still be given when the
         # propensity store is unreadable.
         pass
@@ -482,8 +623,12 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         # Small-and-specific beats long-and-general -- that is the measured effect this implements.
         # A documented per-repo contraindication ranks LAST WITHIN its partition: still offered, so
         # it can still be chosen and still earn evidence, but no longer the first thing read.
-        matched.sort(key=lambda m: (0 if (m.get("bound") or not bound) else 1,
-                                    1 if m.get("contraindicated") else 0))
+        matched.sort(
+            key=lambda m: (
+                0 if (m.get("bound") or not bound) else 1,
+                1 if m.get("contraindicated") else 0,
+            )
+        )
     usable = [m for m in matched if m["dispatch_ready"]]
     # A capability that matched for ANY classified task type is not "not applicable".
     for entry in matched:
@@ -526,17 +671,21 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         "reason": (
             f"{len(matched)} capability(ies) declare a trigger matching "
             f"{', '.join(c['task_type'] for c in candidates)}"
-            + ("; none is dispatch-ready yet, so treat these as advisory"
-               if matched and not usable else "")
-            if matched else
-            f"classified as {', '.join(c['task_type'] for c in candidates)}, but no capability "
+            + (
+                "; none is dispatch-ready yet, so treat these as advisory"
+                if matched and not usable
+                else ""
+            )
+            if matched
+            else f"classified as {', '.join(c['task_type'] for c in candidates)}, but no capability "
             f"declares a trigger for that work"
         ),
     }
     if record and matched:
         # Asking the question is itself the observation that improves the answer.
-        result["recorded_matches"] = _record_matches(result, skill=skill,
-                                                     surface=surface or skill, path=path)
+        result["recorded_matches"] = _record_matches(
+            result, skill=skill, surface=surface or skill, path=path
+        )
     return result
 
 
@@ -546,6 +695,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
 # where nothing has changed, which is how a surface trains you to ignore it. Every condition below
 # is derived from observable state, so it fires on change and is silent otherwise.
 # ---------------------------------------------------------------------------
+
 
 def should_reask(previous: dict | None, current_context: dict) -> dict:
     """Should the advisor be consulted again? Returns {reask, reasons}.
@@ -559,8 +709,10 @@ def should_reask(previous: dict | None, current_context: dict) -> dict:
 
     # The work reclassified — e.g. an "implement" task that has moved on to writing tests. This is
     # the highest-value trigger: it is exactly when a different capability becomes relevant.
-    now_types = set(classify_task(str(current_context.get("task") or "")) and
-                    [c["task_type"] for c in classify_task(str(current_context.get("task") or ""))])
+    now_types = set(
+        classify_task(str(current_context.get("task") or ""))
+        and [c["task_type"] for c in classify_task(str(current_context.get("task") or ""))]
+    )
     was_types = set(previous.get("task_types") or [])
     if now_types and now_types != was_types:
         reasons.append(f"task_reclassified:{','.join(sorted(now_types - was_types)) or 'narrowed'}")
@@ -631,23 +783,23 @@ NO_BINDING = "__none__"
 SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     "closer-lane": {
         "adversarial-review": "its matcher IS {kind: closer_gate, name: high_stakes_review} -- built "
-                              "for this lane's complex-target selection, 0 invocations in 1,766 rounds",
+        "for this lane's complex-target selection, 0 invocations in 1,766 rounds",
         "partitioned-review": "the ten-class batch sweep (a-j) is a partition adjudicated in prose; "
-                              "review-thread work in 1,022 of 1,766 rounds",
+        "review-thread work in 1,022 of 1,766 rounds",
         "runtime-ac-checks": "sweep classes (b)(c)(d) are merged-but-unverified, verifier non-PASS, "
-                             "and PASS-with-issue-open -- 30 fleet issues exist because merged work "
-                             "missed its own criteria",
+        "and PASS-with-issue-open -- 30 fleet issues exist because merged work "
+        "missed its own criteria",
         "cross-repo-coordination": "the batch sweep is cross-repo by construction; 312 rounds",
         "offload": "13 repos x 10 candidate classes every round is the largest read in the system, "
-                   "and the lanes account for ~0 of offload's 63 invocations",
+        "and the lanes account for ~0 of offload's 63 invocations",
     },
     "opener-lane": {
         "deliberate-break-verifier": "the lane performs this exact break-then-revert proof in 271 of "
-                                     "2,445 rounds, instructed nowhere -- 0 hits in its TOML, its "
-                                     "rendered prompt and ~/.codex/bin, 10 in its rolling memory",
+        "2,445 rounds, instructed nowhere -- 0 hits in its TOML, its "
+        "rendered prompt and ~/.codex/bin, 10 in its rolling memory",
         "testgen-lane": "writes regression coverage by hand in 339 rounds",
         "codemod-campaign": "materialises phase series one issue at a time with no campaign identity "
-                            "(Trend #5935-#5942 is eight issues)",
+        "(Trend #5935-#5942 is eight issues)",
         "runtime-ac-checks": "stale-checkbox defects on its own PRs are unverified acceptance criteria",
         "offload": "scans 40 durable holders and full review-thread sets per round",
     },
@@ -664,35 +816,35 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # excluded precisely because a keyword classifier would misfire on them.
     "ux-review": {
         "frontend-verifier": "Gate 1 is the deterministic assert-click-assert pass that must precede "
-                             "the panel; the skill drives every primary surface",
+        "the panel; the skill drives every primary surface",
         "adversarial-review": "the panel is >=4 evaluators plus an adversarial critic — the critic "
-                              "role is this capability",
+        "role is this capability",
         "offload": "mining full per-evaluator output is a large read by construction",
     },
     "implementation-verification": {
         "runtime-ac-checks": "the skill's whole job is proving each acceptance criterion landed — "
-                             "that IS the runtime-AC contract",
+        "that IS the runtime-AC contract",
         "deliberate-break-verifier": "it checks the named test gate is present AND passing, which is "
-                                     "the break-then-revert proof",
+        "the break-then-revert proof",
         "offload": "reading real squash diffs across many merged PRs is a large read",
     },
     "file-agent-issue": {
         "deliberate-break-verifier": "AGENT_ISSUE_FORMAT requires a named test gate with a "
-                                     "deliberate-break→revert demonstration in every filed issue",
+        "deliberate-break→revert demonstration in every filed issue",
         "runtime-ac-checks": "the issue's acceptance criteria are what a runtime-AC plan is built from",
     },
     "cross-env-test-doctor": {
         "deliberate-break-verifier": "prescribing the canonical fix per failure class needs the fix "
-                                     "proven to fail without it",
+        "proven to fail without it",
         "testgen-lane": "cross-env failures usually resolve into added or corrected coverage",
     },
     "latched-gate-check": {
         "switch-review": "the repo's own gate sweep already audits the held switches weekly; this "
-                         "skill and that capability are the same question asked two ways",
+        "skill and that capability are the same question asked two ways",
     },
     "orchestrate": {
         "offload": "the skill's prime directive is 'do the thinking; hand off the typing and the "
-                   "reading' — offload is that mechanism and its most-used capability",
+        "reading' — offload is that mechanism and its most-used capability",
         "windowed-capacity-policy": "it assesses capacity before routing each sub-task",
         "role-decomposer": "decomposing the request across agents is the skill's core move",
         "role-triage": "choosing which piece goes to which agent is triage",
@@ -700,34 +852,34 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # SUPPRESSED, each with the reason — these are verdicts, not gaps.
     "human-involvement-check": {
         NO_BINDING: "produces an attention-cost analysis and never dispatchable work; its "
-                    "Orchestrator mentions cite the owner-question protocol as a reference "
-                    "implementation, not as something to invoke.",
+        "Orchestrator mentions cite the owner-question protocol as a reference "
+        "implementation, not as something to invoke.",
     },
     "scheduled-checkin": {
         NO_BINDING: "the work is ~/.codex/bin/checkin.py, a different subsystem. The Orchestrator is "
-                    "a CONSUMER of this skill, not a provider to it.",
+        "a CONSUMER of this skill, not a provider to it.",
     },
     "platform-handoff-brief": {
         NO_BINDING: "binding anything here would manufacture false positives: 'write a Windows TEST "
-                    "brief' classifies as testgen on the word 'test' alone, seeding a steady stream "
-                    "of associations describing work that never happened.",
+        "brief' classifies as testgen on the word 'test' alone, seeding a steady stream "
+        "of associations describing work that never happened.",
     },
     "fast-venv": {
         NO_BINDING: "same failure, worse: 'pytest takes 26 minutes' classifies as testgen every "
-                    "time. The skill diagnoses a filesystem problem, not a coverage problem.",
+        "time. The skill diagnoses a filesystem problem, not a coverage problem.",
     },
     "deploy-recovery": {
         NO_BINDING: "Render incident response. The advisor's own probe returns useful:false, "
-                    "confidence:none, and that is the correct answer.",
+        "confidence:none, and that is the correct answer.",
     },
     # ---- non-skill surfaces
     "tick": {
         "switch-review": "already a weekly tick cadence step; bound so the tick can consult rather "
-                         "than only be scheduled",
+        "than only be scheduled",
         "capability-firing-monitor": "the tick is where does-it-fire is observed",
         "capability-activation-audit": "and where can-it-fire is observed",
         "capability-propensity": "the tick is the highest-volume unattended surface (~91 writes/day), "
-                                 "so it is where propensity evidence should accrue fastest",
+        "so it is where propensity evidence should accrue fastest",
     },
     "ci": {
         "capability-admission-gate": "runs in verify.py on every PR; the gate IS the CI surface",
@@ -735,15 +887,15 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     },
     "repo-audit": {
         "offload": "whole-repo reads are the canonical offload case, and the audit is the biggest "
-                   "read in the system; applies across phases, so declared surface-wide",
+        "read in the system; applies across phases, so declared surface-wide",
     },
     "repo-audit:phase-1": {
         NO_BINDING: "the playbook says 'Orient (bash only, NO agents)'. Binding anything here would "
-                    "contradict the skill's own instruction; the empty set is the correct answer.",
+        "contradict the skill's own instruction; the empty set is the correct answer.",
     },
     "repo-audit:phase-2": {
         "role-decomposer": "phase 2 splits the work across 8 named dimensions — that split IS "
-                           "decomposition, currently done by hand in the prompt",
+        "decomposition, currently done by hand in the prompt",
         # `partitioned-review` USED TO BE BOUND HERE, on the word "partition". It moved to phase 3
         # (2026-08-23) after a real audit run declined it as "wrong phase, not wrong tool". The
         # binding matched a NAME, not a SHAPE: `partitioned_review.validate_corpus` takes a list of
@@ -752,9 +904,9 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         # against `current_code`. That is a corpus of prior CLAIMS being reconciled, and phase 2
         # discovers defects in source — there is no claim list yet for it to dispose.
         "repo-playbook": "the audit runs against 13 repos with different conventions; "
-                         "repo_knowledge.py is exactly that per-repo context",
+        "repo_knowledge.py is exactly that per-repo context",
         "frontend-verifier": "dimension 4 uses the ux-review-overlay when observable surfaces "
-                             "exist, which is what this gate checks",
+        "exist, which is what this gate checks",
     },
     # THE 8 DIMENSIONS OF PHASE 2, bound individually — and modeled as SIBLINGS of `phase-2`, not
     # children of it. The playbook splits phase 2 into "subsystem agents + cross-cutting agents, each
@@ -770,55 +922,55 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # covers. Absent is a verdict here, not an omission.
     "repo-audit:dimension-2": {
         "codemod-campaign": "the dimension IS 'duplication & consolidation ... root-vs-template "
-                            "drift'; consolidating a duplicated shape across a repo is codemod work",
+        "drift'; consolidating a duplicated shape across a repo is codemod work",
     },
     "repo-audit:dimension-3": {
         "runtime-ac-checks": "'trace config key -> loader -> consumer' with direction checks "
-                             "('tighter limit => more breaches') is behavioural verification of "
-                             "wiring, which is what a runtime-AC plan encodes",
+        "('tighter limit => more breaches') is behavioural verification of "
+        "wiring, which is what a runtime-AC plan encodes",
     },
     "repo-audit:dimension-4": {
         "frontend-verifier": "the dimension requires rendered evidence and driven scenarios on any "
-                             "observable surface — Gate 1's assert-click-assert pass",
+        "observable surface — Gate 1's assert-click-assert pass",
         "adversarial-review": "the ux-review overlay's panel includes an adversarial critic",
     },
     "repo-audit:dimension-5": {
         "offload": "the playbook names the mechanism outright: 'research briefs (offload to web "
-                   "agents; good ROI)'",
+        "agents; good ROI)'",
     },
     "repo-audit:dimension-6": {
         "feature-scan": "'adjacent problems the existing machinery almost solves' is exactly what "
-                        "feature_scan.py reports — reusable structures the registry has never seen",
+        "feature_scan.py reports — reusable structures the registry has never seen",
     },
     "repo-audit:dimension-8": {
         "capability-activation-audit": "the dimension audits 'local skills/automations — efficiency, "
-                                       "token-sinks, human-touchpoints', which is can-it-fire",
+        "token-sinks, human-touchpoints', which is can-it-fire",
         "capability-firing-monitor": "and did-it-fire",
         "capability-propensity": "and was-it-worth-firing; this dimension is where a surface's own "
-                                 "false negatives surface",
+        "false negatives surface",
         "switch-review": "held switches are the canonical automation token-sink and human-touchpoint",
     },
     "repo-audit:phase-3": {
         "adversarial-review": "the phase IS 'adversarially verify each finding against the live "
-                              "tip'; appears in 25 of 177 audit documents, done by hand",
+        "tip'; appears in 25 of 177 audit documents, done by hand",
         "partitioned-review": "the phase takes N candidate findings and disposes each against the "
-                              "live tip, which IS this module's corpus shape — `assertion` items "
-                              "with `source_refs`, dispositions satisfied/remaining/partial/"
-                              "intentional/historical_only/unresolved/not_applicable, evidence "
-                              "typed `current_code`, and a `confirmed_defects` category. Moved "
-                              "here from phase-2, where it matched the word 'partition' and not "
-                              "the shape; the 2026-08-22 audit of Trend used it for exactly this",
+        "live tip, which IS this module's corpus shape — `assertion` items "
+        "with `source_refs`, dispositions satisfied/remaining/partial/"
+        "intentional/historical_only/unresolved/not_applicable, evidence "
+        "typed `current_code`, and a `confirmed_defects` category. Moved "
+        "here from phase-2, where it matched the word 'partition' and not "
+        "the shape; the 2026-08-22 audit of Trend used it for exactly this",
     },
     "repo-audit:phase-4": {
         "deliberate-break-verifier": "phase 4 REQUIRES 'a named test gate + deliberate-break→revert' "
-                                     "on every filed issue — it appears in 56 of 177 audit "
-                                     "documents, the dominant pattern, and never as an invocation",
+        "on every filed issue — it appears in 56 of 177 audit "
+        "documents, the dominant pattern, and never as an invocation",
         "testgen-lane": "the named test gate phase 4 demands is testgen work",
         "role-triage": "'prioritize + file' is triage over verified findings",
     },
     "repo-audit:phase-5": {
         "capability-propensity": "phase 5 reconciles and proves nothing was silently dropped; "
-                                 "recording which capabilities helped belongs here",
+        "recording which capabilities helped belongs here",
     },
     "repo-audit:fix": {
         "codemod-campaign": "the fix arc is where consolidation findings become sweeping changes",
@@ -848,7 +1000,7 @@ def binding_for(surface: str, *, path=None) -> dict[str, str]:
     # EVERY prefix, least specific first. `split(":", 1)` skipped the middle level, so a
     # three-part key like `a:b:c` inherited from `a` and silently missed `a:b`.
     parts = surface.split(":")
-    keys = [":".join(parts[:i + 1]) for i in range(len(parts))]
+    keys = [":".join(parts[: i + 1]) for i in range(len(parts))]
     # A phase declaring NO_BINDING suppresses inheritance entirely, so "deliberately empty" can
     # actually be expressed. Checked before merging, or the surface-wide entries would leak in.
     if NO_BINDING in (SURFACE_BINDINGS.get(keys[-1]) or {}):
@@ -1036,20 +1188,55 @@ def consult_target(repository: str) -> str:
 # `src/fine_art_archive/ui/index.html` — which are exactly the two negative and one positive
 # observations on record.
 
-_SURFACE_SKIP_DIRS = frozenset({
-    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache",
-    "docs", "site", ".github", "htmlcov", "build", "dist", ".mypy_cache", "coverage", ".tox",
-    ".eggs", "vendor", "third_party", "examples", "fixtures",
-})
+_SURFACE_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        "docs",
+        "site",
+        ".github",
+        "htmlcov",
+        "build",
+        "dist",
+        ".mypy_cache",
+        "coverage",
+        ".tox",
+        ".eggs",
+        "vendor",
+        "third_party",
+        "examples",
+        "fixtures",
+    }
+)
 # `docs/` and `site/` are skipped deliberately: a generated API-docs tree is full of HTML and is not
 # an application surface. Counting it is precisely what would turn this probe back into the false
 # positive it exists to remove.
-_SURFACE_FRAMEWORKS = ("streamlit", "flask", "fastapi", "django", "dash", "gradio", "panel",
-                       "nicegui")
-_SURFACE_DEP_FILES = frozenset({
-    "pyproject.toml", "requirements.txt", "requirements-dev.txt", "package.json", "setup.cfg",
-    "Pipfile", "environment.yml",
-})
+_SURFACE_FRAMEWORKS = (
+    "streamlit",
+    "flask",
+    "fastapi",
+    "django",
+    "dash",
+    "gradio",
+    "panel",
+    "nicegui",
+)
+_SURFACE_DEP_FILES = frozenset(
+    {
+        "pyproject.toml",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "package.json",
+        "setup.cfg",
+        "Pipfile",
+        "environment.yml",
+    }
+)
 _SURFACE_COMPONENT = re.compile(r"\.(jsx|tsx|vue|svelte)$")
 # Bounded on both axes, so a probe can never become the expensive part of an advisory call: it stops
 # at the first few markers and gives up rather than walking an unbounded tree.
@@ -1066,20 +1253,27 @@ def detect_observable_surface(root) -> dict:
     """
     import os
     import pathlib as _pathlib
+
     base = _pathlib.Path(str(root)).expanduser()
     if not base.is_dir():
-        return {"observable": None, "markers": [],
-                "detail": f"no readable checkout at {str(root)!r}"}
+        return {
+            "observable": None,
+            "markers": [],
+            "detail": f"no readable checkout at {str(root)!r}",
+        }
     markers: list[str] = []
     seen = 0
     for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [d for d in dirnames
-                       if d not in _SURFACE_SKIP_DIRS and not d.startswith(".")]
+        dirnames[:] = [d for d in dirnames if d not in _SURFACE_SKIP_DIRS and not d.startswith(".")]
         for name in filenames:
             seen += 1
             if seen > _SURFACE_MAX_FILES:
-                return {"observable": bool(markers), "markers": markers, "truncated": True,
-                        "detail": f"stopped after {_SURFACE_MAX_FILES} files"}
+                return {
+                    "observable": bool(markers),
+                    "markers": markers,
+                    "truncated": True,
+                    "detail": f"stopped after {_SURFACE_MAX_FILES} files",
+                }
             rel = os.path.relpath(os.path.join(dirpath, name), base)
             low = name.lower()
             if low.endswith((".html", ".htm")):
@@ -1095,18 +1289,28 @@ def detect_observable_surface(root) -> dict:
                     if re.search(rf"(?<![a-z]){framework}(?![a-z])", text):
                         markers.append(f"dependency:{framework}:{rel}")
             if len(markers) >= _SURFACE_MAX_MARKERS:
-                return {"observable": True, "markers": markers,
-                        "detail": f"{len(markers)} surface marker(s) found"}
-    return {"observable": bool(markers), "markers": markers,
-            "detail": (f"{len(markers)} surface marker(s) found" if markers else
-                       "no HTML entrypoint, UI component or web-framework dependency found")}
+                return {
+                    "observable": True,
+                    "markers": markers,
+                    "detail": f"{len(markers)} surface marker(s) found",
+                }
+    return {
+        "observable": bool(markers),
+        "markers": markers,
+        "detail": (
+            f"{len(markers)} surface marker(s) found"
+            if markers
+            else "no HTML entrypoint, UI component or web-framework dependency found"
+        ),
+    }
 
 
 REPO_FACT_PROBES = {"observable_surface": detect_observable_surface}
 
 
-def evaluate_precondition(capability_id: str, *, repository: str = "", repo_path: str = "",
-                          facts: dict | None = None) -> dict:
+def evaluate_precondition(
+    capability_id: str, *, repository: str = "", repo_path: str = "", facts: dict | None = None
+) -> dict:
     """Does this capability's declared precondition hold for this consult?
 
     THREE-VALUED, and that is load-bearing. True and False are verdicts; None means NOT EVALUATED —
@@ -1119,22 +1323,35 @@ def evaluate_precondition(capability_id: str, *, repository: str = "", repo_path
     declared = applies_to(capability_id)
     needs = required_repo_fact(capability_id)
     target = consult_target(repository)
-    out = {"applies_to": declared, "scope_target": target, "scope_match": None,
-           "requires": needs, "requirement_met": None, "requirement_evidence": None,
-           "precondition_met": None, "precondition_note": None, "unevaluated_because": []}
+    out = {
+        "applies_to": declared,
+        "scope_target": target,
+        "scope_match": None,
+        "requires": needs,
+        "requirement_met": None,
+        "requirement_evidence": None,
+        "precondition_met": None,
+        "precondition_note": None,
+        "unevaluated_because": [],
+    }
 
     if declared is not None:
         if target == TARGET_UNKNOWN:
             out["unevaluated_because"].append(
-                f"applies_to={declared!r} needs a `repository`, and none was named")
+                f"applies_to={declared!r} needs a `repository`, and none was named"
+            )
         else:
             out["scope_match"] = declared in (APPLIES_BOTH, target)
             if not out["scope_match"]:
-                where = ("the Orchestrator's own runtime" if target == APPLIES_SELF
-                         else f"the repository under audit, {str(repository)!r}")
+                where = (
+                    "the Orchestrator's own runtime"
+                    if target == APPLIES_SELF
+                    else f"the repository under audit, {str(repository)!r}"
+                )
                 out["precondition_note"] = (
                     f"declared applies_to={declared!r} but this consult targets {where} — the "
-                    f"concept may transfer; the instrument does not")
+                    f"concept may transfer; the instrument does not"
+                )
 
     if needs:
         probe = REPO_FACT_PROBES.get(needs)
@@ -1142,16 +1359,20 @@ def evaluate_precondition(capability_id: str, *, repository: str = "", repo_path
             out["unevaluated_because"].append(f"no probe is registered for {needs!r}")
         elif not repo_path:
             out["unevaluated_because"].append(
-                f"{needs!r} is a one-time repo fact and needs `repo_path`, a checkout to look at")
+                f"{needs!r} is a one-time repo fact and needs `repo_path`, a checkout to look at"
+            )
         else:
             memo = facts if facts is not None else {}
             key = (needs, str(repo_path))
             if key not in memo:
                 try:
                     memo[key] = probe(repo_path)
-                except Exception as exc:                                   # noqa: BLE001
-                    memo[key] = {"observable": None, "markers": [],
-                                 "detail": f"probe failed: {type(exc).__name__}"}
+                except Exception as exc:  # noqa: BLE001
+                    memo[key] = {
+                        "observable": None,
+                        "markers": [],
+                        "detail": f"probe failed: {type(exc).__name__}",
+                    }
             result = memo[key]
             value = result.get("observable")
             out["requirement_met"] = None if value is None else bool(value)
@@ -1161,15 +1382,17 @@ def evaluate_precondition(capability_id: str, *, repository: str = "", repo_path
             elif not value:
                 out["precondition_note"] = (
                     f"requires {needs} and this repository has none: {result.get('detail')} — "
-                    f"dismissible without investigating it")
+                    f"dismissible without investigating it"
+                )
 
     verdicts = [v for v in (out["scope_match"], out["requirement_met"]) if v is not None]
     out["precondition_met"] = all(verdicts) if verdicts else None
     # THE DECLINE KIND THIS IMPLIES, handed to the caller so the RIGHT correction gets recorded.
     # `capability_propensity` marks `precondition_unmet` non-demotable on purpose: the fix is to
     # evaluate the condition, never to unbind a capability that fires where the condition holds.
-    out["suggested_decline_kind"] = ("precondition_unmet" if out["precondition_met"] is False
-                                     else None)
+    out["suggested_decline_kind"] = (
+        "precondition_unmet" if out["precondition_met"] is False else None
+    )
     return out
 
 
@@ -1184,8 +1407,9 @@ def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str
     facts: dict = {}
     declared, unmet, unevaluated = [], [], {}
     for entry in entries:
-        verdict = evaluate_precondition(entry["capability_id"], repository=repository,
-                                        repo_path=repo_path, facts=facts)
+        verdict = evaluate_precondition(
+            entry["capability_id"], repository=repository, repo_path=repo_path, facts=facts
+        )
         entry.update(verdict)
         if verdict["applies_to"] or verdict["requires"]:
             declared.append(entry["capability_id"])
@@ -1193,14 +1417,21 @@ def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str
             unmet.append(entry["capability_id"])
         if verdict["unevaluated_because"]:
             unevaluated[entry["capability_id"]] = list(verdict["unevaluated_because"])
-    return {"repository": repository, "target": consult_target(repository),
-            "repo_path": repo_path or None, "declared": sorted(declared), "unmet": sorted(unmet),
-            "unevaluated": dict(sorted(unevaluated.items())),
-            "declared_capabilities": sorted(CAPABILITY_PRECONDITIONS),
-            "note": ("a failed precondition is REPORTED, never enforced: the capability is offered "
-                     "and ranked exactly as it would be without this axis, because a binding that "
-                     "fires where the condition holds must not be weakened by the cases where it "
-                     "does not")}
+    return {
+        "repository": repository,
+        "target": consult_target(repository),
+        "repo_path": repo_path or None,
+        "declared": sorted(declared),
+        "unmet": sorted(unmet),
+        "unevaluated": dict(sorted(unevaluated.items())),
+        "declared_capabilities": sorted(CAPABILITY_PRECONDITIONS),
+        "note": (
+            "a failed precondition is REPORTED, never enforced: the capability is offered "
+            "and ranked exactly as it would be without this axis, because a binding that "
+            "fires where the condition holds must not be weakened by the cases where it "
+            "does not"
+        ),
+    }
 
 
 def experiment_id(task: str) -> str:
@@ -1211,6 +1442,7 @@ def experiment_id(task: str) -> str:
     outside this module: `_record_matches` derived the digest privately and threw it away.
     """
     import hashlib
+
     return "advice:" + hashlib.sha1(str(task or "").encode()).hexdigest()[:12]
 
 
@@ -1233,18 +1465,23 @@ def _record_matches(advice: dict, *, skill: str = "", surface: str = "", path=No
     "recorded but unusable" defect one level down from the declines this change is about.
     """
     import hashlib
+
     digest = hashlib.sha1(str(advice.get("task") or "").encode()).hexdigest()[:12]
     # exposed via experiment_id() so a caller can record trigger/outcome against it
     written = 0
     for entry in advice.get("capabilities") or []:
         ok = capabilities.heartbeat(
-            entry["capability_id"], "match",
+            entry["capability_id"],
+            "match",
             ref=f"advice:{digest}",
             path=path or capabilities.REG,
             idempotency_key=f"advice:{entry['capability_id']}:{digest}",
-            metadata={"source": "capability_advisor", "skill": skill or None,
-                      "surface": surface or None,
-                      "task_type": entry.get("matched_task_type")},
+            metadata={
+                "source": "capability_advisor",
+                "skill": skill or None,
+                "surface": surface or None,
+                "task_type": entry.get("matched_task_type"),
+            },
         )
         written += 1 if ok else 0
     return written
@@ -1287,17 +1524,20 @@ def learned_associations(*, path=None) -> dict:
                 by_task_type.setdefault(str(tt), {}).setdefault(cap_id, 0)
                 by_task_type[str(tt)][cap_id] += 1
     return {
-        "by_skill": {s: dict(sorted(v.items(), key=lambda kv: -kv[1])) for s, v in sorted(by_skill.items())},
-        "by_task_type": {t: dict(sorted(v.items(), key=lambda kv: -kv[1])) for t, v in sorted(by_task_type.items())},
+        "by_skill": {
+            s: dict(sorted(v.items(), key=lambda kv: -kv[1])) for s, v in sorted(by_skill.items())
+        },
+        "by_task_type": {
+            t: dict(sorted(v.items(), key=lambda kv: -kv[1]))
+            for t, v in sorted(by_task_type.items())
+        },
         "observations": total,
         "observations_with_skill": with_skill,
         "observations_without_skill": total - with_skill,
         "populations": {
             "observations": "every capability_advisor match event in the ledger",
-            "observations_with_skill":
-                "the subset naming a skill — the ONLY population by_skill can cover",
-            "observations_without_skill":
-                "matches with no skill attributed: counted in by_task_type, absent from by_skill",
+            "observations_with_skill": "the subset naming a skill — the ONLY population by_skill can cover",
+            "observations_without_skill": "matches with no skill attributed: counted in by_task_type, absent from by_skill",
             "by_task_type": "every match event carrying a task_type, skill-attributed or not",
         },
     }
@@ -1308,27 +1548,45 @@ def learned_associations(*, path=None) -> dict:
 # for someone who just wants to route the task in front of them. This maps capability -> the concrete
 # thing to run or do. Absent entries fall back to the lifecycle text rather than inventing a command.
 HOW_TO_USE = {
-    "offload": ("dispatcher.offload('gemini', prompt, cwd=repo) — spends the cheap agent's context "
-                "instead of this seat's; returns the result, opens no PR"),
-    "codemod-campaign": ("label the issue `refactor` (or let the daily issue_readiness task-label "
-                         "step do it) so classify() routes it to the codemod lane; the lane hands "
-                         "an agent the codemod_lane.py plan schema"),
-    "testgen-lane": ("label the issue `testing`; the lane adds the testgen_gate.py acceptance gate "
-                     "to the prompt and requires it to pass before the PR body is accepted"),
-    "adversarial-review": ("adversarial.review(worktree, reviewers=['vibe','gemini']) — refute-mode "
-                           "minority-veto panel; use when being wrong is expensive, not for routine "
-                           "review"),
+    "offload": (
+        "dispatcher.offload('gemini', prompt, cwd=repo) — spends the cheap agent's context "
+        "instead of this seat's; returns the result, opens no PR"
+    ),
+    "codemod-campaign": (
+        "label the issue `refactor` (or let the daily issue_readiness task-label "
+        "step do it) so classify() routes it to the codemod lane; the lane hands "
+        "an agent the codemod_lane.py plan schema"
+    ),
+    "testgen-lane": (
+        "label the issue `testing`; the lane adds the testgen_gate.py acceptance gate "
+        "to the prompt and requires it to pass before the PR body is accepted"
+    ),
+    "adversarial-review": (
+        "adversarial.review(worktree, reviewers=['vibe','gemini']) — refute-mode "
+        "minority-veto panel; use when being wrong is expensive, not for routine "
+        "review"
+    ),
     "ux-review": "run the /ux-review skill; drives every primary surface, not the happy path",
-    "epic-decomposition": ("only for a PARENT epic ([Epic] with no #NNN parent ref); produces a "
-                           "subtask plan, does not implement"),
-    "cross-repo-coordination": ("label `consumer-sync`/`cross-repo`; produces a dry-run rollout plan "
-                                "with barrier ordering, creates nothing"),
-    "deliberate-break-verifier": ("local_verify.py — proves a test gate actually fails when the "
-                                  "behaviour is broken, so a vacuous gate cannot pass"),
-    "docs-drift-fix-agent": ("bounded docs-drift repair BATCHES from an existing drift scan; it does "
-                             "not do a semantic docs review and edits nothing itself"),
-    "runtime-ac-checks": ("runtime_ac.py — turns acceptance criteria into a structured evidence plan; "
-                          "execution is opt-in via --confirm-run and mutates nothing"),
+    "epic-decomposition": (
+        "only for a PARENT epic ([Epic] with no #NNN parent ref); produces a "
+        "subtask plan, does not implement"
+    ),
+    "cross-repo-coordination": (
+        "label `consumer-sync`/`cross-repo`; produces a dry-run rollout plan "
+        "with barrier ordering, creates nothing"
+    ),
+    "deliberate-break-verifier": (
+        "local_verify.py — proves a test gate actually fails when the "
+        "behaviour is broken, so a vacuous gate cannot pass"
+    ),
+    "docs-drift-fix-agent": (
+        "bounded docs-drift repair BATCHES from an existing drift scan; it does "
+        "not do a semantic docs review and edits nothing itself"
+    ),
+    "runtime-ac-checks": (
+        "runtime_ac.py — turns acceptance criteria into a structured evidence plan; "
+        "execution is opt-in via --confirm-run and mutates nothing"
+    ),
 }
 
 
@@ -1346,8 +1604,7 @@ def format_advice(a: dict) -> str:
         lines.append(f"    entrypoint: {cap['entrypoint']}")
         lines.append(f"    blocker:    {cap['blocker']}")
         how = HOW_TO_USE.get(cap["capability_id"])
-        lines.append(f"    how to use: {how}" if how
-                     else f"    next step:  {cap['next_step']}")
+        lines.append(f"    how to use: {how}" if how else f"    next step:  {cap['next_step']}")
         if cap.get("entered_directly"):
             lines.append("    note:       entered directly in code — not routed by task type")
         if cap.get("contraindicated"):
@@ -1358,12 +1615,13 @@ def format_advice(a: dict) -> str:
                 lines.append(f"    use instead:          {cap['use_instead']}")
         if cap.get("precondition_note"):
             lines.append(f"    PRECONDITION NOT MET: {cap['precondition_note']}")
-            lines.append(f"    if you decline:       record kind "
-                         f"{cap.get('suggested_decline_kind')!r} — it never counts against the "
-                         f"binding")
+            lines.append(
+                f"    if you decline:       record kind "
+                f"{cap.get('suggested_decline_kind')!r} — it never counts against the "
+                f"binding"
+            )
         elif cap.get("unevaluated_because"):
-            lines.append("    precondition unevaluated: "
-                         + "; ".join(cap["unevaluated_because"]))
+            lines.append("    precondition unevaluated: " + "; ".join(cap["unevaluated_because"]))
     return "\n".join(lines) + "\n"
 
 
@@ -1379,8 +1637,9 @@ def _selftest_front_door() -> None:
     present. They are registered by running the system, not by checking out the tree.
     """
     gaps: list[str] = []
-    if not env_prereq.runnable(gaps, env_prereq.ledger_rows_absent(
-            "offload", "codemod-campaign", "testgen-lane")):
+    if not env_prereq.runnable(
+        gaps, env_prereq.ledger_rows_absent("offload", "codemod-campaign", "testgen-lane")
+    ):
         env_prereq.report_gaps("capability_advisor.py front-door", gaps)
         return
     cases = [
@@ -1402,8 +1661,10 @@ def _selftest_front_door() -> None:
     text = format_advice(advise("summarise these 200 pages", record=False))
     assert "how to use:" in text and "dispatcher.offload" in text, text
     assert "entered directly" in text, text
-    print("capability_advisor front-door selftest: OK (offload + campaign reachable, says no, "
-          "advice is actionable)")
+    print(
+        "capability_advisor front-door selftest: OK (offload + campaign reachable, says no, "
+        "advice is actionable)"
+    )
 
 
 def _selftest_reach() -> None:
@@ -1457,7 +1718,8 @@ def _selftest_reach() -> None:
         na = {r["capability_id"]: r for r in plain["not_applicable"]}
         assert {"gate-cap", "flag-cap"} <= set(na), (
             "kind-based capabilities came back as SILENCE, not as named non-matches; "
-            f"not_applicable held {sorted(na)}")
+            f"not_applicable held {sorted(na)}"
+        )
         assert na["gate-cap"]["why_not"] == ["closer_gate_not_in_trigger"], na["gate-cap"]
         assert na["gate-cap"]["requirement"]["mode"] == "entered_at", na["gate-cap"]
         assert na["gate-cap"]["requirement"]["kind"] == "closer_gate", na["gate-cap"]
@@ -1471,24 +1733,34 @@ def _selftest_reach() -> None:
         # WHOLE DENOMINATOR: every live capability in THIS ledger either matched or was named
         # with a reason. Computed from the ledger, never hardcoded -- a literal here would be the
         # "convenient denominator" this assertion exists to forbid.
-        live = {cid for cid, cap in capabilities.load_declared(ledger).items()
-                if cap.get("status") not in {"retired", "superseded"}}
+        live = {
+            cid
+            for cid, cap in capabilities.load_declared(ledger).items()
+            if cap.get("status") not in {"retired", "superseded"}
+        }
         assert live <= (ids | set(na)), f"unaccounted: {sorted(live - (ids | set(na)))}"
         assert plain["coverage"]["ledger_count"] >= 3, plain["coverage"]
 
         # CONTEXT IS THE MECHANISM. `capabilities._matches_trigger` matches a kind against a
         # same-named field THE CALLER SUPPLIES, so supplying it reaches further -- this is what
         # makes "structurally unreachable" false.
-        rich = advise(task, path=ledger, record=False,
-                      context={"closer_gate": "high_stakes_review"})
+        rich = advise(
+            task, path=ledger, record=False, context={"closer_gate": "high_stakes_review"}
+        )
         assert "gate-cap" in {m["capability_id"] for m in rich["capabilities"]}, rich
 
         # ...and it must still FAIL CLOSED on absent, empty, or WRONG context. Widening what can
         # be answered must never widen what is assumed.
-        for ctx in ({}, {"closer_gate": ""}, {"closer_gate": None},
-                    {"closer_gate": "some_other_gate"}):
-            got = {m["capability_id"] for m in
-                   advise(task, path=ledger, record=False, context=ctx)["capabilities"]}
+        for ctx in (
+            {},
+            {"closer_gate": ""},
+            {"closer_gate": None},
+            {"closer_gate": "some_other_gate"},
+        ):
+            got = {
+                m["capability_id"]
+                for m in advise(task, path=ledger, record=False, context=ctx)["capabilities"]
+            }
             assert "gate-cap" not in got, (ctx, got)
 
     # ---- PART 2: THE DRIFT GUARD, code vs code. No ledger, so it runs on every machine --
@@ -1499,12 +1771,15 @@ def _selftest_reach() -> None:
     for task_type, cap_id in table.items():
         assert entry.get(task_type) == cap_id, (
             f"dispatcher routes {task_type!r} to {cap_id!r} but the advisor's direct-entry map says "
-            f"{entry.get(task_type)!r}; the two halves of the system disagree about one task type")
+            f"{entry.get(task_type)!r}; the two halves of the system disagree about one task type"
+        )
     assert entry.get("offload") == "offload", entry
     # Every task_type the dispatcher knows must be a task_type this advisor can classify, or the
     # mapping is unreachable in practice.
     for task_type in table:
-        assert task_type in TASK_SIGNALS, f"dispatcher routes {task_type!r}, advisor cannot classify it"
+        assert (
+            task_type in TASK_SIGNALS
+        ), f"dispatcher routes {task_type!r}, advisor cannot classify it"
 
     # REACH SHRINKAGE IS NOT CHECKED HERE ON PURPOSE. `capability_activation_audit.advisor_reach`
     # owns it: it holds the declared-reach baseline and raises `advisor_reach_regression`, so a
@@ -1538,39 +1813,68 @@ def _selftest_contraindications() -> None:
         capabilities.save(rows, ledger)
 
         registry = Path(td) / "repo_knowledge.json"
-        registry.write_text(json.dumps({"schema_version": repo_knowledge.SEED_SCHEMA_VERSION, "repos": {
-            "o/spa": {"summary": "s", "contraindications": [{
-                "capability": "frontend-verifier",
-                "reason": "snapshots before the websocket render completes",
-                "instead": "drive a real browser",
-                "evidence": "the repo's own audit record",
-            }]},
-            "o/plain": {"summary": "s"},
-        }}, indent=2) + "\n")
+        registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
+                    "repos": {
+                        "o/spa": {
+                            "summary": "s",
+                            "contraindications": [
+                                {
+                                    "capability": "frontend-verifier",
+                                    "reason": "snapshots before the websocket render completes",
+                                    "instead": "drive a real browser",
+                                    "evidence": "the repo's own audit record",
+                                }
+                            ],
+                        },
+                        "o/plain": {"summary": "s"},
+                    },
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
         real_reg, real_binding = repo_knowledge.REG, SURFACE_BINDINGS.get("t-contra")
         repo_knowledge.REG = registry
-        SURFACE_BINDINGS["t-contra"] = {"frontend-verifier": "bound in general",
-                                        "repo-playbook": "carries the per-repo gotchas"}
+        SURFACE_BINDINGS["t-contra"] = {
+            "frontend-verifier": "bound in general",
+            "repo-playbook": "carries the per-repo gotchas",
+        }
         try:
-            for task in ("xyzzy plugh frobnicate",                    # binding_only path
-                         "review the closer gate"):                   # classified path
-                got = advise(task, surface="t-contra", repository="o/spa",
-                             path=ledger, record=False)
+            for task in (
+                "xyzzy plugh frobnicate",  # binding_only path
+                "review the closer gate",
+            ):  # classified path
+                got = advise(
+                    task, surface="t-contra", repository="o/spa", path=ledger, record=False
+                )
                 ids = [m["capability_id"] for m in got["capabilities"]]
-                assert "frontend-verifier" in ids, (task, ids)        # offered, never concealed
-                assert got["contraindicated"] == ["frontend-verifier"], (task, got["contraindicated"])
-                flagged = [m for m in got["capabilities"] if m["capability_id"] == "frontend-verifier"][0]
+                assert "frontend-verifier" in ids, (task, ids)  # offered, never concealed
+                assert got["contraindicated"] == ["frontend-verifier"], (
+                    task,
+                    got["contraindicated"],
+                )
+                flagged = [
+                    m for m in got["capabilities"] if m["capability_id"] == "frontend-verifier"
+                ][0]
                 assert flagged["contraindicated"] is True, flagged
                 assert "websocket" in flagged["contraindication_reason"], flagged
                 assert flagged["use_instead"] == "drive a real browser", flagged
                 assert flagged["contraindication_evidence"], flagged
-                assert ids[-1] == "frontend-verifier", (task, ids)    # last within its partition
+                assert ids[-1] == "frontend-verifier", (task, ids)  # last within its partition
 
             # A repo with no recorded contraindication is untouched, and so is a missing repository.
             for repository in ("o/plain", ""):
-                quiet = advise("xyzzy plugh frobnicate", surface="t-contra",
-                               repository=repository, path=ledger, record=False)
+                quiet = advise(
+                    "xyzzy plugh frobnicate",
+                    surface="t-contra",
+                    repository=repository,
+                    path=ledger,
+                    record=False,
+                )
                 assert quiet["contraindicated"] == [], (repository, quiet["contraindicated"])
                 assert not any(m.get("contraindicated") for m in quiet["capabilities"]), quiet
 
@@ -1583,21 +1887,33 @@ def _selftest_contraindications() -> None:
             blocker = Path(td) / "not-a-directory"
             blocker.write_text("")
             repo_knowledge.REG = blocker / "x.json"
-            degraded = advise("xyzzy plugh frobnicate", surface="t-contra", repository="o/spa",
-                              path=ledger, record=False)
+            degraded = advise(
+                "xyzzy plugh frobnicate",
+                surface="t-contra",
+                repository="o/spa",
+                path=ledger,
+                record=False,
+            )
             assert degraded["contraindicated"] == [], degraded["contraindicated"]
             assert len(degraded["capabilities"]) == 2, degraded
             repo_knowledge.REG = registry
-            assert advise("xyzzy plugh frobnicate", surface="t-contra", repository="o/spa",
-                          path=ledger, record=False)["contraindicated"] == ["frontend-verifier"]
+            assert advise(
+                "xyzzy plugh frobnicate",
+                surface="t-contra",
+                repository="o/spa",
+                path=ledger,
+                record=False,
+            )["contraindicated"] == ["frontend-verifier"]
         finally:
             repo_knowledge.REG = real_reg
             if real_binding is None:
                 SURFACE_BINDINGS.pop("t-contra", None)
             else:
                 SURFACE_BINDINGS["t-contra"] = real_binding
-    print("capability_advisor contraindication selftest: OK (offered not concealed, reason + "
-          "alternative reach the caller on both paths, ranks last, degrades quietly)")
+    print(
+        "capability_advisor contraindication selftest: OK (offered not concealed, reason + "
+        "alternative reach the caller on both paths, ranks last, degrades quietly)"
+    )
 
 
 def _selftest_bindings() -> None:
@@ -1613,11 +1929,12 @@ def _selftest_bindings() -> None:
     with tempfile.TemporaryDirectory(prefix="binding-selftest-") as td:
         ledger = Path(td) / "capabilities.json"
         rows = {}
-        for cid, matcher in (("bound-a", {"kind": "closer_gate", "name": "g"}),
-                             ("bound-b", {"kind": "closer_gate", "name": "g"}),
-                             ("unbound-testgen", {"field": "task_type", "operator": "in",
-                                                  "value": ["testgen"]}),
-                             ("gone", {"kind": "closer_gate", "name": "g"})):
+        for cid, matcher in (
+            ("bound-a", {"kind": "closer_gate", "name": "g"}),
+            ("bound-b", {"kind": "closer_gate", "name": "g"}),
+            ("unbound-testgen", {"field": "task_type", "operator": "in", "value": ["testgen"]}),
+            ("gone", {"kind": "closer_gate", "name": "g"}),
+        ):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "retired" if cid == "gone" else "generated"
             cap["matcher"] = matcher
@@ -1625,8 +1942,11 @@ def _selftest_bindings() -> None:
         capabilities.save(rows, ledger)
 
         real = SURFACE_BINDINGS.get("t-surface")
-        SURFACE_BINDINGS["t-surface"] = {"bound-a": "because a", "bound-b": "because b",
-                                        "gone": "retired, must be filtered"}
+        SURFACE_BINDINGS["t-surface"] = {
+            "bound-a": "because a",
+            "bound-b": "because b",
+            "gone": "retired, must be filtered",
+        }
         try:
             # 1. CLASSIFICATION MISS: the binding still answers. This is the whole point.
             miss = advise("xyzzy plugh frobnicate", surface="t-surface", path=ledger, record=False)
@@ -1648,38 +1968,59 @@ def _selftest_bindings() -> None:
             # denominator for a trigger rate. Measured 2026-08-22 while wiring the tick — whose
             # cadence text classifies as nothing, so it takes this branch on EVERY consult.
             # Asserted through the LEDGER, which is what a downstream reader actually sees.
-            rec = advise("plugh xyzzy nothing classifies here", surface="t-surface", skill="t-surface",
-                         path=ledger)
+            rec = advise(
+                "plugh xyzzy nothing classifies here",
+                surface="t-surface",
+                skill="t-surface",
+                path=ledger,
+            )
             assert rec["confidence"] == "binding_only", rec["confidence"]
             assert rec.get("recorded_matches") == 2, rec.get("recorded_matches")
             import capability_propensity as _prop
-            trial = next(t for t in _prop.experiments(path=ledger)
-                         if t["experiment_id"] == rec["experiment_id"])
+
+            trial = next(
+                t
+                for t in _prop.experiments(path=ledger)
+                if t["experiment_id"] == rec["experiment_id"]
+            )
             assert sorted(trial["candidates"]) == ["bound-a", "bound-b"], trial
             assert trial["skills"] == ["t-surface"], trial
             # ...and the same question again must not inflate the count.
-            again = advise("plugh xyzzy nothing classifies here", surface="t-surface",
-                           skill="t-surface", path=ledger)
+            again = advise(
+                "plugh xyzzy nothing classifies here",
+                surface="t-surface",
+                skill="t-surface",
+                path=ledger,
+            )
             assert again.get("recorded_matches") == 0, again.get("recorded_matches")
             # record=False stays a pure query on this branch too.
-            pure = advise("plugh xyzzy nothing classifies here either", surface="t-surface",
-                          path=ledger, record=False)
+            pure = advise(
+                "plugh xyzzy nothing classifies here either",
+                surface="t-surface",
+                path=ledger,
+                record=False,
+            )
             assert "recorded_matches" not in pure, pure
-            assert not any(t["experiment_id"] == pure["experiment_id"]
-                           for t in _prop.experiments(path=ledger)), \
-                "record=False wrote a trial on the binding-only branch"
+            assert not any(
+                t["experiment_id"] == pure["experiment_id"] for t in _prop.experiments(path=ledger)
+            ), "record=False wrote a trial on the binding-only branch"
 
             # 2. NEVER CONCEAL. A classifying task must still return the unbound match, ranked after
             # the bound ones -- a hidden capability can never earn the evidence that would bind it.
-            hit = advise("add unit tests for the retry helper", surface="t-surface", path=ledger,
-                         record=False)
+            hit = advise(
+                "add unit tests for the retry helper",
+                surface="t-surface",
+                path=ledger,
+                record=False,
+            )
             hid = [m["capability_id"] for m in hit["capabilities"]]
             assert "unbound-testgen" in hid, hid
             assert set(hid) >= {"bound-a", "bound-b", "unbound-testgen"}, hid
             first_unbound = next(i for i, m in enumerate(hit["capabilities"]) if not m.get("bound"))
             assert all(hit["capabilities"][i].get("bound") for i in range(first_unbound)), hid
-            assert not any(hit["capabilities"][i].get("bound")
-                           for i in range(first_unbound, len(hid))), hid
+            assert not any(
+                hit["capabilities"][i].get("bound") for i in range(first_unbound, len(hid))
+            ), hid
 
             # 3. SIZE, on the RESOLVED set. Asserting on the table entries would miss the case that
             # matters: a phase key merges with its surface, so the context a caller actually sees can
@@ -1701,12 +2042,19 @@ def _selftest_bindings() -> None:
             SURFACE_BINDINGS["t-proc:p2"] = {"bound-b": "phase only"}
             SURFACE_BINDINGS["t-proc:p1"] = {NO_BINDING: "deliberately empty, for a stated reason"}
             try:
-                assert sorted(binding_for("t-proc:p2")) == ["bound-a", "bound-b"], "phase must merge"
+                assert sorted(binding_for("t-proc:p2")) == [
+                    "bound-a",
+                    "bound-b",
+                ], "phase must merge"
                 assert binding_for("t-proc:p1") == {}, "NO_BINDING must suppress inheritance"
                 # AND THE WHOLE ANSWER, not just the declared half. Asserting only the binding is
                 # what let phase-1 keep offering classifier matches at a bash-only phase.
-                quiet = advise("add unit tests for the retry helper", surface="t-proc:p1",
-                               path=ledger, record=False)
+                quiet = advise(
+                    "add unit tests for the retry helper",
+                    surface="t-proc:p1",
+                    path=ledger,
+                    record=False,
+                )
                 assert quiet["capabilities"] == [], quiet["capabilities"]
                 assert quiet["confidence"] == "suppressed", quiet["confidence"]
                 assert quiet["useful"] is False and suppressed_reason_in(quiet), quiet["reason"]
@@ -1729,20 +2077,24 @@ def _selftest_bindings() -> None:
 
             # 5. THE REAL TABLE, pinned where it is load-bearing.
             assert binding_for("repo-audit:phase-1") == {}, "phase 1 is bash-only by playbook"
-            assert "deliberate-break-verifier" in binding_for("repo-audit:phase-4"), \
-                "phase 4 requires a named test gate with a deliberate-break proof"
-            assert "adversarial-review" in binding_for("repo-audit:phase-3"), \
-                "phase 3 IS adversarial verification"
+            assert "deliberate-break-verifier" in binding_for(
+                "repo-audit:phase-4"
+            ), "phase 4 requires a named test gate with a deliberate-break proof"
+            assert "adversarial-review" in binding_for(
+                "repo-audit:phase-3"
+            ), "phase 3 IS adversarial verification"
             # A BINDING MUST MATCH THE SHAPE, NOT THE WORD. `partitioned-review` sat at phase 2 on
             # the token "partition" while its corpus is a list of prior ASSERTIONS disposed against
             # current code -- so it was offered where no claim list exists yet and withheld from the
             # phase that produces one. Pinned in BOTH directions: dropping the phase-3 half would
             # silently restore the useless offer, and dropping the phase-2 half would let it come
             # back as a duplicate.
-            assert "partitioned-review" in binding_for("repo-audit:phase-3"), \
-                "phase 3 disposes N candidate findings against the live tip -- the corpus shape"
-            assert "partitioned-review" not in binding_for("repo-audit:phase-2"), \
-                "phase 2 discovers defects in source; there is no claim corpus to reconcile yet"
+            assert "partitioned-review" in binding_for(
+                "repo-audit:phase-3"
+            ), "phase 3 disposes N candidate findings against the live tip -- the corpus shape"
+            assert "partitioned-review" not in binding_for(
+                "repo-audit:phase-2"
+            ), "phase 2 discovers defects in source; there is no claim corpus to reconcile yet"
             # Dimensions are SIBLINGS of the phase, so a worker context must NOT inherit the
             # splitter's capabilities -- that inheritance is what would push a worker to 9-10.
             for d in range(1, 9):
@@ -1750,15 +2102,18 @@ def _selftest_bindings() -> None:
                 assert "role-decomposer" not in ctx, (d, sorted(ctx))
                 assert "partitioned-review" not in ctx, (d, sorted(ctx))
                 assert 1 <= len(ctx) <= 6, (d, len(ctx))
-            assert "offload" in binding_for("repo-audit:dimension-5"), \
-                "the playbook names offload outright for the public-field research dimension"
+            assert "offload" in binding_for(
+                "repo-audit:dimension-5"
+            ), "the playbook names offload outright for the public-field research dimension"
         finally:
             if real is None:
                 SURFACE_BINDINGS.pop("t-surface", None)
             else:
                 SURFACE_BINDINGS["t-surface"] = real
-    print("capability_advisor binding selftest: OK (survives a classification miss, never conceals "
-          "an unbound match, filters retired, bound sets stay small)")
+    print(
+        "capability_advisor binding selftest: OK (survives a classification miss, never conceals "
+        "an unbound match, filters retired, bound sets stay small)"
+    )
 
 
 def _selftest_preconditions() -> None:
@@ -1807,11 +2162,14 @@ def _selftest_preconditions() -> None:
     assert "the concept may transfer" in mism["precondition_note"], mism
     assert mism["suggested_decline_kind"] == "precondition_unmet", mism
     import capability_propensity
+
     assert capability_propensity.DECLINE_KINDS[mism["suggested_decline_kind"]]["demotable"] is False
 
     # Same instrument, this repository: TRUE.
-    assert evaluate_precondition("switch-review",
-                                 repository=SELF_REPOSITORY)["precondition_met"] is True
+    assert (
+        evaluate_precondition("switch-review", repository=SELF_REPOSITORY)["precondition_met"]
+        is True
+    )
     # `both` matches either target; declaring it is behaviourally identical to declaring nothing.
     for repo in (SELF_REPOSITORY, "stranske/Workflows"):
         assert evaluate_precondition("offload", repository=repo)["precondition_met"] is True, repo
@@ -1849,11 +2207,14 @@ def _selftest_preconditions() -> None:
     # conflating them would re-create the defect in the other direction.
     absent = detect_observable_surface("/nonexistent/path/for/the/selftest")
     assert absent["observable"] is None, absent
-    unev = evaluate_precondition("frontend-verifier", repository="stranske/X",
-                                 repo_path="/nonexistent/path/for/the/selftest")
+    unev = evaluate_precondition(
+        "frontend-verifier", repository="stranske/X", repo_path="/nonexistent/path/for/the/selftest"
+    )
     assert unev["requirement_met"] is None, unev
     assert unev["precondition_met"] is True, (
-        "a scope match with an UNEVALUATED repo fact must not become a failure", unev)
+        "a scope match with an UNEVALUATED repo fact must not become a failure",
+        unev,
+    )
     assert unev["unevaluated_because"], unev
     # And with no `repo_path` at all, the MISSING INPUT IS NAMED. A condition nothing can attempt to
     # check is the original defect; naming the input is the fix.
@@ -1880,15 +2241,22 @@ def _selftest_preconditions() -> None:
 
         real = SURFACE_BINDINGS.get("t-precond")
         real_pre = {k: dict(v) for k, v in CAPABILITY_PRECONDITIONS.items()}
-        SURFACE_BINDINGS["t-precond"] = {"aaa-self-only": "bound, self-scoped",
-                                         "mmm-both": "bound, both",
-                                         "zzz-undeclared": "bound, undeclared"}
+        SURFACE_BINDINGS["t-precond"] = {
+            "aaa-self-only": "bound, self-scoped",
+            "mmm-both": "bound, both",
+            "zzz-undeclared": "bound, undeclared",
+        }
         CAPABILITY_PRECONDITIONS["aaa-self-only"] = {"applies_to": APPLIES_SELF}
         CAPABILITY_PRECONDITIONS["mmm-both"] = {"applies_to": APPLIES_BOTH}
         try:
             task = "add unit tests for the retry helper"
-            got = advise(task, surface="t-precond", repository="stranske/Workflows",
-                         path=ledger, record=False)
+            got = advise(
+                task,
+                surface="t-precond",
+                repository="stranske/Workflows",
+                path=ledger,
+                record=False,
+            )
             ids = [m["capability_id"] for m in got["capabilities"]]
             assert set(ids) >= {"aaa-self-only", "mmm-both", "zzz-undeclared"}, ids
 
@@ -1905,7 +2273,8 @@ def _selftest_preconditions() -> None:
             # id put it. Any sink moves it, and this fails.
             assert ids[0] == "aaa-self-only", (
                 "a failed precondition changed the position a caller receives; the axis may only "
-                f"annotate. order={ids}")
+                f"annotate. order={ids}"
+            )
 
             # AND THE SUMMARY BLOCK names all three populations, so "nothing failed" and "nothing
             # was checked" cannot read alike.
@@ -1921,36 +2290,57 @@ def _selftest_preconditions() -> None:
             saved = {k: dict(v) for k, v in CAPABILITY_PRECONDITIONS.items()}
             CAPABILITY_PRECONDITIONS.clear()
             try:
-                without = advise(task, surface="t-precond", repository="stranske/Workflows",
-                                 path=ledger, record=False)
+                without = advise(
+                    task,
+                    surface="t-precond",
+                    repository="stranske/Workflows",
+                    path=ledger,
+                    record=False,
+                )
             finally:
                 CAPABILITY_PRECONDITIONS.clear()
                 CAPABILITY_PRECONDITIONS.update(saved)
             assert [m["capability_id"] for m in without["capabilities"]] == ids, (
                 "the applies_to axis changed the ORDER or the SET a caller receives; it may only "
-                f"annotate. with={ids} without={[m['capability_id'] for m in without['capabilities']]}")
+                f"annotate. with={ids} without={[m['capability_id'] for m in without['capabilities']]}"
+            )
             assert without["bound_capabilities"] == got["bound_capabilities"], got
             assert without["dispatch_ready_count"] == got["dispatch_ready_count"], got
             # ...and the same for a classification MISS, which takes the other return branch.
-            miss_with = advise("xyzzy plugh frobnicate", surface="t-precond",
-                               repository="stranske/Workflows", path=ledger, record=False)
+            miss_with = advise(
+                "xyzzy plugh frobnicate",
+                surface="t-precond",
+                repository="stranske/Workflows",
+                path=ledger,
+                record=False,
+            )
             CAPABILITY_PRECONDITIONS.clear()
             try:
-                miss_without = advise("xyzzy plugh frobnicate", surface="t-precond",
-                                      repository="stranske/Workflows", path=ledger, record=False)
+                miss_without = advise(
+                    "xyzzy plugh frobnicate",
+                    surface="t-precond",
+                    repository="stranske/Workflows",
+                    path=ledger,
+                    record=False,
+                )
             finally:
                 CAPABILITY_PRECONDITIONS.clear()
                 CAPABILITY_PRECONDITIONS.update(saved)
-            assert ([m["capability_id"] for m in miss_with["capabilities"]]
-                    == [m["capability_id"] for m in miss_without["capabilities"]]), (
-                "the axis reordered the binding-only branch")
-            assert [m["capability_id"] for m in miss_with["capabilities"]][0] == "aaa-self-only", \
-                [m["capability_id"] for m in miss_with["capabilities"]]
-            assert miss_with["precondition"]["unmet"] == ["aaa-self-only"], miss_with["precondition"]
+            assert [m["capability_id"] for m in miss_with["capabilities"]] == [
+                m["capability_id"] for m in miss_without["capabilities"]
+            ], "the axis reordered the binding-only branch"
+            assert [m["capability_id"] for m in miss_with["capabilities"]][0] == "aaa-self-only", [
+                m["capability_id"] for m in miss_with["capabilities"]
+            ]
+            assert miss_with["precondition"]["unmet"] == ["aaa-self-only"], miss_with[
+                "precondition"
+            ]
 
             # EVERY return branch carries the key, so a caller can rely on it.
-            for probe in (advise("xyzzy plugh", path=ledger, record=False),
-                          advise(task, surface="repo-audit:phase-1", path=ledger, record=False)):
+            for probe in (
+                advise("xyzzy plugh", path=ledger, record=False),
+                advise(task, surface="repo-audit:phase-1", path=ledger, record=False),
+            ):
                 assert "precondition" in probe, sorted(probe)
 
             # ---- THE TWO MECHANISMS ARE ORTHOGONAL AND BOTH REACH THE CALLER. A recorded per-repo
@@ -1959,24 +2349,46 @@ def _selftest_preconditions() -> None:
             # silently shadow the other is how two mechanisms become one broken one.
             import json as _json
             import repo_knowledge
+
             registry = Path(td) / "repo_knowledge.json"
-            registry.write_text(_json.dumps(
-                {"schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
-                 "repos": {"stranske/Workflows": {"summary": "s", "contraindications": [
-                     {"capability": "aaa-self-only",
-                      "reason": "recorded as broken against this repo",
-                      "instead": "do it by hand"}]}}}, indent=2) + "\n")
+            registry.write_text(
+                _json.dumps(
+                    {
+                        "schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
+                        "repos": {
+                            "stranske/Workflows": {
+                                "summary": "s",
+                                "contraindications": [
+                                    {
+                                        "capability": "aaa-self-only",
+                                        "reason": "recorded as broken against this repo",
+                                        "instead": "do it by hand",
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
             real_reg = repo_knowledge.REG
             repo_knowledge.REG = registry
             try:
-                both = advise(task, surface="t-precond", repository="stranske/Workflows",
-                              path=ledger, record=False)
-                row = next(m for m in both["capabilities"]
-                           if m["capability_id"] == "aaa-self-only")
+                both = advise(
+                    task,
+                    surface="t-precond",
+                    repository="stranske/Workflows",
+                    path=ledger,
+                    record=False,
+                )
+                row = next(m for m in both["capabilities"] if m["capability_id"] == "aaa-self-only")
                 # `.get`, not `[]`: a suppressed annotation must fail as a legible ASSERTION about
                 # the answer, not as a KeyError that reads like a crash.
                 assert row.get("contraindicated") is True, (
-                    "the precondition pass suppressed the recorded contraindication", row)
+                    "the precondition pass suppressed the recorded contraindication",
+                    row,
+                )
                 assert row.get("precondition_met") is False, row
                 assert row.get("contraindication_reason") and row.get("precondition_note"), row
                 # ONE DIRECTION IS ASSERTED AND THE OTHER IS STRUCTURAL. `_annotate_preconditions`
@@ -2000,8 +2412,10 @@ def _selftest_preconditions() -> None:
                 SURFACE_BINDINGS["t-precond"] = real
             CAPABILITY_PRECONDITIONS.clear()
             CAPABILITY_PRECONDITIONS.update(real_pre)
-    print("capability_advisor precondition selftest: OK (applies_to explains an offer and changes "
-          "neither the set nor the order; undeclared and unevaluated are never failures)")
+    print(
+        "capability_advisor precondition selftest: OK (applies_to explains an offer and changes "
+        "neither the set nor the order; undeclared and unevaluated are never failures)"
+    )
 
 
 def _selftest() -> None:
@@ -2021,10 +2435,14 @@ def _selftest() -> None:
     audit_text = "a read-only audit of the implementation of the config loader; do not change code"
     types = [d["task_type"] for d in classify_task(audit_text)]
     assert "implement" not in types, types
-    assert "review" in types, types                     # ...and the RIGHT one still fires
+    assert "review" in types, types  # ...and the RIGHT one still fires
     # Inflections preserve intent, so they must still hit.
-    for verb_form in ("implement the exporter", "implementing the exporter",
-                      "this implements the spec", "implemented the exporter"):
+    for verb_form in (
+        "implement the exporter",
+        "implementing the exporter",
+        "this implements the spec",
+        "implemented the exporter",
+    ):
         assert "implement" in [d["task_type"] for d in classify_task(verb_form)], verb_form
     # Forms the boundary would otherwise drop are spelled out in TASK_SIGNALS, so they still hit.
     assert "testgen" in [d["task_type"] for d in classify_task("run the testgen lane")]
@@ -2033,18 +2451,21 @@ def _selftest() -> None:
     # Initialisms do not inflect, so `ui` must not reach "uid" via the bare -d ending.
     assert classify_task("check the uid field") == [], classify_task("check the uid field")
     assert "ux_review" in [d["task_type"] for d in classify_task("the ui is broken")]
-    assert "codemod" in [d["task_type"] for d in classify_task("deduped the rows")]  # -e verb keeps -d
+    assert "codemod" in [
+        d["task_type"] for d in classify_task("deduped the rows")
+    ]  # -e verb keeps -d
 
     # DELIBERATE BREAK -> REVERT on the trailing boundary — the half that was missing.
     _saved_pattern = _signal_pattern
     try:
-        globals()["_signal_pattern"] = lambda s: rf"(?<![a-z]){re.escape(s)}"   # the old prefix rule
+        globals()["_signal_pattern"] = lambda s: rf"(?<![a-z]){re.escape(s)}"  # the old prefix rule
         broken = [d["task_type"] for d in classify_task(audit_text)]
         assert "implement" in broken, "break did not change behaviour — test is vacuous"
     finally:
         globals()["_signal_pattern"] = _saved_pattern
-    assert "implement" not in [d["task_type"] for d in classify_task(audit_text)], \
-        "revert did not restore the whole-word boundary"
+    assert "implement" not in [
+        d["task_type"] for d in classify_task(audit_text)
+    ], "revert did not restore the whole-word boundary"
 
     # IT MUST BE ABLE TO SAY NO — both when unclassifiable and when nothing declares a trigger.
     with tempfile.TemporaryDirectory(prefix="advisor-selftest-") as td:
@@ -2064,9 +2485,9 @@ def _selftest() -> None:
         hit = advise("add unit tests for the retry helper", path=ledger)
         assert hit["useful"] is True, hit
         ids = [m["capability_id"] for m in hit["capabilities"]]
-        assert ids == ["testgen-lane"], ids                 # only the matching, non-retired one
+        assert ids == ["testgen-lane"], ids  # only the matching, non-retired one
         assert hit["capabilities"][0]["dispatch_ready"] is False, hit
-        assert "advisory" in hit["reason"], hit             # never implies it will actually run
+        assert "advisory" in hit["reason"], hit  # never implies it will actually run
 
         # Unclassifiable free text => a clean NO, with the reason.
         none = advise("xyzzy plugh frobnicate", path=ledger)
@@ -2082,10 +2503,13 @@ def _selftest() -> None:
         # SAME ledger — saving a single-capability dict would replace the whole file.
         bare = capabilities._blank_capability("bare")
         bare["status"] = "generated"
-        capabilities.save({"testgen-lane": lane, "some-other": unrelated, "gone": retired,
-                           "bare": bare}, ledger)
-        advised = [m["capability_id"] for m in advise("add unit tests", path=ledger,
-                                                      record=False)["capabilities"]]
+        capabilities.save(
+            {"testgen-lane": lane, "some-other": unrelated, "gone": retired, "bare": bare}, ledger
+        )
+        advised = [
+            m["capability_id"]
+            for m in advise("add unit tests", path=ledger, record=False)["capabilities"]
+        ]
         assert "bare" not in advised, advised
 
         text = format_advice(hit)
@@ -2095,22 +2519,42 @@ def _selftest() -> None:
         # --- RE-ASK TRIGGERS: fire on CHANGE, never on a clock -----------------------------
         first = advise("add unit tests", path=ledger, record=False)
         # Same work, same scope => silent. This is the case a timer would get wrong.
-        quiet = should_reask(first, {"task": "add unit tests", "repository": "",
-                                     "capabilities_ready": 0})
+        quiet = should_reask(
+            first, {"task": "add unit tests", "repository": "", "capabilities_ready": 0}
+        )
         assert quiet["reask"] is False and quiet["reasons"] == [], quiet
         # The work reclassified — the highest-value trigger.
-        moved = should_reask(first, {"task": "now refactor every call site", "repository": "",
-                                     "capabilities_ready": 0})
-        assert moved["reask"] and any(r.startswith("task_reclassified") for r in moved["reasons"]), moved
+        moved = should_reask(
+            first,
+            {"task": "now refactor every call site", "repository": "", "capabilities_ready": 0},
+        )
+        assert moved["reask"] and any(
+            r.startswith("task_reclassified") for r in moved["reasons"]
+        ), moved
         # A skill starting is an explicit statement about the kind of work now underway.
-        sk = should_reask(first, {"task": "add unit tests", "skill": "repo-audit",
-                                  "repository": "", "capabilities_ready": 0})
+        sk = should_reask(
+            first,
+            {
+                "task": "add unit tests",
+                "skill": "repo-audit",
+                "repository": "",
+                "capabilities_ready": 0,
+            },
+        )
         assert "skill_invoked:repo-audit" in sk["reasons"], sk
         # Scope moved, and something became runnable.
-        assert "scope_changed" in should_reask(
-            first, {"task": "add unit tests", "repository": "o/other", "capabilities_ready": 0})["reasons"]
-        assert "capability_became_dispatch_ready" in should_reask(
-            first, {"task": "add unit tests", "repository": "", "capabilities_ready": 1})["reasons"]
+        assert (
+            "scope_changed"
+            in should_reask(
+                first, {"task": "add unit tests", "repository": "o/other", "capabilities_ready": 0}
+            )["reasons"]
+        )
+        assert (
+            "capability_became_dispatch_ready"
+            in should_reask(
+                first, {"task": "add unit tests", "repository": "", "capabilities_ready": 1}
+            )["reasons"]
+        )
         # No prior advice always asks.
         assert should_reask(None, {"task": "anything"})["reasons"] == ["no_advice_yet"]
 
@@ -2144,19 +2588,27 @@ def _selftest() -> None:
         # by_skill is blind to it, by design; the totals are not, and they reconcile.
         assert "" not in d["by_skill"] and None not in d["by_skill"], d["by_skill"]
         assert d["observations_with_skill"] == sum(
-            sum(v.values()) for v in d["by_skill"].values()), d
-        assert d["observations_without_skill"] >= 1, d      # the skill-less match IS visible
+            sum(v.values()) for v in d["by_skill"].values()
+        ), d
+        assert d["observations_without_skill"] >= 1, d  # the skill-less match IS visible
         assert d["observations"] == (
-            d["observations_with_skill"] + d["observations_without_skill"]), d
+            d["observations_with_skill"] + d["observations_without_skill"]
+        ), d
         # The old definition would have made these two equal; they must differ here, or the
         # convenient denominator is back.
         assert d["observations"] > d["observations_with_skill"], d
         # Every count states which population it covers, so a subset cannot pass as the set.
-        assert set(d["populations"]) >= {"observations", "observations_with_skill",
-                                         "observations_without_skill", "by_task_type"}, d
+        assert set(d["populations"]) >= {
+            "observations",
+            "observations_with_skill",
+            "observations_without_skill",
+            "by_task_type",
+        }, d
 
-    print("capability_advisor.py selftest: OK (deterministic classification, says NO, "
-          "advice never implies dispatch, retired/unmatched excluded, denominators named)")
+    print(
+        "capability_advisor.py selftest: OK (deterministic classification, says NO, "
+        "advice never implies dispatch, retired/unmatched excluded, denominators named)"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -2164,15 +2616,24 @@ def main(argv: list[str]) -> int:
     ap.add_argument("task", nargs="*", help="the task, in plain words")
     ap.add_argument("--repository", default="")
     ap.add_argument("--lane", default="opener")
-    ap.add_argument("--surface", default="",
-                    help="the skill or automation asking (e.g. closer-lane); selects its declared binding")
-    ap.add_argument("--repo-path", default="",
-                    help="a checkout of --repository, if you have one; lets a declared repo-fact "
-                         "precondition (e.g. frontend-verifier's observable surface) actually be "
-                         "EVALUATED instead of reported as unevaluated")
-    ap.add_argument("--context", default="",
-                    help='JSON of trigger context you actually know, e.g. '
-                         '\'{"closer_gate":"high_stakes_review"}\'')
+    ap.add_argument(
+        "--surface",
+        default="",
+        help="the skill or automation asking (e.g. closer-lane); selects its declared binding",
+    )
+    ap.add_argument(
+        "--repo-path",
+        default="",
+        help="a checkout of --repository, if you have one; lets a declared repo-fact "
+        "precondition (e.g. frontend-verifier's observable surface) actually be "
+        "EVALUATED instead of reported as unevaluated",
+    )
+    ap.add_argument(
+        "--context",
+        default="",
+        help="JSON of trigger context you actually know, e.g. "
+        '\'{"closer_gate":"high_stakes_review"}\'',
+    )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -2186,9 +2647,14 @@ def main(argv: list[str]) -> int:
         return 0
     if not args.task:
         ap.error("give the task in plain words, or use --selftest")
-    result = advise(" ".join(args.task), repository=args.repository, lane=args.lane,
-                    context=json.loads(args.context) if args.context else None,
-                    surface=args.surface, repo_path=args.repo_path)
+    result = advise(
+        " ".join(args.task),
+        repository=args.repository,
+        lane=args.lane,
+        context=json.loads(args.context) if args.context else None,
+        surface=args.surface,
+        repo_path=args.repo_path,
+    )
     print(json.dumps(result, indent=2) if args.json else format_advice(result), end="")
     return 0
 

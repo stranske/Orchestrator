@@ -115,14 +115,10 @@ def _report_summary(report: dict) -> dict:
         "recommended_action": report.get("recommended_action") or "",
         "policy_action": policy.get("action") or "",
         "policy_confidence": policy.get("confidence") or "",
-        "hint_kinds": sorted(
-            {h.get("kind") for h in report.get("hints") or [] if h.get("kind")}
-        ),
+        "hint_kinds": sorted({h.get("kind") for h in report.get("hints") or [] if h.get("kind")}),
         "drift": {
             "severity": drift.get("severity") or "none",
-            "finding_kinds": [
-                f.get("kind") for f in drift.get("findings") or [] if f.get("kind")
-            ],
+            "finding_kinds": [f.get("kind") for f in drift.get("findings") or [] if f.get("kind")],
             "changed_path_count": drift.get("changed_path_count"),
         },
         "has_worktree_changes": bool(signals.get("has_worktree_changes")),
@@ -159,9 +155,7 @@ def _proposal_summary(proposal: dict | None) -> dict | None:
         "reason": proposal.get("reason"),
         "switch_agent": proposal.get("switch_agent"),
         "has_corrected_prompt": bool(isinstance(corrected, str) and corrected.strip()),
-        "corrected_prompt_sha256": (
-            _sha_text(corrected) if isinstance(corrected, str) else None
-        ),
+        "corrected_prompt_sha256": (_sha_text(corrected) if isinstance(corrected, str) else None),
         "corrected_prompt_preview": (
             _short_text(corrected, 500) if isinstance(corrected, str) else None
         ),
@@ -220,12 +214,8 @@ def _iter_events(corpus_path: Path = CORPUS_PATH) -> list[dict]:
     return rows
 
 
-def build_entry(
-    result: dict, report: dict, acceptance_criteria: str, *, source: str
-) -> dict:
-    proposal = (
-        result.get("proposal") if isinstance(result.get("proposal"), dict) else None
-    )
+def build_entry(result: dict, report: dict, acceptance_criteria: str, *, source: str) -> dict:
+    proposal = result.get("proposal") if isinstance(result.get("proposal"), dict) else None
     baseline = result.get("baseline") or {}
     plan = result.get("plan") or {}
     summary = _report_summary(report)
@@ -482,24 +472,18 @@ def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
     events = _iter_events(corpus_path)
     proposals = [e for e in events if e.get("kind") == "redirect_proposal"]
     links = [e for e in events if e.get("kind") == "redirect_outcome_link"]
-    historical_links = [
-        e for e in events if e.get("kind") == "redirect_historical_outcome_link"
-    ]
+    historical_links = [e for e in events if e.get("kind") == "redirect_historical_outcome_link"]
     by_backend: dict[str, int] = {}
     baseline_actions: dict[str, int] = {}
     proposal_actions: dict[str, int] = {}
     plan_actions: dict[str, int] = {}
     states: dict[str, int] = {}
     linked_by_role = {e.get("role_run_id"): e for e in links if e.get("role_run_id")}
-    historical_by_role = {
-        e.get("role_run_id"): e for e in historical_links if e.get("role_run_id")
-    }
+    historical_by_role = {e.get("role_run_id"): e for e in historical_links if e.get("role_run_id")}
 
     valid = invalid = disagreements = role_runs = dispatches = historical_replays = 0
     live_valid = live_invalid = 0
-    linked_outcomes = accepted_links = synced_links = outcome_successes = (
-        disagreement_outcomes
-    ) = 0
+    linked_outcomes = accepted_links = synced_links = outcome_successes = disagreement_outcomes = 0
     historical_outcomes = historical_successes = historical_disagreement_outcomes = 0
     for row in proposals:
         _counter_inc(by_backend, row.get("backend"))
@@ -573,9 +557,7 @@ def summarize(corpus_path: Path = CORPUS_PATH) -> dict:
         "historical_linked_proposals": historical_outcomes,
         "historical_linked_successes": historical_successes,
         "historical_linked_success_rate": (
-            round(historical_successes / historical_outcomes, 3)
-            if historical_outcomes
-            else 0.0
+            round(historical_successes / historical_outcomes, 3) if historical_outcomes else 0.0
         ),
         "historical_linked_disagreements": historical_disagreement_outcomes,
         "backend_distribution": by_backend,
@@ -640,9 +622,7 @@ def historical_candidates_from_keepalive(
         shadow_action = row.get("shadow_action") or ""
         signals = row.get("signals_summary") or {}
         raw_disagreement = bool(row.get("disagreement"))
-        meaningful = keepalive_shadow.meaningful_disagreement(
-            blunt, shadow_action, outcome
-        )
+        meaningful = keepalive_shadow.meaningful_disagreement(blunt, shadow_action, outcome)
         is_failure = outcome in failure_outcomes
         is_success = outcome in success_outcomes
         failure_count = as_int(signals.get("failure_count"))
@@ -707,9 +687,7 @@ def historical_candidates_from_keepalive(
                 "disagreement": raw_disagreement,
                 "meaningful_disagreement": meaningful,
                 "category": (
-                    "calibration_only"
-                    if calibration_only
-                    else "redirect_replay_candidate"
+                    "calibration_only" if calibration_only else "redirect_replay_candidate"
                 ),
                 "priority": priority,
                 "reasons": reasons,
@@ -1090,12 +1068,8 @@ def _selftest() -> None:
             corpus_path=corpus,
         )
         entry = recorded["entry"]
-        assert (
-            entry["valid_proposal"] is True and entry["proposal_action"] == "redirect"
-        ), entry
-        assert (
-            entry["mutates_state"] is False and entry["plan"]["dry_run_only"] is True
-        ), entry
+        assert entry["valid_proposal"] is True and entry["proposal_action"] == "redirect", entry
+        assert entry["mutates_state"] is False and entry["plan"]["dry_run_only"] is True, entry
         diagnostic_entry = build_entry(
             {
                 "mutates_state": False,
@@ -1109,9 +1083,7 @@ def _selftest() -> None:
                     "confidence": "medium",
                     "reason": "baseline",
                 },
-                "errors": [
-                    "backend exit=70 agent returned no stdout; agy log tail captured"
-                ],
+                "errors": ["backend exit=70 agent returned no stdout; agy log tail captured"],
                 "plan": {"action": "inspect", "dry_run_only": True},
                 "raw_output": "",
                 "backend_error_detail": "neither PlanModel nor RequestedModel specified. You must specify a valid model.",
@@ -1122,14 +1094,11 @@ def _selftest() -> None:
         )
         assert diagnostic_entry["valid_proposal"] is False, diagnostic_entry
         assert "backend_error_detail_preview" in diagnostic_entry, diagnostic_entry
-        assert (
-            "PlanModel" in diagnostic_entry["backend_error_detail_preview"]
-        ), diagnostic_entry
+        assert "PlanModel" in diagnostic_entry["backend_error_detail_preview"], diagnostic_entry
         s1 = summarize(corpus)
         assert s1["n"] == 1 and s1["valid_proposals"] == 1, s1
         assert (
-            s1["autonomous_redirect_enabled"] is False
-            and not s1["ready_for_supervised_apply"]
+            s1["autonomous_redirect_enabled"] is False and not s1["ready_for_supervised_apply"]
         ), s1
 
         feedback.record_role_run(
@@ -1146,9 +1115,7 @@ def _selftest() -> None:
         manual["role_run_id"] = "role-shadow-good"
         manual["source"] = "live-dispatch"
         _append_event(manual, corpus)
-        feedback.record_run(
-            "downstream-shadow-good", "stranske/Repo#17", "implement", "codex"
-        )
+        feedback.record_run("downstream-shadow-good", "stranske/Repo#17", "implement", "codex")
         feedback.record_outcome(
             "downstream-shadow-good",
             adjudicated_verdict="PASS",
@@ -1211,12 +1178,8 @@ def _selftest() -> None:
             )
         thin_summary = summarize(thin_ready_corpus)
         assert thin_summary["valid_proposals"] == LINKED_OUTCOME_TARGET, thin_summary
-        assert (
-            thin_summary["synced_role_outcomes"] == LINKED_OUTCOME_TARGET
-        ), thin_summary
-        assert (
-            thin_summary["linked_disagreements"] == LINKED_OUTCOME_TARGET
-        ), thin_summary
+        assert thin_summary["synced_role_outcomes"] == LINKED_OUTCOME_TARGET, thin_summary
+        assert thin_summary["linked_disagreements"] == LINKED_OUTCOME_TARGET, thin_summary
         assert thin_summary["ready_for_analysis"] is False, thin_summary
         assert thin_summary["ready_for_supervised_apply"] is False, thin_summary
 
@@ -1284,9 +1247,7 @@ def _selftest() -> None:
             limit=10,
             include_calibration=True,
         )
-        assert (
-            historical_with_calibration["candidate_count"] == 3
-        ), historical_with_calibration
+        assert historical_with_calibration["candidate_count"] == 3, historical_with_calibration
         replay_report = _historical_report_from_candidate(historical["items"][0])
         assert replay_report["target"] == "stranske/Repo#300", replay_report
         assert "needs_human" not in json.dumps(replay_report), replay_report
@@ -1295,9 +1256,7 @@ def _selftest() -> None:
             limit=10,
             corpus_path=Path(tmp) / "historical-collect.jsonl",
         )
-        assert (
-            dry_collect["dry_run"] is True and dry_collect["would_collect"] == 2
-        ), dry_collect
+        assert dry_collect["dry_run"] is True and dry_collect["would_collect"] == 2, dry_collect
         already_replayed_corpus = Path(tmp) / "historical-already.jsonl"
         _append_event(
             {
@@ -1317,9 +1276,7 @@ def _selftest() -> None:
             corpus_path=already_replayed_corpus,
         )
         assert next_page_collect["would_collect"] == 1, next_page_collect
-        assert (
-            next_page_collect["items"][0]["target"] == "stranske/Repo#302"
-        ), next_page_collect
+        assert next_page_collect["items"][0]["target"] == "stranske/Repo#302", next_page_collect
         invalid_replayed_corpus = Path(tmp) / "historical-invalid-retry.jsonl"
         _append_event(
             {
@@ -1362,12 +1319,8 @@ def _selftest() -> None:
         assert hist_summary["historical_linked_disagreements"] == 1, hist_summary
 
         # A rejected role proposal is audit-linked but not synced as learning evidence.
-        feedback.record_role_run(
-            "role-shadow-rejected", "redirect", "stranske/Repo#18", "codex"
-        )
-        feedback.record_run(
-            "downstream-rejected", "stranske/Repo#18", "implement", "codex"
-        )
+        feedback.record_role_run("role-shadow-rejected", "redirect", "stranske/Repo#18", "codex")
+        feedback.record_run("downstream-rejected", "stranske/Repo#18", "implement", "codex")
         feedback.record_outcome(
             "downstream-rejected",
             adjudicated_verdict="PASS",
@@ -1408,9 +1361,7 @@ def main(argv: list[str]) -> int:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    rec = sub.add_parser(
-        "record", help="run RedirectAgent in shadow and append a proposal event"
-    )
+    rec = sub.add_parser("record", help="run RedirectAgent in shadow and append a proposal event")
     rec.add_argument(
         "--report-json",
         default="",
@@ -1420,9 +1371,7 @@ def main(argv: list[str]) -> int:
     rec.add_argument("--ac-file", default="")
     rec.add_argument("--attempt-history-json", default="")
     rec.add_argument("--backend", default="")
-    rec.add_argument(
-        "--dispatch", action="store_true", help="call the routed/forced backend"
-    )
+    rec.add_argument("--dispatch", action="store_true", help="call the routed/forced backend")
     rec.add_argument(
         "--proposal-json",
         default="",
@@ -1468,9 +1417,7 @@ def main(argv: list[str]) -> int:
         help="replay historical keepalive candidates through RedirectAgent and record analysis links",
     )
     collect.add_argument("--keepalive-corpus", default="")
-    collect.add_argument(
-        "--limit", type=int, default=DEFAULT_HISTORICAL_CANDIDATE_LIMIT
-    )
+    collect.add_argument("--limit", type=int, default=DEFAULT_HISTORICAL_CANDIDATE_LIMIT)
     collect.add_argument(
         "--include-calibration",
         action="store_true",

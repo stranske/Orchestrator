@@ -25,9 +25,7 @@ import provision
 import watch
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
-STATE_DIR = Path(
-    os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")
-)
+STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
 DEFAULT_REPORT = STATE_DIR / "redirect-sweep.json"
 DEFAULT_MAX_REPORTS = 50
 DEFAULT_SHADOW_ACTIONS = ("redirect", "decompose")
@@ -162,9 +160,7 @@ def _stable_sweep_fingerprint(report: dict) -> str:
     return _sha_json(normalized)
 
 
-def _existing_sweep_fingerprints(
-    corpus_path: Path, *, since_ts: int | None
-) -> set[str]:
+def _existing_sweep_fingerprints(corpus_path: Path, *, since_ts: int | None) -> set[str]:
     if not corpus_path.exists():
         return set()
     out: set[str] = set()
@@ -179,9 +175,7 @@ def _existing_sweep_fingerprints(
             continue
         if since_ts is not None and int(entry.get("ts") or 0) < since_ts:
             continue
-        report_summary = (
-            entry.get("report") if isinstance(entry.get("report"), dict) else {}
-        )
+        report_summary = entry.get("report") if isinstance(entry.get("report"), dict) else {}
         fp = entry.get("sweep_fingerprint") or report_summary.get("sweep_fingerprint")
         if fp:
             out.add(str(fp))
@@ -202,10 +196,7 @@ def _parse_action_set(
 
 
 def _acceptance_criteria_for_report(report: dict) -> str:
-    expected = (
-        ", ".join(str(p) for p in report.get("expected_paths") or [])
-        or "(not specified)"
-    )
+    expected = ", ".join(str(p) for p in report.get("expected_paths") or []) or "(not specified)"
     policy = report.get("policy_decision") or {}
     lines = [
         f"Target: {report.get('target') or '(unknown target)'}",
@@ -335,9 +326,7 @@ def record_shadow_candidates(
     releases claims, kills processes, or delegates a replacement lane.
     """
     if not dispatch and proposal_json is None:
-        raise ValueError(
-            "recording sweep candidates requires dispatch or proposal_json"
-        )
+        raise ValueError("recording sweep candidates requires dispatch or proposal_json")
 
     import redirect_shadow
 
@@ -620,12 +609,8 @@ def doctor(
             "record_corpus_env_gate_present": corpus_gate_present,
             "record_corpus_env_enabled": recording_enabled,
             "backend": env.get("ORCH_REDIRECT_SWEEP_BACKEND", ""),
-            "actions": env.get(
-                "ORCH_REDIRECT_SWEEP_ACTIONS", ",".join(DEFAULT_SHADOW_ACTIONS)
-            ),
-            "max_records": env.get(
-                "ORCH_REDIRECT_SWEEP_MAX_RECORDS", DEFAULT_MAX_SHADOW_RECORDS
-            ),
+            "actions": env.get("ORCH_REDIRECT_SWEEP_ACTIONS", ",".join(DEFAULT_SHADOW_ACTIONS)),
+            "max_records": env.get("ORCH_REDIRECT_SWEEP_MAX_RECORDS", DEFAULT_MAX_SHADOW_RECORDS),
             "dedupe_hours": env.get(
                 "ORCH_REDIRECT_SWEEP_DEDUPE_HOURS", DEFAULT_SHADOW_DEDUPE_HOURS
             ),
@@ -647,18 +632,14 @@ def doctor(
             "proposals": corpus_summary.get("n"),
             "valid_proposals": corpus_summary.get("valid_proposals"),
             "linked_proposals": corpus_summary.get("linked_proposals"),
-            "historical_linked_proposals": corpus_summary.get(
-                "historical_linked_proposals"
-            ),
+            "historical_linked_proposals": corpus_summary.get("historical_linked_proposals"),
             "disagreements": corpus_summary.get("disagreements"),
             "linked_disagreements": corpus_summary.get("linked_disagreements"),
             "historical_linked_disagreements": corpus_summary.get(
                 "historical_linked_disagreements"
             ),
             "ready_for_analysis": corpus_summary.get("ready_for_analysis"),
-            "ready_for_supervised_apply": corpus_summary.get(
-                "ready_for_supervised_apply"
-            ),
+            "ready_for_supervised_apply": corpus_summary.get("ready_for_supervised_apply"),
         },
         "recommendation": recommendation,
     }
@@ -701,8 +682,9 @@ def _selftest() -> None:
 
         # Truncation is COUNTED, not silent: 3 claims with a cap of 2 leaves exactly 1 reported.
         # A sweep that reports only `watched_count` claims a smaller world than exists.
-        _fake = {f"o/r#{i}": {"agent": "codex", "pid": None, "log": "", "worktree": ""}
-                 for i in range(3)}
+        _fake = {
+            f"o/r#{i}": {"agent": "codex", "pid": None, "log": "", "worktree": ""} for i in range(3)
+        }
         _orig_active = claims.active_claims
         try:
             claims.active_claims = lambda **kw: _fake
@@ -752,9 +734,7 @@ def _selftest() -> None:
             max_records=1,
             proposal_json=proposal,
         )
-        assert (
-            shadow["recorded_count"] == 1 and shadow["mutates_lane_state"] is False
-        ), shadow
+        assert shadow["recorded_count"] == 1 and shadow["mutates_lane_state"] is False, shadow
         assert corpus.exists() and "redirect-sweep-replay" in corpus.read_text(
             encoding="utf-8"
         ), shadow
@@ -820,8 +800,12 @@ def _selftest() -> None:
         exp_id = "EXPR1"
         edir = etmp / exp_id
         (edir / "done").mkdir(parents=True)
-        meta = {"repo": "o/r", "base": "main", "agents": ["good", "killed", "silent"],
-                "task_type": "implement"}
+        meta = {
+            "repo": "o/r",
+            "base": "main",
+            "agents": ["good", "killed", "silent"],
+            "task_type": "implement",
+        }
         for a in ("good", "killed", "silent"):
             (edir / f"{a}.log").write_text("log")
         (edir / "diff-good.patch").write_text("+++ b/x.py\n")  # succeeded: rc 0 + diff
@@ -853,7 +837,9 @@ def _selftest() -> None:
         _is_actionable = actionable_yes
         try:
             res = record_experiment_candidates(
-                exp_id, meta, edir,
+                exp_id,
+                meta,
+                edir,
                 corpus_path=etmp / "shadow.jsonl",
                 backend="cursor",
                 classify_fn=fake_classify,
@@ -886,9 +872,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="read-only redirect sweep/corpus preflight",
     )
-    parser.add_argument(
-        "--stale-seconds", type=int, default=watch.DEFAULT_STALE_SECONDS
-    )
+    parser.add_argument("--stale-seconds", type=int, default=watch.DEFAULT_STALE_SECONDS)
     parser.add_argument("--ttl", type=int, default=claims.CLAIM_TTL_DEFAULT)
     parser.add_argument("--max-reports", type=int, default=DEFAULT_MAX_REPORTS)
     parser.add_argument("--write", default="")
@@ -908,25 +892,19 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="offline/replay RedirectAgent proposal JSON for corpus recording",
     )
-    parser.add_argument(
-        "--corpus", default="", help="optional redirect shadow corpus path"
-    )
+    parser.add_argument("--corpus", default="", help="optional redirect shadow corpus path")
     parser.add_argument(
         "--shadow-actions",
         default=",".join(DEFAULT_SHADOW_ACTIONS),
         help="comma-separated policy actions eligible for corpus recording",
     )
-    parser.add_argument(
-        "--max-shadow-records", type=int, default=DEFAULT_MAX_SHADOW_RECORDS
-    )
+    parser.add_argument("--max-shadow-records", type=int, default=DEFAULT_MAX_SHADOW_RECORDS)
     parser.add_argument("--dedupe-hours", type=int, default=DEFAULT_SHADOW_DEDUPE_HOURS)
     parser.add_argument(
         "--backend", default="", help="force a RedirectAgent backend when dispatching"
     )
     parser.add_argument("--timeout", type=int, default=600)
-    parser.add_argument(
-        "--ac", "--acceptance-criteria", dest="acceptance_criteria", default=""
-    )
+    parser.add_argument("--ac", "--acceptance-criteria", dest="acceptance_criteria", default="")
     parser.add_argument("--ac-file", default="")
     args = parser.parse_args(argv)
     if args.selftest:
@@ -936,27 +914,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--doctor cannot be combined with --record-corpus")
     if args.doctor:
         report = doctor(run_sweep=True)
-        print(
-            json.dumps(report, indent=2, default=str)
-            if args.as_json
-            else format_doctor(report)
-        )
+        print(json.dumps(report, indent=2, default=str) if args.as_json else format_doctor(report))
         return 0
     if args.dispatch_redirect_agent and args.proposal_json:
-        parser.error(
-            "--dispatch-redirect-agent and --proposal-json are mutually exclusive"
-        )
-    if (
-        args.record_corpus
-        and not args.dispatch_redirect_agent
-        and not args.proposal_json
-    ):
-        parser.error(
-            "--record-corpus requires --dispatch-redirect-agent or --proposal-json"
-        )
-    report = sweep(
-        stale_seconds=args.stale_seconds, ttl=args.ttl, max_reports=args.max_reports
-    )
+        parser.error("--dispatch-redirect-agent and --proposal-json are mutually exclusive")
+    if args.record_corpus and not args.dispatch_redirect_agent and not args.proposal_json:
+        parser.error("--record-corpus requires --dispatch-redirect-agent or --proposal-json")
+    report = sweep(stale_seconds=args.stale_seconds, ttl=args.ttl, max_reports=args.max_reports)
     if args.record_corpus:
         import redirect_shadow
 

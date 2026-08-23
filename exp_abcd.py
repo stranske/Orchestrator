@@ -52,8 +52,7 @@ import watch
 ORCH = Path(__file__).resolve().parent
 EXP_DIR = Path(os.environ.get("ORCH_EXP_DIR", ORCH / "experiments"))
 DISPATCH_LOG_DIR = (
-    Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
-    / "dispatch-logs"
+    Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")) / "dispatch-logs"
 )
 
 # The reasoning/mode the ORCHESTRATOR would assign each agent for a complex, multi-file
@@ -77,13 +76,11 @@ AGENT_MODE = {
 EVALUATOR_TOPUP_ORDER = ("claude", "codex", "cursor", "vibe", "gemini")
 MIN_EVALUATORS = 4
 
-AUTH_FILES = (
-    {  # same as dispatcher: PATH resolves the binary, auth lets it actually run
-        "cursor": "$HOME/.cursor/cursor-agent.env",
-        "claude": "$HOME/.codex/handoff/.claude-oauth-token",
-        "aider": "$HOME/.codex/handoff/aider.env",
-    }
-)
+AUTH_FILES = {  # same as dispatcher: PATH resolves the binary, auth lets it actually run
+    "cursor": "$HOME/.cursor/cursor-agent.env",
+    "claude": "$HOME/.codex/handoff/.claude-oauth-token",
+    "aider": "$HOME/.codex/handoff/aider.env",
+}
 
 
 def _identity_slug(value: str) -> str:
@@ -95,10 +92,7 @@ def _identity_slug(value: str) -> str:
 
 def member_identity(arm_id: str, agent: str, ordinal: int) -> str:
     """Return the immutable identity for one execution inside one strategy arm."""
-    return (
-        f"{_identity_slug(arm_id)}--member-{int(ordinal) + 1:02d}-"
-        f"{_identity_slug(agent)}"
-    )
+    return f"{_identity_slug(arm_id)}--member-{int(ordinal) + 1:02d}-" f"{_identity_slug(agent)}"
 
 
 def _artifact_identity(agent: str, member_id: str | None = None) -> str:
@@ -110,9 +104,7 @@ def exp_branch(exp_id: str, agent: str, member_id: str | None = None) -> str:
     return f"exp/{_identity_slug(exp_id)}-{_artifact_identity(agent, member_id)}"
 
 
-def exp_worktree(
-    repo: str, exp_id: str, agent: str, member_id: str | None = None
-) -> Path:
+def exp_worktree(repo: str, exp_id: str, agent: str, member_id: str | None = None) -> Path:
     return provision.WORKTREES_DIR / (
         f"{provision.repo_slug(repo)}__{_identity_slug(exp_id)}__"
         f"{_artifact_identity(agent, member_id)}"
@@ -235,9 +227,7 @@ def evaluate_prompt(
     """Anonymized: candidates are labeled by letter, NOT agent — so evaluators judge on merit.
     The orchestrator keeps the letter->agent map secret and checks self-favoring AFTER scoring.
     """
-    blocks = "\n\n".join(
-        f"===== CANDIDATE {k} =====\n{v}" for k, v in candidates.items()
-    )
+    blocks = "\n\n".join(f"===== CANDIDATE {k} =====\n{v}" for k, v in candidates.items())
     letters = ", ".join(candidates.keys())
     return (
         "You are an impartial code reviewer. Below is a frozen SPECIFICATION followed by several "
@@ -247,9 +237,7 @@ def evaluate_prompt(
         "inspect orchestration worktrees, process tables, or unrelated repo state; list missing runtime "
         "or test evidence in evidence_gaps instead.\n\n"
         "Return STRICT JSON only, no prose, exactly this shape:\n"
-        '{"scores": {"'
-        + letters.split(",")[0].strip()
-        + '": <0-10>, ...for every candidate}, '
+        '{"scores": {"' + letters.split(",")[0].strip() + '": <0-10>, ...for every candidate}, '
         '"best": "<letter>", "worst": "<letter>", '
         '"notes": {"<letter>": "<one-line: key strength or fatal flaw>"}, '
         '"evidence_gaps": ["<missing evidence that would have improved judgment>", "..."], '
@@ -353,30 +341,34 @@ def _completion_cmd(
     causal_context: dict | None = None,
 ) -> str:
     argv = [
-            "python3",
-            str(ORCH / "ledger_reconcile.py"),
-            "complete",
-            "--run-id",
-            run_id,
-            "--agent",
-            agent,
-            "--target",
-            target,
-            "--mode",
-            str(mode or ""),
-            "--task-type",
-            task_type,
-            "--log-file",
-            str(log),
-            "--started-ts",
-            str(started_ts),
-        ]
+        "python3",
+        str(ORCH / "ledger_reconcile.py"),
+        "complete",
+        "--run-id",
+        run_id,
+        "--agent",
+        agent,
+        "--target",
+        target,
+        "--mode",
+        str(mode or ""),
+        "--task-type",
+        task_type,
+        "--log-file",
+        str(log),
+        "--started-ts",
+        str(started_ts),
+    ]
     if profile:
         argv += [
-            "--selected-profile-id", profile["profile_id"],
-            "--requested-model", profile["requested_model"],
-            "--policy-version", execution_profiles.PROFILE_POLICY_VERSION,
-            "--propensity", "1.0",
+            "--selected-profile-id",
+            profile["profile_id"],
+            "--requested-model",
+            profile["requested_model"],
+            "--policy-version",
+            execution_profiles.PROFILE_POLICY_VERSION,
+            "--propensity",
+            "1.0",
         ]
     if causal_context and causal_context.get("subject_id"):
         argv += ["--subject-id", str(causal_context["subject_id"])]
@@ -416,10 +408,15 @@ def _spawn(
     )
     if profile:
         feedback.record_execution_attempt(
-            run_id, attempt_id=f"attempt:profile:{run_id}", operation_role="worker",
-            profile_id=profile["profile_id"], requested_provider=profile["provider"],
-            requested_model=profile["requested_model"], status="started",
-            source="experiment-profile-decision", started_ts=started_ts,
+            run_id,
+            attempt_id=f"attempt:profile:{run_id}",
+            operation_role="worker",
+            profile_id=profile["profile_id"],
+            requested_provider=profile["provider"],
+            requested_model=profile["requested_model"],
+            status="started",
+            source="experiment-profile-decision",
+            started_ts=started_ts,
         )
     complete = _completion_cmd(
         agent, mode, run_id, target, task_type, log, started_ts, profile, causal_context
@@ -466,8 +463,14 @@ def _spawn(
     return proc.pid
 
 
-def prepare(repo: str, spec_file: str, exp_id: str, agents: list[str], task_type: str = "implement",
-            profiles: dict[str, str] | None = None) -> dict:
+def prepare(
+    repo: str,
+    spec_file: str,
+    exp_id: str,
+    agents: list[str],
+    task_type: str = "implement",
+    profiles: dict[str, str] | None = None,
+) -> dict:
     spec = Path(spec_file).read_text()
     canon = provision.ensure_canonical(repo)
     base = provision.base_branch(repo)
@@ -531,13 +534,17 @@ def prepare(repo: str, spec_file: str, exp_id: str, agents: list[str], task_type
             model=adapters.model_identity(agent, mode, profile),
             capability_ids=["abcd-experiment"],
             influenced_by_workflow_ids=["exp_abcd"],
-            routing_metadata={
-                "selected_profile_id": profile_id,
-                "requested_model": profile["requested_model"],
-                "transport": "experiment",
-                "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
-                "profile_assignment_probability": 1.0,
-            } if profile else None,
+            routing_metadata=(
+                {
+                    "selected_profile_id": profile_id,
+                    "requested_model": profile["requested_model"],
+                    "transport": "experiment",
+                    "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
+                    "profile_assignment_probability": 1.0,
+                }
+                if profile
+                else None
+            ),
         )
         pid = _spawn(
             agent,
@@ -650,15 +657,24 @@ def prepare_arms(
         if not (wt / ".git").exists():
             provision._run(
                 [
-                    "git", "-C", str(canon), "worktree", "add", "-b", br,
-                    str(wt), f"origin/{base}",
+                    "git",
+                    "-C",
+                    str(canon),
+                    "worktree",
+                    "add",
+                    "-b",
+                    br,
+                    str(wt),
+                    f"origin/{base}",
                 ]
             )
         profile_id = member.get("profile_id")
         execution_profile_id = (
             profile_id if profile_id in execution_profiles.PROFILE_REGISTRY else None
         )
-        profile = execution_profiles.get_profile(execution_profile_id) if execution_profile_id else None
+        profile = (
+            execution_profiles.get_profile(execution_profile_id) if execution_profile_id else None
+        )
         mode = AGENT_MODE.get(agent, "full")
         log = edir / exp_log_path(agent, member_id)
         run_id = _member_run_id(exp_id, member)
@@ -677,17 +693,27 @@ def prepare_arms(
             influenced_by_workflow_ids=["exp_abcd"],
             routing_metadata={
                 **(_member_routing_metadata(member) or {}),
-                **({
-                    "selected_profile_id": execution_profile_id,
-                    "requested_model": profile["requested_model"],
-                    "transport": "experiment",
-                    "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
-                    "profile_assignment_probability": 1.0,
-                } if profile else {}),
+                **(
+                    {
+                        "selected_profile_id": execution_profile_id,
+                        "requested_model": profile["requested_model"],
+                        "transport": "experiment",
+                        "profile_policy_version": execution_profiles.PROFILE_POLICY_VERSION,
+                        "profile_assignment_probability": 1.0,
+                    }
+                    if profile
+                    else {}
+                ),
             },
         )
         pid = _spawn(
-            agent, mode, prompt, wt, log, run_id=run_id, target=target,
+            agent,
+            mode,
+            prompt,
+            wt,
+            log,
+            run_id=run_id,
+            target=target,
             task_type=task_type,
             profile_id=execution_profile_id,
             causal_context={"arm_id": member["arm_id"]},
@@ -737,8 +763,9 @@ def status(exp_id: str, *, stale_seconds: int = watch.DEFAULT_STALE_SECONDS) -> 
         report = watch.classify_lane(
             agent=agent,
             target=(
-                f"{repo} [exp {exp_id}]" if member["legacy"] else
-                f"{repo} [exp {exp_id} arm {member['arm_id']} member {member['member_id']}]"
+                f"{repo} [exp {exp_id}]"
+                if member["legacy"]
+                else f"{repo} [exp {exp_id} arm {member['arm_id']} member {member['member_id']}]"
             ),
             log=str(log),
             worktree=str(wt),
@@ -808,6 +835,7 @@ def collect(repo: str, exp_id: str) -> dict:
         if not (wt / ".git").exists():
             try:
                 import experiment_recovery
+
                 recovered = experiment_recovery.arm_diff(repo, exp_id, agent, base=base)
             except Exception:
                 recovered = None
@@ -819,12 +847,17 @@ def collect(repo: str, exp_id: str) -> dict:
                 if recovered.strip() or not (rp.exists() and rp.read_text().strip()):
                     rp.write_text(recovered)
                 written[member["member_id"]] = {
-                    "path": str(rp), "bytes": len(rp.read_text()), "source": "branch",
+                    "path": str(rp),
+                    "bytes": len(rp.read_text()),
+                    "source": "branch",
                 }
                 continue
-        merge_base = provision._run(
-            ["git", "-C", str(wt), "merge-base", "HEAD", base_ref], check=False
-        ).stdout.strip() or base_ref
+        merge_base = (
+            provision._run(
+                ["git", "-C", str(wt), "merge-base", "HEAD", base_ref], check=False
+            ).stdout.strip()
+            or base_ref
+        )
         committed = provision._run(
             ["git", "-C", str(wt), "--no-pager", "diff", merge_base, "HEAD"],
             check=False,
@@ -837,9 +870,7 @@ def collect(repo: str, exp_id: str) -> dict:
         # drift expand the patch to the whole repository.
         d = _join_diffs(committed, uncommitted)
         if not d.strip() and agent == "gemini":
-            d = _gemini_scratch_diff(
-                edir / exp_log_path(agent, artifact_member), base
-            )
+            d = _gemini_scratch_diff(edir / exp_log_path(agent, artifact_member), base)
         p = edir / exp_diff_path(agent, artifact_member)
         p.write_text(d)
         written[member["member_id"]] = {
@@ -916,9 +947,7 @@ def _extract_evidence_gaps(parsed: dict | None) -> list[str]:
     seen: set[str] = set()
     for value in values:
         if isinstance(value, dict):
-            text = (
-                value.get("gap") or value.get("missing") or value.get("evidence") or ""
-            )
+            text = value.get("gap") or value.get("missing") or value.get("evidence") or ""
         else:
             text = str(value)
         text = " ".join(text.strip().split())
@@ -935,9 +964,7 @@ def _extract_evidence_gaps(parsed: dict | None) -> list[str]:
 def _extract_cited_evidence_types(parsed: dict | None) -> list[str]:
     if not isinstance(parsed, dict):
         return []
-    return feedback.normalize_evidence_type_citations(
-        parsed.get("cited_evidence_types")
-    )
+    return feedback.normalize_evidence_type_citations(parsed.get("cited_evidence_types"))
 
 
 def _eval_command(agent: str, promptfile: str) -> str:
@@ -982,10 +1009,7 @@ def _capacity_map() -> dict:
     """Best-effort agent->capacity row from the tick's capacity.json artifact (hourly). Used only
     to PREFER a drain-mode seat as the neutral judge — its expiring window makes the extra
     evaluation effectively free. Absence/staleness degrades to static EVALUATOR_TOPUP_ORDER."""
-    path = (
-        Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
-        / "capacity.json"
-    )
+    path = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")) / "capacity.json"
     try:
         if path.exists() and time.time() - path.stat().st_mtime < 7200:
             agents = (json.loads(path.read_text()) or {}).get("agents")
@@ -1053,10 +1077,7 @@ def _normalize_evaluator_specs(
         if not agent:
             raise ValueError("evaluator requires agent")
         evaluator_id = str(
-            spec.get("evaluator_id")
-            or spec.get("profile_id")
-            or spec.get("arm_id")
-            or agent
+            spec.get("evaluator_id") or spec.get("profile_id") or spec.get("arm_id") or agent
         ).strip()
         spec.update({"agent": agent, "evaluator_id": evaluator_id})
         explicit.append(spec)
@@ -1145,9 +1166,7 @@ def evaluate(
                 "profile_id": evaluator.get("profile_id"),
             },
         )
-        started_ts = _record_execution_start(
-            agent, mode, run_id, target, "review", out_path
-        )
+        started_ts = _record_execution_start(agent, mode, run_id, target, "review", out_path)
         out.write(
             f"=== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} EXP-EVAL "
             f"{agent}/{mode} evaluator_id={ev} [review] exp={exp_id} run_id={run_id} ===\n"
@@ -1169,9 +1188,7 @@ def evaluate(
             out_path,
             evaluator,
         )
-    (edir / "eval-maps.json").write_text(
-        json.dumps(maps, indent=2)
-    )  # per-judge secret maps
+    (edir / "eval-maps.json").write_text(json.dumps(maps, indent=2))  # per-judge secret maps
     matrix = {}
     legacy_scores: dict[tuple[str, str], list[float]] = {}
     legacy_verdicts: dict[tuple[str, str], list[dict]] = {}
@@ -1183,15 +1200,11 @@ def evaluate(
             evaluator_agent, mode, run_id, target, "review", out_path, started_ts
         )
         out.close()
-        parsed = _extract_json(
-            out_path.read_text(errors="replace")
-        )
+        parsed = _extract_json(out_path.read_text(errors="replace"))
         matrix[ev] = parsed
         for gap in _extract_evidence_gaps(parsed):
             feedback.record_evidence_gap(f"{exp_id}:eval", ev, gap)
-        cited = feedback.record_evidence_type_citations(
-            _extract_cited_evidence_types(parsed)
-        )
+        cited = feedback.record_evidence_type_citations(_extract_cited_evidence_types(parsed))
         if parsed and isinstance(parsed.get("scores"), dict):
             for L, score in parsed["scores"].items():
                 impl_id = maps[ev].get(L.strip().upper()[:1])  # this judge's own map
@@ -1362,7 +1375,9 @@ def followup(
         phase = state.get("delivery_phase")
         if phase not in {"candidate_ready", "discarded", "durable"}:
             return
-        verdict = "use" if phase == "candidate_ready" else "durable" if phase == "durable" else "discard"
+        verdict = (
+            "use" if phase == "candidate_ready" else "durable" if phase == "durable" else "discard"
+        )
         payload = {
             "ts": int(now),
             "verdict": verdict,
@@ -1450,9 +1465,7 @@ def followup(
             metadata={"phase": "followup", "repo": meta.get("repo")},
         )
         try:
-            subject_lifecycle_fn(
-                edir.name, "evaluable", reason="all_arm_logs_idle"
-            )
+            subject_lifecycle_fn(edir.name, "evaluable", reason="all_arm_logs_idle")
         except Exception:
             pass  # Subject telemetry must never break experiment recovery.
         if len(out["processed"]) >= max_experiments:
@@ -1466,28 +1479,20 @@ def followup(
             metadata={"phase": "collect-evaluate", "repo": repo},
         )
         collected = collect_fn(repo, edir.name)
-        nonempty = sum(
-            1 for v in (collected.get("diffs") or {}).values() if v.get("bytes")
-        )
+        nonempty = sum(1 for v in (collected.get("diffs") or {}).values() if v.get("bytes"))
         if not nonempty:
             (edir / "followup-skip.json").write_text(
                 json.dumps({"reason": "no-diffs-recoverable", "ts": int(now)})
             )
-            out["processed"].append(
-                {"exp_id": edir.name, "diffs": 0, "evaluated": False}
-            )
+            out["processed"].append({"exp_id": edir.name, "diffs": 0, "evaluated": False})
             try:
-                subject_lifecycle_fn(
-                    edir.name, "failed", reason="no_diffs_recoverable"
-                )
+                subject_lifecycle_fn(edir.name, "failed", reason="no_diffs_recoverable")
             except Exception:
                 pass
         else:
             ev = evaluate_fn(repo, str(spec_p), edir.name, None, timeout=eval_timeout)
             try:
-                subject_lifecycle_fn(
-                    edir.name, "evaluated", reason="followup_evaluation_complete"
-                )
+                subject_lifecycle_fn(edir.name, "evaluated", reason="followup_evaluation_complete")
             except Exception:
                 pass
             entry = {
@@ -1525,7 +1530,10 @@ def followup(
                         entry["ship_gate"] = promotion_state["delivery_phase"]
                         entry["promotion_actions"] = promotion.get("actions") or []
                         launch_available = False
-                        if promotion_state["delivery_phase"] not in synthesis_promotion.TERMINAL_PHASES:
+                        if (
+                            promotion_state["delivery_phase"]
+                            not in synthesis_promotion.TERMINAL_PHASES
+                        ):
                             promotion_inflight = True
                     else:
                         entry["ship_gate"] = "queued_evaluated"
@@ -1551,9 +1559,7 @@ def followup(
             try:
                 import redirect_sweep
 
-                corpus_res = redirect_sweep.record_experiment_candidates(
-                    edir.name, meta, edir
-                )
+                corpus_res = redirect_sweep.record_experiment_candidates(edir.name, meta, edir)
                 out["processed"][-1]["redirect_corpus"] = {
                     "recorded": corpus_res.get("recorded_count", 0),
                     "actionable": corpus_res.get("experiment_actionable", 0),
@@ -1624,8 +1630,7 @@ def _gate_prompt(ranking: list, notes_by_agent: dict) -> str:
     """
     summary = "; ".join(f"{a}={m:.1f}" for a, m in ranking)
     notes = (
-        "\n".join(f"- {a}: {'; '.join(ns)}" for a, ns in notes_by_agent.items() if ns)
-        or "- (none)"
+        "\n".join(f"- {a}: {'; '.join(ns)}" for a, ns in notes_by_agent.items() if ns) or "- (none)"
     )
     return (
         "You are deciding whether an N-way experiment's best implementation is worth BUILDING ON or should "
@@ -1642,9 +1647,7 @@ def _gate_prompt(ranking: list, notes_by_agent: dict) -> str:
     )
 
 
-def usefulness_gate(
-    repo: str, exp_id: str, harvest: dict, judge_agent: str = "codex"
-) -> dict:
+def usefulness_gate(repo: str, exp_id: str, harvest: dict, judge_agent: str = "codex") -> dict:
     """Delegate the ship/discard judgment to a strong reasoning agent reading the winner's actual code."""
     notes_by_agent = {
         harvest["winner"]: harvest["winner_weaknesses"],
@@ -1657,9 +1660,7 @@ def usefulness_gate(
         raise ValueError(f"winner identity missing from experiment metadata: {harvest['winner']}")
     artifact_member = None if winner_member["legacy"] else winner_member["member_id"]
     wt = exp_worktree(repo, exp_id, winner_member["agent"], artifact_member)
-    mode = (
-        "assess" if judge_agent == "codex" else "full"
-    )  # codex assess = read-only sandbox
+    mode = "assess" if judge_agent == "codex" else "full"  # codex assess = read-only sandbox
     out = dispatcher.offload(
         judge_agent,
         _gate_prompt(harvest["ranking"], notes_by_agent),
@@ -1758,7 +1759,7 @@ def synthesize(
     """Harvest the best of all approaches into the chosen base's worktree and commit it — the experiment's
     shippable deliverable. Ship/discard is a delegated JUDGMENT (usefulness_gate), not a score cutoff;
     discard only if a strong reasoning agent judges no approach a productive starting point.
-    
+
     Tranche 0 lane B: Now iterates evaluator keys persisted in eval-maps.json, including neutral top-up judges.
     """
     edir = exp_paths(exp_id)
@@ -1778,13 +1779,19 @@ def synthesize(
             return {
                 key: prior_launch.get(key)
                 for key in (
-                    "base", "synth_agent", "run_id", "pid", "worktree", "log",
-                    "ranking", "gate",
+                    "base",
+                    "synth_agent",
+                    "run_id",
+                    "pid",
+                    "worktree",
+                    "log",
+                    "ranking",
+                    "gate",
                 )
             } | {"recovered_launch": True}
     maps = json.loads((edir / "eval-maps.json").read_text())
     meta = json.loads((edir / "meta.json").read_text())
-    
+
     # eval-maps.json is the durable list of actual judges.  In particular, it
     # contains neutral top-ups that are intentionally absent from meta['agents'].
     verdicts = {}
@@ -1816,15 +1823,21 @@ def synthesize(
             base_member = matches[0]
             base = base_member["member_id"]
         else:
-            return {"blocked": True, "reason": f"ambiguous synthesis base: {base}", "ranking": h["ranking"]}
+            return {
+                "blocked": True,
+                "reason": f"ambiguous synthesis base: {base}",
+                "ranking": h["ranking"],
+            }
     synth_agent = synth_agent or base_member["agent"]
     artifact_member = None if base_member["legacy"] else base_member["member_id"]
     wt = exp_worktree(repo, exp_id, base_member["agent"], artifact_member)
-    log = edir / f"synth-{_artifact_identity(base_member['agent'], artifact_member)}-{_identity_slug(synth_agent)}.log"
+    log = (
+        edir
+        / f"synth-{_artifact_identity(base_member['agent'], artifact_member)}-{_identity_slug(synth_agent)}.log"
+    )
     mode = AGENT_MODE.get(synth_agent, "full")
     run_id = (
-        f"{exp_id}:synth" if base_member["legacy"] else
-        f"{exp_id}:synth:{base_member['arm_id']}"
+        f"{exp_id}:synth" if base_member["legacy"] else f"{exp_id}:synth:{base_member['arm_id']}"
     )
     target = f"{repo} [exp {exp_id} synth]"
     launch_record = {
@@ -1853,8 +1866,9 @@ def synthesize(
         model=adapters.model_identity(synth_agent, mode),
         rationale=f"harvest panel-named strengths into base ({base}); not wasted capacity",
         routing_metadata=(
-            None if base_member["legacy"] else
-            {**_member_routing_metadata(base_member), "synthesis_base_member_id": base}
+            None
+            if base_member["legacy"]
+            else {**_member_routing_metadata(base_member), "synthesis_base_member_id": base}
         ),
     )
     try:
@@ -1918,11 +1932,14 @@ def main(argv):
         # Tranche 0 lane B: Arm-aware preparation
         # argv[1] = repo, argv[2] = spec_file, argv[3] = exp_id, argv[4] = arms_json
         import json as json_mod
+
         repo, spec_file, exp_id, arms_json = argv[1], argv[2], argv[3], argv[4]
         task_type = argv[5] if len(argv) > 5 else "implement"
         arms = json_mod.loads(arms_json)
         print(
-            json.dumps(prepare_arms(repo, spec_file, exp_id, arms, task_type), indent=2, default=str)
+            json.dumps(
+                prepare_arms(repo, spec_file, exp_id, arms, task_type), indent=2, default=str
+            )
         )
         return 0
     if cmd == "status":
@@ -1965,18 +1982,14 @@ def _selftest():
     global EXP_DIR
     assert exp_branch("e1", "claude") == "exp/e1-claude"
     assert (
-        exp_worktree("stranske/Workflows", "e1", "codex").name
-        == "stranske__Workflows__e1__codex"
+        exp_worktree("stranske/Workflows", "e1", "codex").name == "stranske__Workflows__e1__codex"
     )
     assert AGENT_MODE["cursor"] == "composer" and AGENT_MODE["claude"] == "full"
     p = implement_prompt("SPEC-BODY")
     assert "FROZEN SPECIFICATION" in p and "DO NOT push" in p and "SPEC-BODY" in p, p
     ev = evaluate_prompt("S", {"A": "diffA", "B": "diffB"})
     assert (
-        "STRICT JSON" in ev
-        and "CANDIDATE A" in ev
-        and "CANDIDATE B" in ev
-        and "anonymized" in ev
+        "STRICT JSON" in ev and "CANDIDATE A" in ev and "CANDIDATE B" in ev and "anonymized" in ev
     ), ev
     w = _wrapped("cursor", ["cursor-agent", "-p", "x"])
     assert "/.local/bin" in w and "cursor-agent.env" in w and "set -a" in w, w
@@ -1986,10 +1999,7 @@ def _selftest():
     assert _extract_json('chat\n```json\n{"scores":{"A":7,"B":5}}\n```\n') == {
         "scores": {"A": 7, "B": 5}
     }
-    assert (
-        _extract_json('prefix {"x":1} then {"scores":{"A":8},"best":"A"} end')["best"]
-        == "A"
-    )
+    assert _extract_json('prefix {"x":1} then {"scores":{"A":8},"best":"A"} end')["best"] == "A"
     assert _extract_json("no json at all") is None
     assert _extract_evidence_gaps(
         {
@@ -2010,10 +2020,7 @@ def _selftest():
         assert 'read-only "$(cat /tmp/p.txt)"' in ec and "homebrew" in ec, ec
         os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = "1"
         ecn = _eval_command("codex", "/tmp/p.txt")
-        assert (
-            "--dangerously-bypass-approvals-and-sandbox" in ecn
-            and "--sandbox" not in ecn
-        ), ecn
+        assert "--dangerously-bypass-approvals-and-sandbox" in ecn and "--sandbox" not in ecn, ecn
     finally:
         if old_bypass is None:
             os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
@@ -2047,7 +2054,9 @@ def _selftest():
     joined = _join_diffs(committed_demo, uncommitted_demo)
     assert "\n \ndiff --git a/y" in joined, repr(joined)  # space-context line PRESERVED
     assert joined.endswith("+b\n"), repr(joined[-10:])  # terminating newline added
-    assert _join_diffs("", "   \n", uncommitted_demo).startswith("diff --git a/y"), "empty parts dropped"
+    assert _join_diffs("", "   \n", uncommitted_demo).startswith(
+        "diff --git a/y"
+    ), "empty parts dropped"
     # eval prompt diff cap: oversized candidates truncate with an explicit marker (E2BIG bug)
     big = "x" * (EVAL_DIFF_CAP_CHARS + 500)
     capped = _capped_diff(big)
@@ -2094,17 +2103,24 @@ def _selftest():
             # honor the real evaluate() contract: eval-maps.json marks the experiment done,
             # which is exactly what makes followup() idempotent
             (ftmp / exp_id / "eval-maps.json").write_text("{}")
-            return {"exp_id": exp_id, "evaluators": ["codex", "claude"],
-                    "objective_anchors": {"anchored": []}}
+            return {
+                "exp_id": exp_id,
+                "evaluators": ["codex", "claude"],
+                "objective_anchors": {"anchored": []},
+            }
 
         synth_wt = ftmp / "_synth_worktree"
         synth_wt.mkdir()
         subprocess.run(["git", "init", str(synth_wt)], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(synth_wt), "config", "user.email", "test@example.test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(synth_wt), "config", "user.email", "test@example.test"], check=True
+        )
         subprocess.run(["git", "-C", str(synth_wt), "config", "user.name", "Test"], check=True)
         (synth_wt / "feature.py").write_text("VALUE = 1\n")
         subprocess.run(["git", "-C", str(synth_wt), "add", "feature.py"], check=True)
-        subprocess.run(["git", "-C", str(synth_wt), "commit", "-m", "base"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(synth_wt), "commit", "-m", "base"], check=True, capture_output=True
+        )
 
         def fake_synthesize(repo, exp_id):
             calls.setdefault("synthesize", []).append(exp_id)
@@ -2171,12 +2187,16 @@ def _selftest():
             calls["subject_lifecycle"].append((exp_id, lifecycle, reason))
             return True
 
-        fu = followup(max_experiments=1, collect_fn=fake_collect,
-                      evaluate_fn=fake_evaluate, synthesize_fn=fake_synthesize,
-                      subject_lifecycle_fn=fake_subject_lifecycle,
-                      promotion_completion_fn=fake_promotion_completion,
-                      promotion_resume_fn=fake_promotion_resume,
-                      promotion_verify_fn=fake_promotion_verify)
+        fu = followup(
+            max_experiments=1,
+            collect_fn=fake_collect,
+            evaluate_fn=fake_evaluate,
+            synthesize_fn=fake_synthesize,
+            subject_lifecycle_fn=fake_subject_lifecycle,
+            promotion_completion_fn=fake_promotion_completion,
+            promotion_resume_fn=fake_promotion_resume,
+            promotion_verify_fn=fake_promotion_verify,
+        )
         assert len(fu["processed"]) == 1 and fu["processed"][0]["evaluated"], fu
         assert {s["reason"] for s in fu["skipped"]} == {"still-running", "per-call-cap"}, fu
         first = fu["processed"][0]["exp_id"]
@@ -2188,12 +2208,16 @@ def _selftest():
         # Second call resumes one simulated interruption exactly once, while the
         # other idle zero-diff experiment is terminally skipped.
         promotion_mode["status"] = "interrupted"
-        fu2 = followup(max_experiments=2, collect_fn=fake_collect,
-                       evaluate_fn=fake_evaluate, synthesize_fn=fake_synthesize,
-                       subject_lifecycle_fn=fake_subject_lifecycle,
-                       promotion_completion_fn=fake_promotion_completion,
-                       promotion_resume_fn=fake_promotion_resume,
-                       promotion_verify_fn=fake_promotion_verify)
+        fu2 = followup(
+            max_experiments=2,
+            collect_fn=fake_collect,
+            evaluate_fn=fake_evaluate,
+            synthesize_fn=fake_synthesize,
+            subject_lifecycle_fn=fake_subject_lifecycle,
+            promotion_completion_fn=fake_promotion_completion,
+            promotion_resume_fn=fake_promotion_resume,
+            promotion_verify_fn=fake_promotion_verify,
+        )
         stamped = [p for p in fu2["processed"] if not p["evaluated"]]
         assert calls["evaluate"] == [first], calls
         assert calls["synthesize"] == [first], "inflight promotion caps synthesis launches"
@@ -2205,14 +2229,22 @@ def _selftest():
         # synth_complete -> synth_verified -> candidate_ready exactly once.
         (synth_wt / "feature.py").write_text("VALUE = 2\n")
         subprocess.run(["git", "-C", str(synth_wt), "add", "feature.py"], check=True)
-        subprocess.run(["git", "-C", str(synth_wt), "commit", "-m", "synthesis"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(synth_wt), "commit", "-m", "synthesis"],
+            check=True,
+            capture_output=True,
+        )
         promotion_mode["status"] = "complete"
-        fu3 = followup(max_experiments=2, collect_fn=fake_collect,
-                       evaluate_fn=fake_evaluate, synthesize_fn=fake_synthesize,
-                       subject_lifecycle_fn=fake_subject_lifecycle,
-                       promotion_completion_fn=fake_promotion_completion,
-                       promotion_resume_fn=fake_promotion_resume,
-                       promotion_verify_fn=fake_promotion_verify)
+        fu3 = followup(
+            max_experiments=2,
+            collect_fn=fake_collect,
+            evaluate_fn=fake_evaluate,
+            synthesize_fn=fake_synthesize,
+            subject_lifecycle_fn=fake_subject_lifecycle,
+            promotion_completion_fn=fake_promotion_completion,
+            promotion_resume_fn=fake_promotion_resume,
+            promotion_verify_fn=fake_promotion_verify,
+        )
         assert not fu3["processed"], fu3
         promoted = synthesis_promotion.load_state(ftmp / first)
         assert promoted["delivery_phase"] == "candidate_ready", promoted
@@ -2264,9 +2296,7 @@ def _selftest():
     # NEUTRAL judge anyway (all-implementer juries showed 9/10 spreads w/ self-preference live).
     arms4 = ["codex", "gemini", "cursor", "vibe"]
     e_neutral = _ensure_min_evaluators(arms4, implementers=arms4)
-    assert (
-        e_neutral[:4] == arms4 and e_neutral[-1] == "claude" and len(e_neutral) == 5
-    ), e_neutral
+    assert e_neutral[:4] == arms4 and e_neutral[-1] == "claude" and len(e_neutral) == 5, e_neutral
     # drain-mode capacity is preferred among eligible neutrals (capacity injected; pure)
     e_drain = _ensure_min_evaluators(
         ["codex"],
@@ -2308,9 +2338,7 @@ def _selftest():
         },
         "gemini": {"scores": {"A": 8, "B": 10, "C": 6}, "notes": {"B": "excellent"}},
     }
-    h = _winner_and_harvest(
-        verds, maps, reliability={"ready_judge_count": 0, "judges": {}}
-    )
+    h = _winner_and_harvest(verds, maps, reliability={"ready_judge_count": 0, "judges": {}})
     assert h["winner"] == "cursor", h  # cursor 8.33 highest (gemini excluded)
     assert abs(h["winner_mean"] - 8.333) < 0.01, h["winner_mean"]
     assert h["judge_weights"]["gemini"] == 0.0, h[
@@ -2342,12 +2370,8 @@ def _selftest():
     ), h  # codex's strength harvested per-judge
     assert h["winner_weaknesses"], "winner's noted weaknesses surfaced for fixing"
     sp = _synthesis_prompt(h, "cursor")
-    assert (
-        "WEAKNESSES TO FIX" in sp and "STRENGTHS TO ADOPT" in sp and "safety test" in sp
-    ), sp
-    gp = _gate_prompt(
-        h["ranking"], {**{h["winner"]: h["winner_weaknesses"]}, **h["alt_strengths"]}
-    )
+    assert "WEAKNESSES TO FIX" in sp and "STRENGTHS TO ADOPT" in sp and "safety test" in sp, sp
+    gp = _gate_prompt(h["ranking"], {**{h["winner"]: h["winner_weaknesses"]}, **h["alt_strengths"]})
     assert (
         "PRODUCTIVE STARTING POINT" in gp and "digression" in gp and '"decision"' in gp
     ), gp  # judgment, not cutoff
@@ -2385,10 +2409,7 @@ def _selftest():
             self.pid = FakePopen.next_pid
             FakePopen.next_pid += 1
             if stdout is not None:
-                stdout.write(
-                    json.dumps({"usage": {"input_tokens": 11, "output_tokens": 5}})
-                    + "\n"
-                )
+                stdout.write(json.dumps({"usage": {"input_tokens": 11, "output_tokens": 5}}) + "\n")
                 stdout.write(
                     json.dumps(
                         {
@@ -2452,9 +2473,7 @@ def _selftest():
         )
         assert pid == 4900 and "run_id=e1:codex" in log.read_text(), log.read_text()
         wrapped_cmd = " ".join(str(part) for part in captured["popen_cmds"][-1])
-        assert (
-            "ledger_reconcile.py" in wrapped_cmd and " complete " in wrapped_cmd
-        ), wrapped_cmd
+        assert "ledger_reconcile.py" in wrapped_cmd and " complete " in wrapped_cmd, wrapped_cmd
         gemini_log = tmp / "gemini.log"
         gemini_pid = _spawn(
             "gemini",
@@ -2472,19 +2491,14 @@ def _selftest():
         assert captured["build"]["cwd"] == wt, captured["build"]
         rows = [json.loads(line) for line in adapters.LEDGER.read_text().splitlines()]
         start = next(
-            row
-            for row in rows
-            if row.get("run_id") == run_id and row.get("event") == "start"
+            row for row in rows if row.get("run_id") == run_id and row.get("event") == "start"
         )
-        assert start["task_type"] == "implement" and start["log_file"] == str(
-            log
-        ), start
+        assert start["task_type"] == "implement" and start["log_file"] == str(log), start
         complete_cmd = _completion_cmd(
             "codex", "full", run_id, target, "implement", log, start["started_ts"]
         )
         assert (
-            "ledger_reconcile.py" in complete_cmd
-            and "--run-id e1:codex" in complete_cmd
+            "ledger_reconcile.py" in complete_cmd and "--run-id e1:codex" in complete_cmd
         ), complete_cmd
         _record_execution_complete(
             "codex", "full", run_id, target, "implement", log, start["started_ts"]
@@ -2493,9 +2507,7 @@ def _selftest():
 
         dry = ledger_reconcile.reconcile(adapters.LEDGER, dry_run=True)
         costs = {row["run_id"]: row for row in dry["costs"]}
-        assert (
-            costs[run_id]["tokens_in"] == 11 and costs[run_id]["tokens_out"] == 5
-        ), dry
+        assert costs[run_id]["tokens_in"] == 11 and costs[run_id]["tokens_out"] == 5, dry
 
         exp_id = "eval1"
         edir = exp_paths(exp_id)
@@ -2576,19 +2588,33 @@ def _selftest():
         _root = Path(_td)
         _store = _root / "store"
         _store.mkdir()
-        _genv = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        _genv = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        }
+
         def _g(*a):
-            subprocess.run(["git", "-C", str(_store), *a], check=True,
-                           capture_output=True, text=True, env=_genv)
+            subprocess.run(
+                ["git", "-C", str(_store), *a],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=_genv,
+            )
+
         _g("init", "-q", "-b", "main")
         (_store / "f.txt").write_text("base\n")
-        _g("add", "-A"); _g("commit", "-qm", "base")
+        _g("add", "-A")
+        _g("commit", "-qm", "base")
         _g("update-ref", "refs/remotes/origin/main", "HEAD")
         _xid = "tick-1700000000-owner-repo-1"
         _g("checkout", "-q", "-b", exp_branch(_xid, "codex"))
         (_store / "f.txt").write_text("base\nARM WORK\n")
-        _g("add", "-A"); _g("commit", "-qm", "arm")
+        _g("add", "-A")
+        _g("commit", "-qm", "arm")
         _g("checkout", "-q", "main")
 
         _old_repos, _old_expdir = provision.REPOS_DIR, EXP_DIR
@@ -2598,10 +2624,21 @@ def _selftest():
             globals()["EXP_DIR"] = _root / "experiments"
             _ed = EXP_DIR / _xid
             _ed.mkdir(parents=True)
-            (_ed / "meta.json").write_text(json.dumps({
-                "schema_version": 2, "repo": "owner/repo", "base": "main", "base_sha": None,
-                "agents": ["codex"], "exp_id": _xid, "task_type": "implement",
-                "arms": [], "members": []}))
+            (_ed / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "repo": "owner/repo",
+                        "base": "main",
+                        "base_sha": None,
+                        "agents": ["codex"],
+                        "exp_id": _xid,
+                        "task_type": "implement",
+                        "arms": [],
+                        "members": [],
+                    }
+                )
+            )
             # No worktree exists anywhere -- this is the reclaimed-experiment case.
             _out = collect("owner/repo", _xid)["diffs"]["codex"]
             assert _out["source"] == "branch", _out

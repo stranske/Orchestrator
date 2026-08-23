@@ -26,7 +26,7 @@ def completed_children() -> dict[int, str]:
 
 
 def test_epic_requires_all_compile_targets_and_lifecycle(
-    completed_children: dict[int, str]
+    completed_children: dict[int, str],
 ) -> None:
     assert completed_children.get(22) == "gate", "compiler epic missing acceptance-gate child"
     assert set(completed_children) == set(range(17, 24))
@@ -38,7 +38,8 @@ def test_epic_requires_all_compile_targets_and_lifecycle(
     # (module-backed lanes migrated into the ledger). Those must NEVER gain a runtime binding —
     # capability_targets has nothing to bind for them.
     assert set(capabilities.TARGET_KINDS) == (
-        set(capabilities.COMPILE_TARGET_KINDS) | set(capabilities.ADOPTION_ONLY_KINDS))
-    assert not (set(capabilities.ADOPTION_ONLY_KINDS) & set(capability_targets.TARGET_KINDS)), \
-        "an adoption-only kind must not be compilable/bindable"
-
+        set(capabilities.COMPILE_TARGET_KINDS) | set(capabilities.ADOPTION_ONLY_KINDS)
+    )
+    assert not (
+        set(capabilities.ADOPTION_ONLY_KINDS) & set(capability_targets.TARGET_KINDS)
+    ), "an adoption-only kind must not be compilable/bindable"

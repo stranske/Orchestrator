@@ -8,6 +8,7 @@ and a recommended next action.
 
 It never kills processes, releases claims, or mutates live state.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,15 +32,28 @@ DEFAULT_DRIFT_MAX_TOP_LEVEL_DIRS = 5
 _HIGH_RISK_PATHS: list[tuple[str, re.Pattern[str]]] = [
     ("workflow", re.compile(r"^\.github/workflows/")),
     ("github-action", re.compile(r"^\.github/actions/")),
-    ("dependency-lock", re.compile(r"(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|uv\.lock|poetry\.lock)$")),
-    ("project-config", re.compile(r"(^|/)(pyproject\.toml|package\.json|requirements.*\.txt|tox\.ini|setup\.cfg)$")),
-    ("automation-config", re.compile(r"(^|/)(sync-manifest\.ya?ml|renovate\.json|dependabot\.ya?ml)$")),
+    (
+        "dependency-lock",
+        re.compile(r"(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|uv\.lock|poetry\.lock)$"),
+    ),
+    (
+        "project-config",
+        re.compile(
+            r"(^|/)(pyproject\.toml|package\.json|requirements.*\.txt|tox\.ini|setup\.cfg)$"
+        ),
+    ),
+    (
+        "automation-config",
+        re.compile(r"(^|/)(sync-manifest\.ya?ml|renovate\.json|dependabot\.ya?ml)$"),
+    ),
 ]
 _TASK_FORBIDDEN_PATHS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "testgen": [
         (
             "testgen_gate_infra",
-            re.compile(r"(^|/)Orchestrator/(testgen_gate|testgen_lane)\.py$|(^|/)(testgen_gate|testgen_lane)\.py$"),
+            re.compile(
+                r"(^|/)Orchestrator/(testgen_gate|testgen_lane)\.py$|(^|/)(testgen_gate|testgen_lane)\.py$"
+            ),
         ),
     ],
 }
@@ -59,11 +73,17 @@ _HINT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "fatal",
-        re.compile(r"(fatal error|traceback \(most recent|segmentation fault|panic:|unhandled exception)", re.I),
+        re.compile(
+            r"(fatal error|traceback \(most recent|segmentation fault|panic:|unhandled exception)",
+            re.I,
+        ),
     ),
     (
         "network",
-        re.compile(r"(connection (refused|reset|timed out)|name or service not known|network is unreachable)", re.I),
+        re.compile(
+            r"(connection (refused|reset|timed out)|name or service not known|network is unreachable)",
+            re.I,
+        ),
     ),
 ]
 
@@ -84,7 +104,11 @@ def read_log_tail(path: str | Path | None, limit: int = LOG_TAIL_BYTES) -> str:
         data = p.read_bytes()
     except OSError:
         return ""
-    return data[-limit:].decode(errors="replace") if len(data) > limit else data.decode(errors="replace")
+    return (
+        data[-limit:].decode(errors="replace")
+        if len(data) > limit
+        else data.decode(errors="replace")
+    )
 
 
 def pid_alive(pid: int | None) -> bool | None:
@@ -116,7 +140,9 @@ def file_age_seconds(path: str | Path | None, now: float | None = None) -> float
 
 
 def _git(worktree: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", "-C", str(worktree), *args], capture_output=True, text=True, check=False)
+    return subprocess.run(
+        ["git", "-C", str(worktree), *args], capture_output=True, text=True, check=False
+    )
 
 
 def _is_git_worktree(worktree: str | Path | None) -> bool:
@@ -127,7 +153,9 @@ def _is_git_worktree(worktree: str | Path | None) -> bool:
     return res.returncode == 0 and res.stdout.strip() == "true"
 
 
-def git_signals(worktree: str | Path | None, base_ref: str | None, errors: list[str] | None = None) -> dict:
+def git_signals(
+    worktree: str | Path | None, base_ref: str | None, errors: list[str] | None = None
+) -> dict:
     """Return git progress signals; empty values when no git worktree is available."""
     empty = {
         "status_short": "",
@@ -263,22 +291,26 @@ def drift_signals(
             if pattern.search(path):
                 forbidden_hits.append({"kind": kind, "path": path})
     if forbidden_hits:
-        findings.append({
-            "kind": "forbidden_task_paths",
-            "severity": "high",
-            "detail": f"{task_key} lane changed read-only Orchestrator gate/helper path(s)",
-            "paths": [hit["path"] for hit in forbidden_hits[:10]],
-        })
+        findings.append(
+            {
+                "kind": "forbidden_task_paths",
+                "severity": "high",
+                "detail": f"{task_key} lane changed read-only Orchestrator gate/helper path(s)",
+                "paths": [hit["path"] for hit in forbidden_hits[:10]],
+            }
+        )
 
     if expected:
         unexpected = [path for path in paths if not _under_expected(path, expected)]
         if unexpected:
-            findings.append({
-                "kind": "unexpected_paths",
-                "severity": "medium",
-                "detail": f"{len(unexpected)} changed path(s) outside expected scope",
-                "paths": unexpected[:10],
-            })
+            findings.append(
+                {
+                    "kind": "unexpected_paths",
+                    "severity": "medium",
+                    "detail": f"{len(unexpected)} changed path(s) outside expected scope",
+                    "paths": unexpected[:10],
+                }
+            )
 
     high_risk_hits = []
     for path in paths:
@@ -289,20 +321,24 @@ def drift_signals(
                 high_risk_hits.append({"kind": kind, "path": path})
                 break
     if high_risk_hits:
-        findings.append({
-            "kind": "high_risk_paths",
-            "severity": "medium",
-            "detail": "changed high-risk automation/dependency/config path(s) outside explicit expected scope",
-            "paths": [hit["path"] for hit in high_risk_hits[:10]],
-        })
+        findings.append(
+            {
+                "kind": "high_risk_paths",
+                "severity": "medium",
+                "detail": "changed high-risk automation/dependency/config path(s) outside explicit expected scope",
+                "paths": [hit["path"] for hit in high_risk_hits[:10]],
+            }
+        )
 
     if len(paths) > max_files or len(top_dirs) > max_top_level_dirs:
-        findings.append({
-            "kind": "broad_churn",
-            "severity": "medium" if len(paths) <= max_files * 2 else "high",
-            "detail": f"{len(paths)} changed path(s) across {len(top_dirs)} top-level area(s)",
-            "top_level": top_dirs[:12],
-        })
+        findings.append(
+            {
+                "kind": "broad_churn",
+                "severity": "medium" if len(paths) <= max_files * 2 else "high",
+                "detail": f"{len(paths)} changed path(s) across {len(top_dirs)} top-level area(s)",
+                "top_level": top_dirs[:12],
+            }
+        )
 
     severity_rank = {"none": 0, "low": 1, "medium": 2, "high": 3}
     severity = "none"
@@ -385,12 +421,21 @@ def recommended_action(state: str, hints: list[dict]) -> str:
     return "inspect"
 
 
-def _action_for_signals(state: str, hints: list[dict], signals: dict, drift: dict | None = None) -> str:
-    if any((finding or {}).get("kind") == "forbidden_task_paths" for finding in (drift or {}).get("findings", [])):
+def _action_for_signals(
+    state: str, hints: list[dict], signals: dict, drift: dict | None = None
+) -> str:
+    if any(
+        (finding or {}).get("kind") == "forbidden_task_paths"
+        for finding in (drift or {}).get("findings", [])
+    ):
         return "inspect"
     if state in {"running", "progress"} and (drift or {}).get("severity") in {"medium", "high"}:
         return "inspect"
-    if state == "stalled" and signals.get("pid_alive") is None and signals.get("has_worktree_changes"):
+    if (
+        state == "stalled"
+        and signals.get("pid_alive") is None
+        and signals.get("has_worktree_changes")
+    ):
         return "collect"
     return recommended_action(state, hints)
 
@@ -428,9 +473,7 @@ def a2a_state(state: str, log_tail: str = "") -> str:
 
 
 def _finish_report(report: dict, attempt_history: list[dict] | None) -> dict:
-    report["a2a_state"] = a2a_state(
-        report.get("state") or "", report.get("log_tail") or ""
-    )
+    report["a2a_state"] = a2a_state(report.get("state") or "", report.get("log_tail") or "")
     report["policy_decision"] = redirect_policy.decide(report, attempt_history)
     report["redirect_plan"] = redirect_plan.plan(report)
     return report
@@ -664,22 +707,41 @@ def _selftest() -> None:
         os.utime(log, (now - 30, now - 30))
         wt = root / "repo"
         subprocess.run(["git", "init", str(wt)], check=True, capture_output=True, text=True)
-        subprocess.run(["git", "-C", str(wt), "config", "user.email", "watch@example.test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "config", "user.email", "watch@example.test"], check=True
+        )
         subprocess.run(["git", "-C", str(wt), "config", "user.name", "Watcher"], check=True)
         (wt / "tracked.py").write_text("x = 1\n")
         subprocess.run(["git", "-C", str(wt), "add", "tracked.py"], check=True)
-        subprocess.run(["git", "-C", str(wt), "commit", "-m", "base"], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "commit", "-m", "base"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         base = "HEAD"
 
-        running = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                stale_seconds=stale, now=now)
+        running = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            stale_seconds=stale,
+            now=now,
+        )
         assert running["state"] == "progress", running
         assert running["recommended_action"] == "wait", running
 
         os.utime(log, (now - 900, now - 900))
         (wt / "tracked.py").write_text("x = 2\n")
-        with_changes = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                     stale_seconds=stale, now=now)
+        with_changes = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            stale_seconds=stale,
+            now=now,
+        )
         assert with_changes["state"] == "progress", with_changes
         assert with_changes["signals"]["has_worktree_changes"] is True, with_changes
 
@@ -687,27 +749,62 @@ def _selftest() -> None:
         deep.parent.mkdir(parents=True)
         deep.write_text("LOGIN = True\n")
         os.utime(deep, (now - 30, now - 30))
-        deep_progress = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                      stale_seconds=stale, now=now)
+        deep_progress = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            stale_seconds=stale,
+            now=now,
+        )
         assert deep_progress["state"] == "progress", deep_progress
-        subprocess.run(["git", "-C", str(wt), "clean", "-fd", "src"], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "clean", "-fd", "src"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
         subprocess.run(["git", "-C", str(wt), "checkout", "--", "tracked.py"], check=True)
         os.utime(wt / "tracked.py", (now - 900, now - 900))
-        stalled = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                stale_seconds=stale, now=now)
+        stalled = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            stale_seconds=stale,
+            now=now,
+        )
         assert stalled["state"] == "stalled", stalled
         assert stalled["recommended_action"] == "inspect", stalled
-        repeat_stall = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                     stale_seconds=stale, now=now, attempt_history=[stalled, stalled])
-        assert repeat_stall["policy_decision"]["action"] == "decompose", repeat_stall["policy_decision"]
+        repeat_stall = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            stale_seconds=stale,
+            now=now,
+            attempt_history=[stalled, stalled],
+        )
+        assert repeat_stall["policy_decision"]["action"] == "decompose", repeat_stall[
+            "policy_decision"
+        ]
         assert repeat_stall["redirect_plan"]["action"] == "decompose", repeat_stall["redirect_plan"]
-        assert repeat_stall["redirect_plan"]["requires_confirmation"] is True, repeat_stall["redirect_plan"]
+        assert repeat_stall["redirect_plan"]["requires_confirmation"] is True, repeat_stall[
+            "redirect_plan"
+        ]
 
         (wt / "tracked.py").write_text("x = 333\n")
         os.utime(wt / "tracked.py", (now - 900, now - 900))
-        old_diff = classify_lane(pid=None, log=str(log), worktree=str(wt), base_ref=base,
-                                 task_type="testgen", stale_seconds=stale, now=now)
+        old_diff = classify_lane(
+            pid=None,
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            task_type="testgen",
+            stale_seconds=stale,
+            now=now,
+        )
         assert old_diff["state"] == "stalled", old_diff
         assert old_diff["recommended_action"] == "collect", old_diff
         assert old_diff["redirect_plan"]["task_type"] == "testgen", old_diff["redirect_plan"]
@@ -717,8 +814,14 @@ def _selftest() -> None:
         (wt / ".github" / "workflows").mkdir(parents=True)
         workflow = wt / ".github" / "workflows" / "ci.yml"
         workflow.write_text("name: ci\n")
-        drifted = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                stale_seconds=stale, now=now)
+        drifted = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            stale_seconds=stale,
+            now=now,
+        )
         assert drifted["drift"]["severity"] == "medium", drifted["drift"]
         assert drifted["recommended_action"] == "inspect", drifted
         assert drifted["policy_decision"]["action"] == "inspect", drifted["policy_decision"]
@@ -726,27 +829,51 @@ def _selftest() -> None:
         assert "drift:" in format_human(drifted), format_human(drifted)
         assert "plan:" in format_human(drifted), format_human(drifted)
 
-        scoped = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                               expected_paths=[".github/workflows"], stale_seconds=stale, now=now)
+        scoped = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            expected_paths=[".github/workflows"],
+            stale_seconds=stale,
+            now=now,
+        )
         assert scoped["drift"]["severity"] == "none", scoped["drift"]
-        root_scoped = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                    expected_paths=["."], stale_seconds=stale, now=now)
+        root_scoped = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            expected_paths=["."],
+            stale_seconds=stale,
+            now=now,
+        )
         assert root_scoped["drift"]["severity"] == "none", root_scoped["drift"]
 
         gate_file = wt / "Orchestrator" / "testgen_gate.py"
         gate_file.parent.mkdir(parents=True)
         gate_file.write_text("# changed by mistake\n")
-        forbidden = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref=base,
-                                  task_type="testgen", expected_paths=["."],
-                                  stale_seconds=stale, now=now)
+        forbidden = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref=base,
+            task_type="testgen",
+            expected_paths=["."],
+            stale_seconds=stale,
+            now=now,
+        )
         assert forbidden["drift"]["severity"] == "high", forbidden["drift"]
         assert forbidden["recommended_action"] == "inspect", forbidden
         assert any(
-            finding["kind"] == "forbidden_task_paths"
-            for finding in forbidden["drift"]["findings"]
+            finding["kind"] == "forbidden_task_paths" for finding in forbidden["drift"]["findings"]
         ), forbidden["drift"]
-        subprocess.run(["git", "-C", str(wt), "clean", "-fd", "Orchestrator"],
-                       check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "clean", "-fd", "Orchestrator"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
         for i in range(6):
             d = wt / f"area{i}"
@@ -755,8 +882,14 @@ def _selftest() -> None:
         broad = drift_signals(wt, base, max_files=3, max_top_level_dirs=3)
         assert broad["severity"] in {"medium", "high"}, broad
 
-        bad_base = classify_lane(pid=os.getpid(), log=str(log), worktree=str(wt), base_ref="origin/nope",
-                                 stale_seconds=stale, now=now)
+        bad_base = classify_lane(
+            pid=os.getpid(),
+            log=str(log),
+            worktree=str(wt),
+            base_ref="origin/nope",
+            stale_seconds=stale,
+            now=now,
+        )
         assert any("base_ref 'origin/nope'" in err for err in bad_base["errors"]), bad_base
 
         exited = classify_lane(pid=999_999_999, log=str(log), now=now)
@@ -772,8 +905,10 @@ def _selftest() -> None:
     assert a2a_state("stalled", "Proceed? [y/N]") == "input-required"
     assert a2a_state("stalled", "still compiling, slow box") == "working"
     assert a2a_state("exited") == "completed" and a2a_state("missing") == "unknown"
-    print("watch.py selftest: OK (tail/age/pid, hints, classify progress/stalled/exited/missing, "
-          "drift, A2A state mapping)")
+    print(
+        "watch.py selftest: OK (tail/age/pid, hints, classify progress/stalled/exited/missing, "
+        "drift, A2A state mapping)"
+    )
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
@@ -782,6 +917,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     outside an active tick (ORCH_CAPABILITY_HEARTBEATS). (2026-08-09)"""
     try:
         import capabilities
+
         capabilities.production_heartbeat("stall-watcher", event_type, ref="watch.main")
     except Exception:
         pass
@@ -794,7 +930,9 @@ def main(argv: list[str] | None = None) -> int:
         _selftest()
         return 0
 
-    parser = argparse.ArgumentParser(description="Conservative stall-watcher for detached local delegates.")
+    parser = argparse.ArgumentParser(
+        description="Conservative stall-watcher for detached local delegates."
+    )
     parser.add_argument("--agent", default="")
     parser.add_argument("--target", default="")
     parser.add_argument("--lane", default="")
@@ -803,10 +941,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log", default="")
     parser.add_argument("--worktree", default="")
     parser.add_argument("--base-ref", default="")
-    parser.add_argument("--expected-path", action="append", default=[],
-                        help="expected in-scope path prefix; repeatable")
-    parser.add_argument("--attempt-history-json", default="",
-                        help="JSON file containing prior watch reports for this target")
+    parser.add_argument(
+        "--expected-path",
+        action="append",
+        default=[],
+        help="expected in-scope path prefix; repeatable",
+    )
+    parser.add_argument(
+        "--attempt-history-json",
+        default="",
+        help="JSON file containing prior watch reports for this target",
+    )
     parser.add_argument("--stale-seconds", type=int, default=DEFAULT_STALE_SECONDS)
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args(argv)

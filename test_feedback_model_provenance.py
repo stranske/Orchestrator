@@ -34,12 +34,8 @@ def test_partial_execution_attempt_schema_migrates_before_indexes(tmp_path):
         with sqlite3.connect(feedback.DB_PATH) as conn:
             conn.execute("CREATE TABLE execution_attempts (attempt_id TEXT PRIMARY KEY)")
         with feedback._conn() as conn:
-            columns = {
-                row[1] for row in conn.execute("PRAGMA table_info(execution_attempts)")
-            }
-            indexes = {
-                row[1] for row in conn.execute("PRAGMA index_list(execution_attempts)")
-            }
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(execution_attempts)")}
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list(execution_attempts)")}
         assert {"operation_role", "status", "profile_id", "resolved_model"} <= columns
         assert {
             "idx_execution_attempts_run_role",
@@ -219,9 +215,7 @@ def test_evaluator_trace_cannot_resolve_worker_model(tmp_path):
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run(
-            "codex-worker", "stranske/Workflows#1", "implement", "codex"
-        )
+        feedback.record_run("codex-worker", "stranske/Workflows#1", "implement", "codex")
         feedback.record_execution_trace(
             "codex-worker",
             trace_id="claude-judge",
@@ -239,9 +233,9 @@ def test_evaluator_trace_cannot_resolve_worker_model(tmp_path):
             status="success",
         )
 
-        assert feedback.resolved_worker_model_for_run("codex-worker") is None, (
-            "evaluator trace resolved worker model"
-        )
+        assert (
+            feedback.resolved_worker_model_for_run("codex-worker") is None
+        ), "evaluator trace resolved worker model"
         with feedback._conn() as conn:
             roles = conn.execute(
                 "SELECT DISTINCT operation_role FROM execution_attempts "
@@ -283,10 +277,7 @@ def test_successful_worker_attempt_is_the_only_resolver(tmp_path):
             resolved_model="gpt-new-2026-07-01",
             status="success",
         )
-        assert (
-            feedback.resolved_worker_model_for_run("worker")
-            == "gpt-new-2026-07-01"
-        )
+        assert feedback.resolved_worker_model_for_run("worker") == "gpt-new-2026-07-01"
     finally:
         feedback.DB_PATH = old_db
 
@@ -339,9 +330,7 @@ def test_legacy_migration_is_additive_and_conservative(tmp_path):
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run(
-            "legacy", "o/r#3", "implement", "codex", model="claude-sonnet-4-6"
-        )
+        feedback.record_run("legacy", "o/r#3", "implement", "codex", model="claude-sonnet-4-6")
         with feedback._conn() as conn:
             conn.execute(
                 "INSERT INTO execution_traces VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -363,18 +352,14 @@ def test_legacy_migration_is_additive_and_conservative(tmp_path):
             )
             before = {
                 "runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
-                "traces": conn.execute(
-                    "SELECT COUNT(*) FROM execution_traces"
-                ).fetchone()[0],
+                "traces": conn.execute("SELECT COUNT(*) FROM execution_traces").fetchone()[0],
             }
 
         report = feedback.migrate_legacy_execution_attempts(apply=True)
         with feedback._conn() as conn:
             after = {
                 "runs": conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0],
-                "traces": conn.execute(
-                    "SELECT COUNT(*) FROM execution_traces"
-                ).fetchone()[0],
+                "traces": conn.execute("SELECT COUNT(*) FROM execution_traces").fetchone()[0],
             }
             role = conn.execute(
                 "SELECT operation_role FROM execution_attempts "
@@ -402,12 +387,18 @@ def test_multi_capability_run_records_one_edge_each(tmp_path):
     # unregistered case, which the sibling test asserts produces no attribution.
     env_prereq.require(
         env_prereq.ledger_rows_absent("adversarial-review", "testgen-lane"),
-        env_prereq.ledger_version_lineage_absent("adversarial-review", "testgen-lane"))
+        env_prereq.ledger_version_lineage_absent("adversarial-review", "testgen-lane"),
+    )
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run("multi", "o/r#1", "review", "codex",
-                            capability_ids=["adversarial-review", "testgen-lane"])
+        feedback.record_run(
+            "multi",
+            "o/r#1",
+            "review",
+            "codex",
+            capability_ids=["adversarial-review", "testgen-lane"],
+        )
         with feedback._conn() as c:
             rows = c.execute(
                 "SELECT capability_id, capability_version_id FROM influence_edges "
@@ -426,8 +417,13 @@ def test_unversioned_capability_is_unattributed_not_misattributed(tmp_path):
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_run("mixed", "o/r#2", "review", "codex",
-                            capability_ids=["adversarial-review", "no-such-capability"])
+        feedback.record_run(
+            "mixed",
+            "o/r#2",
+            "review",
+            "codex",
+            capability_ids=["adversarial-review", "no-such-capability"],
+        )
         with feedback._conn() as c:
             rows = c.execute(
                 "SELECT capability_id FROM influence_edges WHERE target_run_id='mixed'"
@@ -446,12 +442,14 @@ def test_role_run_creates_a_capability_tagged_edge(tmp_path):
     # Same prerequisite as the multi-capability case: no version lineage in the ledger, no edge.
     env_prereq.require(
         env_prereq.ledger_rows_absent("role-triage"),
-        env_prereq.ledger_version_lineage_absent("role-triage"))
+        env_prereq.ledger_version_lineage_absent("role-triage"),
+    )
     old_db = feedback.DB_PATH
     feedback.DB_PATH = tmp_path / "feedback.db"
     try:
-        feedback.record_role_run("role:triage:gemini:1", "triage",
-                                 "stranske/Workflows#1", "gemini", action="propose")
+        feedback.record_role_run(
+            "role:triage:gemini:1", "triage", "stranske/Workflows#1", "gemini", action="propose"
+        )
         with feedback._conn() as c:
             rows = c.execute(
                 "SELECT influence_type, capability_id, capability_version_id "

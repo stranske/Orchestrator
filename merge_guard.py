@@ -4,6 +4,7 @@
 Default mode is dry-run. Active mode requires --confirm-merge, and required
 runtime-AC gates still require ORCH_RUN_RUNTIME_AC=1 before any checks run.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,8 +25,9 @@ MERGE_METHOD_FLAGS = {
 }
 
 
-def build_merge_cmd(target: str, *, method: str = "squash", delete_branch: bool = False,
-                    auto: bool = False) -> list[str]:
+def build_merge_cmd(
+    target: str, *, method: str = "squash", delete_branch: bool = False, auto: bool = False
+) -> list[str]:
     repo, num = provision.parse_target(target)
     if num is None:
         raise ValueError(f"merge target must be a PR ref owner/repo#N: {target!r}")
@@ -56,8 +58,14 @@ def pr_metadata(target: str, *, run_fn=subprocess.run) -> dict[str, Any]:
     if num is None:
         return {"target": target, "error": "target does not contain a PR number"}
     cmd = [
-        "gh", "pr", "view", str(num), "-R", repo,
-        "--json", "title,labels,state,isDraft,mergeStateStatus",
+        "gh",
+        "pr",
+        "view",
+        str(num),
+        "-R",
+        repo,
+        "--json",
+        "title,labels,state,isDraft,mergeStateStatus",
     ]
     res = run_fn(cmd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -87,8 +95,14 @@ def evaluate_merge_gate(
     gate_fn=runtime_ac_gate.gate_status,
 ) -> dict[str, Any]:
     meta = metadata_fn(target)
-    base = {"target": target, "dry_run": dry_run, "metadata": meta, "gate": None,
-            "blocked": False, "reason": None}
+    base = {
+        "target": target,
+        "dry_run": dry_run,
+        "metadata": meta,
+        "gate": None,
+        "blocked": False,
+        "reason": None,
+    }
     if meta.get("error"):
         return {**base, "blocked": True, "reason": f"could not read PR metadata: {meta['error']}"}
     if str(meta.get("state") or "").upper() != "OPEN":
@@ -113,7 +127,11 @@ def evaluate_merge_gate(
     if gate.get("blocks"):
         return {**result, "blocked": True, "reason": f"runtime AC gate {gate.get('status')}"}
     if dry_run and gate.get("status") == "missing_spec":
-        return {**result, "blocked": True, "reason": "runtime AC gate would need a spec before active merge"}
+        return {
+            **result,
+            "blocked": True,
+            "reason": "runtime AC gate would need a spec before active merge",
+        }
     return result
 
 
@@ -199,27 +217,58 @@ def _selftest() -> None:
 
     assert build_merge_cmd("o/r#5") == ["gh", "pr", "merge", "5", "-R", "o/r", "--squash"]
     assert build_merge_cmd("o/r#5", method="rebase", delete_branch=True, auto=True) == [
-        "gh", "pr", "merge", "5", "-R", "o/r", "--rebase", "--delete-branch", "--auto",
+        "gh",
+        "pr",
+        "merge",
+        "5",
+        "-R",
+        "o/r",
+        "--rebase",
+        "--delete-branch",
+        "--auto",
     ]
 
-    open_meta = lambda target: {"target": target, "labels": [], "title": "ready", "state": "OPEN",
-                                "is_draft": False}
+    open_meta = lambda target: {
+        "target": target,
+        "labels": [],
+        "title": "ready",
+        "state": "OPEN",
+        "is_draft": False,
+    }
     dry = guarded_merge("o/r#5", metadata_fn=open_meta)
     assert dry["merge_cmd"] and dry["merge_executed"] is False and dry["blocked"] is False, dry
-    meta_fail = guarded_merge("o/r#5", metadata_fn=lambda target: {"target": target, "error": "no auth"})
+    meta_fail = guarded_merge(
+        "o/r#5", metadata_fn=lambda target: {"target": target, "error": "no auth"}
+    )
     assert meta_fail["blocked"] is True and "metadata" in meta_fail["reason"], meta_fail
-    draft = guarded_merge("o/r#5", metadata_fn=lambda target: {**open_meta(target), "is_draft": True})
+    draft = guarded_merge(
+        "o/r#5", metadata_fn=lambda target: {**open_meta(target), "is_draft": True}
+    )
     assert draft["blocked"] is True and draft["reason"] == "PR is draft", draft
-    closed = guarded_merge("o/r#5", metadata_fn=lambda target: {**open_meta(target), "state": "CLOSED"})
+    closed = guarded_merge(
+        "o/r#5", metadata_fn=lambda target: {**open_meta(target), "state": "CLOSED"}
+    )
     assert closed["blocked"] is True and "not OPEN" in closed["reason"], closed
-    missing_state = guarded_merge("o/r#5", metadata_fn=lambda target: {"target": target, "labels": []})
+    missing_state = guarded_merge(
+        "o/r#5", metadata_fn=lambda target: {"target": target, "labels": []}
+    )
     assert missing_state["blocked"] is True and "not OPEN" in missing_state["reason"], missing_state
 
     with tempfile.TemporaryDirectory(prefix="merge-guard-") as tmp:
-        runtime_meta = lambda target: {"target": target, "labels": ["runtime-ac"], "title": "runtime",
-                                       "state": "OPEN", "is_draft": False}
-        missing = guarded_merge("o/r#5", confirm_merge=True, spec_dir=tmp, metadata_fn=runtime_meta,
-                                merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")))
+        runtime_meta = lambda target: {
+            "target": target,
+            "labels": ["runtime-ac"],
+            "title": "runtime",
+            "state": "OPEN",
+            "is_draft": False,
+        }
+        missing = guarded_merge(
+            "o/r#5",
+            confirm_merge=True,
+            spec_dir=tmp,
+            metadata_fn=runtime_meta,
+            merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")),
+        )
         assert missing["blocked"] is True and missing["gate"]["status"] == "missing_spec", missing
 
         path = runtime_ac_gate.spec_path("o/r#5", spec_dir=tmp)
@@ -236,12 +285,26 @@ def _selftest() -> None:
         )
         gate_spec["verification"]["target"] = "o/r#5"
         path.write_text(json.dumps(gate_spec), encoding="utf-8")
-        disabled = guarded_merge("o/r#5", confirm_merge=True, spec_dir=tmp, env={}, metadata_fn=runtime_meta,
-                                 merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")))
-        assert disabled["blocked"] is True and disabled["gate"]["status"] == "required_but_not_run", disabled
-        forced = guarded_merge("o/r#6", confirm_merge=True, spec_dir=tmp, env={}, require_runtime_ac=True,
-                               metadata_fn=open_meta,
-                               merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")))
+        disabled = guarded_merge(
+            "o/r#5",
+            confirm_merge=True,
+            spec_dir=tmp,
+            env={},
+            metadata_fn=runtime_meta,
+            merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")),
+        )
+        assert (
+            disabled["blocked"] is True and disabled["gate"]["status"] == "required_but_not_run"
+        ), disabled
+        forced = guarded_merge(
+            "o/r#6",
+            confirm_merge=True,
+            spec_dir=tmp,
+            env={},
+            require_runtime_ac=True,
+            metadata_fn=open_meta,
+            merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")),
+        )
         assert forced["blocked"] is True and forced["gate"]["status"] == "missing_spec", forced
 
         calls = []
@@ -270,36 +333,58 @@ def _selftest() -> None:
             "o/r#5",
             confirm_merge=True,
             metadata_fn=runtime_meta,
-            gate_fn=lambda item, **kwargs: {"target": item["target"], "status": "executed",
-                                            "verdict": "FAIL", "blocks": True},
+            gate_fn=lambda item, **kwargs: {
+                "target": item["target"],
+                "status": "executed",
+                "verdict": "FAIL",
+                "blocks": True,
+            },
             merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")),
         )
-        assert blocked["blocked"] is True and blocked["reason"] == "runtime AC gate executed", blocked
+        assert (
+            blocked["blocked"] is True and blocked["reason"] == "runtime AC gate executed"
+        ), blocked
 
     parsed_meta = pr_metadata(
         "o/r#5",
         run_fn=lambda cmd, capture_output=True, text=True: subprocess.CompletedProcess(
-            cmd, 0,
-            stdout=json.dumps({"title": "T", "state": "OPEN", "isDraft": False,
-                               "mergeStateStatus": "CLEAN",
-                               "labels": [{"name": "runtime-ac"}]}),
+            cmd,
+            0,
+            stdout=json.dumps(
+                {
+                    "title": "T",
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "mergeStateStatus": "CLEAN",
+                    "labels": [{"name": "runtime-ac"}],
+                }
+            ),
             stderr="",
         ),
     )
     assert parsed_meta["labels"] == ["runtime-ac"] and parsed_meta["title"] == "T", parsed_meta
-    print("merge_guard.py selftest: OK (metadata, runtime AC gate, dry-run, guarded gh merge, outcome patch)")
+    print(
+        "merge_guard.py selftest: OK (metadata, runtime AC gate, dry-run, guarded gh merge, outcome patch)"
+    )
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Guard gh pr merge with Orchestrator runtime AC gates.")
+    parser = argparse.ArgumentParser(
+        description="Guard gh pr merge with Orchestrator runtime AC gates."
+    )
     parser.add_argument("target", nargs="?", help="PR target owner/repo#N")
     parser.add_argument("--method", choices=sorted(MERGE_METHOD_FLAGS), default="squash")
     parser.add_argument("--delete-branch", action="store_true")
     parser.add_argument("--auto", action="store_true", help="pass --auto to gh pr merge")
     parser.add_argument("--confirm-merge", action="store_true", help="actually run gh pr merge")
-    parser.add_argument("--require-runtime-ac", action="store_true",
-                        help="force a runtime AC gate even without a runtime-ac label or spec")
-    parser.add_argument("--json", action="store_true", help="accepted for consistency; output is always JSON")
+    parser.add_argument(
+        "--require-runtime-ac",
+        action="store_true",
+        help="force a runtime AC gate even without a runtime-ac label or spec",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="accepted for consistency; output is always JSON"
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
 

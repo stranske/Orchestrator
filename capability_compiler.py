@@ -5,6 +5,7 @@ The compiler emits a shadow/dry-run plan only.  It has no arbitrary command or
 apply surface: every step and rollback must name a typed deterministic entrypoint
 from ``ENTRYPOINTS``.  Activation remains governed by ``capabilities.py``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,7 +26,6 @@ import feedback
 import repo_knowledge
 import roles
 from capability_ir import CapabilityIR, Lifecycle, SourceOccurrence, canonical_json, stable_hash
-
 
 WORKFLOW_SOURCE_SCHEMA = "orchestrator.workflow-rail-source"
 WORKFLOW_PLAN_SCHEMA = "orchestrator.workflow-rail-plan"
@@ -106,12 +106,19 @@ EVIDENCE_CAPTURE_HOOKS: dict[str, dict[str, Any]] = {
     },
 }
 
-_SAFE_TEST_ID = re.compile(
-    r"^(?:pytest|cli-smoke|runtime-ac|local-verify):[A-Za-z0-9_./:\-]+$"
-)
+_SAFE_TEST_ID = re.compile(r"^(?:pytest|cli-smoke|runtime-ac|local-verify):[A-Za-z0-9_./:\-]+$")
 _FORBIDDEN_EVIDENCE_KEYS = {
-    "command", "cmd", "raw_output", "stdout", "stderr", "stdout_tail",
-    "stderr_tail", "secret", "secrets", "token", "prompt",
+    "command",
+    "cmd",
+    "raw_output",
+    "stdout",
+    "stderr",
+    "stdout_tail",
+    "stderr_tail",
+    "secret",
+    "secrets",
+    "token",
+    "prompt",
 }
 
 VALUE_TYPES = {"string", "path", "repository", "ref", "boolean", "integer", "artifact_ref"}
@@ -191,7 +198,9 @@ def workflow_step_idempotency_key(
     return f"workflow-step:{digest}"
 
 
-def _typed_values(values: Any, contract: dict[str, str], path: str) -> tuple[dict[str, Any], list[str]]:
+def _typed_values(
+    values: Any, contract: dict[str, str], path: str
+) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
     if not isinstance(values, dict):
         return {}, [f"{path} must be an object"]
@@ -263,8 +272,15 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(source, dict):
         raise WorkflowCompileError(["workflow source must be an object"])
     source_fields = {
-        "schema", "version", "capability_id", "source_ir_ref", "selector",
-        "steps", "barriers", "expires_at", "kill_switch",
+        "schema",
+        "version",
+        "capability_id",
+        "source_ir_ref",
+        "selector",
+        "steps",
+        "barriers",
+        "expires_at",
+        "kill_switch",
     }
     unknown_source_fields = sorted(set(source) - source_fields)
     if unknown_source_fields:
@@ -280,7 +296,10 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
     allowed_selector_fields = {"task_type", "repository", "capability_id"}
     if not isinstance(selector, dict) or set(selector) != {"field", "operator", "value"}:
         errors.append("selector must contain field, operator, and value")
-    elif selector.get("field") not in allowed_selector_fields or selector.get("operator") not in {"equals", "in"}:
+    elif selector.get("field") not in allowed_selector_fields or selector.get("operator") not in {
+        "equals",
+        "in",
+    }:
         errors.append("ambiguous judgment: selector")
     elif selector.get("operator") == "equals" and not isinstance(selector.get("value"), str):
         errors.append("selector equals value must be a string")
@@ -301,9 +320,19 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
 
     compiled_by_id: dict[str, dict[str, Any]] = {}
     allowed_step_fields = {
-        "id", "version", "entrypoint", "inputs", "depends_on", "idempotency_key",
-        "preconditions", "postconditions", "retry", "timeout_seconds",
-        "side_effect_policy", "rollback", "requires_judgment",
+        "id",
+        "version",
+        "entrypoint",
+        "inputs",
+        "depends_on",
+        "idempotency_key",
+        "preconditions",
+        "postconditions",
+        "retry",
+        "timeout_seconds",
+        "side_effect_policy",
+        "rollback",
+        "requires_judgment",
     }
     for index, step in enumerate(steps):
         path = f"steps[{index}]"
@@ -322,20 +351,29 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
         if spec is None:
             errors.append(f"unallowlisted command: {entrypoint}")
             continue
-        typed_inputs, input_errors = _typed_values(step.get("inputs"), spec["inputs"], f"{path}.inputs")
+        typed_inputs, input_errors = _typed_values(
+            step.get("inputs"), spec["inputs"], f"{path}.inputs"
+        )
         errors.extend(input_errors)
         if step.get("side_effect_policy") != spec["side_effect_policy"]:
             errors.append(f"side-effect policy mismatch: {step_id}")
-        preconditions, condition_errors = _conditions(step.get("preconditions"), f"{path}.preconditions")
+        preconditions, condition_errors = _conditions(
+            step.get("preconditions"), f"{path}.preconditions"
+        )
         errors.extend(condition_errors)
-        postconditions, condition_errors = _conditions(step.get("postconditions"), f"{path}.postconditions")
+        postconditions, condition_errors = _conditions(
+            step.get("postconditions"), f"{path}.postconditions"
+        )
         errors.extend(condition_errors)
         retry = step.get("retry")
         if not isinstance(retry, dict) or set(retry) != {"max_attempts", "backoff_seconds"}:
             errors.append(f"{path}.retry must contain max_attempts and backoff_seconds")
         elif not isinstance(retry["max_attempts"], int) or not 1 <= retry["max_attempts"] <= 5:
             errors.append(f"{path}.retry.max_attempts must be between 1 and 5")
-        elif not isinstance(retry["backoff_seconds"], int) or not 0 <= retry["backoff_seconds"] <= 300:
+        elif (
+            not isinstance(retry["backoff_seconds"], int)
+            or not 0 <= retry["backoff_seconds"] <= 300
+        ):
             errors.append(f"{path}.retry.backoff_seconds must be between 0 and 300")
         timeout = step.get("timeout_seconds")
         if not isinstance(timeout, int) or not 1 <= timeout <= 3600:
@@ -364,7 +402,9 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
             "version": version,
             "entrypoint": entrypoint,
             "inputs": typed_inputs,
-            "outputs": {name: {"type": type_name} for name, type_name in sorted(spec["outputs"].items())},
+            "outputs": {
+                name: {"type": type_name} for name, type_name in sorted(spec["outputs"].items())
+            },
             "depends_on": sorted(step.get("depends_on") or []),
             "idempotency_key": step.get("idempotency_key"),
             "preconditions": preconditions,
@@ -386,7 +426,11 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
         if barrier.get("condition_id") not in CONDITION_IDS:
             errors.append(f"unsupported barrier condition: {barrier.get('condition_id')}")
         before, after = str(barrier.get("before") or ""), str(barrier.get("after") or "")
-        if before in compiled_by_id and after in compiled_by_id and not _has_dependency_path(compiled_by_id, before, after):
+        if (
+            before in compiled_by_id
+            and after in compiled_by_id
+            and not _has_dependency_path(compiled_by_id, before, after)
+        ):
             errors.append(f"barrier is not represented in DAG: {barrier.get('id')}")
     expiry = source.get("expires_at")
     if not isinstance(expiry, int) or expiry <= 0:
@@ -398,9 +442,14 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
         raise WorkflowCompileError(errors)
 
     order = epic_lane.dependency_order(steps)
-    compiled_steps = [{**compiled_by_id[step_id], "ordinal": index} for index, step_id in enumerate(order, 1)]
+    compiled_steps = [
+        {**compiled_by_id[step_id], "ordinal": index} for index, step_id in enumerate(order, 1)
+    ]
     normalized_barriers = sorted(
-        ({key: barrier[key] for key in ("id", "after", "before", "condition_id")} for barrier in barriers),
+        (
+            {key: barrier[key] for key in ("id", "after", "before", "condition_id")}
+            for barrier in barriers
+        ),
         key=lambda item: item["id"],
     )
     plan_core = {
@@ -441,7 +490,9 @@ def compile_workflow_candidate(source: dict[str, Any]) -> dict[str, Any]:
             "status": "proposal",
             "executable": False,
             "rejection_reasons": list(exc.reasons),
-            "capability_id": str(source.get("capability_id") or "") if isinstance(source, dict) else "",
+            "capability_id": (
+                str(source.get("capability_id") or "") if isinstance(source, dict) else ""
+            ),
         }
         return {**core, "decision_id": stable_hash("workflow-rail-compiler-decision", core)}
     return {
@@ -612,7 +663,7 @@ def build_evidence_contract_source(
 ) -> dict[str, Any]:
     """Build an inert, inspectable source document for the first shadow."""
     current = int(time.time()) if now is None else int(now)
-    candidate_expiry = ((candidate.get("lifecycle") or {}).get("expires_at"))
+    candidate_expiry = (candidate.get("lifecycle") or {}).get("expires_at")
     expires_at = min(
         int(candidate_expiry or current + EVIDENCE_CONTRACT_TTL_SECONDS),
         current + EVIDENCE_CONTRACT_TTL_SECONDS,
@@ -636,8 +687,11 @@ def build_evidence_contract_source(
         "evaluation": {
             "citation_field": "cited_evidence_contracts",
             "influence_measures": [
-                "later_agreement_delta", "later_decisiveness_delta",
-                "later_gap_delta", "rework", "durability",
+                "later_agreement_delta",
+                "later_decisiveness_delta",
+                "later_gap_delta",
+                "rework",
+                "durability",
             ],
             "citation_is_not_influence": True,
         },
@@ -656,9 +710,18 @@ def compile_evidence_contract(source: dict[str, Any]) -> dict[str, Any]:
         raise EvidenceContractCompileError(["source must be an object"])
     errors = _forbidden_evidence_paths(source)
     expected_keys = {
-        "schema", "version", "candidate", "capture_hook", "named_test_id",
-        "live_gate_id", "deliberate_break", "capture_contract", "evaluation",
-        "created_at", "expires_at", "rollback",
+        "schema",
+        "version",
+        "candidate",
+        "capture_hook",
+        "named_test_id",
+        "live_gate_id",
+        "deliberate_break",
+        "capture_contract",
+        "evaluation",
+        "created_at",
+        "expires_at",
+        "rollback",
     }
     unknown = sorted(set(source) - expected_keys)
     missing = sorted(expected_keys - set(source))
@@ -703,19 +766,31 @@ def compile_evidence_contract(source: dict[str, Any]) -> dict[str, Any]:
         errors.append("capture contract output is not bounded")
     evaluation = source.get("evaluation")
     required_measures = {
-        "later_agreement_delta", "later_decisiveness_delta", "later_gap_delta",
-        "rework", "durability",
+        "later_agreement_delta",
+        "later_decisiveness_delta",
+        "later_gap_delta",
+        "rework",
+        "durability",
     }
-    if not isinstance(evaluation, dict) or not required_measures.issubset(
-        set(evaluation.get("influence_measures") or [])
-    ) or evaluation.get("citation_is_not_influence") is not True:
+    if (
+        not isinstance(evaluation, dict)
+        or not required_measures.issubset(set(evaluation.get("influence_measures") or []))
+        or evaluation.get("citation_is_not_influence") is not True
+    ):
         errors.append("evaluation must measure outcome influence separately from citations")
     created_at = source.get("created_at")
     expires_at = source.get("expires_at")
-    if not isinstance(created_at, int) or not isinstance(expires_at, int) or expires_at <= created_at:
+    if (
+        not isinstance(created_at, int)
+        or not isinstance(expires_at, int)
+        or expires_at <= created_at
+    ):
         errors.append("contract requires a future integer expiry")
     rollback = source.get("rollback")
-    if not isinstance(rollback, dict) or rollback.get("action") != "disable_capture_hook_and_retire_candidate":
+    if (
+        not isinstance(rollback, dict)
+        or rollback.get("action") != "disable_capture_hook_and_retire_candidate"
+    ):
         errors.append("contract requires an explicit disable-and-retire rollback")
     if errors:
         raise EvidenceContractCompileError(errors)
@@ -752,7 +827,9 @@ def compile_first_shadow_contract(
 ) -> dict[str, Any]:
     """Compile the first named-test/smoke/deliberate-break candidate."""
     if candidate.get("name") != "named_test_smoke_deliberate_break":
-        raise EvidenceContractCompileError(["first shadow only supports the named-test evidence cluster"])
+        raise EvidenceContractCompileError(
+            ["first shadow only supports the named-test evidence cluster"]
+        )
     return compile_evidence_contract(build_evidence_contract_source(candidate, now=now))
 
 
@@ -816,9 +893,18 @@ def measure_contract_influence(
         gap_delta = float(row.get("later_gap_delta") or 0)
         durability = str(row.get("durability") or "unknown")
         rework = bool(row.get("rework"))
-        harm = rework or agreement < 0 or decisive < 0 or gap_delta > 0 or durability in {
-            "reverted", "abandoned", "regressed",
-        }
+        harm = (
+            rework
+            or agreement < 0
+            or decisive < 0
+            or gap_delta > 0
+            or durability
+            in {
+                "reverted",
+                "abandoned",
+                "regressed",
+            }
+        )
         improved = agreement > 0 or decisive > 0 or gap_delta < 0 or durability == "durable"
         if improved and not harm:
             influential += 1
@@ -889,37 +975,91 @@ def _probe_once(capability_id: str, probe: str, ref: str, ledger_path: Path) -> 
 
 
 def run_reference_workflow(
-    *, ledger_path: Path, consumer: Callable[[dict[str, Any]], dict[str, Any]] = consume_workflow_output
+    *,
+    ledger_path: Path,
+    consumer: Callable[[dict[str, Any]], dict[str, Any]] = consume_workflow_output,
 ) -> dict[str, Any]:
     """Real shadow caller: compile, dry-run, consume, and ledger the reference rail."""
     plan = compile_workflow_rail(reference_workflow_source())
     _register_shadow(plan, ledger_path)
     capability_id = plan["capability_id"]
     event_prefix = plan["plan_id"]
-    capabilities.heartbeat(capability_id, "match", ref=event_prefix, path=ledger_path, idempotency_key=f"{event_prefix}:match")
-    capabilities.heartbeat(capability_id, "invocation", ref=event_prefix, path=ledger_path, idempotency_key=f"{event_prefix}:invocation")
+    capabilities.heartbeat(
+        capability_id,
+        "match",
+        ref=event_prefix,
+        path=ledger_path,
+        idempotency_key=f"{event_prefix}:match",
+    )
+    capabilities.heartbeat(
+        capability_id,
+        "invocation",
+        ref=event_prefix,
+        path=ledger_path,
+        idempotency_key=f"{event_prefix}:invocation",
+    )
     try:
         result = dry_run_workflow_rail(plan)
-        capabilities.heartbeat(capability_id, "output", ref=result["result_id"], path=ledger_path, idempotency_key=f"{event_prefix}:output")
+        capabilities.heartbeat(
+            capability_id,
+            "output",
+            ref=result["result_id"],
+            path=ledger_path,
+            idempotency_key=f"{event_prefix}:output",
+        )
         receipt = consumer(result)
-        capabilities.heartbeat(capability_id, "consumer", ref=receipt["receipt_id"], path=ledger_path, idempotency_key=f"{event_prefix}:consumer")
-        capabilities.heartbeat(capability_id, "success", ref=receipt["receipt_id"], path=ledger_path, idempotency_key=f"{event_prefix}:success")
-        capabilities.heartbeat(capability_id, "outcome", ref=f"shadow:{receipt['receipt_id']}", path=ledger_path, idempotency_key=f"{event_prefix}:outcome")
+        capabilities.heartbeat(
+            capability_id,
+            "consumer",
+            ref=receipt["receipt_id"],
+            path=ledger_path,
+            idempotency_key=f"{event_prefix}:consumer",
+        )
+        capabilities.heartbeat(
+            capability_id,
+            "success",
+            ref=receipt["receipt_id"],
+            path=ledger_path,
+            idempotency_key=f"{event_prefix}:success",
+        )
+        capabilities.heartbeat(
+            capability_id,
+            "outcome",
+            ref=f"shadow:{receipt['receipt_id']}",
+            path=ledger_path,
+            idempotency_key=f"{event_prefix}:outcome",
+        )
         _probe_once(capability_id, "producer_probe", result["result_id"], ledger_path)
         _probe_once(capability_id, "consumer_probe", receipt["receipt_id"], ledger_path)
         _probe_once(capability_id, "outcome_probe", f"shadow:{receipt['receipt_id']}", ledger_path)
-        _probe_once(capability_id, "rollback_probe", stable_hash("workflow-rollback", plan["rollback_order"]), ledger_path)
+        _probe_once(
+            capability_id,
+            "rollback_probe",
+            stable_hash("workflow-rollback", plan["rollback_order"]),
+            ledger_path,
+        )
         return {"plan": plan, "result": result, "consumer_receipt": receipt}
     except Exception as exc:
-        error_ref = stable_hash("workflow-shadow-failure", {"plan_id": plan["plan_id"], "error_type": type(exc).__name__})
-        capabilities.heartbeat(capability_id, "failure", ref=error_ref, path=ledger_path, idempotency_key=f"{event_prefix}:failure:{error_ref}")
+        error_ref = stable_hash(
+            "workflow-shadow-failure",
+            {"plan_id": plan["plan_id"], "error_type": type(exc).__name__},
+        )
+        capabilities.heartbeat(
+            capability_id,
+            "failure",
+            ref=error_ref,
+            path=ledger_path,
+            idempotency_key=f"{event_prefix}:failure:{error_ref}",
+        )
         raise
 
 
 def reference_workflow_source() -> dict[str, Any]:
     capability_id = "capability:reference-sync-hygiene-test-gate"
 
-    def step(step_id: str, entrypoint: str, inputs: dict[str, Any], depends_on: list[str], **rest: Any) -> dict[str, Any]:
+    def step(
+        step_id: str, entrypoint: str, inputs: dict[str, Any], depends_on: list[str], **rest: Any
+    ) -> dict[str, Any]:
         version = 1
         return {
             "id": step_id,
@@ -927,7 +1067,9 @@ def reference_workflow_source() -> dict[str, Any]:
             "entrypoint": entrypoint,
             "inputs": inputs,
             "depends_on": depends_on,
-            "idempotency_key": workflow_step_idempotency_key(capability_id, step_id, version, entrypoint, inputs),
+            "idempotency_key": workflow_step_idempotency_key(
+                capability_id, step_id, version, entrypoint, inputs
+            ),
             **rest,
         }
 
@@ -943,42 +1085,85 @@ def reference_workflow_source() -> dict[str, Any]:
         },
         "steps": [
             step(
-                "sync", "git_remote_sync.sync",
-                {"repository": "owner/repo", "remote": "origin", "branch": "main"}, [],
-                preconditions=[{"check": "kill_switch_off", "expected": True}, {"check": "remote_reachable", "expected": True}],
+                "sync",
+                "git_remote_sync.sync",
+                {"repository": "owner/repo", "remote": "origin", "branch": "main"},
+                [],
+                preconditions=[
+                    {"check": "kill_switch_off", "expected": True},
+                    {"check": "remote_reachable", "expected": True},
+                ],
                 postconditions=[{"check": "remote_synced", "expected": True}],
-                retry={"max_attempts": 3, "backoff_seconds": 5}, timeout_seconds=120,
+                retry={"max_attempts": 3, "backoff_seconds": 5},
+                timeout_seconds=120,
                 side_effect_policy="guarded_remote",
-                rollback={"entrypoint": "git_remote_sync.restore_ref", "inputs": {"repository": "owner/repo", "ref": "pre-sync"}},
+                rollback={
+                    "entrypoint": "git_remote_sync.restore_ref",
+                    "inputs": {"repository": "owner/repo", "ref": "pre-sync"},
+                },
             ),
             step(
-                "consumer-drift", "consumer_sync_shadow.classify",
-                {"plan_ref": "artifact:consumer-sync-plan", "repository": "owner/repo"}, ["sync"],
+                "consumer-drift",
+                "consumer_sync_shadow.classify",
+                {"plan_ref": "artifact:consumer-sync-plan", "repository": "owner/repo"},
+                ["sync"],
                 preconditions=[{"check": "consumer_sync_plan_valid", "expected": True}],
                 postconditions=[{"check": "consumer_sync_shadow_classified", "expected": True}],
-                retry={"max_attempts": 1, "backoff_seconds": 0}, timeout_seconds=60,
-                side_effect_policy="read_only", rollback={"entrypoint": "workflow.noop", "inputs": {}},
+                retry={"max_attempts": 1, "backoff_seconds": 0},
+                timeout_seconds=60,
+                side_effect_policy="read_only",
+                rollback={"entrypoint": "workflow.noop", "inputs": {}},
             ),
             step(
-                "hygiene", "code_workspace_hygiene.audit", {"workspace_root": "/workspace"}, ["consumer-drift"],
+                "hygiene",
+                "code_workspace_hygiene.audit",
+                {"workspace_root": "/workspace"},
+                ["consumer-drift"],
                 preconditions=[{"check": "remote_synced", "expected": True}],
                 postconditions=[{"check": "workspace_root_clean", "expected": True}],
-                retry={"max_attempts": 1, "backoff_seconds": 0}, timeout_seconds=60,
-                side_effect_policy="read_only", rollback={"entrypoint": "workflow.noop", "inputs": {}},
+                retry={"max_attempts": 1, "backoff_seconds": 0},
+                timeout_seconds=60,
+                side_effect_policy="read_only",
+                rollback={"entrypoint": "workflow.noop", "inputs": {}},
             ),
             step(
-                "test-gate", "local_verify.named_test_gate", {"workspace_root": "/workspace", "gate_id": "focused-tests"}, ["hygiene"],
+                "test-gate",
+                "local_verify.named_test_gate",
+                {"workspace_root": "/workspace", "gate_id": "focused-tests"},
+                ["hygiene"],
                 preconditions=[{"check": "workspace_root_clean", "expected": True}],
                 postconditions=[{"check": "named_test_gate_passed", "expected": True}],
-                retry={"max_attempts": 2, "backoff_seconds": 2}, timeout_seconds=300,
-                side_effect_policy="read_only", rollback={"entrypoint": "workflow.noop", "inputs": {}},
+                retry={"max_attempts": 2, "backoff_seconds": 2},
+                timeout_seconds=300,
+                side_effect_policy="read_only",
+                rollback={"entrypoint": "workflow.noop", "inputs": {}},
             ),
         ],
         "barriers": [
-            {"id": "sync-before-consumer-drift", "after": "sync", "before": "consumer-drift", "condition_id": "remote_synced"},
-            {"id": "consumer-drift-before-hygiene", "after": "consumer-drift", "before": "hygiene", "condition_id": "consumer_sync_shadow_classified"},
-            {"id": "sync-before-hygiene", "after": "sync", "before": "hygiene", "condition_id": "remote_synced"},
-            {"id": "hygiene-before-tests", "after": "hygiene", "before": "test-gate", "condition_id": "workspace_root_clean"},
+            {
+                "id": "sync-before-consumer-drift",
+                "after": "sync",
+                "before": "consumer-drift",
+                "condition_id": "remote_synced",
+            },
+            {
+                "id": "consumer-drift-before-hygiene",
+                "after": "consumer-drift",
+                "before": "hygiene",
+                "condition_id": "consumer_sync_shadow_classified",
+            },
+            {
+                "id": "sync-before-hygiene",
+                "after": "sync",
+                "before": "hygiene",
+                "condition_id": "remote_synced",
+            },
+            {
+                "id": "hygiene-before-tests",
+                "after": "hygiene",
+                "before": "test-gate",
+                "condition_id": "workspace_root_clean",
+            },
         ],
         "expires_at": 1893456000,
         "kill_switch": "ORCH_REFERENCE_WORKFLOW_DISABLED=1",
@@ -1062,9 +1247,7 @@ def _installed_skill_evidence(roots: Sequence[Path]) -> tuple[set[str], set[str]
     return names, fingerprints
 
 
-def _safe_resource(
-    raw: Any, index: int
-) -> tuple[dict[str, Any] | None, list[str]]:
+def _safe_resource(raw: Any, index: int) -> tuple[dict[str, Any] | None, list[str]]:
     path = f"resources[{index}]"
     if not isinstance(raw, dict) or set(raw) != {"kind", "source_path", "target", "content_hash"}:
         return None, [f"{path} must contain kind, source_path, target, and content_hash"]
@@ -1155,7 +1338,11 @@ def _render_skill_markdown(source: dict[str, Any], resources: list[dict[str, Any
 def _render_skill_description(source: dict[str, Any]) -> str:
     description = str(source["description"]).strip()
     trigger_clause = "; ".join(source["triggers"])
-    return f"{description} Use when Codex needs to {trigger_clause}." if trigger_clause else description
+    return (
+        f"{description} Use when Codex needs to {trigger_clause}."
+        if trigger_clause
+        else description
+    )
 
 
 def _package_file_hashes(skill_dir: Path) -> dict[str, str]:
@@ -1216,10 +1403,24 @@ def compile_skill_package(
     if not isinstance(source, dict):
         raise SkillCompileError(["skill source must be an object"])
     allowed_fields = {
-        "schema", "version", "capability_id", "source_ir_ref", "source_fingerprint",
-        "procedure_class", "reuse_scope", "name", "description", "triggers",
-        "instructions", "resources", "safety_boundaries", "expected_artifacts",
-        "validation_command", "expires_at", "predecessor", "rollback",
+        "schema",
+        "version",
+        "capability_id",
+        "source_ir_ref",
+        "source_fingerprint",
+        "procedure_class",
+        "reuse_scope",
+        "name",
+        "description",
+        "triggers",
+        "instructions",
+        "resources",
+        "safety_boundaries",
+        "expected_artifacts",
+        "validation_command",
+        "expires_at",
+        "predecessor",
+        "rollback",
     }
     unknown = sorted(set(source) - allowed_fields)
     if unknown:
@@ -1246,18 +1447,26 @@ def compile_skill_package(
     description = str(source.get("description") or "").strip()
     if not description or len(description) > 700 or "<" in description or ">" in description:
         errors.append("invalid skill description")
-    triggers, list_errors = _bounded_string_list(source.get("triggers"), "triggers", limit=MAX_SKILL_TRIGGERS)
+    triggers, list_errors = _bounded_string_list(
+        source.get("triggers"), "triggers", limit=MAX_SKILL_TRIGGERS
+    )
     errors.extend(list_errors)
     instructions, list_errors = _bounded_string_list(
         source.get("instructions"), "instructions", limit=MAX_SKILL_INSTRUCTIONS
     )
     errors.extend(list_errors)
-    safety, list_errors = _bounded_string_list(source.get("safety_boundaries"), "safety_boundaries", limit=12)
+    safety, list_errors = _bounded_string_list(
+        source.get("safety_boundaries"), "safety_boundaries", limit=12
+    )
     errors.extend(list_errors)
-    artifacts, list_errors = _bounded_string_list(source.get("expected_artifacts"), "expected_artifacts", limit=12)
+    artifacts, list_errors = _bounded_string_list(
+        source.get("expected_artifacts"), "expected_artifacts", limit=12
+    )
     errors.extend(list_errors)
     validation_command = str(source.get("validation_command") or "")
-    if not re.fullmatch(r"(?:bash|python3) (?:scripts|references)/[A-Za-z0-9_.-]+(?: --help)?", validation_command):
+    if not re.fullmatch(
+        r"(?:bash|python3) (?:scripts|references)/[A-Za-z0-9_.-]+(?: --help)?", validation_command
+    ):
         errors.append("validation command is not allowlisted")
     expires_at = source.get("expires_at")
     if not isinstance(expires_at, int) or expires_at <= 0:
@@ -1267,7 +1476,9 @@ def compile_skill_package(
         errors.append("skill rollback must contain action and reason")
     elif rollback.get("action") != "retire_shadow_package":
         errors.append("unsupported skill rollback action")
-    if SECRET_RE.search(canonical_json({key: value for key, value in source.items() if key != "resources"})):
+    if SECRET_RE.search(
+        canonical_json({key: value for key, value in source.items() if key != "resources"})
+    ):
         errors.append("secret-bearing skill source")
 
     installed_names, installed_fingerprints = _installed_skill_evidence(installed_skill_roots)
@@ -1324,7 +1535,10 @@ def compile_skill_package(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(resource["source_path"], target)
             manifest_resources.append(
-                {key: resource[key] for key in ("kind", "target", "content_hash", "source_resource_id")}
+                {
+                    key: resource[key]
+                    for key in ("kind", "target", "content_hash", "source_resource_id")
+                }
             )
         file_hashes = _package_file_hashes(staging)
         content_hash = stable_hash("skill-package-content", file_hashes)
@@ -1379,7 +1593,9 @@ def compile_skill_candidate(source: dict[str, Any], **kwargs: Any) -> dict[str, 
             "target": target,
             "executable": False,
             "rejection_reasons": reasons,
-            "capability_id": str(source.get("capability_id") or "") if isinstance(source, dict) else "",
+            "capability_id": (
+                str(source.get("capability_id") or "") if isinstance(source, dict) else ""
+            ),
         }
         return {**core, "decision_id": stable_hash("skill-compiler-decision", core)}
     return {
@@ -1397,7 +1613,9 @@ def _register_skill_shadow(manifest: dict[str, Any], ledger_path: Path) -> None:
     capability_id = manifest["capability_id"]
     existing = capabilities.load(ledger_path, create=False)
     if capability_id in existing:
-        if (existing[capability_id].get("activation_evidence") or {}).get("skill_content_hash") != manifest["content_hash"]:
+        if (existing[capability_id].get("activation_evidence") or {}).get(
+            "skill_content_hash"
+        ) != manifest["content_hash"]:
             raise ValueError("capability already registered with a different skill package")
         return
     capabilities.register(
@@ -1446,11 +1664,17 @@ def shadow_invoke_skill_package(
     )
     event_prefix = f"{manifest['content_hash']}:{match_ref}"
     capabilities.heartbeat(
-        capability_id, "match", ref=match_ref, path=ledger_path,
+        capability_id,
+        "match",
+        ref=match_ref,
+        path=ledger_path,
         idempotency_key=f"{event_prefix}:match",
     )
     capabilities.heartbeat(
-        capability_id, "invocation", ref=match_ref, path=ledger_path,
+        capability_id,
+        "invocation",
+        ref=match_ref,
+        path=ledger_path,
         idempotency_key=f"{event_prefix}:invocation",
     )
     package_artifact = {
@@ -1484,11 +1708,17 @@ def shadow_invoke_skill_package(
         acceptance_gate_id="generated-skill-shadow",
     )
     capabilities.heartbeat(
-        capability_id, "output", ref=manifest["content_hash"], path=ledger_path,
+        capability_id,
+        "output",
+        ref=manifest["content_hash"],
+        path=ledger_path,
         idempotency_key=f"{event_prefix}:output",
     )
     capabilities.heartbeat(
-        capability_id, "consumer", ref=invocation["event_id"], path=ledger_path,
+        capability_id,
+        "consumer",
+        ref=invocation["event_id"],
+        path=ledger_path,
         idempotency_key=f"{event_prefix}:consumer",
     )
     outcome_ref = None
@@ -1501,11 +1731,17 @@ def shadow_invoke_skill_package(
         )
         if accepted:
             capabilities.heartbeat(
-                capability_id, "success", ref=outcome_ref, path=ledger_path,
+                capability_id,
+                "success",
+                ref=outcome_ref,
+                path=ledger_path,
                 idempotency_key=f"{event_prefix}:success",
             )
             capabilities.heartbeat(
-                capability_id, "outcome", ref=outcome_ref, path=ledger_path,
+                capability_id,
+                "outcome",
+                ref=outcome_ref,
+                path=ledger_path,
                 idempotency_key=f"{event_prefix}:outcome",
             )
     _probe_once(capability_id, "producer_probe", manifest["content_hash"], ledger_path)
@@ -1528,7 +1764,14 @@ def shadow_invoke_skill_package(
 
 
 def reference_skill_source() -> dict[str, Any]:
-    resource = Path.home() / ".codex" / "skills" / "code-workspace-hygiene" / "scripts" / "audit_code_root.sh"
+    resource = (
+        Path.home()
+        / ".codex"
+        / "skills"
+        / "code-workspace-hygiene"
+        / "scripts"
+        / "audit_code_root.sh"
+    )
     return {
         "schema": SKILL_SOURCE_SCHEMA,
         "version": SKILL_VERSION,
@@ -1588,9 +1831,7 @@ def _role_contract(candidate: CapabilityIR) -> dict[str, Any]:
     return contract
 
 
-def _validate_role_schema(
-    value: Any, *, label: str
-) -> tuple[dict[str, dict[str, Any]], list[str]]:
+def _validate_role_schema(value: Any, *, label: str) -> tuple[dict[str, dict[str, Any]], list[str]]:
     if not isinstance(value, dict) or not value:
         return {}, [f"generated role lacks {label}"]
     errors: list[str] = []
@@ -1661,11 +1902,26 @@ def _validate_generated_role_manifest(manifest: dict[str, Any]) -> dict[str, Any
     if "output_schema" not in manifest:
         raise AssertionError("generated role lacks output schema")
     required = {
-        "schema", "version", "manifest_id", "capability_id", "source_ir_ref",
-        "source_fingerprint", "name", "description", "authority", "route_as",
-        "input_schema", "output_schema", "selector", "capacity_policy",
-        "prompt_protocol", "prompt_hash", "lifecycle", "shadow_only",
-        "profile_agnostic", "generated_at",
+        "schema",
+        "version",
+        "manifest_id",
+        "capability_id",
+        "source_ir_ref",
+        "source_fingerprint",
+        "name",
+        "description",
+        "authority",
+        "route_as",
+        "input_schema",
+        "output_schema",
+        "selector",
+        "capacity_policy",
+        "prompt_protocol",
+        "prompt_hash",
+        "lifecycle",
+        "shadow_only",
+        "profile_agnostic",
+        "generated_at",
     }
     if set(manifest) != required:
         raise AssertionError("generated role manifest has unsupported or missing fields")
@@ -1679,11 +1935,14 @@ def _validate_generated_role_manifest(manifest: dict[str, Any]) -> dict[str, Any
     output_schema, output_errors = _validate_role_schema(
         manifest["output_schema"], label="output schema"
     )
-    if input_errors or output_errors or input_schema != manifest["input_schema"] or output_schema != manifest["output_schema"]:
+    if (
+        input_errors
+        or output_errors
+        or input_schema != manifest["input_schema"]
+        or output_schema != manifest["output_schema"]
+    ):
         raise AssertionError("generated role has invalid strict schemas")
-    expected_hash = stable_hash(
-        "generated-role-prompt-protocol", manifest["prompt_protocol"]
-    )
+    expected_hash = stable_hash("generated-role-prompt-protocol", manifest["prompt_protocol"])
     if manifest["prompt_hash"] != expected_hash:
         raise AssertionError("generated role prompt hash mismatch")
     core = {key: value for key, value in manifest.items() if key != "manifest_id"}
@@ -1709,16 +1968,30 @@ def compile_role_capability(
         errors.append("candidate is not a role judgment pattern")
     contract = _role_contract(candidate)
     allowed_contract_fields = {
-        "schema", "version", "name", "description", "authority", "route_as",
-        "input_schema", "output_schema", "selector", "capacity_policy",
-        "prompt_protocol", "expires_at", "kill_switch", "rollback",
+        "schema",
+        "version",
+        "name",
+        "description",
+        "authority",
+        "route_as",
+        "input_schema",
+        "output_schema",
+        "selector",
+        "capacity_policy",
+        "prompt_protocol",
+        "expires_at",
+        "kill_switch",
+        "rollback",
     }
     unknown = sorted(set(contract) - allowed_contract_fields)
     if unknown:
         errors.append(f"role contract has unsupported fields: {unknown}")
     if contract.get("schema") != ROLE_SOURCE_SCHEMA or contract.get("version") != ROLE_VERSION:
         errors.append("unsupported role source schema")
-    if candidate.graph.get("decision_mode") != "judgment" or candidate.graph.get("requires_judgment") is not True:
+    if (
+        candidate.graph.get("decision_mode") != "judgment"
+        or candidate.graph.get("requires_judgment") is not True
+    ):
         errors.append("deterministic pattern: route to workflow")
     durable_subjects = {
         item.subject_id
@@ -1766,7 +2039,12 @@ def compile_role_capability(
     )
     errors.extend(input_errors + output_errors)
     selector = contract.get("selector")
-    if not isinstance(selector, dict) or set(selector) != {"field", "operator", "value", "max_matches_per_cycle"}:
+    if not isinstance(selector, dict) or set(selector) != {
+        "field",
+        "operator",
+        "value",
+        "max_matches_per_cycle",
+    }:
         errors.append("generated role selector must be exact and bounded")
     else:
         if selector.get("field") not in input_schema:
@@ -1777,7 +2055,8 @@ def compile_role_capability(
         if selector.get("operator") == "equals" and not isinstance(value, str):
             errors.append("generated role selector equals value must be a string")
         if selector.get("operator") == "in" and (
-            not isinstance(value, list) or not 1 <= len(value) <= 8
+            not isinstance(value, list)
+            or not 1 <= len(value) <= 8
             or not all(isinstance(item, str) for item in value)
         ):
             errors.append("generated role selector values are unbounded")
@@ -1793,20 +2072,32 @@ def compile_role_capability(
         errors.append("generated role capacity policy is not bounded")
     protocol = contract.get("prompt_protocol")
     if not isinstance(protocol, dict) or set(protocol) != {
-        "version", "purpose", "instructions", "max_context_chars", "output_format"
+        "version",
+        "purpose",
+        "instructions",
+        "max_context_chars",
+        "output_format",
     }:
         errors.append("generated role prompt protocol is incomplete")
     else:
         if protocol.get("version") != 1 or protocol.get("output_format") != "strict_json":
             errors.append("generated role prompt protocol is unsupported")
-        if not isinstance(protocol.get("purpose"), str) or not 20 <= len(protocol["purpose"]) <= 500:
+        if (
+            not isinstance(protocol.get("purpose"), str)
+            or not 20 <= len(protocol["purpose"]) <= 500
+        ):
             errors.append("generated role prompt purpose is unbounded")
         instructions = protocol.get("instructions")
-        if not isinstance(instructions, list) or not 1 <= len(instructions) <= 12 or not all(
-            isinstance(item, str) and 5 <= len(item) <= 500 for item in instructions
+        if (
+            not isinstance(instructions, list)
+            or not 1 <= len(instructions) <= 12
+            or not all(isinstance(item, str) and 5 <= len(item) <= 500 for item in instructions)
         ):
             errors.append("generated role prompt instructions are unbounded")
-        if not isinstance(protocol.get("max_context_chars"), int) or not 256 <= protocol["max_context_chars"] <= 8192:
+        if (
+            not isinstance(protocol.get("max_context_chars"), int)
+            or not 256 <= protocol["max_context_chars"] <= 8192
+        ):
             errors.append("generated role prompt context bound is invalid")
     expires_at = contract.get("expires_at")
     if not isinstance(expires_at, int) or not current < expires_at <= current + ROLE_TTL_SECONDS:
@@ -1916,10 +2207,20 @@ def reference_role_candidate(*, now: int | None = None) -> CapabilityIR:
             "evidence_refs": {"type": "string_list", "required": True, "max_items": 8},
         },
         "output_schema": {
-            "decision": {"type": "string", "required": True, "enum": ["inspect", "defer"], "max_length": 32},
+            "decision": {
+                "type": "string",
+                "required": True,
+                "enum": ["inspect", "defer"],
+                "max_length": 32,
+            },
             "rationale": {"type": "string", "required": True, "max_length": 800},
         },
-        "selector": {"field": "task_type", "operator": "equals", "value": "review", "max_matches_per_cycle": 1},
+        "selector": {
+            "field": "task_type",
+            "operator": "equals",
+            "value": "review",
+            "max_matches_per_cycle": 1,
+        },
         "capacity_policy": {
             "selection": "router_capacity_and_learned_weights",
             "reserve_policy": "preserve",
@@ -1928,12 +2229,17 @@ def reference_role_candidate(*, now: int | None = None) -> CapabilityIR:
         "prompt_protocol": {
             "version": 1,
             "purpose": "Prioritize one supplied evidence gap using bounded judgment.",
-            "instructions": ["Use only supplied evidence references and return one advisory recommendation."],
+            "instructions": [
+                "Use only supplied evidence references and return one advisory recommendation."
+            ],
             "max_context_chars": 2048,
             "output_format": "strict_json",
         },
         "expires_at": current + 30 * 86400,
-        "kill_switch": {"env": "ORCH_GENERATED_ROLE_EVIDENCE_GAP_PRIORITIZER_REFERENCE_DISABLED", "disabled_value": "1"},
+        "kill_switch": {
+            "env": "ORCH_GENERATED_ROLE_EVIDENCE_GAP_PRIORITIZER_REFERENCE_DISABLED",
+            "disabled_value": "1",
+        },
         "rollback": {
             "action": "retire_generated_role_and_restore_predecessor",
             "predecessor": predecessor,
@@ -1975,14 +2281,26 @@ def reference_role_candidate(*, now: int | None = None) -> CapabilityIR:
         independent_repositories=tuple(item.repository for item in occurrences),
         selector=contract["selector"],
         graph={
-            "phase_order": ["trigger", "decision", "execution", "artifact", "verification", "outcome", "durability"],
+            "phase_order": [
+                "trigger",
+                "decision",
+                "execution",
+                "artifact",
+                "verification",
+                "outcome",
+                "durability",
+            ],
             "decision_mode": "judgment",
             "requires_judgment": True,
             "role_contract": contract,
         },
         artifact_refs=(),
         gates={"durable_result_required": True},
-        telemetry={"distinct_subject_count": 3, "effective_subject_count": 3.0, "negative_ratio": 0.0},
+        telemetry={
+            "distinct_subject_count": 3,
+            "effective_subject_count": 3.0,
+            "negative_ratio": 0.0,
+        },
         lifecycle=Lifecycle(expires_at=current + 30 * 86400),
         predecessor=predecessor,
     )
@@ -2003,10 +2321,24 @@ def _playbook_contract(candidate: CapabilityIR) -> dict[str, Any]:
 
 def validate_playbook_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     required = {
-        "schema", "version", "manifest_id", "rule_id", "capability_id",
-        "source_ir_ref", "source_fingerprint", "repo", "section", "text",
-        "content_hash", "selector", "current_refs", "negative_examples",
-        "evidence_refs", "risk_level", "optional_workflows_bundle", "lifecycle",
+        "schema",
+        "version",
+        "manifest_id",
+        "rule_id",
+        "capability_id",
+        "source_ir_ref",
+        "source_fingerprint",
+        "repo",
+        "section",
+        "text",
+        "content_hash",
+        "selector",
+        "current_refs",
+        "negative_examples",
+        "evidence_refs",
+        "risk_level",
+        "optional_workflows_bundle",
+        "lifecycle",
         "generated_at",
     }
     if not isinstance(manifest, dict) or set(manifest) != required:
@@ -2046,20 +2378,37 @@ def compile_playbook_capability(
     now: int | None = None,
 ) -> dict[str, Any]:
     """Compile durable repo-specific IR into a reversible low-risk canary rule."""
-    candidate = raw_candidate if isinstance(raw_candidate, CapabilityIR) else CapabilityIR.from_dict(raw_candidate)
+    candidate = (
+        raw_candidate
+        if isinstance(raw_candidate, CapabilityIR)
+        else CapabilityIR.from_dict(raw_candidate)
+    )
     candidate.validate()
     contract = _playbook_contract(candidate)
     current = int(time.time()) if now is None else int(now)
     errors: list[str] = []
     allowed = {
-        "schema", "version", "repo", "section", "text", "content_hash",
-        "selector", "current_refs", "negative_examples", "risk_level",
-        "expires_at", "rollback", "optional_workflows_bundle",
+        "schema",
+        "version",
+        "repo",
+        "section",
+        "text",
+        "content_hash",
+        "selector",
+        "current_refs",
+        "negative_examples",
+        "risk_level",
+        "expires_at",
+        "rollback",
+        "optional_workflows_bundle",
     }
     unknown = sorted(set(contract) - allowed)
     if unknown:
         errors.append(f"playbook contract has unsupported fields: {unknown}")
-    if contract.get("schema") != PLAYBOOK_SOURCE_SCHEMA or contract.get("version") != PLAYBOOK_VERSION:
+    if (
+        contract.get("schema") != PLAYBOOK_SOURCE_SCHEMA
+        or contract.get("version") != PLAYBOOK_VERSION
+    ):
         errors.append("unsupported playbook source schema")
     if candidate.kind_proposal != "playbook" or candidate.owner_proposal != "repo":
         errors.append("candidate is not a repo-owned playbook pattern")
@@ -2068,7 +2417,8 @@ def compile_playbook_capability(
     if not repo or source_repos != {repo} or set(candidate.independent_repositories) != {repo}:
         errors.append("cross-repo-generic playbook candidate")
     durable_subjects = {
-        item.subject_id for item in candidate.source_occurrences
+        item.subject_id
+        for item in candidate.source_occurrences
         if item.verification_ref and item.outcome_ref and item.durability_ref
     }
     if len(durable_subjects) < 3 or durable_subjects != set(candidate.independent_subjects):
@@ -2092,15 +2442,21 @@ def compile_playbook_capability(
         lanes = selector.get("lanes")
         if selector.get("repo") != repo:
             errors.append("playbook selector repo mismatch")
-        if not isinstance(task_types, list) or not 1 <= len(task_types) <= 6 or any(
-            item not in roles.router.ROUTE_TABLE for item in task_types
+        if (
+            not isinstance(task_types, list)
+            or not 1 <= len(task_types) <= 6
+            or any(item not in roles.router.ROUTE_TABLE for item in task_types)
         ):
             errors.append("playbook selector task types are unsupported")
-        if not isinstance(lanes, list) or not 1 <= len(lanes) <= 2 or any(
-            item not in {"opener", "closer"} for item in lanes
+        if (
+            not isinstance(lanes, list)
+            or not 1 <= len(lanes) <= 2
+            or any(item not in {"opener", "closer"} for item in lanes)
         ):
             errors.append("playbook selector lanes are unsupported")
-    refs_result = repo_knowledge.validate_current_refs(Path(repo_root), contract.get("current_refs"))
+    refs_result = repo_knowledge.validate_current_refs(
+        Path(repo_root), contract.get("current_refs")
+    )
     if not refs_result["valid"]:
         errors.extend(refs_result["errors"] or ["stale current path"])
     current_refs = refs_result["refs"]
@@ -2117,13 +2473,19 @@ def compile_playbook_capability(
         for index, item in enumerate(negatives):
             if not isinstance(item, dict) or set(item) != {"text", "evidence_ref"}:
                 errors.append(f"negative_examples[{index}] is invalid")
-            elif not 10 <= len(str(item.get("text") or "")) <= 400 or not str(item.get("evidence_ref") or "").strip():
+            elif (
+                not 10 <= len(str(item.get("text") or "")) <= 400
+                or not str(item.get("evidence_ref") or "").strip()
+            ):
                 errors.append(f"negative_examples[{index}] is invalid")
     risk_level = str(contract.get("risk_level") or "")
     if risk_level != "low_reversible":
         errors.append("policy choice requires owner question")
     expires_at = contract.get("expires_at")
-    if not isinstance(expires_at, int) or not current < expires_at <= current + PLAYBOOK_TTL_SECONDS:
+    if (
+        not isinstance(expires_at, int)
+        or not current < expires_at <= current + PLAYBOOK_TTL_SECONDS
+    ):
         errors.append("playbook requires a bounded future expiry")
     rollback = contract.get("rollback")
     if (
@@ -2156,7 +2518,8 @@ def compile_playbook_capability(
         raise PlaybookCompileError(errors)
     evidence_refs = sorted(
         {
-            ref for item in candidate.source_occurrences
+            ref
+            for item in candidate.source_occurrences
             for ref in (item.verification_ref, item.outcome_ref, item.durability_ref)
             if ref
         }
@@ -2221,7 +2584,11 @@ def compile_playbook_candidate(
         }
         if needs_owner:
             try:
-                candidate = raw_candidate if isinstance(raw_candidate, CapabilityIR) else CapabilityIR.from_dict(raw_candidate)
+                candidate = (
+                    raw_candidate
+                    if isinstance(raw_candidate, CapabilityIR)
+                    else CapabilityIR.from_dict(raw_candidate)
+                )
                 repo = str(_playbook_contract(candidate).get("repo") or "")
             except Exception:
                 repo = ""
@@ -2250,7 +2617,9 @@ def _register_playbook_capability(manifest: dict[str, Any], ledger_path: Path) -
     capability_id = manifest["capability_id"]
     existing = capabilities.load(ledger_path, create=False) if ledger_path.exists() else {}
     if capability_id in existing:
-        old_hash = (existing[capability_id].get("activation_evidence") or {}).get("playbook_manifest_hash")
+        old_hash = (existing[capability_id].get("activation_evidence") or {}).get(
+            "playbook_manifest_hash"
+        )
         if old_hash != manifest["manifest_id"]:
             raise ValueError("capability already registered with a different playbook rule")
         return
@@ -2317,7 +2686,9 @@ def export_playbook_canary(
     }
 
 
-def _playbook_selector_matches(manifest: dict[str, Any], *, repo: str, task_type: str, lane: str) -> bool:
+def _playbook_selector_matches(
+    manifest: dict[str, Any], *, repo: str, task_type: str, lane: str
+) -> bool:
     selector = manifest["selector"]
     return (
         repo == selector["repo"]
@@ -2344,39 +2715,63 @@ def record_playbook_invocation(
     matched = _playbook_selector_matches(manifest, repo=repo, task_type=task_type, lane=lane)
     if not matched or current >= int(manifest["lifecycle"]["expires_at"]):
         return {"matched": matched, "injected": False, "accepted": False, "events": []}
-    invocation_id = "playbook-invocation:" + stable_hash(
-        "playbook-invocation",
-        {"rule_id": manifest["rule_id"], "target_run_id": target_run_id, "ts": current},
-    ).split(":", 1)[1][:24]
+    invocation_id = (
+        "playbook-invocation:"
+        + stable_hash(
+            "playbook-invocation",
+            {"rule_id": manifest["rule_id"], "target_run_id": target_run_id, "ts": current},
+        ).split(":", 1)[1][:24]
+    )
     capability_id = manifest["capability_id"]
     common = {
         "capability_ids": [capability_id],
         "result": {"version_hash": manifest["content_hash"]},
     }
     match_event = feedback.record_completion_event(
-        invocation_id, event_type="workflow", phase="trigger", producer="orchestrator",
-        status="recorded", payload={
+        invocation_id,
+        event_type="workflow",
+        phase="trigger",
+        producer="orchestrator",
+        status="recorded",
+        payload={
             **common,
             "result": {**common["result"], "matched": True, "status": "matched"},
-        }, timestamp=current,
+        },
+        timestamp=current,
     )
     injection_event = feedback.record_completion_event(
-        invocation_id, event_type="workflow", phase="decision", producer="orchestrator",
-        status="recorded", payload={
+        invocation_id,
+        event_type="workflow",
+        phase="decision",
+        producer="orchestrator",
+        status="recorded",
+        payload={
             **common,
             "result": {
-                **common["result"], "matched": True, "invoked": True,
-                "action_id": "playbook-injection", "status": "injected",
+                **common["result"],
+                "matched": True,
+                "invoked": True,
+                "action_id": "playbook-injection",
+                "status": "injected",
             },
-        }, timestamp=current,
+        },
+        timestamp=current,
     )
     acceptance_event = feedback.record_completion_event(
-        invocation_id, event_type="workflow", phase="artifact", producer="orchestrator",
-        status="succeeded" if accepted else "failed", payload={
+        invocation_id,
+        event_type="workflow",
+        phase="artifact",
+        producer="orchestrator",
+        status="succeeded" if accepted else "failed",
+        payload={
             "capability_ids": [capability_id],
             "result_hashes": [manifest["content_hash"]],
-            "result": {"accepted": bool(accepted), "status": "accepted" if accepted else "rejected"},
-        }, timestamp=current,
+            "result": {
+                "accepted": bool(accepted),
+                "status": "accepted" if accepted else "rejected",
+            },
+        },
+        timestamp=current,
     )
     edge = feedback.record_influence_edge(
         target_run_id=target_run_id,
@@ -2395,7 +2790,10 @@ def record_playbook_invocation(
         ("consumer", acceptance_event["event_id"]),
     ):
         capabilities.heartbeat(
-            capability_id, event_type, ref=ref, path=ledger_path,
+            capability_id,
+            event_type,
+            ref=ref,
+            path=ledger_path,
             idempotency_key=f"{event_prefix}:{event_type}",
         )
     outcome = None
@@ -2415,11 +2813,17 @@ def record_playbook_invocation(
             {"target_run_id": target_run_id, "outcome": list(outcome)},
         )
         capabilities.heartbeat(
-            capability_id, "success", ref=outcome_ref, path=ledger_path,
+            capability_id,
+            "success",
+            ref=outcome_ref,
+            path=ledger_path,
             idempotency_key=f"{event_prefix}:success",
         )
         capabilities.heartbeat(
-            capability_id, "outcome", ref=outcome_ref, path=ledger_path,
+            capability_id,
+            "outcome",
+            ref=outcome_ref,
+            path=ledger_path,
             idempotency_key=f"{event_prefix}:outcome",
         )
     for probe, ref in (
@@ -2429,7 +2833,9 @@ def record_playbook_invocation(
     ):
         capabilities.record_probe(capability_id, probe, passed=True, ref=ref, path=ledger_path)
     if outcome_ref:
-        capabilities.record_probe(capability_id, "outcome_probe", passed=True, ref=outcome_ref, path=ledger_path)
+        capabilities.record_probe(
+            capability_id, "outcome_probe", passed=True, ref=outcome_ref, path=ledger_path
+        )
     return {
         "matched": True,
         "injected": True,
@@ -2465,9 +2871,13 @@ def rollback_playbook_canary(
         )
     if apply and ledger_path.exists():
         caps = capabilities.load(ledger_path, create=False)
-        if manifest["capability_id"] in caps and caps[manifest["capability_id"]]["status"] != "retired":
+        if (
+            manifest["capability_id"] in caps
+            and caps[manifest["capability_id"]]["status"] != "retired"
+        ):
             capabilities.transition(
-                manifest["capability_id"], "retired",
+                manifest["capability_id"],
+                "retired",
                 reason="managed playbook rule rolled back to predecessor",
                 evidence_refs=[manifest["lifecycle"]["predecessor"]],
                 path=ledger_path,
@@ -2495,9 +2905,12 @@ def _selftest() -> None:
         assert manifest["lifecycle"]["globally_installed"] is False
         role_compiled = compile_role_capability(reference_role_candidate())
         role_manifest = _validate_generated_role_manifest(role_compiled["manifest"])
-        assert role_compiled["role"].validate(
-            {"decision": "inspect", "rationale": "Inspect the named evidence gap."}
-        ) == []
+        assert (
+            role_compiled["role"].validate(
+                {"decision": "inspect", "rationale": "Inspect the named evidence gap."}
+            )
+            == []
+        )
         assert role_manifest["shadow_only"] and role_manifest["profile_agnostic"]
         deterministic = reference_role_candidate().to_dict()
         deterministic["graph"]["decision_mode"] = "deterministic"
@@ -2514,13 +2927,20 @@ def _selftest() -> None:
         )
         playbook_registry = root / "repo-knowledge.json"
         playbook_registry.write_text(
-            json.dumps({
-                "schema_version": 1,
-                "repos": {"owner/reference": {
-                    "summary": "Reference repo.",
-                    "definition_of_done": [], "gotchas": [], "validation": [],
-                }},
-            }) + "\n",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "repos": {
+                        "owner/reference": {
+                            "summary": "Reference repo.",
+                            "definition_of_done": [],
+                            "gotchas": [],
+                            "validation": [],
+                        }
+                    },
+                }
+            )
+            + "\n",
             encoding="utf-8",
         )
         raw_playbook = reference_role_candidate().to_dict()
@@ -2530,34 +2950,51 @@ def _selftest() -> None:
         raw_playbook["independent_repositories"] = ["owner/reference"]
         for occurrence in raw_playbook["source_occurrences"]:
             occurrence["repository"] = "owner/reference"
-        selector = {
-            "repo": "owner/reference", "task_types": ["implement"], "lanes": ["opener"]
-        }
+        selector = {"repo": "owner/reference", "task_types": ["implement"], "lanes": ["opener"]}
         current_refs = [{"path": "docs/RULES.md", "symbol": "registry_symbol"}]
         rule_text = "When changing `docs/RULES.md`, retain the `registry_symbol` and run the narrow validation."
         content_hash = stable_hash(
             "repo-playbook-rule",
             {
-                "repo": "owner/reference", "section": "validation",
-                "text": rule_text, "selector": selector, "current_refs": current_refs,
+                "repo": "owner/reference",
+                "section": "validation",
+                "text": rule_text,
+                "selector": selector,
+                "current_refs": current_refs,
             },
         )
         raw_playbook["selector"] = selector
         raw_playbook["graph"] = {
-            "phase_order": ["trigger", "decision", "execution", "artifact", "verification", "outcome", "durability"],
+            "phase_order": [
+                "trigger",
+                "decision",
+                "execution",
+                "artifact",
+                "verification",
+                "outcome",
+                "durability",
+            ],
             "playbook_contract": {
-                "schema": PLAYBOOK_SOURCE_SCHEMA, "version": PLAYBOOK_VERSION,
-                "repo": "owner/reference", "section": "validation", "text": rule_text,
-                "content_hash": content_hash, "selector": selector,
+                "schema": PLAYBOOK_SOURCE_SCHEMA,
+                "version": PLAYBOOK_VERSION,
+                "repo": "owner/reference",
+                "section": "validation",
+                "text": rule_text,
+                "content_hash": content_hash,
+                "selector": selector,
                 "current_refs": current_refs,
-                "negative_examples": [{
-                    "text": "A prior change omitted the registry symbol and required repair.",
-                    "evidence_ref": stable_hash("reference-playbook-negative", "one"),
-                }],
-                "risk_level": "low_reversible", "expires_at": int(time.time()) + 86400,
+                "negative_examples": [
+                    {
+                        "text": "A prior change omitted the registry symbol and required repair.",
+                        "evidence_ref": stable_hash("reference-playbook-negative", "one"),
+                    }
+                ],
+                "risk_level": "low_reversible",
+                "expires_at": int(time.time()) + 86400,
                 "rollback": {
                     "action": "remove_managed_rule_and_restore_predecessor",
-                    "predecessor": "role-adjudicator", "reason": "canary regressed",
+                    "predecessor": "role-adjudicator",
+                    "reason": "canary regressed",
                 },
                 "optional_workflows_bundle": False,
             },

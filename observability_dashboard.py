@@ -27,9 +27,7 @@ import periodic_report
 DEFAULT_STATE_DIR = Path.home() / ".codex" / "orchestrator"
 
 
-def _rate(
-    numerator: int | float | None, denominator: int | float | None
-) -> float | None:
+def _rate(numerator: int | float | None, denominator: int | float | None) -> float | None:
     if denominator in (None, 0) or numerator is None:
         return None
     return float(numerator) / float(denominator)
@@ -103,9 +101,7 @@ def _productivity(report: dict) -> dict:
         "production_flow": production_flow,
         "production_flow_status": production_flow.get("status"),
         "recent_production_runs": production_flow.get("recent_production_runs", 0),
-        "recent_production_outcomes": production_flow.get(
-            "recent_production_outcomes", 0
-        ),
+        "recent_production_outcomes": production_flow.get("recent_production_outcomes", 0),
         "latest_production_run_age_days": production_flow.get("latest_run_age_days"),
     }
 
@@ -171,10 +167,13 @@ def _capability_rows(report: dict) -> list[dict]:
     rows = []
     for capability_id, cap in sorted(declared.items()):
         events = cap.get("event_history") or []
-        last_outcome = max(
-            (int(row.get("timestamp") or 0) for row in events if row.get("type") == "outcome"),
-            default=0,
-        ) or None
+        last_outcome = (
+            max(
+                (int(row.get("timestamp") or 0) for row in events if row.get("type") == "outcome"),
+                default=0,
+            )
+            or None
+        )
         liveness = capabilities.classify_liveness(cap)
         if liveness == "matched_not_invoked":
             exact_reason = "matching work was observed after the last invocation"
@@ -233,7 +232,7 @@ def _activation_state(report: dict, cadence: dict) -> dict:
     runtime_reason = runtime.get("reason")
     if not runtime_reason:
         alerts = runtime.get("alerts") or []
-        runtime_reason = (alerts[0].get("message") if alerts else None)
+        runtime_reason = alerts[0].get("message") if alerts else None
     if not runtime_reason:
         if runtime.get("closer_proxy_present") and not runtime.get("runtime_ac_live_firing"):
             runtime_reason = "closer traffic exists but no eligible runtime-AC event fired"
@@ -250,16 +249,18 @@ def _activation_state(report: dict, cadence: dict) -> dict:
     capability_rows = _capability_rows(report)
     role_rows = (report.get("role_activation") or {}).get("roles") or {}
     profiles = report.get("execution_profiles") or {}
-    provenance = ((report.get("costs_traces") or {}).get("worker_model_provenance") or {})
-    completion = ((report.get("dry_seams") or {}).get("completion_event_health") or {})
-    outcomes_rollup = ((report.get("outcomes") or {}).get("rollup") or {})
+    provenance = (report.get("costs_traces") or {}).get("worker_model_provenance") or {}
+    completion = (report.get("dry_seams") or {}).get("completion_event_health") or {}
+    outcomes_rollup = (report.get("outcomes") or {}).get("rollup") or {}
     production = report.get("production_flow") or {}
     experiment_observations = sum(
         int(row.get("evaluation_observations") or 0)
         for row in experiments.get("implementation_arms") or []
     )
     capability_invoked = sum(bool(row.get("last_invocation")) for row in capability_rows)
-    capability_with_outcomes = sum(bool(row.get("last_outcome") or row.get("outcome_links")) for row in capability_rows)
+    capability_with_outcomes = sum(
+        bool(row.get("last_outcome") or row.get("outcome_links")) for row in capability_rows
+    )
     role_runs = sum(int(row.get("role_runs") or 0) for row in role_rows.values())
     role_linked = sum(int(row.get("linked") or 0) for row in role_rows.values())
     feature_report = report.get("features") or {}
@@ -270,10 +271,13 @@ def _activation_state(report: dict, cadence: dict) -> dict:
         "model_provenance": provenance,
         "experiments": {
             **experiments,
-            "promotion_state": "blocked_missing_arm_outcomes" if missing_arm_outcomes else "evidence_complete",
+            "promotion_state": (
+                "blocked_missing_arm_outcomes" if missing_arm_outcomes else "evidence_complete"
+            ),
             "next_transition": (
                 "run bounded experiment followup/evaluation"
-                if missing_arm_outcomes else "promotion policy may evaluate complete arm evidence"
+                if missing_arm_outcomes
+                else "promotion policy may evaluate complete arm evidence"
             ),
         },
         "compiler": {
@@ -284,9 +288,13 @@ def _activation_state(report: dict, cadence: dict) -> dict:
             "next_actions": compiler_inventory.get("next_actions") or [],
         },
         "evidence_contracts": {
-            "schema_state": (((report.get("evidence") or {}).get("schema_growth") or {}).get("status")),
+            "schema_state": (
+                ((report.get("evidence") or {}).get("schema_growth") or {}).get("status")
+            ),
             "candidate_count": len((report.get("evidence") or {}).get("proposals") or []),
-            "next_transition": (((report.get("evidence") or {}).get("schema_growth") or {}).get("recommendation")),
+            "next_transition": (
+                ((report.get("evidence") or {}).get("schema_growth") or {}).get("recommendation")
+            ),
         },
         "range": {
             "eligible": range_state.get("eligible"),
@@ -303,7 +311,9 @@ def _activation_state(report: dict, cadence: dict) -> dict:
             "required_event_denominator": int(runtime.get("required_event_denominator") or 0),
             "executed_gate_numerator": int(runtime.get("executed_gate_numerator") or 0),
             "closer_proxy_present": bool(runtime.get("closer_proxy_present")),
-            "closer_proxy_is_diagnostic_only": bool(runtime.get("closer_proxy_is_diagnostic_only", True)),
+            "closer_proxy_is_diagnostic_only": bool(
+                runtime.get("closer_proxy_is_diagnostic_only", True)
+            ),
             "target_spec_attribution_alert": bool(runtime.get("target_spec_attribution_alert")),
             "materialization_alert": bool(runtime.get("materialization_alert")),
             "exact_reason": runtime_reason,
@@ -311,11 +321,20 @@ def _activation_state(report: dict, cadence: dict) -> dict:
             "gate_history": runtime.get("gate_history") or {},
         },
         "research": {
-            "duplicate_rejections": (report.get("research_subjects") or {}).get("duplicate_rejections", 0),
-            "unevaluated_backlog": (report.get("research_subjects") or {}).get("unevaluated_backlog", 0),
+            "duplicate_rejections": (report.get("research_subjects") or {}).get(
+                "duplicate_rejections", 0
+            ),
+            "unevaluated_backlog": (report.get("research_subjects") or {}).get(
+                "unevaluated_backlog", 0
+            ),
             "unevaluated_cap": (report.get("research_subjects") or {}).get("unevaluated_cap", 0),
-            "production_collisions": (report.get("research_subjects") or {}).get("research_production_collisions", 0),
-            "rejections_by_reason": (report.get("research_subjects") or {}).get("rejections_by_reason") or {},
+            "production_collisions": (report.get("research_subjects") or {}).get(
+                "research_production_collisions", 0
+            ),
+            "rejections_by_reason": (report.get("research_subjects") or {}).get(
+                "rejections_by_reason"
+            )
+            or {},
         },
         "denominators": {
             "production_outcomes": {
@@ -337,12 +356,17 @@ def _activation_state(report: dict, cadence: dict) -> dict:
                 "missing": len(missing_arm_outcomes),
             },
             "role_outcome_links": {
-                "numerator": role_linked, "denominator": role_runs,
+                "numerator": role_linked,
+                "denominator": role_runs,
                 "durable": sum(int(row.get("durable") or 0) for row in role_rows.values()),
             },
             "offload_cost_rows": {
-                "numerator": int(((report.get("dataset") or {}).get("table_counts") or {}).get("costs", 0)),
-                "denominator": int(((report.get("dataset") or {}).get("table_counts") or {}).get("runs", 0)),
+                "numerator": int(
+                    ((report.get("dataset") or {}).get("table_counts") or {}).get("costs", 0)
+                ),
+                "denominator": int(
+                    ((report.get("dataset") or {}).get("table_counts") or {}).get("runs", 0)
+                ),
                 "note": "all retained cost rows; offload source detail remains in costs_by_source",
             },
             "synthesis_promotion": {
@@ -364,8 +388,12 @@ def _activation_state(report: dict, cadence: dict) -> dict:
                 "denominator": capability_invoked,
             },
             "profile_resolution": {
-                "numerator": sum(int(row.get("resolved_attempts") or 0) for row in profiles.get("profiles") or []),
-                "denominator": sum(int(row.get("attempts") or 0) for row in profiles.get("profiles") or []),
+                "numerator": sum(
+                    int(row.get("resolved_attempts") or 0) for row in profiles.get("profiles") or []
+                ),
+                "denominator": sum(
+                    int(row.get("attempts") or 0) for row in profiles.get("profiles") or []
+                ),
                 "shared_pool": profiles.get("shared_pool_burn") or {},
             },
         },
@@ -437,9 +465,7 @@ def _route_coverage_summary(
         len(task.get("zero_observation_agents") or []) for task in route_tasks
     )
     backfill_zero_cells = sum(
-        1
-        for cell in missing_cells
-        if "zero_observation_cell" in (cell.get("reasons") or [])
+        1 for cell in missing_cells if "zero_observation_cell" in (cell.get("reasons") or [])
     )
     planned_zero_cells = sum(
         1
@@ -465,7 +491,9 @@ def _route_coverage_summary(
             "and collect real evidence only when safe, non-duplicative subjects exist."
         )
     elif active_backfill_eligible:
-        recommendation = "Run one guarded backfill job, then collect and evaluate it before counting evidence."
+        recommendation = (
+            "Run one guarded backfill job, then collect and evaluate it before counting evidence."
+        )
     else:
         recommendation = "Wait for safe opener subjects or future exploration candidates before collecting route evidence."
 
@@ -520,9 +548,7 @@ def _data_health(report: dict) -> dict:
         "cost_sources": costs.get("costs_by_source") or [],
         "trace_status_counts": costs.get("trace_status_counts") or [],
         "langsmith_artifact_status": artifact_health.get("status"),
-        "langsmith_artifact_registered_repos": artifact_health.get(
-            "registered_repos", 0
-        ),
+        "langsmith_artifact_registered_repos": artifact_health.get("registered_repos", 0),
         "langsmith_artifact_expected_repos": artifact_health.get(
             "expected_repos", artifact_health.get("registered_repos", 0)
         ),
@@ -531,9 +557,7 @@ def _data_health(report: dict) -> dict:
             "visible_artifacts_found",
             artifact_health.get("per_repo_artifacts_found", 0),
         ),
-        "langsmith_artifact_per_repo_found": artifact_health.get(
-            "per_repo_artifacts_found", 0
-        ),
+        "langsmith_artifact_per_repo_found": artifact_health.get("per_repo_artifacts_found", 0),
         "langsmith_artifact_missing_with_recent_runs": artifact_health.get(
             "missing_expected_with_recent_runs", 0
         ),
@@ -546,9 +570,7 @@ def _data_health(report: dict) -> dict:
         "langsmith_artifact_missing_diagnostic_errors": artifact_health.get(
             "missing_expected_diagnostic_errors", 0
         ),
-        "langsmith_artifact_rollup_found": bool(
-            artifact_health.get("rollup_artifact_found")
-        ),
+        "langsmith_artifact_rollup_found": bool(artifact_health.get("rollup_artifact_found")),
         "langsmith_artifact_recommendation": artifact_health.get("recommendation"),
         "langsmith_telemetry_status": langsmith_telemetry.get("status"),
         "langsmith_telemetry_cost_rows": langsmith_telemetry.get("cost_rows", 0),
@@ -560,14 +582,10 @@ def _data_health(report: dict) -> dict:
         "requested_worker_runs": worker_provenance.get("requested_worker_runs", 0),
         "resolved_worker_runs": worker_provenance.get("resolved_worker_runs", 0),
         "unknown_worker_runs": worker_provenance.get("unknown_worker_runs", 0),
-        "requested_worker_coverage": worker_provenance.get(
-            "requested_worker_coverage"
-        ),
+        "requested_worker_coverage": worker_provenance.get("requested_worker_coverage"),
         "resolved_worker_coverage": worker_provenance.get("resolved_worker_coverage"),
         "unknown_worker_coverage": worker_provenance.get("unknown_worker_coverage"),
-        "attempts_by_operation_role": worker_provenance.get(
-            "attempts_by_operation_role"
-        ) or {},
+        "attempts_by_operation_role": worker_provenance.get("attempts_by_operation_role") or {},
         "worker_evaluator_role_overlap_runs": worker_provenance.get(
             "worker_evaluator_role_overlap_runs", 0
         ),
@@ -577,43 +595,28 @@ def _data_health(report: dict) -> dict:
         "legacy_worker_nonworker_model_collision_runs": worker_provenance.get(
             "legacy_worker_nonworker_model_collision_runs", 0
         ),
-        "unmigrated_legacy_trace_rows": worker_provenance.get(
-            "unmigrated_legacy_trace_rows", 0
-        ),
+        "unmigrated_legacy_trace_rows": worker_provenance.get("unmigrated_legacy_trace_rows", 0),
         "legacy_execution_attempt_migration_complete": bool(
             worker_provenance.get("legacy_migration_complete")
         ),
         "capability_total": capabilities_report.get("total", 0),
         "capability_counts_by_status": capabilities_report.get("counts_by_status") or {},
-        "capability_active_without_edges": capabilities_report.get(
-            "active_without_edges"
-        ) or [],
+        "capability_active_without_edges": capabilities_report.get("active_without_edges") or [],
         "research_subject_count": research_subjects.get("registered_subjects", 0),
-        "research_independent_subject_count": research_subjects.get(
-            "independent_subjects", 0
-        ),
-        "research_unevaluated_backlog": research_subjects.get(
-            "unevaluated_backlog", 0
-        ),
+        "research_independent_subject_count": research_subjects.get("independent_subjects", 0),
+        "research_unevaluated_backlog": research_subjects.get("unevaluated_backlog", 0),
         "research_unevaluated_cap": research_subjects.get("unevaluated_cap", 0),
         "research_unevaluated_cap_reached": bool(
             research_subjects.get("unevaluated_backlog_cap_reached")
         ),
-        "research_duplicate_rejections": research_subjects.get(
-            "duplicate_rejections", 0
-        ),
+        "research_duplicate_rejections": research_subjects.get("duplicate_rejections", 0),
         "research_production_collisions": research_subjects.get(
             "research_production_collisions", 0
         ),
-        "research_true_task_type_distribution": research_subjects.get(
-            "true_task_type_distribution"
-        ) or {},
-        "research_rejections_by_reason": research_subjects.get(
-            "rejections_by_reason"
-        ) or {},
-        "research_effective_sample_count": research_subjects.get(
-            "effective_sample_count", 0.0
-        ),
+        "research_true_task_type_distribution": research_subjects.get("true_task_type_distribution")
+        or {},
+        "research_rejections_by_reason": research_subjects.get("rejections_by_reason") or {},
+        "research_effective_sample_count": research_subjects.get("effective_sample_count", 0.0),
         "execution_profile_ready": profile_report.get("ready_profiles", 0),
         "execution_profile_cold_starts": profile_report.get("cold_starts", 0),
         "execution_profile_resolved_coverage": {
@@ -640,12 +643,8 @@ def _data_health(report: dict) -> dict:
         "model_profile_trial_source_unchanged": bool(
             (model_trial.get("source_integrity") or {}).get("unchanged")
         ),
-        "model_profile_trial_shared_pool_debit": (
-            model_trial.get("shared_pool_debit") or {}
-        ),
-        "model_profile_trial_learning_enabled": bool(
-            model_trial.get("learning_enabled")
-        ),
+        "model_profile_trial_shared_pool_debit": (model_trial.get("shared_pool_debit") or {}),
+        "model_profile_trial_learning_enabled": bool(model_trial.get("learning_enabled")),
         "model_profile_transport_qualification_status": transport_qualification.get(
             "status", "not_qualified"
         ),
@@ -667,12 +666,8 @@ def _data_health(report: dict) -> dict:
         "open_gap_kinds": len(evidence.get("open_gaps_by_recurrence") or []),
         "evidence_proposals": len(evidence.get("proposals") or []),
         "evidence_schema_status": schema_growth.get("status"),
-        "evidence_schema_clustered_proposals": schema_growth.get(
-            "clustered_proposal_count", 0
-        ),
-        "evidence_schema_prune_candidates": active_review.get(
-            "prune_candidate_count", 0
-        ),
+        "evidence_schema_clustered_proposals": schema_growth.get("clustered_proposal_count", 0),
+        "evidence_schema_prune_candidates": active_review.get("prune_candidate_count", 0),
         "evidence_schema_active_review": active_review.get("active") or [],
         "evidence_schema_recommendation": schema_growth.get("recommendation"),
         "active_evidence_types": (
@@ -686,17 +681,11 @@ def _data_health(report: dict) -> dict:
         "dry_seams_overall": dry.get("overall"),
         "dry_seam_counts": dry.get("status_counts") or {},
         "outcome_gap_total": outcome_gaps.get("total_runs_without_outcome", 0),
-        "outcome_gap_actionable": outcome_gaps.get(
-            "actionable_runs_without_outcome", 0
-        ),
-        "outcome_gap_advisory_or_unlinked": outcome_gaps.get(
-            "advisory_or_expected_unlinked", 0
-        ),
+        "outcome_gap_actionable": outcome_gaps.get("actionable_runs_without_outcome", 0),
+        "outcome_gap_advisory_or_unlinked": outcome_gaps.get("advisory_or_expected_unlinked", 0),
         "outcome_gap_categories": outcome_gaps.get("categories") or [],
         "feature_total": features_report.get("total", 0),
-        "feature_promotion_candidates": len(
-            features_report.get("promotion_candidates") or []
-        ),
+        "feature_promotion_candidates": len(features_report.get("promotion_candidates") or []),
     }
 
 
@@ -740,9 +729,7 @@ def _keepalive_supervisor(report: dict) -> dict:
         "disagreement_rate": summary.get("disagreement_rate"),
         "thresholds": thresholds,
         "stage2_status": stage2.get("status"),
-        "stage2_ready_for_supervised_apply": bool(
-            stage2.get("ready_for_supervised_apply")
-        ),
+        "stage2_ready_for_supervised_apply": bool(stage2.get("ready_for_supervised_apply")),
         "stage2_ready_for_historical_replay_analysis": bool(
             stage2.get("ready_for_historical_replay_analysis")
         ),
@@ -759,15 +746,11 @@ def _keepalive_supervisor(report: dict) -> dict:
         "stage2_synced_role_outcomes": stage2_summary.get("synced_role_outcomes", 0),
         "stage2_linked_outcome_target": stage2_summary.get("linked_outcome_target"),
         "stage2_linked_disagreements": stage2_summary.get("linked_disagreements", 0),
-        "stage2_disagreement_outcome_target": stage2_summary.get(
-            "disagreement_outcome_target"
-        ),
+        "stage2_disagreement_outcome_target": stage2_summary.get("disagreement_outcome_target"),
         "stage2_historical_linked_disagreements": stage2_summary.get(
             "historical_linked_disagreements", 0
         ),
-        "stage2_historical_candidates_remaining": stage2.get(
-            "historical_candidates_remaining", 0
-        ),
+        "stage2_historical_candidates_remaining": stage2.get("historical_candidates_remaining", 0),
         "stage2_calibration_candidates_remaining": stage2.get(
             "calibration_candidates_remaining", 0
         ),
@@ -776,9 +759,7 @@ def _keepalive_supervisor(report: dict) -> dict:
         "stage2_live_plan_status": live_plan.get("status"),
         "stage2_live_plan_age_s": live_plan.get("age_s"),
         "stage2_live_candidate_count": live_plan.get("live_candidate_count", 0),
-        "stage2_eligible_live_candidate_count": live_plan.get(
-            "eligible_live_candidate_count", 0
-        ),
+        "stage2_eligible_live_candidate_count": live_plan.get("eligible_live_candidate_count", 0),
         "stage2_unrecorded_live_candidate_count": live_plan.get(
             "unrecorded_live_candidate_count", 0
         ),
@@ -835,10 +816,7 @@ def _build_alerts(
     low_coverage_needs_action = (
         actionable_outcome_gaps is None
         or int(actionable_outcome_gaps or 0) > 0
-        or (
-            production_outcome_coverage is not None
-            and production_outcome_coverage < 0.8
-        )
+        or (production_outcome_coverage is not None and production_outcome_coverage < 0.8)
     )
     if coverage is not None and coverage < 0.8 and low_coverage_needs_action:
         _alert(
@@ -849,9 +827,7 @@ def _build_alerts(
             {
                 "runs": productivity.get("runs"),
                 "outcomes": productivity.get("outcomes"),
-                "actionable_missing_joins": productivity.get(
-                    "actionable_missing_production_joins"
-                ),
+                "actionable_missing_joins": productivity.get("actionable_missing_production_joins"),
             },
         )
     if productivity.get("pending_durability_count", 0):
@@ -940,13 +916,9 @@ def _build_alerts(
     if artifact_status in {"rollup_only", "partial", "dry", "unknown"}:
         telemetry_status = health.get("langsmith_telemetry_status")
         telemetry_flowing = telemetry_status in {"flowing", "cost_only", "trace_only"}
-        severity = (
-            "fail" if artifact_status == "dry" and not telemetry_flowing else "warn"
-        )
+        severity = "fail" if artifact_status == "dry" and not telemetry_flowing else "warn"
         telemetry_note = (
-            f"; durable telemetry sink is {telemetry_status}"
-            if telemetry_flowing
-            else ""
+            f"; durable telemetry sink is {telemetry_status}" if telemetry_flowing else ""
         )
         _alert(
             alerts,
@@ -960,9 +932,7 @@ def _build_alerts(
                 "expected_repos": health.get("langsmith_artifact_expected_repos"),
                 "registered_repos": health.get("langsmith_artifact_registered_repos"),
                 "exempted_repos": health.get("langsmith_artifact_exempted_repos"),
-                "visible_artifacts_found": health.get(
-                    "langsmith_artifact_visible_found"
-                ),
+                "visible_artifacts_found": health.get("langsmith_artifact_visible_found"),
                 "missing_with_recent_runs": health.get(
                     "langsmith_artifact_missing_with_recent_runs"
                 ),
@@ -1003,9 +973,7 @@ def _build_alerts(
                 f"{route_coverage['active_backfill_collectable_zero_observation_cells']} active backfill-collectable)."
             )
         else:
-            message = (
-                f"{route_coverage['raw_zero_observation_cells']} route-weight cells have zero observations."
-            )
+            message = f"{route_coverage['raw_zero_observation_cells']} route-weight cells have zero observations."
         _alert(
             alerts,
             severity,
@@ -1040,7 +1008,7 @@ def _build_alerts(
                 "failure_outcomes": supervisor.get("failure_outcomes"),
                 "meaningful_disagreements": supervisor.get("meaningful_disagreements"),
             },
-    )
+        )
     live_dispatches = int(supervisor.get("stage2_live_dispatches") or 0)
     live_valid_proposals = int(supervisor.get("stage2_live_valid_proposals") or 0)
     synced_role_outcomes = int(supervisor.get("stage2_synced_role_outcomes") or 0)
@@ -1131,11 +1099,7 @@ def _build_alerts(
         )
     dry = report.get("dry_seams") or {}
     for item in (dry.get("findings") or [])[:8]:
-        severity = (
-            item.get("status")
-            if item.get("status") in {"fail", "warn", "info"}
-            else "warn"
-        )
+        severity = item.get("status") if item.get("status") in {"fail", "warn", "info"} else "warn"
         detail = {"recommendation": item.get("recommendation")}
         if item.get("sink") == "route_weights":
             detail.update(route_coverage)
@@ -1193,8 +1157,11 @@ def _classify_alert_actionability(alert: dict, dashboard: dict) -> dict:
         return _actionability_item(
             alert,
             "actionable",
-            detail.get("next_transition") or "Inspect the exact log/artifact and rerun the bounded cadence step.",
-            detail.get("log_path") or detail.get("artifact_path") or "Cadence failure evidence is retained.",
+            detail.get("next_transition")
+            or "Inspect the exact log/artifact and rerun the bounded cadence step.",
+            detail.get("log_path")
+            or detail.get("artifact_path")
+            or "Cadence failure evidence is retained.",
         )
     if key in {"low_outcome_coverage", "production_flow_stale"}:
         return _actionability_item(
@@ -1429,9 +1396,7 @@ def build_dashboard(report: dict, capacity_snapshot: dict | None = None) -> dict
     recorded_exploration = exploration.get("recorded_exploration_evidence") or {}
     acquisition = report.get("exploration_evidence_plan") or {}
     backfill = report.get("exploration_backfill_plan") or {}
-    route_coverage = _route_coverage_summary(
-        learning, exploration, acquisition, backfill
-    )
+    route_coverage = _route_coverage_summary(learning, exploration, acquisition, backfill)
     learning["route_coverage"] = route_coverage
     alerts = _build_alerts(
         productivity,
@@ -1462,20 +1427,14 @@ def build_dashboard(report: dict, capacity_snapshot: dict | None = None) -> dict
             "durability_failure_rate": productivity.get("durability_failure_rate"),
             "production_flow_status": productivity.get("production_flow_status"),
             "recent_production_runs": productivity.get("recent_production_runs"),
-            "recent_production_outcomes": productivity.get(
-                "recent_production_outcomes"
-            ),
-            "latest_production_run_age_days": productivity.get(
-                "latest_production_run_age_days"
-            ),
+            "recent_production_outcomes": productivity.get("recent_production_outcomes"),
+            "latest_production_run_age_days": productivity.get("latest_production_run_age_days"),
             "capacity_ok": capacity_summary.get("state_counts", {}).get("ok", 0),
             "capacity_warn": capacity_summary.get("state_counts", {}).get("warn", 0),
             "capacity_shed": capacity_summary.get("state_counts", {}).get("shed", 0),
             "route_weight_version": learning.get("route_weights_version"),
             "zero_observation_cells": learning.get("zero_observation_cells"),
-            "raw_zero_observation_cells": route_coverage.get(
-                "raw_zero_observation_cells"
-            ),
+            "raw_zero_observation_cells": route_coverage.get("raw_zero_observation_cells"),
             "default_review_zero_observation_cells": route_coverage.get(
                 "default_review_zero_observation_cells"
             ),
@@ -1486,9 +1445,7 @@ def build_dashboard(report: dict, capacity_snapshot: dict | None = None) -> dict
             "route_weight_route_ready": route_coverage.get("route_ready"),
             "exploration_policy_status": exploration.get("status"),
             "exploration_policy_recommendation": exploration.get("recommendation"),
-            "exploration_direct_ready": recorded_exploration.get(
-                "ready_for_direct_comparison"
-            ),
+            "exploration_direct_ready": recorded_exploration.get("ready_for_direct_comparison"),
             "exploration_acquisition_stage": acquisition.get("stage"),
             "exploration_backfill_status": backfill.get("status"),
             "exploration_backfill_eligible": backfill.get("active_backfill_eligible"),
@@ -1515,9 +1472,7 @@ def build_dashboard(report: dict, capacity_snapshot: dict | None = None) -> dict
     dashboard["actionability"] = actionability
     dashboard["scorecard"]["actionable_alert_count"] = actionability["actionable_count"]
     dashboard["scorecard"]["gated_alert_count"] = actionability["gated_count"]
-    dashboard["scorecard"]["informational_alert_count"] = actionability[
-        "informational_count"
-    ]
+    dashboard["scorecard"]["informational_alert_count"] = actionability["informational_count"]
     return dashboard
 
 
@@ -1713,9 +1668,7 @@ def format_markdown(dashboard: dict) -> str:
             f"cost_rows={health.get('langsmith_telemetry_cost_rows')} "
             f"trace_rows={health.get('langsmith_telemetry_trace_rows')}"
         )
-    lines.append(
-        f"- Judges: {health.get('ready_judge_count')}/{health.get('judge_count')} ready"
-    )
+    lines.append(f"- Judges: {health.get('ready_judge_count')}/{health.get('judge_count')} ready")
     lines.append(
         f"- Human calibration: status={health.get('human_calibration_status')} "
         f"ready={health.get('human_calibration_ready')} "
@@ -1837,9 +1790,7 @@ def format_markdown(dashboard: dict) -> str:
             )
     else:
         lines.append("- Non-durable issue runs: none")
-    lines.append(
-        f"- Reviewed issue failures: {process.get('reviewed_issue_failure_count', 0)}"
-    )
+    lines.append(f"- Reviewed issue failures: {process.get('reviewed_issue_failure_count', 0)}")
     lines.extend(["", "## Keepalive Supervisor Gate", ""])
     thresholds = supervisor.get("thresholds") or {}
     lines.append(f"- Status: {supervisor.get('status') or 'unknown'}")
@@ -1873,9 +1824,7 @@ def format_markdown(dashboard: dict) -> str:
         f"eligible={supervisor.get('stage2_eligible_live_candidate_count')} "
         f"unrecorded={supervisor.get('stage2_unrecorded_live_candidate_count')}"
     )
-    lines.append(
-        f"- Live supervisor allowed: {supervisor.get('live_supervisor_allowed')}"
-    )
+    lines.append(f"- Live supervisor allowed: {supervisor.get('live_supervisor_allowed')}")
     if supervisor.get("recommendation"):
         lines.append(f"- Recommendation: {supervisor['recommendation']}")
     lines.extend(["", "## Actionability", ""])
@@ -1890,9 +1839,7 @@ def format_markdown(dashboard: dict) -> str:
         for item in actionability.get("gated") or []:
             lines.append(f"- {item['key']}: {item['next_step']}")
     if actionability.get("informational"):
-        lines.append(
-            f"- Informational: {actionability.get('informational_count', 0)} alert(s)"
-        )
+        lines.append(f"- Informational: {actionability.get('informational_count', 0)} alert(s)")
     lines.extend(["", "## Alerts", ""])
     if not dashboard.get("alerts"):
         lines.append("- None")
@@ -1958,58 +1905,45 @@ def _selftest() -> None:
         dash = build_dashboard(report, fake_capacity)
         assert dash["productivity"]["runs"] == 10, dash["productivity"]
         assert dash["productivity"]["outcome_coverage"] == 1.0, dash["productivity"]
-        assert dash["scorecard"]["production_flow_status"] == "flowing", dash[
-            "scorecard"
-        ]
+        assert dash["scorecard"]["production_flow_status"] == "flowing", dash["scorecard"]
         assert dash["scorecard"]["recent_production_runs"] == 10, dash["scorecard"]
         assert dash["capacity"]["state_counts"]["warn"] == 1, dash["capacity"]
         assert dash["learning"]["divergent_task_count"] == 1, dash["learning"]
-        assert dash["process_improvement"]["signal_count"] == 2, dash[
+        assert dash["process_improvement"]["signal_count"] == 2, dash["process_improvement"]
+        assert dash["process_improvement"]["suppressed_process_failure_count"] == 1, dash[
             "process_improvement"
         ]
-        assert (
-            dash["process_improvement"]["suppressed_process_failure_count"] == 1
-        ), dash["process_improvement"]
         assert dash["scorecard"]["non_durable_issue_count"] == 2, dash["scorecard"]
         assert dash["process_improvement"]["reviewed_issue_failure_count"] == 1, dash[
             "process_improvement"
         ]
         assert dash["data_health"]["outcome_gap_total"] == 0, dash["data_health"]
-        assert dash["data_health"]["langsmith_telemetry_status"] == "flowing", dash[
-            "data_health"
-        ]
+        assert dash["data_health"]["langsmith_telemetry_status"] == "flowing", dash["data_health"]
         assert dash["data_health"]["resolved_worker_runs"] == 4, dash["data_health"]
         assert dash["data_health"]["unknown_worker_runs"] == 6, dash["data_health"]
-        assert dash["data_health"]["worker_evaluator_role_overlap_runs"] == 1, dash[
-            "data_health"
-        ]
-        assert dash["data_health"]["research_subject_count"] == 1, dash[
-            "data_health"
-        ]
-        assert dash["data_health"]["research_duplicate_rejections"] == 1, dash[
-            "data_health"
-        ]
-        assert dash["data_health"]["research_production_collisions"] == 1, dash[
-            "data_health"
+        assert dash["data_health"]["worker_evaluator_role_overlap_runs"] == 1, dash["data_health"]
+        assert dash["data_health"]["research_subject_count"] == 1, dash["data_health"]
+        assert dash["data_health"]["research_duplicate_rejections"] == 1, dash["data_health"]
+        assert dash["data_health"]["research_production_collisions"] == 1, dash["data_health"]
+        assert dash["keepalive_supervisor"]["status"] == "armed_for_layered_ab_review", dash[
+            "keepalive_supervisor"
         ]
         assert (
-            dash["keepalive_supervisor"]["status"] == "armed_for_layered_ab_review"
+            dash["keepalive_supervisor"]["stage2_status"] == "ready_for_supervised_apply_review"
         ), dash["keepalive_supervisor"]
-        assert (
-            dash["keepalive_supervisor"]["stage2_status"]
-            == "ready_for_supervised_apply_review"
-        ), dash["keepalive_supervisor"]
-        assert any(alert["key"] == "capacity_gemini" for alert in dash["alerts"]), dash[
-            "alerts"
-        ]
+        assert any(alert["key"] == "capacity_gemini" for alert in dash["alerts"]), dash["alerts"]
         actionable_keys = {item["key"] for item in dash["actionability"]["actionable"]}
         gated_keys = {item["key"] for item in dash["actionability"]["gated"]}
         assert "capacity_gemini" in actionable_keys, dash["actionability"]
         gemini_capacity_item = next(
             item for item in dash["actionability"]["actionable"] if item["key"] == "capacity_gemini"
         )
-        assert "usable but 5h soft-budget constrained" in gemini_capacity_item["reason"], gemini_capacity_item
-        assert "Prefer ok seats until the 5h window refreshes" in gemini_capacity_item["next_step"], gemini_capacity_item
+        assert (
+            "usable but 5h soft-budget constrained" in gemini_capacity_item["reason"]
+        ), gemini_capacity_item
+        assert (
+            "Prefer ok seats until the 5h window refreshes" in gemini_capacity_item["next_step"]
+        ), gemini_capacity_item
         assert "process_renovate" in actionable_keys, dash["actionability"]
         assert "non_durable_issue_runs" in actionable_keys, dash["actionability"]
         assert "no_human_calibration" in gated_keys, dash["actionability"]
@@ -2062,14 +1996,16 @@ def _selftest() -> None:
                     {"reasons": ["zero_observation_cell"]},
                     {"reasons": ["min_task_observations"]},
                 ],
-                "planned_jobs": [
-                    {"covers_cells": [{"reasons": ["zero_observation_cell"]}]}
-                ],
+                "planned_jobs": [{"covers_cells": [{"reasons": ["zero_observation_cell"]}]}],
             },
         )
         assert stage4_route_summary["raw_zero_observation_cells"] == 36, stage4_route_summary
-        assert stage4_route_summary["default_review_zero_observation_cells"] == 1, stage4_route_summary
-        assert stage4_route_summary["backfill_missing_zero_observation_cells"] == 1, stage4_route_summary
+        assert (
+            stage4_route_summary["default_review_zero_observation_cells"] == 1
+        ), stage4_route_summary
+        assert (
+            stage4_route_summary["backfill_missing_zero_observation_cells"] == 1
+        ), stage4_route_summary
         assert (
             stage4_route_summary["active_backfill_collectable_zero_observation_cells"] == 0
         ), stage4_route_summary
@@ -2148,17 +2084,11 @@ def _selftest() -> None:
         )
         if artifact_status in {"rollup_only", "partial", "dry", "unknown"}:
             assert artifact_alert is not None, dash["alerts"]
-            assert (
-                artifact_alert["detail"].get("telemetry_status") == "flowing"
-            ), artifact_alert
+            assert artifact_alert["detail"].get("telemetry_status") == "flowing", artifact_alert
         else:
             assert artifact_alert is None, dash["alerts"]
         dry_human_alert = next(
-            (
-                alert
-                for alert in dash["alerts"]
-                if alert["key"] == "dry_seam_human_calibration"
-            ),
+            (alert for alert in dash["alerts"] if alert["key"] == "dry_seam_human_calibration"),
             None,
         )
         if dry_human_alert:
@@ -2189,13 +2119,10 @@ def _selftest() -> None:
             {"dry_seams": {"findings": []}},
         )
         assert not any(
-            alert["key"] == "low_outcome_coverage"
-            for alert in suppressed_coverage_alerts
+            alert["key"] == "low_outcome_coverage" for alert in suppressed_coverage_alerts
         ), suppressed_coverage_alerts
         no_human_alert = next(
-            alert
-            for alert in suppressed_coverage_alerts
-            if alert["key"] == "no_human_calibration"
+            alert for alert in suppressed_coverage_alerts if alert["key"] == "no_human_calibration"
         )
         assert no_human_alert["severity"] == "info", no_human_alert
         actionable_coverage_alerts = _build_alerts(
@@ -2209,19 +2136,14 @@ def _selftest() -> None:
             {"dry_seams": {"findings": []}},
         )
         assert any(
-            alert["key"] == "low_outcome_coverage"
-            for alert in actionable_coverage_alerts
+            alert["key"] == "low_outcome_coverage" for alert in actionable_coverage_alerts
         ), actionable_coverage_alerts
-        assert any(
-            alert["key"] == "process_renovate" for alert in dash["alerts"]
-        ), dash["alerts"]
-        assert any(
-            alert["key"] == "keepalive_supervisor_gate" for alert in dash["alerts"]
-        ), dash["alerts"]
-        blocked_report = json.loads(json.dumps(report))
-        blocked_stage2 = blocked_report["keepalive_supervisor"][
-            "stage2_proposal_corpus"
+        assert any(alert["key"] == "process_renovate" for alert in dash["alerts"]), dash["alerts"]
+        assert any(alert["key"] == "keepalive_supervisor_gate" for alert in dash["alerts"]), dash[
+            "alerts"
         ]
+        blocked_report = json.loads(json.dumps(report))
+        blocked_stage2 = blocked_report["keepalive_supervisor"]["stage2_proposal_corpus"]
         blocked_stage2["status"] = "waiting_for_candidates"
         blocked_stage2["ready_for_supervised_apply"] = False
         blocked_stage2["ready_for_historical_replay_analysis"] = False
@@ -2234,12 +2156,10 @@ def _selftest() -> None:
         blocked_stage2["summary"]["disagreement_outcome_target"] = 3
         blocked_dash = build_dashboard(blocked_report, fake_capacity)
         assert (
-            blocked_dash["keepalive_supervisor"]["stage2_status"]
-            == "waiting_for_candidates"
+            blocked_dash["keepalive_supervisor"]["stage2_status"] == "waiting_for_candidates"
         ), blocked_dash["keepalive_supervisor"]
         assert any(
-            alert["key"] == "stage2_waiting_for_candidates"
-            for alert in blocked_dash["alerts"]
+            alert["key"] == "stage2_waiting_for_candidates" for alert in blocked_dash["alerts"]
         ), blocked_dash["alerts"]
         assert any(
             item["key"] == "stage2_waiting_for_candidates"
@@ -2267,8 +2187,7 @@ def _selftest() -> None:
         }
         live_candidate_dash = build_dashboard(live_candidate_report, fake_capacity)
         assert any(
-            alert["key"] == "stage2_live_candidates"
-            for alert in live_candidate_dash["alerts"]
+            alert["key"] == "stage2_live_candidates" for alert in live_candidate_dash["alerts"]
         ), live_candidate_dash["alerts"]
         assert any(
             item["key"] == "stage2_live_candidates"
@@ -2301,25 +2220,17 @@ def main(argv: list[str] | None = None) -> int:
         description="Read-only Orchestrator productivity/quality dashboard."
     )
     parser.add_argument("--window-days", type=periodic_report._positive_int, default=90)
-    parser.add_argument(
-        "--min-gap-recurrence", type=periodic_report._positive_int, default=3
-    )
-    parser.add_argument(
-        "--snapshot-json", type=Path, help="read feedback.snapshot_json() output"
-    )
+    parser.add_argument("--min-gap-recurrence", type=periodic_report._positive_int, default=3)
+    parser.add_argument("--snapshot-json", type=Path, help="read feedback.snapshot_json() output")
     parser.add_argument("--json", action="store_true", help="print dashboard JSON")
     parser.add_argument(
         "--markdown", action="store_true", help="print dashboard Markdown (default)"
     )
-    parser.add_argument(
-        "--write-json", type=Path, help="also write dashboard JSON to this path"
-    )
+    parser.add_argument("--write-json", type=Path, help="also write dashboard JSON to this path")
     parser.add_argument(
         "--write-markdown", type=Path, help="also write dashboard Markdown to this path"
     )
-    parser.add_argument(
-        "--no-capacity", action="store_true", help="skip live capacity probe"
-    )
+    parser.add_argument("--no-capacity", action="store_true", help="skip live capacity probe")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
 

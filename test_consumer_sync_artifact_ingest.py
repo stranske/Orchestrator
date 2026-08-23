@@ -136,9 +136,7 @@ def test_run_attempt_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         }
     )
 
-    run_list = {
-        "workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]
-    }
+    run_list = {"workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]}
     artifact_list = {
         "artifacts": [
             {
@@ -160,9 +158,7 @@ def test_run_attempt_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         raise ValueError(f"Unexpected mock gh command: {cmd}")
 
     monkeypatch.setattr(consumer_sync_artifact_ingest, "GH_COMMAND_MOCK", mock_gh)
-    monkeypatch.setattr(
-        consumer_sync_artifact_ingest, "TEST_REGISTRY", ["stranske/template"]
-    )
+    monkeypatch.setattr(consumer_sync_artifact_ingest, "TEST_REGISTRY", ["stranske/template"])
 
     # Ingestion must reject mismatched attempt and return exit code 1
     rc = consumer_sync_artifact_ingest.main(
@@ -283,9 +279,7 @@ def test_artifact_contract_accepts_producer_superset() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "dropped", sorted(consumer_sync_artifact_ingest.ARTIFACT_REQUIRED_MEMBERS)
-)
+@pytest.mark.parametrize("dropped", sorted(consumer_sync_artifact_ingest.ARTIFACT_REQUIRED_MEMBERS))
 def test_artifact_contract_requires_both_read_members(dropped: str) -> None:
     with pytest.raises(ValueError, match="missing required member"):
         consumer_sync_artifact_ingest.validate_artifact_members(
@@ -299,9 +293,7 @@ def test_artifact_contract_requires_both_read_members(dropped: str) -> None:
 def test_artifact_contract_rejects_secret_bearing_extra(leak: str) -> None:
     # Tolerating extras must not become tolerating credential exfiltration.
     with pytest.raises(ValueError, match="secret-bearing"):
-        consumer_sync_artifact_ingest.validate_artifact_members(
-            _infolist(*PRODUCER_MEMBERS, leak)
-        )
+        consumer_sync_artifact_ingest.validate_artifact_members(_infolist(*PRODUCER_MEMBERS, leak))
 
 
 def test_artifact_contract_rejects_non_regular_and_runaway_members() -> None:
@@ -324,9 +316,7 @@ def test_artifact_contract_rejects_non_regular_and_runaway_members() -> None:
         )
 
 
-def test_expiry_boundary_is_inclusive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_expiry_boundary_is_inclusive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # `--expiry DATE` names the LAST authorised day, so the window is still live ON that day.
     # `<=` refused it in production: "Expiry date 2026-07-25 must be in the future relative to
     # current date 2026-07-25", four times.
@@ -374,9 +364,7 @@ def _legacy_observed_targets(repo_root: Path, plan: dict) -> dict[str, str]:
     recorded as evidence — a silent, self-inflicted corruption of the ledger.
     """
     observed: dict[str, str] = {}
-    targets = {e["target"] for e in plan["entries"]} | {
-        r["target"] for r in plan["removals"]
-    }
+    targets = {e["target"] for e in plan["entries"]} | {r["target"] for r in plan["removals"]}
     for target in targets:
         target_abs_path = repo_root / target
         if not target_abs_path.exists():
@@ -418,9 +406,7 @@ EQUIV_PLAN = {
 
 def test_targeted_read_matches_legacy_zipball_read(tmp_path: Path) -> None:
     # Legacy path: GitHub zipballs nest everything under one generated root directory.
-    zip_bytes = make_zip(
-        {f"stranske-Repo-abcdef/{p}": c for p, c in EQUIV_FILES.items()}
-    )
+    zip_bytes = make_zip({f"stranske-Repo-abcdef/{p}": c for p, c in EQUIV_FILES.items()})
     dest = tmp_path / "extracted"
     dest.mkdir()
     consumer_sync_artifact_ingest.safe_extract_zip(zip_bytes, dest)
@@ -435,9 +421,7 @@ def test_targeted_read_matches_legacy_zipball_read(tmp_path: Path) -> None:
         EQUIV_PLAN,
         reader=consumer_sync_artifact_ingest.BlobReader(
             {
-                sha: hashlib.sha256(
-                    __import__("base64").b64decode(row["content"])
-                ).hexdigest()
+                sha: hashlib.sha256(__import__("base64").b64decode(row["content"])).hexdigest()
                 for sha, row in blobs.items()
             }
         ),
@@ -470,9 +454,7 @@ def test_tree_read_fails_closed_on_truncation_and_odd_entries(
         lambda args: json.dumps(
             {
                 "truncated": False,
-                "tree": [
-                    {"path": "../escape", "mode": "100644", "type": "blob", "sha": "0" * 40}
-                ],
+                "tree": [{"path": "../escape", "mode": "100644", "type": "blob", "sha": "0" * 40}],
             }
         ),
     )
@@ -481,9 +463,7 @@ def test_tree_read_fails_closed_on_truncation_and_odd_entries(
 
     # Symlinks and submodules are refused rather than hashed under a changed meaning.
     for mode, node_type in (("120000", "blob"), ("160000", "commit")):
-        nodes = {
-            "t.yml": {"path": "t.yml", "mode": mode, "type": node_type, "sha": "0" * 40}
-        }
+        nodes = {"t.yml": {"path": "t.yml", "mode": mode, "type": node_type, "sha": "0" * 40}}
         with pytest.raises(ValueError, match="unsupported_tree_entry"):
             consumer_sync_artifact_ingest.observed_targets_from_tree(
                 "stranske/Repo",
@@ -588,10 +568,7 @@ def test_repo_hygiene_separates_debris_from_vendored() -> None:
     assert by_path["node_modules"]["disposition"] == "untrack"
     assert by_path["node_modules"]["manifest"] is None
     assert by_path[".github/scripts/node_modules"]["disposition"] == "review_vendored"
-    assert (
-        by_path[".github/scripts/node_modules"]["manifest"]
-        == ".github/scripts/package.json"
-    )
+    assert by_path[".github/scripts/node_modules"]["manifest"] == ".github/scripts/package.json"
     assert by_path["tests/__pycache__"]["disposition"] == "untrack"
     # `vendor/` means "committed on purpose" by convention, and JS actions ship a committed
     # `dist/` — recommending removal of either would be reckless.
@@ -601,10 +578,7 @@ def test_repo_hygiene_separates_debris_from_vendored() -> None:
     # Patterns are ANCHORED. A bare "node_modules/" matches at every depth and would swallow the
     # vendored copy — that recommendation would have broken CI.
     assert by_path["node_modules"]["gitignore"] == "/node_modules/"
-    assert (
-        by_path[".github/scripts/node_modules"]["gitignore"]
-        == "/.github/scripts/node_modules/"
-    )
+    assert by_path[".github/scripts/node_modules"]["gitignore"] == "/.github/scripts/node_modules/"
     assert "node_modules/" not in report["remediation"]["gitignore_lines"]
 
     # Only debris gets untrack commands; the vendored and owner-decision items are review-only.
@@ -619,12 +593,13 @@ def test_repo_hygiene_separates_debris_from_vendored() -> None:
     # number understates the case it is making.
     assert by_path["data/image_cache"]["files"] == 2
     assert by_path["data/image_cache"]["bytes"] == len(big) + 4
-    assert report["reclaimable_bytes"] == by_path["node_modules"]["bytes"] + by_path["tests/__pycache__"]["bytes"]
+    assert (
+        report["reclaimable_bytes"]
+        == by_path["node_modules"]["bytes"] + by_path["tests/__pycache__"]["bytes"]
+    )
 
     # A clean repo produces findings-free output, not a false positive.
-    clean_tree, _ = consumer_sync_artifact_ingest.make_tree_responses(
-        {"src/app.py": "print(1)"}
-    )
+    clean_tree, _ = consumer_sync_artifact_ingest.make_tree_responses({"src/app.py": "print(1)"})
     clean = consumer_sync_artifact_ingest.repo_hygiene(
         "stranske/Clean", {n["path"]: n for n in clean_tree["tree"]}
     )
@@ -635,8 +610,7 @@ def test_repo_hygiene_separates_debris_from_vendored() -> None:
 
 def _hygiene_report(**findings_by_repo):
     return {
-        repo: {"hygiene": {"findings": findings}}
-        for repo, findings in findings_by_repo.items()
+        repo: {"hygiene": {"findings": findings}} for repo, findings in findings_by_repo.items()
     }
 
 
@@ -646,25 +620,52 @@ def test_hygiene_escalation_asks_only_about_judgment_calls() -> None:
         **{
             "stranske/a": [
                 # machine-decidable -> digest, never a question
-                {"kind": "dependency_dir", "path": "node_modules", "bytes": 7 * MB,
-                 "files": 356, "gitignore": "/node_modules/", "disposition": "untrack"},
+                {
+                    "kind": "dependency_dir",
+                    "path": "node_modules",
+                    "bytes": 7 * MB,
+                    "files": 356,
+                    "gitignore": "/node_modules/",
+                    "disposition": "untrack",
+                },
                 # expected and load-bearing -> neither
-                {"kind": "dependency_dir", "path": ".github/scripts/node_modules",
-                 "bytes": 604127, "files": 84,
-                 "gitignore": "/.github/scripts/node_modules/",
-                 "disposition": "review_vendored"},
+                {
+                    "kind": "dependency_dir",
+                    "path": ".github/scripts/node_modules",
+                    "bytes": 604127,
+                    "files": 84,
+                    "gitignore": "/.github/scripts/node_modules/",
+                    "disposition": "review_vendored",
+                },
                 # below the digest floor -> not worth a line
-                {"kind": "dependency_dir", "path": "tests/__pycache__", "bytes": 15088,
-                 "files": 3, "gitignore": "/tests/__pycache__/", "disposition": "untrack"},
+                {
+                    "kind": "dependency_dir",
+                    "path": "tests/__pycache__",
+                    "bytes": 15088,
+                    "files": 3,
+                    "gitignore": "/tests/__pycache__/",
+                    "disposition": "untrack",
+                },
             ],
             "stranske/b": [
                 # judgment, and material -> the ONE thing a human is asked
-                {"kind": "large_binary_dir", "path": "data/image_cache", "bytes": 105 * MB,
-                 "files": 225, "gitignore": "/data/image_cache/",
-                 "disposition": "review_owner"},
+                {
+                    "kind": "large_binary_dir",
+                    "path": "data/image_cache",
+                    "bytes": 105 * MB,
+                    "files": 225,
+                    "gitignore": "/data/image_cache/",
+                    "disposition": "review_owner",
+                },
                 # judgment, but trivial -> the floor keeps it silent
-                {"kind": "large_binary_dir", "path": "docs/img", "bytes": 47755, "files": 1,
-                 "gitignore": "/docs/img/", "disposition": "review_owner"},
+                {
+                    "kind": "large_binary_dir",
+                    "path": "docs/img",
+                    "bytes": 47755,
+                    "files": 1,
+                    "gitignore": "/docs/img/",
+                    "disposition": "review_owner",
+                },
             ],
         }
     )
@@ -682,9 +683,20 @@ def test_hygiene_escalation_asks_only_about_judgment_calls() -> None:
 
     # Standing findings must be ONE question, not a new one on every byte change — the question
     # text carries a coarse band, not exact bytes, because record_owner_question keys on the text.
-    grown = _hygiene_report(**{"stranske/b": [
-        {"kind": "large_binary_dir", "path": "data/image_cache", "bytes": 105 * MB + 5000,
-         "files": 226, "gitignore": "/data/image_cache/", "disposition": "review_owner"}]})
+    grown = _hygiene_report(
+        **{
+            "stranske/b": [
+                {
+                    "kind": "large_binary_dir",
+                    "path": "data/image_cache",
+                    "bytes": 105 * MB + 5000,
+                    "files": 226,
+                    "gitignore": "/data/image_cache/",
+                    "disposition": "review_owner",
+                }
+            ]
+        }
+    )
     assert (
         consumer_sync_artifact_ingest.hygiene_escalation(grown)["questions"][0]["question"]
         == q["question"]
@@ -705,8 +717,17 @@ def test_hygiene_escalation_recording_is_fail_open(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(feedback, "record_owner_question", boom)
     out = consumer_sync_artifact_ingest.record_hygiene_escalation(
-        {"questions": [{"repository": "r", "path": "p", "question": "q",
-                        "default_action": "d", "options": []}]}
+        {
+            "questions": [
+                {
+                    "repository": "r",
+                    "path": "p",
+                    "question": "q",
+                    "default_action": "d",
+                    "options": [],
+                }
+            ]
+        }
     )
     assert out == {"recorded": [], "asked": 0}
 
@@ -755,9 +776,7 @@ def test_preview_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         {".github/workflows/new.yml": "hello old"}
     )
 
-    run_list = {
-        "workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]
-    }
+    run_list = {"workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]}
     artifact_list = {
         "artifacts": [
             {
@@ -785,9 +804,7 @@ def test_preview_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         raise ValueError(f"Unexpected mock gh command: {cmd}")
 
     monkeypatch.setattr(consumer_sync_artifact_ingest, "GH_COMMAND_MOCK", mock_gh)
-    monkeypatch.setattr(
-        consumer_sync_artifact_ingest, "TEST_REGISTRY", ["stranske/template"]
-    )
+    monkeypatch.setattr(consumer_sync_artifact_ingest, "TEST_REGISTRY", ["stranske/template"])
 
     rc = consumer_sync_artifact_ingest.main(
         [
@@ -809,9 +826,7 @@ def test_preview_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert not (state_dir / "consumer-sync-artifact-ingest-report.json").exists()
 
 
-def test_end_to_end_idempotency(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_end_to_end_idempotency(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state_dir = tmp_path / "state"
     ledger_path = tmp_path / "capabilities.json"
     capabilities.save({}, ledger_path)
@@ -848,9 +863,7 @@ def test_end_to_end_idempotency(
         }
     )
 
-    run_list = {
-        "workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]
-    }
+    run_list = {"workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]}
     artifact_list = {
         "artifacts": [
             {
@@ -878,9 +891,7 @@ def test_end_to_end_idempotency(
         raise ValueError(f"Unexpected mock gh command: {cmd}")
 
     monkeypatch.setattr(consumer_sync_artifact_ingest, "GH_COMMAND_MOCK", mock_gh)
-    monkeypatch.setattr(
-        consumer_sync_artifact_ingest, "TEST_REGISTRY", ["stranske/template"]
-    )
+    monkeypatch.setattr(consumer_sync_artifact_ingest, "TEST_REGISTRY", ["stranske/template"])
 
     # First Run
     rc1 = consumer_sync_artifact_ingest.main(
@@ -909,9 +920,7 @@ def test_end_to_end_idempotency(
     # (the reference-workflow seeding that creates the capability also emits output events, and
     # those legitimately carry no subject — only the ingest's own effect does)
     outputs = [e for e in cap["event_history"] if e.get("type") == "output"]
-    assert "stranske/template" in {
-        (e.get("metadata") or {}).get("subject_id") for e in outputs
-    }
+    assert "stranske/template" in {(e.get("metadata") or {}).get("subject_id") for e in outputs}
     # Second Run
     rc2 = consumer_sync_artifact_ingest.main(
         [

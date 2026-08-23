@@ -8,6 +8,7 @@ undone merge as a durable win.
 
 `--selftest` runs fully offline against a temp feedback store.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,7 +25,9 @@ import outcomes
 import provision
 
 GRACE_DAYS = 7
-REVERT_WINDOW_DAYS = 21  # reverts land within days of a merge; bound the base-commit scan to this window
+REVERT_WINDOW_DAYS = (
+    21  # reverts land within days of a merge; bound the base-commit scan to this window
+)
 SECONDS_PER_DAY = 86400
 MAX_REVERT_PRS = 50
 MAX_BASE_COMMITS = 100
@@ -93,6 +96,7 @@ def _gh_throttle(resource: str) -> None:
     no-op + fail-open otherwise so the sweep never breaks on a missing/erroring module."""
     try:
         import gh_capacity
+
         gh_capacity.throttle_if_enabled(resource)
     except Exception:
         pass
@@ -106,10 +110,23 @@ def _gh_pr_details(target: str, mode: str | None) -> dict | None:
 
     fields = "number,state,mergedAt,closedAt,mergeCommit,baseRefName,title,files"
     if mode == "local":
-        arr = _run_json([
-            "gh", "pr", "list", "-R", repo, "--head", f"orchestrator/issue-{num}",
-            "--state", "all", "--json", fields, "--limit", "1",
-        ])
+        arr = _run_json(
+            [
+                "gh",
+                "pr",
+                "list",
+                "-R",
+                repo,
+                "--head",
+                f"orchestrator/issue-{num}",
+                "--state",
+                "all",
+                "--json",
+                fields,
+                "--limit",
+                "1",
+            ]
+        )
         return arr[0] if isinstance(arr, list) and arr else None
 
     obj = _run_json(["gh", "pr", "view", str(num), "-R", repo, "--json", fields])
@@ -150,9 +167,21 @@ def _merge_sha(pr: dict) -> str | None:
 
 def _default_branch(repo: str) -> str | None:
     try:
-        r = subprocess.run(["gh", "repo", "view", repo, "--json", "defaultBranchRef",
-                            "-q", ".defaultBranchRef.name"],
-                           capture_output=True, text=True, timeout=30)
+        r = subprocess.run(
+            [
+                "gh",
+                "repo",
+                "view",
+                repo,
+                "--json",
+                "defaultBranchRef",
+                "-q",
+                ".defaultBranchRef.name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
     except subprocess.TimeoutExpired:
         return None
     if r.returncode != 0:
@@ -172,17 +201,31 @@ def _fetch_repo_revert_prs(repo: str) -> tuple[list | None, bool]:
     Returns (merged_revert_prs, hit_limit); the list is None on search failure.
     """
     _gh_throttle("search")  # SEARCH = 30/min, the binding constraint on bulk sweeps
-    arr = _run_json([
-        "gh", "pr", "list", "-R", repo, "--state", "merged", "--search", "Revert in:title",
-        "--json", "number,title,body", "--limit", str(MAX_REVERT_PRS),
-    ])
+    arr = _run_json(
+        [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "merged",
+            "--search",
+            "Revert in:title",
+            "--json",
+            "number,title,body",
+            "--limit",
+            str(MAX_REVERT_PRS),
+        ]
+    )
     if not isinstance(arr, list):
         return None, False
     return arr, len(arr) >= MAX_REVERT_PRS
 
 
-def _revert_pr_status(repo: str, pr_number: int,
-                      revert_cache: dict | None = None) -> tuple[bool | None, str]:
+def _revert_pr_status(
+    repo: str, pr_number: int, revert_cache: dict | None = None
+) -> tuple[bool | None, str]:
     """Was `pr_number` reverted by a merged 'Revert ...' PR? Matches `pr_number` locally
     against the repo-wide revert search, cached per repo when `revert_cache` is supplied
     (the per-PR search otherwise hit the 30/min REST search limit on bulk sweeps)."""
@@ -206,7 +249,9 @@ def _revert_pr_status(repo: str, pr_number: int,
     return False, "no revert PR found"
 
 
-def _revert_commit_status(repo: str, base: str, merge_sha: str, merged_at: str) -> tuple[bool | None, str]:
+def _revert_commit_status(
+    repo: str, base: str, merge_sha: str, merged_at: str
+) -> tuple[bool | None, str]:
     # Bound the scan to a window AFTER the merge: a commit two months later is not "this merge failed",
     # and scanning every commit since an old merge always blows past MAX_BASE_COMMITS in active repos
     # (which forced every old merged PR to stay pending — the keepalive backfill exposed this).
@@ -227,7 +272,7 @@ def _revert_commit_status(repo: str, base: str, merge_sha: str, merged_at: str) 
         return None, "base commit scan failed"
     needle = f"This reverts commit {merge_sha}"
     for item in arr:
-        msg = ((item.get("commit") or {}).get("message") or "")
+        msg = (item.get("commit") or {}).get("message") or ""
         if needle in msg:
             sha = item.get("sha") or "unknown"
             return True, f"revert commit found: {sha}"
@@ -283,8 +328,9 @@ def _normalize_revert_status(value) -> tuple[bool | None, str]:
     return None, "revert resolver ambiguous"
 
 
-def _revert_status(pr: dict, _revert_fn=None,
-                   revert_cache: dict | None = None) -> tuple[bool | None, str]:
+def _revert_status(
+    pr: dict, _revert_fn=None, revert_cache: dict | None = None
+) -> tuple[bool | None, str]:
     if _revert_fn:
         return _normalize_revert_status(_revert_fn(pr))
     if "reverted" in pr:
@@ -320,7 +366,7 @@ def delivered(pr: dict | None) -> bool | None:
         return None
     files = pr.get("files")
     if not isinstance(files, list) or not files:
-        return None                      # no file list is unknown, never "delivered nothing"
+        return None  # no file list is unknown, never "delivered nothing"
     paths = []
     for entry in files:
         path = entry.get("path") if isinstance(entry, dict) else entry
@@ -331,9 +377,15 @@ def delivered(pr: dict | None) -> bool | None:
     return not all(BOOKKEEPING_PATH_RE.search(p) for p in paths)
 
 
-def classify_durability(run: dict, pr: dict | None, *, grace_days: int = GRACE_DAYS,
-                        now: int | None = None, _revert_fn=None,
-                        revert_cache: dict | None = None) -> dict:
+def classify_durability(
+    run: dict,
+    pr: dict | None,
+    *,
+    grace_days: int = GRACE_DAYS,
+    now: int | None = None,
+    _revert_fn=None,
+    revert_cache: dict | None = None,
+) -> dict:
     """Pure-ish classifier. Returns a pending result whenever evidence is incomplete."""
     now = int(now or time.time())
     if not pr:
@@ -356,16 +408,20 @@ def classify_durability(run: dict, pr: dict | None, *, grace_days: int = GRACE_D
 
     state = (pr.get("state") or "").upper()
     if state == "OPEN":
-        return {"durability": "reopened",
-                "notes": f"durability_sweep: PR reopened after merge; merge age {age}d"}
+        return {
+            "durability": "reopened",
+            "notes": f"durability_sweep: PR reopened after merge; merge age {age}d",
+        }
 
     if state not in ("MERGED", "CLOSED"):
         return {"durability": None, "reason": f"ambiguous PR state {state or 'unknown'}"}
 
     reverted, revert_note = _revert_status(pr, _revert_fn=_revert_fn, revert_cache=revert_cache)
     if reverted is True:
-        return {"durability": "reverted",
-                "notes": f"durability_sweep: {revert_note}; merge age {age}d"}
+        return {
+            "durability": "reverted",
+            "notes": f"durability_sweep: {revert_note}; merge age {age}d",
+        }
     if reverted is None:
         return {"durability": None, "reason": revert_note}
 
@@ -373,34 +429,67 @@ def classify_durability(run: dict, pr: dict | None, *, grace_days: int = GRACE_D
         paths = ", ".join(
             str(f.get("path") if isinstance(f, dict) else f) for f in (pr.get("files") or [])
         )[:160]
-        return {"durability": "abandoned",
-                "notes": (f"durability_sweep: merged but delivered nothing -- every changed path is "
-                          f"agent bookkeeping ({paths}); merge age {age}d")}
+        return {
+            "durability": "abandoned",
+            "notes": (
+                f"durability_sweep: merged but delivered nothing -- every changed path is "
+                f"agent bookkeeping ({paths}); merge age {age}d"
+            ),
+        }
 
-    return {"durability": "durable",
-            "notes": f"durability_sweep: held {age}d; {revert_note}"}
+    return {"durability": "durable", "notes": f"durability_sweep: held {age}d; {revert_note}"}
 
 
-def sweep_durability(*, grace_days: int = GRACE_DAYS, dry_run: bool = False,
-                     _state_fn=None, _revert_fn=None, _now: int | None = None) -> dict:
+def sweep_durability(
+    *,
+    grace_days: int = GRACE_DAYS,
+    dry_run: bool = False,
+    _state_fn=None,
+    _revert_fn=None,
+    _now: int | None = None,
+) -> dict:
     """Patch old merged+pending outcomes when their durability can be resolved with confidence."""
-    summary = {"checked": 0, "durable": 0, "reverted": 0, "reopened": 0, "skipped": 0, "details": []}
+    summary = {
+        "checked": 0,
+        "durable": 0,
+        "reverted": 0,
+        "reopened": 0,
+        "skipped": 0,
+        "details": [],
+    }
     revert_cache: dict = {}  # repo -> cached revert search, so a bulk sweep does 1 search/repo
     for run in _pending_merged_runs():
         summary["checked"] += 1
         pr = _resolved_pr_state(run, _state_fn=_state_fn)
-        verdict = classify_durability(run, pr, grace_days=grace_days, now=_now,
-                                      _revert_fn=_revert_fn, revert_cache=revert_cache)
+        verdict = classify_durability(
+            run,
+            pr,
+            grace_days=grace_days,
+            now=_now,
+            _revert_fn=_revert_fn,
+            revert_cache=revert_cache,
+        )
         durability = verdict.get("durability")
         if durability is None:
             summary["skipped"] += 1
-            summary["details"].append({"run_id": run["run_id"], "target": run["target"],
-                                       "action": "skip", "reason": verdict.get("reason")})
+            summary["details"].append(
+                {
+                    "run_id": run["run_id"],
+                    "target": run["target"],
+                    "action": "skip",
+                    "reason": verdict.get("reason"),
+                }
+            )
             continue
 
         summary[durability] += 1
-        detail = {"run_id": run["run_id"], "target": run["target"], "action": "patch",
-                  "durability": durability, "notes": verdict["notes"]}
+        detail = {
+            "run_id": run["run_id"],
+            "target": run["target"],
+            "action": "patch",
+            "durability": durability,
+            "notes": verdict["notes"],
+        }
         if dry_run:
             detail["dry_run"] = True
         else:
@@ -418,8 +507,9 @@ def _selftest_live_revert_scan(now: int):
     """Exercise the live revert resolver without the injected `reverted` shortcut."""
     old = _iso_days_ago(now, 10)
 
-    def classify_with_canned_gh(pr_number: int, merge_sha: str, pr_rows: list[dict],
-                               commit_rows: list[dict]) -> tuple[dict, list[list[str]]]:
+    def classify_with_canned_gh(
+        pr_number: int, merge_sha: str, pr_rows: list[dict], commit_rows: list[dict]
+    ) -> tuple[dict, list[list[str]]]:
         calls = []
         real_run_json = globals()["_run_json"]
 
@@ -433,13 +523,21 @@ def _selftest_live_revert_scan(now: int):
 
         globals()["_run_json"] = fake_run_json
         try:
-            return classify_durability(
-                {"target": f"o/r#{pr_number}", "mode": "remote"},
-                {"state": "MERGED", "number": pr_number, "mergedAt": old,
-                 "baseRefName": "main", "mergeCommit": {"oid": merge_sha}},
-                grace_days=GRACE_DAYS,
-                now=now,
-            ), calls
+            return (
+                classify_durability(
+                    {"target": f"o/r#{pr_number}", "mode": "remote"},
+                    {
+                        "state": "MERGED",
+                        "number": pr_number,
+                        "mergedAt": old,
+                        "baseRefName": "main",
+                        "mergeCommit": {"oid": merge_sha},
+                    },
+                    grace_days=GRACE_DAYS,
+                    now=now,
+                ),
+                calls,
+            )
         finally:
             globals()["_run_json"] = real_run_json
 
@@ -463,13 +561,22 @@ def _selftest_live_revert_scan(now: int):
     _now_ts = int(time.time())
 
     def _verdict_for(files):
-        pr = {"state": "MERGED", "number": 792, "mergedAt": _old_iso,
-              "baseRefName": "main", "mergeCommit": {"oid": "deadbeef"}}
+        pr = {
+            "state": "MERGED",
+            "number": 792,
+            "mergedAt": _old_iso,
+            "baseRefName": "main",
+            "mergeCommit": {"oid": "deadbeef"},
+        }
         if files is not None:
             pr["files"] = files
-        return classify_durability({"target": "o/r#792", "mode": "remote"}, pr,
-                                   grace_days=GRACE_DAYS, now=_now_ts,
-                                   _revert_fn=lambda *a, **k: (False, "no revert found"))
+        return classify_durability(
+            {"target": "o/r#792", "mode": "remote"},
+            pr,
+            grace_days=GRACE_DAYS,
+            now=_now_ts,
+            _revert_fn=lambda *a, **k: (False, "no revert found"),
+        )
 
     ledger_only = _verdict_for([{"path": ".agents/issue-791-ledger.yml"}])
     assert ledger_only["durability"] == "abandoned", ledger_only
@@ -480,8 +587,7 @@ def _selftest_live_revert_scan(now: int):
     # Real work still resolves durable...
     assert _verdict_for([{"path": "dashboard/theme.py"}])["durability"] == "durable"
     # ...and so does a MIXED diff (a ledger entry alongside real work is normal).
-    assert _verdict_for([{"path": ".agents/x.yml"},
-                         {"path": "app.py"}])["durability"] == "durable"
+    assert _verdict_for([{"path": ".agents/x.yml"}, {"path": "app.py"}])["durability"] == "durable"
 
     # FAIL-SAFE: unknowable delivery must never manufacture a failure.
     for unknown in (None, []):
@@ -494,12 +600,14 @@ def _selftest_live_revert_scan(now: int):
     try:
         globals()["BOOKKEEPING_PATH_RE"] = re.compile(r".")
         broken = _verdict_for([{"path": "dashboard/theme.py"}])
-        assert broken["durability"] == "abandoned", "break did not change behaviour — test is vacuous"
+        assert (
+            broken["durability"] == "abandoned"
+        ), "break did not change behaviour — test is vacuous"
     finally:
         globals()["BOOKKEEPING_PATH_RE"] = _saved_re
-    assert _verdict_for([{"path": "dashboard/theme.py"}])["durability"] == "durable", \
-        "revert did not restore the guard"
-
+    assert (
+        _verdict_for([{"path": "dashboard/theme.py"}])["durability"] == "durable"
+    ), "revert did not restore the guard"
 
     commit_paths = [args[2] for args in calls if len(args) >= 3 and args[:2] == ["gh", "api"]]
     assert commit_paths, calls
@@ -514,8 +622,13 @@ def _selftest_live_revert_scan(now: int):
     verdict, _calls = classify_with_canned_gh(
         102,
         "merge-pr-reverted",
-        [{"number": 901, "title": "Revert feature from orchestrator",
-          "body": "Backs out the change from #102."}],
+        [
+            {
+                "number": 901,
+                "title": "Revert feature from orchestrator",
+                "body": "Backs out the change from #102.",
+            }
+        ],
         [],
     )
     assert verdict["durability"] == "reverted", verdict
@@ -524,9 +637,7 @@ def _selftest_live_revert_scan(now: int):
         103,
         "merge-commit-reverted",
         [],
-        [{"sha": "revert-sha", "commit": {
-            "message": "This reverts commit merge-commit-reverted"
-        }}],
+        [{"sha": "revert-sha", "commit": {"message": "This reverts commit merge-commit-reverted"}}],
     )
     assert verdict["durability"] == "reverted", verdict
 
@@ -546,13 +657,21 @@ def _selftest_revert_search_cached_per_repo(now: int):
     try:
         for n in nums:
             rid = f"cache-{n}"
-            feedback.record_run(rid, f"o/r#{n}", "implement", "codex", mode="remote",
-                                ts=now - 20 * SECONDS_PER_DAY)
-            feedback.record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="pending")
+            feedback.record_run(
+                rid, f"o/r#{n}", "implement", "codex", mode="remote", ts=now - 20 * SECONDS_PER_DAY
+            )
+            feedback.record_outcome(
+                rid, adjudicated_verdict="PASS", merged=True, durability="pending"
+            )
         # PR state withholds the 'reverted' key so classification takes the live search path.
         states = {
-            f"o/r#{n}": {"state": "MERGED", "number": n, "mergedAt": old,
-                         "baseRefName": "main", "mergeCommit": {"oid": f"sha-{n}"}}
+            f"o/r#{n}": {
+                "state": "MERGED",
+                "number": n,
+                "mergedAt": old,
+                "baseRefName": "main",
+                "mergeCommit": {"oid": f"sha-{n}"},
+            }
             for n in nums
         }
         search_calls = {"n": 0}
@@ -568,12 +687,15 @@ def _selftest_revert_search_cached_per_repo(now: int):
 
         globals()["_run_json"] = fake_run_json
         try:
-            res = sweep_durability(grace_days=GRACE_DAYS,
-                                   _state_fn=lambda t: states.get(t), _now=now)
+            res = sweep_durability(
+                grace_days=GRACE_DAYS, _state_fn=lambda t: states.get(t), _now=now
+            )
         finally:
             globals()["_run_json"] = real_run_json
 
-        assert search_calls["n"] == 1, f"expected 1 repo-wide revert search, got {search_calls['n']}"
+        assert (
+            search_calls["n"] == 1
+        ), f"expected 1 repo-wide revert search, got {search_calls['n']}"
         assert res["checked"] == 3 and res["durable"] == 3, res
     finally:
         feedback.DB_PATH = saved_db
@@ -593,26 +715,80 @@ def _selftest():
 
     try:
         cases = [
-            ("clean", "o/r#1", {"state": "MERGED", "number": 1, "mergedAt": old,
-                                "baseRefName": "main", "mergeCommit": {"oid": "aaa"},
-                                "reverted": False}, "durable"),
-            ("revert", "o/r#2", {"state": "MERGED", "number": 2, "mergedAt": old,
-                                 "baseRefName": "main", "mergeCommit": {"oid": "bbb"},
-                                 "reverted": True}, "reverted"),
-            ("open", "o/r#3", {"state": "OPEN", "number": 3, "mergedAt": old,
-                               "baseRefName": "main", "mergeCommit": {"oid": "ccc"},
-                               "reverted": False}, "reopened"),
-            ("young", "o/r#4", {"state": "MERGED", "number": 4, "mergedAt": young,
-                                "baseRefName": "main", "mergeCommit": {"oid": "ddd"},
-                                "reverted": False}, "pending"),
-            ("ambiguous", "o/r#5", {"state": "MERGED", "number": 5, "mergedAt": old,
-                                    "baseRefName": "main", "mergeCommit": {"oid": "eee"},
-                                    "reverted": None}, "pending"),
+            (
+                "clean",
+                "o/r#1",
+                {
+                    "state": "MERGED",
+                    "number": 1,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "aaa"},
+                    "reverted": False,
+                },
+                "durable",
+            ),
+            (
+                "revert",
+                "o/r#2",
+                {
+                    "state": "MERGED",
+                    "number": 2,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "bbb"},
+                    "reverted": True,
+                },
+                "reverted",
+            ),
+            (
+                "open",
+                "o/r#3",
+                {
+                    "state": "OPEN",
+                    "number": 3,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "ccc"},
+                    "reverted": False,
+                },
+                "reopened",
+            ),
+            (
+                "young",
+                "o/r#4",
+                {
+                    "state": "MERGED",
+                    "number": 4,
+                    "mergedAt": young,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "ddd"},
+                    "reverted": False,
+                },
+                "pending",
+            ),
+            (
+                "ambiguous",
+                "o/r#5",
+                {
+                    "state": "MERGED",
+                    "number": 5,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "eee"},
+                    "reverted": None,
+                },
+                "pending",
+            ),
         ]
         states = {}
         for run_id, target, state, _expected in cases:
-            feedback.record_run(run_id, target, "implement", "codex", mode="remote", ts=now - 20 * SECONDS_PER_DAY)
-            feedback.record_outcome(run_id, adjudicated_verdict="PASS", merged=True, durability="pending")
+            feedback.record_run(
+                run_id, target, "implement", "codex", mode="remote", ts=now - 20 * SECONDS_PER_DAY
+            )
+            feedback.record_outcome(
+                run_id, adjudicated_verdict="PASS", merged=True, durability="pending"
+            )
             states[target] = state
 
         feedback.record_run(
@@ -639,7 +815,9 @@ def _selftest():
             "reverted": False,
         }
 
-        res = sweep_durability(grace_days=GRACE_DAYS, _state_fn=lambda target: states.get(target), _now=now)
+        res = sweep_durability(
+            grace_days=GRACE_DAYS, _state_fn=lambda target: states.get(target), _now=now
+        )
         assert res["checked"] == 6 and res["durable"] == 2 and res["reverted"] == 1, res
         assert res["reopened"] == 1 and res["skipped"] == 2, res
 
@@ -652,9 +830,11 @@ def _selftest():
         _selftest_live_revert_scan(now)
         _selftest_revert_search_cached_per_repo(now)
 
-        print("durability_sweep.py selftest: OK (old clean->durable, revert->reverted, "
-              "open->reopened, young/ambiguous stay pending, live revert scan covered, "
-              "revert search cached 1/repo)")
+        print(
+            "durability_sweep.py selftest: OK (old clean->durable, revert->reverted, "
+            "open->reopened, young/ambiguous stay pending, live revert scan covered, "
+            "revert search cached 1/repo)"
+        )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

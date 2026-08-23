@@ -51,7 +51,6 @@ from completion_event_adapter import (
     adapt_completion_event_envelope,
 )
 
-
 STATUS_SCHEMA = "orchestrator.pattern-miner-status"
 STATUS_VERSION = 1
 STATE_SCHEMA = "orchestrator.pattern-miner-state"
@@ -345,10 +344,7 @@ def normalize_episode(events: dict[str, CompletionEvent]) -> NormalizedEpisode:
 
     graph = {
         "phase_order": PHASES,
-        "edges": tuple(
-            {"from": left, "to": right}
-            for left, right in zip(PHASES, PHASES[1:])
-        ),
+        "edges": tuple({"from": left, "to": right} for left, right in zip(PHASES, PHASES[1:])),
         "trigger": {
             "kind": "task_completion",
             "signature": identity.task_type,
@@ -358,9 +354,7 @@ def normalize_episode(events: dict[str, CompletionEvent]) -> NormalizedEpisode:
             "signature": selected_ids
             or {
                 "action_id": _norm_string(_result(decision).get("action_id")),
-                "decision_source_id": _norm_string(
-                    _result(decision).get("decision_source_id")
-                ),
+                "decision_source_id": _norm_string(_result(decision).get("decision_source_id")),
             },
             "selected_ids": selected_ids,
         },
@@ -502,12 +496,9 @@ class PatternMiner:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("schema") != STATE_SCHEMA or payload.get("version") != STATE_VERSION:
             raise ValueError("unsupported pattern miner state schema")
-        self.candidates = [
-            CapabilityIR.from_dict(item) for item in payload.get("candidates") or ()
-        ]
+        self.candidates = [CapabilityIR.from_dict(item) for item in payload.get("candidates") or ()]
         self.tombstones = [
-            CandidateTombstone.from_dict(item)
-            for item in payload.get("tombstones") or ()
+            CandidateTombstone.from_dict(item) for item in payload.get("tombstones") or ()
         ]
         self._status = dict(payload.get("last_status") or {})
         self.state_loaded = True
@@ -543,13 +534,9 @@ class PatternMiner:
                 # Production delivery with no research design set. Counted, never a failure --
                 # calling this a rejection is what made a healthy-but-empty run look like a fault
                 # and a faulty run look ordinary. Subclass check MUST precede EnvelopeError.
-                self.exclusions.append(
-                    Rejection(exc.event_id, "out_of_scope", tuple(exc.reasons))
-                )
+                self.exclusions.append(Rejection(exc.event_id, "out_of_scope", tuple(exc.reasons)))
             except EnvelopeError as exc:
-                self.rejections.append(
-                    Rejection(exc.event_id, "envelope", tuple(exc.reasons))
-                )
+                self.rejections.append(Rejection(exc.event_id, "envelope", tuple(exc.reasons)))
 
         grouped: dict[tuple[str, str], list[CompletionEvent]] = {}
         for event in accepted_events:
@@ -691,10 +678,7 @@ class PatternMiner:
         )
         capability_id = "capability:" + canonical_fingerprint.removeprefix("sha256:")[:24]
         aliases = tuple(
-            sorted(
-                {episode.fingerprint for episode in all_evidence}
-                - {canonical_fingerprint}
-            )
+            sorted({episode.fingerprint for episode in all_evidence} - {canonical_fingerprint})
         )
         deduped_positives: dict[tuple[str, str], NormalizedEpisode] = {}
         for episode in sorted(positive, key=lambda item: (item.occurred_at, item.episode_id)):
@@ -730,17 +714,12 @@ class PatternMiner:
                 subject_id=episode.identity.subject_id,
                 reason=episode.evidence_reason,
                 verification_verdict=_norm_string(
-                    (episode.events[4].payload.get("verification") or {}).get(
-                        "adjudicated_verdict"
-                    )
-                    or (episode.events[4].payload.get("verification") or {}).get(
-                        "verifier_verdict"
-                    )
+                    (episode.events[4].payload.get("verification") or {}).get("adjudicated_verdict")
+                    or (episode.events[4].payload.get("verification") or {}).get("verifier_verdict")
                     or episode.events[4].status
                 ),
                 outcome_verdict=_norm_string(
-                    _result(episode.events[5]).get("outcome_verdict")
-                    or episode.events[5].status
+                    _result(episode.events[5]).get("outcome_verdict") or episode.events[5].status
                 ),
                 durability=_norm_string(
                     (episode.events[6].payload.get("durability") or {}).get("status")
@@ -773,8 +752,7 @@ class PatternMiner:
                 occurrence.observation_id
             )
         observation_weights = {
-            occurrence.observation_id: 1.0
-            / len(observations_by_subject[occurrence.subject_id])
+            occurrence.observation_id: 1.0 / len(observations_by_subject[occurrence.subject_id])
             for occurrence in occurrences
         }
         representative = min(
@@ -796,14 +774,10 @@ class PatternMiner:
             source_occurrences=occurrences,
             counterexamples=counterexamples,
             independent_subjects=tuple(positive_subjects),
-            independent_repositories=tuple(
-                sorted({item.identity.repository for item in positive})
-            ),
+            independent_repositories=tuple(sorted({item.identity.repository for item in positive})),
             selector=representative.selector,
             graph=representative.graph,
-            artifact_refs=tuple(
-                sorted({ref for item in positive for ref in item.artifact_refs})
-            ),
+            artifact_refs=tuple(sorted({ref for item in positive for ref in item.artifact_refs})),
             gates={
                 "minimum_positive_subjects": self.min_positive_subjects,
                 "maximum_negative_ratio": self.max_negative_ratio,
@@ -821,9 +795,7 @@ class PatternMiner:
                     1 for episode in retry_history if not episode.positive
                 ),
                 "distinct_subject_count": len(positive_subjects),
-                "distinct_repository_count": len(
-                    {item.identity.repository for item in positive}
-                ),
+                "distinct_repository_count": len({item.identity.repository for item in positive}),
                 "counterexample_count": len(counterexamples),
                 "negative_ratio": negative_ratio,
                 "observation_weights": observation_weights,
@@ -852,9 +824,7 @@ class PatternMiner:
     ) -> MiningResult:
         current = int(time.time()) if now is None else int(now)
         episodes, raw_count = self._assemble(raw_events)
-        terminal_episodes, retry_history_by_terminal = self._terminalize_subjects(
-            episodes
-        )
+        terminal_episodes, retry_history_by_terminal = self._terminalize_subjects(episodes)
         existing_candidates = list(self.candidates) if preserve_existing else []
         existing_tombstones = list(self.tombstones) if preserve_existing else []
         self.candidates = []
@@ -885,17 +855,13 @@ class PatternMiner:
                         )
                     )
         if preserve_existing:
-            candidates_by_fingerprint = {
-                item.fingerprint: item for item in existing_candidates
-            }
+            candidates_by_fingerprint = {item.fingerprint: item for item in existing_candidates}
             for candidate in self.candidates:
                 previous = candidates_by_fingerprint.get(candidate.fingerprint)
                 previous_evidence_at = int(
                     (previous.telemetry if previous else {}).get("last_evidence_at") or 0
                 )
-                candidate_evidence_at = int(
-                    candidate.telemetry.get("last_evidence_at") or 0
-                )
+                candidate_evidence_at = int(candidate.telemetry.get("last_evidence_at") or 0)
                 if (
                     previous is None
                     or previous.lifecycle.state == "clustered"
@@ -958,11 +924,7 @@ class PatternMiner:
             "terminal_episode_count": len(terminal_episodes),
             "collapsed_retry_episode_count": len(episodes) - len(terminal_episodes),
             "distinct_eligible_subjects": len(
-                {
-                    episode.identity.subject_id
-                    for episode in terminal_episodes
-                    if episode.positive
-                }
+                {episode.identity.subject_id for episode in terminal_episodes if episode.positive}
             ),
             "emitted_candidate_count": sum(
                 1 for item in self.candidates if item.lifecycle.state == "clustered"
@@ -986,8 +948,7 @@ class PatternMiner:
                 len(self.candidates),
             ),
             "rejected_event_reasons": _reason_counts(
-                rejection for rejection in self.rejections
-                if rejection.phase == "envelope"
+                rejection for rejection in self.rejections if rejection.phase == "envelope"
             ),
             "threshold_progress": progress,
             "next_actions": next_actions,
@@ -1131,4 +1092,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

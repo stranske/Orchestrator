@@ -26,7 +26,6 @@ import capacity
 import execution_profiles
 import feedback
 
-
 TRIAL_SCHEMA = "orchestrator.model-profile-trial"
 RESULT_SCHEMA = "orchestrator.model-profile-trial-results"
 STATE_SCHEMA = "orchestrator.model-profile-trial-state"
@@ -57,8 +56,21 @@ EXCLUDED_SOURCE_PARTS = {
     "coverage",
 }
 EXCLUDED_SOURCE_SUFFIXES = {
-    ".db", ".sqlite", ".sqlite3", ".pyc", ".png", ".jpg", ".jpeg", ".gif",
-    ".pdf", ".zip", ".tar", ".gz", ".mp4", ".mov", ".bin",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".pyc",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".pdf",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".mp4",
+    ".mov",
+    ".bin",
 }
 MAX_MANIFEST_FILES = int(os.environ.get("ORCH_TRIAL_MAX_MANIFEST_FILES", "20000"))
 MAX_MANIFEST_BYTES = int(os.environ.get("ORCH_TRIAL_MAX_MANIFEST_BYTES", "200000000"))
@@ -82,23 +94,51 @@ IDENTITY_AUTHORITIES = {
     "openai-response-metadata/v1",
 }
 IDENTITY_EVIDENCE_FIELDS = {
-    "schema", "version", "authority", "artifact_ref", "artifact_sha256",
+    "schema",
+    "version",
+    "authority",
+    "artifact_ref",
+    "artifact_sha256",
 }
 RESULT_FIELDS = {
-    "schema", "version", "trial_id", "packet_hash", "acknowledged",
-    "attempts", "auxiliary_traces",
+    "schema",
+    "version",
+    "trial_id",
+    "packet_hash",
+    "acknowledged",
+    "attempts",
+    "auxiliary_traces",
 }
 ATTEMPT_FIELDS = {
-    "run_id", "profile_id", "operation_role", "attempt_ordinal",
-    "requested_model", "selected_model", "reported_model",
-    "provider_resolved_provider", "provider_resolved_model",
-    "fallback_reason", "runner_version", "cli_version", "status",
-    "latency_s", "tokens_in", "tokens_out", "artifact_ref",
-    "packet_hash", "acknowledged", "identity_evidence",
+    "run_id",
+    "profile_id",
+    "operation_role",
+    "attempt_ordinal",
+    "requested_model",
+    "selected_model",
+    "reported_model",
+    "provider_resolved_provider",
+    "provider_resolved_model",
+    "fallback_reason",
+    "runner_version",
+    "cli_version",
+    "status",
+    "latency_s",
+    "tokens_in",
+    "tokens_out",
+    "artifact_ref",
+    "packet_hash",
+    "acknowledged",
+    "identity_evidence",
 }
 TRACE_FIELDS = {
-    "run_id", "trace_id", "operation", "operation_role", "provider",
-    "model", "status",
+    "run_id",
+    "trace_id",
+    "operation",
+    "operation_role",
+    "provider",
+    "model",
+    "status",
 }
 
 
@@ -151,9 +191,7 @@ def source_manifest(root: Path) -> dict[str, Any]:
     # when their files are later ignored, making the read-only trial appear
     # hung before it can emit a manifest.
     for directory, dirnames, filenames in os.walk(root, topdown=True):
-        dirnames[:] = sorted(
-            name for name in dirnames if name not in EXCLUDED_SOURCE_PARTS
-        )
+        dirnames[:] = sorted(name for name in dirnames if name not in EXCLUDED_SOURCE_PARTS)
         for filename in sorted(filenames):
             path = Path(directory) / filename
             if path.is_symlink():
@@ -162,14 +200,10 @@ def source_manifest(root: Path) -> dict[str, Any]:
                 continue
             relative = path.relative_to(root)
             if len(entries) >= MAX_MANIFEST_FILES:
-                raise ValueError(
-                    f"source manifest exceeds file limit {MAX_MANIFEST_FILES}: {root}"
-                )
+                raise ValueError(f"source manifest exceeds file limit {MAX_MANIFEST_FILES}: {root}")
             file_bytes = path.stat().st_size
             if total_bytes + file_bytes > MAX_MANIFEST_BYTES:
-                raise ValueError(
-                    f"source manifest exceeds byte limit {MAX_MANIFEST_BYTES}: {root}"
-                )
+                raise ValueError(f"source manifest exceeds byte limit {MAX_MANIFEST_BYTES}: {root}")
             content = path.read_bytes()
             total_bytes += len(content)
             entries.append(
@@ -187,9 +221,7 @@ def source_manifest(root: Path) -> dict[str, Any]:
     }
 
 
-def _shared_pool_snapshot(
-    *, state: str, captured_at: int, used: float = 0.0
-) -> dict[str, Any]:
+def _shared_pool_snapshot(*, state: str, captured_at: int, used: float = 0.0) -> dict[str, Any]:
     snapshot = capacity.profile_capacity_snapshot(
         {"agents": {"codex": {"state": state}}},
         pool_usage={"codex-subscription": float(used)},
@@ -216,9 +248,7 @@ def build_trial_manifest(
     timestamp = int(time.time()) if now is None else int(now)
     roots = (orchestrator_root.resolve(), workflows_root.resolve())
     profiles = [execution_profiles.get_profile(profile_id) for profile_id in EXPECTED_PROFILE_IDS]
-    pool_ids = {
-        pool_id for profile in profiles for pool_id in profile["capacity_pool_ids"]
-    }
+    pool_ids = {pool_id for profile in profiles for pool_id in profile["capacity_pool_ids"]}
     stop_reasons = []
     if pool_ids != {"codex-subscription"}:
         stop_reasons.append("profiles_do_not_share_exactly_one_codex_pool")
@@ -242,14 +272,10 @@ def build_trial_manifest(
         "packet_hash": packet_hash,
         "profile_ids": list(EXPECTED_PROFILE_IDS),
         "seed": int(seed),
-        "source_hashes": {
-            key: value["aggregate_sha256"] for key, value in source_before.items()
-        },
+        "source_hashes": {key: value["aggregate_sha256"] for key, value in source_before.items()},
     }
     trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
-    pool_snapshot = _shared_pool_snapshot(
-        state=capacity_state, captured_at=timestamp
-    )
+    pool_snapshot = _shared_pool_snapshot(state=capacity_state, captured_at=timestamp)
     requests = []
     for launch_ordinal, profile_id in enumerate(order, start=1):
         profile = execution_profiles.get_profile(profile_id)
@@ -297,14 +323,16 @@ def build_trial_manifest(
 def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("schema") != TRIAL_SCHEMA or manifest.get("version") != SCHEMA_VERSION:
         raise ValueError("unsupported model-profile trial manifest")
-    if manifest.get("assignment") != "instrumentation" or manifest.get("learning_enabled") is not False:
+    if (
+        manifest.get("assignment") != "instrumentation"
+        or manifest.get("learning_enabled") is not False
+    ):
         raise ValueError("model-profile trial must remain instrumentation/no-learning")
     if manifest.get("promotion_allowed") is not False or manifest.get("lifecycle") != "shadow":
         raise ValueError("model-profile trial may not promote profiles")
     if manifest.get("stop_conditions", {}).get("triggered"):
         raise ValueError(
-            "trial stop condition: "
-            + ",".join(manifest["stop_conditions"].get("reasons") or [])
+            "trial stop condition: " + ",".join(manifest["stop_conditions"].get("reasons") or [])
         )
     packet = manifest.get("frozen_packet")
     if not isinstance(packet, dict) or _sha256(packet) != manifest.get("packet_hash"):
@@ -313,7 +341,11 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     if not isinstance(source_before, dict) or set(source_before) != {"orchestrator", "workflows"}:
         raise ValueError("trial source manifest set is incomplete")
     for source in source_before.values():
-        if not isinstance(source, dict) or not source.get("root") or not source.get("aggregate_sha256"):
+        if (
+            not isinstance(source, dict)
+            or not source.get("root")
+            or not source.get("aggregate_sha256")
+        ):
             raise ValueError("trial source manifest is incomplete")
     identity = {
         "created_at": manifest.get("created_at"),
@@ -321,8 +353,7 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         "profile_ids": list(EXPECTED_PROFILE_IDS),
         "seed": manifest.get("seed"),
         "source_hashes": {
-            key: source_before[key]["aggregate_sha256"]
-            for key in ("orchestrator", "workflows")
+            key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
         },
     }
     expected_trial_id = "model-profile-trial:" + _sha256(identity).split(":", 1)[1][:24]
@@ -363,7 +394,10 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError("trial capacity pool contradicts the authoritative profile")
         if request.get("packet_hash") != manifest["packet_hash"]:
             raise ValueError("trial request packet hash mismatch")
-        if request.get("assignment") != "instrumentation" or request.get("learning_enabled") is not False:
+        if (
+            request.get("assignment") != "instrumentation"
+            or request.get("learning_enabled") is not False
+        ):
             raise ValueError("trial request escaped no-learning assignment")
         if request.get("permission_mode") != "read-only" or request.get("tools") != []:
             raise ValueError("trial request is not read-only")
@@ -389,7 +423,10 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
         raise ValueError("unsupported model-profile trial results")
     if results.get("trial_id") != manifest["trial_id"]:
         raise ValueError("trial result identity mismatch")
-    if results.get("packet_hash") != manifest["packet_hash"] or results.get("acknowledged") is not True:
+    if (
+        results.get("packet_hash") != manifest["packet_hash"]
+        or results.get("acknowledged") is not True
+    ):
         raise ValueError("trial results did not acknowledge the frozen packet")
     attempts = results.get("attempts") or []
     by_profile = {item.get("profile_id"): item for item in attempts}
@@ -407,7 +444,10 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
             raise ValueError("trial profile attempt must be a worker")
         if attempt.get("requested_model") != request["requested_model"]:
             raise ValueError("trial requested model changed after launch")
-        if attempt.get("packet_hash") != manifest["packet_hash"] or attempt.get("acknowledged") is not True:
+        if (
+            attempt.get("packet_hash") != manifest["packet_hash"]
+            or attempt.get("acknowledged") is not True
+        ):
             raise ValueError("trial attempt did not acknowledge the frozen packet")
         if str(attempt.get("status") or "").lower() not in {"success", "succeeded"}:
             raise ValueError("trial attempt did not succeed")
@@ -432,8 +472,13 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
             raise ValueError("trial attempt missing authoritative identity evidence")
         unknown_evidence = sorted(set(evidence) - IDENTITY_EVIDENCE_FIELDS)
         if unknown_evidence:
-            raise ValueError(f"trial identity evidence contains unsupported fields: {unknown_evidence}")
-        if evidence.get("schema") != IDENTITY_EVIDENCE_SCHEMA or evidence.get("version") != IDENTITY_EVIDENCE_VERSION:
+            raise ValueError(
+                f"trial identity evidence contains unsupported fields: {unknown_evidence}"
+            )
+        if (
+            evidence.get("schema") != IDENTITY_EVIDENCE_SCHEMA
+            or evidence.get("version") != IDENTITY_EVIDENCE_VERSION
+        ):
             raise ValueError("trial attempt identity evidence schema is unsupported")
         if evidence.get("authority") not in IDENTITY_AUTHORITIES:
             raise ValueError("trial attempt identity authority is not trusted")
@@ -473,8 +518,7 @@ def finalize_trial(
         for key, value in manifest["source_before"].items()
     }
     source_unchanged = all(
-        source_after[key]["aggregate_sha256"]
-        == manifest["source_before"][key]["aggregate_sha256"]
+        source_after[key]["aggregate_sha256"] == manifest["source_before"][key]["aggregate_sha256"]
         for key in source_after
     )
     if not source_unchanged:
@@ -647,7 +691,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
-        capabilities.production_heartbeat("local-model-profile-trial", event_type, ref="model_profile_trial.main")
+
+        capabilities.production_heartbeat(
+            "local-model-profile-trial", event_type, ref="model_profile_trial.main"
+        )
     except Exception:
         pass
 
@@ -661,7 +708,9 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--workflows-root", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--seed", type=int, default=56014)
-    prepare.add_argument("--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown")
+    prepare.add_argument(
+        "--capacity-state", choices=("ok", "warn", "shed", "unknown"), default="unknown"
+    )
     finalize = sub.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--results", type=Path, required=True)
@@ -672,9 +721,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "prepare":
-        ensure_artifact_outside_sources(
-            args.output, (args.orchestrator_root, args.workflows_root)
-        )
+        ensure_artifact_outside_sources(args.output, (args.orchestrator_root, args.workflows_root))
         payload = build_trial_manifest(
             args.orchestrator_root,
             args.workflows_root,

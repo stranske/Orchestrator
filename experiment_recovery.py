@@ -45,6 +45,7 @@ counts distinct subjects rather than attempts, and `relearn_quality` retains sub
 module deliberately does NOT dedupe. It reports the subject histogram instead, so the correlation is
 visible at the point of use rather than silently baked in here.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -71,7 +72,9 @@ def _git(store: Path, *args: str, timeout: int = GIT_TIMEOUT_S) -> str:
     try:
         out = subprocess.run(
             ["git", "-C", str(store), *args],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         return out.stdout if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
@@ -103,14 +106,16 @@ def unevaluated_experiments(conn: sqlite3.Connection | None = None) -> list[dict
     ).fetchall()
     out = []
     for exp_id, agents, target, task_type, ts in rows:
-        out.append({
-            "exp_id": str(exp_id),
-            "agents": [a for a in str(agents or "").split(",") if a],
-            "target": str(target or ""),
-            "repo": _canonical_repo(target),
-            "task_type": str(task_type or "implement"),
-            "ts": ts,
-        })
+        out.append(
+            {
+                "exp_id": str(exp_id),
+                "agents": [a for a in str(agents or "").split(",") if a],
+                "target": str(target or ""),
+                "repo": _canonical_repo(target),
+                "task_type": str(task_type or "implement"),
+                "ts": ts,
+            }
+        )
     return out
 
 
@@ -152,7 +157,9 @@ def _spec_for(target: str, *, cache: dict[str, str], gh_fn=None) -> str:
             try:
                 out = subprocess.run(
                     ["gh", "issue", "view", number, "--repo", key, "--json", "title,body"],
-                    capture_output=True, text=True, timeout=GH_TIMEOUT_S,
+                    capture_output=True,
+                    text=True,
+                    timeout=GH_TIMEOUT_S,
                 )
                 if out.returncode == 0:
                     data = json.loads(out.stdout or "{}")
@@ -201,8 +208,9 @@ def restore_experiment(
         "arms_recovered": sorted(arms),
         "arms_missing": sorted(missing),
         "nonempty_arms": sorted(a for a, d in arms.items() if d.strip()),
-        "status": "recoverable" if arms and not missing else
-                  ("partial" if arms else "unrecoverable"),
+        "status": (
+            "recoverable" if arms and not missing else ("partial" if arms else "unrecoverable")
+        ),
         "applied": False,
     }
     if not apply or not arms:
@@ -283,24 +291,35 @@ def _selftest() -> None:
         # A real git repo standing in for the shared per-repo store.
         store = root / "store"
         store.mkdir()
-        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        }
+
         def run(*a):
-            subprocess.run(["git", "-C", str(store), *a], check=True,
-                           capture_output=True, text=True, env=env)
+            subprocess.run(
+                ["git", "-C", str(store), *a], check=True, capture_output=True, text=True, env=env
+            )
+
         run("init", "-q", "-b", "main")
         (store / "f.txt").write_text("base\n")
-        run("add", "-A"); run("commit", "-qm", "base")
+        run("add", "-A")
+        run("commit", "-qm", "base")
         run("update-ref", "refs/remotes/origin/main", "HEAD")
         exp_id = "tick-1782960020-owner-repo-1"
         br = exp_abcd.exp_branch(exp_id, "codex")
         run("checkout", "-q", "-b", br)
         (store / "f.txt").write_text("base\ncandidate\n")
-        run("add", "-A"); run("commit", "-qm", "arm")
+        run("add", "-A")
+        run("commit", "-qm", "arm")
         run("checkout", "-q", "main")
         # Base moves AFTER the arm branched — the drift that makes a naive diff swallow the repo.
         (store / "unrelated.txt").write_text("later\n")
-        run("add", "-A"); run("commit", "-qm", "later")
+        run("add", "-A")
+        run("commit", "-qm", "later")
         run("update-ref", "refs/remotes/origin/main", "HEAD")
 
         orig_repos = provision.REPOS_DIR
@@ -312,13 +331,21 @@ def _selftest() -> None:
             assert d is not None and "candidate" in d, d
             # MERGE-BASE ANCHORING: the arm never touched unrelated.txt, so a diff that mentions it
             # is anchored at the moved base and would misattribute later work to this candidate.
-            assert "unrelated.txt" not in d, "diff must be anchored at the merge-base, not origin/base"
+            assert (
+                "unrelated.txt" not in d
+            ), "diff must be anchored at the merge-base, not origin/base"
             # A branch that does not exist is REPORTED, never invented as an empty diff.
             assert arm_diff("owner/repo", exp_id, "vibe") is None
             assert arm_diff("owner/repo", "no-such-exp", "codex") is None
 
-            row = {"exp_id": exp_id, "agents": ["codex", "vibe"], "target": "owner/repo#1",
-                   "repo": "owner/repo", "task_type": "implement", "ts": 0}
+            row = {
+                "exp_id": exp_id,
+                "agents": ["codex", "vibe"],
+                "target": "owner/repo#1",
+                "repo": "owner/repo",
+                "task_type": "implement",
+                "ts": 0,
+            }
             dry = restore_experiment(row, apply=False)
             assert dry["status"] == "partial", dry
             assert dry["arms_recovered"] == ["codex"] and dry["arms_missing"] == ["vibe"], dry
@@ -327,7 +354,9 @@ def _selftest() -> None:
             assert not expdir.exists(), "read-only plan must not create anything"
 
             got = restore_experiment(
-                row, apply=True, exp_dir=expdir,
+                row,
+                apply=True,
+                exp_dir=expdir,
                 gh_fn=lambda repo, num: "# Title\n\nreal spec body",
             )
             assert got["applied"] is True
@@ -348,6 +377,7 @@ def _selftest() -> None:
             # ...while meta.json stays FRESH, because its mtime answers a different question
             # (when was this reconstructed) and gates followup's max_age_days window.
             import time as _time
+
             assert _time.time() - (edir / "meta.json").stat().st_mtime < 300, "meta must stay fresh"
             # The missing arm must leave NO artifact — a zero-byte diff is a real verdict elsewhere.
             assert not (edir / exp_abcd.exp_diff_path("vibe")).exists(), "must not fabricate an arm"
@@ -362,8 +392,10 @@ def _selftest() -> None:
         finally:
             provision.REPOS_DIR = orig_repos
             shutil.rmtree(root / provision.repo_slug("owner/repo"), ignore_errors=True)
-    print("experiment_recovery.py selftest: OK (merge-base anchoring, missing-arm refusal, "
-          "read-only plan, self-naming spec stub, provenance in meta)")
+    print(
+        "experiment_recovery.py selftest: OK (merge-base anchoring, missing-arm refusal, "
+        "read-only plan, self-naming spec stub, provenance in meta)"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -381,16 +413,22 @@ def main(argv: list[str]) -> int:
     if args.apply:
         cache: dict[str, str] = {}
         applied = []
-        for row in unevaluated_experiments()[: args.limit] if args.limit else unevaluated_experiments():
+        for row in (
+            unevaluated_experiments()[: args.limit] if args.limit else unevaluated_experiments()
+        ):
             applied.append(restore_experiment(row, base=args.base, spec_cache=cache, apply=True))
         report["results"] = applied
         report["applied"] = sum(1 for r in applied if r["applied"])
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
-        print(f"experiments={report['experiments']} counts={report['counts']} "
-              f"arms_recovered={report['arms_recovered']} arms_missing={report['arms_missing']}")
-        print(f"distinct subjects={report['distinct_subjects']} (correlated evidence — see module docstring)")
+        print(
+            f"experiments={report['experiments']} counts={report['counts']} "
+            f"arms_recovered={report['arms_recovered']} arms_missing={report['arms_missing']}"
+        )
+        print(
+            f"distinct subjects={report['distinct_subjects']} (correlated evidence — see module docstring)"
+        )
         for subject, n in report["subject_histogram"][:10]:
             print(f"   {n:4d}x  {subject}")
     return 0

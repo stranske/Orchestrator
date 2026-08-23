@@ -29,6 +29,7 @@ figure, and a capability with no terminal outcomes is reported as "not yet measu
     python3 capability_effectiveness.py --json
     python3 capability_effectiveness.py --selftest
 """
+
 from __future__ import annotations
 
 import argparse
@@ -75,8 +76,15 @@ def _edge_rows(conn=None) -> list[dict]:
         if close:
             c.close()
     return [
-        {"capability_id": r[0], "accepted": bool(r[1]), "counterfactual": bool(r[2]),
-         "verdict": r[3], "durability": r[4], "run_id": r[5], "ts": r[6]}
+        {
+            "capability_id": r[0],
+            "accepted": bool(r[1]),
+            "counterfactual": bool(r[2]),
+            "verdict": r[3],
+            "durability": r[4],
+            "run_id": r[5],
+            "ts": r[6],
+        }
         for r in rows
     ]
 
@@ -103,24 +111,35 @@ def _arm_stats(edges: list[dict]) -> dict:
     error the learning rules forbid. Deduplicating by subject turns that into an honest
     `insufficient_evidence`.
     """
-    terminal = [e for e in edges if e["verdict"] in ("PASS", "FAIL") or e["durability"] in
-                ("durable", "abandoned", "reverted", "reopened")]
+    terminal = [
+        e
+        for e in edges
+        if e["verdict"] in ("PASS", "FAIL")
+        or e["durability"] in ("durable", "abandoned", "reverted", "reopened")
+    ]
     durable = [e for e in terminal if e["durability"] == "durable"]
     # Distinct subjects — a target counts as durable if ANY attempt on it landed durably.
     durable_subjects = {_target_of(e["run_id"]) for e in durable}
     terminal_subjects = {_target_of(e["run_id"]) for e in terminal}
-    out = {"attributed": len(edges), "terminal": len(terminal), "durable": len(durable),
-           "terminal_subjects": len(terminal_subjects),
-           "durable_subjects": len(durable_subjects),
-           "attempts_per_subject": (round(len(terminal) / len(terminal_subjects), 2)
-                                    if terminal_subjects else None)}
+    out = {
+        "attributed": len(edges),
+        "terminal": len(terminal),
+        "durable": len(durable),
+        "terminal_subjects": len(terminal_subjects),
+        "durable_subjects": len(durable_subjects),
+        "attempts_per_subject": (
+            round(len(terminal) / len(terminal_subjects), 2) if terminal_subjects else None
+        ),
+    }
     if not terminal:
         out["durable_rate"] = None
-        out["status"] = "not_yet_measurable"          # NOT 0% — nothing has resolved yet
+        out["status"] = "not_yet_measurable"  # NOT 0% — nothing has resolved yet
     elif len(terminal_subjects) < MIN_SAMPLE:
         out["durable_rate"] = None
-        out["status"] = (f"insufficient_evidence ({len(terminal_subjects)}/{MIN_SAMPLE} distinct "
-                         f"subjects from {len(terminal)} attempts)")
+        out["status"] = (
+            f"insufficient_evidence ({len(terminal_subjects)}/{MIN_SAMPLE} distinct "
+            f"subjects from {len(terminal)} attempts)"
+        )
     else:
         out["durable_rate"] = round(len(durable_subjects) / len(terminal_subjects), 3)
         out["status"] = "measured"
@@ -151,13 +170,13 @@ def measure(*, path=None, conn=None) -> dict:
         a, c = entry["accepted"], entry["counterfactual"]
         if a["durable_rate"] is not None and c["durable_rate"] is not None:
             entry["lift"] = round(a["durable_rate"] - c["durable_rate"], 3)
-            entry["verdict"] = ("helps" if entry["lift"] > 0
-                                else "hurts" if entry["lift"] < 0 else "neutral")
+            entry["verdict"] = (
+                "helps" if entry["lift"] > 0 else "hurts" if entry["lift"] < 0 else "neutral"
+            )
         else:
             entry["lift"] = None
             # No control arm is the COMMON case and must not read as a result.
-            entry["verdict"] = ("no_control_arm" if a["durable_rate"] is not None
-                                else a["status"])
+            entry["verdict"] = "no_control_arm" if a["durable_rate"] is not None else a["status"]
         out.append(entry)
 
     attributed = [e for e in out if e["attributed_edges"]]
@@ -165,53 +184,111 @@ def measure(*, path=None, conn=None) -> dict:
         "min_sample": MIN_SAMPLE,
         "capabilities": len(out),
         "with_attribution": len(attributed),
-        "measured": [e["capability_id"] for e in out if e["verdict"] in
-                     ("helps", "hurts", "neutral")],
-        "awaiting_outcomes": [e["capability_id"] for e in attributed
-                              if e["accepted"]["status"] == "not_yet_measurable"],
+        "measured": [
+            e["capability_id"] for e in out if e["verdict"] in ("helps", "hurts", "neutral")
+        ],
+        "awaiting_outcomes": [
+            e["capability_id"]
+            for e in attributed
+            if e["accepted"]["status"] == "not_yet_measurable"
+        ],
         "rows": out,
     }
 
 
 def format_report(rep: dict) -> str:
     lines = [
-        "# Capability effectiveness — does using it improve outcomes?", "",
+        "# Capability effectiveness — does using it improve outcomes?",
+        "",
         f"{rep['with_attribution']} of {rep['capabilities']} capabilities have attributed evidence; "
         f"{len(rep['measured'])} have enough of it to state a rate "
-        f"(minimum {rep['min_sample']} terminal outcomes).", "",
+        f"(minimum {rep['min_sample']} terminal outcomes).",
+        "",
     ]
     if not rep["with_attribution"]:
-        lines += ["No capability has attributed evidence yet. Nothing to measure — this is the",
-                  "honest state, not a zero score.", ""]
-    lines += ["| Capability | Inv/wk | Edges | Accepted (dur/term) | Control | Lift | Verdict |",
-              "|---|---:|---:|---|---|---:|---|"]
+        lines += [
+            "No capability has attributed evidence yet. Nothing to measure — this is the",
+            "honest state, not a zero score.",
+            "",
+        ]
+    lines += [
+        "| Capability | Inv/wk | Edges | Accepted (dur/term) | Control | Lift | Verdict |",
+        "|---|---:|---:|---|---|---:|---|",
+    ]
     for row in rep["rows"]:
         if not row["attributed_edges"]:
             continue
         a, c = row["accepted"], row["counterfactual"]
-        arm = (f"{a['durable_subjects']}/{a['terminal_subjects']} subj "
-               f"({a['terminal']} att)") if a["terminal"] else "—"
+        arm = (
+            (f"{a['durable_subjects']}/{a['terminal_subjects']} subj " f"({a['terminal']} att)")
+            if a["terminal"]
+            else "—"
+        )
         ctl = (f"{c['durable_subjects']}/{c['terminal_subjects']} subj") if c["terminal"] else "—"
         lift = "—" if row["lift"] is None else f"{row['lift']:+.3f}"
-        lines.append(f"| {row['capability_id']} | {row['invocations_per_week']} | "
-                     f"{row['attributed_edges']} | {arm} | {ctl} | {lift} | {row['verdict']} |")
+        lines.append(
+            f"| {row['capability_id']} | {row['invocations_per_week']} | "
+            f"{row['attributed_edges']} | {arm} | {ctl} | {lift} | {row['verdict']} |"
+        )
     if rep["awaiting_outcomes"]:
-        lines += ["", "Awaiting outcome resolution (edges exist, nothing terminal yet): "
-                  + ", ".join(rep["awaiting_outcomes"])]
+        lines += [
+            "",
+            "Awaiting outcome resolution (edges exist, nothing terminal yet): "
+            + ", ".join(rep["awaiting_outcomes"]),
+        ]
     return "\n".join(lines) + "\n"
 
 
 def _selftest() -> None:
     # A capability with a real sample on both arms yields a lift.
     edges = (
-        [{"capability_id": "c1", "accepted": True, "counterfactual": False,
-          "verdict": "PASS", "durability": "durable", "run_id": f"a{i}", "ts": 0} for i in range(4)]
-        + [{"capability_id": "c1", "accepted": True, "counterfactual": False,
-            "verdict": "FAIL", "durability": "abandoned", "run_id": "a9", "ts": 0}]
-        + [{"capability_id": "c1", "accepted": False, "counterfactual": True,
-            "verdict": "PASS", "durability": "durable", "run_id": f"b{i}", "ts": 0} for i in range(2)]
-        + [{"capability_id": "c1", "accepted": False, "counterfactual": True,
-            "verdict": "FAIL", "durability": "abandoned", "run_id": f"c{i}", "ts": 0} for i in range(3)]
+        [
+            {
+                "capability_id": "c1",
+                "accepted": True,
+                "counterfactual": False,
+                "verdict": "PASS",
+                "durability": "durable",
+                "run_id": f"a{i}",
+                "ts": 0,
+            }
+            for i in range(4)
+        ]
+        + [
+            {
+                "capability_id": "c1",
+                "accepted": True,
+                "counterfactual": False,
+                "verdict": "FAIL",
+                "durability": "abandoned",
+                "run_id": "a9",
+                "ts": 0,
+            }
+        ]
+        + [
+            {
+                "capability_id": "c1",
+                "accepted": False,
+                "counterfactual": True,
+                "verdict": "PASS",
+                "durability": "durable",
+                "run_id": f"b{i}",
+                "ts": 0,
+            }
+            for i in range(2)
+        ]
+        + [
+            {
+                "capability_id": "c1",
+                "accepted": False,
+                "counterfactual": True,
+                "verdict": "FAIL",
+                "durability": "abandoned",
+                "run_id": f"c{i}",
+                "ts": 0,
+            }
+            for i in range(3)
+        ]
     )
     a = _arm_stats([e for e in edges if e["accepted"]])
     assert a["terminal"] == 5 and a["durable"] == 4 and a["durable_rate"] == 0.8, a
@@ -224,6 +301,7 @@ def _selftest() -> None:
     # `link-outcome` edges targeting advisory `role:redirect:*` runs were 100% of `offload`'s
     # durable signal at a reported rate of 0.059, with no causal link behind any of them.
     import sqlite3 as _sqlite3
+
     _c = _sqlite3.connect(":memory:")
     _c.executescript(feedback.SCHEMA)
     feedback._migrate_schema(_c)
@@ -233,8 +311,22 @@ def _selftest() -> None:
             "source_run_id,target_event_id,target_run_id,capability_id,accepted,counterfactual,"
             "outcome_verdict,durability,created_ts,metadata_hash) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (_eid, 1, "capability", "offload", "src", _tev, f"remote:o/r#{_eid}:codex", "offload",
-             1, 0, "PASS", "durable", 0, "h"),
+            (
+                _eid,
+                1,
+                "capability",
+                "offload",
+                "src",
+                _tev,
+                f"remote:o/r#{_eid}:codex",
+                "offload",
+                1,
+                0,
+                "PASS",
+                "durable",
+                0,
+                "h",
+            ),
         )
     _rows = _edge_rows(_c)
     _ids = {r["run_id"] for r in _rows}
@@ -247,25 +339,51 @@ def _selftest() -> None:
 
     # CORRELATED ATTEMPTS MUST NOT INFLATE THE SAMPLE. 30 retries of one stuck target is one
     # observation, not 30 — the confound that produced a false 0% for role-triage on 2026-08-18.
-    stuck = [{"capability_id": "c2", "accepted": True, "counterfactual": False,
-              "verdict": "FAIL", "durability": "abandoned",
-              "run_id": f"remote:o/r#2819:cursor:{i}", "ts": 0} for i in range(30)]
+    stuck = [
+        {
+            "capability_id": "c2",
+            "accepted": True,
+            "counterfactual": False,
+            "verdict": "FAIL",
+            "durability": "abandoned",
+            "run_id": f"remote:o/r#2819:cursor:{i}",
+            "ts": 0,
+        }
+        for i in range(30)
+    ]
     s = _arm_stats(stuck)
     assert s["terminal"] == 30 and s["terminal_subjects"] == 1, s
     assert s["durable_rate"] is None, "30 attempts at ONE target must not yield a rate"
     assert "1/5 distinct subjects from 30 attempts" in s["status"], s["status"]
     assert s["attempts_per_subject"] == 30.0, s
     # Five DISTINCT targets do earn a rate.
-    spread = [{"capability_id": "c3", "accepted": True, "counterfactual": False,
-               "verdict": "FAIL", "durability": "abandoned",
-               "run_id": f"remote:o/r#{900+i}:cursor:1", "ts": 0} for i in range(5)]
+    spread = [
+        {
+            "capability_id": "c3",
+            "accepted": True,
+            "counterfactual": False,
+            "verdict": "FAIL",
+            "durability": "abandoned",
+            "run_id": f"remote:o/r#{900+i}:cursor:1",
+            "ts": 0,
+        }
+        for i in range(5)
+    ]
     sp = _arm_stats(spread)
     assert sp["terminal_subjects"] == 5 and sp["durable_rate"] == 0.0, sp
     assert sp["status"] == "measured", sp
     # A subject counts durable if ANY attempt on it landed durably.
-    mixed = spread + [{"capability_id": "c3", "accepted": True, "counterfactual": False,
-                       "verdict": "PASS", "durability": "durable",
-                       "run_id": "remote:o/r#900:codex:2", "ts": 0}]
+    mixed = spread + [
+        {
+            "capability_id": "c3",
+            "accepted": True,
+            "counterfactual": False,
+            "verdict": "PASS",
+            "durability": "durable",
+            "run_id": "remote:o/r#900:codex:2",
+            "ts": 0,
+        }
+    ]
     mx = _arm_stats(mixed)
     assert mx["terminal_subjects"] == 5 and mx["durable_subjects"] == 1, mx
     assert mx["durable_rate"] == 0.2, mx
@@ -276,14 +394,26 @@ def _selftest() -> None:
     small = _arm_stats(edges[:2])
     assert small["durable_rate"] is None and "insufficient_evidence" in small["status"], small
     # No terminal outcome is "not yet measurable", NEVER 0%.
-    pending = _arm_stats([{"capability_id": "c", "accepted": True, "counterfactual": False,
-                           "verdict": None, "durability": None, "run_id": "p", "ts": 0}])
+    pending = _arm_stats(
+        [
+            {
+                "capability_id": "c",
+                "accepted": True,
+                "counterfactual": False,
+                "verdict": None,
+                "durability": None,
+                "run_id": "p",
+                "ts": 0,
+            }
+        ]
+    )
     assert pending["durable_rate"] is None and pending["status"] == "not_yet_measurable", pending
     assert pending["durable"] == 0 and pending["attributed"] == 1, pending
 
     # An accepted arm with no control must not be reported as a comparison.
     import tempfile
     from pathlib import Path
+
     with tempfile.TemporaryDirectory(prefix="cap-eff-selftest-") as td:
         ledger = Path(td) / "capabilities.json"
         rec = capabilities._blank_capability("c1")
@@ -291,15 +421,33 @@ def _selftest() -> None:
         capabilities.save({"c1": rec}, ledger)
 
         class _Cursor:
-            def __init__(self, rows): self._rows = rows
-            def fetchall(self): return self._rows
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchall(self):
+                return self._rows
 
         class FakeConn:
             def execute(self, *_a, **_k):
-                return _Cursor([(e["capability_id"], e["accepted"], e["counterfactual"],
-                                 e["verdict"], e["durability"], e["run_id"], e["ts"])
-                                for e in edges if e["accepted"]])
-            def close(self): pass
+                return _Cursor(
+                    [
+                        (
+                            e["capability_id"],
+                            e["accepted"],
+                            e["counterfactual"],
+                            e["verdict"],
+                            e["durability"],
+                            e["run_id"],
+                            e["ts"],
+                        )
+                        for e in edges
+                        if e["accepted"]
+                    ]
+                )
+
+            def close(self):
+                pass
+
         rep = measure(path=ledger, conn=FakeConn())
         row = rep["rows"][0]
         assert row["lift"] is None and row["verdict"] == "no_control_arm", row
@@ -309,14 +457,20 @@ def _selftest() -> None:
 
         # Empty evidence must say so rather than score zero.
         class EmptyConn:
-            def execute(self, *_a, **_k): return _Cursor([])
-            def close(self): pass
+            def execute(self, *_a, **_k):
+                return _Cursor([])
+
+            def close(self):
+                pass
+
         empty = measure(path=ledger, conn=EmptyConn())
         assert empty["with_attribution"] == 0
         assert "not a zero score" in format_report(empty)
 
-    print("capability_effectiveness.py selftest: OK (lift on real samples, refuses small samples, "
-          "pending != 0%, no-control-arm is not a verdict)")
+    print(
+        "capability_effectiveness.py selftest: OK (lift on real samples, refuses small samples, "
+        "pending != 0%, no-control-arm is not a verdict)"
+    )
 
 
 def main(argv: list[str]) -> int:

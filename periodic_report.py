@@ -46,10 +46,7 @@ HYPOTHESES_JSON = ORCH / "experiments" / "hypotheses.json"
 DEFAULT_STAGE2_PLAN_JSON = Path(
     os.environ.get(
         "ORCH_KEEPALIVE_STAGE2_PLAN_JSON",
-        Path.home()
-        / ".codex"
-        / "orchestrator"
-        / "keepalive-supervisor-stage2-plan.json",
+        Path.home() / ".codex" / "orchestrator" / "keepalive-supervisor-stage2-plan.json",
     )
 )
 TABLES = [
@@ -97,17 +94,12 @@ def _since(window_days: int) -> int:
 
 def _table_counts() -> dict[str, int]:
     with feedback._conn() as c:
-        return {
-            table: c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in TABLES
-        }
+        return {table: c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in TABLES}
 
 
 def _max_route_version() -> int:
     with feedback._conn() as c:
-        return c.execute(
-            "SELECT COALESCE(MAX(version),0) FROM route_weights"
-        ).fetchone()[0]
+        return c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]
 
 
 def _experiment_identity_summary(window_days: int) -> dict:
@@ -160,7 +152,14 @@ def _experiment_identity_summary(window_days: int) -> dict:
         key = (str(experiment_id), str(arm_id))
         arm = arm_rows.setdefault(
             key,
-            {"experiment_id": key[0], "arm_id": key[1], "members": set(), "agents": set(), "profiles": set(), "scores": []},
+            {
+                "experiment_id": key[0],
+                "arm_id": key[1],
+                "members": set(),
+                "agents": set(),
+                "profiles": set(),
+                "scores": [],
+            },
         )
         arm["members"].add(str(member_id))
         arm["agents"].add(str(implementation_agent))
@@ -242,9 +241,7 @@ def _version_exists(version: int | None) -> bool:
         return False
     with feedback._conn() as c:
         return (
-            c.execute(
-                "SELECT 1 FROM route_weights WHERE version=? LIMIT 1", (version,)
-            ).fetchone()
+            c.execute("SELECT 1 FROM route_weights WHERE version=? LIMIT 1", (version,)).fetchone()
             is not None
         )
 
@@ -321,20 +318,12 @@ def build_report_from_snapshot(
 def _route_weight_summary(route_table=None) -> dict:
     task_type_priors = priors_from_route_table(route_table or router.ROUTE_TABLE)
     latest_version = _max_route_version()
-    previous_version = (
-        latest_version - 1 if _version_exists(latest_version - 1) else None
-    )
+    previous_version = latest_version - 1 if _version_exists(latest_version - 1) else None
     tasks = []
     for task_type, priors in task_type_priors.items():
-        learned = (
-            feedback.current_weights(task_type, latest_version)
-            if latest_version
-            else []
-        )
+        learned = feedback.current_weights(task_type, latest_version) if latest_version else []
         if learned:
-            tasks.append(
-                _task_report(task_type, priors, latest_version, previous_version)
-            )
+            tasks.append(_task_report(task_type, priors, latest_version, previous_version))
         else:
             tasks.append(
                 {
@@ -365,9 +354,7 @@ def _outcome_summary(window_days: int) -> dict:
         "broke_later",
     }
     with feedback._conn() as c:
-        runs_total = c.execute(
-            "SELECT COUNT(*) FROM runs WHERE ts>=?", (since,)
-        ).fetchone()[0]
+        runs_total = c.execute("SELECT COUNT(*) FROM runs WHERE ts>=?", (since,)).fetchone()[0]
         total = c.execute(
             "SELECT COUNT(*) FROM runs r JOIN outcomes o ON r.run_id=o.run_id WHERE r.ts>=?",
             (since,),
@@ -511,13 +498,9 @@ def _production_flow_summary(window_days: int) -> dict:
         ).fetchall()
     window_runs, window_outcomes, latest_run_ts, latest_outcome_run_ts = window_row
     recent_runs, recent_outcomes = recent_row
-    latest_age_days = (
-        max(0, (now - int(latest_run_ts)) // 86400) if latest_run_ts else None
-    )
+    latest_age_days = max(0, (now - int(latest_run_ts)) // 86400) if latest_run_ts else None
     latest_outcome_age_days = (
-        max(0, (now - int(latest_outcome_run_ts)) // 86400)
-        if latest_outcome_run_ts
-        else None
+        max(0, (now - int(latest_outcome_run_ts)) // 86400) if latest_outcome_run_ts else None
     )
     status = "flowing" if recent_runs else "stale" if window_runs else "dry"
     recommendation = (
@@ -544,9 +527,7 @@ def _production_flow_summary(window_days: int) -> dict:
                 "assignment": assignment or None,
                 "runs": runs,
                 "outcomes": outcomes,
-                "latest_run_age_days": (
-                    max(0, (now - int(last_ts)) // 86400) if last_ts else None
-                ),
+                "latest_run_age_days": (max(0, (now - int(last_ts)) // 86400) if last_ts else None),
             }
             for source, assignment, runs, outcomes, last_ts in by_source
         ],
@@ -793,14 +774,20 @@ def _redirect_stage2_summary(
     calibration_remaining = int(calibration_preview.get("would_collect") or 0)
     if not path.exists() or int(summary.get("n") or 0) == 0:
         status = "no_proposal_corpus"
-        recommendation = "wait for eligible post-escalation candidates, then execute stage2_record_command"
+        recommendation = (
+            "wait for eligible post-escalation candidates, then execute stage2_record_command"
+        )
     elif not summary.get("ready_for_analysis"):
         status = "collecting_proposals"
-        recommendation = "continue recording valid RedirectAgent proposals for eligible Stage 1 candidates"
+        recommendation = (
+            "continue recording valid RedirectAgent proposals for eligible Stage 1 candidates"
+        )
     elif not summary.get("ready_for_historical_replay_analysis"):
         if historical_remaining:
             status = "collect_historical_replay"
-            recommendation = "run bounded historical replay collection before considering any apply path"
+            recommendation = (
+                "run bounded historical replay collection before considering any apply path"
+            )
         elif calibration_remaining:
             status = "collect_calibration_replay"
             recommendation = (
@@ -816,7 +803,9 @@ def _redirect_stage2_summary(
             )
     elif not summary.get("ready_for_supervised_apply"):
         status = "linking_outcomes"
-        recommendation = "link accepted/applied proposal advice to downstream outcomes before any apply path"
+        recommendation = (
+            "link accepted/applied proposal advice to downstream outcomes before any apply path"
+        )
     else:
         status = "ready_for_supervised_apply_review"
         recommendation = "review Stage 3 supervised-apply design; live supervisor remains disabled until implemented"
@@ -881,12 +870,8 @@ def _stage2_live_plan_summary(path: Path) -> dict:
         "generated_at": generated_at,
         "age_s": age_s,
         "live_candidate_count": int(data.get("live_candidate_count") or 0),
-        "eligible_live_candidate_count": int(
-            data.get("eligible_live_candidate_count") or 0
-        ),
-        "unrecorded_live_candidate_count": int(
-            data.get("unrecorded_live_candidate_count") or 0
-        ),
+        "eligible_live_candidate_count": int(data.get("eligible_live_candidate_count") or 0),
+        "unrecorded_live_candidate_count": int(data.get("unrecorded_live_candidate_count") or 0),
         "commands": data.get("commands") or [],
         "live_targets": data.get("live_targets") or [],
         "recommendation": data.get("recommendation") or base["recommendation"],
@@ -913,15 +898,15 @@ def _keepalive_supervisor_summary(
     stage2 = _redirect_stage2_summary(redirect_corpus_path, corpus_path)
     if not path.exists():
         status = "no_corpus"
-        recommendation = "keep shadow-only corpus collection running; no live supervisor evidence exists yet"
+        recommendation = (
+            "keep shadow-only corpus collection running; no live supervisor evidence exists yet"
+        )
     elif not labeled_ready:
         status = "collecting_labels"
         recommendation = "continue shadow/backfill collection until labeled trajectories reach the readiness target"
     elif not failure_ready:
         status = "success_heavy_underpowered"
-        recommendation = (
-            "do not run a live-supervisor A/B yet; collect more failure outcomes first"
-        )
+        recommendation = "do not run a live-supervisor A/B yet; collect more failure outcomes first"
     elif not disagreement_ready:
         status = "failure_disagreement_underpowered"
         recommendation = "do not run a live-supervisor A/B yet; failures exist but shadow-vs-keepalive divergence is too thin"
@@ -933,18 +918,14 @@ def _keepalive_supervisor_summary(
                 "until an explicit supervised-apply path is implemented"
             )
         else:
-            recommendation = (
-                f"{stage2.get('recommendation')}; live supervisor remains disabled"
-            )
+            recommendation = f"{stage2.get('recommendation')}; live supervisor remains disabled"
     return {
         "corpus_path": str(path),
         "status": status,
         "live_supervisor_allowed": False,
         "recommendation": recommendation,
         "thresholds": {
-            "labeled_outcomes": summary.get(
-                "readiness_target", keepalive_shadow.READINESS_TARGET
-            ),
+            "labeled_outcomes": summary.get("readiness_target", keepalive_shadow.READINESS_TARGET),
             "failure_outcomes": KEEPALIVE_SUPERVISOR_MIN_FAILURE_OUTCOMES,
             "meaningful_disagreements": KEEPALIVE_SUPERVISOR_MIN_MEANINGFUL_DISAGREEMENTS,
         },
@@ -991,9 +972,7 @@ def _langsmith_artifact_distribution(
     if artifact_health is not _LANGSMITH_ARTIFACT_HEALTH_UNSET:
         return artifact_health
     if not probe:
-        return _skipped_langsmith_artifact_distribution(
-            "LangSmith GitHub artifact probe skipped."
-        )
+        return _skipped_langsmith_artifact_distribution("LangSmith GitHub artifact probe skipped.")
     try:
         return langsmith_fetch.diagnose_artifact_distribution()
     except Exception as exc:
@@ -1101,9 +1080,7 @@ def _cost_trace_summary(
         "worker_model_provenance": feedback.worker_model_provenance_summary(
             window_days=window_days
         ),
-        "langsmith_telemetry": _langsmith_telemetry_summary(
-            costs_by_source, traces_by_source
-        ),
+        "langsmith_telemetry": _langsmith_telemetry_summary(costs_by_source, traces_by_source),
         "langsmith_artifact_distribution": _langsmith_artifact_distribution(
             artifact_health=langsmith_artifact_health,
             probe=probe_langsmith_artifacts,
@@ -1133,9 +1110,7 @@ def _evidence_summary(window_days: int, min_gap_recurrence: int) -> dict:
     return {
         "window_days": window_days,
         "min_gap_recurrence": min_gap_recurrence,
-        "open_gaps_by_recurrence": [
-            {"gap": gap, "recurrence": count} for gap, count in gaps
-        ],
+        "open_gaps_by_recurrence": [{"gap": gap, "recurrence": count} for gap, count in gaps],
         "proposals": feedback.propose_evidence_changes(
             min_recurrence=min_gap_recurrence,
             window_days=window_days,
@@ -1245,15 +1220,23 @@ def build_report(
     probe_langsmith_artifacts: bool = True,
 ) -> dict:
     route_weights = _route_weight_summary(route_table=route_table)
-    pattern_state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    pattern_state_dir = Path(
+        os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")
+    )
     pattern_status_path = pattern_state_dir / "pattern-miner-status.json"
     pattern_inventory_path = pattern_state_dir / "pattern-miner-inventory.json"
     try:
-        pattern_status = json.loads(pattern_status_path.read_text()) if pattern_status_path.exists() else {}
+        pattern_status = (
+            json.loads(pattern_status_path.read_text()) if pattern_status_path.exists() else {}
+        )
     except (OSError, json.JSONDecodeError):
         pattern_status = {}
     try:
-        pattern_inventory = json.loads(pattern_inventory_path.read_text()) if pattern_inventory_path.exists() else {}
+        pattern_inventory = (
+            json.loads(pattern_inventory_path.read_text())
+            if pattern_inventory_path.exists()
+            else {}
+        )
     except (OSError, json.JSONDecodeError):
         pattern_inventory = {}
     try:
@@ -1284,13 +1267,9 @@ def build_report(
         "role_activation": feedback.role_activation_metrics(),
         "range_rollout": range_rollout,
         "runtime_ac_flow": runtime_flow,
-        "model_profile_trial": model_profile_trial.build_report(
-            model_profile_trial_path
-        ),
+        "model_profile_trial": model_profile_trial.build_report(model_profile_trial_path),
         "model_profile_transport_qualification": (
-            model_profile_trial_bridge.build_qualification_report(
-                model_profile_qualification_path
-            )
+            model_profile_trial_bridge.build_qualification_report(model_profile_qualification_path)
         ),
         "pattern_miner": {
             "status": pattern_status,
@@ -1340,9 +1319,7 @@ def build_report(
         ),
         "hypotheses": _hypothesis_summary(hypotheses_path),
         "features": features.summary(features_path or features.REG, create=False),
-        "capabilities": capabilities.summary(
-            capabilities_path or capabilities.REG, create=False
-        ),
+        "capabilities": capabilities.summary(capabilities_path or capabilities.REG, create=False),
     }
 
 
@@ -1370,9 +1347,7 @@ def format_human(report: dict) -> str:
         f"route_weights_version={dataset['route_weights_version'] or 'none'} "
         f"window_days={report['window_days']}"
     )
-    count_bits = [
-        f"{table}={count}" for table, count in dataset["table_counts"].items() if count
-    ]
+    count_bits = [f"{table}={count}" for table, count in dataset["table_counts"].items() if count]
     lines.append(f"dataset: {' '.join(count_bits) if count_bits else 'no rows yet'}")
 
     experiments = report.get("experiments") or {}
@@ -1451,9 +1426,7 @@ def format_human(report: dict) -> str:
             for row in acquisition.get("direct_mode_deficits") or []
         }
         candidates = [
-            row
-            for row in acquisition.get("candidate_task_types") or []
-            if row.get("recommended")
+            row for row in acquisition.get("candidate_task_types") or [] if row.get("recommended")
         ]
         lines.append(
             f"exploration acquisition: stage={acquisition.get('stage')} "
@@ -1624,14 +1597,17 @@ def format_human(report: dict) -> str:
         f"invalid_active_edges={len(capability_report.get('active_without_edges') or [])}"
     )
     for capability_id, cap in sorted((capability_report.get("capabilities") or {}).items()):
-        last_outcome = max(
-            (
-                int(event.get("timestamp") or 0)
-                for event in cap.get("event_history") or []
-                if event.get("type") == "outcome"
-            ),
-            default=0,
-        ) or None
+        last_outcome = (
+            max(
+                (
+                    int(event.get("timestamp") or 0)
+                    for event in cap.get("event_history") or []
+                    if event.get("type") == "outcome"
+                ),
+                default=0,
+            )
+            or None
+        )
         lines.append(
             f"  {capability_id}: state={cap.get('status')} "
             f"liveness={capabilities.classify_liveness(cap)} "
@@ -1691,9 +1667,7 @@ def format_human(report: dict) -> str:
     if subjects.get("true_task_type_distribution"):
         task_bits = " ".join(
             f"{task_type}={count}"
-            for task_type, count in sorted(
-                subjects["true_task_type_distribution"].items()
-            )
+            for task_type, count in sorted(subjects["true_task_type_distribution"].items())
         )
         lines.append(f"  true task types: {task_bits}")
     range_state = report.get("range_rollout") or {}
@@ -1881,8 +1855,7 @@ def format_human(report: dict) -> str:
 
     hypotheses = report["hypotheses"]
     status_bits = " ".join(
-        f"{status}={count}"
-        for status, count in sorted(hypotheses["status_counts"].items())
+        f"{status}={count}" for status, count in sorted(hypotheses["status_counts"].items())
     )
     lines.append(f"hypotheses ({status_bits or 'none'}):")
     for row in hypotheses["hypotheses"]:
@@ -1917,9 +1890,7 @@ def _seed_selftest_data(route_table: dict, now: int) -> Path:
 
     for i in range(4):
         run_id = f"win-{i}"
-        feedback.record_run(
-            run_id, "o/r#1", "implement", "evidence_wins", ts=now - 3600
-        )
+        feedback.record_run(run_id, "o/r#1", "implement", "evidence_wins", ts=now - 3600)
         feedback.record_outcome(
             run_id, adjudicated_verdict="PASS", merged=True, durability="durable"
         )
@@ -2015,10 +1986,7 @@ def _seed_selftest_data(route_table: dict, now: int) -> Path:
         adjudicated_verdict="",
         merged=False,
         durability="abandoned",
-        notes=(
-            "remote keepalive PR closed unmerged; "
-            "process_ignore=duplicate_or_superseded"
-        ),
+        notes=("remote keepalive PR closed unmerged; " "process_ignore=duplicate_or_superseded"),
     )
     feedback.record_run(
         "issue-reviewed",
@@ -2041,9 +2009,7 @@ def _seed_selftest_data(route_table: dict, now: int) -> Path:
 
     feedback.record_evaluation("exp-self", "evidence_wins", "judge-a", 9.0)
     for _ in range(3):
-        feedback.record_evidence_gap(
-            "exp-gap", "judge-a", "need test-execution output to judge"
-        )
+        feedback.record_evidence_gap("exp-gap", "judge-a", "need test-execution output to judge")
     feedback.record_evidence_type("test_run_output", "already approved")
     feedback.record_evidence_type("unused_field", "speculative")
     feedback.bump_evidence_influence("test_run_output")
@@ -2157,9 +2123,7 @@ def _seed_redirect_stage2_corpus(path: Path) -> None:
     rows = []
     for idx in range(redirect_shadow.READINESS_TARGET):
         role_run_id = (
-            f"role:redirect:fixture:{idx}"
-            if idx < redirect_shadow.LINKED_OUTCOME_TARGET
-            else None
+            f"role:redirect:fixture:{idx}" if idx < redirect_shadow.LINKED_OUTCOME_TARGET else None
         )
         rows.append(
             {
@@ -2334,19 +2298,11 @@ def _selftest() -> None:
         assert task["rows"][0]["previous_rank_delta"] is not None, task
         assert report["outcomes"]["total"] == 10, report["outcomes"]
         assert report["outcomes"]["rollup"]["runs_total"] == 10, report["outcomes"]
-        assert report["outcomes"]["rollup"]["outcome_coverage"] == 1.0, report[
-            "outcomes"
-        ]
-        assert report["production_flow"]["status"] == "flowing", report[
-            "production_flow"
-        ]
-        assert report["production_flow"]["recent_production_runs"] == 10, report[
-            "production_flow"
-        ]
+        assert report["outcomes"]["rollup"]["outcome_coverage"] == 1.0, report["outcomes"]
+        assert report["production_flow"]["status"] == "flowing", report["production_flow"]
+        assert report["production_flow"]["recent_production_runs"] == 10, report["production_flow"]
         assert report["outcomes"]["rollup"]["merged_rate"] == 7 / 10, report["outcomes"]
-        assert report["outcomes"]["rollup"]["durable_success_count"] == 4, report[
-            "outcomes"
-        ]
+        assert report["outcomes"]["rollup"]["durable_success_count"] == 4, report["outcomes"]
         assert report["outcomes"]["by_source_assignment"], report["outcomes"]
         process = report["process_improvement"]
         process_by_type = {row["work_type"]: row for row in process["work_type_rollup"]}
@@ -2358,23 +2314,18 @@ def _selftest() -> None:
         assert process_signals["sync"]["severity"] == "MED", process
         assert len(process["suppressed_process_failures"]) == 1, process
         assert (
-            process["suppressed_process_failures"][0]["reason"]
-            == "duplicate_or_superseded"
+            process["suppressed_process_failures"][0]["reason"] == "duplicate_or_superseded"
         ), process
         assert len(process["non_durable_issue_runs"]) == 2, process
         assert len(process["reviewed_issue_failures"]) == 1, process
-        assert (
-            process["reviewed_issue_failures"][0]["reason"]
-            == "duplicate_or_superseded"
-        ), process
+        assert process["reviewed_issue_failures"][0]["reason"] == "duplicate_or_superseded", process
         supervisor = report["keepalive_supervisor"]
         assert supervisor["status"] == "armed_for_layered_ab_review", supervisor
         assert supervisor["live_supervisor_allowed"] is False, supervisor
         assert supervisor["summary"]["failure_outcomes"] == 5, supervisor
         assert supervisor["summary"]["meaningful_disagreements"] == 3, supervisor
         assert (
-            supervisor["stage2_proposal_corpus"]["status"]
-            == "ready_for_supervised_apply_review"
+            supervisor["stage2_proposal_corpus"]["status"] == "ready_for_supervised_apply_review"
         ), supervisor
         assert (
             supervisor["stage2_proposal_corpus"]["ready_for_supervised_apply"] is True
@@ -2383,13 +2334,9 @@ def _selftest() -> None:
         empty_keepalive_corpus = temp_dir / "keepalive-shadow-empty.jsonl"
         empty_keepalive_corpus.write_text("", encoding="utf-8")
         _seed_blocked_redirect_stage2_corpus(blocked_redirect_corpus)
-        blocked_stage2 = _redirect_stage2_summary(
-            blocked_redirect_corpus, empty_keepalive_corpus
-        )
+        blocked_stage2 = _redirect_stage2_summary(blocked_redirect_corpus, empty_keepalive_corpus)
         assert blocked_stage2["status"] == "waiting_for_candidates", blocked_stage2
-        assert (
-            blocked_stage2["ready_for_historical_replay_analysis"] is False
-        ), blocked_stage2
+        assert blocked_stage2["ready_for_historical_replay_analysis"] is False, blocked_stage2
         assert blocked_stage2["historical_candidates_remaining"] == 0, blocked_stage2
         assert blocked_stage2["calibration_candidates_remaining"] == 0, blocked_stage2
         assert report["costs_traces"]["costs_by_source"], report["costs_traces"]
@@ -2405,34 +2352,26 @@ def _selftest() -> None:
         assert provenance["unknown_worker_runs"] == 6, provenance
         assert provenance["worker_evaluator_role_overlap_runs"] == 1, provenance
         assert (
-            report["costs_traces"]["langsmith_artifact_distribution"]["status"]
-            == "rollup_only"
+            report["costs_traces"]["langsmith_artifact_distribution"]["status"] == "rollup_only"
         ), report["costs_traces"]
-        assert (
-            report["costs_traces"]["langsmith_telemetry"]["status"] == "flowing"
-        ), report["costs_traces"]
-        assert report["judge_reliability"]["judge_count"] >= 1, report[
-            "judge_reliability"
+        assert report["costs_traces"]["langsmith_telemetry"]["status"] == "flowing", report[
+            "costs_traces"
         ]
-        assert any(
-            p["recurrence"] >= 3 for p in report["evidence"]["proposals"]
-        ), report["evidence"]
-        assert (
-            report["evidence"]["evidence_types"]["counts_by_status"]["active"] == 1
-        ), report["evidence"]
-        assert (
-            report["evidence"]["evidence_types"]["counts_by_status"]["retired"] == 1
-        ), report["evidence"]
-        assert report["dry_seams"]["overall"] in {"pass", "warn", "fail"}, report[
-            "dry_seams"
+        assert report["judge_reliability"]["judge_count"] >= 1, report["judge_reliability"]
+        assert any(p["recurrence"] >= 3 for p in report["evidence"]["proposals"]), report[
+            "evidence"
         ]
+        assert report["evidence"]["evidence_types"]["counts_by_status"]["active"] == 1, report[
+            "evidence"
+        ]
+        assert report["evidence"]["evidence_types"]["counts_by_status"]["retired"] == 1, report[
+            "evidence"
+        ]
+        assert report["dry_seams"]["overall"] in {"pass", "warn", "fail"}, report["dry_seams"]
         assert "outcome_gap_summary" in report["dry_seams"], report["dry_seams"]
-        assert report["hypotheses"]["status_counts"]["accumulating"] == 1, report[
-            "hypotheses"
-        ]
+        assert report["hypotheses"]["status_counts"]["accumulating"] == 1, report["hypotheses"]
         assert (
-            report["features"]["promotion_candidates"][0]["name"]
-            == "fixture-reflection"
+            report["features"]["promotion_candidates"][0]["name"] == "fixture-reflection"
         ), report["features"]
         assert "evidence_wins" in format_human(report)
         assert "judge reliability" in format_human(report)
@@ -2460,7 +2399,9 @@ def _selftest() -> None:
             langsmith_artifact_health=artifact_health,
         )
         assert snapshot_report["dataset"]["table_counts"]["runs"] == 10, snapshot_report
-        assert snapshot_report["dataset"]["table_counts"]["execution_attempts"] == 5, snapshot_report
+        assert (
+            snapshot_report["dataset"]["table_counts"]["execution_attempts"] == 5
+        ), snapshot_report
 
         gap_text = "need test-execution output to judge"
         snapshot_preview = build_report_from_snapshot(
@@ -2548,17 +2489,11 @@ def _selftest() -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(
-        description="Read-only periodic feedback dataset report."
-    )
+    parser = argparse.ArgumentParser(description="Read-only periodic feedback dataset report.")
     parser.add_argument("--window-days", type=_positive_int, default=90)
     parser.add_argument("--min-gap-recurrence", type=_positive_int, default=3)
-    parser.add_argument(
-        "--json", action="store_true", help="print JSON instead of human text"
-    )
-    parser.add_argument(
-        "--snapshot-json", type=Path, help="read feedback.snapshot_json() output"
-    )
+    parser.add_argument("--json", action="store_true", help="print JSON instead of human text")
+    parser.add_argument("--snapshot-json", type=Path, help="read feedback.snapshot_json() output")
     parser.add_argument(
         "--no-langsmith-artifact-probe",
         action="store_true",
@@ -2575,9 +2510,7 @@ def main(argv: list[str]) -> int:
         metavar="GAP",
         help="exact evidence gap text that motivated the proposed type",
     )
-    parser.add_argument(
-        "--rationale", default="", help="rationale stored on the evidence type"
-    )
+    parser.add_argument("--rationale", default="", help="rationale stored on the evidence type")
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -2592,9 +2525,7 @@ def main(argv: list[str]) -> int:
     if args.approve_evidence_type and not args.from_gap:
         parser.error("--approve-evidence-type requires --from-gap")
     if args.apply and args.snapshot_json:
-        parser.error(
-            "--apply cannot be used with --snapshot-json; snapshot mode is read-only"
-        )
+        parser.error("--apply cannot be used with --snapshot-json; snapshot mode is read-only")
 
     if args.snapshot_json:
         snapshot_path = args.snapshot_json.resolve()

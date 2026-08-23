@@ -14,7 +14,6 @@ from capability_ir import CapabilityIR, Lifecycle, SourceOccurrence, stable_hash
 import feedback
 import repo_knowledge
 
-
 REPO = "owner/example-repo"
 TEXT = "When changing `docs/ci/WORKFLOWS.md`, retain the `workflow_name` registry symbol and run its narrow validation."
 
@@ -115,8 +114,13 @@ def _candidate(repo_root: Path, *, now: int | None = None) -> CapabilityIR:
         selector=selector,
         graph={
             "phase_order": [
-                "trigger", "decision", "execution", "artifact",
-                "verification", "outcome", "durability",
+                "trigger",
+                "decision",
+                "execution",
+                "artifact",
+                "verification",
+                "outcome",
+                "durability",
             ],
             "playbook_contract": contract,
         },
@@ -215,7 +219,9 @@ def test_registered_repo_missing_block_is_absent(agents_md_fixture: dict) -> Non
 def test_block_status_distinguishes_stale_and_mismatched(agents_md_fixture: dict) -> None:
     agents_path = agents_md_fixture["repo_root"] / "AGENTS.md"
     original = agents_path.read_text()
-    agents_path.write_text(original.replace("retain the `workflow_name`", "omit the `workflow_name`"))
+    agents_path.write_text(
+        original.replace("retain the `workflow_name`", "omit the `workflow_name`")
+    )
     mismatch = repo_knowledge.validate_agents_md_export(
         agents_md_fixture["repo_root"], repo=REPO, path=agents_md_fixture["registry"]
     )
@@ -284,9 +290,7 @@ def test_insufficient_evidence_auto_expires(tmp_path: Path) -> None:
     raw["independent_subjects"] = raw["independent_subjects"][:2]
     raw["telemetry"]["distinct_subject_count"] = 2
     raw["telemetry"]["effective_subject_count"] = 2.0
-    decision = compiler.compile_playbook_candidate(
-        raw, repo_root=repo_root, registry_path=registry
-    )
+    decision = compiler.compile_playbook_candidate(raw, repo_root=repo_root, registry_path=registry)
     assert decision["status"] == "expired"
     assert "insufficient durable repo evidence" in decision["rejection_reasons"]
 
@@ -336,7 +340,9 @@ def test_used_rule_links_durability_and_rolls_back(
     assert cap["status"] == "retired"
     bundle = json.loads(agents_md_fixture["bundle"].read_text())
     assert bundle["user_content"] == {"keep": True}
-    assert agents_md_fixture["manifest"]["rule_id"] not in bundle["orchestrator_repo_playbook_rules"]
+    assert (
+        agents_md_fixture["manifest"]["rule_id"] not in bundle["orchestrator_repo_playbook_rules"]
+    )
 
 
 def test_high_risk_policy_uses_nonblocking_owner_question(
@@ -357,5 +363,8 @@ def test_high_risk_policy_uses_nonblocking_owner_question(
         record_owner_question=True,
     )
     assert decision["status"] == "owner_question"
-    assert decision["owner_question"]["default_action"] == "leave the candidate unexported and let it expire"
+    assert (
+        decision["owner_question"]["default_action"]
+        == "leave the candidate unexported and let it expire"
+    )
     assert decision["owner_question_result"]["status"] == "open"

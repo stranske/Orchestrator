@@ -22,7 +22,6 @@ import repo_knowledge
 import roles
 import runtime_ac
 
-
 SCHEMA = "orchestrator.capability-target-registry"
 VERSION = 1
 TARGET_KINDS = frozenset({"role", "workflow", "skill", "playbook", "gate"})
@@ -122,13 +121,17 @@ def register_target(
     )
     if identity:
         required_identity = {
-            "capability_id", "capability_version_id", "artifact_hash",
+            "capability_id",
+            "capability_version_id",
+            "artifact_hash",
             "lifecycle_policy_hash",
         }
         if set(identity) != required_identity:
             raise ValueError("target identity must contain the exact lifecycle identity fields")
         if identity["capability_id"] != capability_id:
-            raise ValueError("target artifact capability identity does not match lifecycle identity")
+            raise ValueError(
+                "target artifact capability identity does not match lifecycle identity"
+            )
         version_id = str(identity["capability_version_id"])
         artifact_hash = str(identity["artifact_hash"])
         policy_hash = str(identity["lifecycle_policy_hash"])
@@ -157,7 +160,8 @@ def register_target(
             ledger_path=Path(context["capability_ledger_path"]),
             workflows_bundle_path=(
                 Path(context["workflows_bundle_path"])
-                if context.get("workflows_bundle_path") else None
+                if context.get("workflows_bundle_path")
+                else None
             ),
             apply=True,
         )
@@ -201,7 +205,9 @@ def _matches(binding: Mapping[str, Any], trigger: Mapping[str, Any]) -> bool:
         selector = role.selector or {}
         value = trigger.get(selector.get("field"))
         expected = selector.get("value")
-        return value == expected if selector.get("operator") == "equals" else value in (expected or [])
+        return (
+            value == expected if selector.get("operator") == "equals" else value in (expected or [])
+        )
     if kind == "workflow":
         selector = artifact.get("selector") or {}
         if {"field", "operator", "value"} <= set(selector):
@@ -213,9 +219,7 @@ def _matches(binding: Mapping[str, Any], trigger: Mapping[str, Any]) -> bool:
                 return value in (expected or [])
             return False
         return all(
-            trigger.get(key) in value
-            if isinstance(value, list)
-            else trigger.get(key) == value
+            trigger.get(key) in value if isinstance(value, list) else trigger.get(key) == value
             for key, value in selector.items()
         )
     if kind == "skill":
@@ -228,10 +232,9 @@ def _matches(binding: Mapping[str, Any], trigger: Mapping[str, Any]) -> bool:
             and trigger.get("task_type") in selector["task_types"]
             and trigger.get("lane") in selector["lanes"]
         )
-    return (
-        trigger.get("kind") == "acceptance_gate"
-        and trigger.get("named_test_id") == artifact.get("named_test_id")
-    )
+    return trigger.get("kind") == "acceptance_gate" and trigger.get(
+        "named_test_id"
+    ) == artifact.get("named_test_id")
 
 
 def invoke_target(
@@ -311,7 +314,11 @@ def invoke_target(
     invocation = {
         "invocation_id": _hash(
             "capability-target-invocation",
-            {"version": current["capability_version_id"], "trigger": dict(trigger), "consumer": consumer_ref},
+            {
+                "version": current["capability_version_id"],
+                "trigger": dict(trigger),
+                "consumer": consumer_ref,
+            },
         ),
         "matched": True,
         "invoked": True,
@@ -327,13 +334,19 @@ def invoke_target(
         {
             key: invocation[key]
             for key in (
-                "invocation_id", "accepted", "consumer_ref", "target_run_id", "invoked_at",
+                "invocation_id",
+                "accepted",
+                "consumer_ref",
+                "target_run_id",
+                "invoked_at",
                 "lifecycle_stage",
             )
         }
     )
     _atomic_write(Path(registry_path), registry)
-    _atomic_write(Path(current["binding_path"]), registry["targets"][current["capability_version_id"]])
+    _atomic_write(
+        Path(current["binding_path"]), registry["targets"][current["capability_version_id"]]
+    )
     return invocation
 
 
@@ -352,9 +365,18 @@ def prepare_rollback(
         raise AssertionError("regressing canary has no rollback target")
     token = _hash(
         "capability-target-rollback",
-        {"version": current["capability_version_id"], "artifact": current["artifact_hash"], "reason": reason},
+        {
+            "version": current["capability_version_id"],
+            "artifact": current["artifact_hash"],
+            "reason": reason,
+        },
     )
-    current["rollback"] = {"phase": "pending", "reason": reason, "token": token, "prepared_at": int(time.time())}
+    current["rollback"] = {
+        "phase": "pending",
+        "reason": reason,
+        "token": token,
+        "prepared_at": int(time.time()),
+    }
     _atomic_write(Path(current["binding_path"]), current)
     registry["targets"][current["capability_version_id"]] = current
     _atomic_write(Path(registry_path), registry)
@@ -390,14 +412,23 @@ def apply_rollback(
             repo_root=Path(context["repo_root"]),
             registry_path=Path(context["repo_registry_path"]),
             ledger_path=Path(context["capability_ledger_path"]),
-            workflows_bundle_path=(Path(context["workflows_bundle_path"]) if context.get("workflows_bundle_path") else None),
+            workflows_bundle_path=(
+                Path(context["workflows_bundle_path"])
+                if context.get("workflows_bundle_path")
+                else None
+            ),
             apply=True,
         )
     else:
         detail = {"capture_disabled": True, "plan_id": current["artifact"]["plan_id"]}
     current["enabled"] = False
     current["restored_predecessor"] = current["predecessor"]
-    current["rollback"] = {**pending, "phase": "applied", "applied_at": int(time.time()), "detail": detail}
+    current["rollback"] = {
+        **pending,
+        "phase": "applied",
+        "applied_at": int(time.time()),
+        "detail": detail,
+    }
     registry["targets"][current["capability_version_id"]] = current
     _atomic_write(Path(registry_path), registry)
     if kind != "skill":
@@ -451,7 +482,8 @@ def _selftest() -> None:
             capability_compiler.reference_workflow_source()
         )
         binding = register_target(
-            "workflow", plan,
+            "workflow",
+            plan,
             registry_path=root / "targets.json",
             predecessor="workflow:manual",
             lifecycle_policy={"mode": "shadow", "tasks_per_day": 1},

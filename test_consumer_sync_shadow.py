@@ -49,9 +49,7 @@ def entry(
     effect_record = {key: value for key, value in record.items() if key != "description"}
     return {
         **record,
-        "effect_fingerprint": stable_hash(
-            "consumer-sync-source-effect", effect_record
-        ),
+        "effect_fingerprint": stable_hash("consumer-sync-source-effect", effect_record),
     }
 
 
@@ -66,9 +64,7 @@ def valid_plan() -> dict:
         {
             **removal_core,
             "description": "Obsolete fixture",
-            "effect_fingerprint": stable_hash(
-                "consumer-sync-removal-effect", removal_core
-            ),
+            "effect_fingerprint": stable_hash("consumer-sync-removal-effect", removal_core),
         }
     ]
     core = {
@@ -113,9 +109,7 @@ def test_shadow_classifies_only_allowlisted_effects_without_writes() -> None:
         ".github/workflows/skipped.yml": stable_hash("old", "skipped"),
         ".github/workflows/obsolete.yml": stable_hash("old", "obsolete"),
     }
-    result = classify_shadow_drift(
-        plan, repository="owner/repo", observed_targets=observed
-    )
+    result = classify_shadow_drift(plan, repository="owner/repo", observed_targets=observed)
 
     assert result["mode"] == "shadow_read_only"
     assert result["side_effects_performed"] == []
@@ -212,9 +206,7 @@ def test_handoff_rejects_spoofed_plan_and_identity() -> None:
 
 def test_shadow_result_records_idempotently_on_existing_capability(tmp_path: Path) -> None:
     ledger = tmp_path / "capabilities.json"
-    result = classify_shadow_drift(
-        valid_plan(), repository="owner/repo", observed_targets={}
-    )
+    result = classify_shadow_drift(valid_plan(), repository="owner/repo", observed_targets={})
     first = record_shadow_result(result, ledger_path=ledger, timestamp=100)
     second = record_shadow_result(result, ledger_path=ledger, timestamp=101)
 
@@ -237,9 +229,7 @@ def test_dashboard_reports_no_data_and_expiry_blocker(tmp_path: Path) -> None:
     assert promotion_dashboard(ledger_path=empty)["status"] == "no-data"
 
     ledger = tmp_path / "caps.json"
-    result = classify_shadow_drift(
-        valid_plan(), repository="owner/repo", observed_targets={}
-    )
+    result = classify_shadow_drift(valid_plan(), repository="owner/repo", observed_targets={})
     record_shadow_result(result, ledger_path=ledger, timestamp=100)
     dashboard = promotion_dashboard(ledger_path=ledger, now=1893456001)
     assert "capability_expired" in dashboard["promotion_blockers"]

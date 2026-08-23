@@ -33,8 +33,7 @@ RUNTIME_AC_REQUIRED_LABELS = {
 }
 DEFAULT_RUNTIME_AC_SPEC_DIR = Path.home() / ".codex" / "orchestrator" / "runtime-ac"
 DEFAULT_BACKLOG_JSON = (
-    Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
-    / "backlog.json"
+    Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")) / "backlog.json"
 )
 DEFAULT_CRON_LOG = (
     Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
@@ -46,14 +45,9 @@ def target_slug(target: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "__", target).strip("_")
 
 
-def spec_path(
-    target: str, *, spec_dir: str | Path | None = None, env: dict | None = None
-) -> Path:
+def spec_path(target: str, *, spec_dir: str | Path | None = None, env: dict | None = None) -> Path:
     source_env = os.environ if env is None else env
-    root = Path(
-        spec_dir
-        or source_env.get("ORCH_RUNTIME_AC_SPEC_DIR", DEFAULT_RUNTIME_AC_SPEC_DIR)
-    )
+    root = Path(spec_dir or source_env.get("ORCH_RUNTIME_AC_SPEC_DIR", DEFAULT_RUNTIME_AC_SPEC_DIR))
     return root / f"{target_slug(target)}.json"
 
 
@@ -74,9 +68,7 @@ def _all_label_names(item: dict) -> list[str]:
 
 def required(item: dict, path: Path) -> bool:
     labels = {label.lower() for label in _all_label_names(item)}
-    normalized = labels | {
-        label.split(":", 1)[1].strip() for label in labels if ":" in label
-    }
+    normalized = labels | {label.split(":", 1)[1].strip() for label in labels if ":" in label}
     return bool(normalized & RUNTIME_AC_REQUIRED_LABELS) or path.exists()
 
 
@@ -91,7 +83,11 @@ def eligibility(item: dict, path: Path) -> dict:
             matched_labels.append(raw)
     by_label = bool(matched_labels)
     by_spec = path.exists()
-    source = "label+spec" if by_label and by_spec else "label" if by_label else "spec" if by_spec else "none"
+    source = (
+        "label+spec"
+        if by_label and by_spec
+        else "label" if by_label else "spec" if by_spec else "none"
+    )
     refs = list(matched_labels)
     if by_spec:
         refs.append(str(path))
@@ -351,8 +347,7 @@ def gate_status(
             result["feedback"] = {"recorded": False, "error": str(feedback_exc)}
         feedback_result = result.get("feedback")
         feedback_recorded = bool(run_id) and not (
-            isinstance(feedback_result, dict)
-            and feedback_result.get("recorded") is False
+            isinstance(feedback_result, dict) and feedback_result.get("recorded") is False
         )
         if verdict == "PASS" and feedback_recorded:
             capabilities.production_heartbeat(
@@ -378,7 +373,9 @@ def gate_status(
             closer_run_id=run_id,
             verifier_run_id=gate.get("verification_id"),
             verifier_verdict=verdict,
-            terminal_reason=(None if verdict == "PASS" else f"verifier_{str(verdict or 'unknown').lower()}"),
+            terminal_reason=(
+                None if verdict == "PASS" else f"verifier_{str(verdict or 'unknown').lower()}"
+            ),
         )
         return result
     except Exception as exc:
@@ -577,7 +574,9 @@ def scan_items(
     elif active_blockers:
         recommendation = "Resolve missing specs or active-run environment before expecting runtime AC gates to fire."
     else:
-        recommendation = "Runtime AC-required backlog items are ready for active gate execution when selected."
+        recommendation = (
+            "Runtime AC-required backlog items are ready for active gate execution when selected."
+        )
     return {
         "read_only": True,
         "items_checked": len(items),
@@ -586,9 +585,7 @@ def scan_items(
         "active_blocker_count": active_blockers,
         "env": {
             "ORCH_RUN_RUNTIME_AC": env_flag(env, "ORCH_RUN_RUNTIME_AC"),
-            "ORCH_RUNTIME_AC_ALLOW_COMMANDS": env_flag(
-                env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"
-            ),
+            "ORCH_RUNTIME_AC_ALLOW_COMMANDS": env_flag(env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
             "ORCH_RUNTIME_AC_TIMEOUT": env_int(env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
         },
         "spec_dir": str(
@@ -704,8 +701,7 @@ def _scan_db_runtime_ac_rows(db_path: str | Path) -> tuple[dict, str | None]:
     try:
         c = sqlite3.connect(str(path))
         c.row_factory = sqlite3.Row
-        rows = c.execute(
-            """
+        rows = c.execute("""
             SELECT r.run_id, r.target, r.agent, r.mode, r.source, r.experiment_id,
                    o.verifier_verdict, o.adjudicated_verdict, o.merged,
                    o.durability, o.notes
@@ -715,8 +711,7 @@ def _scan_db_runtime_ac_rows(db_path: str | Path) -> tuple[dict, str | None]:
                OR o.verifier_verdict LIKE '%RUNTIME_AC%'
                OR o.notes LIKE '%runtime%AC%'
             ORDER BY r.ts DESC
-            """
-        ).fetchall()
+            """).fetchall()
     except sqlite3.Error as exc:
         return {
             "path": str(path),
@@ -964,46 +959,35 @@ def _selftest() -> None:
         assert required({"labels": ["Type: Runtime-AC"]}, missing_path) is True
         assert required({"labels": ["AC-CHECKS"]}, missing_path) is True
         with tempfile.TemporaryDirectory(prefix="runtime-ac-env-") as env_tmp:
-            env_path = spec_path(
-                item["target"], env={"ORCH_RUNTIME_AC_SPEC_DIR": env_tmp}
-            )
+            env_path = spec_path(item["target"], env={"ORCH_RUNTIME_AC_SPEC_DIR": env_tmp})
             env_path.parent.mkdir(parents=True, exist_ok=True)
             env_path.write_text(json.dumps(fixture_spec), encoding="utf-8")
-            env_planned = gate_status(
-                item, dry_run=True, env={"ORCH_RUNTIME_AC_SPEC_DIR": env_tmp}
-            )
+            env_planned = gate_status(item, dry_run=True, env={"ORCH_RUNTIME_AC_SPEC_DIR": env_tmp})
             assert env_planned["spec_path"] == str(env_path), env_planned
 
         planned = gate_status(item, dry_run=True, spec_dir=tmp)
         assert planned["status"] == "planned" and planned["blocks"] is False, planned
-        assert gate_status(
-            {**item, "target": "stranske/Workflows#999", "labels": []},
-            dry_run=False,
-            spec_dir=tmp,
-        ) is None
         assert (
-            gate_status({**item, "lane": "opener"}, dry_run=True, spec_dir=tmp) is None
+            gate_status(
+                {**item, "target": "stranske/Workflows#999", "labels": []},
+                dry_run=False,
+                spec_dir=tmp,
+            )
+            is None
         )
+        assert gate_status({**item, "lane": "opener"}, dry_run=True, spec_dir=tmp) is None
         missing = gate_status(
             {**item, "target": "stranske/Workflows#304"},
             dry_run=False,
             env={"ORCH_RUN_RUNTIME_AC": "1"},
             spec_dir=tmp,
         )
-        assert (
-            missing["status"] == "missing_spec" and missing["blocks"] is True
-        ), missing
+        assert missing["status"] == "missing_spec" and missing["blocks"] is True, missing
         disabled = gate_status(item, dry_run=False, env={}, spec_dir=tmp)
-        assert (
-            disabled["status"] == "required_but_not_run" and disabled["blocks"] is True
-        ), disabled
+        assert disabled["status"] == "required_but_not_run" and disabled["blocks"] is True, disabled
         path.write_text("{not json", encoding="utf-8")
-        malformed = gate_status(
-            item, dry_run=False, env={"ORCH_RUN_RUNTIME_AC": "1"}, spec_dir=tmp
-        )
-        assert (
-            malformed["status"] == "failed" and malformed["blocks"] is True
-        ), malformed
+        malformed = gate_status(item, dry_run=False, env={"ORCH_RUN_RUNTIME_AC": "1"}, spec_dir=tmp)
+        assert malformed["status"] == "failed" and malformed["blocks"] is True, malformed
 
         recorded = []
         path.write_text(json.dumps(fixture_spec), encoding="utf-8")
@@ -1068,9 +1052,7 @@ def _selftest() -> None:
             env={"ORCH_RUN_RUNTIME_AC": "1"},
             spec_dir=tmp,
             run_fn=fake_pass,
-            latest_run_fn=lambda target, mode=None: (_ for _ in ()).throw(
-                RuntimeError("db busy")
-            ),
+            latest_run_fn=lambda target, mode=None: (_ for _ in ()).throw(RuntimeError("db busy")),
         )
         assert (
             feedback_error["status"] == "executed" and feedback_error["blocks"] is False
@@ -1094,12 +1076,21 @@ def _selftest() -> None:
             run_fn=fake_needs_review,
             latest_run_fn=lambda target, mode=None: None,
         )
-        assert needs_review["verdict"] == "NEEDS_REVIEW" and needs_review["blocks"] is True, needs_review
+        assert (
+            needs_review["verdict"] == "NEEDS_REVIEW" and needs_review["blocks"] is True
+        ), needs_review
 
         structured = feedback.runtime_ac_gate_events(limit=100)
         statuses = {row.get("gate_status") for row in structured}
         verdicts = {row.get("verifier_verdict") for row in structured}
-        assert {"required", "planned", "missing_spec", "skipped", "error", "executed"} <= statuses, structured
+        assert {
+            "required",
+            "planned",
+            "missing_spec",
+            "skipped",
+            "error",
+            "executed",
+        } <= statuses, structured
         assert {"PASS", "NEEDS_REVIEW", "FAIL"} <= verdicts, structured
         assert all(row.get("spec_path_matches_target") is True for row in structured), structured
 
@@ -1151,9 +1142,7 @@ def _selftest() -> None:
             spec_dir=tmp,
             latest_run_fn=lambda target, mode=None: None,
         )
-        assert (
-            integrated["status"] == "executed" and integrated["verdict"] == "PASS"
-        ), integrated
+        assert integrated["status"] == "executed" and integrated["verdict"] == "PASS", integrated
         assert integrated["blocks"] is False, integrated
 
         scan_item = {
@@ -1172,12 +1161,9 @@ def _selftest() -> None:
         assert scan["required_count"] == 1 and scan["items_checked"] == 2, scan
         assert scan["status_counts"]["planned"] == 1, scan
         assert scan["required"][0]["active_preflight"]["status"] == "requires_env", scan
-        scan_ready = scan_items(
-            [scan_item], env={"ORCH_RUN_RUNTIME_AC": "1"}, spec_dir=tmp
-        )
+        scan_ready = scan_items([scan_item], env={"ORCH_RUN_RUNTIME_AC": "1"}, spec_dir=tmp)
         assert (
-            scan_ready["required"][0]["active_preflight"]["status"]
-            == "ready_to_execute"
+            scan_ready["required"][0]["active_preflight"]["status"] == "ready_to_execute"
         ), scan_ready
         missing_scan = scan_items(
             [{**scan_item, "target": "stranske/Workflows#306"}],
@@ -1195,7 +1181,7 @@ def _selftest() -> None:
 
         history_log = Path(tmp) / "cron.log"
         history_log.write_text(
-            '''
+            """
             {
               "runtime_ac_gates": [
                 {
@@ -1209,7 +1195,7 @@ def _selftest() -> None:
             {
               "runtime_ac_gates": []
             }
-            ''',
+            """,
             encoding="utf-8",
         )
         history = scan_history(log_path=history_log, db_path=Path(tmp) / "missing.db")

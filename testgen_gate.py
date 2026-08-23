@@ -12,6 +12,7 @@ dirtied. Coverage JSON generation forces `--fail-under=0` so repo-wide coverage
 thresholds cannot mask the gate's own covered-lines delta verdict. `--selftest`
 is offline and checks only pure command/verdict helpers.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,7 +24,6 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Sequence
-
 
 TAIL_STDOUT = 1200
 TAIL_STDERR = 800
@@ -69,7 +69,11 @@ def coverage_sources(sources: Sequence[str]) -> list[str]:
 
 
 def coverage_run_cmd(
-    sources: Sequence[str], data_file: Path, pytest_args: Sequence[str], *, cache_dir: Path | None = None
+    sources: Sequence[str],
+    data_file: Path,
+    pytest_args: Sequence[str],
+    *,
+    cache_dir: Path | None = None,
 ) -> list[str]:
     """Build the coverage run command for a pytest invocation."""
     if not sources:
@@ -201,7 +205,9 @@ def coverage_check(
     json_file = temp_dir / f"{name}.json"
     run = command_report(
         f"{name}_coverage_run",
-        coverage_run_cmd(sources, data_file, pytest_args, cache_dir=temp_dir / f"{name}-pytest-cache"),
+        coverage_run_cmd(
+            sources, data_file, pytest_args, cache_dir=temp_dir / f"{name}-pytest-cache"
+        ),
         repo,
         timeout,
     )
@@ -243,12 +249,14 @@ def reliability_check(
     """Run candidate tests repeatedly and report pass/fail per run."""
     reports = []
     for idx in range(runs):
-        reports.append(command_report(
-            f"candidate_reliability_{idx + 1}",
-            pytest_cmd(pytest_args, cache_dir=temp_dir / f"reliability-pytest-cache-{idx + 1}"),
-            repo,
-            timeout,
-        ))
+        reports.append(
+            command_report(
+                f"candidate_reliability_{idx + 1}",
+                pytest_cmd(pytest_args, cache_dir=temp_dir / f"reliability-pytest-cache-{idx + 1}"),
+                repo,
+                timeout,
+            )
+        )
     return {
         "runs_requested": runs,
         "pytest_args": list(pytest_args),
@@ -314,18 +322,28 @@ def run_gate(
         return {"ok": False, "error": f"repo not found: {repo_path}"}
     if not sources:
         return {"ok": False, "error": "at least one --source is required"}
-    reliability_args = list(reliability_pytest_args if reliability_pytest_args is not None else candidate_pytest_args)
+    reliability_args = list(
+        reliability_pytest_args if reliability_pytest_args is not None else candidate_pytest_args
+    )
 
     with tempfile.TemporaryDirectory(prefix="orch-testgen-gate-") as td:
         temp_dir = Path(td)
         collect = command_report(
             "candidate_collect",
-            pytest_cmd(candidate_pytest_args, collect_only=True, cache_dir=temp_dir / "collect-pytest-cache"),
+            pytest_cmd(
+                candidate_pytest_args,
+                collect_only=True,
+                cache_dir=temp_dir / "collect-pytest-cache",
+            ),
             repo_path,
             timeout,
         )
-        baseline = coverage_check("baseline", repo_path, sources, baseline_pytest_args, temp_dir, timeout)
-        candidate = coverage_check("candidate", repo_path, sources, candidate_pytest_args, temp_dir, timeout)
+        baseline = coverage_check(
+            "baseline", repo_path, sources, baseline_pytest_args, temp_dir, timeout
+        )
+        candidate = coverage_check(
+            "candidate", repo_path, sources, candidate_pytest_args, temp_dir, timeout
+        )
         reliability = reliability_check(repo_path, reliability_args, runs, timeout, temp_dir)
 
     baseline_covered = int(baseline["coverage"]["covered_lines"])
@@ -386,20 +404,26 @@ def _selftest() -> None:
     assert "--source=pkg,lib" in cov and "-m" in cov and "pytest" in cov and "tests" in cov, cov
     file_source = coverage_run_cmd(["tools/resolve_mypy_pin.py"], Path("/tmp/.cov"), ["tests"])
     assert "--source=tools.resolve_mypy_pin" in file_source, file_source
-    cached_cov = coverage_run_cmd(["pkg"], Path("/tmp/.cov"), ["tests"], cache_dir=Path("/tmp/cov-cache"))
+    cached_cov = coverage_run_cmd(
+        ["pkg"], Path("/tmp/.cov"), ["tests"], cache_dir=Path("/tmp/cov-cache")
+    )
     assert "cache_dir=/tmp/cov-cache" in cached_cov, cached_cov
     cj = coverage_json_cmd(Path("/tmp/.cov"), Path("/tmp/cov.json"))
     assert cj[:4] == [sys.executable, "-m", "coverage", "json"] and "-o" in cj, cj
     assert "--fail-under=0" in cj, cj
 
-    totals = coverage_totals({"totals": {"covered_lines": 7, "num_statements": 10, "percent_covered": 70}})
+    totals = coverage_totals(
+        {"totals": {"covered_lines": 7, "num_statements": 10, "percent_covered": 70}}
+    )
     assert totals == {"covered_lines": 7, "num_statements": 10, "percent_covered": 70.0}, totals
-    fallback = coverage_totals({
-        "files": {
-            "a.py": {"summary": {"covered_lines": 3, "num_statements": 4}},
-            "b.py": {"summary": {"covered_lines": 2, "num_statements": 6}},
+    fallback = coverage_totals(
+        {
+            "files": {
+                "a.py": {"summary": {"covered_lines": 3, "num_statements": 4}},
+                "b.py": {"summary": {"covered_lines": 2, "num_statements": 6}},
+            }
         }
-    })
+    )
     assert fallback["covered_lines"] == 5 and fallback["num_statements"] == 10, fallback
 
     collect = {"ok": True}
@@ -415,7 +439,9 @@ def _selftest() -> None:
 
     missing = run_gate("/path/that/does/not/exist", ["pkg"], [], [], runs=1)
     assert missing["ok"] is False and "repo not found" in missing["error"], missing
-    print("testgen_gate.py selftest: OK (argv builders, coverage totals, verdict checks, live input guards)")
+    print(
+        "testgen_gate.py selftest: OK (argv builders, coverage totals, verdict checks, live input guards)"
+    )
 
 
 def main(argv: Sequence[str]) -> int:
@@ -424,11 +450,15 @@ def main(argv: Sequence[str]) -> int:
     )
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--repo", default=".", help="repository root to run pytest in")
-    parser.add_argument("--source", action="append", default=[], help="coverage source path/package; repeatable")
+    parser.add_argument(
+        "--source", action="append", default=[], help="coverage source path/package; repeatable"
+    )
     parser.add_argument("--baseline-pytest-args", help="pytest args excluding generated tests")
     parser.add_argument("--candidate-pytest-args", help="pytest args including generated tests")
-    parser.add_argument("--reliability-pytest-args",
-                        help="optional narrower pytest args for repeated flakiness runs")
+    parser.add_argument(
+        "--reliability-pytest-args",
+        help="optional narrower pytest args for repeated flakiness runs",
+    )
     parser.add_argument("--runs", type=int, default=5, help="candidate reliability runs")
     parser.add_argument("--min-covered-lines-delta", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=120, help="per-command timeout in seconds")
@@ -450,7 +480,9 @@ def main(argv: Sequence[str]) -> int:
         split_args(ns.baseline_pytest_args),
         split_args(ns.candidate_pytest_args),
         reliability_pytest_args=(
-            split_args(ns.reliability_pytest_args) if ns.reliability_pytest_args is not None else None
+            split_args(ns.reliability_pytest_args)
+            if ns.reliability_pytest_args is not None
+            else None
         ),
         runs=ns.runs,
         min_covered_lines_delta=ns.min_covered_lines_delta,

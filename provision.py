@@ -16,6 +16,7 @@ fs) and add worktrees off THAT — both worktree add and push work on normal fs.
 Pure helpers are selftested offline; `--smoke owner/repo#N opener|closer` provisions one
 target live (clone + worktree) to verify the normal-fs path works, then cleans up.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,8 +31,12 @@ ORCH = Path(__file__).resolve().parent
 # and `git push` deadlocks ("mmap: Resource deadlock avoided"). The CODE now lives in the Dropbox
 # Code/Orchestrator project dir, but these default to a fixed LOCAL runtime path regardless. Env-overridable.
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
-REPOS_DIR = Path(os.environ.get("ORCH_REPOS_DIR", LOCAL_RUNTIME / "repos"))            # local canonical clones
-WORKTREES_DIR = Path(os.environ.get("ORCH_WORKTREE_BASE", LOCAL_RUNTIME / "worktrees"))  # per-target worktrees
+REPOS_DIR = Path(
+    os.environ.get("ORCH_REPOS_DIR", LOCAL_RUNTIME / "repos")
+)  # local canonical clones
+WORKTREES_DIR = Path(
+    os.environ.get("ORCH_WORKTREE_BASE", LOCAL_RUNTIME / "worktrees")
+)  # per-target worktrees
 
 # Base branch a NEW opener branch is cut from, when it must NOT be the repo's default branch.
 # The Trend pin is currently a NO-OP and is kept deliberately: `phase-3` IS that repo's default
@@ -71,9 +76,12 @@ def canonical_path(repo: str) -> Path:
 
 
 # --- live git/gh ops --------------------------------------------------------
-def _run(args: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=str(cwd) if cwd else None, capture_output=True,
-                          text=True, check=check)
+def _run(
+    args: list[str], cwd: Path | None = None, check: bool = True
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args, cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=check
+    )
 
 
 def _existing_worktree_reuse_error(wt: Path) -> str | None:
@@ -112,8 +120,19 @@ def _existing_worktree_reuse_error(wt: Path) -> str | None:
 
 def default_branch(repo: str) -> str:
     try:
-        out = _run(["gh", "repo", "view", repo, "--json", "defaultBranchRef",
-                    "-q", ".defaultBranchRef.name"], check=False).stdout.strip()
+        out = _run(
+            [
+                "gh",
+                "repo",
+                "view",
+                repo,
+                "--json",
+                "defaultBranchRef",
+                "-q",
+                ".defaultBranchRef.name",
+            ],
+            check=False,
+        ).stdout.strip()
         return out or "main"
     except Exception:
         return "main"
@@ -130,13 +149,15 @@ def ensure_canonical(repo: str) -> Path:
         _run(["git", "-C", str(path), "fetch", "--prune", "origin"], check=False)
         return path
     REPOS_DIR.mkdir(parents=True, exist_ok=True)
-    _run(["gh", "repo", "clone", repo, str(path)])     # uses gh auth; normal-fs => push works
+    _run(["gh", "repo", "clone", repo, str(path)])  # uses gh auth; normal-fs => push works
     return path
 
 
 def _pr_head_branch(repo: str, num: int) -> str:
-    out = _run(["gh", "pr", "view", str(num), "-R", repo, "--json", "headRefName",
-                "-q", ".headRefName"], check=False).stdout.strip()
+    out = _run(
+        ["gh", "pr", "view", str(num), "-R", repo, "--json", "headRefName", "-q", ".headRefName"],
+        check=False,
+    ).stdout.strip()
     if not out:
         raise RuntimeError(f"could not resolve head branch for {repo}#{num}")
     return out
@@ -156,21 +177,32 @@ def provision(target: str, lane: str) -> Path:
                 f"refusing to reuse stale worktree for {target} ({lane}): "
                 f"{reuse_error}; inspect or remove {wt}"
             )
-        return wt                                      # already provisioned and clean
+        return wt  # already provisioned and clean
     WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
 
     if lane == "closer" and num is not None:
         head = _pr_head_branch(repo, num)
         _run(["git", "-C", str(canon), "fetch", "origin", head], check=False)
         # worktree tracking origin/<head> so the agent's push updates the PR
-        _run(["git", "-C", str(canon), "worktree", "add", "--checkout", "-B", head,
-              str(wt), f"origin/{head}"])
+        _run(
+            [
+                "git",
+                "-C",
+                str(canon),
+                "worktree",
+                "add",
+                "--checkout",
+                "-B",
+                head,
+                str(wt),
+                f"origin/{head}",
+            ]
+        )
     else:  # opener (issue) or repo-level: new branch off the base
         base = base_branch(repo)
         branch = f"orchestrator/issue-{num}" if num is not None else f"orchestrator/{lane}"
         _run(["git", "-C", str(canon), "fetch", "origin", base], check=False)
-        _run(["git", "-C", str(canon), "worktree", "add", "-b", branch,
-              str(wt), f"origin/{base}"])
+        _run(["git", "-C", str(canon), "worktree", "add", "-b", branch, str(wt), f"origin/{base}"])
     return wt
 
 
@@ -178,18 +210,22 @@ def provision(target: str, lane: str) -> Path:
 def _selftest() -> None:
     assert parse_target("stranske/Repo#123") == ("stranske/Repo", 123)
     assert parse_target("stranske/Repo") == ("stranske/Repo", None)
-    assert parse_target("o/r#abc") == ("o/r", None)              # non-numeric => None
+    assert parse_target("o/r#abc") == ("o/r", None)  # non-numeric => None
     assert repo_slug("stranske/Trend_Model_Project") == "stranske__Trend_Model_Project"
-    assert worktree_name("stranske/Counter_Risk#42", "closer") == "stranske__Counter_Risk__42__closer"
+    assert (
+        worktree_name("stranske/Counter_Risk#42", "closer") == "stranske__Counter_Risk__42__closer"
+    )
     assert worktree_name("stranske/Workflows#7", "opener") == "stranske__Workflows__7__opener"
     assert worktree_path("o/r#1", "closer").name == "o__r__1__closer"
     assert canonical_path("stranske/Counter_Risk").name == "stranske__Counter_Risk"
     assert _existing_worktree_reuse_error(Path("/definitely/not/a/worktree")) is not None
     # base-branch override is pure (no network); Trend => phase-3
     assert BASE_BRANCH_OVERRIDES["stranske/Trend_Model_Project"] == "phase-3"
-    assert base_branch.__name__ == "base_branch"   # the override is consulted before gh
-    print("provision.py selftest: OK (target parse, slug, worktree naming/paths, "
-          "Trend phase-3 base override) — live clone/worktree covered by --smoke")
+    assert base_branch.__name__ == "base_branch"  # the override is consulted before gh
+    print(
+        "provision.py selftest: OK (target parse, slug, worktree naming/paths, "
+        "Trend phase-3 base override) — live clone/worktree covered by --smoke"
+    )
 
 
 def _smoke(target: str, lane: str) -> None:
@@ -201,10 +237,16 @@ def _smoke(target: str, lane: str) -> None:
     # prove it's a usable, writable, normal-fs checkout (git status works; not on Dropbox)
     st = _run(["git", "-C", str(wt), "status", "--porcelain"], check=False)
     assert st.returncode == 0, f"git status failed in worktree: {st.stderr}"
-    assert "CloudStorage/Dropbox" not in str(wt.resolve()), "worktree must be on local disk, not Dropbox"
-    branch = _run(["git", "-C", str(wt), "rev-parse", "--abbrev-ref", "HEAD"], check=False).stdout.strip()
+    assert "CloudStorage/Dropbox" not in str(
+        wt.resolve()
+    ), "worktree must be on local disk, not Dropbox"
+    branch = _run(
+        ["git", "-C", str(wt), "rev-parse", "--abbrev-ref", "HEAD"], check=False
+    ).stdout.strip()
     print(f"  OK worktree={wt}")
-    print(f"  branch={branch}  (normal-fs: worktree add succeeded — no Dropbox 'Operation not permitted')")
+    print(
+        f"  branch={branch}  (normal-fs: worktree add succeeded — no Dropbox 'Operation not permitted')"
+    )
     # cleanup so the smoke leaves no junk branch/worktree
     canon = canonical_path(repo)
     _run(["git", "-C", str(canon), "worktree", "remove", "--force", str(wt)], check=False)
@@ -223,8 +265,10 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "provision":
         print(provision(argv[1], argv[2] if len(argv) > 2 else "opener"))
         return 0
-    print("usage: provision.py --selftest | --smoke <owner/repo#N> <opener|closer> | provision <target> <lane>",
-          file=sys.stderr)
+    print(
+        "usage: provision.py --selftest | --smoke <owner/repo#N> <opener|closer> | provision <target> <lane>",
+        file=sys.stderr,
+    )
     return 2
 
 

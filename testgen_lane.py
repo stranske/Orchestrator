@@ -6,6 +6,7 @@ wires that gate into an actual orchestrator lane: the seat can generate one
 prompt file for a delegated agent, and the prompt includes the exact acceptance
 gate command that must pass before commit/PR.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,7 +15,6 @@ import shlex
 import sys
 from pathlib import Path
 from typing import Sequence
-
 
 ORCH_DIR = Path(__file__).resolve().parent
 TESTGEN_GATE = ORCH_DIR / "testgen_gate.py"
@@ -53,17 +53,26 @@ def gate_command(
     parts = ["python3", _quote(TESTGEN_GATE), "--repo", _quote(repo)]
     for source in sources:
         parts.extend(["--source", _quote(source)])
-    parts.extend([
-        "--baseline-pytest-args", _quote(baseline_pytest_args),
-        "--candidate-pytest-args", _quote(candidate_pytest_args),
-    ])
+    parts.extend(
+        [
+            "--baseline-pytest-args",
+            _quote(baseline_pytest_args),
+            "--candidate-pytest-args",
+            _quote(candidate_pytest_args),
+        ]
+    )
     if reliability_pytest_args is not None:
         parts.extend(["--reliability-pytest-args", _quote(reliability_pytest_args)])
-    parts.extend([
-        "--runs", str(runs),
-        "--min-covered-lines-delta", str(min_covered_lines_delta),
-        "--timeout", str(timeout),
-    ])
+    parts.extend(
+        [
+            "--runs",
+            str(runs),
+            "--min-covered-lines-delta",
+            str(min_covered_lines_delta),
+            "--timeout",
+            str(timeout),
+        ]
+    )
     return " ".join(parts)
 
 
@@ -94,8 +103,8 @@ def build_prompt(
     source_list = ", ".join(sources)
     reliability_line = (
         f"- Repeated reliability args: `{reliability_pytest_args}`"
-        if reliability_pytest_args is not None else
-        "- Repeated reliability args: same as candidate pytest args"
+        if reliability_pytest_args is not None
+        else "- Repeated reliability args: same as candidate pytest args"
     )
     lines = [
         "You are in the Orchestrator test-generation lane.",
@@ -209,6 +218,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
+
         capabilities.production_heartbeat("testgen-lane", event_type, ref="testgen_lane.main")
     except Exception:
         pass
@@ -219,17 +229,23 @@ def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description="Build a gate-backed test-generation lane prompt.")
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--repo", default=".", help="repository root the agent will work in")
-    parser.add_argument("--source", action="append", default=[], help="coverage source path/package; repeatable")
+    parser.add_argument(
+        "--source", action="append", default=[], help="coverage source path/package; repeatable"
+    )
     parser.add_argument("--baseline-pytest-args", help="pytest args excluding generated tests")
     parser.add_argument("--candidate-pytest-args", help="pytest args including generated tests")
-    parser.add_argument("--reliability-pytest-args", help="optional narrower args for repeated flake runs")
+    parser.add_argument(
+        "--reliability-pytest-args", help="optional narrower args for repeated flake runs"
+    )
     parser.add_argument("--runs", type=_positive_int, default=5)
     parser.add_argument("--min-covered-lines-delta", type=_non_negative_int, default=1)
     parser.add_argument("--timeout", type=_positive_int, default=120)
     parser.add_argument("--target", default="", help="issue/PR target to include in the prompt")
     parser.add_argument("--context", default="", help="short inline task context")
     parser.add_argument("--context-file", help="file containing additional task context")
-    parser.add_argument("--json", action="store_true", help="print JSON with prompt and gate command")
+    parser.add_argument(
+        "--json", action="store_true", help="print JSON with prompt and gate command"
+    )
     args = parser.parse_args(list(argv))
 
     if args.selftest:
@@ -258,19 +274,24 @@ def main(argv: Sequence[str]) -> int:
         context=context,
     )
     if args.json:
-        print(json.dumps({
-            "prompt": prompt,
-            "gate_command": gate_command(
-                args.repo,
-                args.source,
-                args.baseline_pytest_args,
-                args.candidate_pytest_args,
-                reliability_pytest_args=args.reliability_pytest_args,
-                runs=args.runs,
-                min_covered_lines_delta=args.min_covered_lines_delta,
-                timeout=args.timeout,
-            ),
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "prompt": prompt,
+                    "gate_command": gate_command(
+                        args.repo,
+                        args.source,
+                        args.baseline_pytest_args,
+                        args.candidate_pytest_args,
+                        reliability_pytest_args=args.reliability_pytest_args,
+                        runs=args.runs,
+                        min_covered_lines_delta=args.min_covered_lines_delta,
+                        timeout=args.timeout,
+                    ),
+                },
+                indent=2,
+            )
+        )
     else:
         print(prompt)
     return 0

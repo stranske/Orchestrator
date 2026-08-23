@@ -69,7 +69,7 @@ def build_anchor_payload(
         "implementer": impl,
         "score": parsed_score,
     }
-    
+
     # Add arm-aware metadata when available
     if arm_id:
         verdict_dict["arm_id"] = arm_id
@@ -79,9 +79,9 @@ def build_anchor_payload(
         verdict_dict["profile_id"] = profile_id
     if agent:
         verdict_dict["agent"] = agent
-    
+
     verdict = json.dumps(verdict_dict, sort_keys=True, separators=(",", ":"))
-    
+
     result = {
         "ref": ref,
         "human_verdict": verdict,
@@ -90,7 +90,7 @@ def build_anchor_payload(
         "implementer": impl,
         "score": parsed_score,
     }
-    
+
     # Add arm-aware metadata to result as well
     if arm_id:
         result["arm_id"] = arm_id
@@ -100,7 +100,7 @@ def build_anchor_payload(
         result["profile_id"] = profile_id
     if agent:
         result["agent"] = agent
-    
+
     return result
 
 
@@ -131,9 +131,7 @@ def record_anchor(
     )
     expected_confirmation = payload["ref"]
     if apply and confirm_anchor != expected_confirmation:
-        raise CalibrationInputError(
-            f"--apply requires --confirm-anchor {expected_confirmation!r}"
-        )
+        raise CalibrationInputError(f"--apply requires --confirm-anchor {expected_confirmation!r}")
     if apply:
         record_func(payload["ref"], payload["human_verdict"], payload["note"])
     return {
@@ -271,9 +269,7 @@ def _fit_linear(pairs: list[dict]) -> dict:
         "intercept": round(intercept, 6),
         "slope": round(slope, 6),
         "raw_mean_abs_error": round(sum(raw_errors) / len(raw_errors), 6),
-        "calibrated_mean_abs_error": round(
-            sum(calibrated_errors) / len(calibrated_errors), 6
-        ),
+        "calibrated_mean_abs_error": round(sum(calibrated_errors) / len(calibrated_errors), 6),
         "mean_proxy_score": round(mean_x, 6),
         "mean_human_score": round(mean_y, 6),
     }
@@ -320,10 +316,14 @@ def compute(
     model = None
     if not anchors:
         status = "no_human_anchors"
-        recommendation = "Record structured human_calibration score anchors before fitting calibration."
+        recommendation = (
+            "Record structured human_calibration score anchors before fitting calibration."
+        )
     elif not pairs:
         status = "no_matched_proxy_scores"
-        recommendation = "Human anchors exist, but none match evaluation experiment/implementer pairs."
+        recommendation = (
+            "Human anchors exist, but none match evaluation experiment/implementer pairs."
+        )
     elif len(pairs) < min_pairs:
         status = "insufficient_pairs"
         recommendation = (
@@ -332,9 +332,7 @@ def compute(
         )
     elif len({row["proxy_score"] for row in pairs}) < 2:
         status = "insufficient_score_variance"
-        recommendation = (
-            "Need at least two distinct proxy-score values to fit a regression."
-        )
+        recommendation = "Need at least two distinct proxy-score values to fit a regression."
     else:
         ready = True
         status = "ready"
@@ -427,9 +425,7 @@ def pending_queue(*, window_days: int = DEFAULT_WINDOW_DAYS, limit: int = 5) -> 
             "SELECT experiment_id, agent, target FROM runs "
             "WHERE experiment_id IS NOT NULL AND experiment_id != ''",
         ).fetchall()
-    anchored = {
-        (a["experiment_id"], a["implementer"]) for a in parse_human_anchors(anchor_rows)
-    }
+    anchored = {(a["experiment_id"], a["implementer"]) for a in parse_human_anchors(anchor_rows)}
     targets = {(str(e), str(a)): str(t or "") for e, a, t in target_rows}
     pairs: dict[tuple[str, str], dict] = {}
     for exp, impl, evaluator, score, ts in eval_rows:
@@ -481,7 +477,8 @@ def pending_queue(*, window_days: int = DEFAULT_WINDOW_DAYS, limit: int = 5) -> 
         "status": "objective_anchor_pending" if candidates else "complete_or_no_candidates",
         "next_transition": (
             "exp_abcd followup and objective_anchor produce anchors automatically"
-            if candidates else "wait for evaluated experiment arms"
+            if candidates
+            else "wait for evaluated experiment arms"
         ),
         "items": items,
     }
@@ -507,9 +504,7 @@ def _selftest() -> None:
         human_rows.append((1, f"{exp}:{impl}", str(human), None))
     report = compute(eval_rows, human_rows, min_pairs=5, generated_at=1)
     assert report["ready"] is True and report["model"], report
-    assert (
-        report["model"]["calibrated_mean_abs_error"] < report["raw_mean_abs_error"]
-    ), report
+    assert report["model"]["calibrated_mean_abs_error"] < report["raw_mean_abs_error"], report
     assert calibrate_score(9.0, report["model"]) < 9.0, report
 
     sparse = compute(eval_rows[:2], human_rows[:1], min_pairs=5, generated_at=1)
@@ -583,8 +578,11 @@ def _selftest() -> None:
         assert all("command" not in item for item in queue["items"]), queue
         # Anchoring a pair removes it from the ask.
         record_anchor(
-            experiment_id="QE1", implementer="codex", score=7.5,
-            apply=True, confirm_anchor="QE1:codex",
+            experiment_id="QE1",
+            implementer="codex",
+            score=7.5,
+            apply=True,
+            confirm_anchor="QE1:codex",
         )
         queue2 = pending_queue(limit=5)
         order2 = [(i["experiment_id"], i["implementer"]) for i in queue2["items"]]
@@ -646,9 +644,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"(window {queue['window_days']}d, anchored so far {queue['anchored_pairs']})"
             )
             for item in queue["items"]:
-                scores = " ".join(
-                    f"{k}={v:g}" for k, v in sorted(item["judge_scores"].items())
-                )
+                scores = " ".join(f"{k}={v:g}" for k, v in sorted(item["judge_scores"].items()))
                 print(
                     f"  {item['experiment_id']}:{item['implementer']} "
                     f"target={item['target'] or 'n/a'} judges[{scores}] spread={item['judge_spread']}"
@@ -696,4 +692,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

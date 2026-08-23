@@ -29,7 +29,6 @@ import feedback
 import local_verify
 import runtime_ac
 
-
 SCHEMA_VERSION = 1
 STATE_NAME = "synthesis-promotion.json"
 LOCK_NAME = ".synthesis-promotion.lock"
@@ -192,8 +191,7 @@ def _accepted_source_influences(source_run_ids: list[str]) -> list[dict]:
     try:
         placeholders = ",".join("?" for _ in source_run_ids)
         tables = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         if "influence_edges" in tables:
             for row in conn.execute(
@@ -307,9 +305,9 @@ def ensure_evaluated_state(
         if maps_path.exists():
             maps = json.loads(maps_path.read_text(encoding="utf-8"))
             evaluator_ids = sorted(str(value) for value in maps) if isinstance(maps, dict) else []
-        initial_event = "promotion:" + hashlib.sha256(
-            f"{exp_id}|evaluated".encode()
-        ).hexdigest()[:24]
+        initial_event = (
+            "promotion:" + hashlib.sha256(f"{exp_id}|evaluated".encode()).hexdigest()[:24]
+        )
         state = {
             "schema_version": SCHEMA_VERSION,
             "experiment_id": exp_id,
@@ -377,9 +375,12 @@ def transition(
     if canonical not in capabilities.CANONICAL_STATES:
         raise ValueError("promotion target does not map to a canonical state")
     ts = int(now or time.time())
-    event_id = "promotion:" + hashlib.sha256(
-        f"{state['experiment_id']}|{current}|{target_phase}|{reason}".encode()
-    ).hexdigest()[:24]
+    event_id = (
+        "promotion:"
+        + hashlib.sha256(
+            f"{state['experiment_id']}|{current}|{target_phase}|{reason}".encode()
+        ).hexdigest()[:24]
+    )
     if any(row.get("event_id") == event_id for row in state.get("phase_history") or []):
         return state, False
     state = json.loads(json.dumps(state))
@@ -506,7 +507,9 @@ def _run_gate(argv: list[str], worktree: Path, timeout: int = 600) -> dict:
             "returncode": result.returncode,
             "argv": argv,
             "duration_s": round(time.time() - started, 3),
-            "output_hash": _hash({"stdout": result.stdout[-4000:], "stderr": result.stderr[-4000:]}),
+            "output_hash": _hash(
+                {"stdout": result.stdout[-4000:], "stderr": result.stderr[-4000:]}
+            ),
         }
     except subprocess.TimeoutExpired:
         return {
@@ -536,13 +539,23 @@ def verify_synthesis(state: dict, exp_dir: str | Path) -> dict:
     worktree = Path(str((state.get("synthesis") or {}).get("worktree") or ""))
     base_ref = str(config.get("base_ref") or meta.get("base_sha") or meta.get("base") or "HEAD^")
     changed = _git(worktree, ["diff", "--name-only", f"{base_ref}...HEAD"])
-    changed_paths = sorted(path for path in changed.stdout.splitlines() if path.strip()) if changed.returncode == 0 else []
-    safe_paths = bool(changed_paths) and len(changed_paths) <= int(config.get("max_changed_paths", 200))
+    changed_paths = (
+        sorted(path for path in changed.stdout.splitlines() if path.strip())
+        if changed.returncode == 0
+        else []
+    )
+    safe_paths = bool(changed_paths) and len(changed_paths) <= int(
+        config.get("max_changed_paths", 200)
+    )
     safe_paths = safe_paths and all(
-        not Path(path).is_absolute() and ".." not in Path(path).parts and not path.startswith(".git/")
+        not Path(path).is_absolute()
+        and ".." not in Path(path).parts
+        and not path.startswith(".git/")
         for path in changed_paths
     )
-    allowed_prefixes = [str(value).rstrip("/") for value in config.get("allowed_path_prefixes") or []]
+    allowed_prefixes = [
+        str(value).rstrip("/") for value in config.get("allowed_path_prefixes") or []
+    ]
     if allowed_prefixes:
         safe_paths = safe_paths and all(
             any(path == prefix or path.startswith(prefix + "/") for prefix in allowed_prefixes)
@@ -620,7 +633,9 @@ def verify_synthesis(state: dict, exp_dir: str | Path) -> dict:
     if gate_specs:
         for raw in gate_specs:
             argv = list(raw) if isinstance(raw, list) else shlex.split(str(raw))
-            repo_gates.append(_run_gate(argv, worktree, int(config.get("repo_gate_timeout") or 600)))
+            repo_gates.append(
+                _run_gate(argv, worktree, int(config.get("repo_gate_timeout") or 600))
+            )
     else:
         repo_gates.append(
             _run_gate(["git", "diff", "--check", f"{base_ref}...HEAD"], worktree, 120)
@@ -655,8 +670,9 @@ def verify_synthesis(state: dict, exp_dir: str | Path) -> dict:
         },
         "repo_gates": repo_gates,
         "deliberate_break_status": (
-            "PASS" if deliberate_required and local_ok else
-            "FAIL" if deliberate_required else "NOT_REQUIRED"
+            "PASS"
+            if deliberate_required and local_ok
+            else "FAIL" if deliberate_required else "NOT_REQUIRED"
         ),
     }
     return {
@@ -677,8 +693,8 @@ def _candidate_body(state: dict, exp_dir: Path) -> str:
         f"- [ ] Deliver the verified synthesis change affecting `{path}` through the repository's normal issue/PR workflow."
         for path in named_paths
     )
-    local_gate = ((verification.get("evidence") or {}).get("local_verify") or {})
-    repo_gates = ((verification.get("evidence") or {}).get("repo_gates") or [])
+    local_gate = (verification.get("evidence") or {}).get("local_verify") or {}
+    repo_gates = (verification.get("evidence") or {}).get("repo_gates") or []
     named_gate = local_gate.get("test_cmd") or (
         shlex.join(repo_gates[0].get("argv") or []) if repo_gates else "git diff --check"
     )
@@ -728,14 +744,19 @@ Experiment `{lineage.get('experiment_id')}` produced a locally committed synthes
 """
 
 
-def compile_candidate(state: dict, exp_dir: str | Path, now: int | None = None) -> tuple[dict, dict]:
+def compile_candidate(
+    state: dict, exp_dir: str | Path, now: int | None = None
+) -> tuple[dict, dict]:
     if state.get("delivery_phase") != "synth_verified":
         raise ValueError("candidate compilation requires synth_verified")
     root = Path(exp_dir)
     body = _candidate_body(state, root)
-    candidate_id = "synth-candidate:" + hashlib.sha256(
-        f"{state['experiment_id']}|{(state.get('synthesis') or {}).get('commit')}|{state['verification'].get('evidence_hash')}".encode()
-    ).hexdigest()[:24]
+    candidate_id = (
+        "synth-candidate:"
+        + hashlib.sha256(
+            f"{state['experiment_id']}|{(state.get('synthesis') or {}).get('commit')}|{state['verification'].get('evidence_hash')}".encode()
+        ).hexdigest()[:24]
+    )
     body_hash = _hash(body)
     candidate = {
         "schema_version": SCHEMA_VERSION,
@@ -794,7 +815,11 @@ def link_delivery(
     root = Path(exp_dir)
     with _locked(root):
         state = load_state(root)
-        if state is None or state.get("delivery_phase") not in {"candidate_ready", "delegated_or_pr", "merged"}:
+        if state is None or state.get("delivery_phase") not in {
+            "candidate_ready",
+            "delegated_or_pr",
+            "merged",
+        }:
             raise ValueError("delivery link requires a candidate_ready promotion")
         existing = state.get("delivery") or {}
         if existing and (
@@ -951,16 +976,12 @@ def reconcile(
             if phase in TERMINAL_PHASES:
                 break
             if ts >= int(state.get("expires_ts") or 0):
-                state, _ = transition(
-                    state, "discarded", reason="promotion_expired", now=ts
-                )
+                state, _ = transition(state, "discarded", reason="promotion_expired", now=ts)
                 state = _mirror_once(state, "expired", mirror_fn)
                 actions.append("retired_expired")
                 break
             if phase == "candidate_ready" and ts >= int(state.get("candidate_expires_ts") or 0):
-                state, _ = transition(
-                    state, "discarded", reason="stale_candidate_retired", now=ts
-                )
+                state, _ = transition(state, "discarded", reason="stale_candidate_retired", now=ts)
                 state = _mirror_once(state, "candidate_retired", mirror_fn)
                 actions.append("retired_stale_candidate")
                 break
@@ -973,13 +994,17 @@ def reconcile(
                 if launch_fn is None:
                     actions.append("awaiting_synthesis_launch")
                     break
-                launch_intent_id = "launch-intent:" + hashlib.sha256(
-                    f"{state['experiment_id']}|synthesis".encode()
-                ).hexdigest()[:24]
+                launch_intent_id = (
+                    "launch-intent:"
+                    + hashlib.sha256(f"{state['experiment_id']}|synthesis".encode()).hexdigest()[
+                        :24
+                    ]
+                )
                 state.setdefault("synthesis", {}).update(
                     {
                         "launch_intent_id": launch_intent_id,
-                        "launch_intent_ts": state.get("synthesis", {}).get("launch_intent_ts") or ts,
+                        "launch_intent_ts": state.get("synthesis", {}).get("launch_intent_ts")
+                        or ts,
                     }
                 )
                 # Durable intent precedes the side effect. exp_abcd.synthesize has
@@ -988,16 +1013,27 @@ def reconcile(
                 _atomic_json(state_path(root), state)
                 launch = launch_fn()
                 if launch.get("discard"):
-                    state["synthesis"] = {"gate": launch.get("gate"), "ranking": launch.get("ranking")}
+                    state["synthesis"] = {
+                        "gate": launch.get("gate"),
+                        "ranking": launch.get("ranking"),
+                    }
                     state, _ = transition(
-                        state, "discarded", reason="usefulness_gate_discard", evidence=launch, now=ts
+                        state,
+                        "discarded",
+                        reason="usefulness_gate_discard",
+                        evidence=launch,
+                        now=ts,
                     )
                     actions.append("discarded_by_usefulness_gate")
                     break
                 if launch.get("blocked") or not launch.get("pid"):
-                    state = _record_retry(state, launch.get("reason") or "synthesis launch blocked", ts)
+                    state = _record_retry(
+                        state, launch.get("reason") or "synthesis launch blocked", ts
+                    )
                     if state["retry"]["count"] >= state["max_retries"]:
-                        state, _ = transition(state, "discarded", reason="synthesis_launch_retries_exhausted", now=ts)
+                        state, _ = transition(
+                            state, "discarded", reason="synthesis_launch_retries_exhausted", now=ts
+                        )
                         state = _mirror_once(state, "launch_failed", mirror_fn)
                     actions.append("synthesis_launch_retry")
                     break
@@ -1021,7 +1057,11 @@ def reconcile(
                     "resume_history": [],
                 }
                 state, _ = transition(
-                    state, "synth_running", reason="synthesis_process_launched", evidence={"run_id": run_id}, now=ts
+                    state,
+                    "synth_running",
+                    reason="synthesis_process_launched",
+                    evidence={"run_id": run_id},
+                    now=ts,
                 )
                 actions.append("synthesis_launched")
                 break
@@ -1033,21 +1073,39 @@ def reconcile(
                     actions.append("synthesis_still_running")
                     break
                 if status == "interrupted":
-                    state = _record_retry(state, completion.get("reason") or "synthesis interrupted", ts)
+                    state = _record_retry(
+                        state, completion.get("reason") or "synthesis interrupted", ts
+                    )
                     if state["retry"]["count"] >= state["max_retries"]:
-                        state, _ = transition(state, "discarded", reason="synthesis_resume_retries_exhausted", evidence=completion, now=ts)
+                        state, _ = transition(
+                            state,
+                            "discarded",
+                            reason="synthesis_resume_retries_exhausted",
+                            evidence=completion,
+                            now=ts,
+                        )
                         state = _mirror_once(state, "resume_failed", mirror_fn)
                         actions.append("synthesis_retired_after_interruptions")
                     elif resume_fn is not None:
                         resumed = resume_fn(state)
                         if resumed.get("pid") and resumed.get("run_id"):
                             synthesis = state["synthesis"]
-                            resume_event = "resume:" + hashlib.sha256(
-                                f"{state['experiment_id']}|{resumed['run_id']}".encode()
-                            ).hexdigest()[:24]
-                            if not any(row.get("event_id") == resume_event for row in synthesis.get("resume_history") or []):
+                            resume_event = (
+                                "resume:"
+                                + hashlib.sha256(
+                                    f"{state['experiment_id']}|{resumed['run_id']}".encode()
+                                ).hexdigest()[:24]
+                            )
+                            if not any(
+                                row.get("event_id") == resume_event
+                                for row in synthesis.get("resume_history") or []
+                            ):
                                 synthesis.setdefault("resume_history", []).append(
-                                    {"event_id": resume_event, "run_id": resumed["run_id"], "ts": ts}
+                                    {
+                                        "event_id": resume_event,
+                                        "run_id": resumed["run_id"],
+                                        "ts": ts,
+                                    }
                                 )
                                 synthesis.setdefault("run_ids", []).append(resumed["run_id"])
                             synthesis.update(
@@ -1065,7 +1123,13 @@ def reconcile(
                         actions.append("synthesis_resume_required")
                     break
                 if status == "failed":
-                    state, _ = transition(state, "discarded", reason=completion.get("reason") or "synthesis completion invalid", evidence=completion, now=ts)
+                    state, _ = transition(
+                        state,
+                        "discarded",
+                        reason=completion.get("reason") or "synthesis completion invalid",
+                        evidence=completion,
+                        now=ts,
+                    )
                     state = _mirror_once(state, "synthesis_invalid", mirror_fn)
                     actions.append("synthesis_discarded")
                     break
@@ -1074,7 +1138,13 @@ def reconcile(
                 state["synthesis"]["commit"] = completion.get("commit")
                 state["synthesis"]["completion_evidence"] = completion
                 state["retry"]["next_retry_ts"] = None
-                state, _ = transition(state, "synth_complete", reason="synthesis_commit_complete", evidence=completion, now=ts)
+                state, _ = transition(
+                    state,
+                    "synth_complete",
+                    reason="synthesis_commit_complete",
+                    evidence=completion,
+                    now=ts,
+                )
                 actions.append("synthesis_complete")
                 continue
 
@@ -1083,16 +1153,38 @@ def reconcile(
                 state["verification"] = verification
                 if not verification.get("passed"):
                     if verification.get("transient"):
-                        state = _record_retry(state, verification.get("failure_reason") or "transient verification failure", ts)
+                        state = _record_retry(
+                            state,
+                            verification.get("failure_reason") or "transient verification failure",
+                            ts,
+                        )
                         if state["retry"]["count"] >= state["max_retries"]:
-                            state, _ = transition(state, "discarded", reason="verification_retries_exhausted", evidence=verification, now=ts)
+                            state, _ = transition(
+                                state,
+                                "discarded",
+                                reason="verification_retries_exhausted",
+                                evidence=verification,
+                                now=ts,
+                            )
                             state = _mirror_once(state, "verification_failed", mirror_fn)
                     else:
-                        state, _ = transition(state, "discarded", reason="deterministic_verification_failure", evidence=verification, now=ts)
+                        state, _ = transition(
+                            state,
+                            "discarded",
+                            reason="deterministic_verification_failure",
+                            evidence=verification,
+                            now=ts,
+                        )
                         state = _mirror_once(state, "verification_failed", mirror_fn)
                     actions.append("verification_failed")
                     break
-                state, _ = transition(state, "synth_verified", reason="all_synthesis_gates_passed", evidence=verification, now=ts)
+                state, _ = transition(
+                    state,
+                    "synth_verified",
+                    reason="all_synthesis_gates_passed",
+                    evidence=verification,
+                    now=ts,
+                )
                 actions.append("synthesis_verified")
                 continue
 
@@ -1114,19 +1206,34 @@ def reconcile(
                 state["outcome"] = outcome
                 durability = outcome.get("durability")
                 if durability in FAILURE_DURABILITY or (
-                    outcome.get("merged") is False and outcome.get("ci_status") in {"closed", "failed"}
+                    outcome.get("merged") is False
+                    and outcome.get("ci_status") in {"closed", "failed"}
                 ):
-                    state, _ = transition(state, "discarded", reason=f"delivery_{durability or 'failed'}", evidence=outcome, now=ts)
+                    state, _ = transition(
+                        state,
+                        "discarded",
+                        reason=f"delivery_{durability or 'failed'}",
+                        evidence=outcome,
+                        now=ts,
+                    )
                     state = _mirror_once(state, "delivery_failed", mirror_fn)
                     actions.append("delivery_retired")
                     break
                 if phase == "delegated_or_pr" and outcome.get("merged") is True:
-                    state, _ = transition(state, "merged", reason="delivery_merged_pending_durability", evidence=outcome, now=ts)
+                    state, _ = transition(
+                        state,
+                        "merged",
+                        reason="delivery_merged_pending_durability",
+                        evidence=outcome,
+                        now=ts,
+                    )
                     state = _mirror_once(state, "merged", mirror_fn)
                     actions.append("delivery_merged")
                     continue
                 if phase == "merged" and durability == "durable":
-                    state, _ = transition(state, "durable", reason="delivery_durably_held", evidence=outcome, now=ts)
+                    state, _ = transition(
+                        state, "durable", reason="delivery_durably_held", evidence=outcome, now=ts
+                    )
                     state = _mirror_once(state, "durable", mirror_fn)
                     actions.append("delivery_durable")
                     break
@@ -1163,11 +1270,15 @@ def selftest() -> None:
         wt = Path(tmp) / "worktree"
         wt.mkdir()
         subprocess.run(["git", "init", str(wt)], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(wt), "config", "user.email", "test@example.test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "config", "user.email", "test@example.test"], check=True
+        )
         subprocess.run(["git", "-C", str(wt), "config", "user.name", "Test"], check=True)
         (wt / "x.py").write_text("x=1\n")
         subprocess.run(["git", "-C", str(wt), "add", "x.py"], check=True)
-        subprocess.run(["git", "-C", str(wt), "commit", "-m", "base"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "commit", "-m", "base"], check=True, capture_output=True
+        )
 
         def launch():
             calls["launch"] += 1
@@ -1189,7 +1300,11 @@ def selftest() -> None:
 
         def resume(_state):
             calls["resume"] += 1
-            return {"pid": 999998, "run_id": "exp-1:synth:resume:1", "log": str(root / "resume.log")}
+            return {
+                "pid": 999998,
+                "run_id": "exp-1:synth:resume:1",
+                "log": str(root / "resume.log"),
+            }
 
         resumed = reconcile(root, completion_fn=interrupted, resume_fn=resume, now=102)
         assert resumed["state"]["delivery_phase"] == "synth_running"
@@ -1205,7 +1320,9 @@ def selftest() -> None:
 
         (wt / "x.py").write_text("x=2\n")
         subprocess.run(["git", "-C", str(wt), "add", "x.py"], check=True)
-        subprocess.run(["git", "-C", str(wt), "commit", "-m", "synth"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(wt), "commit", "-m", "synth"], check=True, capture_output=True
+        )
         commit = subprocess.run(
             ["git", "-C", str(wt), "rev-parse", "HEAD"],
             check=True,
@@ -1218,21 +1335,37 @@ def selftest() -> None:
 
         def verified(_state, _root):
             evidence = {
-                "scope": {"ok": True, "changed_paths": ["x.py"], "changed_paths_hash": _hash(["x.py"])},
+                "scope": {
+                    "ok": True,
+                    "changed_paths": ["x.py"],
+                    "changed_paths_hash": _hash(["x.py"]),
+                },
                 "secret_scan": {"ok": True, "finding_ids": []},
-                "local_verify": {"ok": True, "verdict": "PASS", "test_cmd": "pytest tests/test_x.py"},
+                "local_verify": {
+                    "ok": True,
+                    "verdict": "PASS",
+                    "test_cmd": "pytest tests/test_x.py",
+                },
                 "runtime_ac": {"ok": True, "verdict": "PASS"},
                 "repo_gates": [{"ok": True, "argv": ["pytest", "tests/test_x.py"]}],
                 "deliberate_break_status": "PASS",
             }
-            return {"passed": True, "transient": False, "evidence": evidence, "evidence_hash": _hash(evidence)}
+            return {
+                "passed": True,
+                "transient": False,
+                "evidence": evidence,
+                "evidence_hash": _hash(evidence),
+            }
 
         ready = reconcile(root, completion_fn=complete, verify_fn=verified, now=1000)
         assert ready["state"]["delivery_phase"] == "candidate_ready", ready
         candidate_id = ready["state"]["candidate"]["candidate_id"]
         repeat = reconcile(root, completion_fn=complete, verify_fn=verified, now=1001)
         assert repeat["state"]["candidate"]["candidate_id"] == candidate_id
-        assert len([row for row in repeat["state"]["phase_history"] if row["to"] == "candidate_ready"]) == 1
+        assert (
+            len([row for row in repeat["state"]["phase_history"] if row["to"] == "candidate_ready"])
+            == 1
+        )
         shutil.rmtree(wt, ignore_errors=True)
         feedback.DB_PATH = old_feedback_db
     print("synthesis_promotion.py selftest: OK")
@@ -1249,7 +1382,10 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
     """
     try:
         import capabilities
-        capabilities.production_heartbeat("synthesis-promotion", event_type, ref="synthesis_promotion.main")
+
+        capabilities.production_heartbeat(
+            "synthesis-promotion", event_type, ref="synthesis_promotion.main"
+        )
     except Exception:
         pass
 
