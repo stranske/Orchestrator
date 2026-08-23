@@ -270,15 +270,50 @@ def resolve_unresolved_worker_attempts(*, apply: bool = False, limit: int = 5000
     keeps no per-session log stays unresolved with its reason NAMED, and nothing is ever inferred
     from the requested model. Dry-run by default; reports the per-agent breakdown either way, so
     "resolved 37" always arrives next to "16 cannot report and here is why".
+
+    Only TERMINAL attempts are eligible: `status='unresolved'`. An in-flight (`started`)
+    attempt is never completed here, and neither is one that never ran (`failed`) — see the
+    eligibility comment below for why each exclusion is required and why neither starves the
+    drain.
     """
+    # TERMINAL ROWS ONLY -- `status='unresolved'` is the whole eligibility rule, and it is doing two
+    # jobs. A worker attempt's profile row is written `started` BEFORE the subprocess is spawned
+    # (`dispatcher`/`exp_abcd` pre-dispatch), so an IN-FLIGHT attempt matches every other clause
+    # here: role worker, profile set, resolved_model still NULL. `cli_reported_model` reads the
+    # FIRST model in the session log within a 2h window of `started_ts`, and that log exists as soon
+    # as the CLI starts -- so a run still executing probes clean, and `--apply` stamped it
+    # `complete` with a resolved model and a `completed_ts` of the sweep's own clock. That is the
+    # one row shape allowed to support an exact-model claim, manufactured for a worker that had not
+    # finished and could still fall back, retry onto another model, or fail outright.
+    # It also excludes `failed` (dispatcher's `profile_process_start_failed`), which is terminal but
+    # never ran: there is no served model to recover, so resolving it from a neighbouring session in
+    # the window would be pure invention.
+    # Not a starved drain (the trap this repo keeps falling into): a `started` row is excluded only
+    # while it is in flight. Its own completion closes it to `complete` (resolved -- no sweep
+    # needed) or `unresolved` (eligible on the next pass), so the exclusion clears itself without
+    # the sweep's help. Measured on the live ledger when this filter landed: 56 candidates before,
+    # 56 after -- every genuinely drainable row is already `unresolved`.
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT ea.run_id, ea.profile_id, r.agent, r.target, r.ts "
             "FROM execution_attempts ea JOIN runs r ON r.run_id=ea.run_id "
-            "WHERE ea.operation_role='worker' AND ea.resolved_model IS NULL "
+            "WHERE ea.operation_role='worker' AND ea.status='unresolved' "
+            "AND ea.resolved_model IS NULL "
             "AND ea.profile_id IS NOT NULL ORDER BY r.ts DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
+        # Counted, not silently narrowed. `candidates: 0` beside `not_terminal: {started: 3}` reads
+        # as "wait for those runs to finish"; `candidates: 0` alone reads as "the sweep is broken".
+        not_terminal = {
+            str(status or "<null>"): int(count)
+            for status, count in c.execute(
+                "SELECT ea.status, COUNT(*) "
+                "FROM execution_attempts ea JOIN runs r ON r.run_id=ea.run_id "
+                "WHERE ea.operation_role='worker' AND ea.resolved_model IS NULL "
+                "AND ea.profile_id IS NOT NULL "
+                "AND (ea.status IS NULL OR ea.status<>'unresolved') GROUP BY ea.status"
+            ).fetchall()
+        }
     resolved: dict[str, int] = {}
     blocked: dict[str, int] = {}
     failed: dict[str, str] = {}
@@ -349,6 +384,9 @@ def resolve_unresolved_worker_attempts(*, apply: bool = False, limit: int = 5000
         # Reported beside it, never inside it: rows excluded because the seat can never report.
         # Naming them keeps the exclusion auditable, and keeps `candidates` an honest backlog.
         "excluded_unreportable": unreportable,
+        # Rows excluded as not-terminal, keyed by the status that excluded them. `started` clears
+        # itself when the run completes; `failed` never ran and is permanently and correctly out.
+        "excluded_not_terminal": not_terminal,
         "failed": failed,
     }
 

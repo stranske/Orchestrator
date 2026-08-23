@@ -121,6 +121,11 @@ pr_body.md
 workloop-state.md
 
 # Test/coverage artifacts
+# .coverage is written by every `pytest --cov` run, and coverage is ON in the Gate as of
+# 2026-08-23, so it now appears after any local probe too.
+.coverage
+.coverage.*
+coverage.json
 coverage.xml
 
 # Wrong package manager artifacts (defense-in-depth)

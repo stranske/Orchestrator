@@ -18,8 +18,12 @@ deterministic tool can remove**. It is derived, never asserted --
 * black -- every file it reports, since ``black`` rewrites all of them;
 * mypy  -- 0, because no ``mypy --fix`` exists. That is a property of the toolchain, not an opinion
            about this repo's difficulty;
-* coverage -- 0, because the blocker is a conflict between two upstream requirements that no change
-           inside this repo can satisfy (see ``--explain``).
+* coverage -- measured by actually probing collection with the arguments the reusable workflow
+           builds today. Until 2026-08-23 this was a standing 1/0: the workflow appended
+           ``--cov-config=pyproject.toml`` unconditionally and no change inside this repo could
+           satisfy both that and the editable install. stranske/Workflows#3202 drained it upstream,
+           so the number is probed rather than asserted -- an upstream regression comes back as a
+           count here instead of as silence (see ``--explain``).
 
 Usage::
 
@@ -60,9 +64,9 @@ DRAINS = {
     "lint-format": "one `black --line-length 100 .` run",
     "typecheck-mypy": "typed modules landing incrementally; there is no mechanical fixer",
     "coverage": (
-        "upstream: append `--cov-config` only when the file exists; or a real packaging "
-        "pyproject.toml here. Adding a bare pyproject.toml makes the same workflow append "
-        "`-e '.[app,dev]'`, which 126 flat root modules with no build backend cannot satisfy"
+        "nothing to drain while this reads 0. It was 1 until stranske/Workflows#3202 (merged "
+        "2026-08-23) made `--cov-config` conditional on the file existing and gated the editable "
+        "install on real packaging metadata; if it goes back to 1, the drain is upstream again"
     ),
 }
 
@@ -213,12 +217,31 @@ def measure_mypy() -> dict:
 
 
 def measure_coverage() -> dict:
-    """Not a finding count: a conflict between two upstream requirements."""
-    has_pyproject = (REPO / "pyproject.toml").is_file()
+    """Probe collection with the arguments the reusable workflow builds, and count startup errors.
+
+    Deliberately not a static verdict. The old form returned ``1`` whenever this repo had no
+    ``pyproject.toml``, which encoded an upstream behaviour as a local fact -- so when
+    stranske/Workflows#3202 changed that behaviour, the recorded reason would have outlived its
+    evidence and kept the gate shut. Running the probe means an upstream regression reappears here
+    as a number instead of as silence.
+    """
+    args = ["--cov"]
+    if (REPO / "pyproject.toml").is_file():
+        args.append("--cov-config=pyproject.toml")
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", *args, "--collect-only", "-q", "-p", "no:cacheprovider"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+    combined = proc.stdout + proc.stderr
+    # A coverage misconfiguration aborts before collection; a collection error in the suite itself
+    # is a different defect and is not this check's business.
+    blocking = 1 if "coverage.exceptions" in combined or "CoverageException" in combined else 0
     return {
         "check": "coverage",
-        "command": "pytest --cov --cov-config=pyproject.toml (appended by the reusable workflow)",
-        "blocking": 0 if has_pyproject else 1,
+        "command": "pytest " + " ".join(args) + " (arguments built by the reusable workflow)",
+        "blocking": blocking,
         "blocking_unit": "startup errors",
         "drainable": 0,
         "drain": DRAINS["coverage"],
