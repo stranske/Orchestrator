@@ -61,6 +61,82 @@ def test_every_capability_has_a_recurrence_fixture():
     )
 
 
+def test_an_absent_entrypoint_diagnoses_itself_differently_from_a_real_defect():
+    """The two reds this file's own message could not tell apart.
+
+    Salvaged from PR #43, which built this diagnostic independently and in parallel with #46; #46
+    merged first but put its equivalent checks in a module `--selftest`, and a selftest is NOT
+    guarded by `.verify-floor.json`. Only a COLLECTED test is, so this is the half that makes the
+    behaviour hold.
+
+    The capability ledger is SHARED machine-local state (`$ORCH_LOCAL_RUNTIME`) while code is
+    branch-isolated per worktree, so a sibling branch that registers a capability makes every other
+    branch's `verify.py` red with a bare capability id — the same text a row registered with no
+    implementation produces. On 2026-08-22 that ambiguity was read the wrong way, and the remedies
+    proposed for a LIVE capability were to retire its ledger row or mask it with a waiver; either
+    would have discarded merged-ready work.
+
+    Not a skip: both cases still FAIL. The text now says which one it is. The ledger is INJECTED so
+    the distinction is pinned on any machine, not on whichever rows this instance has registered.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="cap-set-entrypoint-") as td:
+        saved = audit.HERE
+        try:
+            audit.HERE = Path(td)
+            (Path(td) / "here_lane.py").write_text("# in the tree\n")
+            led = {
+                "here-cap": {"capability_id": "here-cap", "entrypoint": "here_lane.py:run"},
+                "gone-cap": {"capability_id": "gone-cap", "entrypoint": "gone_lane.py:run"},
+            }
+
+            gone = audit.absent_entrypoint_note(["gone-cap"], ledger=led)
+            assert "MODULE ABSENT FROM THIS TREE" in gone, gone
+            assert "gone_lane.py is not in this tree" in gone, gone
+            assert "WAIT-OR-MERGE" in gone, gone
+            # Retiring or waiving must be named as the WRONG move, not left to inference.
+            assert "WAIVERS" in gone and "discards finished work" in gone, gone
+            # The pointer AND its caveat: the wrong verdict rested on `git log --all` coming back
+            # empty for a branch whose ref had never been fetched.
+            assert "git log --all --oneline -- gone_lane.py" in gone, gone
+            assert "FETCH FIRST" in gone, gone
+
+            # THE OPPOSITE CASE. A row whose module is right here must produce NO diagnosis, or the
+            # text sends a reader off to wait for a merge of code already in front of them.
+            assert audit.absent_entrypoint_note(["here-cap"], ledger=led) == ""
+            assert audit.entrypoint_presence(led["here-cap"])["state"] == audit.ENTRYPOINT_PRESENT
+            assert audit.entrypoint_presence(led["gone-cap"])["state"] == audit.ENTRYPOINT_ABSENT
+        finally:
+            audit.HERE = saved
+
+
+def test_the_capability_gates_all_consult_the_entrypoint_diagnosis():
+    """One shared helper, three call sites — checked, because three copies is how they drift.
+
+    Also from PR #43, and the sharper of its two ideas: nothing else in the tree notices if one gate
+    quietly stops calling the helper and goes back to reporting a bare capability id.
+
+    Matches the CALL (`audit.absent_entrypoint_note(`), never the bare name: every one of these
+    files also MENTIONS the helper in a comment, so a name-only grep would keep passing after
+    someone deleted the call and left the comment behind.
+    """
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    for name in (
+        "test_capability_admission.py",
+        "test_capability_set_coverage.py",
+        "test_model_tier_resolution.py",
+    ):
+        text = (here / name).read_text(encoding="utf-8")
+        assert "audit.absent_entrypoint_note(" in text, (
+            f"{name} no longer calls audit.absent_entrypoint_note(), so its capability gate is "
+            f"back to reporting a bare capability id — indistinguishable from the defect it guards"
+        )
+
+
 def test_no_fixture_names_an_unknown_capability():
     """A fixture pointing at a nonexistent capability covers nothing while looking like coverage."""
     # This check compares fixtures against the LIVE ledger, so it can only distinguish a typo

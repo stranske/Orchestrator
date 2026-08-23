@@ -426,7 +426,9 @@ def entrypoint_presence(cap: dict) -> dict:
     }
 
 
-def absent_entrypoint_report(capability_ids, *, path: Path | None = None) -> dict:
+def absent_entrypoint_report(
+    capability_ids, *, path: Path | None = None, ledger: dict | None = None
+) -> dict:
     """Which of these rows declare code that is NOT in this tree, and where that code was found.
 
     `total` travels with `absent` on purpose: the runtime rule in CLAUDE.md is that a count must
@@ -437,7 +439,11 @@ def absent_entrypoint_report(capability_ids, *, path: Path | None = None) -> dic
     # diagnostic printed inside an assertion message must never mutate shared machine-local state
     # as a side effect of explaining a failure. `load_declared` reconciles an in-memory copy and
     # writes nothing, and both sibling checks already read the ledger through it.
-    ledger = capabilities.load_declared(path or capabilities.REG)
+    # `ledger` INJECTS rows directly, so a test can pin the two-way distinction without a temp
+    # ledger FILE and without depending on which rows this machine happens to have registered:
+    # the interesting case is one row present and one absent, and no real ledger is reliably both.
+    if ledger is None:
+        ledger = capabilities.load_declared(path or capabilities.REG)
     wanted = [cid for cid in capability_ids if cid in ledger]
     absent = []
     for cid in wanted:
@@ -447,7 +453,9 @@ def absent_entrypoint_report(capability_ids, *, path: Path | None = None) -> dic
     return {"absent": absent, "checked": len(wanted), "total": len(ledger)}
 
 
-def absent_entrypoint_note(capability_ids, *, path: Path | None = None, indent: str = "  ") -> str:
+def absent_entrypoint_note(
+    capability_ids, *, path: Path | None = None, ledger: dict | None = None, indent: str = "  "
+) -> str:
     """The diagnostic block, or '' when every row's code is here. Appended to a FAILURE, never a skip.
 
     One formatter for all three checks so they cannot tell three different stories about the same
@@ -455,7 +463,7 @@ def absent_entrypoint_note(capability_ids, *, path: Path | None = None, indent: 
     Returning '' when there is nothing to say keeps the ordinary declaration failure unchanged.
     """
     try:
-        rep = absent_entrypoint_report(capability_ids, path=path)
+        rep = absent_entrypoint_report(capability_ids, path=path, ledger=ledger)
     except Exception as exc:  # noqa: BLE001
         # A diagnostic must never convert the real assertion into an error about the diagnostic.
         return (
@@ -503,9 +511,34 @@ def absent_entrypoint_note(capability_ids, *, path: Path | None = None, indent: 
         f"the repo's open",
         f"{indent}PRs BEFORE retiring the row or adding a WAIVERS entry — either one discards "
         f"finished work.",
-        f"{indent}Any row NOT listed here has its module present, and for those the fix is the "
-        f"declaration.",
     ]
+    # THE POINTER, AND THE CAVEAT THAT MAKES IT HONEST. `git log --all` is the natural next probe,
+    # and on 2026-08-22 it came back EMPTY for a module that existed — because the branch holding
+    # it had never been fetched into that checkout. An empty result there means "not fetched",
+    # never "does not exist", so the command and its precondition must travel together, or the
+    # pointer reproduces the very misreading it exists to prevent.
+    modules = sorted(
+        {m for row in rep["absent"] for hit in (row.get("found_in") or []) for m in hit["modules"]}
+        or {
+            c
+            for row in rep["absent"]
+            for entry in (row.get("missing") or [])
+            for c in entry["candidates"]
+        }
+    )
+    if modules:
+        out.append(
+            f"{indent}To check every branch, FETCH FIRST — an unfetched ref makes the log look "
+            f"empty, which is how"
+        )
+        out.append(
+            f"{indent}this was misread once: git fetch --all && "
+            f"git log --all --oneline -- {' '.join(modules[:3])}"
+        )
+    out.append(
+        f"{indent}Any row NOT listed here has its module present, and for those the fix is the "
+        f"declaration."
+    )
     return "\n".join(out)
 
 
