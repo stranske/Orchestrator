@@ -300,7 +300,8 @@ safety switch, not dead code.
 ## Governing docs
 `ORCHESTRATOR.md` (role/philosophy) · `ARCHITECTURE.md` (data flow) · `FEEDBACK_LOOP.md` (learning
 loop) · `EVAL_AND_TESTING.md` (selftest/gate regime) · `PLANNING.md` (roadmap) ·
-`IMPROVEMENT_BACKLOG.md` (numbered items + status log) · `CLAUDE.md` (agent rules) ·
+`improvement_log.py` (the machine-local numbered items + status log; `IMPROVEMENT_BACKLOG.md` in the
+tree is a pointer to it) · `CLAUDE.md` (agent rules) ·
 **`ADDING_CAPABILITIES.md`** (the enforced procedure for adding or reviving a capability, and the
 nine failure modes it exists to stop).
 Durable audit history: `Code/Audits/Orchestrator/`.
