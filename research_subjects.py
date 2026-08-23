@@ -820,6 +820,25 @@ def mark_lifecycle(
     return changed
 
 
+def reciprocal_evidence_weights(groups: dict) -> dict[str, float]:
+    """THE correlated-arm discount, in one place: n observations in a group are worth ONE.
+
+    `groups` maps a correlation key -> the observation ids that share it. Each member gets
+    `1/n`, so a group's total contribution is 1.0 however many times it was observed. That is
+    what makes `n_eff` a count of INDEPENDENT observations rather than of rows.
+
+    Extracted from `effective_evidence_weights` (which keys on `(agent, subject_family)`) so a
+    second consumer cannot invent a second scheme. `capability_propensity.usefulness()` needs
+    exactly this rule for usefulness verdicts — repeated verdicts from one judge answering one
+    question about one capability are not independent evidence — and `CLAUDE.md` §2 forbids
+    treating correlated arms as independent. One function, so the two cannot drift apart: a
+    shared name cannot, a matching pair of formulas will.
+    """
+    return {
+        member: 1.0 / len(members) for members in groups.values() if members for member in members
+    }
+
+
 def effective_evidence_weights(
     *, conn: sqlite3.Connection | None = None, task_type: str | None = None
 ) -> dict[str, float]:
@@ -843,9 +862,8 @@ def effective_evidence_weights(
     by_agent_subject: dict[tuple[str, str], list[str]] = defaultdict(list)
     for run_id, agent, family_id in rows:
         by_agent_subject[(str(agent or "unknown"), str(family_id))].append(str(run_id))
-    weights = {
-        run_id: 1.0 / len(run_ids) for run_ids in by_agent_subject.values() for run_id in run_ids
-    }
+    # ONE scheme, shared with `capability_propensity`. See `reciprocal_evidence_weights`.
+    weights = reciprocal_evidence_weights(by_agent_subject)
     if close:
         db.close()
     return weights
@@ -1053,6 +1071,12 @@ def _selftest() -> None:
         )
     weights = effective_evidence_weights(conn=conn, task_type="testgen")
     assert len(weights) == 22 and abs(sum(weights.values()) - 3.0) < 1e-9, weights
+    # THE SHARED SCHEME, asserted on its own so a second consumer cannot silently diverge:
+    # a group of n correlated observations totals 1.0, and an empty group contributes nobody.
+    shared = reciprocal_evidence_weights({("a", "s"): ["r1", "r2", "r3"], ("b", "s"): ["r4"]})
+    assert shared == {"r1": 1 / 3, "r2": 1 / 3, "r3": 1 / 3, "r4": 1.0}, shared
+    assert abs(sum(shared.values()) - 2.0) < 1e-9, shared
+    assert reciprocal_evidence_weights({("c", "s"): []}) == {}
     # A legacy experiment remains usable elsewhere but receives no invented subject mapping.
     conn.execute(
         "INSERT INTO runs (run_id,ts,target,task_type,agent,experiment_id,assignment) "
