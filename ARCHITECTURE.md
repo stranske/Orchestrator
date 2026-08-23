@@ -314,6 +314,44 @@ per-verdict comparison here. This module's counterfactual is `experiments()`'s c
 candidates named for the exact same task and not triggered. `propensity()` now reports that arm
 beside the posterior and never mixes it in.
 
+### A FIND has a finder, and the finder may be a capability OR a surface
+
+The strongest signal this loop produced on 2026-08-23 was not in the dataset. Instrumented work
+found **seven defects in the system's own code** that its author had not found. Two were attributable
+to a capability and *were* recorded — `adversarial-review` supplying citations that became the
+strongest facts in two issue bodies, `deliberate-break-verifier` catching an auditor's own
+methodological error. The other **five were found by the process**: an audit noticing that a
+suppressed surface still offered capabilities; an agent reading `capability_propensity` and finding a
+branch that recorded nothing. Those had no capability to attribute to, so they became PRs and prose
+and taught the loop nothing at all.
+
+`capability_propensity.record_find` closes that, with the finder as a first-class field:
+
+| finder | feeds | how |
+|---|---|---|
+| a **capability** (with the `experiment_id` it was offered under) | that capability's **usefulness** | a verdict at `defect_found` provenance, weight 1.0, whose `corroboration` is the artifact — a defect found is an outcome, not an opinion |
+| a **surface** | **binding quality** | `binding_quality(surface)` — offers, triggers, declines *and finds* for that surface. There was nowhere to put this before |
+
+**No new store and no new event type.** A find rides on a `match` event tagged
+`source=capability_find`, exactly as a decline and a binding promotion already do. Its ref is
+`find:<digest>` and **not** `advice:<digest>`, so `_experiment_id()` returns None for it and
+`experiments()` / `usefulness()` / `propensity()` cannot see it at all. That separation is
+**structural, not conventional**: no metadata a caller could set would make a find record reach a
+posterior. The only path from a find to the posterior is `record_usefulness` at `defect_found`
+provenance.
+
+**And it must not become a way to inflate a capability's standing.** `defect` and `artifact` are both
+required and refused when blank — a *claimed* find with no artifact is worth nothing, the same rule
+that refuses an unevidenced verdict and an unexplained decline. The binding guard, though, is the
+correlated-arm discount from the section above: **ten artifact-backed finds from one judge arm total
+one observation**, so the number does not move past 0.667 however many are recorded; only an
+independent arm moves it. Measured on the break: removing the discount takes ten same-arm finds from
+0.667 to 0.917, which is exactly the inflation this is built not to allow.
+
+`binding_quality()` is **report-only**. `propose_bindings` and `propose_demotions` keep their
+existing external evidence rules untouched — a number about a *surface* must not become selection
+pressure on a *capability*, which is the ratchet the detection loop already refuses.
+
 ### Where layer 2's evidence comes from
 
 Layer 2 needs resolved trials, and until 2026-08-22 nothing produced any: `advise()` recorded the

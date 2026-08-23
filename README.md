@@ -159,6 +159,20 @@ safety switch, not dead code.
   hand the caller the provenance mix, independent-arm count and self-reported share beside the
   number, and the report headline now reads *12 verdicts, 12 self_reported, 0 outcome-derived*, with
   the three capabilities that had shown 0.800 showing 0.556.
+- **A defect found is recordable, and the finder may be a capability OR a surface**
+  (`capability_propensity.record_find`, `binding_quality`, 2026-08-23). Instrumented work found seven
+  defects in this system's own code; two were attributable to a capability and recorded, and the
+  other five were found by the **process** — an audit noticing that a suppressed surface still
+  offered capabilities, an agent finding a branch of this module that recorded nothing — so they had
+  no capability to attribute to and became PRs and prose. A capability-attributed find now feeds that
+  capability's usefulness at `defect_found` provenance (an outcome, not an opinion, with the artifact
+  as its corroboration); a surface-attributed find feeds **binding quality**, which had nowhere to
+  live. No new store and no new event type: a find rides a `match` event tagged
+  `source=capability_find` with a `find:` ref rather than an `advice:` one, so `experiments()` /
+  `usefulness()` / `propensity()` cannot see it — structurally, not by convention. `defect` and
+  `artifact` are both required (a claimed find with no artifact is worth nothing), and the
+  correlated-arm discount is the real guard: ten artifact-backed finds from one judge arm are still
+  one observation, so volume cannot inflate a capability and only an independent arm moves it.
 - **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
   the code path that would produce an outcome (Thompson never chooses while the mode is
   epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label
