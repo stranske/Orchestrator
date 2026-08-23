@@ -1430,7 +1430,9 @@ def offload(
     logf = DISPATCH_LOG_DIR / f"offload.{agent}.{time.time_ns()}.log"
     agy_log: Path | None = None
     if agent == "gemini" and "--log-file" in argv:
-        agy_log = logf.with_suffix(".agy.log")
+        # `adapters.agy_log_for` owns the name, because `adapters.cli_reported_model` reads it back.
+        # Two literals would drift, and the symptom of drift here is a model that never resolves.
+        agy_log = adapters.agy_log_for(logf)
         argv[argv.index("--log-file") + 1] = str(agy_log)
     auth_prelude = _auth_prelude(agent)
     agent_prelude = _agent_runtime_prelude(agent)
@@ -1580,7 +1582,9 @@ def offload(
             probe = (
                 {"model": observed_model, "reason": None}
                 if observed_model
-                else adapters.cli_reported_model(agent, run_cwd, started_ts=started_ts)
+                else adapters.cli_reported_model(
+                    agent, run_cwd, started_ts=started_ts, log_file=str(logf)
+                )
             )
             if probe.get("model"):
                 feedback.complete_profile_attempt(
