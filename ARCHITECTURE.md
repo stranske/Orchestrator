@@ -141,8 +141,9 @@ the two axes as one. They are orthogonal:
   capability routinely spans both (`adversarial-review` is role judgment, invoked by a rail gate,
   recorded over a deterministic acceptance edge).
 
-The eight admission parts (`ADDING_CAPABILITIES.md`) are **not** the definition of a capability. They
-are what must be present for one to work with this system — invocable, observable, improvable.
+The nine admission parts (`ADDING_CAPABILITIES.md`) are **not** the definition of a capability. They
+are what must be present for one to work with this system — invocable, observable, findable,
+improvable.
 
 **Two kinds, and their measurement stories differ.** *Workflow* capabilities run implementation code
 and have a definable success condition, so effectiveness is a pass/fail rate. *Sub-agent* capabilities
@@ -167,7 +168,7 @@ are ordered by when each starts working:
 
 | Layer | Mechanism | Works from |
 |---|---|---|
-| 1 | `capability_advisor.SURFACE_BINDINGS` — declared, per surface, 3–7 entries, each with its reason; plus `CAPABILITY_PRECONDITIONS`, which explains an offer without changing it | day one; no classifier, no history |
+| 1 | `capability_advisor.SURFACE_BINDINGS` — declared, per surface, 3–7 entries, each with its reason; `CONSULT_SITES`, which declares who actually ASKS at each surface; plus `CAPABILITY_PRECONDITIONS`, which explains an offer without changing it | day one; no classifier, no history |
 | 2 | `capability_propensity.rank` — orders *within* the bound set by measured usefulness | first resolved trials |
 | 3 | `capability_advisor.learned_associations` — corrects the table from what a surface actually reaches for | once observations accumulate |
 
@@ -177,6 +178,58 @@ committed table is the seed (tool); instance promotions live in the ledger (evid
 **Binding prioritises, it never conceals.** Unbound capabilities are still returned, ranked after the
 bound set and flagged `bound: false`. A concealed capability could never be selected, so it could
 never earn the evidence that would bind it — the gate would starve its own drain.
+
+**And a binding is only half of layer 1: `CONSULT_SITES` is the other half, and nothing declared it
+until 2026-08-23.** `SURFACE_BINDINGS` says which capabilities a surface should be offered; nothing
+said which surfaces are ever ASKED, and the two are independent — from a capability's point of view,
+a binding to a surface no caller consults is indistinguishable from no binding at all. Measured over
+the 43-row ledger: `ci` bound two capabilities and no caller anywhere consults a `ci` surface;
+`opener-lane` and `closer-lane` bind ten between them and both lane prompts consult the advisor with
+**no `--surface`**, so `binding_for("")` returns `{}` and the declared set never reaches the caller it
+was written for. `repo-audit` is the control case — never consulted under its bare name, and
+correctly so, because every consult happens at a phase key whose resolution merges the parent's
+entries. So "not consulted" is a defect only for a key that is not a PREFIX of a consulted key.
+A consult site is a **falsifiable claim about a file**: the selftest opens it. Present-and-no-longer-
+naming-its-surface is DRIFT and fails; absent on this machine is *unverified*, never refuted — the
+same "no ledger, no verdict" rule `capability_admission.commitments()` uses, because treating absence
+as refutation would strand every skill-bound capability on a fresh clone.
+
+**A surface therefore has exactly three declared states, and a fourth is a selftest failure.** It is
+consulted (`CONSULT_SITES`), it deliberately binds nothing (`NO_BINDING` with the reason), or it holds
+bindings nothing can reach and that is recorded with the reason and the fix (`KNOWN_UNCONSULTED` —
+currently `opener-lane` and `closer-lane`, whose fix is a `--surface` flag in a lane TOML outside this
+repository). Bindings nothing can reach that nobody wrote down is the fourth state, it is what `ci`
+was, and it is invisible until a capability is stranded on it — so it now fails naming the SURFACE,
+not just the capability. `KNOWN_UNCONSULTED` is a record and not a waiver: a capability bound only
+there still fails requirement 9. A fixed entry may not linger either; a stale one fails, because a
+cached reason outliving its evidence is the prose-cache defect under a different hat.
+
+**Findability is the ninth admission requirement (2026-08-23), because the eight before it make a
+capability invocable and observable and none of them makes it findable.** 37 of 43 capabilities had
+no usefulness evidence and 22 of those were bound to no surface, so nothing could offer them and no
+amount of running could produce evidence for them — every one had passed admission, and the rule
+against it existed as prose in the document that argues prose does not survive the next session.
+`capability_admission.req_findable` consumes `capability_advisor.surfaces_binding` (the inverse of
+`binding_for`, so ONE resolver) and `consulting_surfaces()`, and it distinguishes `bound_nowhere` from
+`bound_to_unconsulted_surface` because the fixes differ: declare a surface, versus bind a consulted
+one or make the surface consult. A capability a rail invokes UNCONDITIONALLY rather than offers is
+exempt by declaration — `findability_category: no_surface` plus a rationale in
+`capabilities.KNOWN_DECLARATIONS`, both halves required, which is where `capability-admission-gate`
+and `docs-drift-fix-agent` now sit instead of on a `ci` surface nothing consults.
+
+Two things it deliberately does **not** decide, named rather than omitted. A surface that invokes the
+entrypoint DIRECTLY without surface attribution: the `orchestrate` skill already runs `capacity.py`
+while `windowed-capacity-policy`'s heartbeat sits behind `ORCH_CAPABILITY_HEARTBEATS`, which only a
+live tick sets, so the capability is used and entirely uncredited.
+`capability_activation_audit.heartbeat_reachable` answers a different question — it calls that row
+`reachable` via `orchestrate.sh (CLI)`, because it asks whether *some* driver reaches the heartbeat,
+not whether *this surface's* invocation is attributed to the surface — and deciding it needs the
+surface's own prompt, which lives outside this repository. And a surface that is NAMED but never
+ENTERED (`repo-audit:fix`, which the skill's table lists and no audit run reaches, since an audit ends
+at phase 5 and hands implementation to the lanes): only trial records can show that, never a table of
+files. Enforcement is per-requirement dated (`REQUIREMENT_ENFORCED_FROM`) so the 43 pre-existing rows
+are reported as drainable debt instead of failing the suite; the report prints the debt, its causes,
+the surfaces that strand a binding, and the drainable count beside it.
 
 **And a fourth input, orthogonal to all three: the per-repo contraindication.** The three layers above
 rank a capability by how well it fits the SURFACE. None of them can say *this tool does not work
