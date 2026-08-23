@@ -112,28 +112,116 @@ def test_an_absent_entrypoint_diagnoses_itself_differently_from_a_real_defect():
             audit.HERE = saved
 
 
-def test_the_capability_gates_all_consult_the_entrypoint_diagnosis():
-    """One shared helper, three call sites — checked, because three copies is how they drift.
+def test_the_fetch_command_names_every_absent_module_not_just_the_found_ones():
+    """UNION, not `or` — the regression a CodeRabbit review on PR #51 caught.
 
-    Also from PR #43, and the sharper of its two ideas: nothing else in the tree notices if one gate
+    The module list behind `git log --all` was `{sibling hits} or {missing candidates}`, which
+    short-circuits: as soon as ONE absent row was found in a sibling checkout, the candidates of
+    every row found NOWHERE were dropped. Those are the rows the pointer matters most for — a
+    module in no sibling checkout is the one most likely to be on an unfetched remote branch, which
+    is the entire case the fetch-first caveat exists for. So the command claimed to check every
+    branch while omitting the hardest modules.
+
+    Needs BOTH kinds of absent row present at once, which is why it is its own test: with only one
+    kind, `or` and `|` are indistinguishable.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="cap-set-union-") as td:
+        root = Path(td)
+        mine, theirs = (
+            root / ".claude" / "worktrees" / "mine",
+            root / ".claude" / "worktrees" / "theirs",
+        )
+        for tree in (root, mine, theirs):
+            tree.mkdir(parents=True, exist_ok=True)
+            (tree / "capabilities.py").write_text("# a checkout is recognised by this file\n")
+        (theirs / "a_lane.py").write_text("def run():\n    pass\n")  # found in a sibling
+        # b_lane.py exists NOWHERE — the row the old `or` silently dropped.
+        saved = audit.HERE
+        try:
+            audit.HERE = mine
+            led = {
+                "found-elsewhere": {
+                    "capability_id": "found-elsewhere",
+                    "entrypoint": "a_lane.py:run",
+                },
+                "found-nowhere": {"capability_id": "found-nowhere", "entrypoint": "b_lane.py:run"},
+            }
+            note = audit.absent_entrypoint_note(sorted(led), ledger=led)
+            assert "a_lane.py" in note, note
+            assert "b_lane.py" in note, note
+            # Both must be in the COMMAND, not merely mentioned in the per-row lines above it.
+            cmd = [ln for ln in note.splitlines() if "git log --all" in ln]
+            assert len(cmd) == 1, note
+            assert "a_lane.py" in cmd[0] and "b_lane.py" in cmd[0], cmd[0]
+        finally:
+            audit.HERE = saved
+
+
+# The gate whose message must carry the diagnosis, per file. An explicit mapping, because "some
+# call somewhere in the file" is exactly the weakness that made the first version of the check
+# below vacuous.
+GATE_CALL_SITES = {
+    "test_capability_admission.py": "test_new_capabilities_carry_all_required_parts",
+    "test_capability_set_coverage.py": "test_every_capability_has_a_recurrence_fixture",
+    "test_model_tier_resolution.py": "test_every_capability_has_a_heartbeat_call_site",
+}
+
+
+def _calls_absent_entrypoint_note(path, func_name: str) -> bool:
+    """Does THIS function's body really call `audit.absent_entrypoint_note(...)`? AST, not text.
+
+    Matching source text cannot answer this. `audit.absent_entrypoint_note(` appears SIX times in
+    this very file — in the mapping above, in a docstring, and in sibling tests — so a substring
+    search over the whole file passes no matter what the gate at `func_name` actually does. An AST
+    walk scoped to one function body cannot be satisfied by a string literal or a comment at all.
+    """
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    target = next(
+        (
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func_name
+        ),
+        None,
+    )
+    assert target is not None, (
+        f"{path.name} has no function {func_name!r} — the gate was renamed or removed, which this "
+        f"check must not silently pass. Update GATE_CALL_SITES deliberately."
+    )
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "absent_entrypoint_note"
+        for node in ast.walk(target)
+    )
+
+
+def test_the_capability_gates_all_consult_the_entrypoint_diagnosis():
+    """One shared helper, three gates — checked, because three copies is how they drift.
+
+    From PR #43, and the sharper of its two ideas: nothing else in the tree notices if one gate
     quietly stops calling the helper and goes back to reporting a bare capability id.
 
-    Matches the CALL (`audit.absent_entrypoint_note(`), never the bare name: every one of these
-    files also MENTIONS the helper in a comment, so a name-only grep would keep passing after
-    someone deleted the call and left the comment behind.
+    THE FIRST VERSION OF THIS CHECK WAS VACUOUS, and a CodeRabbit review on PR #51 caught it. It
+    searched each whole FILE for the substring `audit.absent_entrypoint_note(` — a literal that
+    appears six times in this file alone, including inside the assertion itself. So the check
+    passed for its own file no matter what the recurrence-fixture gate did. A guard against
+    vacuous checks that was itself vacuous is this repo's founding defect wearing the uniform of
+    its own countermeasure, so it now walks the AST of ONE NAMED FUNCTION per file.
     """
     from pathlib import Path
 
     here = Path(__file__).resolve().parent
-    for name in (
-        "test_capability_admission.py",
-        "test_capability_set_coverage.py",
-        "test_model_tier_resolution.py",
-    ):
-        text = (here / name).read_text(encoding="utf-8")
-        assert "audit.absent_entrypoint_note(" in text, (
-            f"{name} no longer calls audit.absent_entrypoint_note(), so its capability gate is "
-            f"back to reporting a bare capability id — indistinguishable from the defect it guards"
+    for name, func in GATE_CALL_SITES.items():
+        assert _calls_absent_entrypoint_note(here / name, func), (
+            f"{name}::{func} no longer calls audit.absent_entrypoint_note(), so that capability "
+            f"gate is back to reporting a bare capability id — indistinguishable from the defect "
+            f"it guards"
         )
 
 

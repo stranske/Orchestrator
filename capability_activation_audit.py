@@ -517,9 +517,14 @@ def absent_entrypoint_note(
     # it had never been fetched into that checkout. An empty result there means "not fetched",
     # never "does not exist", so the command and its precondition must travel together, or the
     # pointer reproduces the very misreading it exists to prevent.
+    # UNION, not `or`. This was `A or B`, which short-circuits: one row having a sibling hit
+    # dropped the candidates of every row that had NONE — and those are exactly the rows the
+    # pointer matters most for, because a module found in no sibling checkout is the one most
+    # likely to be sitting on an unfetched remote branch. A command that says "check every branch"
+    # while silently omitting the hardest cases is worse than no command.
     modules = sorted(
         {m for row in rep["absent"] for hit in (row.get("found_in") or []) for m in hit["modules"]}
-        or {
+        | {
             c
             for row in rep["absent"]
             for entry in (row.get("missing") or [])
@@ -527,13 +532,17 @@ def absent_entrypoint_note(
         }
     )
     if modules:
+        # NO SILENT CAP. Truncating the module list would put the same lie back in a smaller
+        # place, so anything not shown is COUNTED in the same breath.
+        shown, hidden = modules[:6], max(0, len(modules) - 6)
         out.append(
             f"{indent}To check every branch, FETCH FIRST — an unfetched ref makes the log look "
             f"empty, which is how"
         )
         out.append(
             f"{indent}this was misread once: git fetch --all && "
-            f"git log --all --oneline -- {' '.join(modules[:3])}"
+            f"git log --all --oneline -- {' '.join(shown)}"
+            + (f"   (+{hidden} more module(s) not shown)" if hidden else "")
         )
     out.append(
         f"{indent}Any row NOT listed here has its module present, and for those the fix is the "
