@@ -23,7 +23,9 @@ of the standard suite so a normal verification run cannot pass while the set is 
 
 from __future__ import annotations
 
+import ast
 import sys
+from pathlib import Path
 
 import capabilities
 import capability_activation_audit as audit
@@ -87,8 +89,16 @@ def test_an_absent_entrypoint_diagnoses_itself_differently_from_a_real_defect():
         try:
             audit.HERE = Path(td)
             (Path(td) / "here_lane.py").write_text("# in the tree\n")
-            led = {"here-cap": {"capability_id": "here-cap", "entrypoint": "here_lane.py:run"},
-                   "gone-cap": {"capability_id": "gone-cap", "entrypoint": "gone_lane.py:run"}}
+            led = {
+                "here-cap": {
+                    "capability_id": "here-cap",
+                    "entrypoint": "here_lane.py:run",
+                },
+                "gone-cap": {
+                    "capability_id": "gone-cap",
+                    "entrypoint": "gone_lane.py:run",
+                },
+            }
 
             gone = audit.absent_entrypoint_note(["gone-cap"], ledger=led)
             assert "MODULE ABSENT FROM THIS TREE" in gone, gone
@@ -106,8 +116,14 @@ def test_an_absent_entrypoint_diagnoses_itself_differently_from_a_real_defect():
             # them. Silence is the assertion: the ordinary declaration failure reads unchanged.
             here = audit.absent_entrypoint_note(["here-cap"], ledger=led)
             assert here == "", here
-            assert audit.entrypoint_presence(led["here-cap"])["state"] == audit.ENTRYPOINT_PRESENT
-            assert audit.entrypoint_presence(led["gone-cap"])["state"] == audit.ENTRYPOINT_ABSENT
+            assert (
+                audit.entrypoint_presence(led["here-cap"])["state"]
+                == audit.ENTRYPOINT_PRESENT
+            )
+            assert (
+                audit.entrypoint_presence(led["gone-cap"])["state"]
+                == audit.ENTRYPOINT_ABSENT
+            )
         finally:
             audit.HERE = saved
 
@@ -122,14 +138,33 @@ def test_the_capability_gates_all_consult_the_entrypoint_diagnosis():
     files also MENTIONS the helper in a comment, so a name-only grep would keep passing after
     someone deleted the call and left the comment behind.
     """
-    from pathlib import Path
-
     here = Path(__file__).resolve().parent
-    for name in ("test_capability_admission.py", "test_capability_set_coverage.py",
-                 "test_model_tier_resolution.py"):
-        text = (here / name).read_text(encoding="utf-8")
-        assert "audit.absent_entrypoint_note(" in text, (
-            f"{name} no longer calls audit.absent_entrypoint_note(), so its capability gate is "
+    gates = {
+        "test_capability_admission.py": "test_new_capabilities_carry_all_required_parts",
+        "test_capability_set_coverage.py": "test_every_capability_has_a_recurrence_fixture",
+        "test_model_tier_resolution.py": "test_every_capability_has_a_heartbeat_call_site",
+    }
+    for name, function_name in gates.items():
+        tree = ast.parse((here / name).read_text(encoding="utf-8"))
+        function = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == function_name
+            ),
+            None,
+        )
+        calls_helper = function is not None and any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "audit"
+            and node.func.attr == "absent_entrypoint_note"
+            for node in ast.walk(function)
+        )
+        assert calls_helper, (
+            f"{name}:{function_name} no longer calls audit.absent_entrypoint_note(), so its "
+            f"capability gate is "
             f"back to reporting a bare capability id — indistinguishable from the defect it "
             f"guards"
         )
@@ -168,7 +203,11 @@ def test_every_capability_appears_in_the_activation_audit():
 def test_unreachable_capabilities_state_a_reason():
     """ "Cannot fire" is allowed. "Cannot fire, unexplained" is not."""
     rep = audit.audit(use_cache=True)
-    silent = [r["capability_id"] for r in rep["rows"] if not r["reachable"] and not r["defects"]]
+    silent = [
+        r["capability_id"]
+        for r in rep["rows"]
+        if not r["reachable"] and not r["defects"]
+    ]
     assert not silent, f"capabilities blocked with no named defect: {silent}"
 
 
@@ -186,7 +225,9 @@ def test_exemptions_carry_reasons_and_exist():
     ledger = set(capabilities.load_declared(capabilities.REG))
     for cap_id, reason in FIXTURE_EXEMPT.items():
         assert cap_id in ledger, f"FIXTURE_EXEMPT names unknown capability {cap_id!r}"
-        assert reason and len(reason) > 20, f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"
+        assert reason and len(reason) > 20, (
+            f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"
+        )
 
 
 def roster() -> str:
@@ -241,7 +282,11 @@ def roster() -> str:
     )
     for cap_id in sorted(ledger):
         row = rows.get(cap_id) or {}
-        fx = "yes" if cap_id in covered else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
+        fx = (
+            "yes"
+            if cap_id in covered
+            else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
+        )
         can = "yes" if row.get("reachable") else "NO"
         fire = {True: "fires", False: "miss"}.get(fired.get(cap_id), "—")
         out.append(
@@ -262,7 +307,9 @@ def main() -> int:
     if "--roster" in sys.argv:
         print(roster(), end="")
         return 0
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    tests = [
+        v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)
+    ]
     failures, skipped = [], []
     for fn in tests:
         try:
@@ -284,7 +331,9 @@ def main() -> int:
             # check here produces rather than at a round number.
             print(f"       {str(exc)[:2000]}")
     if failures:
-        print(f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED")
+        print(
+            f"\n{len(failures)} of {len(tests)} capability-set coverage checks FAILED"
+        )
         return 1
     ledger = capabilities.load_declared(capabilities.REG)
     if skipped:
