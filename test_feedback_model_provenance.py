@@ -529,12 +529,17 @@ def test_cli_reported_identity_resolves_only_seats_that_actually_report(tmp_path
     assert blank["model"] is None
     assert blank["reason"] == "codex_rollout_named_no_real_model"
 
-    # Seats whose CLI leaves no per-session log say so BY NAME, so per-agent coverage can report
-    # why a seat is unminable instead of showing an indistinguishable empty count.
-    for agent in ("cursor", "gemini", "vibe"):
+    # A seat with NO reader says so by name. This list was once ("cursor", "gemini", "vibe") --
+    # wrong for two of the three, because cursor and vibe both keep per-session model records and
+    # the claim they did not was asserted from a truncated directory listing.
+    for agent in ("gemini", "aider"):
         reason = adapters.cli_reported_model(agent, workspace)["reason"]
         assert reason.startswith("no_cli_session_log:"), (agent, reason)
         assert len(reason) > 30, f"{agent} needs a real justification, got {reason!r}"
+    # And a seat WITH a reader reports a miss against its own store, not an incapacity.
+    for agent in ("cursor", "vibe"):
+        reason = adapters.cli_reported_model(agent, workspace)["reason"]
+        assert reason == f"no_{agent}_session_matched_workspace", (agent, reason)
 
     # A run with no workspace recorded is distinguishable from a seat that cannot report.
     assert adapters.cli_reported_model("codex", None)["reason"] == "no_workspace_recorded_for_run"
@@ -596,11 +601,12 @@ def test_completion_records_cli_identity_and_never_invents_one(tmp_path, monkeyp
         assert (status, provider, model) == ("complete", "openai", "gpt-5.6-terra")
         assert feedback.latest_worker_identity_for_agent("codex") is not None
 
-        # A seat that cannot report stays unresolved, and the reason NAMES the seat -- one string
-        # for "permanently cannot report" and "log not found" made a permanent limit look like a bug.
+        # A seat whose store holds nothing for THIS workspace stays unresolved, with the reason
+        # naming which store was searched -- distinct from a seat that has no store at all.
+        monkeypatch.setattr(adapters, "CURSOR_CHATS", tmp_path / "no-cursor-chats")
         status, _, model, reason = _run("cursor", "cursor-composer-2.5", "r-cursor")
         assert status == "unresolved" and model is None
-        assert "no_cli_session_log" in reason, reason
+        assert "no_cursor_session_matched_workspace" in reason, reason
         assert feedback.latest_worker_identity_for_agent("cursor") is None
 
         # DELIBERATE BREAK: reader always blank, as before the fix.
@@ -692,3 +698,78 @@ def test_a_resolved_attempt_cannot_also_have_fallen_back(tmp_path):
         assert cov["fallback_rate"] == 0.0, cov
     finally:
         feedback.DB_PATH = old_db
+
+
+def test_every_seat_with_a_session_store_can_report_and_is_read_from_its_own_store(
+    tmp_path, monkeypatch
+):
+    """Four seats were declared incapable of reporting a model. All four were wrong.
+
+    The claim `cursor-agent writes no per-session model log under ~/.cursor` was asserted from an
+    eight-line `find | head` — inferring a blocker instead of verifying it. Looking properly:
+    cursor keeps `providerOptions.cursor.modelName` in `~/.cursor/chats/*/*/store.db` joined by the
+    sibling meta's `cwd`, and vibe keeps `config.active_model` in its session meta joined by
+    `environment.working_directory`. Both are the tool's own record of the run, not our `--model`
+    echoed back.
+
+    Also pins the one seat that genuinely cannot: agy gives a workspace join but records no served
+    model, and it is the seat where that matters most because it is a multi-provider router whose
+    requested model may not be what ran.
+    """
+    import json as _json
+    import sqlite3 as _sq
+
+    import adapters
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    resolved_ws = str(workspace.resolve())
+
+    # --- cursor: chat store keyed by cwd, model in the provider's own options ---
+    chats = tmp_path / "chats" / "hash" / "session"
+    chats.mkdir(parents=True)
+    (chats / "meta.json").write_text(_json.dumps({"cwd": resolved_ws, "updatedAtMs": 1_000_000}))
+    store = _sq.connect(chats / "store.db")
+    store.execute("CREATE TABLE blobs (id INTEGER, data BLOB)")
+    store.execute(
+        "INSERT INTO blobs VALUES (1, ?)",
+        (b'{"providerOptions":{"cursor":{"modelName":"composer-2.5"}}}',),
+    )
+    store.commit()
+    store.close()
+    monkeypatch.setattr(adapters, "CURSOR_CHATS", tmp_path / "chats")
+    got = adapters.cli_reported_model("cursor", workspace)
+    assert got["model"] == "composer-2.5", got
+
+    # --- vibe: session meta keyed by working_directory ---
+    vibe = tmp_path / "vibe" / "session_1"
+    vibe.mkdir(parents=True)
+    (vibe / "meta.json").write_text(_json.dumps({
+        "environment": {"working_directory": resolved_ws},
+        "config": {"active_model": "mistral-medium-3.5"},
+        "start_time": "2026-08-22T15:00:00+00:00",
+    }))
+    monkeypatch.setattr(adapters, "VIBE_SESSIONS", tmp_path / "vibe")
+    got = adapters.cli_reported_model("vibe", workspace)
+    assert got["model"] == "mistral-medium-3.5", got
+
+    # NEVER OUR REQUEST. A store that names no model resolves to nothing with a reason -- the
+    # requested model is unreachable from here by construction.
+    (chats / "meta.json").write_text(_json.dumps({"cwd": "/somewhere/else"}))
+    blank = adapters.cli_reported_model("cursor", workspace)
+    assert blank["model"] is None and "no_cursor_session" in blank["reason"], blank
+
+    # A LOG FULL OF FILENAMES IS NOT A MODEL. This is the false-positive class that made log
+    # parsing look unusable: offload logs are full of `gpt-4o-mini` and `claude-fleet-list.sh`
+    # because agents edit code about models.
+    assert adapters.VENDOR_MODEL_RE.fullmatch("claude-fleet-list.sh") is None
+    assert adapters.VENDOR_MODEL_RE.fullmatch("composer-2.5") is not None
+
+    # The reader list and the capability answer come from ONE place, so "we have a reader" and
+    # "we will look" cannot disagree -- they did, for three seats whose readers were written.
+    for seat in adapters.CLI_IDENTITY_READERS:
+        assert adapters.can_report_cli_identity(seat)[0] is True, seat
+    for seat in adapters.NO_SESSION_LOG_AGENTS:
+        capable, why = adapters.can_report_cli_identity(seat)
+        assert capable is False and why, seat
+    assert "gemini" in adapters.NO_SESSION_LOG_AGENTS, "agy records no served model; keep it named"

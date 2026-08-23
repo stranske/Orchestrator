@@ -1337,16 +1337,34 @@ def offload(agent: str, prompt: str, cwd: str = ".", mode: str | None = None,
         # Only close what was opened -- reaching for a row deliberately not created is how a
         # "stop recording this" change quietly becomes a crash.
         if profile and record_worker_attempt:
-            # The Codex CLI's bounded completion output does not currently carry
-            # a provider-resolved model identity. Close the selected attempt as
-            # explicitly unresolved instead of leaving a permanent `started`
-            # row or copying requested_model into resolved_model.
-            feedback.complete_profile_attempt_unresolved(
-                run_id,
-                selected_profile_id=profile["profile_id"],
-                fallback_reason="resolved_model_not_reported_by_offload",
-                completed_ts=int(time.time()),
-            )
+            # RESOLVE HERE, NOT IN A LATER SWEEP. This closed every attempt `unresolved` on the
+            # grounds that the CLI's completion output carries no model -- true of stdout, but the
+            # CLI has just written its OWN session record, and this is the moment we know the agent,
+            # the workspace and the run window. Resolving post-hoc instead left every attempt
+            # stranded until a sweep noticed, made that sweep the mechanism rather than a backstop,
+            # and let a row sit unresolved forever if the sweep never ran.
+            #
+            # Still never a fallback to the requested model: a seat whose store does not name what
+            # served closes unresolved with the reason, exactly as before.
+            probe = adapters.cli_reported_model(agent, run_cwd, started_ts=started_ts)
+            if probe.get("model"):
+                feedback.complete_profile_attempt(
+                    run_id,
+                    selected_profile_id=profile["profile_id"],
+                    resolved_provider=profile["provider"],
+                    resolved_model=probe["model"],
+                    completed_ts=int(time.time()),
+                )
+            else:
+                feedback.complete_profile_attempt_unresolved(
+                    run_id,
+                    selected_profile_id=profile["profile_id"],
+                    fallback_reason=(
+                        f"resolved_model_not_reported_by_offload:"
+                        f"{probe.get('reason') or 'unknown'}"
+                    )[:200],
+                    completed_ts=int(time.time()),
+                )
         # Instant meter (2026-07-03 audit F2): don't wait a day for ledger_reconcile to pair the
         # ndjson events — the offload runs synchronously, so latency is known RIGHT NOW. Write the
         # costs row immediately; the daily reconcile recomputes the same values (INSERT OR REPLACE,

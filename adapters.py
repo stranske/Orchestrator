@@ -19,10 +19,12 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
 from collections.abc import Iterable
+from typing import Any
 from pathlib import Path
 
 import execution_profiles
@@ -577,14 +579,61 @@ def model_identity(agent: str, mode: str | None = None, profile=None) -> str | N
 # fabricated identity is worse than a skipped event.
 CODEX_SESSIONS = Path(os.environ.get("ORCH_CODEX_SESSIONS_DIR", HOME / ".codex" / "sessions"))
 CLAUDE_PROJECTS = Path(os.environ.get("ORCH_CLAUDE_PROJECTS_DIR", HOME / ".claude" / "projects"))
-# Seats whose CLI leaves no per-session identity log we can read. Named, not silently absent, so
-# per-agent mining coverage can say WHY a seat is unminable instead of showing an empty count.
+# EVERY SEAT HERE WAS WRONG. This dict once listed cursor, gemini, vibe and aider as keeping no
+# per-session model log, and that was asserted from an eight-line `find | head` -- inferring a
+# blocker instead of verifying it. Looking properly, four of them do:
+#
+#   cursor  ~/.cursor/chats/<h>/<session>/store.db   providerOptions.cursor.modelName
+#           joined by the sibling meta.json's `cwd` -- provider-side, not our request echoed back
+#   vibe    ~/.vibe/logs/session/<id>/meta.json      config.active_model
+#           joined by environment.working_directory, with start_time/end_time
+#   gemini  conversation_summaries.db -> brain/<conversation_id>/.../transcript_full.jsonl
+#           joined by workspace_uris; the transcript names what actually served
+#
+# The gemini case is why this matters more than tidiness: agy is a multi-provider ROUTER, and a
+# real conversation there was served by `claude-sonnet-4-6` while our profile requests
+# `gemini-3.1-pro-high`. The requested model is genuinely not what ran, so any scheme that recorded
+# the request as the resolved model would fabricate the attribution -- and model rotation on that
+# seat would be measuring the wrong thing entirely.
+# The seats a reader exists for. ONE list, consumed by both `can_report_cli_identity` and
+# `cli_reported_model`, so "we have a reader" and "we will look" can never disagree -- they did,
+# and the answer was False for three seats whose readers were already written.
+CLI_IDENTITY_READERS = ("codex", "claude", "cursor", "vibe")
+CURSOR_CHATS = Path(os.environ.get("ORCH_CURSOR_CHATS_DIR", HOME / ".cursor" / "chats"))
+VIBE_SESSIONS = Path(
+    os.environ.get("ORCH_VIBE_SESSIONS_DIR", HOME / ".vibe" / "logs" / "session")
+)
+AGY_HOME = Path(os.environ.get("ORCH_AGY_HOME", HOME / ".gemini" / "antigravity-cli"))
+# Only aider is left, and only because nothing has been found for it yet -- stated as an absence of
+# evidence, not as a property of the tool.
 NO_SESSION_LOG_AGENTS = {
-    "cursor": "cursor-agent writes no per-session model log under ~/.cursor",
-    "gemini": "agy/antigravity writes no per-session model log we can join to a run",
-    "vibe": "vibe writes no per-session transcript; its model is single-lane config, not a report",
-    "aider": "aider writes no per-session model log; codestral-latest floats anyway",
+    # VERIFIED ABSENT, not assumed. agy's `conversation_summaries` DOES give a workspace join, and
+    # `_agy_model_for` uses it -- but the conversations it points at record no model anywhere in the
+    # brain directory (checked every file of two Orchestrator conversations: zero vendor ids). One
+    # unrelated conversation mentioned `claude-sonnet-4-6` in prose, which is what first suggested
+    # agy knows; its own store does not persist it per session.
+    #
+    # This is the seat where it matters MOST and the only one still open: agy is a multi-provider
+    # router, so unlike cursor or vibe its requested model genuinely may not be what served. Until
+    # agy records the served model (or is asked for it at completion), rotation on this seat cannot
+    # be measured -- and recording the request would be a fabrication, not a stopgap.
+    "gemini": "agy records a workspace join but no served model in its conversation store",
+    "aider": "no per-session model store located for aider yet (not confirmed absent)",
 }
+# A real vendor model id, used to pick the model out of a transcript that also mentions filenames,
+# branch names and prose. Deliberately an ALLOWLIST of vendor families: `_first_real_model` would
+# happily accept `claude-fleet-list.sh` from a log otherwise.
+VENDOR_MODEL_RE = re.compile(
+    r"\b("
+    r"gpt-[0-9][A-Za-z0-9.-]*"
+    r"|o[0-9]-[A-Za-z0-9.-]+"
+    r"|claude-(?:opus|sonnet|haiku)-[0-9][A-Za-z0-9.-]*"
+    r"|gemini-[0-9][A-Za-z0-9.-]*"
+    r"|composer-[0-9][A-Za-z0-9.-]*"
+    r"|(?:mistral|magistral|devstral|codestral)[A-Za-z0-9.-]*"
+    r"|gpt-oss[A-Za-z0-9.-]*"
+    r")\b"
+)
 ROLLOUT_TS_RE = re.compile(r"rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})")
 
 
@@ -605,7 +654,7 @@ def can_report_cli_identity(agent: str) -> tuple[bool, str | None]:
     key = str(agent or "").strip().lower()
     if key in NO_SESSION_LOG_AGENTS:
         return False, f"no_cli_session_log:{NO_SESSION_LOG_AGENTS[key]}"
-    if key in {"codex", "claude"}:
+    if key in CLI_IDENTITY_READERS:
         return True, None
     return False, f"no_cli_identity_reader_for_agent:{key or 'unknown'}"
 
@@ -674,6 +723,131 @@ def _codex_rollout_for(workspace: str | Path, started_ts: int | None, window_s: 
     return None
 
 
+def _cursor_model_for(workspace: str, started_ts: int | None, window_s: int) -> str | None:
+    """Model recorded in cursor's own chat store for the session that ran in `workspace`.
+
+    `meta.json` carries `cwd` and millisecond timestamps; the sibling `store.db` holds the message
+    blobs, where the provider's own `providerOptions.cursor.modelName` names what served. That is
+    provider-side identity, not the `--model` we asked for.
+    """
+    target = str(Path(workspace).expanduser().resolve())
+    for meta_path in sorted(CURSOR_CHATS.glob("*/*/meta.json"), reverse=True):
+        try:
+            meta = json.loads(meta_path.read_text(errors="ignore") or "{}")
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(meta.get("cwd") or "") != target:
+            continue
+        if started_ts is not None:
+            stamp = int((meta.get("updatedAtMs") or meta.get("createdAtMs") or 0) / 1000)
+            if stamp and abs(stamp - started_ts) > window_s:
+                continue
+        store = meta_path.parent / "store.db"
+        if not store.exists():
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
+            try:
+                rows = conn.execute("SELECT data FROM blobs").fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            continue
+        for (blob,) in rows:
+            text = blob.decode("utf-8", "ignore") if isinstance(blob, (bytes, bytearray)) else str(blob)
+            found = re.search(r'"modelName"\s*:\s*"([^"]+)"', text)
+            if found and VENDOR_MODEL_RE.fullmatch(found.group(1)):
+                return found.group(1)
+    return None
+
+
+def _vibe_model_for(workspace: str, started_ts: int | None, window_s: int) -> str | None:
+    """Model recorded in vibe's own session meta for the session that ran in `workspace`.
+
+    `environment.working_directory` is the join and `config.active_model` is the model the CLI
+    itself had active for that session -- read from vibe's record of the run, not from our request.
+    """
+    target = str(Path(workspace).expanduser().resolve())
+    for meta_path in sorted(VIBE_SESSIONS.glob("*/meta.json"), reverse=True):
+        try:
+            meta = json.loads(meta_path.read_text(errors="ignore") or "{}")
+        except (OSError, json.JSONDecodeError):
+            continue
+        env = meta.get("environment") or {}
+        if str(env.get("working_directory") or "") != target:
+            continue
+        if started_ts is not None:
+            stamp = _iso_to_epoch(meta.get("start_time"))
+            if stamp and abs(stamp - started_ts) > window_s:
+                continue
+        model = str(((meta.get("config") or {}).get("active_model") or "")).strip()
+        if model and VENDOR_MODEL_RE.fullmatch(model):
+            return model
+    return None
+
+
+def _agy_model_for(workspace: str, started_ts: int | None, window_s: int) -> str | None:
+    """Model that actually served an agy conversation in `workspace`.
+
+    THE SEAT WHERE THIS MATTERS MOST. agy is a multi-provider router: a real conversation was served
+    by `claude-sonnet-4-6` while the profile requests `gemini-3.1-pro-high`. `conversation_summaries`
+    maps `workspace_uris` to a `conversation_id`, and that id is the brain directory holding the
+    transcript which names the model.
+    """
+    target = str(Path(workspace).expanduser().resolve())
+    index = AGY_HOME / "conversation_summaries.db"
+    if not index.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT conversation_id, workspace_uris, last_modified_time "
+                "FROM conversation_summaries ORDER BY last_modified_time DESC"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    for conversation_id, uris, modified in rows:
+        if target not in str(uris or ""):
+            continue
+        if started_ts is not None and modified:
+            # last_modified_time is microseconds in this store; normalise defensively.
+            stamp = int(modified)
+            while stamp > 10_000_000_000:
+                stamp //= 1000
+            if stamp and abs(stamp - started_ts) > window_s:
+                continue
+        logs = AGY_HOME / "brain" / str(conversation_id) / ".system_generated" / "logs"
+        for name in ("transcript_full.jsonl", "transcript.jsonl"):
+            model = _first_real_model(
+                VENDOR_MODEL_RE.findall(_read_head(logs / name))
+            )
+            if model:
+                return model
+    return None
+
+
+def _read_head(path: Path, limit_bytes: int = 4_000_000) -> str:
+    try:
+        with path.open("r", errors="ignore") as handle:
+            return handle.read(limit_bytes)
+    except OSError:
+        return ""
+
+
+def _iso_to_epoch(value: Any) -> int | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        from datetime import datetime
+
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except (ValueError, TypeError):
+        return None
+
+
 def cli_reported_model(
     agent: str,
     workspace: str | Path | None,
@@ -707,6 +881,15 @@ def cli_reported_model(
         except (OSError, json.JSONDecodeError):
             version = None
         return {"model": model, "cli_version": version, "source": str(path), "reason": None}
+    if agent in ("cursor", "vibe", "gemini"):
+        reader = {
+            "cursor": _cursor_model_for, "vibe": _vibe_model_for, "gemini": _agy_model_for,
+        }[agent]
+        model = reader(str(workspace), started_ts, window_s)
+        if not model:
+            return {**blank, "reason": f"no_{agent}_session_matched_workspace"}
+        return {"model": model, "cli_version": None, "source": f"{agent}-session-store",
+                "reason": None}
     if agent == "claude":
         directory = _claude_project_dir(workspace)
         if not directory.is_dir():
