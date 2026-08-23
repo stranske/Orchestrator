@@ -47,6 +47,14 @@ HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lan
   missing thing named — see `env_prereq.py` — and the floor file caps how many such skips are
   allowed, so quietly checking less is a red. Every skip and its reason is printed, so a green run
   always states what it did not check. On a machine with all prerequisites nothing skips at all.
+- **The remote Gate checks two of four python-ci legs, and says so.** `pr-00-gate.yml` calls the
+  fleet's shared Python CI. Ruff lint, Black format and the pytest matrix are ON and green;
+  `typecheck-mypy` and `coverage` are OFF, each annotated at the single place the toggles are
+  computed with its BLOCKING and its DRAINABLE quantity — 604 mypy errors, drainable 0 per PR, and
+  one coverage startup error that no change inside this repo can remove. `ruff.toml` pins the rule
+  set so the Gate and Autofix apply the same one; before that they disagreed and Autofix rewrote the
+  tree on every Gate failure. Recorded baseline, measurement commands and per-rule drains:
+  `docs/CI_LINT_BASELINE.md`, regenerated with `python3 scripts/ci_lint_baseline.py`.
 - **Activation is evidence-backed.** `features.py` describes reusable code maturity;
   `capabilities.py` is the activation authority. An `active` declaration must prove its matcher,
   invocation, artifact consumer, outcome sink, expiry, kill switch, and rollback. Each active tick
@@ -144,6 +152,50 @@ safety switch, not dead code.
   projection keeps identity and verdict fields only — `overdue`'s `silent_days` rises daily on its
   own, and hashing a row whole would score the monitor "useful" on every run it will ever make.
   Kill switch: `ORCH_TICK_EVIDENCE_DISABLED=1`, or `ORCH_DISABLE_STEPS=tick-capability-evidence`.
+- **A usefulness verdict carries its PROVENANCE, and the posterior is weighted by it**
+  (`capability_propensity.VERDICT_PROVENANCE`, 2026-08-23). The first real corpus was 12 verdicts,
+  11 useful — every one **self-assessed by the agent that chose to use the capability**, from three
+  audits by the same model under near-identical instructions. Selection bias on top of correlated
+  arms, which `CLAUDE.md` §2 forbids counting as independent evidence. So a verdict is classified
+  `outcome_corroborated` / `defect_found` (1.0, and **refused** without `corroboration` naming the
+  outcome), `machine_observed` (0.6 — the tick's code-computed finding-set diff) or `self_reported`
+  (0.25, the honest default for any unlabelled row); verdicts are grouped by
+  `(judge arm, provenance)` and each group totals 1.0 however many it holds, reusing the same
+  reciprocal `relearn_quality` applies to research arms via
+  `research_subjects.reciprocal_evidence_weights`. Down-weighted, never banned — self-assessment is
+  the only signal most capabilities have. Every surface states the mix: `propensity()` and `rank()`
+  hand the caller the provenance mix, independent-arm count and self-reported share beside the
+  number, and the report headline now reads *12 verdicts, 12 self_reported, 0 outcome-derived*, with
+  the three capabilities that had shown 0.800 showing 0.556.
+- **The repair channel — the loop's third action** (`capability_propensity.propose_repair`,
+  `record_repair`, 2026-08-23). Promote and demote were the only two actions, so the loop could not
+  represent *"this capability is worth having and is broken"* — and demoting such a capability
+  silences the thing that should be fixed. Live case: `repo-playbook` at one useful and one
+  not-useful verdict, where the audit documented that its useful content is gated behind
+  `task_type: implement/testgen/mechanical`, so a `review` consult gets 308 characters with one
+  factually wrong clause. Fed by `not_useful` verdicts **with their evidence carried forward** (a
+  proposal without the words is a flag) and by the declines whose kind indicates a defect —
+  `repairable` is a second property of `DECLINE_KINDS`, declared once beside `demotable`:
+  `wrong_match` and `precondition_unmet` yes, `no_landing_zone` explicitly no (nobody's fault, the
+  capability is working), `scope_too_small` no (its fix *is* the demotion path). `precondition_unmet`
+  is the pair that proves the two properties are independent: not demotable, so before this it had no
+  action at all. **Report-only, never applied, and it queues nothing for anyone** — 13 rows in a
+  report the cadence step already writes, 0 minutes/week. The drain is `record_repair` (an action,
+  not the calendar), and every proposal prints its measuring, blocking and drainable counts together.
+- **A defect found is recordable, and the finder may be a capability OR a surface**
+  (`capability_propensity.record_find`, `binding_quality`, 2026-08-23). Instrumented work found seven
+  defects in this system's own code; two were attributable to a capability and recorded, and the
+  other five were found by the **process** — an audit noticing that a suppressed surface still
+  offered capabilities, an agent finding a branch of this module that recorded nothing — so they had
+  no capability to attribute to and became PRs and prose. A capability-attributed find now feeds that
+  capability's usefulness at `defect_found` provenance (an outcome, not an opinion, with the artifact
+  as its corroboration); a surface-attributed find feeds **binding quality**, which had nowhere to
+  live. No new store and no new event type: a find rides a `match` event tagged
+  `source=capability_find` with a `find:` ref rather than an `advice:` one, so `experiments()` /
+  `usefulness()` / `propensity()` cannot see it — structurally, not by convention. `defect` and
+  `artifact` are both required (a claimed find with no artifact is worth nothing), and the
+  correlated-arm discount is the real guard: ten artifact-backed finds from one judge arm are still
+  one observation, so volume cannot inflate a capability and only an independent arm moves it.
 - **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
   the code path that would produce an outcome (Thompson never chooses while the mode is
   epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label
@@ -300,10 +352,12 @@ safety switch, not dead code.
 ## Governing docs
 `ORCHESTRATOR.md` (role/philosophy) · `ARCHITECTURE.md` (data flow) · `FEEDBACK_LOOP.md` (learning
 loop) · `EVAL_AND_TESTING.md` (selftest/gate regime) · `PLANNING.md` (roadmap) ·
-`IMPROVEMENT_BACKLOG.md` (numbered items + status log) · `CLAUDE.md` (agent rules) ·
+`improvement_log.py` (the machine-local numbered items + status log; `IMPROVEMENT_BACKLOG.md` in the
+tree is a pointer to it) · `CLAUDE.md` (agent rules) ·
 **`ADDING_CAPABILITIES.md`** (the enforced procedure for adding or reviving a capability, and the
 nine failure modes it exists to stop).
 Durable audit history: `Code/Audits/Orchestrator/`.
+Remote CI: `docs/CI_LINT_BASELINE.md` (what the Gate checks, what is deferred, and what would clear each deferral).
 
 ## Adding a capability (enforced)
 

@@ -391,10 +391,15 @@ DEADLINE_RE = re.compile(
     r"([A-Z][A-Z_]*(?:UNTIL|DEADLINE|EXPIRES?)[A-Z_]*)[^\n]{0,60}?" r"(20\d\d-\d\d-\d\d)"
 )
 SCAN_SUFFIXES = (".py", ".sh", ".md")
-# The backlog narrates history and cites closed records; this module necessarily NAMES the records
-# that were never written, because documenting them is the whole point. Both would otherwise report
-# themselves forever, and a check that cries wolf about itself gets muted.
-SKIP_NAMES = {"IMPROVEMENT_BACKLOG.md", "capability_admission.py", "CAPABILITY_USEFULNESS.md"}
+# This module necessarily NAMES the records that were never written, because documenting them is the
+# whole point; the usefulness log likewise narrates history and cites closed records. Both would
+# otherwise report themselves forever, and a check that cries wolf about itself gets muted.
+#
+# `IMPROVEMENT_BACKLOG.md` was the third entry and is deliberately GONE from this set: the file that
+# narrated history now lives outside the tree (`improvement_log.py`), and what remains at that path
+# is a short pointer with nothing to exempt. A stale allowlist entry is an incident record for a
+# condition that no longer exists, and it would silence the scan over a file this gate should read.
+SKIP_NAMES = {"capability_admission.py", "CAPABILITY_USEFULNESS.md"}
 
 
 def _now() -> int:
@@ -689,7 +694,6 @@ def _selftest() -> None:
 
     # COMMITMENTS: the real historical failure must be detected, not hypothetically detectable.
     com = commitments()
-    cited = {d["record"] for d in com["dangling_citations"]}
     assert isinstance(com["clean"], bool)
     # orchestrate.sh cites the range-lane review record that was never written. If someone fixes
     # that line, this assertion should be updated — but it must never be quietly dropped, so the

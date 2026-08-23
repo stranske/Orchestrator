@@ -101,8 +101,8 @@ def _labels(obj: dict) -> list[str]:
 
 
 def classify(labels: list[str]) -> str:
-    low = {l.strip().lower() for l in labels}
-    normalized = low | {l.split(":", 1)[1].strip() for l in low if ":" in l}
+    low = {lab.strip().lower() for lab in labels}
+    normalized = low | {lab.split(":", 1)[1].strip() for lab in low if ":" in lab}
     if normalized & CROSS_REPO_LABELS:
         return "cross_repo"
     if normalized & EPIC_LABELS:
@@ -119,11 +119,11 @@ def classify(labels: list[str]) -> str:
 
 
 def _is_ready(labels: list[str]) -> bool:
-    return any(l.strip().lower() in {r.lower() for r in READY_LABELS} for l in labels)
+    return any(lab.strip().lower() in {r.lower() for r in READY_LABELS} for lab in labels)
 
 
 def _has_agent_label(labels: list[str]) -> bool:
-    return any(l.strip().lower().startswith("agent:") for l in labels)
+    return any(lab.strip().lower().startswith("agent:") for lab in labels)
 
 
 def _pr_issue_refs(repo: str, pr: dict) -> set[int]:

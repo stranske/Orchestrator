@@ -527,6 +527,21 @@ if _cadence_due capability-propensity && _attempt_ok capability-propensity; then
     else
       echo "    evidence: ${1} of ${2} capabilities; ${3} experiments, ${4} resolved"
     fi
+    # THE PROVENANCE MIX, never printed apart from the rate it qualifies. "11 of 12 useful" read as
+    # a measurement of usefulness for as long as nothing said all 12 were self-assessed by the agent
+    # that chose the capability, from one model under near-identical instructions.
+    _prov=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("verdict_count",0),d.get("verdicts_outcome_derived",0),d.get("capabilities_with_multiple_judge_arms",0))'               "$STAMP_DIR/capability-propensity.json" 2>/dev/null || echo "? ? ?")
+    set -- $_prov
+    echo "    verdicts: ${1:-?} (${2:-?} outcome-derived, ${3:-?} capabilities with >1 judge arm) — a self-reported-only mix is an opinion mix, not a measurement"
+    # THE THIRD ACTION. Promote and demote cannot say "worth having and BROKEN", so a capability
+    # that should be fixed could only be silenced. REPORT-ONLY: nothing is applied and nothing is
+    # queued for anyone. Both quantities, so "0 proposals" cannot read as patience: the drainable
+    # count (repairs recorded) prints beside the blocking one.
+    _rep=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("repair_proposal_count",0),d.get("repair_proposals_worth_having",0),d.get("repairs_recorded",0),d.get("find_count",0))'              "$STAMP_DIR/capability-propensity.json" 2>/dev/null || echo "? ? ? ?")
+    set -- $_rep
+    if [[ "${1:-0}" != "0" || "${4:-0}" != "0" ]]; then
+      echo "    repair proposals: ${1} (${2} worth having and broken), repairs recorded ${3}; defect finds ${4} — report only, see $STAMP_DIR/capability-propensity.json"
+    fi
     # DETECTION half of the same loop: which surfaces did a capability's work by hand while never
     # selecting it. REPORT-ONLY here on purpose -- `--apply` exists and is deliberately not passed,
     # the same way feature_scan is wired, because a promotion widens a bound set and widening the

@@ -263,6 +263,155 @@ keepalive / orchestrator_local / orchestrator_remote), so run history says a cap
 OVERALL and cannot say which surface passed it over. That is why signal 1 exists and why a promotion
 is never derived from run history alone.
 
+### A VERDICT HAS A PROVENANCE, and the number is meaningless without it
+
+Layer 2's first real corpus was **12 verdicts, 11 useful, from three audits** — and every one was
+**self-assessed by the agent that chose to use the capability**, with all three audits run by the
+same model under near-identical instructions. That is selection bias on top of correlated arms, which
+`CLAUDE.md` §2 forbids treating as independent evidence, so 11/12 is almost certainly optimistic and
+must never be presented as though it were not.
+
+So `capability_propensity.VERDICT_PROVENANCE` declares, once, where a verdict came from and what it
+may weigh, and `propensity()` **weights by it** instead of counting every verdict equally:
+
+| provenance | weight | what it is |
+|---|---|---|
+| `outcome_corroborated` | 1.0 | a **named** outcome corroborates it (survived review, issue filed, fix landed and held) |
+| `defect_found` | 1.0 | it surfaced a defect and the record names the artifact proving it |
+| `machine_observed` | 0.6 | computed by code from the capability's own artifacts (the tick's finding-set diff) — nobody's opinion |
+| `self_reported` | 0.25 | the agent that chose the capability also graded it |
+
+Four disciplines make that honest rather than decorative:
+
+1. **Outcome-derived outranks self-reported**, inheriting §2's un-gameable-label rule from route
+   weights. The two strong classes **require** `corroboration` naming the outcome and are refused
+   without it — an unnamed corroboration would make the top weight self-certifying, which is
+   green-CI-alone under a new name.
+2. **Correlated arms are represented, not assumed away.** Verdicts are grouped by
+   `(judge arm, provenance)` and each group totals **1.0** however many verdicts it holds — the same
+   reciprocal `relearn_quality` already applies to research arms, now consumed from
+   `research_subjects.reciprocal_evidence_weights` by both, so there is one scheme and not two. Three
+   same-model self-reports are worth 0.25 effective observations, not three; a verdict with **no**
+   judge identity joins the one `unattributed` arm rather than being assumed independent.
+3. **Down-weighted, never banned.** Self-assessment is the only signal most capabilities have, so
+   excluding it would empty the dataset — the gate would starve its own drain.
+4. **The reporting requirement is as load-bearing as the arithmetic.** `propensity()` returns the
+   provenance mix, the independent-arm count, the self-reported share and the raw count beside the
+   weighted one; `rank()` hands all of it to the **caller**; `report()` states the corpus mix in the
+   headline. On the live ledger that headline reads *12 verdicts, 12 self_reported, 0
+   outcome-derived, 0 capabilities with >1 judge arm* — and the three capabilities that had shown
+   0.800 now show 0.556, which is what three correlated opinions are worth.
+
+Two axes, never collapsed: `verdict_provenance` is *where it came from*; `verdict_kind` (e.g.
+`observer_output_change`) is *which question was answered*. §2 forbids averaging across the kinds, so
+a mixed-kind posterior is **flagged** on the row rather than silently blended.
+
+**The counterfactual was already there, and nothing was added for it.**
+`influence_edges.counterfactual` is the **delivery** counterfactual, keyed on `(capability, run)`,
+and `capability_effectiveness` already computes `durable_rate(accepted)` against
+`durable_rate(counterfactual)` from it — an advisory consult is not a run, so it cannot carry a
+per-verdict comparison here. This module's counterfactual is `experiments()`'s control arm: the
+candidates named for the exact same task and not triggered. `propensity()` now reports that arm
+beside the posterior and never mixes it in.
+
+### The REPAIR channel — the loop's third action
+
+Promote and demote were the only two actions, so the loop **could not represent "this capability is
+worth having and is broken."** The only available response to a broken capability was to stop
+offering it, which silences the thing that should be fixed and loses a capability worth keeping.
+
+**The live case.** `repo-playbook` sits at one useful and one not-useful verdict, and the
+Fine-Art-Archive audit documented *why*: its useful content is gated behind
+`task_type: implement/testgen/mechanical`, so a `review` consult receives 308 characters, one clause
+of which is factually wrong — it tells auditors a repository's default branch is something it is not.
+Demotion silences that. A repair proposal names it, with the words attached.
+
+`capability_propensity.propose_repair` reads two inputs:
+
+1. **`not_useful` verdicts, with their evidence carried forward.** That is the whole difference
+   between a flag and a repair: *"0.5, one bad verdict"* is a number, *"308 characters, one clause
+   factually wrong about the default branch"* is an action.
+2. **Declines whose KIND indicates a defect** — `decline_kind_repairable`: `wrong_match` (the matcher
+   may be wrong) and `precondition_unmet`. Explicitly **not** `no_landing_zone`: nobody's fault, the
+   match was correct, the capability is working; proposing a repair there asserts a defect that does
+   not exist. `scope_too_small` is also excluded, and for an arithmetic reason rather than a
+   judgement — its fix is narrowing the *declaration*, which **is** the demotion path, and one
+   decline must not argue for unbinding and rebuilding at once.
+
+**`repairable` is a second property of the kind**, declared once beside `demotable` and read by one
+lookup. They are independent questions, and the pair that proves it is `precondition_unmet`: **not
+demotable, is repairable.** Before this channel existed it therefore had *no action at all* — 11 of
+them on the live ledger, recorded and inert forever.
+
+**Report-only, and it queues nothing for anyone** (`CLAUDE.md` §3). Proposals are a field in a report
+the cadence step already writes: nothing waits on a human, nothing expires against a human, and no
+human action can fall behind. Attention cost: 13 rows in an existing report, zero actions required,
+expiring on their own with `WINDOW_DAYS` — **0 minutes/week**.
+
+#### Latched-gate answers (a proposal set is a gate, so it owes all three)
+
+1. **What decrements it?** `record_repair` — a named mechanism writing a durable marker with the fix
+   and its artifact, after which a proposal counts only defect evidence **newer than that marker**.
+   Not "time passes", not "someone notices". Window expiry is a *second* drain on the same
+   `WINDOW_DAYS` constant. *The first draft had no marker at all: defect evidence stayed in the
+   90-day window, so fixing the capability did not clear its proposal for three months. That is the
+   latch, and asking question 1 — not testing — is what caught it.*
+2. **Can that mechanism run while the gate is non-empty?** Yes, unconditionally. `record_repair`
+   requires nothing a standing proposal forbids, and a proposal is report-only on both sides: it
+   never withholds the capability from `rank()`, never lowers its propensity, never blocks a consult.
+   The capability keeps being offered and keeps earning verdicts while the proposal stands.
+3. **Does the measuring window equal the draining window?** Yes, by construction — `WINDOW_DAYS`,
+   the one constant `usefulness()`, `propensity()` and `surface_decline_counts()` already share,
+   bounds both the defect evidence counted and the repair markers that clear it.
+
+Runtime rule: every proposal carries `defect_evidence_total` (measuring),
+`defect_evidence_since_repair` (blocking) and `repairs_recorded` (drainable), and `report()` carries
+`repairs_recorded` **even when the proposal list is empty** — an empty list cannot say whether
+anything is accumulating, and "0 proposals, 0 repairs ever recorded" reads nothing like "0 proposals,
+6 repairs recorded".
+
+And the tie-break **fails toward motion**: ledger timestamps are second-granular, so the freshness
+test is `>=`, not `>`. A defect recorded in the same second as a repair is unorderable and must
+*re-open* the proposal (one report line) rather than vanish (the finding).
+
+### A FIND has a finder, and the finder may be a capability OR a surface
+
+The strongest signal this loop produced on 2026-08-23 was not in the dataset. Instrumented work
+found **seven defects in the system's own code** that its author had not found. Two were attributable
+to a capability and *were* recorded — `adversarial-review` supplying citations that became the
+strongest facts in two issue bodies, `deliberate-break-verifier` catching an auditor's own
+methodological error. The other **five were found by the process**: an audit noticing that a
+suppressed surface still offered capabilities; an agent reading `capability_propensity` and finding a
+branch that recorded nothing. Those had no capability to attribute to, so they became PRs and prose
+and taught the loop nothing at all.
+
+`capability_propensity.record_find` closes that, with the finder as a first-class field:
+
+| finder | feeds | how |
+|---|---|---|
+| a **capability** (with the `experiment_id` it was offered under) | that capability's **usefulness** | a verdict at `defect_found` provenance, weight 1.0, whose `corroboration` is the artifact — a defect found is an outcome, not an opinion |
+| a **surface** | **binding quality** | `binding_quality(surface)` — offers, triggers, declines *and finds* for that surface. There was nowhere to put this before |
+
+**No new store and no new event type.** A find rides on a `match` event tagged
+`source=capability_find`, exactly as a decline and a binding promotion already do. Its ref is
+`find:<digest>` and **not** `advice:<digest>`, so `_experiment_id()` returns None for it and
+`experiments()` / `usefulness()` / `propensity()` cannot see it at all. That separation is
+**structural, not conventional**: no metadata a caller could set would make a find record reach a
+posterior. The only path from a find to the posterior is `record_usefulness` at `defect_found`
+provenance.
+
+**And it must not become a way to inflate a capability's standing.** `defect` and `artifact` are both
+required and refused when blank — a *claimed* find with no artifact is worth nothing, the same rule
+that refuses an unevidenced verdict and an unexplained decline. The binding guard, though, is the
+correlated-arm discount from the section above: **ten artifact-backed finds from one judge arm total
+one observation**, so the number does not move past 0.667 however many are recorded; only an
+independent arm moves it. Measured on the break: removing the discount takes ten same-arm finds from
+0.667 to 0.917, which is exactly the inflation this is built not to allow.
+
+`binding_quality()` is **report-only**. `propose_bindings` and `propose_demotions` keep their
+existing external evidence rules untouched — a number about a *surface* must not become selection
+pressure on a *capability*, which is the ratchet the detection loop already refuses.
+
 ### Where layer 2's evidence comes from
 
 Layer 2 needs resolved trials, and until 2026-08-22 nothing produced any: `advise()` recorded the
@@ -339,8 +488,9 @@ declaration. And `frontend-verifier` — declined on two frontend-less repos, th
 second-strongest finding of an audit on a repo that *does* have a display surface — is the same
 lesson from the other side: two negatives are not a verdict on a binding.
 
-So `demotable` is a property of the **kind**, declared once in `DECLINE_KINDS` and read nowhere
-else. `wrong_match` and `scope_too_small` may demote; `precondition_unmet`, `no_landing_zone`,
+So `demotable` is a property of the **kind**, declared once in `DECLINE_KINDS` and read by exactly
+one lookup — as is `repairable`, its independent twin (see the repair channel below).
+`wrong_match` and `scope_too_small` may demote; `precondition_unmet`, `no_landing_zone`,
 `gated_off`, `deferred` and the `unspecified` default may not — they are counted and reported, and
 cannot clear the floor. `precondition_unmet` is the load-bearing one: the correct response to a
 capability whose condition does not hold here is to **evaluate the condition, not to weaken the

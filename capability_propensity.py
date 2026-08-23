@@ -103,9 +103,67 @@ NO NEW STORE, AGAIN. `capabilities.EVENT_FIELDS` already has `match`; `record_pr
 carries a non-match fact on it distinguished by `metadata.source`. A decline follows that precedent
 rather than adding an eighth event type or a second table.
 
+AND A VERDICT HAS A PROVENANCE, because "11 of 12 useful" was not a measurement of usefulness
+(2026-08-23). The entire corpus was 12 verdicts from three audits, every one SELF-ASSESSED by the
+same agent that chose to use the capability, and all three audits were the same model under
+near-identical instructions -- selection bias on top of correlated arms, which §2 forbids treating
+as independent evidence. So `VERDICT_PROVENANCE` classifies where a verdict came from,
+`propensity()` weights BY it (an outcome-corroborated verdict 1.0, a self-report 0.25), correlated
+verdicts from one judge arm total 1.0 however many there are (the same reciprocal
+`relearn_quality` already applies to research arms, via
+`research_subjects.reciprocal_evidence_weights`), and every report states the MIX. Down-weighted,
+not banned: self-assessment is the only signal most capabilities have, so excluding it would empty
+the dataset. The reporting requirement is as important as the arithmetic -- "0.800" must never again
+be readable as independent outcome evidence when it rests on three correlated self-reports.
+
+WHAT THE COUNTERFACTUAL IS, and where it already lives (checked before adding anything).
+`influence_edges.counterfactual` is populated on every edge and is the DELIVERY counterfactual --
+the capability's contribution was considered and rejected on a run -- and `capability_effectiveness`
+already computes `durable_rate(accepted)` against `durable_rate(counterfactual)` from it. It is
+keyed on `(capability, run)` in the Brain, and an advisory consult is not a run, so it cannot carry a
+per-verdict comparison here. THIS module's counterfactual already exists too: `experiments()`
+records, per trial, the candidates named for that exact task and NOT triggered
+(`not_triggered` / `not_triggered_silently`), which is the same task, same context, divergent
+treatment. `propensity()` now reports that arm beside the posterior. Nothing new was added for it.
+
+AND THERE IS A THIRD ACTION, because "worth having AND broken" was unrepresentable (2026-08-23).
+The loop had exactly promote and demote, so the only response to a broken capability was to stop
+offering it -- which silences the thing that should be fixed. The live case: `repo-playbook` sits at
+one useful and one not-useful verdict, and the Fine-Art-Archive audit documented WHY -- its useful
+content is gated behind `task_type: implement/testgen/mechanical`, so a `review` consult receives 308
+characters, one clause of which is factually wrong (it tells auditors a repo's default branch is
+something it is not). `propose_repair` reads `not_useful` verdicts WITH THEIR EVIDENCE CARRIED
+FORWARD, plus the declines whose KIND indicates a DEFECT (`decline_kind_repairable`: `wrong_match`
+and `precondition_unmet`, explicitly NOT `no_landing_zone`, which is nobody's fault and whose
+capability is working correctly). `repairable` is a SECOND PROPERTY OF THE KIND, declared once beside
+`demotable` and read by one lookup -- and the pair that proves they must be separate is
+`precondition_unmet`, which is NOT demotable and IS repairable, so before this it was recorded and
+inert forever. Report-only, never applied, and it queues nothing for anyone. The drain is
+`record_repair`, an ACTION, not the calendar.
+
+AND A DEFECT FOUND IS THE STRONGEST SIGNAL THERE IS, so it must be recordable (2026-08-23).
+Instrumented work found SEVEN defects in this system's own code that its author had not. Two were
+attributable to a capability and were recorded; the other FIVE were found by the PROCESS -- an audit
+noticing that a suppressed surface still offered capabilities, an agent reading this module and
+finding a branch that recorded nothing -- so they had no capability to attribute to, became PRs and
+prose, and taught the loop nothing. `record_find` accepts a finder that is EITHER a capability (which
+feeds that capability's usefulness at `defect_found` provenance -- outcome evidence, not an opinion)
+OR a surface (which feeds BINDING QUALITY, the thing that had nowhere to go: "consulting at
+repo-audit:phase-1 surfaced a defect in the advisor itself" is evidence about the surface). `defect`
+and `artifact` are both REQUIRED and refused when blank -- a CLAIMED find with no artifact is worth
+nothing -- and the correlated-arm discount caps it, so ten artifact-backed finds from one arm are
+still one observation and only an independent arm moves the number.
+
     python3 capability_propensity.py report
     python3 capability_propensity.py experiments
     python3 capability_propensity.py decline --capability X --experiment advice:abc --reason "..."
+    python3 capability_propensity.py useful --capability X --experiment advice:abc \
+        --evidence "..." --provenance outcome_corroborated --judge codex --corroboration "..."
+    python3 capability_propensity.py find --defect "..." --artifact "issue #77" \
+        --surface repo-audit:phase-1 [--capability X --experiment advice:abc]
+    python3 capability_propensity.py binding-quality --surface repo-audit:phase-1
+    python3 capability_propensity.py repair
+    python3 capability_propensity.py record-repair --capability X --fix "..." --artifact "PR #1"
     python3 capability_propensity.py --json report
     python3 capability_propensity.py --selftest
 """
@@ -146,19 +204,153 @@ DECLINE_SOURCE = "capability_decline"
 DECLINE_REASON_KEY = "reason"
 DECLINE_KIND_KEY = "decline_kind"
 
+# --------------------------------------------------------------------------- verdict provenance
+# WHERE A VERDICT CAME FROM, because "11 of 12 useful" was not a measurement of usefulness.
+#
+# MEASURED, NOT THEORISED (2026-08-23). The whole corpus was 12 verdicts, 11 useful, from three
+# audits. EVERY ONE was self-assessed by the same agent that chose to use the capability, and all
+# three audits were the same model under near-identical instructions. That is selection bias on top
+# of correlated arms, and `CLAUDE.md` §2 forbids treating correlated arms as independent evidence.
+# The 11/12 rate is almost certainly optimistic; printing it as though it rested on independent
+# outcome evidence is the failure this axis exists to prevent.
+#
+# THE RULE THIS INHERITS. §2 already mandates an UN-GAMEABLE label for route weights — durability,
+# verified success, never green-CI-alone. Capability usefulness inherits it: a verdict corroborated
+# by an outcome (the finding survived adversarial review, the issue was filed, the defect was real)
+# OUTRANKS an opinion. So provenance is recorded on the row and `propensity()` weights BY it instead
+# of counting every verdict equally.
+#
+# WEIGHT, NOT EXCLUSION. Self-assessment is the only signal that exists for most capabilities today,
+# so banning it would empty the dataset — the gate would starve its own drain. It is discounted and
+# still counted.
+#
+# TWO AXES, NEVER COLLAPSED. `verdict_provenance` is WHERE the verdict came from; `verdict_kind`
+# (e.g. `observer_output_change`) is WHICH QUESTION was answered. §2 forbids averaging across the
+# two KINDS, so the kinds are reported per capability and a mixed-kind posterior is FLAGGED rather
+# than silently blended. This axis does not fix that; it must not hide it either.
+VERDICT_PROVENANCE_KEY = "verdict_provenance"
+VERDICT_JUDGE_KEY = "verdict_judge"
+VERDICT_CORROBORATION_KEY = "corroboration"
+VERDICT_KIND_KEY = "verdict_kind"
+
+VERDICT_PROVENANCE: dict[str, dict] = {
+    # An OUTCOME corroborates the verdict: the finding survived adversarial review, the issue was
+    # filed, the fix landed and held. The caller must NAME that outcome (`corroboration`) or the
+    # class is refused — otherwise the strongest weight in the table would be self-certifying,
+    # which is the green-CI-alone label wearing a new name.
+    "outcome_corroborated": {
+        "weight": 1.0,
+        "requires_corroboration": True,
+        "self_assessed": False,
+        "means": "a named outcome (survived review, issue filed, fix landed and held) "
+        "corroborates the verdict",
+    },
+    # A DEFECT WAS FOUND, with an artifact naming what was defective. A defect found is an outcome,
+    # not an opinion: the artifact is checkable by someone who was not there. Written only by
+    # `record_find`, which refuses an unevidenced claim.
+    "defect_found": {
+        "weight": 1.0,
+        "requires_corroboration": True,
+        "self_assessed": False,
+        "means": "the capability surfaced a defect and the record names the artifact proving it",
+    },
+    # COMPUTED BY CODE from the capability's own artifacts — the tick's finding-set diff. Nobody's
+    # opinion, but the capability's output compared against itself rather than against a delivery,
+    # so it is worth less than a corroborated outcome and more than a self-report.
+    "machine_observed": {
+        "weight": 0.6,
+        "requires_corroboration": False,
+        "self_assessed": False,
+        "means": "computed by code from the capability's own artifacts (a finding-set diff), "
+        "not asserted by the agent that used it",
+    },
+    # THE DEFAULT, and the honest reading of every pre-provenance row: the agent that chose to use
+    # the capability also graded it. Kept, discounted, and never presented as measurement.
+    "self_reported": {
+        "weight": 0.25,
+        "requires_corroboration": False,
+        "self_assessed": True,
+        "means": "self-assessed by the agent that chose to use the capability — selection bias, "
+        "and the only signal most capabilities have today",
+    },
+}
+PROVENANCE_DEFAULT = "self_reported"
+# THE UNATTRIBUTED ARM. A verdict with no judge identity is not "some unknown independent judge" —
+# treating it that way is exactly the assumption that turned three runs of one model into 11
+# independent successes. All unattributed verdicts of one provenance about one capability are ONE
+# arm, so they total 1.0 no matter how many there are.
+UNATTRIBUTED_JUDGE = "unattributed"
+
+
+def provenance_weight(provenance: str) -> float:
+    """How much a verdict of this provenance may weigh. One lookup, so it cannot drift."""
+    row = VERDICT_PROVENANCE.get(str(provenance)) or VERDICT_PROVENANCE[PROVENANCE_DEFAULT]
+    return float(row["weight"])
+
+
+def provenance_self_assessed(provenance: str) -> bool:
+    """Whether this provenance is the capability's user grading their own choice."""
+    row = VERDICT_PROVENANCE.get(str(provenance)) or VERDICT_PROVENANCE[PROVENANCE_DEFAULT]
+    return bool(row["self_assessed"])
+
+
+def verdict_provenance(metadata: dict | None) -> str:
+    """The provenance of one outcome event. DERIVED, so pre-provenance rows classify honestly.
+
+    Precedence: an explicit `verdict_provenance`, then the machine-computed tick verdict (which
+    already stamped `verdict_kind=observer_output_change` before this axis existed), then
+    `self_reported`. Defaulting to the WEAKEST class is deliberate: an unlabelled verdict is one
+    whose provenance nobody recorded, and assuming the strongest would recreate the 11/12 reading
+    this axis exists to correct.
+    """
+    meta = metadata or {}
+    explicit = str(meta.get(VERDICT_PROVENANCE_KEY) or "").strip()
+    if explicit in VERDICT_PROVENANCE:
+        return explicit
+    if str(meta.get(VERDICT_KIND_KEY) or "").strip() == TICK_VERDICT_KIND:
+        return "machine_observed"
+    return PROVENANCE_DEFAULT
+
+
+def verdict_judge(metadata: dict | None) -> str:
+    """Which arm judged. Unknown is ONE arm, never many — see `UNATTRIBUTED_JUDGE`."""
+    return str((metadata or {}).get(VERDICT_JUDGE_KEY) or "").strip() or UNATTRIBUTED_JUDGE
+
+
 # THE KIND OF DECLINE, because the kinds imply OPPOSITE corrections and one undifferentiated
 # "declined" column would license the wrong one. Measured, not theorised: a third audit round on
 # 2026-08-23 declined 22 offers across six reason classes, and only some are the binding's fault.
-# `demotable` is therefore a property OF THE KIND, declared here once, and read by nothing else.
+#
+# TWO PROPERTIES OF THE KIND, each declared here once and read by exactly one lookup:
+#
+#   `demotable`  — may this decline weaken the BINDING? (the drain on the binding table)
+#   `repairable` — does this decline indicate a DEFECT IN THE CAPABILITY? (the repair channel)
+#
+# They are deliberately NOT the same question, and neither implies the other. The loop had exactly
+# two actions, promote and demote, so it could not represent "this capability is worth having and is
+# BROKEN" — and demoting such a capability silences the thing that should be fixed.
+# `precondition_unmet` is the case that proves the pair must be separate: it is NOT demotable (the
+# fix is to evaluate the condition, not weaken the binding) and IS repairable (an undeclared or
+# unevaluated precondition is a defect in the capability), so before `repairable` existed it was
+# recorded and INERT FOREVER — 11 of them on the live ledger with no channel that could act on any.
 DECLINE_KINDS: dict[str, dict] = {
-    # It does not fit this work. The binding or the matcher is wrong.
-    "wrong_match": {"demotable": True, "fix": "the matcher or the binding"},
+    # It does not fit this work. The binding or the matcher is wrong -- and "the matcher is wrong" is
+    # a defect in the capability, so this is the one kind that is BOTH.
+    "wrong_match": {
+        "demotable": True,
+        "repairable": True,
+        "fix": "the matcher or the binding",
+    },
     # A CORRECT match declared too broadly. `offload` was offered at 9 of 12 surfaces in one run and
     # declined at all 9, always structurally, because a one-subsystem audit has no read big enough
     # to pay for a dispatch. Narrowing the declaration IS a demotion, so this counts -- and the
     # proposal carries the fix text, because "add a precondition" is the other valid answer.
+    # NOT REPAIRABLE, and the reason is arithmetic rather than taste: the fix is to narrow the
+    # DECLARATION, which IS the demotion path above. Routing one decline into two opposite actions
+    # would double-count it and let the same evidence argue for unbinding and for rebuilding at once.
     "scope_too_small": {
         "demotable": True,
+        "repairable": False,
         "fix": "a precondition or a narrower declaration, not a lower rank",
     },
     # A CORRECT match whose declared PRECONDITION does not hold here: the instrument is aimed at
@@ -169,28 +361,52 @@ DECLINE_KINDS: dict[str, dict] = {
     # produced the second-strongest finding of that audit -- one the code-reading path had missed.
     # Down-weighting it on the two negatives alone would have cost that finding. THE FIX IS TO
     # EVALUATE THE CONDITION, NOT TO WEAKEN THE BINDING.
+    # REPAIRABLE, and this is the load-bearing pair in the table: NOT demotable, so before the
+    # repair channel existed there was no action this kind could ever produce. An undeclared or
+    # unevaluated precondition is a defect IN THE CAPABILITY -- fixable, and worth fixing precisely
+    # because the match itself was correct.
     "precondition_unmet": {
         "demotable": False,
+        "repairable": True,
         "fix": "declare and EVALUATE the capability's precondition (applies_to, "
         "an observable surface); the binding is right where it holds",
     },
     # A CORRECT match the deliverable shape made impossible: `testgen-lane` matched correctly three
     # times in a read-only audit with no commit target. THE FIX IS NOTHING, so this must never
     # demote -- down-weighting here would punish a capability for being right.
+    # NEITHER demotable NOR repairable. NOBODY'S FAULT: the match was correct and the capability
+    # is working correctly; there was simply nowhere to put the result. Proposing a repair here
+    # would be as wrong as demoting -- it asserts a defect that does not exist.
     "no_landing_zone": {
         "demotable": False,
+        "repairable": False,
         "fix": "nothing — the match was correct and the deliverable had nowhere to "
         "put the result",
     },
     # Correct match held behind a deliberate default-OFF switch or a shadow status. The gate is the
     # subject, and it moves on its own evidence, not on this.
-    "gated_off": {"demotable": False, "fix": "the capability's own gate, on its own evidence"},
-    # Wanted and not affordable this run ("the one I most regret declining").
-    "deferred": {"demotable": False, "fix": "nothing — wanted, not affordable this run"},
+    "gated_off": {
+        "demotable": False,
+        # Not a defect: the gate is the subject and it moves on its own evidence.
+        "repairable": False,
+        "fix": "the capability's own gate, on its own evidence",
+    },
+    # Wanted and not affordable this run ("the one I most regret declining"). Nothing is broken.
+    "deferred": {
+        "demotable": False,
+        "repairable": False,
+        "fix": "nothing — wanted, not affordable this run",
+    },
     # The caller did not classify it. Recorded, so offered-vs-never-considered still works, and NOT
     # demotable: an unclassified decline that could demote is precisely the wrong correction arriving
     # by default, which is the failure this vocabulary exists to prevent.
-    "unspecified": {"demotable": False, "fix": "unknown — the caller did not classify it"},
+    # ...and NOT repairable either, for the identical reason: a repair proposed by DEFAULT, from a
+    # decline nobody classified, is the wrong correction arriving unasked.
+    "unspecified": {
+        "demotable": False,
+        "repairable": False,
+        "fix": "unknown — the caller did not classify it",
+    },
 }
 DECLINE_KIND_DEFAULT = "unspecified"
 
@@ -198,6 +414,16 @@ DECLINE_KIND_DEFAULT = "unspecified"
 def decline_kind_demotable(kind: str) -> bool:
     """Whether a decline of this kind may drive a demotion. One lookup, so it cannot drift."""
     return bool((DECLINE_KINDS.get(str(kind)) or DECLINE_KINDS[DECLINE_KIND_DEFAULT])["demotable"])
+
+
+def decline_kind_repairable(kind: str) -> bool:
+    """Whether a decline of this kind indicates a DEFECT IN THE CAPABILITY. One lookup, one place.
+
+    A second property of the kind, declared once in `DECLINE_KINDS` and read only here — the same
+    discipline `demotable` follows, for the same reason: a predicate spelled out at each call site
+    drifts, and the two answers here are opposite corrections.
+    """
+    return bool((DECLINE_KINDS.get(str(kind)) or DECLINE_KINDS[DECLINE_KIND_DEFAULT])["repairable"])
 
 
 # The surface a decline (or a match) was recorded for. Attribution has to be on the EVENT: the
@@ -248,6 +474,12 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     "declined": [],
                     "decline_reasons": {},
                     "decline_kinds": {},
+                    # PER-VERDICT PROVENANCE, carried the same way the decline metadata already is.
+                    # Without it a reader can only count verdicts, and counting 3 correlated
+                    # self-reports as 3 independent observations is the defect this fixes.
+                    "verdict_provenance": {},
+                    "verdict_judges": {},
+                    "verdict_kinds": {},
                     "skills": set(),
                 },
             )
@@ -281,6 +513,14 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                 bucket = "useful" if meta.get(USEFUL_KEY) is True else "not_useful"
                 if cap_id not in trial[bucket]:
                     trial[bucket].append(cap_id)
+                # PROVENANCE travels with the verdict, or the weighting has nothing to read. The
+                # first verdict for a capability in a trial wins, matching the idempotency key that
+                # already admits at most one.
+                trial["verdict_provenance"].setdefault(cap_id, verdict_provenance(meta))
+                trial["verdict_judges"].setdefault(cap_id, verdict_judge(meta))
+                kind = str(meta.get(VERDICT_KIND_KEY) or "").strip()
+                if kind:
+                    trial["verdict_kinds"].setdefault(cap_id, kind)
     out = []
     for trial in trials.values():
         trial["skills"] = sorted(trial["skills"])
@@ -321,6 +561,15 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
 
     Every rate travels with its denominator. A bare "80% useful" over 5 trials has burned this
     project before under a different name.
+
+    AND EVERY VERDICT TRAVELS WITH ITS PROVENANCE. `usefulness_rate` is the RAW share — kept,
+    because it is what the events say — while `effective_useful` / `n_eff` are the same evidence
+    after two discounts that `CLAUDE.md` §2 requires: a provenance weight (self-assessment outranked
+    by a corroborated outcome) and the correlated-arm reciprocal from
+    `research_subjects.reciprocal_evidence_weights` (n verdicts from one judge answering one
+    question about one capability are ONE observation, not n). `propensity()` reads the weighted
+    numbers; the raw ones stay visible beside them so the discount is inspectable rather than
+    implied.
     """
     caps = capabilities.load_declared(path or capabilities.REG)
     rows: dict[str, dict] = {
@@ -333,10 +582,17 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
             "declined": 0,
             "declined_demotable": 0,
             "declines_by_kind": {},
+            # THE CONTROL ARM, per capability. Already recorded per trial by `experiments()`; it is
+            # counted here so `propensity()` can report the counterfactual beside the posterior
+            # without a second pass. Same task, same context, divergent treatment.
+            "named_not_triggered": 0,
+            "named_not_triggered_silently": 0,
             "status": cap.get("status"),
         }
         for cap_id, cap in sorted(caps.items())
     }
+    # One entry per resolved verdict: (capability, useful?, provenance, judge arm, verdict kind).
+    verdicts: dict[str, list[tuple[bool, str, str, str]]] = {cap_id: [] for cap_id in rows}
     for trial in experiments(path=path, window_days=window_days, now=now):
         for cap_id in trial["candidates"]:
             if cap_id in rows:
@@ -356,20 +612,109 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
         for cap_id in trial["declined_demotable"]:
             if cap_id in rows:
                 rows[cap_id]["declined_demotable"] += 1
+        for cap_id in trial["not_triggered"]:
+            if cap_id in rows:
+                rows[cap_id]["named_not_triggered"] += 1
+        for cap_id in trial["not_triggered_silently"]:
+            if cap_id in rows:
+                rows[cap_id]["named_not_triggered_silently"] += 1
         for key in ("useful", "not_useful"):
             for cap_id in trial[key]:
                 if cap_id in rows:
                     rows[cap_id][key] += 1
-    for row in rows.values():
+                    verdicts[cap_id].append(
+                        (
+                            key == "useful",
+                            trial["verdict_provenance"].get(cap_id, PROVENANCE_DEFAULT),
+                            trial["verdict_judges"].get(cap_id, UNATTRIBUTED_JUDGE),
+                            trial["verdict_kinds"].get(cap_id, ""),
+                        )
+                    )
+    for cap_id, row in rows.items():
         row["declines_by_kind"] = dict(sorted(row["declines_by_kind"].items()))
         resolved = row["useful"] + row["not_useful"]
         row["resolved"] = resolved
         row["trigger_rate"] = (row["triggered"] / row["candidates"]) if row["candidates"] else None
         row["usefulness_rate"] = (row["useful"] / resolved) if resolved else None
+        row.update(_weigh_verdicts(verdicts[cap_id]))
     return {
         "window_days": window_days,
         "capability_count": len(rows),
         "rows": {k: v for k, v in sorted(rows.items())},
+    }
+
+
+def _weigh_verdicts(verdicts: list[tuple[bool, str, str, str]]) -> dict:
+    """Provenance weight x correlated-arm discount, for one capability's resolved verdicts.
+
+    TWO DISCOUNTS, in this order, and neither is a second scheme:
+
+      1. PROVENANCE — `VERDICT_PROVENANCE[...]["weight"]`. An outcome-corroborated verdict weighs
+         1.0; a self-report weighs 0.25. §2's un-gameable-label rule, applied to capability
+         usefulness the way it already applies to route weights.
+      2. CORRELATION — `research_subjects.reciprocal_evidence_weights`, the SAME function
+         `relearn_quality` uses for research arms, keyed here on `(judge arm, provenance)`. Three
+         verdicts from one model answering one question about one capability total 1.0, not 3.
+         Keyed on the pair rather than the judge alone because an outcome-corroborated verdict's
+         independence rests on the NAMED OUTCOME, not on who noticed it; sharing an arm with three
+         self-reports must not discount it.
+
+    Falls back to the local reciprocal if `research_subjects` cannot be imported (it reaches the
+    Brain at module scope), because the weighting must hold on a machine with no database — but the
+    formula is the same one, not a second one.
+    """
+    if not verdicts:
+        return {
+            "effective_useful": 0.0,
+            "n_eff": 0.0,
+            "weighted_usefulness_rate": None,
+            "provenance_mix": {},
+            "judge_arms": [],
+            "independent_arms": 0,
+            "outcome_derived": 0,
+            "self_reported": 0,
+            "self_reported_share": None,
+            "verdict_kinds": {},
+            "mixed_verdict_kinds": False,
+        }
+    groups: dict[tuple[str, str], list[int]] = {}
+    for index, (_useful, prov, judge, _kind) in enumerate(verdicts):
+        groups.setdefault((judge, prov), []).append(index)
+    try:
+        import research_subjects
+
+        corr = research_subjects.reciprocal_evidence_weights(groups)
+    except Exception:  # noqa: BLE001
+        corr = {i: 1.0 / len(ix) for ix in groups.values() for i in ix}
+    eff_useful = 0.0
+    n_eff = 0.0
+    mix: dict[str, int] = {}
+    kinds: dict[str, int] = {}
+    for index, (useful, prov, _judge, kind) in enumerate(verdicts):
+        weight = provenance_weight(prov) * float(corr.get(index, 1.0))
+        n_eff += weight
+        if useful:
+            eff_useful += weight
+        mix[prov] = mix.get(prov, 0) + 1
+        label = kind or "unstated"
+        kinds[label] = kinds.get(label, 0) + 1
+    self_n = sum(n for p, n in mix.items() if provenance_self_assessed(p))
+    return {
+        "effective_useful": round(eff_useful, 4),
+        "n_eff": round(n_eff, 4),
+        "weighted_usefulness_rate": round(eff_useful / n_eff, 4) if n_eff else None,
+        "provenance_mix": dict(sorted(mix.items())),
+        # BOTH quantities: which arms spoke, and how many of them were actually distinct. "3
+        # verdicts" and "3 verdicts from 1 arm" are opposite readings.
+        "judge_arms": sorted({judge for _u, _p, judge, _k in verdicts}),
+        "independent_arms": len(groups),
+        "outcome_derived": len(verdicts) - self_n,
+        "self_reported": self_n,
+        "self_reported_share": round(self_n / len(verdicts), 4),
+        # §2 forbids AVERAGING across verdict kinds. This axis cannot unmix them, so it reports
+        # them and flags the mixture rather than letting it pass as one rate.
+        "verdict_kinds": dict(sorted(kinds.items())),
+        "mixed_verdict_kinds": len(kinds) > 1,
     }
 
 
@@ -381,13 +726,33 @@ def propensity(
     Posterior mean of a Beta(1,1)-Bernoulli over resolved outcomes, floored so evidence can always
     be acquired. `evidence_count` is the blocking quantity and `explorable` the drainable one, in
     one dict, because "0.05" alone reads as patience when it may mean deadlock.
+
+    THE POSTERIOR IS PROVENANCE-WEIGHTED, and saying so is half the point. It reads `n_eff` /
+    `effective_useful` from `usefulness()`, not the raw counts: a self-report weighs 0.25 and
+    correlated verdicts from one judge arm total 1.0 however many there are. So a capability with
+    three same-model self-reports lands NEAR THE PRIOR rather than at 1.0, and the returned
+    `provenance_mix`, `independent_arms` and `self_reported_share` say why. "0.800" must never again
+    be readable as independent outcome evidence when it rests on three correlated self-reports.
+
+    LATCHED-GATE ANSWERS for the weighting (it discounts evidence, so it owes all three in writing):
+      1. WHAT DECREMENTS IT? Recording ONE verdict from a different judge arm, or one verdict of a
+         non-self-assessed provenance — `record_usefulness(..., judge=..., provenance=...)` and
+         `record_find`. Named mechanisms, not "time passes" and not "someone notices".
+      2. CAN THE DRAIN RUN WHILE IT IS CLOSED? Yes, and the direction is favourable: the discount
+         compresses a posterior TOWARDS the 0.5 prior, never below `EXPLORATION_FLOOR`, and never
+         changes the candidate SET. A capability whose only evidence is self-reported therefore
+         stays offered — if anything more often than its raw rate would justify — so it can keep
+         earning the independent verdict that clears the discount.
+      3. SAME WINDOW BOTH WAYS? Yes: `WINDOW_DAYS`, the one constant, bounds the verdicts counted
+         and the verdicts that can drain the mix. There is no second literal to drift.
     """
     stats = usefulness(path=path, window_days=window_days, now=now)["rows"]
     row = stats.get(capability_id)
     if row is None:
         raise ValueError(f"unknown capability: {capability_id}")
     resolved = row["resolved"]
-    posterior = (row["useful"] + PRIOR_USEFUL) / (resolved + PRIOR_TOTAL)
+    n_eff = float(row["n_eff"])
+    posterior = (row["effective_useful"] + PRIOR_USEFUL) / (n_eff + PRIOR_TOTAL)
     value = max(EXPLORATION_FLOOR, posterior)
     return {
         "capability_id": capability_id,
@@ -396,6 +761,29 @@ def propensity(
         "floored": value > posterior,
         # BLOCKING quantity and DRAINABLE quantity, together, always.
         "evidence_count": resolved,
+        # THE SAME EVIDENCE AFTER THE DISCOUNTS, beside the raw count. `evidence_count` 3 with
+        # `evidence_weight` 0.25 is the honest shape of "three correlated self-reports"; printing
+        # only the first is how 11/12 came to look like a measurement.
+        "evidence_weight": row["n_eff"],
+        "effective_useful": row["effective_useful"],
+        "raw_usefulness_rate": row["usefulness_rate"],
+        "weighted_usefulness_rate": row["weighted_usefulness_rate"],
+        "provenance_mix": dict(row["provenance_mix"]),
+        "independent_arms": row["independent_arms"],
+        "judge_arms": list(row["judge_arms"]),
+        "outcome_derived_verdicts": row["outcome_derived"],
+        "self_reported_verdicts": row["self_reported"],
+        "self_reported_share": row["self_reported_share"],
+        # §2: never average across verdict KINDS. Flagged, not blended away.
+        "verdict_kinds": dict(row["verdict_kinds"]),
+        "mixed_verdict_kinds": row["mixed_verdict_kinds"],
+        # THE COUNTERFACTUAL ARM, reported beside the posterior and never mixed into it. These are
+        # trials where this capability was named for the exact same task and NOT triggered. It is
+        # the natural comparison the module was built on; `influence_edges.counterfactual` is the
+        # DELIVERY counterfactual and is already consumed by `capability_effectiveness`, so it is
+        # not duplicated here (see the module docstring).
+        "counterfactual_named_not_triggered": row["named_not_triggered"],
+        "counterfactual_silent": row["named_not_triggered_silently"],
         # REPORTED, NEVER MIXED. "0.5 with 0 evidence" and "0.5 with 0 evidence and 4 reasoned
         # rejections" are opposite findings that were indistinguishable until declines existed.
         # Printing them side by side is the point; the posterior above is computed from `resolved`,
@@ -417,7 +805,23 @@ def propensity(
             "no resolved outcomes yet — optimistic prior plus an unconditional floor, so this "
             "can still be sampled and can therefore still earn evidence"
             if not resolved
-            else f"{row['useful']} of {resolved} resolved trials were useful"
+            else (
+                f"{row['useful']} of {resolved} resolved trials were useful; "
+                f"provenance {row['provenance_mix']} across {row['independent_arms']} independent "
+                f"judge arm(s) discounts that to {row['effective_useful']:.2f} of "
+                f"{row['n_eff']:.2f} effective observations"
+                + (
+                    " — SELF-REPORTED ONLY, so this is an opinion mix, not outcome evidence"
+                    if not row["outcome_derived"]
+                    else ""
+                )
+                + (
+                    f" — MIXED VERDICT KINDS {row['verdict_kinds']}, which §2 forbids averaging: "
+                    "read them separately"
+                    if row["mixed_verdict_kinds"]
+                    else ""
+                )
+            )
         )
         + (
             f"; declined with a stated reason {row['declined']} time(s) "
@@ -439,6 +843,12 @@ def rank(entries: list[dict], *, path=None, window_days: int = WINDOW_DAYS) -> l
     ORDER ONLY. The candidate SET is never changed, so the worst a wrong propensity can do is put a
     good suggestion second. That containment is deliberate: this module ranks advice, it does not
     decide what runs.
+
+    AND THE CALLER RECEIVES THE PROVENANCE, not just the number. The reporting requirement is as
+    important as the arithmetic: an entry carrying `propensity: 0.8` and nothing else invites being
+    read as measured, so every ranked entry also carries the provenance mix, the independent-arm
+    count and the self-reported share. Asserted through what a CALLER receives, because a helper
+    that computes the right thing while the caller sees the old thing is a bug this repo has shipped.
     """
     if DISABLED or not entries:
         return entries
@@ -449,15 +859,25 @@ def rank(entries: list[dict], *, path=None, window_days: int = WINDOW_DAYS) -> l
         entry["propensity_basis"] = prop["basis"]
         entry["usefulness_evidence_count"] = prop["evidence_count"]
         entry["propensity_floored"] = prop["floored"]
+        # PROVENANCE, on the entry the caller actually reads.
+        entry["usefulness_evidence_weight"] = prop["evidence_weight"]
+        entry["usefulness_provenance_mix"] = prop["provenance_mix"]
+        entry["usefulness_independent_arms"] = prop["independent_arms"]
+        entry["usefulness_self_reported_share"] = prop["self_reported_share"]
+        entry["usefulness_outcome_derived"] = prop["outcome_derived_verdicts"]
         scored.append(entry)
     scored.sort(key=lambda e: (-e["propensity"], e["capability_id"]))
     # Credited on the executed path, not only from the CLI: a capability whose heartbeat sits behind
     # a manual command reads as dormant no matter how often production uses it.
     _capability_heartbeat("invocation", f"rank:{len(scored)}")
     with_evidence = sum(1 for e in scored if e["usefulness_evidence_count"])
+    outcome_derived = sum(1 for e in scored if e["usefulness_outcome_derived"])
     # BOTH quantities in one place: how many of these rankings rest on measurement, and how many on
     # the prior. A ranked list that does not say which is which invites being trusted too early.
-    _capability_heartbeat("output", f"rank:evidence:{with_evidence}/{len(scored)}")
+    # And a THIRD: how many rest on anything other than the user's own opinion of their own choice.
+    _capability_heartbeat(
+        "output", f"rank:evidence:{with_evidence}/{len(scored)}:outcome_derived:{outcome_derived}"
+    )
     return scored
 
 
@@ -487,6 +907,19 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         )
     ranked.sort(key=lambda r: (-r["propensity"], -r["resolved"], r["capability_id"]))
     resolved_caps = [r["capability_id"] for r in ranked if r["resolved"]]
+    # THE PROVENANCE MIX OF THE WHOLE CORPUS, in the headline. This is the number that makes the
+    # arithmetic honest: on 2026-08-23 it was 12 verdicts, 12 of them self_reported, 0 outcome-
+    # derived, from 1 judge arm per capability — a fact the old headline could not express, so
+    # "11 of 12 useful" read as a measurement of usefulness rather than of one model's opinion.
+    corpus_mix: dict[str, int] = {}
+    for row in ranked:
+        for prov, n in (row["provenance_mix"] or {}).items():
+            corpus_mix[prov] = corpus_mix.get(prov, 0) + n
+    verdict_total = sum(corpus_mix.values())
+    self_total = sum(n for p, n in corpus_mix.items() if provenance_self_assessed(p))
+    recorded_finds = finds(path=path, window_days=window_days, now=now)
+    repairs = propose_repair(path=path, window_days=window_days, now=now)
+    markers = repair_markers(path=path, window_days=window_days, now=now)
     return {
         "window_days": window_days,
         "capability_count": stats["capability_count"],
@@ -497,6 +930,23 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # dashboard that looks informative while reporting nothing.
         "capabilities_with_evidence": len(resolved_caps),
         "capabilities_without_evidence": stats["capability_count"] - len(resolved_caps),
+        # THE PROVENANCE MIX. Never omit this beside a usefulness rate: the two together are the
+        # only honest reading, and the first without the second is what this axis exists to stop.
+        "verdict_count": verdict_total,
+        "verdicts_by_provenance": dict(sorted(corpus_mix.items())),
+        "verdicts_self_reported": self_total,
+        "verdicts_outcome_derived": verdict_total - self_total,
+        "verdicts_self_reported_share": (
+            round(self_total / verdict_total, 4) if verdict_total else None
+        ),
+        # THE DRAINABLE QUANTITY for the provenance discount: how many capabilities have any
+        # evidence that is not their user's own opinion. 0 means every number below is opinion.
+        "capabilities_with_outcome_derived_evidence": sum(
+            1 for r in ranked if r["outcome_derived"]
+        ),
+        "capabilities_with_multiple_judge_arms": sum(
+            1 for r in ranked if r["independent_arms"] > 1
+        ),
         # THE POPULATION THE 0.5 FLOOR USED TO HIDE. A capability with no outcome evidence but
         # several reasoned rejections is not "unmeasured"; it is measured on a different axis. This
         # count says how much of the un-evidenced population is actually of that kind.
@@ -505,6 +955,24 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # Both quantities again: how many declines exist, and how many of them are actually a
         # statement about the binding rather than about the work's shape.
         "decline_demotable_count": sum(len(t["declined_demotable"]) for t in trials),
+        # DEFECT FINDS. Counted here so a run that surfaced defects cannot read as a quiet one.
+        # The capability-attributed half is ALSO in `verdicts_by_provenance` as `defect_found`; the
+        # surface-attributed half is in no rate at all, by construction, and is the binding-quality
+        # evidence that previously had nowhere to go.
+        "find_count": len(recorded_finds),
+        "finds_by_finder_kind": {
+            k: sum(1 for f in recorded_finds if f["finder_kind"] == k)
+            for k in sorted({f["finder_kind"] for f in recorded_finds})
+        },
+        "find_subjects": sorted({f["subject"] for f in recorded_finds if f["subject"]}),
+        # THE THIRD ACTION. Report-only, never applied, never queued for anyone.
+        "repair_proposals": repairs,
+        "repair_proposal_count": len(repairs),
+        "repair_proposals_worth_having": sum(1 for r in repairs if r["worth_having"]),
+        # THE DRAINABLE QUANTITY, carried even when the proposal list is EMPTY -- an empty list
+        # cannot say whether anything is accumulating, and "0 proposals, 0 repairs ever recorded"
+        # reads completely differently from "0 proposals, 6 repairs recorded".
+        "repairs_recorded": sum(m["count"] for m in markers.values()),
         "declines_by_kind": {
             k: sum(v for r in ranked for kk, v in r["declines_by_kind"].items() if kk == k)
             for k in sorted(DECLINE_KINDS)
@@ -541,7 +1009,11 @@ def record_usefulness(
     *,
     useful: bool,
     evidence: str,
+    provenance: str = PROVENANCE_DEFAULT,
+    judge: str = "",
+    corroboration: str = "",
     path=None,
+    timestamp: int | None = None,
     metadata: dict | None = None,
 ) -> bool:
     """Did triggering it help? `evidence` is required: an unevidenced verdict is an opinion.
@@ -549,26 +1021,67 @@ def record_usefulness(
     The verdict must describe what the capability CHANGED, not that it ran. "It fired" is the
     un-gameable-label failure this project's learning rules exist to prevent.
 
-    `metadata` carries the verdict's PROVENANCE — which surface judged it and by which question.
-    Added for the tick wiring: an observer graded on "did your report change" and a lane capability
-    graded on "did the delivery survive" answer different questions, and CLAUDE.md's learning rules
-    forbid averaging across the two kinds. Without a durable `verdict_kind` on the row, a later
-    reader could only average them.
+    `metadata` carries the verdict's VERDICT KIND — which question was answered. Added for the tick
+    wiring: an observer graded on "did your report change" and a lane capability graded on "did the
+    delivery survive" answer different questions, and CLAUDE.md's learning rules forbid averaging
+    across the two kinds. Without a durable `verdict_kind` on the row, a later reader could only
+    average them.
+
+    `provenance` is the ORTHOGONAL axis: where the verdict CAME FROM. Default `self_reported`,
+    because that is what an unlabelled verdict is, and it weighs 0.25 rather than 1.0. Claiming
+    `outcome_corroborated` or `defect_found` REQUIRES `corroboration` naming the outcome — an
+    unnamed corroboration would make the strongest weight in the table self-certifying, which is
+    green-CI-alone under a new name. An unknown provenance is refused rather than coerced, for the
+    same reason an unknown decline kind is: a typo silently becoming the default would discard the
+    classification the caller believed it had made.
+
+    `judge` is the ARM that judged. Optional, and load-bearing: verdicts with no judge identity are
+    ALL treated as one correlated arm, so recording it is how a capability escapes the correlated-arm
+    discount. It cannot be inferred, and inferring independence is exactly the error that turned
+    three runs of one model into eleven independent successes.
     """
     if not str(evidence).strip():
         raise ValueError("a usefulness verdict requires evidence naming what changed")
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
+    if str(provenance) not in VERDICT_PROVENANCE:
+        raise ValueError(
+            f"unknown verdict provenance {provenance!r}; expected one of "
+            f"{sorted(VERDICT_PROVENANCE)}"
+        )
+    if (
+        VERDICT_PROVENANCE[str(provenance)]["requires_corroboration"]
+        and not str(corroboration).strip()
+    ):
+        raise ValueError(
+            f"provenance {provenance!r} claims outcome-strength evidence, so it requires "
+            "`corroboration` naming the outcome that corroborates it (the review that confirmed "
+            "it, the issue filed, the fix that landed); an unnamed corroboration is self-certifying"
+        )
+    extra: dict = {VERDICT_PROVENANCE_KEY: str(provenance)}
+    if str(judge).strip():
+        extra[VERDICT_JUDGE_KEY] = str(judge).strip()
+    if str(corroboration).strip():
+        extra[VERDICT_CORROBORATION_KEY] = str(corroboration)[:400]
     return capabilities.heartbeat(
         capability_id,
         "outcome",
         ref=experiment_id,
         path=path or capabilities.REG,
         idempotency_key=f"useful:{capability_id}:{experiment_id}",
+        # A TEST SEAM, not a caller-facing field: ledger timestamps are second-granular, and a
+        # selftest that records a defect, its repair and the re-opening evidence inside one second
+        # cannot distinguish "the action drained it" from "the tie-break happened to go this way".
+        # Deliberately NOT added to `record_decline`: `mcp_server`'s contract selftest asserts that
+        # every keyword-only parameter of that function is advertised by the `capability_decline`
+        # MCP tool, and an MCP caller must never be able to backdate a decline. CI caught exactly
+        # that when the seam was put there first.
+        timestamp=timestamp,
         metadata={
             "source": "capability_propensity",
             USEFUL_KEY: bool(useful),
             "evidence": str(evidence)[:400],
+            **extra,
             **(metadata or {}),
         },
     )
@@ -1110,6 +1623,14 @@ def tick_evidence(
                         experiment,
                         useful=changed,
                         evidence=evidence,
+                        # MACHINE-OBSERVED, stated rather than inferred. The tick computes this
+                        # verdict from a fingerprint diff of the capability's own artifact; nobody
+                        # asserts it, so it is not a self-report. The derivation in
+                        # `verdict_provenance()` would reach the same class from `verdict_kind`
+                        # alone, but a derivation is a fallback for rows written before this axis
+                        # existed, not a substitute for the producer saying what it produced.
+                        provenance="machine_observed",
+                        judge=TICK_SURFACE,
                         path=path,
                         metadata={
                             "verdict_kind": TICK_VERDICT_KIND,
@@ -1775,6 +2296,981 @@ def record_decline(
     )
 
 
+# ---------------------------------------------------------------------------
+# DEFECT FINDS — what was found, and by whom. The strongest signal the loop was throwing away.
+#
+# MEASURED (2026-08-23). Instrumented work found SEVEN defects in this system's own code that its
+# author had not found. TWO were attributable to a capability and were recorded:
+# `adversarial-review` supplied citations that became the strongest facts in two issue bodies, and
+# `deliberate-break-verifier` caught an auditor's own methodological error. The other FIVE were
+# found by the PROCESS -- an audit noticing that a suppressed surface still offered capabilities; an
+# agent reading this module and finding a branch that recorded nothing. Those had no capability to
+# attribute to, so they became PRs and prose and taught the loop nothing at all.
+#
+# SO THE FINDER MAY BE A CAPABILITY *OR* A SURFACE, and the two feed different things:
+#
+#   * CAPABILITY-attributed -> that capability's USEFULNESS, at `defect_found` provenance. A defect
+#     found is an OUTCOME, not an opinion: the artifact naming it is checkable by someone who was
+#     not there. It reaches the posterior through the provenance weighting and by NO other route.
+#   * SURFACE-attributed -> BINDING QUALITY. "Consulting at `repo-audit:phase-1` surfaced a defect
+#     in the advisor itself" is evidence about the SURFACE, not about any capability, and there was
+#     nowhere at all to put it. `binding_quality()` is that place.
+#
+# NO NEW STORE AND NO NEW EVENT TYPE (`CLAUDE.md` forbids a second one). A find rides on a `match`
+# event tagged `source=capability_find`, exactly as `record_decline` and `record_promotion` already
+# carry non-match facts there. Its ref is `find:<digest>`, NOT `advice:<digest>` -- so
+# `_experiment_id()` returns None for it and `experiments()`, `usefulness()` and `propensity()`
+# cannot see it AT ALL. That is structural, not conventional: no metadata a caller could set would
+# make a find record reach a posterior.
+#
+# IT MUST NOT BECOME A WAY TO INFLATE A CAPABILITY'S STANDING. Three guards, and the third is the
+# one that actually binds:
+#   1. `artifact` is REQUIRED and refused when blank, exactly as `record_usefulness` refuses an
+#      unevidenced verdict. A CLAIMED find with no artifact is worth nothing.
+#   2. `defect` is REQUIRED and must name WHAT was defective, not that something was found.
+#   3. The correlated-arm discount caps it. N finds from one judge arm total ONE observation, so ten
+#      artifact-backed finds from one agent cannot lift a capability past 0.667; only an independent
+#      arm can. The incentive is corroboration, not volume.
+FIND_SOURCE = "capability_find"
+FIND_REF_PREFIX = "find:"
+# The carrier row for a SURFACE-attributed find. The ledger is keyed by capability, so a fact about
+# a surface needs a row to sit on; this module owns binding quality (`detect`, `propose_bindings`,
+# `propose_demotions`), so its own row is the honest carrier. The record is `find:`-reffed, so it
+# sits outside every rate on every row INCLUDING this one -- it cannot flatter its own carrier.
+FIND_CARRIER = "capability-propensity"
+FIND_DEFECT_KEY = "defect"
+FIND_ARTIFACT_KEY = "artifact"
+FIND_SUBJECT_KEY = "subject"
+FIND_FINDER_KEY = "finder"
+FIND_FINDER_KIND_KEY = "finder_kind"
+
+
+def find_id(defect: str, *, surface: str = "", capability_id: str = "") -> str:
+    """A stable id for one find, so replaying a backfill cannot inflate the count.
+
+    Keyed on the DEFECT plus its finder, not on a timestamp: the same defect found again by the same
+    finder is the same find, and a second record of it is not a second piece of evidence.
+    """
+    payload = "|".join((str(defect).strip().lower(), str(surface or ""), str(capability_id or "")))
+    return f"{FIND_REF_PREFIX}{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+
+def record_find(
+    *,
+    defect: str,
+    artifact: str,
+    surface: str = "",
+    capability_id: str = "",
+    experiment_id: str = "",
+    subject: str = "",
+    judge: str = "",
+    path=None,
+) -> dict:
+    """A defect was found. Record WHO found it and WHAT proves it.
+
+    `defect` names what was defective. `artifact` is the thing a stranger could check — the PR, the
+    issue, the file:line, the failing test. Both are REQUIRED and refused when blank, for the same
+    reason `record_usefulness` refuses an unevidenced verdict and `record_decline` an unexplained
+    one: a claimed find with no artifact is worth nothing, and letting one through would make this
+    the cheapest way to inflate a capability's standing.
+
+    THE FINDER IS EITHER A CAPABILITY OR A SURFACE, and at least one must be named:
+
+      * `capability_id` (with the `experiment_id` it was offered under) -> the find ALSO writes a
+        usefulness verdict at `defect_found` provenance, whose `corroboration` is the artifact. That
+        is the ONLY path from a find to a posterior, and it is the provenance weighting -- so N finds
+        from one judge arm still total one observation.
+      * `surface` alone -> the find feeds BINDING QUALITY only. "Consulting here surfaced a defect"
+        is evidence about the surface, and `binding_quality()` reads it. It touches no posterior.
+
+    `subject` optionally names what the defect was IN (a module, a capability, a doc). Recorded for
+    the audit trail; it is never scored, because a capability must not be debited for having had a
+    bug found in it.
+
+    Idempotent on `find_id`, so a replay records nothing twice. Returns what happened, including
+    `affects_propensity`, because a caller that thinks it just scored a capability has been misled.
+    """
+    if not str(defect).strip():
+        raise ValueError("a find requires `defect` naming WHAT was defective")
+    if not str(artifact).strip():
+        raise ValueError(
+            "a find requires `artifact` — the PR, issue, file:line or failing test a stranger "
+            "could check; a claimed find with no artifact is worth nothing"
+        )
+    if not str(surface).strip() and not str(capability_id).strip():
+        raise ValueError(
+            "a find needs a FINDER: either `capability_id` (the capability that surfaced it) or "
+            "`surface` (the surface whose consult surfaced it). An unattributed find teaches "
+            "nothing, which is the state this replaces"
+        )
+    if str(capability_id).strip() and not str(experiment_id).startswith(ADVICE_REF_PREFIX):
+        raise ValueError(
+            "a capability-attributed find must carry the `experiment_id` "
+            f"({ADVICE_REF_PREFIX}<digest>) it was offered under, or its usefulness verdict "
+            "belongs to no trial"
+        )
+    cap_id = str(capability_id).strip()
+    finder_kind = "capability" if cap_id else "surface"
+    finder = cap_id or str(surface).strip()
+    ref = find_id(defect, surface=surface, capability_id=cap_id)
+    carrier = cap_id or FIND_CARRIER
+    recorded = capabilities.heartbeat(
+        carrier,
+        "match",
+        ref=ref,
+        path=path or capabilities.REG,
+        idempotency_key=f"find:{finder}:{ref}",
+        metadata={
+            "source": FIND_SOURCE,
+            FIND_DEFECT_KEY: str(defect)[:400],
+            FIND_ARTIFACT_KEY: str(artifact)[:400],
+            FIND_SUBJECT_KEY: str(subject)[:200] or None,
+            FIND_FINDER_KEY: finder,
+            FIND_FINDER_KIND_KEY: finder_kind,
+            SURFACE_KEY: str(surface).strip() or None,
+        },
+    )
+    verdict = False
+    if cap_id:
+        verdict = record_usefulness(
+            cap_id,
+            experiment_id,
+            useful=True,
+            evidence=f"found a defect: {str(defect)[:280]}",
+            provenance="defect_found",
+            judge=judge,
+            corroboration=str(artifact),
+            path=path,
+            metadata={SURFACE_KEY: str(surface).strip() or None},
+        )
+    return {
+        "find_id": ref,
+        "recorded": bool(recorded),
+        "finder": finder,
+        "finder_kind": finder_kind,
+        "carrier": carrier,
+        "surface": str(surface).strip() or None,
+        "subject": str(subject).strip() or None,
+        "feeds": "capability_usefulness" if cap_id else "binding_quality",
+        "usefulness_recorded": bool(verdict),
+        # SAY WHAT THIS DID. A surface find scores nothing; a capability find scores one
+        # PROVENANCE-WEIGHTED observation, shared with every other verdict from the same arm.
+        "affects_propensity": bool(cap_id),
+        "provenance": "defect_found" if cap_id else None,
+    }
+
+
+def finds(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> list[dict]:
+    """Every recorded find in the window, from the ledger. No second store to read."""
+    caps = capabilities.load_declared(path or capabilities.REG)
+    now = capabilities._now() if now is None else now
+    out = []
+    for cap_id, cap in sorted(caps.items()):
+        for event in _events(cap):
+            meta = event.get("metadata") or {}
+            if meta.get("source") != FIND_SOURCE:
+                continue
+            if not _within_window(event, now=now, window_days=window_days):
+                continue
+            out.append(
+                {
+                    "find_id": str(event.get("ref") or ""),
+                    "carrier": cap_id,
+                    "finder": str(meta.get(FIND_FINDER_KEY) or ""),
+                    "finder_kind": str(meta.get(FIND_FINDER_KIND_KEY) or ""),
+                    "surface": meta.get(SURFACE_KEY),
+                    "defect": str(meta.get(FIND_DEFECT_KEY) or ""),
+                    "artifact": str(meta.get(FIND_ARTIFACT_KEY) or ""),
+                    "subject": meta.get(FIND_SUBJECT_KEY),
+                    "timestamp": int(event.get("timestamp") or 0),
+                }
+            )
+    return sorted(out, key=lambda f: (f["timestamp"], f["find_id"]))
+
+
+def binding_quality(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> dict:
+    """Is consulting at this surface producing anything? THE PLACE A SURFACE FIND HAD TO GO.
+
+    The three layers rank a capability by fit to a surface. Nothing measured the surface itself, so
+    "consulting at `repo-audit:phase-1` surfaced a defect in the advisor" was evidence with no home.
+    This is the home: the bound set, what it was offered and what came of it, and the FINDS the
+    consults at this surface produced -- capability-attributed and surface-attributed separately,
+    because only the first is also a verdict on a capability.
+
+    REPORT ONLY. Nothing here promotes, demotes or scores; `propose_bindings` and
+    `propose_demotions` keep their existing, external, evidence rules unchanged. A surface find is a
+    number about a surface, and a number about a surface must not become selection pressure on a
+    capability -- that is the ratchet the detection loop already refuses.
+    """
+    import capability_advisor
+
+    counts = surface_decline_counts(surface, path=path, window_days=window_days)
+    here = [
+        f
+        for f in finds(path=path, window_days=window_days)
+        if f["surface"] == surface or f["finder"] == surface
+    ]
+    by_kind: dict[str, int] = {}
+    for f in here:
+        by_kind[f["finder_kind"]] = by_kind.get(f["finder_kind"], 0) + 1
+    return {
+        "surface": surface,
+        "bound": sorted(capability_advisor.binding_for(surface, path=path)),
+        "offers": sum(counts["offered"].values()),
+        "triggers": sum(counts["triggered"].values()),
+        "declines": sum(counts["declined"].values()),
+        # BOTH quantities: how many defects the consults here surfaced, and how many of those are
+        # ALSO a verdict on a capability. A surface that produces finds while triggering nothing is
+        # not an idle surface, and those were indistinguishable before this existed.
+        "finds": len(here),
+        "finds_by_finder_kind": dict(sorted(by_kind.items())),
+        "find_subjects": sorted({f["subject"] for f in here if f["subject"]}),
+        "find_defects": [f["defect"] for f in here][:10],
+        "window_days": window_days,
+    }
+
+
+# ---------------------------------------------------------------------------
+# THE REPAIR CHANNEL — because "worth having AND broken" was unrepresentable.
+#
+# The loop had exactly two actions: PROMOTE (widen a binding) and DEMOTE (narrow one). Neither can
+# say "this capability should exist and does not work", so the only available response to a broken
+# capability was to stop offering it — which silences the thing that should be fixed and loses a
+# capability that was worth having.
+#
+# THE LIVE CASE, and it is why this exists. `repo-playbook` sits at one useful verdict and one
+# not-useful verdict, and the Fine-Art-Archive audit documented exactly WHY: its useful content is
+# gated behind `task_type: implement/testgen/mechanical`, so a `review` consult receives 308
+# characters, one clause of which is factually wrong — it tells auditors a repository's default
+# branch is something it is not. Demotion silences that. A repair proposal names it.
+#
+# TWO INPUTS, and the second is the one the taxonomy was missing an action for:
+#   1. `not_useful` verdicts, WITH THEIR EVIDENCE CARRIED FORWARD, so the proposal is actionable
+#      rather than a flag. "0.5, one bad verdict" is a number; "308 characters, one clause factually
+#      wrong about the default branch" is a repair.
+#   2. Declines whose KIND indicates a DEFECT — `decline_kind_repairable`, i.e. `wrong_match` (the
+#      matcher may be wrong) and `precondition_unmet` (an undeclared or unevaluated precondition is
+#      a defect in the capability, and it is NOT demotable, so this channel is the only one that can
+#      act on it at all). Explicitly NOT `no_landing_zone`: nobody's fault, the match was correct,
+#      the capability is working. Proposing a repair there asserts a defect that does not exist.
+#
+# REPORT-ONLY, NEVER AUTO-APPLIED, and it never queues anything for the owner (`CLAUDE.md` §3). It
+# is a field in a report the cadence step already writes; nothing waits on a human, nothing expires
+# against a human, and no human action can be behind on it. ATTENTION COST: the live ledger produces
+# 13 proposal rows inside an existing hourly/6-daily report, requiring zero actions and expiring on
+# their own with `WINDOW_DAYS`. 0 minutes/week.
+#
+# LATCHED-GATE ANSWERS (a proposal set is a gate, so it owes all three in writing):
+#
+#   1. WHAT DECREMENTS IT? `record_repair` — a named mechanism that writes a durable marker with the
+#      fix and its artifact, after which a proposal counts only defect evidence NEWER than that
+#      marker. Not "time passes" and not "someone notices". Window expiry is a SECOND drain and uses
+#      the same `WINDOW_DAYS` constant, so it cannot drift from the measurement.
+#      The first draft of this had NO marker: defect evidence stayed in the 90-day window, so fixing
+#      the capability did not clear its proposal for three months. That is the latch, and it was
+#      caught by asking question 1 rather than by testing.
+#   2. CAN THE DRAIN RUN WHILE THE GATE IS NON-EMPTY? Yes, unconditionally. `record_repair` requires
+#      nothing a standing proposal forbids, and a proposal is report-only on both sides: it never
+#      withholds the capability from `rank()`, never lowers its propensity, and never blocks a
+#      consult. So the capability keeps being offered, keeps being able to earn useful verdicts, and
+#      the repair can be recorded at any moment — including while the proposal stands.
+#   3. DOES THE MEASURING WINDOW EQUAL THE DRAINING WINDOW? Yes, by construction: `WINDOW_DAYS`, the
+#      one constant `usefulness()`, `propensity()` and `surface_decline_counts()` already share,
+#      bounds the defect evidence counted AND the repair markers that clear it. One name, consumed by
+#      both — a matching pair of literals would drift.
+#
+#   And the runtime rule: every proposal reports `defect_evidence_total` (measuring), and
+#   `defect_evidence_since_repair` (blocking) beside `repairs_recorded` (drainable), so
+#   "13 proposals" can never read as patience when it should read as a repair that was never
+#   recorded. `report()` carries `repairs_recorded` even when the proposal list is EMPTY, because an
+#   empty list cannot say whether anything is accumulating.
+#
+# NO NEW STORE. A repair marker rides a `match` event tagged `source=capability_repair` with a
+# `repair:<digest>` ref — same carrier and same structural exclusion as a find, so a marker can
+# never reach a posterior either.
+REPAIR_SOURCE = "capability_repair"
+REPAIR_REF_PREFIX = "repair:"
+REPAIR_FIX_KEY = "fix"
+REPAIR_ARTIFACT_KEY = "artifact"
+# ONE piece of evidenced defect evidence is enough to PROPOSE, because a proposal costs nothing and
+# is never applied. The floor exists to be stated, not to hold anything shut: raising it would make
+# the channel silent about exactly the single-verdict case (`repo-playbook`) it was built for.
+REPAIR_MIN_DEFECT_EVIDENCE = 1
+
+
+def record_repair(
+    capability_id: str, *, fix: str, artifact: str, path=None, timestamp: int | None = None
+) -> bool:
+    """THE DRAIN. Record that a proposed repair was actually MADE.
+
+    `fix` says what was changed; `artifact` is the PR, commit or file:line a stranger could check.
+    Both are REQUIRED and refused when blank, for the same reason a find and a verdict are: a
+    claimed repair with nothing to check would clear a proposal without fixing anything, which is
+    worse than no drain at all.
+
+    After this, `propose_repair` counts only defect evidence recorded AFTER the marker. That is what
+    makes the gate drainable by an ACTION rather than by the calendar — the first draft had no
+    marker, so a repaired capability kept its proposal for the whole 90-day window.
+    """
+    if not str(fix).strip():
+        raise ValueError("a repair record must say what was FIXED")
+    if not str(artifact).strip():
+        raise ValueError(
+            "a repair record requires an `artifact` — the PR, commit or file:line a stranger "
+            "could check; a claimed repair with nothing to check would clear a proposal without "
+            "fixing anything"
+        )
+    digest = hashlib.sha256(f"{capability_id}|{str(fix).strip().lower()}".encode()).hexdigest()[:12]
+    return capabilities.heartbeat(
+        capability_id,
+        "match",
+        ref=f"{REPAIR_REF_PREFIX}{digest}",
+        path=path or capabilities.REG,
+        idempotency_key=f"repair:{capability_id}:{digest}",
+        # `timestamp` exists so a selftest can lay events out in TIME. Ledger timestamps are
+        # second-granular, and a test that records the defect, the repair and the re-opening
+        # evidence inside one second cannot distinguish "the action drained it" from "the tie-break
+        # happened to go this way" -- which is the whole property under test.
+        timestamp=timestamp,
+        metadata={
+            "source": REPAIR_SOURCE,
+            REPAIR_FIX_KEY: str(fix)[:400],
+            REPAIR_ARTIFACT_KEY: str(artifact)[:400],
+        },
+    )
+
+
+def repair_markers(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> dict:
+    """Per capability: how many repairs were recorded, and when the latest one was.
+
+    Read with the SAME window as the defect evidence it clears -- `WINDOW_DAYS`, the one constant.
+    """
+    caps = capabilities.load_declared(path or capabilities.REG)
+    now = capabilities._now() if now is None else now
+    out: dict[str, dict] = {}
+    for cap_id, cap in sorted(caps.items()):
+        for event in _events(cap):
+            meta = event.get("metadata") or {}
+            if meta.get("source") != REPAIR_SOURCE:
+                continue
+            if not _within_window(event, now=now, window_days=window_days):
+                continue
+            ts = int(event.get("timestamp") or 0)
+            row = out.setdefault(cap_id, {"count": 0, "latest_ts": 0, "records": []})
+            row["count"] += 1
+            row["latest_ts"] = max(row["latest_ts"], ts)
+            row["records"].append(
+                {
+                    "timestamp": ts,
+                    "fix": str(meta.get(REPAIR_FIX_KEY) or ""),
+                    "artifact": str(meta.get(REPAIR_ARTIFACT_KEY) or ""),
+                }
+            )
+    return out
+
+
+def defect_evidence(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> dict:
+    """Per capability: every in-window record saying the capability itself is BROKEN.
+
+    Derived from `experiments()` rather than from a fresh ledger scan, so it inherits every
+    refinement that already exists there — a decline the capability was later TRIGGERED for does not
+    count, and the trial-level window is the same one. Timestamps and evidence text then come from
+    the events those trials were built from, because a proposal without the words is a flag.
+    """
+    trials = {
+        t["experiment_id"]: t for t in experiments(path=path, window_days=window_days, now=now)
+    }
+    caps = capabilities.load_declared(path or capabilities.REG)
+    now = capabilities._now() if now is None else now
+    out: dict[str, list[dict]] = {}
+    for cap_id, cap in sorted(caps.items()):
+        for event in _events(cap):
+            exp = _experiment_id(event)
+            trial = trials.get(exp) if exp else None
+            if trial is None or not _within_window(event, now=now, window_days=window_days):
+                continue
+            meta = event.get("metadata") or {}
+            etype = event.get("type") or event.get("event_type")
+            ts = int(event.get("timestamp") or 0)
+            if etype == "outcome" and cap_id in trial["not_useful"]:
+                out.setdefault(cap_id, []).append(
+                    {
+                        "basis": "not_useful_verdict",
+                        "experiment_id": exp,
+                        "timestamp": ts,
+                        # CARRIED FORWARD, deliberately. The whole difference between a flag and an
+                        # actionable proposal is that the words travel with it.
+                        "evidence": str(meta.get("evidence") or ""),
+                        "provenance": verdict_provenance(meta),
+                        "surface": meta.get(SURFACE_KEY) or meta.get("skill"),
+                        "implied_fix": "the capability's own behaviour on this task",
+                    }
+                )
+            elif etype == "match" and meta.get("source") == DECLINE_SOURCE:
+                if cap_id not in trial["declined"]:
+                    continue
+                kind = str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT)
+                if not decline_kind_repairable(kind):
+                    continue
+                out.setdefault(cap_id, []).append(
+                    {
+                        "basis": "declined_repairable",
+                        "decline_kind": kind,
+                        "experiment_id": exp,
+                        "timestamp": ts,
+                        "evidence": str(meta.get(DECLINE_REASON_KEY) or ""),
+                        "surface": meta.get(SURFACE_KEY),
+                        "implied_fix": DECLINE_KINDS[kind]["fix"],
+                    }
+                )
+    return {c: sorted(v, key=lambda r: r["timestamp"]) for c, v in out.items()}
+
+
+def propose_repair(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> list:
+    """The third action: this capability is worth having and something about it is BROKEN.
+
+    REPORT-ONLY. Nothing here is applied, nothing is queued for anyone, and a proposal changes
+    neither the candidate set nor any propensity — so a wrong proposal costs a line in a report.
+
+    `worth_having` is REPORTED, never a filter. Filtering on it would hide a capability whose only
+    evidence is negative, and that population is the demotion path's business; both readings must
+    stay visible, because "broken and wanted" and "broken and unwanted" imply different work.
+    """
+    evidence = defect_evidence(path=path, window_days=window_days, now=now)
+    markers = repair_markers(path=path, window_days=window_days, now=now)
+    stats = usefulness(path=path, window_days=window_days, now=now)["rows"]
+    out = []
+    for cap_id, records in sorted(evidence.items()):
+        marker = markers.get(cap_id) or {"count": 0, "latest_ts": 0, "records": []}
+        # `>=`, NOT `>`, and the tie-break direction is the point. Ledger timestamps are
+        # second-granular, so a defect recorded in the same second as a repair is UNORDERABLE — and
+        # with a strict `>` it would be excluded forever, which is silence. A gate must fail toward
+        # MOTION: an unorderable defect re-opens the proposal, which costs one report line, rather
+        # than vanishing, which costs the finding. The drain is unaffected, because the evidence a
+        # repair is answering is strictly older than the repair that answers it.
+        fresh = [r for r in records if r["timestamp"] >= marker["latest_ts"]]
+        if len(fresh) < REPAIR_MIN_DEFECT_EVIDENCE:
+            continue
+        row = stats.get(cap_id) or {}
+        bases = sorted({r["basis"] for r in fresh})
+        kinds: dict[str, int] = {}
+        for r in fresh:
+            if r.get("decline_kind"):
+                kinds[r["decline_kind"]] = kinds.get(r["decline_kind"], 0) + 1
+        useful_n = int(row.get("useful") or 0)
+        out.append(
+            {
+                "capability_id": cap_id,
+                "action": "repair",
+                "basis": bases,
+                # WORTH HAVING, reported beside the defect rather than gating it.
+                "worth_having": useful_n > 0,
+                "worth_having_basis": (
+                    f"{useful_n} useful verdict(s) in the window"
+                    if useful_n
+                    else "no useful verdict yet — the defect evidence stands alone, so read this "
+                    "beside the demotion proposals rather than instead of them"
+                ),
+                "useful": useful_n,
+                "not_useful": int(row.get("not_useful") or 0),
+                "propensity": propensity(cap_id, path=path, window_days=window_days, now=now)[
+                    "propensity"
+                ],
+                # THE WORDS, carried forward. This is what makes it a repair and not a flag.
+                "evidence": [r["evidence"] for r in fresh if r["evidence"]][:5],
+                "implied_fixes": sorted({r["implied_fix"] for r in fresh if r["implied_fix"]}),
+                "declines_repairable_by_kind": dict(sorted(kinds.items())),
+                "surfaces": sorted({str(r["surface"]) for r in fresh if r.get("surface")}),
+                # MEASURING quantity, BLOCKING quantity, DRAINABLE quantity — all three, always.
+                "defect_evidence_total": len(records),
+                "defect_evidence_since_repair": len(fresh),
+                "repairs_recorded": marker["count"],
+                "last_repair_at": marker["latest_ts"] or None,
+                "defect_evidence_floor": REPAIR_MIN_DEFECT_EVIDENCE,
+                "window_days": window_days,
+                "auto_applied": False,
+                "queued_for_owner": False,
+            }
+        )
+    # Worth-having first, then most defect evidence: a capability that is wanted AND broken is the
+    # case this channel exists for, and it must not sit below one that is merely broken.
+    return sorted(
+        out,
+        key=lambda r: (
+            not r["worth_having"],
+            -r["defect_evidence_since_repair"],
+            r["capability_id"],
+        ),
+    )
+
+
+def _selftest_repair() -> None:
+    """ "WORTH HAVING AND BROKEN" MUST BE EXPRESSIBLE, and the channel must be drainable BY ACTION.
+
+    Every assertion was written by breaking it first:
+
+      * making `no_landing_zone` repairable -> a CORRECT match is proposed for repair, caught here;
+      * making `precondition_unmet` NON-repairable -> the one kind that has no other channel goes
+        silent again, caught here;
+      * dropping the repair marker from the freshness comparison -> a repaired capability keeps its
+        proposal for the whole 90-day window, which is the latch; caught here;
+      * dropping the artifact guard on `record_repair` -> a claimed repair with nothing to check
+        clears a proposal, caught here;
+      * dropping the carried-forward evidence -> the proposal becomes a flag, caught here;
+      * letting a repair proposal touch the posterior -> caught here.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="repair-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("worth-fixing", "correct-match", "precondition-only", "healthy"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["review"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        # THE LIVE SHAPE: one useful verdict, one evidenced not-useful verdict, one wrong_match
+        # decline. Worth having AND broken -- the state the two-action loop could not express.
+        capabilities.heartbeat(
+            "worth-fixing",
+            "match",
+            ref="advice:wf00000001",
+            path=ledger,
+            idempotency_key="m:wf1",
+            metadata={"surface": "repo-audit:phase-4"},
+        )
+        record_trigger("worth-fixing", "advice:wf00000001", path=ledger)
+        record_usefulness(
+            "worth-fixing",
+            "advice:wf00000001",
+            useful=True,
+            evidence="returned the repo-specific rule that changed the scope boundary",
+            path=ledger,
+        )
+        capabilities.heartbeat(
+            "worth-fixing",
+            "match",
+            ref="advice:wf00000002",
+            path=ledger,
+            idempotency_key="m:wf2",
+            metadata={"surface": "repo-audit:phase-2"},
+        )
+        record_trigger("worth-fixing", "advice:wf00000002", path=ledger)
+        record_usefulness(
+            "worth-fixing",
+            "advice:wf00000002",
+            useful=False,
+            evidence="308 chars that changed no finding, and one clause is factually wrong: it "
+            "names a default branch this repo does not have",
+            path=ledger,
+        )
+        record_decline(
+            "worth-fixing",
+            "advice:wf00000003",
+            reason="the review path receives only the gated summary",
+            kind="wrong_match",
+            surface="repo-audit:phase-2",
+            path=ledger,
+        )
+        # A CORRECT MATCH the deliverable made impossible. Never a repair candidate.
+        for i in range(4):
+            record_decline(
+                "correct-match",
+                f"advice:cm0000000{i}",
+                reason=f"read-only audit, no commit target ({i})",
+                kind="no_landing_zone",
+                surface="repo-audit:phase-4",
+                path=ledger,
+            )
+        # THE KIND WITH NO OTHER CHANNEL: not demotable, so before this it was inert forever.
+        for i in range(3):
+            record_decline(
+                "precondition-only",
+                f"advice:po0000000{i}",
+                reason=f"aimed at another system's runtime ({i})",
+                kind="precondition_unmet",
+                surface="repo-audit:dimension-8",
+                path=ledger,
+            )
+        # ...and one that is simply fine.
+        capabilities.heartbeat(
+            "healthy",
+            "match",
+            ref="advice:hh00000001",
+            path=ledger,
+            idempotency_key="m:hh1",
+            metadata={"surface": "repo-audit:phase-1"},
+        )
+        record_trigger("healthy", "advice:hh00000001", path=ledger)
+        record_usefulness(
+            "healthy", "advice:hh00000001", useful=True, evidence="found two defects", path=ledger
+        )
+
+        props = {p["capability_id"]: p for p in propose_repair(path=ledger)}
+        # ---- 1. THE THIRD ACTION EXISTS, and it is not promote or demote.
+        assert "worth-fixing" in props, props
+        wf = props["worth-fixing"]
+        assert wf["action"] == "repair", wf
+        assert wf["worth_having"] is True and wf["useful"] == 1, wf
+        assert sorted(wf["basis"]) == ["declined_repairable", "not_useful_verdict"], wf
+        # THE WORDS TRAVEL WITH IT. A proposal without the evidence is a flag.
+        assert any("factually wrong" in e for e in wf["evidence"]), wf["evidence"]
+        assert any("gated summary" in e for e in wf["evidence"]), wf["evidence"]
+        assert wf["implied_fixes"], wf
+        assert wf["surfaces"] == ["repo-audit:phase-2"], wf
+        # ---- 2. A CORRECT MATCH IS NEVER PROPOSED FOR REPAIR. `no_landing_zone` is nobody's fault
+        #         and the capability is working; four of them must produce nothing.
+        assert "correct-match" not in props, props
+        # ---- 3. THE KIND WITH NO OTHER CHANNEL IS REACHED. `precondition_unmet` cannot demote, so
+        #         without this it accumulated forever with no action available.
+        assert "precondition-only" in props, props
+        po = props["precondition-only"]
+        assert po["declines_repairable_by_kind"] == {"precondition_unmet": 3}, po
+        assert po["worth_having"] is False, po
+        assert "no useful verdict yet" in po["worth_having_basis"], po
+        # ...and worth-having sorts FIRST, because wanted-and-broken is the case this is for.
+        assert (
+            list(props)[0] == "worth-fixing"
+            or [p["capability_id"] for p in propose_repair(path=ledger)][0] == "worth-fixing"
+        ), list(props)
+        # ---- 4. A HEALTHY CAPABILITY IS NOT PROPOSED.
+        assert "healthy" not in props, props
+        # ---- 5. NEVER APPLIED, NEVER QUEUED. §3 forbids a human touchpoint that can accumulate.
+        for p in propose_repair(path=ledger):
+            assert p["auto_applied"] is False and p["queued_for_owner"] is False, p
+        # ---- 6. BOTH QUANTITIES ON EVERY ROW, per the runtime rule.
+        assert wf["defect_evidence_total"] == 2, wf
+        assert wf["defect_evidence_since_repair"] == 2, wf
+        assert wf["repairs_recorded"] == 0 and wf["last_repair_at"] is None, wf
+        # ---- 7. IT DOES NOT TOUCH THE POSTERIOR. A repair proposal is not a verdict.
+        before = propensity("worth-fixing", path=ledger)
+        propose_repair(path=ledger)
+        after = propensity("worth-fixing", path=ledger)
+        assert after["propensity"] == before["propensity"], (before, after)
+        assert after["evidence_weight"] == before["evidence_weight"], (before, after)
+
+        # ---- 8. THE DRAIN RUNS BY ACTION, NOT BY THE CALENDAR. This is the latched-gate answer,
+        #         asserted: recording the repair clears the proposal immediately, and the same
+        #         defect evidence is still inside the window. Explicit timestamps, because every
+        #         event above landed in the SAME SECOND and a same-second comparison cannot
+        #         distinguish "the action drained it" from "the tie-break went this way".
+        base = capabilities._now()
+        assert record_repair(
+            "worth-fixing",
+            fix="ungate the review path so a review consult receives the repo facts",
+            artifact="PR #999, repo_knowledge.py:812",
+            path=ledger,
+            timestamp=base + 3600,
+        )
+        drained = {p["capability_id"]: p for p in propose_repair(path=ledger)}
+        assert "worth-fixing" not in drained, drained
+        # ...and the evidence really is still there, so this proves an ACTION cleared it and not
+        # the window. A break that dropped the marker comparison would leave the proposal standing.
+        assert len(defect_evidence(path=ledger)["worth-fixing"]) == 2, defect_evidence(path=ledger)
+        # ...and the repair is VISIBLE, so a cleared proposal is not an unexplained silence.
+        assert repair_markers(path=ledger)["worth-fixing"]["count"] == 1
+        # ...and a REPEAT is idempotent: the same fix twice is one repair.
+        assert (
+            record_repair(
+                "worth-fixing",
+                fix="Ungate The Review Path So A Review Consult Receives The Repo Facts",
+                artifact="same PR",
+                path=ledger,
+            )
+            is False
+        )
+        # ---- 9. AND NEW defect evidence after the repair RE-OPENS it, so a recorded repair is not
+        #         a permanent silencer -- the gate fails toward motion in both directions.
+        record_usefulness(
+            "worth-fixing",
+            "advice:wf00000009",
+            useful=False,
+            evidence="still gated for review consults after the fix",
+            path=ledger,
+            timestamp=base + 7200,
+        )
+        reopened = {p["capability_id"]: p for p in propose_repair(path=ledger)}
+        assert "worth-fixing" in reopened, reopened
+        assert reopened["worth-fixing"]["repairs_recorded"] == 1, reopened["worth-fixing"]
+        assert reopened["worth-fixing"]["defect_evidence_since_repair"] == 1, reopened[
+            "worth-fixing"
+        ]
+        assert reopened["worth-fixing"]["defect_evidence_total"] == 3, reopened["worth-fixing"]
+
+        # ---- 9b. THE TIE-BREAK FAILS TOWARD MOTION. A defect recorded in the SAME SECOND as a
+        #          repair is unorderable; it must re-open the proposal (one report line) rather
+        #          than vanish (the finding). Asserted on a fresh capability so the surrounding
+        #          state cannot make it pass for another reason.
+        capabilities.save(
+            {
+                **capabilities.load_declared(ledger),
+                "tie-break": {
+                    **capabilities._blank_capability("tie-break"),
+                    "status": "generated",
+                    "matcher": {"field": "task_type", "operator": "in", "value": ["review"]},
+                },
+            },
+            ledger,
+        )
+        record_usefulness(
+            "tie-break",
+            "advice:tb00000001",
+            useful=False,
+            evidence="the matcher does not fit this work",
+            path=ledger,
+            timestamp=base + 100,
+        )
+        assert record_repair(
+            "tie-break",
+            fix="fixed the matcher",
+            artifact="PR #1000",
+            path=ledger,
+            timestamp=base + 200,
+        )
+        cleared = {p["capability_id"] for p in propose_repair(path=ledger)}
+        assert "tie-break" not in cleared, cleared
+        record_usefulness(
+            "tie-break",
+            "advice:tb00000002",
+            useful=False,
+            evidence="still does not fit",
+            path=ledger,
+            timestamp=base + 200,  # EXACTLY the repair's second
+        )
+        tied = {p["capability_id"] for p in propose_repair(path=ledger)}
+        assert "tie-break" in tied, (
+            "a defect recorded in the same second as a repair must RE-OPEN the proposal, not "
+            "vanish -- a gate must fail toward motion, not silence"
+        )
+
+        # ---- 10. A CLAIMED REPAIR WITH NOTHING TO CHECK MUST NOT CLEAR ANYTHING.
+        for kwargs in ({"fix": "fixed it", "artifact": ""}, {"fix": "", "artifact": "PR #1"}):
+            try:
+                record_repair("worth-fixing", path=ledger, **kwargs)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"an unevidenced repair must be refused: {kwargs}")
+
+    # ---- 11. THE TWO PROPERTIES OF A KIND ARE INDEPENDENT, and the pair that proves it is
+    #          `precondition_unmet`: NOT demotable, IS repairable. If those ever coincide the
+    #          repair channel is redundant with the drain.
+    assert decline_kind_demotable("precondition_unmet") is False
+    assert decline_kind_repairable("precondition_unmet") is True
+    assert decline_kind_repairable("no_landing_zone") is False
+    assert decline_kind_repairable("unspecified") is False, "a default must not propose a repair"
+    for kind, row in DECLINE_KINDS.items():
+        assert "repairable" in row, f"{kind} does not declare `repairable`"
+    print(
+        "capability_propensity repair selftest: OK (worth-having-and-broken is expressible, a "
+        "correct match is never proposed, precondition_unmet finally has an action, the evidence "
+        "travels with the proposal, recording the repair drains it while the evidence is still in "
+        "window, new evidence re-opens it, and nothing is applied or queued)"
+    )
+
+
+def _selftest_finds() -> None:
+    """A FIND IS AN ATTRIBUTION RECORD, and the finder may be a capability OR a surface.
+
+    Every assertion was written by breaking it first:
+
+      * dropping the `artifact` guard -> a claimed find with no artifact is accepted, caught here;
+      * dropping the `defect` guard -> likewise;
+      * letting a surface find write a usefulness verdict -> the posterior moves for a capability
+        nobody credited, caught here;
+      * giving the find record an `advice:` ref -> `experiments()` sees it, the candidate count
+        moves, and the structural separation becomes conventional; caught here;
+      * dropping the idempotency key -> re-recording one find inflates the count, caught here;
+      * dropping `defect_found` from the provenance table's corroboration requirement -> covered by
+        `_selftest_provenance`, and the interlock below proves the discount still caps volume.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import capability_advisor
+
+    with tempfile.TemporaryDirectory(prefix="finds-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("finder-cap", FIND_CARRIER):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["review"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        real = capability_advisor.SURFACE_BINDINGS.get("f-surf")
+        capability_advisor.SURFACE_BINDINGS["f-surf"] = {"finder-cap": "bound for the test"}
+        try:
+            # ---- 1. A CLAIM WITHOUT AN ARTIFACT IS WORTH NOTHING, and is refused.
+            for kwargs in (
+                {"defect": "the advisor still offered a suppressed surface", "artifact": ""},
+                {"defect": "", "artifact": "PR #123"},
+                {"defect": "   ", "artifact": "   "},
+            ):
+                try:
+                    record_find(surface="f-surf", path=ledger, **kwargs)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"an unevidenced find must be refused: {kwargs}")
+            # ...and a find with NO finder at all teaches nothing, so it is refused too.
+            try:
+                record_find(defect="d", artifact="PR #1", path=ledger)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("a find with no finder must be refused")
+            # ...and a capability-attributed find without its experiment id belongs to no trial.
+            try:
+                record_find(defect="d", artifact="PR #1", capability_id="finder-cap", path=ledger)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("a capability find with no experiment id must be refused")
+
+            # ---- 2. A SURFACE-ATTRIBUTED FIND FEEDS BINDING QUALITY AND SCORES NOTHING.
+            before = propensity("finder-cap", path=ledger)
+            res = record_find(
+                defect="the advisor offered capabilities at a suppressed surface",
+                # A SYNTHETIC artifact string, deliberately not a dated filename:
+                # `capability_admission.commitments()` treats `<date>-<name>.md` in committed code
+                # as a CITATION to a decision record and fails the suite when the record does not
+                # exist. A fixture must not look like a promise.
+                artifact="finding A2 of the audit run, recorded in the audit's own ledger",
+                surface="f-surf",
+                subject="capability-advisor",
+                path=ledger,
+            )
+            assert res["recorded"] and res["finder_kind"] == "surface", res
+            assert res["feeds"] == "binding_quality", res
+            assert res["affects_propensity"] is False and not res["usefulness_recorded"], res
+            assert res["carrier"] == FIND_CARRIER, res
+            after = propensity("finder-cap", path=ledger)
+            assert after["propensity"] == before["propensity"], (before, after)
+            assert after["evidence_weight"] == before["evidence_weight"], (before, after)
+            # ...and it did not touch the CARRIER's numbers either, because `find:` is not `advice:`.
+            carrier = usefulness(path=ledger)["rows"][FIND_CARRIER]
+            assert carrier["candidates"] == 0 and carrier["resolved"] == 0, carrier
+            assert experiments(path=ledger) == [], "a find must be invisible to experiments()"
+
+            # ...and it IS visible where it belongs.
+            bq = binding_quality("f-surf", path=ledger)
+            assert bq["finds"] == 1, bq
+            assert bq["finds_by_finder_kind"] == {"surface": 1}, bq
+            assert bq["find_subjects"] == ["capability-advisor"], bq
+
+            # ---- 3. IDEMPOTENT: the same defect from the same finder is ONE find.
+            again = record_find(
+                defect="The Advisor Offered Capabilities At A Suppressed Surface",
+                artifact="same finding, recorded twice",
+                surface="f-surf",
+                path=ledger,
+            )
+            assert again["recorded"] is False, again
+            assert binding_quality("f-surf", path=ledger)["finds"] == 1, "a replay must not inflate"
+
+            # ---- 4. A CAPABILITY-ATTRIBUTED FIND IS OUTCOME EVIDENCE, at `defect_found`.
+            capabilities.heartbeat(
+                "finder-cap",
+                "match",
+                ref="advice:findtrial01",
+                path=ledger,
+                idempotency_key="m:fc:1",
+                metadata={"surface": "f-surf"},
+            )
+            got = record_find(
+                defect="gui/app.py:884 offers an exporter that export.EXPORTERS never registers",
+                artifact="issue #77, verified at gui/app.py:884-888",
+                surface="f-surf",
+                capability_id="finder-cap",
+                experiment_id="advice:findtrial01",
+                judge="codex",
+                path=ledger,
+            )
+            assert got["recorded"] and got["usefulness_recorded"], got
+            assert got["finder_kind"] == "capability" and got["affects_propensity"], got
+            scored = propensity("finder-cap", path=ledger)
+            assert scored["provenance_mix"] == {"defect_found": 1}, scored
+            assert scored["evidence_weight"] == 1.0, scored
+            assert scored["outcome_derived_verdicts"] == 1, scored
+            # A defect found outweighs a self-report: 0.6667 against 0.5556, both literals.
+            assert scored["propensity"] == 0.6667, scored
+            assert binding_quality("f-surf", path=ledger)["finds_by_finder_kind"] == {
+                "capability": 1,
+                "surface": 1,
+            }, binding_quality("f-surf", path=ledger)
+
+            # ---- 5. THE INFLATION INTERLOCK. Nine more artifact-backed finds from the SAME arm
+            #        must not move the number, because one arm is one observation. This is the
+            #        guard that makes `defect_found` safe to weigh at 1.0.
+            for i in range(9):
+                exp = f"advice:spamfind{i:03d}"
+                capabilities.heartbeat(
+                    "finder-cap",
+                    "match",
+                    ref=exp,
+                    path=ledger,
+                    idempotency_key=f"m:spam{i}",
+                    metadata={"surface": "f-surf"},
+                )
+                record_find(
+                    defect=f"another distinct defect {i}",
+                    artifact=f"issue #{100 + i}",
+                    surface="f-surf",
+                    capability_id="finder-cap",
+                    experiment_id=exp,
+                    judge="codex",
+                    path=ledger,
+                )
+            spammed = propensity("finder-cap", path=ledger)
+            assert spammed["evidence_count"] == 10, spammed
+            # TEN finds, ONE arm, still ONE observation's worth -- and the number has not budged.
+            assert spammed["evidence_weight"] == 1.0, spammed
+            assert spammed["propensity"] == 0.6667, spammed
+            assert spammed["independent_arms"] == 1, spammed
+            # ...while ONE find from a SECOND arm does move it, which is the incentive we want.
+            capabilities.heartbeat(
+                "finder-cap",
+                "match",
+                ref="advice:secondarm01",
+                path=ledger,
+                idempotency_key="m:arm2",
+                metadata={"surface": "f-surf"},
+            )
+            record_find(
+                defect="a defect the other reviewer found",
+                artifact="issue #200",
+                surface="f-surf",
+                capability_id="finder-cap",
+                experiment_id="advice:secondarm01",
+                judge="gemini",
+                path=ledger,
+            )
+            corroborated = propensity("finder-cap", path=ledger)
+            assert corroborated["independent_arms"] == 2, corroborated
+            assert corroborated["evidence_weight"] == 2.0, corroborated
+            assert corroborated["propensity"] > spammed["propensity"], (
+                corroborated,
+                spammed,
+            )
+        finally:
+            if real is None:
+                capability_advisor.SURFACE_BINDINGS.pop("f-surf", None)
+            else:
+                capability_advisor.SURFACE_BINDINGS["f-surf"] = real
+
+    print(
+        "capability_propensity finds selftest: OK (a claimed find with no artifact is refused, a "
+        "surface find feeds binding quality and scores nothing, a capability find is defect_found "
+        "outcome evidence, replays do not inflate, and ten finds from one arm are still one "
+        "observation)"
+    )
+
+
 def _selftest_declines() -> None:
     """A DECLINE IS A THIRD STATE. It must be visible, attributable, and inert on the posterior.
 
@@ -1822,7 +3318,11 @@ def _selftest_declines() -> None:
         # decline leaking in as `not_useful` would visibly drag a real number down rather than
         # merely appearing beside a prior.
         before = propensity("helper", path=ledger)
-        assert before["evidence_count"] == 1 and before["propensity"] == 0.6667, before
+        # 0.5556, not 0.6667: one UNATTRIBUTED SELF-REPORT weighs 0.25, so (1+0.25)/(2+0.25). The
+        # provenance discount landed here on 2026-08-23; the point of the assertion is unchanged
+        # (a real, non-prior number the decline below must leave alone).
+        assert before["evidence_count"] == 1 and before["propensity"] == 0.5556, before
+        assert before["evidence_weight"] == 0.25, before
         for i in range(3):
             e = f"advice:helperdecl{i:03d}"
             assert record_decline(
@@ -2196,6 +3696,282 @@ def _selftest_declines() -> None:
     )
 
 
+def _selftest_provenance() -> None:
+    """A VERDICT IS ONLY AS GOOD AS WHERE IT CAME FROM, and the report must say where.
+
+    Every assertion below was written by breaking it first, and each break was checked to
+    DISCRIMINATE — several earlier attempts in this repo asserted a property using the constant that
+    guarded it, so the test moved with the bug and could never fail:
+
+      * dropping the provenance weight (treat every verdict as 1.0) -> three correlated
+        self-reports reach 0.6667, exactly where one corroborated outcome sits, and the
+        `corroborated > solo` assertion fails;
+      * dropping the correlated-arm reciprocal -> three same-arm self-reports reach 0.6364,
+        exactly where three DIFFERENT arms sit, and both the `n_eff == 0.25` and
+        `many_arms > solo` assertions fail;
+      * defaulting an unlabelled row to the strongest class -> the legacy-row mix assertion fails;
+      * dropping the corroboration requirement -> the refusal assertion fails;
+      * keying the correlation on the judge alone -> a corroborated verdict sharing the
+        unattributed arm with three self-reports drops from n_eff 1.25 to 0.4375 and the
+        `mixed_arm` assertion fails;
+      * annotating the entry in `rank()` but not with the mix -> the CALLER assertion fails, which
+        is the one that matters: a helper computing the right thing while the caller receives the
+        old thing is a bug this repo has shipped and an audit, not its author, caught.
+
+    LITERAL EXPECTED VALUES throughout, deliberately not expressed in terms of
+    `VERDICT_PROVENANCE[...]["weight"]`: an assertion written in terms of the table it guards moves
+    with the table and can never fail.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="provenance-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("solo", "many-arms", "corroborated", "legacy", "ticky", "mixed-arm"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        def _offer(cap_id: str, exp: str) -> None:
+            capabilities.heartbeat(
+                cap_id,
+                "match",
+                ref=exp,
+                path=ledger,
+                idempotency_key=f"m:{cap_id}:{exp}",
+                metadata={"surface": "repo-audit:phase-1"},
+            )
+            record_trigger(cap_id, exp, path=ledger)
+
+        # THE MEASURED CASE: three verdicts, one model, near-identical instructions. The raw rate
+        # says 100%; the honest reading is one observation's worth of one opinion.
+        for i in range(3):
+            exp = f"advice:solo{i:08d}"
+            _offer("solo", exp)
+            record_usefulness("solo", exp, useful=True, evidence=f"found defect {i}", path=ledger)
+        # ...the same three verdicts from three DIFFERENT arms.
+        for i, judge in enumerate(("codex", "cursor", "gemini")):
+            exp = f"advice:arms{i:08d}"
+            _offer("many-arms", exp)
+            record_usefulness(
+                "many-arms", exp, useful=True, evidence="found a defect", judge=judge, path=ledger
+            )
+        # ...and ONE verdict corroborated by a named outcome.
+        _offer("corroborated", "advice:corrob00000")
+        record_usefulness(
+            "corroborated",
+            "advice:corrob00000",
+            useful=True,
+            evidence="supplied the citation that became the strongest fact in the issue body",
+            provenance="outcome_corroborated",
+            corroboration="issue #123 filed and the fix merged in PR #124, still green 14d later",
+            path=ledger,
+        )
+        # A PRE-PROVENANCE ROW, written the way the live ledger's 12 verdicts were: an outcome
+        # event with `useful` and `evidence` and nothing else.
+        capabilities.heartbeat(
+            "legacy",
+            "outcome",
+            ref="advice:legacy000000",
+            path=ledger,
+            idempotency_key="useful:legacy:advice:legacy000000",
+            metadata={"source": "capability_propensity", USEFUL_KEY: True, "evidence": "helped"},
+        )
+        # A TICK ROW, which stamped `verdict_kind` before this axis existed.
+        capabilities.heartbeat(
+            "ticky",
+            "outcome",
+            ref="advice:ticky0000000",
+            path=ledger,
+            idempotency_key="useful:ticky:advice:ticky0000000",
+            metadata={
+                "source": "capability_propensity",
+                USEFUL_KEY: True,
+                "evidence": "finding set changed",
+                VERDICT_KIND_KEY: TICK_VERDICT_KIND,
+            },
+        )
+        # THREE self-reports AND one corroborated outcome, all from the unattributed arm. The
+        # corroborated one's independence rests on the NAMED OUTCOME, not on who noticed it, so
+        # sharing an arm with three opinions must not discount it.
+        for i in range(3):
+            exp = f"advice:mixed{i:07d}"
+            _offer("mixed-arm", exp)
+            record_usefulness("mixed-arm", exp, useful=True, evidence=f"helped {i}", path=ledger)
+        _offer("mixed-arm", "advice:mixedcorrob")
+        record_usefulness(
+            "mixed-arm",
+            "advice:mixedcorrob",
+            useful=True,
+            evidence="the finding survived adversarial review",
+            provenance="outcome_corroborated",
+            corroboration="two independent reviewers refuted none of the four findings",
+            path=ledger,
+        )
+
+        u = usefulness(path=ledger)["rows"]
+        # THE RAW RATE IS UNCHANGED and still reported -- the discount must be inspectable, not
+        # applied silently in place of the number the events actually say.
+        assert u["solo"]["useful"] == 3 and u["solo"]["usefulness_rate"] == 1.0, u["solo"]
+        # ...and the discounted evidence is a QUARTER of ONE observation, not three.
+        assert u["solo"]["n_eff"] == 0.25, u["solo"]
+        assert u["solo"]["independent_arms"] == 1, u["solo"]
+        assert u["solo"]["provenance_mix"] == {"self_reported": 3}, u["solo"]
+        assert u["solo"]["self_reported_share"] == 1.0, u["solo"]
+        assert u["solo"]["outcome_derived"] == 0, u["solo"]
+        # THREE ARMS ARE THREE OBSERVATIONS, each still discounted for being an opinion.
+        assert u["many-arms"]["n_eff"] == 0.75, u["many-arms"]
+        assert u["many-arms"]["independent_arms"] == 3, u["many-arms"]
+        # A CORROBORATED OUTCOME IS A WHOLE OBSERVATION.
+        assert u["corroborated"]["n_eff"] == 1.0, u["corroborated"]
+        assert u["corroborated"]["outcome_derived"] == 1, u["corroborated"]
+        assert u["corroborated"]["self_reported_share"] == 0.0, u["corroborated"]
+        # AN UNLABELLED ROW IS A SELF-REPORT, because that is what it is.
+        assert u["legacy"]["provenance_mix"] == {"self_reported": 1}, u["legacy"]
+        assert u["legacy"]["n_eff"] == 0.25, u["legacy"]
+        # A TICK ROW IS MACHINE-OBSERVED even though it predates the explicit field.
+        assert u["ticky"]["provenance_mix"] == {"machine_observed": 1}, u["ticky"]
+        assert u["ticky"]["n_eff"] == 0.6, u["ticky"]
+        assert u["ticky"]["outcome_derived"] == 1, u["ticky"]
+        # THE PAIR KEY: 3 correlated opinions (0.25 total) + 1 corroborated outcome (1.0).
+        assert u["mixed-arm"]["n_eff"] == 1.25, u["mixed-arm"]
+        assert u["mixed-arm"]["independent_arms"] == 2, u["mixed-arm"]
+        assert u["mixed-arm"]["provenance_mix"] == {
+            "outcome_corroborated": 1,
+            "self_reported": 3,
+        }, u["mixed-arm"]
+
+        p_solo = propensity("solo", path=ledger)
+        p_arms = propensity("many-arms", path=ledger)
+        p_corr = propensity("corroborated", path=ledger)
+        p_mixed = propensity("mixed-arm", path=ledger)
+        # 3 correlated self-reports at a RAW 100% must land near the 0.5 prior, not near 1.0.
+        assert p_solo["propensity"] == 0.5556, p_solo
+        assert p_solo["raw_usefulness_rate"] == 1.0, p_solo
+        # ONE corroborated outcome OUTWEIGHS three correlated opinions.
+        assert p_corr["propensity"] > p_solo["propensity"], (p_corr, p_solo)
+        # THREE INDEPENDENT ARMS outweigh three correlated ones at the same raw rate.
+        assert p_arms["propensity"] > p_solo["propensity"], (p_arms, p_solo)
+        assert p_mixed["propensity"] > p_arms["propensity"], (p_mixed, p_arms)
+        # THE REPORTING REQUIREMENT: the mix travels with the number, always.
+        for prop in (p_solo, p_arms, p_corr, p_mixed):
+            assert prop["provenance_mix"], prop
+            assert prop["evidence_count"] >= 1 and prop["evidence_weight"] > 0, prop
+            assert prop["independent_arms"] >= 1, prop
+            assert prop["self_reported_share"] is not None, prop
+        assert "SELF-REPORTED ONLY" in p_solo["basis"], p_solo["basis"]
+        assert "SELF-REPORTED ONLY" not in p_corr["basis"], p_corr["basis"]
+        # BOTH quantities, per the runtime rule: the raw count AND the effective weight.
+        assert f"{p_solo['evidence_count']}" == "3" and p_solo["evidence_weight"] == 0.25, p_solo
+        # THE LATCHED-GATE PROPERTY SURVIVES THE DISCOUNT: discounting compresses towards the
+        # prior, never below the floor, so a self-reported-only capability stays samplable.
+        assert p_solo["propensity"] >= EXPLORATION_FLOOR and p_solo["explorable"], p_solo
+
+        # THE COUNTERFACTUAL ARM is reported beside the posterior, from the trials themselves.
+        capabilities.heartbeat(
+            "solo",
+            "match",
+            ref="advice:controlarm00",
+            path=ledger,
+            idempotency_key="m:solo:control",
+            metadata={"surface": "repo-audit:phase-1"},
+        )
+        after = propensity("solo", path=ledger)
+        assert after["counterfactual_named_not_triggered"] == 1, after
+        assert after["counterfactual_silent"] == 1, after
+        # ...and it did NOT move the posterior. A counterfactual is context, never a verdict.
+        assert after["propensity"] == p_solo["propensity"], (after, p_solo)
+
+        # WHAT A CALLER RECEIVES. `rank()` is the production path; a mix computed and not handed
+        # over is a mix nobody reads.
+        ranked = rank(
+            [{"capability_id": c} for c in ("solo", "corroborated", "many-arms")], path=ledger
+        )
+        assert [e["capability_id"] for e in ranked][0] == "corroborated", ranked
+        for entry in ranked:
+            assert entry["usefulness_provenance_mix"], entry
+            assert entry["usefulness_independent_arms"] >= 1, entry
+            assert entry["usefulness_self_reported_share"] is not None, entry
+            assert entry["usefulness_evidence_weight"] > 0, entry
+        solo_entry = next(e for e in ranked if e["capability_id"] == "solo")
+        assert solo_entry["usefulness_provenance_mix"] == {"self_reported": 3}, solo_entry
+        assert solo_entry["usefulness_evidence_weight"] == 0.25, solo_entry
+        assert solo_entry["usefulness_outcome_derived"] == 0, solo_entry
+        # ORDER ONLY: the discount reorders, it never drops a candidate.
+        assert len(ranked) == 3, ranked
+
+        # THE HEADLINE STATES THE MIX. "11 of 12 useful" with no mix is the reading this replaces.
+        rep = report(path=ledger)
+        assert rep["verdict_count"] == 13, rep["verdict_count"]
+        assert rep["verdicts_by_provenance"] == {
+            "machine_observed": 1,
+            "outcome_corroborated": 2,
+            "self_reported": 10,
+        }, rep["verdicts_by_provenance"]
+        assert rep["verdicts_self_reported"] == 10, rep
+        assert rep["verdicts_outcome_derived"] == 3, rep
+        assert rep["verdicts_self_reported_share"] == round(10 / 13, 4), rep
+        assert rep["capabilities_with_outcome_derived_evidence"] == 3, rep
+        assert rep["capabilities_with_multiple_judge_arms"] == 2, rep
+        assert "self-reported" in _fmt(rep), _fmt(rep)
+
+        # AN UNKNOWN PROVENANCE IS REFUSED, never coerced to the default: a typo must not silently
+        # discard the classification the caller believed it had made.
+        try:
+            record_usefulness(
+                "solo", "advice:badprov0000", useful=True, evidence="x", provenance="great"
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an unknown verdict provenance must be refused")
+        # THE STRONGEST CLASSES ARE NOT SELF-CERTIFYING: no named outcome, no claim.
+        for claim in ("outcome_corroborated", "defect_found"):
+            for blank in ("", "   "):
+                try:
+                    record_usefulness(
+                        "solo",
+                        "advice:nocorrob000",
+                        useful=True,
+                        evidence="it helped",
+                        provenance=claim,
+                        corroboration=blank,
+                        path=ledger,
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"{claim} without a named corroboration must be refused")
+        # ...and a DECLINE still cannot reach the posterior, even carrying provenance metadata.
+        # There is no code path from a decline to a verdict, and this is where that is proven for
+        # the weighted posterior specifically.
+        before = propensity("many-arms", path=ledger)
+        record_decline(
+            "many-arms",
+            "advice:declprov000",
+            reason="wrong tool for a read-only audit",
+            kind="wrong_match",
+            surface="repo-audit:phase-1",
+            path=ledger,
+            metadata={VERDICT_PROVENANCE_KEY: "outcome_corroborated", VERDICT_JUDGE_KEY: "codex"},
+        )
+        post = propensity("many-arms", path=ledger)
+        assert post["propensity"] == before["propensity"], (before, post)
+        assert post["evidence_weight"] == before["evidence_weight"], (before, post)
+        assert post["provenance_mix"] == before["provenance_mix"], (before, post)
+        assert post["declines"] == 1, post
+
+    print(
+        "capability_propensity provenance selftest: OK (self-reports weigh a quarter, one judge "
+        "arm totals one observation, a corroborated outcome outweighs three correlated opinions, "
+        "unlabelled rows classify as self-reported, the strongest classes are not self-certifying, "
+        "declines stay inert, and the caller receives the mix)"
+    )
+
+
 def _selftest_detection() -> None:
     """The recursive loop: detect a pass-over, propose, promote — and never ratchet.
 
@@ -2441,6 +4217,24 @@ def _fmt(rep: dict) -> str:
         f"({rep['resolved_experiment_count']} resolved)",
         f"  capabilities with usefulness evidence: {rep['capabilities_with_evidence']} "
         f"of {rep['capability_count']}",
+        # THE PROVENANCE MIX, never printed apart from the rate it qualifies.
+        f"  verdicts: {rep['verdict_count']} — {rep['verdicts_by_provenance'] or '(none)'}; "
+        f"{rep['verdicts_outcome_derived']} outcome-derived, {rep['verdicts_self_reported']} "
+        f"self-reported"
+        + (
+            f" ({rep['verdicts_self_reported_share']:.0%})"
+            if rep["verdicts_self_reported_share"] is not None
+            else ""
+        ),
+        f"  capabilities with non-self-reported evidence: "
+        f"{rep['capabilities_with_outcome_derived_evidence']}; with >1 judge arm: "
+        f"{rep['capabilities_with_multiple_judge_arms']}",
+        f"  repair proposals: {rep['repair_proposal_count']} "
+        f"({rep['repair_proposals_worth_having']} worth having and broken); "
+        f"repairs recorded: {rep['repairs_recorded']} — report only, never applied, never queued",
+        f"  defect finds: {rep['find_count']} — {rep['finds_by_finder_kind'] or '(none)'} "
+        f"(capability-attributed finds also score; surface-attributed ones feed binding quality "
+        f"and score nothing)",
         f"  reasoned declines recorded: {rep['decline_count']} across "
         f"{rep['capabilities_declined_with_reason']} capability(ies) — counted, never scored; "
         f"{rep['decline_demotable_count']} attributable to a binding",
@@ -2463,6 +4257,22 @@ def _fmt(rep: dict) -> str:
             f"{row['not_useful']:3d} {row['declined']:5d}"
             + ("  (floored)" if row["floored"] else "")
         )
+    if rep["repair_proposals"]:
+        lines.append("")
+        lines.append(
+            "  REPAIR PROPOSALS (report only; the loop's third action — neither promote nor demote)"
+        )
+        for prop in rep["repair_proposals"][:10]:
+            lines.append(
+                f"    ~ {prop['capability_id']:34s} "
+                f"{'WORTH HAVING' if prop['worth_having'] else 'no useful verdict yet':22s} "
+                f"defect evidence {prop['defect_evidence_since_repair']}"
+                f"/{prop['defect_evidence_total']}, repairs recorded {prop['repairs_recorded']}"
+            )
+            if prop["evidence"]:
+                lines.append(f"        {prop['evidence'][0][:110]}")
+        if len(rep["repair_proposals"]) > 10:
+            lines.append(f"    ... and {len(rep['repair_proposals']) - 10} more")
     return "\n".join(lines) + "\n"
 
 
@@ -2478,6 +4288,10 @@ def main(argv: list[str]) -> int:
             "trigger",
             "useful",
             "decline",
+            "find",
+            "binding-quality",
+            "repair",
+            "record-repair",
             "detect",
             "tick-evidence",
         ],
@@ -2491,6 +4305,29 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--not-useful", action="store_true", help="record that triggering it did NOT help"
+    )
+    # PROVENANCE FROM BASH, because the surfaces that judge are shells. A verdict recorded without
+    # these lands as `self_reported` from an unattributed arm, which is the honest default and the
+    # weakest weight -- so the flags are how a caller EARNS a stronger one.
+    ap.add_argument(
+        "--provenance",
+        default=PROVENANCE_DEFAULT,
+        choices=sorted(VERDICT_PROVENANCE),
+        help="useful: WHERE the verdict came from. The default self_reported weighs "
+        f"{VERDICT_PROVENANCE[PROVENANCE_DEFAULT]['weight']}; outcome_corroborated weighs 1.0 "
+        "and requires --corroboration",
+    )
+    ap.add_argument(
+        "--judge",
+        default="",
+        help="useful: which arm judged (model/backend/surface). Verdicts with no judge are "
+        "treated as ONE correlated arm, so naming it is how a capability escapes that discount",
+    )
+    ap.add_argument(
+        "--corroboration",
+        default="",
+        help="useful: the outcome corroborating the verdict (review that confirmed it, issue "
+        "filed, fix that landed). Required by outcome_corroborated/defect_found",
     )
     # THE CALLERS ARE BASH. Both lane automations and every skill reach this module from a shell, so
     # a verb that exists only in Python is a verb the surfaces that make these decisions cannot use.
@@ -2539,10 +4376,37 @@ def main(argv: list[str]) -> int:
         default=TICK_EVIDENCE_BUDGET_S,
         help="tick-evidence: wall-clock ceiling; the tick must never wait longer",
     )
+    # A FIND, FROM BASH. The surfaces that find defects are skills and lanes, which run shells, so
+    # a verb reachable only from Python is a verb the finders cannot use -- the same reason `decline`
+    # has a subcommand.
+    ap.add_argument(
+        "--defect",
+        default="",
+        help="find: WHAT was defective (required). Not 'something was found'",
+    )
+    ap.add_argument(
+        "--artifact",
+        default="",
+        help="find: the PR, issue, file:line or failing test a stranger could check (required). "
+        "A claimed find with no artifact is worth nothing",
+    )
+    ap.add_argument(
+        "--subject",
+        default="",
+        help="find: what the defect was IN (module, capability, doc). Recorded, never scored",
+    )
+    ap.add_argument(
+        "--fix",
+        default="",
+        help="record-repair: what was CHANGED (required)",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        _selftest_provenance()
+        _selftest_finds()
+        _selftest_repair()
         _selftest_declines()
         _selftest_detection()
         _selftest_tick_evidence()
@@ -2557,6 +4421,86 @@ def main(argv: list[str]) -> int:
         )
         print(json.dumps(rep, indent=2) if args.json else format_tick_evidence(rep))
         return 0
+    if args.command == "find":
+        ledger = pathlib.Path(args.ledger) if args.ledger else None
+        try:
+            res = record_find(
+                defect=args.defect,
+                artifact=args.artifact,
+                surface=args.surface,
+                capability_id=args.capability,
+                experiment_id=args.experiment,
+                subject=args.subject,
+                judge=args.judge,
+                path=ledger,
+            )
+        except ValueError as exc:
+            ap.error(str(exc))
+        res["ledger"] = str(ledger) if ledger else "live"
+        print(json.dumps(res, indent=2 if args.json else None))
+        return 0
+    if args.command == "repair":
+        props = propose_repair(window_days=args.window_days)
+        _capability_heartbeat("invocation", f"repair-proposals:{len(props)}")
+        if args.json:
+            print(json.dumps(props, indent=2))
+        else:
+            worth = sum(1 for p in props if p["worth_having"])
+            print(
+                f"repair proposals — {len(props)} ({worth} worth having and broken). "
+                "REPORT ONLY: never applied, never queued for anyone."
+            )
+            for prop in props:
+                print(
+                    f"  ~ {prop['capability_id']:34s} "
+                    f"{'WORTH HAVING' if prop['worth_having'] else 'no useful verdict yet':22s} "
+                    f"basis={','.join(prop['basis'])} "
+                    f"defect={prop['defect_evidence_since_repair']}"
+                    f"/{prop['defect_evidence_total']} repairs={prop['repairs_recorded']}"
+                )
+                for line in prop["evidence"][:2]:
+                    print(f"      {line[:118]}")
+                for fix in prop["implied_fixes"]:
+                    print(f"      fix: {fix[:118]}")
+        return 0
+    if args.command == "record-repair":
+        if not args.capability:
+            ap.error("--capability is required")
+        ledger = pathlib.Path(args.ledger) if args.ledger else None
+        try:
+            ok = record_repair(args.capability, fix=args.fix, artifact=args.artifact, path=ledger)
+        except ValueError as exc:
+            ap.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "recorded": bool(ok),
+                    "command": "record-repair",
+                    "ledger": str(ledger) if ledger else "live",
+                    "capability": args.capability,
+                    # SAY WHAT THIS DID. It drains the proposal; it is NOT a verdict and moves no
+                    # posterior. New defect evidence after it re-opens the proposal.
+                    "drains_repair_proposal": True,
+                    "affects_propensity": False,
+                }
+            )
+        )
+        return 0
+    if args.command == "binding-quality":
+        if not args.surface:
+            ap.error("--surface is required: binding quality is a property OF a surface")
+        rep = binding_quality(args.surface, window_days=args.window_days)
+        if args.json:
+            print(json.dumps(rep, indent=2))
+        else:
+            print(
+                f"binding quality — {rep['surface']} ({rep['window_days']}d)\n"
+                f"  bound: {len(rep['bound'])}  offers: {rep['offers']}  "
+                f"triggers: {rep['triggers']}  declines: {rep['declines']}\n"
+                f"  finds: {rep['finds']} {rep['finds_by_finder_kind'] or ''}  "
+                f"subjects: {rep['find_subjects'] or '(none)'}"
+            )
+        return 0
     if args.command == "detect":
         rep = detect(apply_promotions=args.apply)
         _capability_heartbeat("invocation", f"detect:{len(rep['promotions'])}")
@@ -2567,7 +4511,10 @@ def main(argv: list[str]) -> int:
                 f"capability selection detection — {len(rep['surfaces'])} surface(s) with records"
             )
             for s_, info in rep["surfaces"].items():
-                print(f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])}")
+                print(
+                    f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])} "
+                    f"finds={info['finds']}"
+                )
             print(
                 f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
                 + (
@@ -2635,19 +4582,33 @@ def main(argv: list[str]) -> int:
                 args.experiment,
                 useful=not args.not_useful,
                 evidence=args.evidence,
+                provenance=args.provenance,
+                judge=args.judge,
+                corroboration=args.corroboration,
                 path=ledger,
             )
-        print(
-            json.dumps(
+        out = {
+            "recorded": bool(ok),
+            "command": args.command,
+            "ledger": str(ledger) if ledger else "live",
+            "capability": args.capability,
+            "experiment": args.experiment,
+        }
+        if args.command == "useful":
+            # SAY WHAT THIS VERDICT IS WORTH, at the moment it is recorded. A caller that thinks
+            # it just added a full observation has been misled -- and a self-report from an
+            # unnamed arm is worth a quarter of one, shared with every other verdict from that arm.
+            out.update(
                 {
-                    "recorded": bool(ok),
-                    "command": args.command,
-                    "ledger": str(ledger) if ledger else "live",
-                    "capability": args.capability,
-                    "experiment": args.experiment,
+                    "provenance": args.provenance,
+                    "provenance_weight": provenance_weight(args.provenance),
+                    "self_assessed": provenance_self_assessed(args.provenance),
+                    "judge": args.judge or UNATTRIBUTED_JUDGE,
+                    "judge_attributed": bool(args.judge.strip()),
+                    "correlated_with_same_arm_verdicts": not args.judge.strip(),
                 }
             )
-        )
+        print(json.dumps(out))
         return 0
     if args.command == "experiments":
         data = experiments(window_days=args.window_days)
@@ -2789,7 +4750,8 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
     """
     import capability_advisor
 
-    out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": []}
+    out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": [], "finds": 0}
+    all_finds = finds(path=path)
     # EVERY SURFACE THAT HAS EITHER A DECLARATION OR EVIDENCE. Enumerating only the declared keys
     # missed the inherited ones entirely: `repo-audit:dimension-1` has no table entry of its own --
     # it inherits `offload` surface-wide -- so three independent audits declining `offload` there
@@ -2804,10 +4766,21 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
         proms = propose_bindings(surface, recs, path=path) if recs else []
         dems = propose_demotions(surface, path=path)
         counts = surface_decline_counts(surface, path=path)
-        if recs or proms or dems or counts["declined"]:
+        # BINDING QUALITY, reported per surface. A surface that triggers nothing while its consults
+        # keep surfacing defects is not an idle surface, and the two were indistinguishable before
+        # finds existed. Read here, never acted on: a number about a surface must not become
+        # selection pressure on a capability.
+        here = [f for f in all_finds if f["surface"] == surface or f["finder"] == surface]
+        if recs or proms or dems or counts["declined"] or here:
             out["surfaces"][surface] = {
                 "records": len(recs),
                 "bound": sorted(capability_advisor.binding_for(surface, path=path)),
+                "finds": len(here),
+                "finds_by_finder_kind": {
+                    k: sum(1 for f in here if f["finder_kind"] == k)
+                    for k in sorted({f["finder_kind"] for f in here})
+                },
+                "find_subjects": sorted({f["subject"] for f in here if f["subject"]}),
                 # THE DRAINABLE QUANTITY, printed whether or not the floor was reached. "0 proposals"
                 # beside "3 declines accumulating, floor 2" reads completely differently from "0
                 # proposals" beside nothing at all, and only one of those is a healthy silence.
@@ -2821,6 +4794,11 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
             }
         out["promotions"].extend(proms)
         out["demotions"].extend(dems)
+    out["finds"] = len(all_finds)
+    out["finds_by_finder_kind"] = {
+        k: sum(1 for f in all_finds if f["finder_kind"] == k)
+        for k in sorted({f["finder_kind"] for f in all_finds})
+    }
     if apply_promotions:
         for prom in out["promotions"]:
             # Respect the ceiling the binding exists to enforce; a promotion that pushes a context
