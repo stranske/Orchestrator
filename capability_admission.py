@@ -712,9 +712,7 @@ def _capability_heartbeat(event: str) -> None:
         pass
 
 
-def findability_report(
-    ledger: dict, ctx: dict, rows: list[dict] | None = None
-) -> dict:
+def findability_report(ledger: dict, ctx: dict, rows: list[dict] | None = None) -> dict:
     """Findability's own numbers: what it BLOCKS, what it defers, and what would drain each.
 
     BOTH QUANTITIES IN ONE PLACE, which is this workspace's standing rule for any gate: `25/43`
@@ -801,9 +799,7 @@ def format_report(rep: dict) -> str:
         )
     find = rep.get("findability") or {}
     if find:
-        causes = ", ".join(
-            f"{len(ids)} {cause}" for cause, ids in sorted(find["by_cause"].items())
-        )
+        causes = ", ".join(f"{len(ids)} {cause}" for cause, ids in sorted(find["by_cause"].items()))
         out += [
             "",
             f"  FINDABILITY:     {len(find['failing'])} of {find['total']} cannot be OFFERED"
@@ -949,9 +945,9 @@ def _selftest() -> None:
             "then name a backlog it cannot say how to clear"
         )
         if cause in FINDABILITY_DRAIN:
-            assert FINDABILITY_DRAIN[cause] in detail, (
-                f"cause {cause!r} does not carry its own fix into the message a caller reads"
-            )
+            assert (
+                FINDABILITY_DRAIN[cause] in detail
+            ), f"cause {cause!r} does not carry its own fix into the message a caller reads"
     assert len(seen) == len(matrix), f"the matrix does not reach every branch: {sorted(seen)}"
 
     # THE ENFORCEMENT DATE MUST NOT BE IN THE FUTURE. `GRANDFATHERED_BEFORE` was first written four

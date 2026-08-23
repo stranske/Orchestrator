@@ -2678,7 +2678,9 @@ def _selftest_findability() -> None:
             site.write_text('consult with surface: "t-find:asked"\n')
             CONSULT_SITES["t-find:asked"] = {"caller": str(site), "how": "synthetic"}
 
-            inv = surfaces_binding(["wide-cap", "asked-cap", "silent-cap", "absent-cap"], path=ledger)
+            inv = surfaces_binding(
+                ["wide-cap", "asked-cap", "silent-cap", "absent-cap"], path=ledger
+            )
             assert "t-find:asked" in inv["wide-cap"], inv["wide-cap"]
             assert "t-find:silent" in inv["wide-cap"], inv["wide-cap"]
             assert inv["asked-cap"] == ["t-find:asked"], inv["asked-cap"]
@@ -2733,7 +2735,9 @@ def _selftest_findability() -> None:
             }
             fam = consulting_surfaces()
             assert {"t-find:step-1", "t-find:step-2"} <= set(fam["reached"]), fam["reached"][:12]
-            assert "t-find:step-3" not in fam["reached"], "a family must not admit an un-listed step"
+            assert (
+                "t-find:step-3" not in fam["reached"]
+            ), "a family must not admit an un-listed step"
             # The family KEY is a label for the declaration, never a surface anyone passes — so it
             # must not leak into the reachable set and quietly satisfy a binding to it.
             assert "t-find:step-N" not in consult_keys(), sorted(consult_keys())[:8]
@@ -2748,7 +2752,9 @@ def _selftest_findability() -> None:
 
     # ---- 5. THE REAL TABLE MUST NOT HAVE DRIFTED, and the in-tree site must verify EVERYWHERE.
     live = consulting_surfaces()
-    assert not live["drifted"], f"a consult site's caller no longer names its surface: {live['drifted']}"
+    assert not live[
+        "drifted"
+    ], f"a consult site's caller no longer names its surface: {live['drifted']}"
     # EVERY BOUND SURFACE IS IN ONE OF THREE DECLARED STATES. A fourth — bindings that nothing can
     # reach and nobody wrote down — is precisely what `ci` was, and it is invisible until a
     # capability is stranded on it. Broken first by adding a binding to a surface with no consult

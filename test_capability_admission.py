@@ -260,8 +260,7 @@ def _findability_ledger(tmp_dir):
         "fixtures": set(rows),
         "known_controls": set(),
         "bound_surfaces": {
-            cap_id: ([spec["bound"]] if spec.get("bound") else [])
-            for cap_id, spec in rows.items()
+            cap_id: ([spec["bound"]] if spec.get("bound") else []) for cap_id, spec in rows.items()
         },
         "reached_surfaces": {"asked"},
         "consult_reach": {"reached": ["asked"], "bound_unconsulted": ["silent"]},
@@ -324,10 +323,13 @@ def test_findability_distinguishes_its_three_sub_causes():
         mine = {cap_id for cap_id in find["failing"] if cap_id.startswith("t-")}
         assert mine == {"t-category-only", "t-nowhere", "t-old-nowhere", "t-stranded"}, mine
         by_cause = {
-            cause: [c for c in ids if c.startswith("t-")]
-            for cause, ids in find["by_cause"].items()
+            cause: [c for c in ids if c.startswith("t-")] for cause, ids in find["by_cause"].items()
         }
-        assert by_cause["bound_nowhere"] == ["t-category-only", "t-nowhere", "t-old-nowhere"], by_cause
+        assert by_cause["bound_nowhere"] == [
+            "t-category-only",
+            "t-nowhere",
+            "t-old-nowhere",
+        ], by_cause
         assert by_cause["bound_to_unconsulted_surface"] == ["t-stranded"], by_cause
         # EVERY FAILURE MUST BE DRAINABLE. A gate reporting a backlog with no stated way to clear it
         # is a latched gate; `drainable` falls below `failing` the moment a cause has no declared
@@ -451,7 +453,9 @@ def test_findability_exemption_is_declared_in_code_not_in_a_live_ledger():
         for cid, cap in ledger.items()
         if cap.get("findability_category") == admission.FINDABILITY_CATEGORY
     } - declared
-    assert not stray, f"ledger declares the findability exemption for undeclared capabilities: {stray}"
+    assert (
+        not stray
+    ), f"ledger declares the findability exemption for undeclared capabilities: {stray}"
 
 
 def test_consult_sites_are_falsifiable_claims_about_real_callers():
@@ -472,7 +476,9 @@ def test_consult_sites_are_falsifiable_claims_about_real_callers():
     # The in-tree site must verify on EVERY machine, CI included, so this check can never degrade
     # into "everything unverified, nothing checked".
     assert "tick" in reach["verified"], reach["verified"]
-    assert advisor.CONSULT_SITES["tick"]["caller"].endswith(".py"), "the in-tree site must be in-tree"
+    assert advisor.CONSULT_SITES["tick"]["caller"].endswith(
+        ".py"
+    ), "the in-tree site must be in-tree"
     # Every declared instance must be accounted for in exactly one of the three states.
     accounted = (
         set(reach["reached"])
