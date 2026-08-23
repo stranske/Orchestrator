@@ -144,6 +144,21 @@ safety switch, not dead code.
   projection keeps identity and verdict fields only — `overdue`'s `silent_days` rises daily on its
   own, and hashing a row whole would score the monitor "useful" on every run it will ever make.
   Kill switch: `ORCH_TICK_EVIDENCE_DISABLED=1`, or `ORCH_DISABLE_STEPS=tick-capability-evidence`.
+- **A usefulness verdict carries its PROVENANCE, and the posterior is weighted by it**
+  (`capability_propensity.VERDICT_PROVENANCE`, 2026-08-23). The first real corpus was 12 verdicts,
+  11 useful — every one **self-assessed by the agent that chose to use the capability**, from three
+  audits by the same model under near-identical instructions. Selection bias on top of correlated
+  arms, which `CLAUDE.md` §2 forbids counting as independent evidence. So a verdict is classified
+  `outcome_corroborated` / `defect_found` (1.0, and **refused** without `corroboration` naming the
+  outcome), `machine_observed` (0.6 — the tick's code-computed finding-set diff) or `self_reported`
+  (0.25, the honest default for any unlabelled row); verdicts are grouped by
+  `(judge arm, provenance)` and each group totals 1.0 however many it holds, reusing the same
+  reciprocal `relearn_quality` applies to research arms via
+  `research_subjects.reciprocal_evidence_weights`. Down-weighted, never banned — self-assessment is
+  the only signal most capabilities have. Every surface states the mix: `propensity()` and `rank()`
+  hand the caller the provenance mix, independent-arm count and self-reported share beside the
+  number, and the report headline now reads *12 verdicts, 12 self_reported, 0 outcome-derived*, with
+  the three capabilities that had shown 0.800 showing 0.556.
 - **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
   the code path that would produce an outcome (Thompson never chooses while the mode is
   epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label
@@ -300,7 +315,8 @@ safety switch, not dead code.
 ## Governing docs
 `ORCHESTRATOR.md` (role/philosophy) · `ARCHITECTURE.md` (data flow) · `FEEDBACK_LOOP.md` (learning
 loop) · `EVAL_AND_TESTING.md` (selftest/gate regime) · `PLANNING.md` (roadmap) ·
-`IMPROVEMENT_BACKLOG.md` (numbered items + status log) · `CLAUDE.md` (agent rules) ·
+`improvement_log.py` (the machine-local numbered items + status log; `IMPROVEMENT_BACKLOG.md` in the
+tree is a pointer to it) · `CLAUDE.md` (agent rules) ·
 **`ADDING_CAPABILITIES.md`** (the enforced procedure for adding or reviving a capability, and the
 nine failure modes it exists to stop).
 Durable audit history: `Code/Audits/Orchestrator/`.

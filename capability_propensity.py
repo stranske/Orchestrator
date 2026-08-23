@@ -103,9 +103,34 @@ NO NEW STORE, AGAIN. `capabilities.EVENT_FIELDS` already has `match`; `record_pr
 carries a non-match fact on it distinguished by `metadata.source`. A decline follows that precedent
 rather than adding an eighth event type or a second table.
 
+AND A VERDICT HAS A PROVENANCE, because "11 of 12 useful" was not a measurement of usefulness
+(2026-08-23). The entire corpus was 12 verdicts from three audits, every one SELF-ASSESSED by the
+same agent that chose to use the capability, and all three audits were the same model under
+near-identical instructions -- selection bias on top of correlated arms, which §2 forbids treating
+as independent evidence. So `VERDICT_PROVENANCE` classifies where a verdict came from,
+`propensity()` weights BY it (an outcome-corroborated verdict 1.0, a self-report 0.25), correlated
+verdicts from one judge arm total 1.0 however many there are (the same reciprocal
+`relearn_quality` already applies to research arms, via
+`research_subjects.reciprocal_evidence_weights`), and every report states the MIX. Down-weighted,
+not banned: self-assessment is the only signal most capabilities have, so excluding it would empty
+the dataset. The reporting requirement is as important as the arithmetic -- "0.800" must never again
+be readable as independent outcome evidence when it rests on three correlated self-reports.
+
+WHAT THE COUNTERFACTUAL IS, and where it already lives (checked before adding anything).
+`influence_edges.counterfactual` is populated on every edge and is the DELIVERY counterfactual --
+the capability's contribution was considered and rejected on a run -- and `capability_effectiveness`
+already computes `durable_rate(accepted)` against `durable_rate(counterfactual)` from it. It is
+keyed on `(capability, run)` in the Brain, and an advisory consult is not a run, so it cannot carry a
+per-verdict comparison here. THIS module's counterfactual already exists too: `experiments()`
+records, per trial, the candidates named for that exact task and NOT triggered
+(`not_triggered` / `not_triggered_silently`), which is the same task, same context, divergent
+treatment. `propensity()` now reports that arm beside the posterior. Nothing new was added for it.
+
     python3 capability_propensity.py report
     python3 capability_propensity.py experiments
     python3 capability_propensity.py decline --capability X --experiment advice:abc --reason "..."
+    python3 capability_propensity.py useful --capability X --experiment advice:abc \
+        --evidence "..." --provenance outcome_corroborated --judge codex --corroboration "..."
     python3 capability_propensity.py --json report
     python3 capability_propensity.py --selftest
 """
@@ -145,6 +170,119 @@ ADVICE_REF_PREFIX = "advice:"
 DECLINE_SOURCE = "capability_decline"
 DECLINE_REASON_KEY = "reason"
 DECLINE_KIND_KEY = "decline_kind"
+
+# --------------------------------------------------------------------------- verdict provenance
+# WHERE A VERDICT CAME FROM, because "11 of 12 useful" was not a measurement of usefulness.
+#
+# MEASURED, NOT THEORISED (2026-08-23). The whole corpus was 12 verdicts, 11 useful, from three
+# audits. EVERY ONE was self-assessed by the same agent that chose to use the capability, and all
+# three audits were the same model under near-identical instructions. That is selection bias on top
+# of correlated arms, and `CLAUDE.md` §2 forbids treating correlated arms as independent evidence.
+# The 11/12 rate is almost certainly optimistic; printing it as though it rested on independent
+# outcome evidence is the failure this axis exists to prevent.
+#
+# THE RULE THIS INHERITS. §2 already mandates an UN-GAMEABLE label for route weights — durability,
+# verified success, never green-CI-alone. Capability usefulness inherits it: a verdict corroborated
+# by an outcome (the finding survived adversarial review, the issue was filed, the defect was real)
+# OUTRANKS an opinion. So provenance is recorded on the row and `propensity()` weights BY it instead
+# of counting every verdict equally.
+#
+# WEIGHT, NOT EXCLUSION. Self-assessment is the only signal that exists for most capabilities today,
+# so banning it would empty the dataset — the gate would starve its own drain. It is discounted and
+# still counted.
+#
+# TWO AXES, NEVER COLLAPSED. `verdict_provenance` is WHERE the verdict came from; `verdict_kind`
+# (e.g. `observer_output_change`) is WHICH QUESTION was answered. §2 forbids averaging across the
+# two KINDS, so the kinds are reported per capability and a mixed-kind posterior is FLAGGED rather
+# than silently blended. This axis does not fix that; it must not hide it either.
+VERDICT_PROVENANCE_KEY = "verdict_provenance"
+VERDICT_JUDGE_KEY = "verdict_judge"
+VERDICT_CORROBORATION_KEY = "corroboration"
+VERDICT_KIND_KEY = "verdict_kind"
+
+VERDICT_PROVENANCE: dict[str, dict] = {
+    # An OUTCOME corroborates the verdict: the finding survived adversarial review, the issue was
+    # filed, the fix landed and held. The caller must NAME that outcome (`corroboration`) or the
+    # class is refused — otherwise the strongest weight in the table would be self-certifying,
+    # which is the green-CI-alone label wearing a new name.
+    "outcome_corroborated": {
+        "weight": 1.0,
+        "requires_corroboration": True,
+        "self_assessed": False,
+        "means": "a named outcome (survived review, issue filed, fix landed and held) "
+        "corroborates the verdict",
+    },
+    # A DEFECT WAS FOUND, with an artifact naming what was defective. A defect found is an outcome,
+    # not an opinion: the artifact is checkable by someone who was not there. Written only by
+    # `record_find`, which refuses an unevidenced claim.
+    "defect_found": {
+        "weight": 1.0,
+        "requires_corroboration": True,
+        "self_assessed": False,
+        "means": "the capability surfaced a defect and the record names the artifact proving it",
+    },
+    # COMPUTED BY CODE from the capability's own artifacts — the tick's finding-set diff. Nobody's
+    # opinion, but the capability's output compared against itself rather than against a delivery,
+    # so it is worth less than a corroborated outcome and more than a self-report.
+    "machine_observed": {
+        "weight": 0.6,
+        "requires_corroboration": False,
+        "self_assessed": False,
+        "means": "computed by code from the capability's own artifacts (a finding-set diff), "
+        "not asserted by the agent that used it",
+    },
+    # THE DEFAULT, and the honest reading of every pre-provenance row: the agent that chose to use
+    # the capability also graded it. Kept, discounted, and never presented as measurement.
+    "self_reported": {
+        "weight": 0.25,
+        "requires_corroboration": False,
+        "self_assessed": True,
+        "means": "self-assessed by the agent that chose to use the capability — selection bias, "
+        "and the only signal most capabilities have today",
+    },
+}
+PROVENANCE_DEFAULT = "self_reported"
+# THE UNATTRIBUTED ARM. A verdict with no judge identity is not "some unknown independent judge" —
+# treating it that way is exactly the assumption that turned three runs of one model into 11
+# independent successes. All unattributed verdicts of one provenance about one capability are ONE
+# arm, so they total 1.0 no matter how many there are.
+UNATTRIBUTED_JUDGE = "unattributed"
+
+
+def provenance_weight(provenance: str) -> float:
+    """How much a verdict of this provenance may weigh. One lookup, so it cannot drift."""
+    row = VERDICT_PROVENANCE.get(str(provenance)) or VERDICT_PROVENANCE[PROVENANCE_DEFAULT]
+    return float(row["weight"])
+
+
+def provenance_self_assessed(provenance: str) -> bool:
+    """Whether this provenance is the capability's user grading their own choice."""
+    row = VERDICT_PROVENANCE.get(str(provenance)) or VERDICT_PROVENANCE[PROVENANCE_DEFAULT]
+    return bool(row["self_assessed"])
+
+
+def verdict_provenance(metadata: dict | None) -> str:
+    """The provenance of one outcome event. DERIVED, so pre-provenance rows classify honestly.
+
+    Precedence: an explicit `verdict_provenance`, then the machine-computed tick verdict (which
+    already stamped `verdict_kind=observer_output_change` before this axis existed), then
+    `self_reported`. Defaulting to the WEAKEST class is deliberate: an unlabelled verdict is one
+    whose provenance nobody recorded, and assuming the strongest would recreate the 11/12 reading
+    this axis exists to correct.
+    """
+    meta = metadata or {}
+    explicit = str(meta.get(VERDICT_PROVENANCE_KEY) or "").strip()
+    if explicit in VERDICT_PROVENANCE:
+        return explicit
+    if str(meta.get(VERDICT_KIND_KEY) or "").strip() == TICK_VERDICT_KIND:
+        return "machine_observed"
+    return PROVENANCE_DEFAULT
+
+
+def verdict_judge(metadata: dict | None) -> str:
+    """Which arm judged. Unknown is ONE arm, never many — see `UNATTRIBUTED_JUDGE`."""
+    return str((metadata or {}).get(VERDICT_JUDGE_KEY) or "").strip() or UNATTRIBUTED_JUDGE
+
 
 # THE KIND OF DECLINE, because the kinds imply OPPOSITE corrections and one undifferentiated
 # "declined" column would license the wrong one. Measured, not theorised: a third audit round on
@@ -248,6 +386,12 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     "declined": [],
                     "decline_reasons": {},
                     "decline_kinds": {},
+                    # PER-VERDICT PROVENANCE, carried the same way the decline metadata already is.
+                    # Without it a reader can only count verdicts, and counting 3 correlated
+                    # self-reports as 3 independent observations is the defect this fixes.
+                    "verdict_provenance": {},
+                    "verdict_judges": {},
+                    "verdict_kinds": {},
                     "skills": set(),
                 },
             )
@@ -281,6 +425,14 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                 bucket = "useful" if meta.get(USEFUL_KEY) is True else "not_useful"
                 if cap_id not in trial[bucket]:
                     trial[bucket].append(cap_id)
+                # PROVENANCE travels with the verdict, or the weighting has nothing to read. The
+                # first verdict for a capability in a trial wins, matching the idempotency key that
+                # already admits at most one.
+                trial["verdict_provenance"].setdefault(cap_id, verdict_provenance(meta))
+                trial["verdict_judges"].setdefault(cap_id, verdict_judge(meta))
+                kind = str(meta.get(VERDICT_KIND_KEY) or "").strip()
+                if kind:
+                    trial["verdict_kinds"].setdefault(cap_id, kind)
     out = []
     for trial in trials.values():
         trial["skills"] = sorted(trial["skills"])
@@ -321,6 +473,15 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
 
     Every rate travels with its denominator. A bare "80% useful" over 5 trials has burned this
     project before under a different name.
+
+    AND EVERY VERDICT TRAVELS WITH ITS PROVENANCE. `usefulness_rate` is the RAW share — kept,
+    because it is what the events say — while `effective_useful` / `n_eff` are the same evidence
+    after two discounts that `CLAUDE.md` §2 requires: a provenance weight (self-assessment outranked
+    by a corroborated outcome) and the correlated-arm reciprocal from
+    `research_subjects.reciprocal_evidence_weights` (n verdicts from one judge answering one
+    question about one capability are ONE observation, not n). `propensity()` reads the weighted
+    numbers; the raw ones stay visible beside them so the discount is inspectable rather than
+    implied.
     """
     caps = capabilities.load_declared(path or capabilities.REG)
     rows: dict[str, dict] = {
@@ -333,10 +494,17 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
             "declined": 0,
             "declined_demotable": 0,
             "declines_by_kind": {},
+            # THE CONTROL ARM, per capability. Already recorded per trial by `experiments()`; it is
+            # counted here so `propensity()` can report the counterfactual beside the posterior
+            # without a second pass. Same task, same context, divergent treatment.
+            "named_not_triggered": 0,
+            "named_not_triggered_silently": 0,
             "status": cap.get("status"),
         }
         for cap_id, cap in sorted(caps.items())
     }
+    # One entry per resolved verdict: (capability, useful?, provenance, judge arm, verdict kind).
+    verdicts: dict[str, list[tuple[bool, str, str, str]]] = {cap_id: [] for cap_id in rows}
     for trial in experiments(path=path, window_days=window_days, now=now):
         for cap_id in trial["candidates"]:
             if cap_id in rows:
@@ -356,20 +524,109 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
         for cap_id in trial["declined_demotable"]:
             if cap_id in rows:
                 rows[cap_id]["declined_demotable"] += 1
+        for cap_id in trial["not_triggered"]:
+            if cap_id in rows:
+                rows[cap_id]["named_not_triggered"] += 1
+        for cap_id in trial["not_triggered_silently"]:
+            if cap_id in rows:
+                rows[cap_id]["named_not_triggered_silently"] += 1
         for key in ("useful", "not_useful"):
             for cap_id in trial[key]:
                 if cap_id in rows:
                     rows[cap_id][key] += 1
-    for row in rows.values():
+                    verdicts[cap_id].append(
+                        (
+                            key == "useful",
+                            trial["verdict_provenance"].get(cap_id, PROVENANCE_DEFAULT),
+                            trial["verdict_judges"].get(cap_id, UNATTRIBUTED_JUDGE),
+                            trial["verdict_kinds"].get(cap_id, ""),
+                        )
+                    )
+    for cap_id, row in rows.items():
         row["declines_by_kind"] = dict(sorted(row["declines_by_kind"].items()))
         resolved = row["useful"] + row["not_useful"]
         row["resolved"] = resolved
         row["trigger_rate"] = (row["triggered"] / row["candidates"]) if row["candidates"] else None
         row["usefulness_rate"] = (row["useful"] / resolved) if resolved else None
+        row.update(_weigh_verdicts(verdicts[cap_id]))
     return {
         "window_days": window_days,
         "capability_count": len(rows),
         "rows": {k: v for k, v in sorted(rows.items())},
+    }
+
+
+def _weigh_verdicts(verdicts: list[tuple[bool, str, str, str]]) -> dict:
+    """Provenance weight x correlated-arm discount, for one capability's resolved verdicts.
+
+    TWO DISCOUNTS, in this order, and neither is a second scheme:
+
+      1. PROVENANCE — `VERDICT_PROVENANCE[...]["weight"]`. An outcome-corroborated verdict weighs
+         1.0; a self-report weighs 0.25. §2's un-gameable-label rule, applied to capability
+         usefulness the way it already applies to route weights.
+      2. CORRELATION — `research_subjects.reciprocal_evidence_weights`, the SAME function
+         `relearn_quality` uses for research arms, keyed here on `(judge arm, provenance)`. Three
+         verdicts from one model answering one question about one capability total 1.0, not 3.
+         Keyed on the pair rather than the judge alone because an outcome-corroborated verdict's
+         independence rests on the NAMED OUTCOME, not on who noticed it; sharing an arm with three
+         self-reports must not discount it.
+
+    Falls back to the local reciprocal if `research_subjects` cannot be imported (it reaches the
+    Brain at module scope), because the weighting must hold on a machine with no database — but the
+    formula is the same one, not a second one.
+    """
+    if not verdicts:
+        return {
+            "effective_useful": 0.0,
+            "n_eff": 0.0,
+            "weighted_usefulness_rate": None,
+            "provenance_mix": {},
+            "judge_arms": [],
+            "independent_arms": 0,
+            "outcome_derived": 0,
+            "self_reported": 0,
+            "self_reported_share": None,
+            "verdict_kinds": {},
+            "mixed_verdict_kinds": False,
+        }
+    groups: dict[tuple[str, str], list[int]] = {}
+    for index, (_useful, prov, judge, _kind) in enumerate(verdicts):
+        groups.setdefault((judge, prov), []).append(index)
+    try:
+        import research_subjects
+
+        corr = research_subjects.reciprocal_evidence_weights(groups)
+    except Exception:  # noqa: BLE001
+        corr = {i: 1.0 / len(ix) for ix in groups.values() for i in ix}
+    eff_useful = 0.0
+    n_eff = 0.0
+    mix: dict[str, int] = {}
+    kinds: dict[str, int] = {}
+    for index, (useful, prov, _judge, kind) in enumerate(verdicts):
+        weight = provenance_weight(prov) * float(corr.get(index, 1.0))
+        n_eff += weight
+        if useful:
+            eff_useful += weight
+        mix[prov] = mix.get(prov, 0) + 1
+        label = kind or "unstated"
+        kinds[label] = kinds.get(label, 0) + 1
+    self_n = sum(n for p, n in mix.items() if provenance_self_assessed(p))
+    return {
+        "effective_useful": round(eff_useful, 4),
+        "n_eff": round(n_eff, 4),
+        "weighted_usefulness_rate": round(eff_useful / n_eff, 4) if n_eff else None,
+        "provenance_mix": dict(sorted(mix.items())),
+        # BOTH quantities: which arms spoke, and how many of them were actually distinct. "3
+        # verdicts" and "3 verdicts from 1 arm" are opposite readings.
+        "judge_arms": sorted({judge for _u, _p, judge, _k in verdicts}),
+        "independent_arms": len(groups),
+        "outcome_derived": len(verdicts) - self_n,
+        "self_reported": self_n,
+        "self_reported_share": round(self_n / len(verdicts), 4),
+        # §2 forbids AVERAGING across verdict kinds. This axis cannot unmix them, so it reports
+        # them and flags the mixture rather than letting it pass as one rate.
+        "verdict_kinds": dict(sorted(kinds.items())),
+        "mixed_verdict_kinds": len(kinds) > 1,
     }
 
 
@@ -381,13 +638,33 @@ def propensity(
     Posterior mean of a Beta(1,1)-Bernoulli over resolved outcomes, floored so evidence can always
     be acquired. `evidence_count` is the blocking quantity and `explorable` the drainable one, in
     one dict, because "0.05" alone reads as patience when it may mean deadlock.
+
+    THE POSTERIOR IS PROVENANCE-WEIGHTED, and saying so is half the point. It reads `n_eff` /
+    `effective_useful` from `usefulness()`, not the raw counts: a self-report weighs 0.25 and
+    correlated verdicts from one judge arm total 1.0 however many there are. So a capability with
+    three same-model self-reports lands NEAR THE PRIOR rather than at 1.0, and the returned
+    `provenance_mix`, `independent_arms` and `self_reported_share` say why. "0.800" must never again
+    be readable as independent outcome evidence when it rests on three correlated self-reports.
+
+    LATCHED-GATE ANSWERS for the weighting (it discounts evidence, so it owes all three in writing):
+      1. WHAT DECREMENTS IT? Recording ONE verdict from a different judge arm, or one verdict of a
+         non-self-assessed provenance — `record_usefulness(..., judge=..., provenance=...)` and
+         `record_find`. Named mechanisms, not "time passes" and not "someone notices".
+      2. CAN THE DRAIN RUN WHILE IT IS CLOSED? Yes, and the direction is favourable: the discount
+         compresses a posterior TOWARDS the 0.5 prior, never below `EXPLORATION_FLOOR`, and never
+         changes the candidate SET. A capability whose only evidence is self-reported therefore
+         stays offered — if anything more often than its raw rate would justify — so it can keep
+         earning the independent verdict that clears the discount.
+      3. SAME WINDOW BOTH WAYS? Yes: `WINDOW_DAYS`, the one constant, bounds the verdicts counted
+         and the verdicts that can drain the mix. There is no second literal to drift.
     """
     stats = usefulness(path=path, window_days=window_days, now=now)["rows"]
     row = stats.get(capability_id)
     if row is None:
         raise ValueError(f"unknown capability: {capability_id}")
     resolved = row["resolved"]
-    posterior = (row["useful"] + PRIOR_USEFUL) / (resolved + PRIOR_TOTAL)
+    n_eff = float(row["n_eff"])
+    posterior = (row["effective_useful"] + PRIOR_USEFUL) / (n_eff + PRIOR_TOTAL)
     value = max(EXPLORATION_FLOOR, posterior)
     return {
         "capability_id": capability_id,
@@ -396,6 +673,29 @@ def propensity(
         "floored": value > posterior,
         # BLOCKING quantity and DRAINABLE quantity, together, always.
         "evidence_count": resolved,
+        # THE SAME EVIDENCE AFTER THE DISCOUNTS, beside the raw count. `evidence_count` 3 with
+        # `evidence_weight` 0.25 is the honest shape of "three correlated self-reports"; printing
+        # only the first is how 11/12 came to look like a measurement.
+        "evidence_weight": row["n_eff"],
+        "effective_useful": row["effective_useful"],
+        "raw_usefulness_rate": row["usefulness_rate"],
+        "weighted_usefulness_rate": row["weighted_usefulness_rate"],
+        "provenance_mix": dict(row["provenance_mix"]),
+        "independent_arms": row["independent_arms"],
+        "judge_arms": list(row["judge_arms"]),
+        "outcome_derived_verdicts": row["outcome_derived"],
+        "self_reported_verdicts": row["self_reported"],
+        "self_reported_share": row["self_reported_share"],
+        # §2: never average across verdict KINDS. Flagged, not blended away.
+        "verdict_kinds": dict(row["verdict_kinds"]),
+        "mixed_verdict_kinds": row["mixed_verdict_kinds"],
+        # THE COUNTERFACTUAL ARM, reported beside the posterior and never mixed into it. These are
+        # trials where this capability was named for the exact same task and NOT triggered. It is
+        # the natural comparison the module was built on; `influence_edges.counterfactual` is the
+        # DELIVERY counterfactual and is already consumed by `capability_effectiveness`, so it is
+        # not duplicated here (see the module docstring).
+        "counterfactual_named_not_triggered": row["named_not_triggered"],
+        "counterfactual_silent": row["named_not_triggered_silently"],
         # REPORTED, NEVER MIXED. "0.5 with 0 evidence" and "0.5 with 0 evidence and 4 reasoned
         # rejections" are opposite findings that were indistinguishable until declines existed.
         # Printing them side by side is the point; the posterior above is computed from `resolved`,
@@ -417,7 +717,23 @@ def propensity(
             "no resolved outcomes yet — optimistic prior plus an unconditional floor, so this "
             "can still be sampled and can therefore still earn evidence"
             if not resolved
-            else f"{row['useful']} of {resolved} resolved trials were useful"
+            else (
+                f"{row['useful']} of {resolved} resolved trials were useful; "
+                f"provenance {row['provenance_mix']} across {row['independent_arms']} independent "
+                f"judge arm(s) discounts that to {row['effective_useful']:.2f} of "
+                f"{row['n_eff']:.2f} effective observations"
+                + (
+                    " — SELF-REPORTED ONLY, so this is an opinion mix, not outcome evidence"
+                    if not row["outcome_derived"]
+                    else ""
+                )
+                + (
+                    f" — MIXED VERDICT KINDS {row['verdict_kinds']}, which §2 forbids averaging: "
+                    "read them separately"
+                    if row["mixed_verdict_kinds"]
+                    else ""
+                )
+            )
         )
         + (
             f"; declined with a stated reason {row['declined']} time(s) "
@@ -439,6 +755,12 @@ def rank(entries: list[dict], *, path=None, window_days: int = WINDOW_DAYS) -> l
     ORDER ONLY. The candidate SET is never changed, so the worst a wrong propensity can do is put a
     good suggestion second. That containment is deliberate: this module ranks advice, it does not
     decide what runs.
+
+    AND THE CALLER RECEIVES THE PROVENANCE, not just the number. The reporting requirement is as
+    important as the arithmetic: an entry carrying `propensity: 0.8` and nothing else invites being
+    read as measured, so every ranked entry also carries the provenance mix, the independent-arm
+    count and the self-reported share. Asserted through what a CALLER receives, because a helper
+    that computes the right thing while the caller sees the old thing is a bug this repo has shipped.
     """
     if DISABLED or not entries:
         return entries
@@ -449,15 +771,25 @@ def rank(entries: list[dict], *, path=None, window_days: int = WINDOW_DAYS) -> l
         entry["propensity_basis"] = prop["basis"]
         entry["usefulness_evidence_count"] = prop["evidence_count"]
         entry["propensity_floored"] = prop["floored"]
+        # PROVENANCE, on the entry the caller actually reads.
+        entry["usefulness_evidence_weight"] = prop["evidence_weight"]
+        entry["usefulness_provenance_mix"] = prop["provenance_mix"]
+        entry["usefulness_independent_arms"] = prop["independent_arms"]
+        entry["usefulness_self_reported_share"] = prop["self_reported_share"]
+        entry["usefulness_outcome_derived"] = prop["outcome_derived_verdicts"]
         scored.append(entry)
     scored.sort(key=lambda e: (-e["propensity"], e["capability_id"]))
     # Credited on the executed path, not only from the CLI: a capability whose heartbeat sits behind
     # a manual command reads as dormant no matter how often production uses it.
     _capability_heartbeat("invocation", f"rank:{len(scored)}")
     with_evidence = sum(1 for e in scored if e["usefulness_evidence_count"])
+    outcome_derived = sum(1 for e in scored if e["usefulness_outcome_derived"])
     # BOTH quantities in one place: how many of these rankings rest on measurement, and how many on
     # the prior. A ranked list that does not say which is which invites being trusted too early.
-    _capability_heartbeat("output", f"rank:evidence:{with_evidence}/{len(scored)}")
+    # And a THIRD: how many rest on anything other than the user's own opinion of their own choice.
+    _capability_heartbeat(
+        "output", f"rank:evidence:{with_evidence}/{len(scored)}:outcome_derived:{outcome_derived}"
+    )
     return scored
 
 
@@ -487,6 +819,16 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         )
     ranked.sort(key=lambda r: (-r["propensity"], -r["resolved"], r["capability_id"]))
     resolved_caps = [r["capability_id"] for r in ranked if r["resolved"]]
+    # THE PROVENANCE MIX OF THE WHOLE CORPUS, in the headline. This is the number that makes the
+    # arithmetic honest: on 2026-08-23 it was 12 verdicts, 12 of them self_reported, 0 outcome-
+    # derived, from 1 judge arm per capability — a fact the old headline could not express, so
+    # "11 of 12 useful" read as a measurement of usefulness rather than of one model's opinion.
+    corpus_mix: dict[str, int] = {}
+    for row in ranked:
+        for prov, n in (row["provenance_mix"] or {}).items():
+            corpus_mix[prov] = corpus_mix.get(prov, 0) + n
+    verdict_total = sum(corpus_mix.values())
+    self_total = sum(n for p, n in corpus_mix.items() if provenance_self_assessed(p))
     return {
         "window_days": window_days,
         "capability_count": stats["capability_count"],
@@ -497,6 +839,23 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # dashboard that looks informative while reporting nothing.
         "capabilities_with_evidence": len(resolved_caps),
         "capabilities_without_evidence": stats["capability_count"] - len(resolved_caps),
+        # THE PROVENANCE MIX. Never omit this beside a usefulness rate: the two together are the
+        # only honest reading, and the first without the second is what this axis exists to stop.
+        "verdict_count": verdict_total,
+        "verdicts_by_provenance": dict(sorted(corpus_mix.items())),
+        "verdicts_self_reported": self_total,
+        "verdicts_outcome_derived": verdict_total - self_total,
+        "verdicts_self_reported_share": (
+            round(self_total / verdict_total, 4) if verdict_total else None
+        ),
+        # THE DRAINABLE QUANTITY for the provenance discount: how many capabilities have any
+        # evidence that is not their user's own opinion. 0 means every number below is opinion.
+        "capabilities_with_outcome_derived_evidence": sum(
+            1 for r in ranked if r["outcome_derived"]
+        ),
+        "capabilities_with_multiple_judge_arms": sum(
+            1 for r in ranked if r["independent_arms"] > 1
+        ),
         # THE POPULATION THE 0.5 FLOOR USED TO HIDE. A capability with no outcome evidence but
         # several reasoned rejections is not "unmeasured"; it is measured on a different axis. This
         # count says how much of the un-evidenced population is actually of that kind.
@@ -541,6 +900,9 @@ def record_usefulness(
     *,
     useful: bool,
     evidence: str,
+    provenance: str = PROVENANCE_DEFAULT,
+    judge: str = "",
+    corroboration: str = "",
     path=None,
     metadata: dict | None = None,
 ) -> bool:
@@ -549,16 +911,48 @@ def record_usefulness(
     The verdict must describe what the capability CHANGED, not that it ran. "It fired" is the
     un-gameable-label failure this project's learning rules exist to prevent.
 
-    `metadata` carries the verdict's PROVENANCE — which surface judged it and by which question.
-    Added for the tick wiring: an observer graded on "did your report change" and a lane capability
-    graded on "did the delivery survive" answer different questions, and CLAUDE.md's learning rules
-    forbid averaging across the two kinds. Without a durable `verdict_kind` on the row, a later
-    reader could only average them.
+    `metadata` carries the verdict's VERDICT KIND — which question was answered. Added for the tick
+    wiring: an observer graded on "did your report change" and a lane capability graded on "did the
+    delivery survive" answer different questions, and CLAUDE.md's learning rules forbid averaging
+    across the two kinds. Without a durable `verdict_kind` on the row, a later reader could only
+    average them.
+
+    `provenance` is the ORTHOGONAL axis: where the verdict CAME FROM. Default `self_reported`,
+    because that is what an unlabelled verdict is, and it weighs 0.25 rather than 1.0. Claiming
+    `outcome_corroborated` or `defect_found` REQUIRES `corroboration` naming the outcome — an
+    unnamed corroboration would make the strongest weight in the table self-certifying, which is
+    green-CI-alone under a new name. An unknown provenance is refused rather than coerced, for the
+    same reason an unknown decline kind is: a typo silently becoming the default would discard the
+    classification the caller believed it had made.
+
+    `judge` is the ARM that judged. Optional, and load-bearing: verdicts with no judge identity are
+    ALL treated as one correlated arm, so recording it is how a capability escapes the correlated-arm
+    discount. It cannot be inferred, and inferring independence is exactly the error that turned
+    three runs of one model into eleven independent successes.
     """
     if not str(evidence).strip():
         raise ValueError("a usefulness verdict requires evidence naming what changed")
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
+    if str(provenance) not in VERDICT_PROVENANCE:
+        raise ValueError(
+            f"unknown verdict provenance {provenance!r}; expected one of "
+            f"{sorted(VERDICT_PROVENANCE)}"
+        )
+    if (
+        VERDICT_PROVENANCE[str(provenance)]["requires_corroboration"]
+        and not str(corroboration).strip()
+    ):
+        raise ValueError(
+            f"provenance {provenance!r} claims outcome-strength evidence, so it requires "
+            "`corroboration` naming the outcome that corroborates it (the review that confirmed "
+            "it, the issue filed, the fix that landed); an unnamed corroboration is self-certifying"
+        )
+    extra: dict = {VERDICT_PROVENANCE_KEY: str(provenance)}
+    if str(judge).strip():
+        extra[VERDICT_JUDGE_KEY] = str(judge).strip()
+    if str(corroboration).strip():
+        extra[VERDICT_CORROBORATION_KEY] = str(corroboration)[:400]
     return capabilities.heartbeat(
         capability_id,
         "outcome",
@@ -569,6 +963,7 @@ def record_usefulness(
             "source": "capability_propensity",
             USEFUL_KEY: bool(useful),
             "evidence": str(evidence)[:400],
+            **extra,
             **(metadata or {}),
         },
     )
@@ -1110,6 +1505,14 @@ def tick_evidence(
                         experiment,
                         useful=changed,
                         evidence=evidence,
+                        # MACHINE-OBSERVED, stated rather than inferred. The tick computes this
+                        # verdict from a fingerprint diff of the capability's own artifact; nobody
+                        # asserts it, so it is not a self-report. The derivation in
+                        # `verdict_provenance()` would reach the same class from `verdict_kind`
+                        # alone, but a derivation is a fallback for rows written before this axis
+                        # existed, not a substitute for the producer saying what it produced.
+                        provenance="machine_observed",
+                        judge=TICK_SURFACE,
                         path=path,
                         metadata={
                             "verdict_kind": TICK_VERDICT_KIND,
@@ -1822,7 +2225,11 @@ def _selftest_declines() -> None:
         # decline leaking in as `not_useful` would visibly drag a real number down rather than
         # merely appearing beside a prior.
         before = propensity("helper", path=ledger)
-        assert before["evidence_count"] == 1 and before["propensity"] == 0.6667, before
+        # 0.5556, not 0.6667: one UNATTRIBUTED SELF-REPORT weighs 0.25, so (1+0.25)/(2+0.25). The
+        # provenance discount landed here on 2026-08-23; the point of the assertion is unchanged
+        # (a real, non-prior number the decline below must leave alone).
+        assert before["evidence_count"] == 1 and before["propensity"] == 0.5556, before
+        assert before["evidence_weight"] == 0.25, before
         for i in range(3):
             e = f"advice:helperdecl{i:03d}"
             assert record_decline(
@@ -2196,6 +2603,282 @@ def _selftest_declines() -> None:
     )
 
 
+def _selftest_provenance() -> None:
+    """A VERDICT IS ONLY AS GOOD AS WHERE IT CAME FROM, and the report must say where.
+
+    Every assertion below was written by breaking it first, and each break was checked to
+    DISCRIMINATE — several earlier attempts in this repo asserted a property using the constant that
+    guarded it, so the test moved with the bug and could never fail:
+
+      * dropping the provenance weight (treat every verdict as 1.0) -> three correlated
+        self-reports reach 0.6667, exactly where one corroborated outcome sits, and the
+        `corroborated > solo` assertion fails;
+      * dropping the correlated-arm reciprocal -> three same-arm self-reports reach 0.6364,
+        exactly where three DIFFERENT arms sit, and both the `n_eff == 0.25` and
+        `many_arms > solo` assertions fail;
+      * defaulting an unlabelled row to the strongest class -> the legacy-row mix assertion fails;
+      * dropping the corroboration requirement -> the refusal assertion fails;
+      * keying the correlation on the judge alone -> a corroborated verdict sharing the
+        unattributed arm with three self-reports drops from n_eff 1.25 to 0.4375 and the
+        `mixed_arm` assertion fails;
+      * annotating the entry in `rank()` but not with the mix -> the CALLER assertion fails, which
+        is the one that matters: a helper computing the right thing while the caller receives the
+        old thing is a bug this repo has shipped and an audit, not its author, caught.
+
+    LITERAL EXPECTED VALUES throughout, deliberately not expressed in terms of
+    `VERDICT_PROVENANCE[...]["weight"]`: an assertion written in terms of the table it guards moves
+    with the table and can never fail.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="provenance-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("solo", "many-arms", "corroborated", "legacy", "ticky", "mixed-arm"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        def _offer(cap_id: str, exp: str) -> None:
+            capabilities.heartbeat(
+                cap_id,
+                "match",
+                ref=exp,
+                path=ledger,
+                idempotency_key=f"m:{cap_id}:{exp}",
+                metadata={"surface": "repo-audit:phase-1"},
+            )
+            record_trigger(cap_id, exp, path=ledger)
+
+        # THE MEASURED CASE: three verdicts, one model, near-identical instructions. The raw rate
+        # says 100%; the honest reading is one observation's worth of one opinion.
+        for i in range(3):
+            exp = f"advice:solo{i:08d}"
+            _offer("solo", exp)
+            record_usefulness("solo", exp, useful=True, evidence=f"found defect {i}", path=ledger)
+        # ...the same three verdicts from three DIFFERENT arms.
+        for i, judge in enumerate(("codex", "cursor", "gemini")):
+            exp = f"advice:arms{i:08d}"
+            _offer("many-arms", exp)
+            record_usefulness(
+                "many-arms", exp, useful=True, evidence="found a defect", judge=judge, path=ledger
+            )
+        # ...and ONE verdict corroborated by a named outcome.
+        _offer("corroborated", "advice:corrob00000")
+        record_usefulness(
+            "corroborated",
+            "advice:corrob00000",
+            useful=True,
+            evidence="supplied the citation that became the strongest fact in the issue body",
+            provenance="outcome_corroborated",
+            corroboration="issue #123 filed and the fix merged in PR #124, still green 14d later",
+            path=ledger,
+        )
+        # A PRE-PROVENANCE ROW, written the way the live ledger's 12 verdicts were: an outcome
+        # event with `useful` and `evidence` and nothing else.
+        capabilities.heartbeat(
+            "legacy",
+            "outcome",
+            ref="advice:legacy000000",
+            path=ledger,
+            idempotency_key="useful:legacy:advice:legacy000000",
+            metadata={"source": "capability_propensity", USEFUL_KEY: True, "evidence": "helped"},
+        )
+        # A TICK ROW, which stamped `verdict_kind` before this axis existed.
+        capabilities.heartbeat(
+            "ticky",
+            "outcome",
+            ref="advice:ticky0000000",
+            path=ledger,
+            idempotency_key="useful:ticky:advice:ticky0000000",
+            metadata={
+                "source": "capability_propensity",
+                USEFUL_KEY: True,
+                "evidence": "finding set changed",
+                VERDICT_KIND_KEY: TICK_VERDICT_KIND,
+            },
+        )
+        # THREE self-reports AND one corroborated outcome, all from the unattributed arm. The
+        # corroborated one's independence rests on the NAMED OUTCOME, not on who noticed it, so
+        # sharing an arm with three opinions must not discount it.
+        for i in range(3):
+            exp = f"advice:mixed{i:07d}"
+            _offer("mixed-arm", exp)
+            record_usefulness("mixed-arm", exp, useful=True, evidence=f"helped {i}", path=ledger)
+        _offer("mixed-arm", "advice:mixedcorrob")
+        record_usefulness(
+            "mixed-arm",
+            "advice:mixedcorrob",
+            useful=True,
+            evidence="the finding survived adversarial review",
+            provenance="outcome_corroborated",
+            corroboration="two independent reviewers refuted none of the four findings",
+            path=ledger,
+        )
+
+        u = usefulness(path=ledger)["rows"]
+        # THE RAW RATE IS UNCHANGED and still reported -- the discount must be inspectable, not
+        # applied silently in place of the number the events actually say.
+        assert u["solo"]["useful"] == 3 and u["solo"]["usefulness_rate"] == 1.0, u["solo"]
+        # ...and the discounted evidence is a QUARTER of ONE observation, not three.
+        assert u["solo"]["n_eff"] == 0.25, u["solo"]
+        assert u["solo"]["independent_arms"] == 1, u["solo"]
+        assert u["solo"]["provenance_mix"] == {"self_reported": 3}, u["solo"]
+        assert u["solo"]["self_reported_share"] == 1.0, u["solo"]
+        assert u["solo"]["outcome_derived"] == 0, u["solo"]
+        # THREE ARMS ARE THREE OBSERVATIONS, each still discounted for being an opinion.
+        assert u["many-arms"]["n_eff"] == 0.75, u["many-arms"]
+        assert u["many-arms"]["independent_arms"] == 3, u["many-arms"]
+        # A CORROBORATED OUTCOME IS A WHOLE OBSERVATION.
+        assert u["corroborated"]["n_eff"] == 1.0, u["corroborated"]
+        assert u["corroborated"]["outcome_derived"] == 1, u["corroborated"]
+        assert u["corroborated"]["self_reported_share"] == 0.0, u["corroborated"]
+        # AN UNLABELLED ROW IS A SELF-REPORT, because that is what it is.
+        assert u["legacy"]["provenance_mix"] == {"self_reported": 1}, u["legacy"]
+        assert u["legacy"]["n_eff"] == 0.25, u["legacy"]
+        # A TICK ROW IS MACHINE-OBSERVED even though it predates the explicit field.
+        assert u["ticky"]["provenance_mix"] == {"machine_observed": 1}, u["ticky"]
+        assert u["ticky"]["n_eff"] == 0.6, u["ticky"]
+        assert u["ticky"]["outcome_derived"] == 1, u["ticky"]
+        # THE PAIR KEY: 3 correlated opinions (0.25 total) + 1 corroborated outcome (1.0).
+        assert u["mixed-arm"]["n_eff"] == 1.25, u["mixed-arm"]
+        assert u["mixed-arm"]["independent_arms"] == 2, u["mixed-arm"]
+        assert u["mixed-arm"]["provenance_mix"] == {
+            "outcome_corroborated": 1,
+            "self_reported": 3,
+        }, u["mixed-arm"]
+
+        p_solo = propensity("solo", path=ledger)
+        p_arms = propensity("many-arms", path=ledger)
+        p_corr = propensity("corroborated", path=ledger)
+        p_mixed = propensity("mixed-arm", path=ledger)
+        # 3 correlated self-reports at a RAW 100% must land near the 0.5 prior, not near 1.0.
+        assert p_solo["propensity"] == 0.5556, p_solo
+        assert p_solo["raw_usefulness_rate"] == 1.0, p_solo
+        # ONE corroborated outcome OUTWEIGHS three correlated opinions.
+        assert p_corr["propensity"] > p_solo["propensity"], (p_corr, p_solo)
+        # THREE INDEPENDENT ARMS outweigh three correlated ones at the same raw rate.
+        assert p_arms["propensity"] > p_solo["propensity"], (p_arms, p_solo)
+        assert p_mixed["propensity"] > p_arms["propensity"], (p_mixed, p_arms)
+        # THE REPORTING REQUIREMENT: the mix travels with the number, always.
+        for prop in (p_solo, p_arms, p_corr, p_mixed):
+            assert prop["provenance_mix"], prop
+            assert prop["evidence_count"] >= 1 and prop["evidence_weight"] > 0, prop
+            assert prop["independent_arms"] >= 1, prop
+            assert prop["self_reported_share"] is not None, prop
+        assert "SELF-REPORTED ONLY" in p_solo["basis"], p_solo["basis"]
+        assert "SELF-REPORTED ONLY" not in p_corr["basis"], p_corr["basis"]
+        # BOTH quantities, per the runtime rule: the raw count AND the effective weight.
+        assert f"{p_solo['evidence_count']}" == "3" and p_solo["evidence_weight"] == 0.25, p_solo
+        # THE LATCHED-GATE PROPERTY SURVIVES THE DISCOUNT: discounting compresses towards the
+        # prior, never below the floor, so a self-reported-only capability stays samplable.
+        assert p_solo["propensity"] >= EXPLORATION_FLOOR and p_solo["explorable"], p_solo
+
+        # THE COUNTERFACTUAL ARM is reported beside the posterior, from the trials themselves.
+        capabilities.heartbeat(
+            "solo",
+            "match",
+            ref="advice:controlarm00",
+            path=ledger,
+            idempotency_key="m:solo:control",
+            metadata={"surface": "repo-audit:phase-1"},
+        )
+        after = propensity("solo", path=ledger)
+        assert after["counterfactual_named_not_triggered"] == 1, after
+        assert after["counterfactual_silent"] == 1, after
+        # ...and it did NOT move the posterior. A counterfactual is context, never a verdict.
+        assert after["propensity"] == p_solo["propensity"], (after, p_solo)
+
+        # WHAT A CALLER RECEIVES. `rank()` is the production path; a mix computed and not handed
+        # over is a mix nobody reads.
+        ranked = rank(
+            [{"capability_id": c} for c in ("solo", "corroborated", "many-arms")], path=ledger
+        )
+        assert [e["capability_id"] for e in ranked][0] == "corroborated", ranked
+        for entry in ranked:
+            assert entry["usefulness_provenance_mix"], entry
+            assert entry["usefulness_independent_arms"] >= 1, entry
+            assert entry["usefulness_self_reported_share"] is not None, entry
+            assert entry["usefulness_evidence_weight"] > 0, entry
+        solo_entry = next(e for e in ranked if e["capability_id"] == "solo")
+        assert solo_entry["usefulness_provenance_mix"] == {"self_reported": 3}, solo_entry
+        assert solo_entry["usefulness_evidence_weight"] == 0.25, solo_entry
+        assert solo_entry["usefulness_outcome_derived"] == 0, solo_entry
+        # ORDER ONLY: the discount reorders, it never drops a candidate.
+        assert len(ranked) == 3, ranked
+
+        # THE HEADLINE STATES THE MIX. "11 of 12 useful" with no mix is the reading this replaces.
+        rep = report(path=ledger)
+        assert rep["verdict_count"] == 13, rep["verdict_count"]
+        assert rep["verdicts_by_provenance"] == {
+            "machine_observed": 1,
+            "outcome_corroborated": 2,
+            "self_reported": 10,
+        }, rep["verdicts_by_provenance"]
+        assert rep["verdicts_self_reported"] == 10, rep
+        assert rep["verdicts_outcome_derived"] == 3, rep
+        assert rep["verdicts_self_reported_share"] == round(10 / 13, 4), rep
+        assert rep["capabilities_with_outcome_derived_evidence"] == 3, rep
+        assert rep["capabilities_with_multiple_judge_arms"] == 2, rep
+        assert "self-reported" in _fmt(rep), _fmt(rep)
+
+        # AN UNKNOWN PROVENANCE IS REFUSED, never coerced to the default: a typo must not silently
+        # discard the classification the caller believed it had made.
+        try:
+            record_usefulness(
+                "solo", "advice:badprov0000", useful=True, evidence="x", provenance="great"
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an unknown verdict provenance must be refused")
+        # THE STRONGEST CLASSES ARE NOT SELF-CERTIFYING: no named outcome, no claim.
+        for claim in ("outcome_corroborated", "defect_found"):
+            for blank in ("", "   "):
+                try:
+                    record_usefulness(
+                        "solo",
+                        "advice:nocorrob000",
+                        useful=True,
+                        evidence="it helped",
+                        provenance=claim,
+                        corroboration=blank,
+                        path=ledger,
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"{claim} without a named corroboration must be refused")
+        # ...and a DECLINE still cannot reach the posterior, even carrying provenance metadata.
+        # There is no code path from a decline to a verdict, and this is where that is proven for
+        # the weighted posterior specifically.
+        before = propensity("many-arms", path=ledger)
+        record_decline(
+            "many-arms",
+            "advice:declprov000",
+            reason="wrong tool for a read-only audit",
+            kind="wrong_match",
+            surface="repo-audit:phase-1",
+            path=ledger,
+            metadata={VERDICT_PROVENANCE_KEY: "outcome_corroborated", VERDICT_JUDGE_KEY: "codex"},
+        )
+        post = propensity("many-arms", path=ledger)
+        assert post["propensity"] == before["propensity"], (before, post)
+        assert post["evidence_weight"] == before["evidence_weight"], (before, post)
+        assert post["provenance_mix"] == before["provenance_mix"], (before, post)
+        assert post["declines"] == 1, post
+
+    print(
+        "capability_propensity provenance selftest: OK (self-reports weigh a quarter, one judge "
+        "arm totals one observation, a corroborated outcome outweighs three correlated opinions, "
+        "unlabelled rows classify as self-reported, the strongest classes are not self-certifying, "
+        "declines stay inert, and the caller receives the mix)"
+    )
+
+
 def _selftest_detection() -> None:
     """The recursive loop: detect a pass-over, propose, promote — and never ratchet.
 
@@ -2441,6 +3124,18 @@ def _fmt(rep: dict) -> str:
         f"({rep['resolved_experiment_count']} resolved)",
         f"  capabilities with usefulness evidence: {rep['capabilities_with_evidence']} "
         f"of {rep['capability_count']}",
+        # THE PROVENANCE MIX, never printed apart from the rate it qualifies.
+        f"  verdicts: {rep['verdict_count']} — {rep['verdicts_by_provenance'] or '(none)'}; "
+        f"{rep['verdicts_outcome_derived']} outcome-derived, {rep['verdicts_self_reported']} "
+        f"self-reported"
+        + (
+            f" ({rep['verdicts_self_reported_share']:.0%})"
+            if rep["verdicts_self_reported_share"] is not None
+            else ""
+        ),
+        f"  capabilities with non-self-reported evidence: "
+        f"{rep['capabilities_with_outcome_derived_evidence']}; with >1 judge arm: "
+        f"{rep['capabilities_with_multiple_judge_arms']}",
         f"  reasoned declines recorded: {rep['decline_count']} across "
         f"{rep['capabilities_declined_with_reason']} capability(ies) — counted, never scored; "
         f"{rep['decline_demotable_count']} attributable to a binding",
@@ -2491,6 +3186,29 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--not-useful", action="store_true", help="record that triggering it did NOT help"
+    )
+    # PROVENANCE FROM BASH, because the surfaces that judge are shells. A verdict recorded without
+    # these lands as `self_reported` from an unattributed arm, which is the honest default and the
+    # weakest weight -- so the flags are how a caller EARNS a stronger one.
+    ap.add_argument(
+        "--provenance",
+        default=PROVENANCE_DEFAULT,
+        choices=sorted(VERDICT_PROVENANCE),
+        help="useful: WHERE the verdict came from. The default self_reported weighs "
+        f"{VERDICT_PROVENANCE[PROVENANCE_DEFAULT]['weight']}; outcome_corroborated weighs 1.0 "
+        "and requires --corroboration",
+    )
+    ap.add_argument(
+        "--judge",
+        default="",
+        help="useful: which arm judged (model/backend/surface). Verdicts with no judge are "
+        "treated as ONE correlated arm, so naming it is how a capability escapes that discount",
+    )
+    ap.add_argument(
+        "--corroboration",
+        default="",
+        help="useful: the outcome corroborating the verdict (review that confirmed it, issue "
+        "filed, fix that landed). Required by outcome_corroborated/defect_found",
     )
     # THE CALLERS ARE BASH. Both lane automations and every skill reach this module from a shell, so
     # a verb that exists only in Python is a verb the surfaces that make these decisions cannot use.
@@ -2543,6 +3261,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        _selftest_provenance()
         _selftest_declines()
         _selftest_detection()
         _selftest_tick_evidence()
@@ -2635,19 +3354,33 @@ def main(argv: list[str]) -> int:
                 args.experiment,
                 useful=not args.not_useful,
                 evidence=args.evidence,
+                provenance=args.provenance,
+                judge=args.judge,
+                corroboration=args.corroboration,
                 path=ledger,
             )
-        print(
-            json.dumps(
+        out = {
+            "recorded": bool(ok),
+            "command": args.command,
+            "ledger": str(ledger) if ledger else "live",
+            "capability": args.capability,
+            "experiment": args.experiment,
+        }
+        if args.command == "useful":
+            # SAY WHAT THIS VERDICT IS WORTH, at the moment it is recorded. A caller that thinks
+            # it just added a full observation has been misled -- and a self-report from an
+            # unnamed arm is worth a quarter of one, shared with every other verdict from that arm.
+            out.update(
                 {
-                    "recorded": bool(ok),
-                    "command": args.command,
-                    "ledger": str(ledger) if ledger else "live",
-                    "capability": args.capability,
-                    "experiment": args.experiment,
+                    "provenance": args.provenance,
+                    "provenance_weight": provenance_weight(args.provenance),
+                    "self_assessed": provenance_self_assessed(args.provenance),
+                    "judge": args.judge or UNATTRIBUTED_JUDGE,
+                    "judge_attributed": bool(args.judge.strip()),
+                    "correlated_with_same_arm_verdicts": not args.judge.strip(),
                 }
             )
-        )
+        print(json.dumps(out))
         return 0
     if args.command == "experiments":
         data = experiments(window_days=args.window_days)

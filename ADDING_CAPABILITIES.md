@@ -24,7 +24,8 @@ in a table nothing wrote for it.
 
 The dated evidence for all nine failure modes is deliberately **not** committed — it names this
 instance's repositories, PRs, spend and working constraints. It lives in
-`ADDING_CAPABILITIES.local.md` alongside `IMPROVEMENT_BACKLOG.md` (see `LOCAL_POLICY.md`).
+`ADDING_CAPABILITIES.local.md` (see `LOCAL_POLICY.md`), and the item-by-item status history lives in
+the machine-local improvement log, reached with `python3 improvement_log.py search <term>`.
 
 The governing lesson survives the split, and it is the reason this file has a test file rather than
 only prose: **a rule that lives only in a document does not survive the next session.** `CLAUDE.md`

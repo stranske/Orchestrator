@@ -59,8 +59,18 @@ venv/
 # instance's failure history, spend calibration and availability stay local.
 # Sanitized public twins of the load-bearing docs are committed under their
 # canonical names; these are the full versions.
+#
+# IMPROVEMENT_BACKLOG.md IS NO LONGER LISTED, ON PURPOSE. Ignoring it made it
+# invisible: a gitignored file does not exist in a git worktree, and agents work
+# in worktrees, so CLAUDE.md's two mandatory rules about it were unfollowable by
+# the workers they bind. The log now lives OUTSIDE the tree at
+# $ORCH_LOCAL_RUNTIME, reached via improvement_log.py, and the tracked
+# IMPROVEMENT_BACKLOG.md here is a short POINTER to it. Keeping it ignored as
+# well would let the 481 KB evidence file reappear at that path silently, which
+# is the failure this whole change undoes; tracked, it announces itself in
+# `git status` instead. test_improvement_log.py fails if the pointer grows into
+# a log.
 LOCAL_POLICY.md
-IMPROVEMENT_BACKLOG.md
 CAPABILITY_USEFULNESS.md
 *.local.md
 

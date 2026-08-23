@@ -263,6 +263,57 @@ keepalive / orchestrator_local / orchestrator_remote), so run history says a cap
 OVERALL and cannot say which surface passed it over. That is why signal 1 exists and why a promotion
 is never derived from run history alone.
 
+### A VERDICT HAS A PROVENANCE, and the number is meaningless without it
+
+Layer 2's first real corpus was **12 verdicts, 11 useful, from three audits** — and every one was
+**self-assessed by the agent that chose to use the capability**, with all three audits run by the
+same model under near-identical instructions. That is selection bias on top of correlated arms, which
+`CLAUDE.md` §2 forbids treating as independent evidence, so 11/12 is almost certainly optimistic and
+must never be presented as though it were not.
+
+So `capability_propensity.VERDICT_PROVENANCE` declares, once, where a verdict came from and what it
+may weigh, and `propensity()` **weights by it** instead of counting every verdict equally:
+
+| provenance | weight | what it is |
+|---|---|---|
+| `outcome_corroborated` | 1.0 | a **named** outcome corroborates it (survived review, issue filed, fix landed and held) |
+| `defect_found` | 1.0 | it surfaced a defect and the record names the artifact proving it |
+| `machine_observed` | 0.6 | computed by code from the capability's own artifacts (the tick's finding-set diff) — nobody's opinion |
+| `self_reported` | 0.25 | the agent that chose the capability also graded it |
+
+Four disciplines make that honest rather than decorative:
+
+1. **Outcome-derived outranks self-reported**, inheriting §2's un-gameable-label rule from route
+   weights. The two strong classes **require** `corroboration` naming the outcome and are refused
+   without it — an unnamed corroboration would make the top weight self-certifying, which is
+   green-CI-alone under a new name.
+2. **Correlated arms are represented, not assumed away.** Verdicts are grouped by
+   `(judge arm, provenance)` and each group totals **1.0** however many verdicts it holds — the same
+   reciprocal `relearn_quality` already applies to research arms, now consumed from
+   `research_subjects.reciprocal_evidence_weights` by both, so there is one scheme and not two. Three
+   same-model self-reports are worth 0.25 effective observations, not three; a verdict with **no**
+   judge identity joins the one `unattributed` arm rather than being assumed independent.
+3. **Down-weighted, never banned.** Self-assessment is the only signal most capabilities have, so
+   excluding it would empty the dataset — the gate would starve its own drain.
+4. **The reporting requirement is as load-bearing as the arithmetic.** `propensity()` returns the
+   provenance mix, the independent-arm count, the self-reported share and the raw count beside the
+   weighted one; `rank()` hands all of it to the **caller**; `report()` states the corpus mix in the
+   headline. On the live ledger that headline reads *12 verdicts, 12 self_reported, 0
+   outcome-derived, 0 capabilities with >1 judge arm* — and the three capabilities that had shown
+   0.800 now show 0.556, which is what three correlated opinions are worth.
+
+Two axes, never collapsed: `verdict_provenance` is *where it came from*; `verdict_kind` (e.g.
+`observer_output_change`) is *which question was answered*. §2 forbids averaging across the kinds, so
+a mixed-kind posterior is **flagged** on the row rather than silently blended.
+
+**The counterfactual was already there, and nothing was added for it.**
+`influence_edges.counterfactual` is the **delivery** counterfactual, keyed on `(capability, run)`,
+and `capability_effectiveness` already computes `durable_rate(accepted)` against
+`durable_rate(counterfactual)` from it — an advisory consult is not a run, so it cannot carry a
+per-verdict comparison here. This module's counterfactual is `experiments()`'s control arm: the
+candidates named for the exact same task and not triggered. `propensity()` now reports that arm
+beside the posterior and never mixes it in.
+
 ### Where layer 2's evidence comes from
 
 Layer 2 needs resolved trials, and until 2026-08-22 nothing produced any: `advise()` recorded the
