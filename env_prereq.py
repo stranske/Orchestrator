@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import tomllib
 import shutil
 import unittest
 from pathlib import Path
@@ -299,14 +300,20 @@ def vibe_config_absent() -> str | None:
 def vibe_active_model() -> str | None:
     """vibe's configured active model, read from its own config. None when unreadable."""
     path = pathlib.Path(os.environ.get("VIBE_HOME", pathlib.Path.home() / ".vibe")) / "config.toml"
+    # Parsed as TOML, not scanned line-by-line. The previous prefix match had three failure modes
+    # on a valid config: `active_model = "x"  # why` returned `x"  # why` (an inline comment is not
+    # quote-stripped), any key merely STARTING with the name matched (`active_model_fallback`), and
+    # a nested table's key matched as though it were top-level. A drift detector that misreads the
+    # value it compares reports drift that is not there.
     try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("active_model"):
-                return stripped.split("=", 1)[1].strip().strip('"').strip("'") or None
+        raw = path.read_bytes()
     except OSError:
         return None
-    return None
+    try:
+        value = tomllib.loads(raw.decode("utf-8", errors="replace")).get("active_model")
+    except tomllib.TOMLDecodeError:
+        return None
+    return str(value) or None if value is not None else None
 
 
 def require(*reasons: str | None) -> None:
@@ -411,9 +418,46 @@ def _selftest() -> None:
     assert PREREQ_ABSENT_MARK in text and "thing X is absent" in text, text
     assert text.count(PREREQ_ABSENT_MARK) == 1, text
 
+    # The vibe readers, against an ISOLATED VIBE_HOME so the verdict never depends on whether the
+    # owner happens to have vibe installed. Each case is one the previous prefix-match got wrong.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        home = pathlib.Path(td)
+        old = os.environ.get("VIBE_HOME")
+        os.environ["VIBE_HOME"] = str(home)
+        try:
+            # absent file: named reason, and no value
+            assert vibe_config_absent(), "an absent config must name itself"
+            assert vibe_active_model() is None
+            cfg = home / "config.toml"
+            # plain value
+            cfg.write_text('active_model = "gpt-5"\n', encoding="utf-8")
+            assert not vibe_config_absent()
+            assert vibe_active_model() == "gpt-5", vibe_active_model()
+            # INLINE COMMENT -- the prefix match returned `gpt-5"  # pinned` here
+            cfg.write_text('active_model = "gpt-5"  # pinned\n', encoding="utf-8")
+            assert vibe_active_model() == "gpt-5", vibe_active_model()
+            # empty value reads as absent, not as the empty string
+            cfg.write_text('active_model = ""\n', encoding="utf-8")
+            assert vibe_active_model() is None, vibe_active_model()
+            # a LONGER key must not match, and neither must a nested table's key
+            cfg.write_text('active_model_fallback = "wrong"\n', encoding="utf-8")
+            assert vibe_active_model() is None, vibe_active_model()
+            cfg.write_text('[nested]\nactive_model = "wrong"\n', encoding="utf-8")
+            assert vibe_active_model() is None, vibe_active_model()
+            # malformed TOML is unreadable, not a crash
+            cfg.write_text("active_model = \n", encoding="utf-8")
+            assert vibe_active_model() is None
+        finally:
+            if old is None:
+                os.environ.pop("VIBE_HOME", None)
+            else:
+                os.environ["VIBE_HOME"] = old
+
     print(
         "env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, "
-        "marked selftest skip speaks)"
+        "marked selftest skip speaks, vibe readers)"
     )
 
 

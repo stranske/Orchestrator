@@ -129,19 +129,31 @@ def roster() -> str:
     covered = _fixture_capabilities()
     rep = audit.audit(use_cache=True)
     rows = {r["capability_id"]: r for r in rep["rows"]}
+    # A MISSING PREREQUISITE is the one expected failure and it names itself; anything else is a
+    # real recurrence-check defect and must be printed. Catching bare Exception into `fired = {}`
+    # made the roster show a dash for every capability and still report success, so a broken
+    # replay was indistinguishable from a replay that found nothing -- the founding defect again.
+    replay_error: str | None = None
+    fired: dict[str, bool] = {}
     try:
         rec = rc.replay(offline=True)
-        fired: dict[str, bool] = {}
         for row in rec["rows"]:
             cap = row.get("capability")
             if cap and not str(cap).endswith("-flag"):
                 fired[cap] = fired.get(cap, True) and bool(row["fires"])
-    except Exception:  # noqa: BLE001
-        fired = {}
+    except env_prereq.MissingPrerequisite as exc:
+        replay_error = f"prerequisite absent: {exc}"
+    except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
+        replay_error = f"{type(exc).__name__}: {exc}"
 
     out = [
         f"# Capability set roster — all {len(ledger)} capabilities",
         "",
+    ] + ([
+        f"> RECURRENCE REPLAY DID NOT RUN — {replay_error}. Every 'Recurrence' cell below is "
+        f"UNKNOWN, not empty.",
+        "",
+    ] if replay_error else []) + [
         "| Capability | Fixture | Can fire | Recurrence | Blocker |",
         "|---|---|---|---|---|",
     ]

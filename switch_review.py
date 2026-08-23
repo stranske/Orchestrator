@@ -79,8 +79,11 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
         import capabilities as _caps
 
         _caps.production_heartbeat("switch-review", event_type, ref="switch_review.review")
-    except Exception:
-        pass
+    except Exception as exc:
+        # Continue -- the review is the product and a telemetry failure must not block it. But say
+        # so: a swallowed heartbeat leaves later audits classifying switch-review as unobserved,
+        # and an unexplained silence is indistinguishable from a pass.
+        print(f"switch_review: capability heartbeat failed: {exc}", file=sys.stderr)
 
 
 MIRROR_DIR = Path(os.environ.get("ORCH_MIRROR", Path.home() / ".codex" / "orchestrator-mirror"))
@@ -218,7 +221,11 @@ def review(*, now: int | None = None, env: dict | None = None, path=None) -> dic
                 }
             )
 
-    runners = stale_runners(now=now)
+    # NOT `now=now`: `stale_runners` derives a process start from `now - etime` and compares it to
+    # the mirror's real mtime, so an injected review clock (the selftest uses 2023) puts every start
+    # before every mirror write and reports every live process stale. Two real-world quantities must
+    # be compared on the real clock; `now` here dates the REVIEW, not the process table.
+    runners = stale_runners()
     return {
         "generated_at": now,
         "review_days": REVIEW_DAYS,

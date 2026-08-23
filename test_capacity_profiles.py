@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import time
 
 import pytest
@@ -589,15 +590,40 @@ def test_registry_models_match_adapters():
             else str(model)
         )
 
-    by_agent: dict[str, set[str]] = {}
-    for profile in execution_profiles.PROFILE_REGISTRY.values():
-        by_agent.setdefault(profile["agent"], set()).add(bare(profile["requested_model"]))
-    for agent, models in by_agent.items():
-        reported = {bare(adapters.model_identity(agent, mode)) for mode in ("mid", "full")}
-        assert models & reported, (
-            f"{agent}: registry {sorted(models)} matches none of the adapter identities "
-            f"{sorted(reported)}"
-        )
+    # PIN THE PROBE OFF. `model_identity("gemini", ...)` resolves through `resolve_model`, which
+    # shells out to `agy models` when its disk cache is cold -- so this drift assertion could fail
+    # or hang for a reason that has nothing to do with drift, on any machine without a warm cache.
+    # Same isolation `adapters._selftest` already applies, and the same probe leak that made the
+    # dispatcher selftest machine-dependent.
+    # A SEAT OVERRIDE makes this comparison meaningless rather than failing: `CURSOR_COMPOSER_MODEL`
+    # and friends are bound at import, so clearing the variable here cannot rebind them. Skip with
+    # the variable NAMED, which is this repo's rule for a check whose prerequisite is disturbed --
+    # a bare failure would read as drift that does not exist.
+    overrides = [
+        v
+        for v in ("ORCH_CURSOR_COMPOSER_MODEL", "ORCH_GEMINI_MODEL", "ORCH_VIBE_MODEL")
+        if os.environ.get(v)
+    ]
+    if overrides:
+        pytest.skip(f"seat model override(s) set, so registry-vs-adapter drift is unmeasurable: {', '.join(overrides)}")
+
+    old_probe = os.environ.get("ORCH_MODEL_PROBE")
+    os.environ["ORCH_MODEL_PROBE"] = "0"
+    try:
+        by_agent: dict[str, set[str]] = {}
+        for profile in execution_profiles.PROFILE_REGISTRY.values():
+            by_agent.setdefault(profile["agent"], set()).add(bare(profile["requested_model"]))
+        for agent, models in by_agent.items():
+            reported = {bare(adapters.model_identity(agent, mode)) for mode in ("mid", "full")}
+            assert models & reported, (
+                f"{agent}: registry {sorted(models)} matches none of the adapter identities "
+                f"{sorted(reported)}"
+            )
+    finally:
+        if old_probe is None:
+            os.environ.pop("ORCH_MODEL_PROBE", None)
+        else:
+            os.environ["ORCH_MODEL_PROBE"] = old_probe
 
 
 def test_every_agent_can_record_a_worker_attempt():
