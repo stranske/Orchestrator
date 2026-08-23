@@ -49,6 +49,33 @@ gates / feedback surfaces — and "capability" is a different axis entirely.
    **backend fit**, which needs arm + member identity — never collapse two same-agent arms back to
    the provider name, and never average a member into an ensemble verdict.
 
+**Selection is offered, never mandated — so narrowing is the whole lever.** A capability is offered
+to a calling agent that may legitimately have a better way to do the work. The design problem is
+raising the odds the right one is chosen, and catalogue size is the dominant factor: published
+measurements put selection accuracy at 84–95% for ~50 tools, 41–83% at 200, near zero at 740, with a
+safe zone of 10–20 per reasoning context; RAG-MCP measured 13.62% with a full catalogue against
+43.13% showing top-3-of-15. A 40-plus capability catalogue queried generically IS the 13.62% case.
+
+Three layers, ordered by when each starts working — see `ARCHITECTURE.md` for the full treatment:
+
+1. **`capability_advisor.SURFACE_BINDINGS`** — declared per surface, 3–7 entries, each carrying its
+   reason. Works on day one with no classifier and no history. When adding or reviving a capability,
+   say which surfaces bind it, or say why none does.
+2. **`capability_propensity.rank`** — orders *within* the bound set by measured usefulness.
+3. **`capability_advisor.learned_associations`** — corrects the table from observed use.
+
+Two rules that keep layer 1 honest, and both are enforced by selftest:
+
+- **Binding prioritises, never conceals.** Unbound capabilities are still returned, ranked after and
+  flagged. A concealed capability can never be selected, so it can never earn the evidence that would
+  bind it — the gate would starve its own drain.
+- **The binding is DATA, not prose.** Never write a loop that edits an automation's or skill's prompt
+  to increase selection. §1 makes the manual mirror sync the only circuit breaker between an agent's
+  change and the dispatcher; a prompt-rewriting loop is a self-modifying dispatch path. Promote by
+  writing a `binding_promotion` event instead, and gate promotion on an EXTERNAL signal (the surface
+  did the work by hand; a post-hoc failure) never on the advisor's own naming — otherwise the loop
+  ratchets toward invocation regardless of usefulness.
+
 **The objective this work serves.** The point is not to maximise capability INVOCATIONS. It is to
 turn a capability on, let it accomplish a stated task, and collect whether it accomplished it — so
 the learner can rank capabilities by measured effectiveness and improve the ones that fail. Building
