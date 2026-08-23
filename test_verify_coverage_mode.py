@@ -146,7 +146,19 @@ def test_absent_coverage_data_is_reported_as_absent(monkeypatch, tmp_path):
 def test_coverage_never_changes_the_exit_code():
     """The report is printed after the verdict and must not feed into it."""
     main_src = VERIFY_SRC.split("def main()", 1)[1]
-    assert "code, text = verify(update_floor=args.update_floor)" in main_src
+    # Pinned by PROPERTY, not by exact text. This was the whole call line as one literal until
+    # 2026-08-23, when `--reconcile-floor` legitimately added a second kwarg and reformatted the
+    # call across lines — which failed this test and read as a coverage regression while nothing
+    # about coverage had changed. The literal was load-bearing for one reason only, and that
+    # reason is now asserted directly: COVERAGE MUST NOT BE AN INPUT TO THE VERDICT. Other kwargs
+    # are none of this test's business; the two assertions below still hold the ordering and the
+    # no-touch rules, which are what "must not feed into it" actually means.
+    assert "code, text = verify(" in main_src, "the exit code must still come from verify()"
+    call_args = main_src.split("code, text = verify(", 1)[1].split(")", 1)[0]
+    assert "coverage" not in call_args, (
+        f"coverage is being passed into verify() ({call_args.strip()!r}). The verdict may not "
+        "depend on a measurement — that is the threshold nobody agreed to."
+    )
     report_at = main_src.find("coverage_combine_and_report()")
     return_at = main_src.find("return code")
     assert report_at != -1 and return_at != -1 and report_at < return_at, (

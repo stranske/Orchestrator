@@ -67,3 +67,102 @@ jobs:
       #
       # It also prints every skip and its reason, so a green run here always states what it did
       # not check. If that list grows, the ceiling turns it into a red rather than a footnote.
+
+  # ---------------------------------------------------------------------------------------------
+  # THE FLOOR'S DRAIN, RUN AUTOMATICALLY — main only.
+  #
+  # WHAT THIS FIXES. `collected` in .verify-floor.json is an EQUALITY (2026-08-23), and correctly
+  # so: a floor left BEHIND reality is permissive by exactly the gap, and that direction was
+  # silent for as long as it existed. But the correct number is only knowable on the MERGE
+  # RESULT, and this repo merges fast — so the value a branch records is invalidated by the next
+  # unrelated merge. That file's own note records the floor being found behind reality FOUR
+  # separate times (366 vs 368, 391 vs 402, and twice more), every one of them a later
+  # hand-correction. The drain was always one command; nothing ran it.
+  #
+  # WHAT IT DOES NOT FIX, stated so nobody expects it to: this does NOT remove the rebase step on
+  # a PR. A PR's CI still measures the merge result and still goes red when the branch's number
+  # lags, because that number is the author's claim about their own delta. What it removes is the
+  # case where a lagging floor reaches main and STAYS there until somebody notices — which is the
+  # dangerous one, since a floor N tests permissive lets N tests silently stop being collected.
+  #
+  # THE THREE QUESTIONS (house rule for anything gate-shaped):
+  #   1. What decrements it?  This job: `verify.py --reconcile-floor` writes the measured integers.
+  #      Not "time passes", not "someone notices" — both of which is what it replaces.
+  #   2. Can that mechanism run while the gate is CLOSED?  Yes, and that property is already
+  #      tested: `_blocks_floor_update` deliberately does NOT count drift as blocking, so the one
+  #      command that clears a drift is not refused for the existence of the drift.
+  #   3. Does the measuring window equal the draining window?  Exactly — the number written is the
+  #      number measured in the same process, in the same tree, in this run. There is no second
+  #      literal to drift.
+  #
+  # WHY IT CANNOT WEAKEN THE GATE. It can only ever RAISE the floor to observed reality, which
+  # makes the gate stricter. A collection DROP keeps blocking the write (`_blocks_floor_update`),
+  # so the file is never rewritten downward and `_failing_problems` has nothing to forgive: it
+  # forgives only a drift THIS RUN HEALED, never an unwritten one. Both properties have
+  # deliberate-break demos in `verify.py --selftest`.
+  #
+  # FAILS TOWARD NOISE, NOT SILENCE. No `|| true` anywhere. If the reconcile run finds anything
+  # real, it exits non-zero and this job is red. If the push is refused (branch protection, token
+  # scope), the push step fails and this job is red — because a drain that quietly stops draining
+  # is how the floor fell behind in the first place. The `verify` job above still runs on main
+  # unchanged, so a drift is still REPORTED red there on the commit that introduced it; this job
+  # heals it for the next one rather than hiding it.
+  #
+  # Converges without a loop guard: the commit it pushes re-triggers this workflow, that run finds
+  # no drift, writes nothing, and pushes nothing.
+  reconcile-floor:
+    name: reconcile the collection floor (main only)
+    # Never on a pull_request: a PR's floor is the author's claim about their own delta, and
+    # auto-writing it would delete the claim instead of checking it.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        # Credentials ARE persisted here, unlike the verify job — this is the one step that needs
+        # to push. Scope is bounded by `permissions:` above and by the single path in `git add`.
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml
+
+      - name: Reconcile
+        env:
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          python3 verify.py --reconcile-floor
+
+      - name: Commit the reconciled floor
+        run: |
+          set -euo pipefail
+          # ONLY this path. If the reconcile run somehow touched anything else, that is a bug and
+          # this job must not carry it to main.
+          if git diff --quiet -- .verify-floor.json; then
+            echo "floor already matches reality; nothing to reconcile."
+            exit 0
+          fi
+          if ! git diff --quiet -- . ':!.verify-floor.json'; then
+            echo "::error::the reconcile run modified files other than .verify-floor.json:"
+            git diff --name-only -- . ':!.verify-floor.json'
+            exit 1
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .verify-floor.json
+          git commit -m "chore(floor): reconcile the collection floor on main
+
+          verify.py --reconcile-floor measured the counts on this commit and wrote them. The
+          floor is an equality, so a value left behind reality is permissive by exactly the gap;
+          the number is only knowable on the merge result, which is why this is automated rather
+          than asked of each author. Raising it can only make the gate stricter -- a collection
+          DROP still blocks the write and fails the run."
+          git push

@@ -368,6 +368,42 @@ def _blocks_floor_update(problems: list[str]) -> list[str]:
     return [p for p in problems if not p.startswith(DRIFT_PREFIX)]
 
 
+def _failing_problems(
+    problems: list[str], *, forgive_healed_drift: bool, wrote_floor: bool
+) -> list[str]:
+    """Which problems make the run RED? Normally all of them. Pure, so the selftest holds the rule.
+
+    WHY A NARROWER ANSWER EXISTS AT ALL. `collected` is an equality, so a floor left behind
+    reality is a problem — correctly, it is permissive by exactly the gap. But the number is only
+    knowable on the MERGE RESULT, so on a busy day every concurrent branch records a value that
+    the next merge invalidates. The drain (write the two integers) is one command, but nothing
+    ran it automatically, which is how the floor came to be found behind reality four separate
+    times in this file's own history.
+
+    Under `--reconcile-floor` a drift that THIS RUN JUST HEALED is not a failure: the file now
+    records what was measured in this same process, in this same tree, so there is nothing left
+    for anyone to do about it. The measuring window and the draining window are the same run —
+    the house rule about one constant serving both sides, taken to its limit.
+
+    TWO THINGS KEEP THIS FROM BECOMING A GATE THAT CLEARS ITSELF:
+
+    * It reuses `_blocks_floor_update`, the SAME predicate that decided the write. A second
+      literal listing "which problems are drift" would be a matching pair, and a drifted pair
+      would either re-latch the gate or forgive a real failure.
+    * It is gated on `wrote_floor`, NOT on the flag. If the write did not happen — because a real
+      problem blocked it — every problem still fails, drift included. Forgiving an UNHEALED drift
+      would be exactly the defect this repo names most often: a gate that opens because it was
+      asked nicely rather than because the condition changed.
+
+    What it can never do is LOWER a floor. `_blocks_floor_update` keeps blocking on a collection
+    DROP, so the write never happens in that direction and there is nothing to forgive. Raising a
+    floor to observed reality makes the gate STRICTER, never weaker.
+    """
+    if forgive_healed_drift and wrote_floor:
+        return _blocks_floor_update(problems)
+    return problems
+
+
 def _appended_note(prior: str | None, collected: int, passed: int, today: str) -> str:
     """Append the recorded counts to the EXISTING note. Never replace it. Pure, so the selftest
     can hold the preservation property rather than trusting it.
@@ -480,7 +516,7 @@ def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
     return problems
 
 
-def verify(*, update_floor: bool = False) -> tuple[int, str]:
+def verify(*, update_floor: bool = False, forgive_healed_drift: bool = False) -> tuple[int, str]:
     py = run_pytest()
     floor = load_floor()
     mods = selftest_modules()
@@ -599,6 +635,7 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
         )
 
     # Drift does NOT block the write — see `_blocks_floor_update`. A real failure still does.
+    wrote_floor = False
     if update_floor and not _blocks_floor_update(problems):
         # `collected` and `passed` are re-measured; the CEILINGS are NOT. A ceiling re-recorded
         # from whatever the last run happened to skip is not a ceiling, it is a ratchet that
@@ -620,12 +657,16 @@ def verify(*, update_floor: bool = False) -> tuple[int, str]:
             _dt.datetime.now(_dt.timezone.utc).date().isoformat(),
         )
         FLOOR.write_text(json.dumps(blob, indent=1) + "\n", encoding="utf-8")
+        wrote_floor = True
         lines.append(
             f"  floor updated: collected={py['collected']} passed={py['passed']} "
             f"(ceilings preserved)"
         )
 
-    return (1 if problems else 0), "\n".join(lines) + "\n"
+    failing = _failing_problems(
+        problems, forgive_healed_drift=forgive_healed_drift, wrote_floor=wrote_floor
+    )
+    return (1 if failing else 0), "\n".join(lines) + "\n"
 
 
 def _selftest() -> None:
@@ -794,6 +835,34 @@ def _selftest() -> None:
         "would once again block the one command that fixes it"
     )
 
+    # ---- --reconcile-floor forgives a drift it HEALED, and nothing else ------------------------
+    # DELIBERATE-BREAK DEMO: drop the `wrote_floor` conjunct from `_failing_problems` and the
+    # third assert below fails — an UNHEALED drift starts passing, which is the gate opening
+    # because it was asked rather than because the condition changed.
+    _drift = [f"{DRIFT_PREFIX}: 417 collected > floor 416 — ..."]
+    _real = ["3 pytest failure(s)/error(s)"]
+    # Healed drift, reconciling: green. The file now says what this run measured.
+    assert _failing_problems(_drift, forgive_healed_drift=True, wrote_floor=True) == []
+    # Same drift, NOT reconciling: still red. The default path is unchanged, which is what keeps
+    # a PR honest — its author still has to record the number on the merge result.
+    assert _failing_problems(_drift, forgive_healed_drift=False, wrote_floor=True) == _drift
+    # Drift that was NOT written (a real problem blocked the write): still red, drift included.
+    assert _failing_problems(_drift, forgive_healed_drift=True, wrote_floor=False) == _drift
+    # A real failure is never forgiven, even alongside a healed drift.
+    assert _failing_problems(_drift + _real, forgive_healed_drift=True, wrote_floor=True) == _real
+    # A collection DROP cannot reach forgiveness at all: `_blocks_floor_update` refuses the write,
+    # so `wrote_floor` is False by construction. Asserted so the two guards stay coupled.
+    _dropped = ["collection DROPPED: 400 < floor 416 — tests stopped running"]
+    assert _blocks_floor_update(_dropped) == _dropped
+    assert _failing_problems(_dropped, forgive_healed_drift=True, wrote_floor=False) == _dropped
+    # ...and WIRED, not merely present — the same lesson as the guard above. Split literal so the
+    # needle cannot match this line itself.
+    _recon = "failing = _failing_problems(" + "\n"
+    assert _recon in _src, (
+        "verify() no longer routes its exit code through _failing_problems — --reconcile-floor "
+        "would silently stop forgiving, or worse, forgive unconditionally"
+    )
+
     # ---- --update-floor APPENDS to the note, so the ceiling rationale survives the tool -------
     # DELIBERATE-BREAK DEMO: restore the old `blob["note"] = (...)` literal and the first assert
     # fails — the prior text, which is the only record of why each ceiling is what it is, is gone.
@@ -855,7 +924,8 @@ def _selftest() -> None:
         "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
         "not, floor counts passed+skipped, floor fails BEHIND reality as loudly as below "
         "it and names the integers to write, --update-floor appends to the note instead of "
-        "clobbering the ceiling rationale, absent-module line is silent when clean and is "
+        "clobbering the ceiling rationale, --reconcile-floor forgives ONLY a drift it "
+        "healed and never an unwritten one, absent-module line is silent when clean and is "
         "never counted as a skip)"
     )
 
@@ -867,6 +937,14 @@ def main() -> int:
         "--update-floor",
         action="store_true",
         help="record the current counts as the floor (only when everything passes)",
+    )
+    ap.add_argument(
+        "--reconcile-floor",
+        action="store_true",
+        help=(
+            "like --update-floor, but a drift this run HEALED does not fail the run. For CI on "
+            "main: heals a floor left behind reality, and still fails on anything real."
+        ),
     )
     ap.add_argument(
         "--coverage",
@@ -885,7 +963,10 @@ def main() -> int:
     if args.coverage:
         globals()["COVERAGE"] = True
         coverage_reset()
-    code, text = verify(update_floor=args.update_floor)
+    code, text = verify(
+        update_floor=args.update_floor or args.reconcile_floor,
+        forgive_healed_drift=args.reconcile_floor,
+    )
     print(text, end="")
     if args.coverage:
         # Printed AFTER the verdict, and it never alters the exit code. Coverage is a measurement,
