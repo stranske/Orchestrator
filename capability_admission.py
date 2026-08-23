@@ -24,8 +24,12 @@ two holes account for essentially all of the wasted effort on this project:
 
 So this module enforces two things the others cannot:
 
-  A. ADMISSION — a capability must arrive with all eight parts, or the suite fails. Checked from a
+  A. ADMISSION — a capability must arrive with all NINE parts, or the suite fails. Checked from a
      proposed spec too (`preflight`), so the answer arrives before the code is written, not after.
+     The ninth, findability, was added 2026-08-23: the first eight make a capability invocable and
+     observable, and none of them makes it FINDABLE. 22 of 43 rows were bound to no surface at all,
+     so nothing could offer them and no amount of running could produce evidence for them — the
+     rule against that existed, in prose, in the very document that argues prose does not survive.
   B. COMMITMENTS — a dated promise must resolve to an artifact that exists. A citation to a
      decision record that was never written, or a trial deadline that passed with nothing recorded,
      fails here instead of rotting quietly.
@@ -252,6 +256,125 @@ def req_expiry_or_cadence(cap: dict, ctx: dict) -> tuple[bool, str]:
     return False, "neither expiry nor cadence: nothing will ever re-examine this"
 
 
+# --------------------------------------------------------------------------------------------
+# The ninth part — FINDABILITY. The eight above make a capability invocable and observable. None of
+# them makes it FINDABLE, and a capability nothing can offer can never earn the evidence that would
+# improve it: the gate would starve its own drain.
+# --------------------------------------------------------------------------------------------
+
+# `ADDING_CAPABILITIES.md` has carried "say which surfaces bind it (or why none does)" as PROSE since
+# 2026-08-21. That document's own opening argues a rule living only in prose does not survive the
+# next session, and THIS module exists because one did not. Measured 2026-08-23 over the 43-row
+# ledger: 37 capabilities have no usefulness evidence at all, and 22 of those are bound to NO
+# surface — nothing can offer them, so no amount of running will ever produce evidence for them.
+# Every one of the 43 passed admission. That is the same failure the file warns about, one layer up.
+FINDABILITY_ENFORCED_FROM = 1787443200  # 2026-08-23T00:00:00Z, the day findability became a gate
+
+# PER-REQUIREMENT ENFORCEMENT DATES. The row-level `legacy` flag answers "was this capability
+# registered before the GATE existed". A requirement added LATER needs its own date, or it is red on
+# arrival for every capability that predates it — and this module already made that trade once, in
+# writing: a gate red on arrival gets switched off, and then it protects nothing. ONE constant per
+# requirement, defined here and read only by `admit()`, so the window a requirement MEASURES and the
+# window it can be DRAINED over are the same window by construction.
+REQUIREMENT_ENFORCED_FROM: dict[str, int] = {"findable": FINDABILITY_ENFORCED_FROM}
+
+# The one declared exemption, shaped exactly like `kill_switch_category`: a category AND a written
+# rationale, neither sufficient alone. It is for a capability that is INVOKED rather than OFFERED —
+# a rail runs it unconditionally, so selection pressure cannot reach it and a binding would be
+# theatre. Deliberately narrow, and a drift guard in `test_capability_admission.py` stops a live
+# ledger from out-declaring the committed table, exactly as it does for the two kill-switch
+# categories.
+FINDABILITY_CATEGORY = "no_surface"
+
+# The verdicts that are not failures. `reach_not_evaluated` is here for the same reason
+# `commitments()` returns "cannot judge" with no audit ledger: an unreadable advisor must not
+# reclassify the whole catalogue as unfindable.
+FINDABLE_OK = frozenset({"declared_no_surface", "bound_and_consulted", "reach_not_evaluated"})
+
+# Each detectable cause and the DATA EDIT that clears it. Declared, so `report()` can print a
+# drainable count that is falsifiable rather than tautological: add a cause with no drain here and
+# `drainable` drops below `failing`, which is the alarm. Both fixes are things an agent performs in
+# the same PR, and neither requires the thing the gate forbids — so this gate fails toward motion.
+FINDABILITY_DRAIN: dict[str, str] = {
+    "bound_nowhere": "add one entry to a surface's 3-7 in capability_advisor.SURFACE_BINDINGS with "
+    f"its reason, or declare findability_category={FINDABILITY_CATEGORY!r} + findability_rationale",
+    "bound_to_unconsulted_surface": "bind a surface listed in capability_advisor.CONSULT_SITES, or "
+    "make the bound surface consult (pass --surface / the `surface` field)",
+}
+
+# What this requirement DOES NOT CHECK, stated where the check is rather than nowhere. A gate that
+# cannot say what would clear it is already defective; so is one that cannot say what it never
+# looked at.
+FINDABILITY_NOT_CHECKED = (
+    "a surface that invokes the entrypoint DIRECTLY without surface attribution — the `orchestrate` "
+    "skill already runs capacity.py (SKILL.md:31, listed as a tool at :116) while "
+    "`windowed-capacity-policy`'s heartbeat sits in `capacity.build` behind "
+    "ORCH_CAPABILITY_HEARTBEATS, which only a live tick sets, so the capability is used and "
+    "entirely uncredited. `capability_activation_audit.heartbeat_reachable` was checked first and "
+    "answers a DIFFERENT question — it reports that row `reachable` via `orchestrate.sh (CLI)`, "
+    "because it asks whether SOME driver reaches the heartbeat, not whether THIS surface's "
+    "invocation is attributed to the surface. Answering that needs the surface's own prompt, which "
+    "lives outside this repository, so no predicate over the tree can see it"
+)
+
+
+def findability_cause(cap: dict, ctx: dict) -> tuple[str, str]:
+    """Which sub-cause applies, and the sentence naming the fix. ONE classifier, two readers.
+
+    `req_findable` turns this into a verdict; `report()` counts the causes. A second classifier
+    would be the parallel inventory this tree keeps paying for.
+
+    THE THREE SUB-CAUSES HAVE DIFFERENT FIXES, so they are never collapsed into one "unfindable":
+
+      1. `bound_nowhere` — no surface declares it (22 of 43 on 2026-08-23). DETECTED EXACTLY: the
+         binding table is committed data and `capability_advisor.surfaces_binding` inverts it.
+      2. `bound_to_unconsulted_surface` — every binding names a surface no caller ever consults.
+         `capability-admission-gate` and `docs-drift-fix-agent` are bound to `ci`, which nothing
+         consults; ten more are bound to `opener-lane`/`closer-lane`, whose prompts consult with no
+         surface at all. DETECTED from `capability_advisor.consulting_surfaces()`. One shape of this
+         is NOT detectable and the table says so on the entry: `repo-audit:fix` is NAMED by the
+         skill and never ENTERED by a run, which only trial records can show.
+      3. Invoked without attribution — see `FINDABILITY_NOT_CHECKED`. Deliberately out of reach of
+         any predicate over this tree, and named rather than omitted.
+    """
+    cap_id = cap.get("capability_id")
+    # Checked FIRST, and therefore also for a capability bound only to an unconsulted surface: a
+    # capability a rail invokes unconditionally is exempt whatever the binding table says about it.
+    if cap.get("findability_category") == FINDABILITY_CATEGORY and _has(
+        cap, "findability_rationale"
+    ):
+        return "declared_no_surface", (
+            "declared unofferable, with a rationale: " + str(cap.get("findability_rationale"))[:110]
+        )
+    surfaces = list((ctx.get("bound_surfaces") or {}).get(cap_id) or [])
+    if not surfaces:
+        return "bound_nowhere", (
+            "bound_nowhere: no surface in capability_advisor.SURFACE_BINDINGS offers it, so it is "
+            "only ever drawn from the full catalogue queried generically — the measured 13.62% "
+            "selection condition. " + FINDABILITY_DRAIN.get("bound_nowhere", "")
+        )
+    reached = ctx.get("reached_surfaces")
+    if not reached:
+        return "reach_not_evaluated", (
+            f"bound to {len(surfaces)} surface(s); consult reach NOT EVALUATED "
+            "(capability_advisor.consulting_surfaces unavailable) — never read as a pass or a fail"
+        )
+    consulted = [s for s in surfaces if s in reached]
+    if consulted:
+        return "bound_and_consulted", "offered at " + ", ".join(sorted(consulted)[:3])
+    return "bound_to_unconsulted_surface", (
+        "bound_to_unconsulted_surface: every binding names a surface no caller consults "
+        f"({', '.join(sorted(surfaces)[:4])}). A binding nothing asks for is indistinguishable from "
+        "no binding. " + FINDABILITY_DRAIN.get("bound_to_unconsulted_surface", "")
+    )
+
+
+def req_findable(cap: dict, ctx: dict) -> tuple[bool, str]:
+    """Can any surface OFFER it? Thin wrapper; `findability_cause` owns the logic."""
+    cause, detail = findability_cause(cap, ctx)
+    return cause in FINDABLE_OK, detail
+
+
 REQUIREMENTS = (
     ("dedup_recorded", req_dedup_recorded),
     ("caller_exists", req_caller_exists),
@@ -261,6 +384,7 @@ REQUIREMENTS = (
     ("kill_switch", req_kill_switch),
     ("rollback", req_rollback),
     ("expiry_or_cadence", req_expiry_or_cadence),
+    ("findable", req_findable),
 )
 
 
@@ -289,15 +413,42 @@ def known_controls() -> set[str]:
     return controls
 
 
+def _findability_context(capability_ids, *, path: pathlib.Path | None = None) -> dict:
+    """The two inputs `req_findable` reads, both CONSUMED from `capability_advisor`.
+
+    Nothing here re-derives a binding or a reach: `surfaces_binding` inverts `binding_for`, and
+    `consulting_surfaces` owns the consult table. If the advisor cannot be imported at all, the
+    reach set is left empty and the predicate reports `reach_not_evaluated` rather than failing the
+    whole catalogue on an ImportError.
+    """
+    try:
+        import capability_advisor as advisor
+
+        reach = advisor.consulting_surfaces()
+        return {
+            "bound_surfaces": advisor.surfaces_binding(capability_ids, path=path),
+            "reached_surfaces": set(reach["reached"]),
+            "consult_reach": reach,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "bound_surfaces": {},
+            "reached_surfaces": set(),
+            "consult_reach": {"unreadable": f"{type(exc).__name__}: {str(exc)[:80]}"},
+        }
+
+
 def _context(path: pathlib.Path | None = None) -> dict:
     import capability_activation_audit as audit
     import test_capability_set_coverage as coverage
 
     rows = {r["capability_id"]: r for r in audit.audit(use_cache=True)["rows"]}
+    ledger = capabilities.load(path or capabilities.REG)
     return {
         "audit_rows": rows,
         "fixtures": coverage._fixture_capabilities(),
         "known_controls": known_controls(),
+        **_findability_context(sorted(ledger), path=path),
     }
 
 
@@ -321,11 +472,24 @@ def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | N
     waived = bool(waiver and int(waiver.get("expires", 0)) > _now())
     created = _created_ts(cap)
     legacy = bool(created and created < GRANDFATHERED_BEFORE)
+    # PER-REQUIREMENT SCOPING, alongside the row-level kind. A requirement added after this
+    # capability was registered is DEFERRED: still reported in `missing` so the debt is visible,
+    # but excluded from `blocking` so a newly added rule is not red on arrival for the whole
+    # catalogue. Same trade as `legacy`, one level finer, and it lives on the ROW rather than
+    # inside a predicate for the same reason — debt must never read as compliance.
+    deferred = [
+        name
+        for name in missing
+        if created and created < REQUIREMENT_ENFORCED_FROM.get(name, GRANDFATHERED_BEFORE)
+    ]
+    blocking = [name for name in missing if name not in deferred]
     return {
         "capability_id": capability_id,
         "status": cap.get("status"),
         "admitted": not missing,
         "missing": missing,
+        "deferred": deferred,
+        "blocking": blocking,
         "checks": checks,
         "waived": waived,
         "waiver": waiver,
@@ -349,7 +513,16 @@ def preflight(spec: dict) -> dict:
         **capabilities._blank_capability(spec.get("capability_id") or "capability:proposed"),
         **spec,
     }
-    ctx = {"audit_rows": {}, "fixtures": set()}
+    # FINDABILITY IS DECLARABLE, so preflight ANSWERS it rather than deferring it — which is the
+    # whole point of running this before writing code. The binding table and the consult table are
+    # both committed, so the question needs no ledger and no built module: "which surface will offer
+    # this?" is a design question the author can settle now, and the alternative is discovering
+    # after the build that nothing can reach it.
+    ctx = {
+        "audit_rows": {},
+        "fixtures": set(),
+        **_findability_context([stub["capability_id"]]),
+    }
     checks, missing = {}, []
     # Caller/heartbeat/fixture cannot be verified for code that does not exist; they are reported as
     # OBLIGATIONS rather than silently skipped, because silently skipping is how they got skipped.
@@ -539,20 +712,63 @@ def _capability_heartbeat(event: str) -> None:
         pass
 
 
-def report(*, path: pathlib.Path | None = None) -> dict:
+def findability_report(ledger: dict, ctx: dict, rows: list[dict] | None = None) -> dict:
+    """Findability's own numbers: what it BLOCKS, what it defers, and what would drain each.
+
+    BOTH QUANTITIES IN ONE PLACE, which is this workspace's standing rule for any gate: `25/43`
+    reads as "be patient" indefinitely, while `25/43, drainable 25` says the fix is available now
+    and `drainable 0` would be an instant deadlock report. `drainable` is computed from
+    `FINDABILITY_DRAIN`, so a future cause with no declared fix makes it fall BELOW `failing`
+    instead of silently inheriting a comfortable number.
+    """
+    by_cause: dict[str, list[str]] = {}
+    for cap_id in sorted(ledger):
+        cause, _detail = findability_cause(ledger[cap_id], ctx)
+        if cause in FINDABLE_OK:
+            continue
+        by_cause.setdefault(cause, []).append(cap_id)
+    failing = sorted(cap for ids in by_cause.values() for cap in ids)
+    blocking = sorted(
+        r["capability_id"] for r in (rows or []) if r["enforced"] and "findable" in r["blocking"]
+    )
+    drainable = sorted(
+        cap for cause, ids in by_cause.items() if cause in FINDABILITY_DRAIN for cap in ids
+    )
+    reach = ctx.get("consult_reach") or {}
+    return {
+        "total": len(ledger),
+        "failing": failing,
+        "by_cause": {cause: sorted(ids) for cause, ids in sorted(by_cause.items())},
+        "blocking": blocking,
+        "deferred": sorted(set(failing) - set(blocking)),
+        "drainable": drainable,
+        "drain": dict(FINDABILITY_DRAIN),
+        "not_checked": FINDABILITY_NOT_CHECKED,
+        "bound_unconsulted_surfaces": list(reach.get("bound_unconsulted") or []),
+        "consult_sites_unverified": list(reach.get("unverified") or []),
+        "consult_sites_drifted": list(reach.get("drifted") or []),
+        "enforced_from": FINDABILITY_ENFORCED_FROM,
+    }
+
+
+def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict:
     _capability_heartbeat("invocation")
     ledger = capabilities.load(path or capabilities.REG)
-    ctx = _context(path)
+    ctx = ctx or _context(path)
     rows = [admit(cid, path=path, ctx=ctx) for cid in sorted(ledger)]
     enforced = [r for r in rows if r["enforced"]]
     return {
         "total": len(rows),
         "admitted": sum(1 for r in rows if r["admitted"]),
         "enforced_total": len(enforced),
-        "enforced_failing": [r["capability_id"] for r in enforced if not r["admitted"]],
+        # BLOCKING, not merely "not admitted": a requirement that postdates the capability is
+        # reported below and does not fail the suite. Without the distinction, adding the ninth
+        # part would have turned four rows red the day it landed.
+        "enforced_failing": [r["capability_id"] for r in enforced if r["blocking"]],
         "legacy_debt": sorted(
             r["capability_id"] for r in rows if r["legacy"] and not r["admitted"]
         ),
+        "findability": findability_report(ledger, ctx, rows),
         "rows": rows,
         "commitments": commitments(),
     }
@@ -581,6 +797,30 @@ def format_report(rep: dict) -> str:
         out.append(
             "  no enforced failures: every capability added since the gate carries its parts"
         )
+    find = rep.get("findability") or {}
+    if find:
+        causes = ", ".join(f"{len(ids)} {cause}" for cause, ids in sorted(find["by_cause"].items()))
+        out += [
+            "",
+            f"  FINDABILITY:     {len(find['failing'])} of {find['total']} cannot be OFFERED"
+            + (f" — {causes}" if causes else ""),
+            f"                   blocking {len(find['blocking'])}, "
+            f"pre-cutoff debt {len(find['deferred'])}, "
+            f"DRAINABLE {len(find['drainable'])} (a data edit each, no code)",
+        ]
+        if find["bound_unconsulted_surfaces"]:
+            out.append(
+                "                   surfaces bound but never consulted: "
+                + ", ".join(find["bound_unconsulted_surfaces"])
+            )
+        for d in find["consult_sites_drifted"]:
+            out.append(f"                   DRIFT {d['surface']}: {d['why']} ({d['caller']})")
+        if find["consult_sites_unverified"]:
+            out.append(
+                "                   consult sites not verifiable here: "
+                + ", ".join(u["surface"] for u in find["consult_sites_unverified"])
+            )
+        out.append(f"                   NOT CHECKED: {find['not_checked'][:96]}...")
     if rep["legacy_debt"]:
         out += ["", "  legacy debt (pay down opportunistically; never a human queue):"]
         counts: dict[str, int] = {}
@@ -734,12 +974,62 @@ def _selftest() -> None:
     ctx_full = {
         "audit_rows": {"capability:nothing-declared": {"reachable": True, "defects": []}},
         "fixtures": {"capability:nothing-declared"},
+        # Findability is satisfied by DATA, so the satisfiable case is a synthetic binding to a
+        # synthetic consulted surface. Driving it from ctx rather than from the real table keeps
+        # this assertion independent of whatever the live binding table happens to say.
+        "bound_surfaces": {"capability:nothing-declared": ["t-consulted"]},
+        "reached_surfaces": {"t-consulted"},
     }
     for name, fn in REQUIREMENTS:
         if name == "heartbeat":
             continue  # needs real module introspection; covered on live rows
         ok, detail = fn(full, ctx_full)
         assert ok, f"requirement {name!r} cannot be satisfied even when declared: {detail}"
+
+    # EVERY CAUSE THE CLASSIFIER CAN RETURN IS EITHER A PASS OR CARRIES ITS OWN FIX. A gate that
+    # cannot say what would clear it is already defective, and `FINDABILITY_DRAIN` is where that
+    # answer lives — so the two must not be able to drift apart. Driven over a synthetic matrix that
+    # walks every branch of `findability_cause`, so it holds on any machine and does not consult the
+    # live ledger.
+    probe_cap = {"capability_id": "t-probe"}
+    exempt = {
+        **probe_cap,
+        "findability_category": FINDABILITY_CATEGORY,
+        "findability_rationale": "a rail invokes it unconditionally",
+    }
+    bound = {"bound_surfaces": {"t-probe": ["t-x"]}}
+    matrix = [
+        (probe_cap, {}),  # bound_nowhere
+        (probe_cap, {**bound, "reached_surfaces": {"t-x"}}),  # bound_and_consulted
+        (probe_cap, {**bound, "reached_surfaces": {"t-other"}}),  # bound_to_unconsulted_surface
+        (probe_cap, {**bound, "reached_surfaces": set()}),  # reach_not_evaluated
+        (exempt, {}),  # declared_no_surface
+    ]
+    seen = set()
+    for cap_probe, ctx_probe in matrix:
+        cause, detail = findability_cause(cap_probe, ctx_probe)
+        seen.add(cause)
+        assert detail.strip(), f"cause {cause!r} returns no detail at all"
+        assert cause in FINDABLE_OK or cause in FINDABILITY_DRAIN, (
+            f"cause {cause!r} is a failure with no entry in FINDABILITY_DRAIN — the report would "
+            "then name a backlog it cannot say how to clear"
+        )
+        if cause in FINDABILITY_DRAIN:
+            assert (
+                FINDABILITY_DRAIN[cause] in detail
+            ), f"cause {cause!r} does not carry its own fix into the message a caller reads"
+    assert len(seen) == len(matrix), f"the matrix does not reach every branch: {sorted(seen)}"
+
+    # THE ENFORCEMENT DATE MUST NOT BE IN THE FUTURE. `GRANDFATHERED_BEFORE` was first written four
+    # days ahead, which grandfathered brand-new capabilities and made the gate check nothing; the
+    # same mistake in a per-requirement date would be invisible, since it silences only one
+    # requirement rather than all of them.
+    for name, when in REQUIREMENT_ENFORCED_FROM.items():
+        assert when <= _now(), (
+            f"{name!r} is enforced from {when}, which is in the FUTURE — every capability, "
+            "including brand-new ones, would pass it as pre-cutoff"
+        )
+        assert dict(REQUIREMENTS).get(name), f"{name!r} has an enforcement date but no predicate"
 
     # GRANDFATHERING MUST BE VISIBLE, NOT SILENT, and must not weaken the predicates themselves.
     # Legacy scoping lives on the ROW (`legacy`/`enforced`), so a pre-gate capability still reports
@@ -802,27 +1092,44 @@ def _selftest() -> None:
 
     # preflight must report obligations rather than pretending it verified them.
 
+    spec = {
+        "capability_id": "capability:proposed-thing",
+        "notes": "dedup: checked X; absent",
+        "downstream_consumer": "a.py:b",
+        "learning_sink": "feedback.outcomes",
+        "kill_switch": "F=0",
+        "rollback": "revert",
+        "trigger_cadence": "daily",
+    }
+    # FINDABILITY IS THE ONE THE AUTHOR MUST LEARN HERE, before writing code — a proposed
+    # capability no surface will offer is the 13.62% case, and discovering that after the build is
+    # a second project. So a spec with the first eight parts and no surface is NOT ready to build.
+    pf_unbound = preflight(spec)
+    assert not pf_unbound["ready_to_build"], pf_unbound
+    assert pf_unbound["declarable_missing"] == ["findable"], pf_unbound
+    assert "bound_nowhere" in pf_unbound["checks"]["findable"]["detail"], pf_unbound
+    # ...and declaring the exemption (category AND rationale) clears it.
     pf = preflight(
         {
-            "capability_id": "capability:proposed-thing",
-            "notes": "dedup: checked X; absent",
-            "downstream_consumer": "a.py:b",
-            "learning_sink": "feedback.outcomes",
-            "kill_switch": "F=0",
-            "rollback": "revert",
-            "trigger_cadence": "daily",
+            **spec,
+            "findability_category": FINDABILITY_CATEGORY,
+            "findability_rationale": "a rail invokes it unconditionally; it is never offered",
         }
     )
     assert pf["ready_to_build"], pf
     assert set(pf["obligations"]) == {"caller_exists", "heartbeat", "fixture"}, pf
     assert all(pf["checks"][o]["ok"] is None for o in pf["obligations"]), pf
+    # The category ALONE must not clear it, exactly as for the kill-switch categories.
+    pf_bare_category = preflight({**spec, "findability_category": FINDABILITY_CATEGORY})
+    assert not pf_bare_category["ready_to_build"], pf_bare_category
     pf2 = preflight({"capability_id": "capability:bare"})
     assert not pf2["ready_to_build"] and "kill_switch" in pf2["declarable_missing"], pf2
 
     env_prereq.report_gaps("capability_admission.py", gaps)
     print(
         "capability_admission.py selftest: OK (every requirement can fail and can pass, "
-        "grandfathering visible, waivers expire, dangling + overdue commitments detected, "
+        "grandfathering visible, per-requirement cutoffs are in the past, findability is "
+        "declarable pre-build, waivers expire, dangling + overdue commitments detected, "
         "live-tree scan proven non-vacuous and correctly attributed)"
         + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
     )

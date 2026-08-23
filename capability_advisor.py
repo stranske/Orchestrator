@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import re
 import sys
 
@@ -880,10 +881,27 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "capability-activation-audit": "and where can-it-fire is observed",
         "capability-propensity": "the tick is the highest-volume unattended surface (~91 writes/day), "
         "so it is where propensity evidence should accrue fastest",
+        "evidence-acquisition": "a `tick_phase` matcher whose declared consumer IS the "
+        "`orchestrate.sh:evidence-acquisition` cadence step — the same shape as `switch-review` "
+        "above, bound so the tick can consult it rather than only schedule it. Added 2026-08-23 "
+        "because the findability requirement blocked it: registered after that cutoff and bound "
+        "nowhere, it is the first row the new gate actually drained",
     },
+    # `ci` WAS A BINDING TO A SURFACE NOTHING CONSULTS, which is the first finding the findability
+    # requirement produced about the tree it was added to (2026-08-23). Both former entries were
+    # right about the mechanism and wrong about the axis: neither capability is ever OFFERED to a
+    # reasoning context, so no amount of binding could raise its selection odds. `verify.py` runs
+    # the admission gate on every PR unconditionally, and `docs-drift-fix-agent` is a Workflows
+    # workflow whose invocations arrive through `capability_outcome_bridge`. Both now declare
+    # `findability_category: no_surface` in `capabilities.KNOWN_DECLARATIONS`, which is the
+    # honest statement, and this entry records why the surface is deliberately empty rather than
+    # leaving a deleted key that reads as an oversight.
     "ci": {
-        "capability-admission-gate": "runs in verify.py on every PR; the gate IS the CI surface",
-        "docs-drift-fix-agent": "a Workflows CI workflow that fires per PR without local invocation",
+        NO_BINDING: "no caller anywhere consults a `ci` surface — not verify.py, not a workflow, "
+        "not a skill — so a binding here could never reach a reasoning context. Both "
+        "capabilities that used to sit here are invoked UNCONDITIONALLY by a rail and "
+        "declare `findability_category: no_surface` instead. If a CI-side consult is "
+        "ever added, this is the entry to restore.",
     },
     "repo-audit": {
         "offload": "whole-repo reads are the canonical offload case, and the audit is the biggest "
@@ -980,7 +998,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
 }
 
 
-def binding_for(surface: str, *, path=None) -> dict[str, str]:
+def binding_for(surface: str, *, path=None, promoted: dict | None = None) -> dict[str, str]:
     """The declared bound set for a surface, plus any promotions this instance has learned.
 
     PHASE-SCOPED. A surface may be a bare name (`closer-lane`) or a phase within a long process
@@ -994,6 +1012,11 @@ def binding_for(surface: str, *, path=None) -> dict[str, str]:
 
     Seed comes from the committed table; promotions are read from the ledger, so an instance can grow
     its own bindings without a code change and without touching any prompt.
+
+    `promoted` is an OPTIONAL pre-read promotion index (see `_promoted_index`). Passing it makes a
+    sweep over every surface read the ledger once instead of once per prefix per call — a 43x30
+    inverse lookup took minutes against the live ledger without it. Omitted, the behaviour is
+    exactly as before.
     """
     if not surface:
         return {}
@@ -1012,7 +1035,7 @@ def binding_for(surface: str, *, path=None) -> dict[str, str]:
             if cap_id == NO_BINDING:
                 continue
             out[cap_id] = reason
-        for cap_id, reason in _promoted_bindings(key, path=path).items():
+        for cap_id, reason in _promoted_bindings(key, path=path, index=promoted).items():
             out.setdefault(cap_id, reason)
     return out
 
@@ -1032,16 +1055,223 @@ def binding_suppressed(surface: str) -> str:
     return str(entry.get(NO_BINDING) or "")
 
 
-def _promoted_bindings(surface: str, *, path=None) -> dict[str, str]:
-    """Bindings this instance promoted from observed use. Machine-local evidence, never committed."""
+def _promoted_index(path=None) -> dict[str, dict[str, str]]:
+    """Every promotion this instance has learned, surface -> {capability: reason}. ONE ledger read.
+
+    Split out of `_promoted_bindings` so a sweep over every surface pays the ledger cost once. The
+    per-surface function still exists and still answers identically; this is the shared read, not a
+    second source.
+    """
     caps = capabilities.load_declared(path or capabilities.REG)
-    out: dict[str, str] = {}
+    index: dict[str, dict[str, str]] = {}
     for cap_id, cap in caps.items():
         for event in cap.get("event_history") or []:
             meta = event.get("metadata") or {}
-            if meta.get("source") == "binding_promotion" and meta.get("surface") == surface:
-                out[cap_id] = str(meta.get("reason") or "promoted from observed use")
+            if meta.get("source") == "binding_promotion" and meta.get("surface"):
+                index.setdefault(str(meta["surface"]), {})[cap_id] = str(
+                    meta.get("reason") or "promoted from observed use"
+                )
+    return index
+
+
+def _promoted_bindings(surface: str, *, path=None, index: dict | None = None) -> dict[str, str]:
+    """Bindings this instance promoted from observed use. Machine-local evidence, never committed."""
+    idx = _promoted_index(path) if index is None else index
+    return dict(idx.get(surface) or {})
+
+
+# ---------------------------------------------------------------------------
+# WHO ACTUALLY ASKS — the other half of a binding, and the half nothing declared.
+#
+# The table above says which capabilities a surface should be OFFERED. Nothing said which surfaces
+# are ever ASKED, and the two are independent: from a capability's point of view, a binding to a
+# surface no caller consults is indistinguishable from no binding at all. Measured 2026-08-23 over
+# the 43-row ledger, and all three shapes are live:
+#
+#   * `ci` binds `capability-admission-gate` and `docs-drift-fix-agent`, and NOTHING consults a `ci`
+#     surface anywhere — not `verify.py`, not a workflow, not a skill.
+#   * `opener-lane` and `closer-lane` bind ten capabilities between them, and both lane prompts DO
+#     consult the advisor — with no surface at all:
+#     `capability_advisor.py --json --lane opener --repository <r> '<work>'`. `binding_for("")` is
+#     `{}`, so the declared set never reaches the caller the declaration was written for.
+#   * `repo-audit` binds `offload` surface-wide and is never consulted under its bare name — and
+#     that one is CORRECT, because every consult happens at a phase key whose resolution merges the
+#     parent's entries. So "not consulted" is a defect only for a key that is not a PREFIX of a
+#     consulted key, and `consulting_surfaces()` encodes exactly that difference.
+#
+# DECLARED, AND FALSIFIABLE. A consult site is a claim about a file, so each entry names the caller
+# and the surface literal it passes, and `_selftest_findability` opens the file and checks. In-tree
+# callers are verified on every machine, CI included. External callers — skill prompts under
+# `~/.claude/skills`, lane prompts under `~/.codex/automations` — are verified where they exist and
+# reported UNVERIFIED where they do not. Absence is never read as refutation: doing so would strand
+# every skill-bound capability on a fresh clone, which is a gate red on arrival. Same three-valued
+# discipline as the precondition axis, same rule as `capability_admission.commitments()` — no
+# ledger, no verdict. A caller that is PRESENT and no longer names its surface is different: that is
+# DRIFT, it drops out of `reached`, and the selftest fails on it.
+#
+# WHY NOT DERIVE IT ENTIRELY. The consulting callers are prompts OUTSIDE this repository, so a fresh
+# clone can derive nothing at all. A committed table answers the same way on every machine and shows
+# a change in a diff; a derivation that silently returned the empty set on CI would make the
+# findability gate inert exactly where it has to bite.
+# ---------------------------------------------------------------------------
+CONSULT_SITES: dict[str, dict] = {
+    "tick": {
+        "caller": "capability_propensity.py",
+        "literal": "TICK_SURFACE",
+        "how": "`tick-evidence` consults on every tick with surface=TICK_SURFACE. IN-TREE, so this "
+        "site is verified on every machine, CI included",
+    },
+    "orchestrate": {
+        "caller": "~/.claude/skills/orchestrate/SKILL.md",
+        "how": "task-initiation consult naming its own surface",
+    },
+    "ux-review": {
+        "caller": "~/.claude/skills/ux-review/SKILL.md",
+        "how": "task-initiation consult naming its own surface",
+    },
+    "file-agent-issue": {
+        "caller": "~/.claude/skills/file-agent-issue/SKILL.md",
+        "how": "task-initiation consult naming its own surface",
+    },
+    "implementation-verification": {
+        "caller": "~/.claude/skills/implementation-verification/SKILL.md",
+        "how": "task-initiation consult naming its own surface",
+    },
+    "cross-env-test-doctor": {
+        "caller": "~/.claude/skills/cross-env-test-doctor/SKILL.md",
+        "how": "task-initiation consult naming its own surface",
+    },
+    "latched-gate-check": {
+        "caller": "~/.claude/skills/latched-gate-check/SKILL.md",
+        "how": "task-initiation consult naming its own surface",
+    },
+    # THE PHASE FAMILIES. The skill's own surface table says "pass the phase as the surface" and
+    # "pass this in each dimension AGENT's prompt, N=1..8", so the literal in the file is the family
+    # name while the surfaces actually passed are its instances. The instances are enumerated rather
+    # than matched by prefix, so a diff reviews them — a prefix rule would silently admit a phase
+    # nobody consults, which is the very thing being measured.
+    "repo-audit:phase-N": {
+        "caller": "~/.claude/skills/repo-audit/SKILL.md",
+        "instances": [f"repo-audit:phase-{n}" for n in range(1, 6)],
+        "how": "the skill consults once per phase, passing `repo-audit:phase-N`",
+    },
+    "repo-audit:dimension-N": {
+        "caller": "~/.claude/skills/repo-audit/SKILL.md",
+        "instances": [f"repo-audit:dimension-{n}" for n in range(1, 9)],
+        "how": "phase 2 fans out to eight dimension agents, each passed its own surface",
+    },
+    "repo-audit:fix": {
+        "caller": "~/.claude/skills/repo-audit/SKILL.md",
+        "how": "named in the skill's surface table for the follow-up arc. NOTE THE LIMIT: the "
+        "surface is NAMED, but an audit run ends at phase 5 and hands implementation to the "
+        "lanes, so no run actually ENTERS it. A table of files cannot see that difference; "
+        "only `capability_propensity`'s trials can, from what a surface really consulted",
+    },
+}
+
+
+# BOUND, AND KNOWN NOT TO BE CONSULTED — the third declared state, and an incident record rather
+# than a permission. A surface has exactly three honest states: a caller consults it
+# (`CONSULT_SITES`), it deliberately binds nothing (`NO_BINDING`), or it holds bindings that nothing
+# can ever reach. The third one is what `ci` was, silently, and `_selftest_findability` now fails on
+# any surface in that state which is not listed here — so restoring a binding to an unconsulted
+# surface is a loud failure at the point of the change instead of a wrong verdict months later.
+#
+# NOT A WAIVER. Capabilities bound only to a surface listed here still fail `req_findable` as
+# `bound_to_unconsulted_surface`; this table records that WE KNOW, with the reason and the fix, so
+# the difference between an acknowledged defect and an oversight is legible. When a consult is added,
+# MOVE the entry into `CONSULT_SITES` — the selftest will tell you if you forget.
+KNOWN_UNCONSULTED: dict[str, str] = {
+    "opener-lane": "the lane prompt DOES consult "
+    "(`capability_advisor.py --json --lane opener --repository <r> '<work>'`) but passes no "
+    "--surface, so `binding_for('')` returns {} and these five bindings have never reached it. "
+    "FIX: add `--surface opener-lane` to the lane TOML, which is outside this repository — "
+    "CLAUDE.md forbids a loop that edits lane prompts, so this is recorded, not patched here.",
+    "closer-lane": "same defect, same lane family: the closer TOML consults with --lane and "
+    "--context and no --surface. FIX: add `--surface closer-lane` to the lane TOML.",
+}
+
+
+def consult_keys() -> set[str]:
+    """Every concrete surface some caller passes, families expanded to their instances."""
+    out: set[str] = set()
+    for key, site in CONSULT_SITES.items():
+        out |= set(site.get("instances") or [key])
     return out
+
+
+def consulting_surfaces() -> dict:
+    """Which surfaces a caller actually NAMES, and which bound surfaces none of them does.
+
+    Returns `reached` (the surfaces an offer can travel through), `verified` / `unverified` /
+    `drifted` (the three states of a declared claim), and `bound_unconsulted` — the bound surfaces
+    that strand whatever is declared on them.
+    """
+    reached: set[str] = set()
+    verified: list[str] = []
+    unverified: list[dict] = []
+    drifted: list[dict] = []
+    here = pathlib.Path(__file__).resolve().parent
+    for key, site in sorted(CONSULT_SITES.items()):
+        instances = set(site.get("instances") or [key])
+        literal = str(site.get("literal") or key)
+        caller = str(site.get("caller") or "")
+        target = pathlib.Path(caller).expanduser()
+        if not target.is_absolute():
+            target = here / target
+        try:
+            text = target.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            unverified.append(
+                {"surface": key, "caller": caller, "why": "caller not present on this machine"}
+            )
+            reached |= instances
+            continue
+        if literal in text:
+            verified.append(key)
+            reached |= instances
+        else:
+            drifted.append(
+                {"surface": key, "caller": caller, "why": f"caller no longer names {literal!r}"}
+            )
+    promoted = _promoted_index()
+    stranded: list[str] = []
+    for surface in sorted(SURFACE_BINDINGS):
+        if not binding_for(surface, promoted=promoted):
+            continue  # suppressed, or empty — there is nothing here to strand
+        if surface in reached:
+            continue
+        # A PARENT WHOSE PHASES ARE CONSULTED IS NOT STRANDED. `repo-audit` is the case: its
+        # surface-wide entries are resolved at every `repo-audit:phase-N` consult.
+        if any(r.startswith(surface + ":") for r in reached):
+            continue
+        stranded.append(surface)
+    return {
+        "reached": sorted(reached),
+        "verified": sorted(verified),
+        "unverified": unverified,
+        "drifted": drifted,
+        "bound_unconsulted": stranded,
+        "site_count": len(CONSULT_SITES),
+    }
+
+
+def surfaces_binding(capability_ids, *, path=None) -> dict[str, list[str]]:
+    """The inverse of `binding_for`: which surfaces bind each of these capabilities.
+
+    CONSUMES `binding_for`, so prefix inheritance, `NO_BINDING` suppression and this instance's
+    ledger promotions are resolved by exactly ONE model — a second resolver here would be the
+    parallel inventory this tree keeps paying for. The promotion index is read once and handed to
+    every resolution.
+    """
+    wanted = set(capability_ids)
+    promoted = _promoted_index(path)
+    out: dict[str, list[str]] = {cap_id: [] for cap_id in wanted}
+    for surface in sorted(set(SURFACE_BINDINGS) | consult_keys()):
+        for cap_id in binding_for(surface, promoted=promoted):
+            if cap_id in wanted:
+                out[cap_id].append(surface)
+    return {cap_id: sorted(surfaces) for cap_id, surfaces in out.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -2419,6 +2649,148 @@ def _selftest_preconditions() -> None:
     )
 
 
+def _selftest_findability() -> None:
+    """The consult table and the inverse lookup — the two inputs the admission gate reads.
+
+    SYNTHETIC SURFACES, not the live table, per the standing rule to test the mechanism rather than
+    the bug: `ci` is stranded today and `repo-audit` is not, but asserting on those two would make
+    this selftest fail the moment either is fixed, which is the opposite of a regression guard.
+    Every assertion below was written by breaking it first — see the docstring of each block.
+    """
+    import tempfile
+    from pathlib import Path
+
+    # ---- 1. THE INVERSE LOOKUP RESOLVES THROUGH `binding_for`, INHERITANCE INCLUDED.
+    # Broken first by having `surfaces_binding` read `SURFACE_BINDINGS[surface]` directly: the
+    # parent-inherited capability then reported ZERO surfaces, which would have failed every
+    # surface-wide binding as `bound_nowhere` — a second resolver disagreeing with the first.
+    saved = {k: dict(v) for k, v in SURFACE_BINDINGS.items() if k.startswith("t-find")}
+    saved_sites = {k: dict(v) for k, v in CONSULT_SITES.items() if k.startswith("t-find")}
+    SURFACE_BINDINGS["t-find"] = {"wide-cap": "declared surface-wide"}
+    SURFACE_BINDINGS["t-find:asked"] = {"asked-cap": "phase that a caller consults"}
+    SURFACE_BINDINGS["t-find:silent"] = {"silent-cap": "phase nobody consults"}
+    SURFACE_BINDINGS["t-find:empty"] = {NO_BINDING: "deliberately empty, with a reason"}
+    try:
+        with tempfile.TemporaryDirectory(prefix="adv-find-") as td:
+            ledger = Path(td) / "capabilities.json"
+            capabilities.save({}, ledger)
+            site = Path(td) / "fake-skill.md"
+            site.write_text('consult with surface: "t-find:asked"\n')
+            CONSULT_SITES["t-find:asked"] = {"caller": str(site), "how": "synthetic"}
+
+            inv = surfaces_binding(
+                ["wide-cap", "asked-cap", "silent-cap", "absent-cap"], path=ledger
+            )
+            assert "t-find:asked" in inv["wide-cap"], inv["wide-cap"]
+            assert "t-find:silent" in inv["wide-cap"], inv["wide-cap"]
+            assert inv["asked-cap"] == ["t-find:asked"], inv["asked-cap"]
+            assert inv["silent-cap"] == ["t-find:silent"], inv["silent-cap"]
+            # A SUPPRESSED PHASE MUST NOT INHERIT. Broken first by dropping the NO_BINDING check
+            # from `binding_for`, which made every deliberately-empty surface look bound.
+            assert "t-find:empty" not in inv["wide-cap"], inv["wide-cap"]
+            # A capability nothing declares gets an EMPTY LIST, not a KeyError — the caller reads
+            # this as `bound_nowhere` and must not have to guard.
+            assert inv["absent-cap"] == [], inv
+
+            # ---- 2. A DECLARED CONSULT SITE IS A FALSIFIABLE CLAIM ABOUT A FILE.
+            reach = consulting_surfaces()
+            assert "t-find:asked" in reach["reached"], reach["reached"][:8]
+            assert "t-find:asked" in reach["verified"], reach["verified"]
+            # PRESENT BUT NO LONGER NAMING ITS SURFACE IS DRIFT, and drift must LEAVE `reached`.
+            # Broken first by treating any readable file as verification, which let a renamed
+            # surface keep counting as consulted forever.
+            site.write_text("this file no longer mentions the surface at all\n")
+            drifted = consulting_surfaces()
+            assert "t-find:asked" not in drifted["reached"], drifted["reached"][:8]
+            assert any(d["surface"] == "t-find:asked" for d in drifted["drifted"]), drifted
+            # ABSENT IS NOT REFUTED. A caller this machine does not have stays reached and is
+            # reported unverified — the same "no ledger, no verdict" rule the commitment check
+            # uses. Broken first by treating absence as drift, which stranded every skill-bound
+            # capability on a fresh clone: a gate red on arrival.
+            CONSULT_SITES["t-find:asked"] = {
+                "caller": str(Path(td) / "does-not-exist.md"),
+                "how": "synthetic",
+            }
+            absent = consulting_surfaces()
+            assert "t-find:asked" in absent["reached"], absent["reached"][:8]
+            assert any(u["surface"] == "t-find:asked" for u in absent["unverified"]), absent
+
+            # ---- 3. A PARENT WHOSE PHASES ARE CONSULTED IS NOT STRANDED.
+            # This is the `repo-audit` case and the assertion that keeps the check from crying wolf
+            # about every surface-wide declaration. Broken first by testing plain membership in
+            # `reached`, which reported `t-find` stranded while its own phase was being consulted.
+            stranded = set(absent["bound_unconsulted"])
+            assert "t-find" not in stranded, sorted(stranded)
+            assert "t-find:silent" in stranded, sorted(stranded)
+            # ...and a deliberately-empty surface strands nothing, so it is not reported either.
+            assert "t-find:empty" not in stranded, sorted(stranded)
+
+            # ---- 4. FAMILIES EXPAND TO THE SURFACES ACTUALLY PASSED, not to a prefix rule.
+            fam_site = Path(td) / "fam.md"
+            fam_site.write_text("pass t-find:step-N as the surface\n")
+            CONSULT_SITES["t-find:step-N"] = {
+                "caller": str(fam_site),
+                "instances": ["t-find:step-1", "t-find:step-2"],
+                "how": "synthetic family",
+            }
+            fam = consulting_surfaces()
+            assert {"t-find:step-1", "t-find:step-2"} <= set(fam["reached"]), fam["reached"][:12]
+            assert (
+                "t-find:step-3" not in fam["reached"]
+            ), "a family must not admit an un-listed step"
+            # The family KEY is a label for the declaration, never a surface anyone passes — so it
+            # must not leak into the reachable set and quietly satisfy a binding to it.
+            assert "t-find:step-N" not in consult_keys(), sorted(consult_keys())[:8]
+            assert "t-find:step-1" in consult_keys(), sorted(consult_keys())[:8]
+    finally:
+        for key in [k for k in SURFACE_BINDINGS if k.startswith("t-find")]:
+            SURFACE_BINDINGS.pop(key)
+        SURFACE_BINDINGS.update(saved)
+        for key in [k for k in CONSULT_SITES if k.startswith("t-find")]:
+            CONSULT_SITES.pop(key)
+        CONSULT_SITES.update(saved_sites)
+
+    # ---- 5. THE REAL TABLE MUST NOT HAVE DRIFTED, and the in-tree site must verify EVERYWHERE.
+    live = consulting_surfaces()
+    assert not live[
+        "drifted"
+    ], f"a consult site's caller no longer names its surface: {live['drifted']}"
+    # EVERY BOUND SURFACE IS IN ONE OF THREE DECLARED STATES. A fourth — bindings that nothing can
+    # reach and nobody wrote down — is precisely what `ci` was, and it is invisible until a
+    # capability is stranded on it. Broken first by adding a binding to a surface with no consult
+    # site and no entry below: without this the gate reports `bound_to_unconsulted_surface` on the
+    # capability and never on the SURFACE that caused it.
+    unaccounted = set(live["bound_unconsulted"]) - set(KNOWN_UNCONSULTED)
+    assert not unaccounted, (
+        f"surface(s) {sorted(unaccounted)} hold bindings that no caller can reach. Either declare "
+        "the consult in CONSULT_SITES, make the binding deliberately empty with NO_BINDING, or "
+        "record the defect in KNOWN_UNCONSULTED with its reason and fix"
+    )
+    # ...and the reverse: an acknowledged defect that has been FIXED must not linger, or the record
+    # outlives the evidence — the prose-cache failure this workspace names explicitly.
+    stale = set(KNOWN_UNCONSULTED) - set(live["bound_unconsulted"])
+    assert not stale, (
+        f"KNOWN_UNCONSULTED still lists {sorted(stale)}, which is no longer stranded — move the "
+        "entry to CONSULT_SITES (or drop it) rather than leaving a cached reason behind"
+    )
+    for surface, why in KNOWN_UNCONSULTED.items():
+        assert "FIX:" in why, f"{surface} records the defect without naming the fix"
+    assert "tick" in live["verified"], (
+        "the in-tree consult site must verify on every machine, CI included; "
+        f"verified={live['verified']}"
+    )
+    for key, site in CONSULT_SITES.items():
+        assert str(site.get("caller") or "").strip(), key
+        assert str(site.get("how") or "").strip(), f"{key} declares no reason"
+        assert set(site.get("instances") or [key]) <= set(live["reached"]) | {
+            u["surface"] for u in live["unverified"]
+        } | {d["surface"] for d in live["drifted"]}, key
+    print(
+        "capability_advisor findability selftest: OK (inverse lookup reuses binding_for, drift "
+        "leaves reach, absence is not refutation, consulted parents are not stranded)"
+    )
+
+
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
@@ -2644,6 +3016,7 @@ def main(argv: list[str]) -> int:
         _selftest_bindings()
         _selftest_contraindications()
         _selftest_preconditions()
+        _selftest_findability()
         _selftest_reach()
         return 0
     if not args.task:
