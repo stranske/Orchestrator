@@ -25,12 +25,21 @@ What these tests defend, and why each one has a scar behind it:
     pin without re-measuring must go red rather than quietly re-describing a toolchain nobody runs.
 7.  **`mypy.ini` never silences an error code.** Fifteen `disable_error_code` entries would cover
     597 of the 601 findings and produce a green job that checks nothing.
+8.  **A citation names a file that is there.** These configs are prose-heavy on purpose: each
+    tells the next reader where to re-measure before touching a pin. The pin file shipped citing
+    `docs/ci/LINT_BASELINE.md` while the real path was `docs/CI_LINT_BASELINE.md`, so the single
+    pointer to the baseline led nowhere — and prose is what no other check here reads. Scoped to
+    the two files this repo OWNS; `pr-00-gate.yml` is synced from upstream and its unresolved
+    script references are properly guarded (`hashFiles(...) != ''` with a named skip), so
+    including it would only add noise, and a test that cries wolf gets waived.
 
 DELIBERATE BREAK -> REVERT, performed 2026-08-23 (see `test_one_line_length_constant`):
 changing `ruff.toml`'s `line-length = 100` to `88` failed exactly that test with
 "ruff.toml line-length is 88 but the Gate and Autofix both pass --line-length 100"; reverting
 restored a byte-identical file and the test passed again. The assertion is load-bearing, not
-decorative.
+decorative. Repeated 2026-08-23 for `test_every_cited_repo_path_resolves`: restoring the original
+`docs/ci/LINT_BASELINE.md` citation failed it with
+"autofix-versions.env paragraph at line 23 cites docs/ci/LINT_BASELINE.md"; reverting passed.
 """
 
 from __future__ import annotations
@@ -50,6 +59,17 @@ RUFF_TOML = HERE / "ruff.toml"
 MYPY_INI = HERE / "mypy.ini"
 BASELINE_DOC = HERE / "docs" / "CI_LINT_BASELINE.md"
 BASELINE_SCRIPT = HERE / "scripts" / "ci_lint_baseline.py"
+
+# Only the two files this repo owns and hand-maintains. `GATE` is synced from upstream, and every
+# unresolved script path in it sits behind an explicit guard, so it is deliberately not scanned.
+CITING_FILES = (PINS, RUFF_TOML)
+# A repo-relative path to something committed here. Bare filenames are not matched: `ruff.toml`
+# citing `test_ci_gate_config.py` is a name, not a path, and needs no directory to resolve.
+CITED_REPO_PATH = re.compile(r"(?<![\w./-])((?:docs|scripts|tools)/[\w./-]+\.(?:md|py|json|toml))")
+# Naming the upstream repo marks a path as belonging to THAT tree, so it must not be resolved
+# against this checkout. Scoped per PARAGRAPH, not per line: the prose wraps, and
+# `docs/ci/WORKFLOWS.md` is quoted three lines below the sentence that says whose doc it is.
+UPSTREAM_REPO = "stranske/Workflows"
 
 # The value `reusable-10-ci-python.yml` and `reusable-18-autofix.yml` both hardcode on their Black
 # command lines. Named once here; every other copy in this repo is asserted against it.
@@ -110,6 +130,30 @@ def python_ci_with_block() -> str:
     match = re.search(r"\n  python-ci:\n(.*?)\n  [a-z][a-z0-9-]*:\n", text, re.S)
     assert match, "the python-ci job moved; this test can no longer read its `with:` block"
     return match.group(1)
+
+
+def comment_paragraphs(text: str) -> list[tuple[int, str]]:
+    """Split prose into blank-line-separated blocks, each tagged with its first line number.
+
+    A citation belongs to the paragraph that frames it, which is why the upstream marker is
+    searched per block rather than per line.
+    """
+    blocks: list[tuple[int, str]] = []
+    current: list[str] = []
+    start = 1
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if line.strip() in ("#", ""):
+            if current:
+                blocks.append((start, "\n".join(current)))
+                current = []
+            start = lineno + 1
+        else:
+            if not current:
+                start = lineno
+            current.append(line)
+    if current:
+        blocks.append((start, "\n".join(current)))
+    return blocks
 
 
 def test_pin_file_exists_and_pins_exactly():
@@ -273,4 +317,27 @@ def test_no_packaging_file_appears_without_making_this_repo_installable(name):
         "Note: since #3202 a pyproject.toml carrying ONLY tool configuration no longer triggers the "
         "install, so relaxing this for that case is a legitimate change — but make it deliberately, "
         "and keep setup.cfg / setup.py forbidden, because those still do."
+    )
+
+
+def test_every_cited_repo_path_resolves():
+    """A pointer to a file that is not there is worse than no pointer: it reads as verified."""
+    require_checkout()
+    dangling = []
+    for path in CITING_FILES:
+        if not path.is_file():
+            continue
+        for start, block in comment_paragraphs(path.read_text(encoding="utf-8")):
+            if UPSTREAM_REPO in block:
+                continue
+            for cited in CITED_REPO_PATH.findall(block):
+                if not (HERE / cited).is_file():
+                    dangling.append(f"{path.name} paragraph at line {start} cites {cited}")
+    assert not dangling, (
+        "these citations name files that do not exist in this checkout:\n  "
+        + "\n  ".join(dangling)
+        + f"\n\nFix the path, or name `{UPSTREAM_REPO}` in the same paragraph if it genuinely "
+        "refers to that repo's tree. The pin file shipped citing `docs/ci/LINT_BASELINE.md` when "
+        "the real path was `docs/CI_LINT_BASELINE.md`, so the one comment telling a reader where "
+        "to re-measure before bumping a pin pointed at nothing."
     )
