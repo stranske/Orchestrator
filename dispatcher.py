@@ -1952,6 +1952,12 @@ def _selftest() -> None:
             stdout = '{"usage":{"input_tokens":7,"output_tokens":3}}\nOFFLOAD RESULT\n'
             stderr = ""
 
+        class ProbeCompleted:
+            """An incidental subprocess a double must NOT mistake for the run under test."""
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
         class WaitingCompleted:
             returncode = 0
             stdout = ("I am waiting for the pytest suite execution to finish in the offload workspace. "
@@ -2457,6 +2463,15 @@ def _selftest() -> None:
         # one shared path for every gemini run, so a line in it belongs to no particular run -- the
         # same non-attributability that made cursor's reused `/private/tmp` useless.
         def fake_agy_run(cmd, cwd=None, **_kwargs):
+            # ISOLATION, NOT A SKIP. `adapters.advertised_models` shells out to `agy models` when
+            # its disk cache (`agent-runtime/gemini/advertised-models.json`) is cold -- the normal
+            # state on every machine except this instance, where the cache is warm and the probe
+            # never fires. That probe landed INSIDE this patch window and overwrote `captured`, so
+            # the per-run-log assertion below compared against `['agy', 'models']` and failed on a
+            # bare runner while passing here. Record only the run under test (offload always shells
+            # through `bash -lc <wrapped>`); let an incidental probe return empty and change nothing.
+            if not (isinstance(cmd, list) and list(cmd[:2]) == ["bash", "-lc"]):
+                return ProbeCompleted()
             captured["cmd"] = cmd     # asserted below; a stale `captured` proves the wrong command
             captured["cwd"] = cwd
             _write_agy_log(
@@ -2482,8 +2497,15 @@ def _selftest() -> None:
         assert agy_row[1] == "gemini-3.6-flash-high", ("agy's own log names the model", agy_row)
         assert agy_row[2] == "complete" and agy_row[3] is None, agy_row
         # The log path handed to agy must be THIS run's, never the shared default.
-        assert "--log-file" in " ".join(captured["cmd"]), captured["cmd"]
-        assert "agent-runtime/gemini/logs/agy.log" not in " ".join(captured["cmd"]), (
+        # The message stays SHORT and names what it saw: this assertion fired on a Linux/3.14
+        # runner while passing on the owner's Mac, and the bare `captured["cmd"]` dump was
+        # truncated out of the CI log, so the failure could not be attributed from the log alone.
+        _cmd = captured["cmd"]
+        _joined = " ".join(_cmd) if isinstance(_cmd, list) else str(_cmd)
+        assert "--log-file" in _joined, (
+            f"agy argv lost its per-run log: type={type(_cmd).__name__} "
+            f"len={len(_cmd)} head={str(_cmd)[:200]!r}")
+        assert "agent-runtime/gemini/logs/agy.log" not in _joined, (
             "a shared agy log cannot attribute a model to one run", captured["cmd"])
         # And a label that is not a model never becomes one.
         assert adapters.model_label_from_agy_log("nothing to see") is None
