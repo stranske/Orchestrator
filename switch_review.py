@@ -361,7 +361,7 @@ def _selftest_stale_runners() -> None:
 
         subprocess.run = fake_ps
         try:
-            age = 7 * 3600 + 19 * 60 + 52          # the etime above, in seconds
+            age = 7 * 3600 + 19 * 60 + 52  # the etime above, in seconds
             # STALE: the process started one hour BEFORE the mirror was written.
             rows = stale_runners(now=mtime + age - 3600, mirror=fake_mirror)
             assert len(rows) == 1, rows
@@ -370,6 +370,7 @@ def _selftest_stale_runners() -> None:
             assert rows[0]["reason"], "a stale runner must say why it is stale"
             # NOT STALE: the same process started one hour AFTER the mirror was written.
             assert stale_runners(now=mtime + age + 3600, mirror=fake_mirror) == []
+
             # An unparseable etime must be skipped, never guessed at.
             def fake_ps_bogus(*_a, **_k):
                 class R:
