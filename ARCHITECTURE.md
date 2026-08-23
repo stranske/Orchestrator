@@ -282,6 +282,12 @@ posterior for exactly this reason: "prior, no evidence" and "prior, no evidence,
 rejections" are opposite readings that were previously identical. A decline requires a reason and is
 refused without one, the same way `record_usefulness` refuses an unevidenced verdict.
 
+`detect` enumerates every surface that has either a declaration or evidence, not only the declared
+keys: `repo-audit:dimension-1` has no table entry of its own — it inherits `offload` surface-wide —
+so three independent audits declining `offload` there were recorded and never read. A drain that
+cannot see a surface cannot drain it, and the surfaces most likely to be over-bound are exactly the
+ones that only inherit.
+
 Attribution is on the event: the advisor records the `surface` on each `match`, because it recorded
 only `skill` before and the CLI has no `--skill` flag — so every `--surface` consult wrote
 `skill: null` and its whole control arm was unattributable to the surface that produced it.

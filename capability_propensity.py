@@ -1743,9 +1743,27 @@ def _selftest_declines() -> None:
                                    for d in propose_demotions("t-dec", path=ledger)], \
                     f"a non-demotable kind ({kind}) demoted a binding"
 
-            # `detect()` prints the drainable quantity for the surface even when nothing fires.
+            # `detect()` prints the drainable quantity for the surface even when nothing fires --
+            # and it must find a surface that has EVIDENCE BUT NO TABLE ENTRY, because the surfaces
+            # most likely to be over-bound are the ones that only inherit a binding. `t-dec` has a
+            # stubbed entry, so assert the derived path on a surface that has none.
+            assert "t-dec" in observed_surfaces(path=ledger), sorted(observed_surfaces(path=ledger))
+            record_decline("helper", "advice:inherited0001", reason="inherited-surface probe",
+                           surface="t-inherited-only", kind="wrong_match", path=ledger)
+            assert "t-inherited-only" in observed_surfaces(path=ledger), \
+                "a surface with evidence and no table entry must still be enumerated"
+            assert "t-inherited-only" not in capability_advisor.SURFACE_BINDINGS
             rep = detect(path=ledger)
             assert "t-dec" in rep["surfaces"], sorted(rep["surfaces"])
+            # ASSERT ON WHAT THE CALLER RECEIVES, not on the helper. The first version of this
+            # checked `observed_surfaces()` alone and stayed GREEN when `detect()` was reverted to
+            # enumerating only declared keys -- a test of the table instead of the answer, which is
+            # this project's most-repeated testing mistake.
+            assert "t-inherited-only" in rep["surfaces"], (
+                "detect() must REPORT a surface that has decline evidence and no table entry; "
+                f"it reported {sorted(rep['surfaces'])}")
+            assert rep["surfaces"]["t-inherited-only"]["declines"] == {"helper": 1}, \
+                rep["surfaces"]["t-inherited-only"]
             assert rep["surfaces"]["t-dec"]["declines"]["wrong-tool"] == 2, rep["surfaces"]["t-dec"]
             assert rep["surfaces"]["t-dec"]["declines_floor"] == DEMOTION_MIN_DECLINES
             assert "wrong-tool" in [d["capability_id"] for d in rep["demotions"]], rep["demotions"]
@@ -2209,6 +2227,16 @@ def surface_records(surface: str) -> list[str]:
     return [r for r in re.split(RECORD_SPLIT, text, flags=re.M) if r.strip()]
 
 
+def observed_surfaces(*, path=None, window_days: int = WINDOW_DAYS) -> set[str]:
+    """Surfaces that actually consulted, read from the trials themselves.
+
+    Derived, never a second list: a declared table of surfaces would drift from the surfaces that
+    exist, and the ones that only INHERIT a binding would never appear in it at all.
+    """
+    return {surface for trial in experiments(path=path, window_days=window_days)
+            for surface in (trial.get("skills") or [])}
+
+
 def detect(*, path=None, apply_promotions: bool = False) -> dict:
     """Run detection across every surface whose records are resolvable here.
 
@@ -2218,7 +2246,13 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
     """
     import capability_advisor
     out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": []}
-    for surface in sorted(set(SURFACE_RECORD_GLOBS) | set(capability_advisor.SURFACE_BINDINGS)):
+    # EVERY SURFACE THAT HAS EITHER A DECLARATION OR EVIDENCE. Enumerating only the declared keys
+    # missed the inherited ones entirely: `repo-audit:dimension-1` has no table entry of its own --
+    # it inherits `offload` surface-wide -- so three independent audits declining `offload` there
+    # were recorded and never read. A drain that cannot see a surface cannot drain it, and the
+    # surfaces most likely to be over-bound are exactly the ones that only inherit.
+    for surface in sorted(set(SURFACE_RECORD_GLOBS) | set(capability_advisor.SURFACE_BINDINGS)
+                          | observed_surfaces(path=path)):
         recs = surface_records(surface)
         proms = propose_bindings(surface, recs, path=path) if recs else []
         dems = propose_demotions(surface, path=path)
