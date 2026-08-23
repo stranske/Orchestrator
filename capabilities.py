@@ -1110,6 +1110,11 @@ DECLARATION_FIELDS: tuple[str, ...] = (
     "kill_switch_category",
     "control_point",
     "kill_switch_rationale",
+    # The findability exemption, carried here for the same reason as the kill-switch categories: a
+    # declaration typed into the running instance's JSON is machine-local and invisible to review.
+    # `capability_admission.req_findable` reads these two, and both are required together.
+    "findability_category",
+    "findability_rationale",
 )
 
 
@@ -1152,6 +1157,29 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "Produces an advisory wait/collect/inspect/redirect/decompose DECISION and nothing else. "
             "Every mutating step downstream is separately gated. The control is at the sweep that "
             "invokes it, ORCH_DISABLE_STEPS=redirect-sweep."
+        ),
+    },
+    # THE FINDABILITY EXEMPTION, and the two capabilities that legitimately hold it. Both are
+    # INVOKED by a rail rather than OFFERED to a reasoning context, so selection pressure cannot
+    # reach them and a surface binding would be theatre — which is exactly what the `ci` binding in
+    # `capability_advisor.SURFACE_BINDINGS` was until 2026-08-23. Declared here rather than in a
+    # live ledger for the same reason the kill-switch categories moved: a machine-local declaration
+    # is green where it was typed, absent on a fresh checkout, and invisible to review.
+    "capability-admission-gate": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "verify.py runs this gate on every PR unconditionally, as one of its five gates. No "
+            "agent ever chooses it, so binding it to a surface could not change how often it runs; "
+            "the thing that would change its reach is a CI-side consult, which does not exist."
+        ),
+    },
+    "docs-drift-fix-agent": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "its entrypoint is a Workflows GitHub Actions workflow that fires per PR in another "
+            "repository; invocations arrive here through "
+            "capability_outcome_bridge.ingest_external_ci_invocations. There is no local reasoning "
+            "context to offer it to, so no surface can make it more findable."
         ),
     },
     "feedback-store": {

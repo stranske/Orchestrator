@@ -43,9 +43,10 @@ gates / feedback surfaces — and "capability" is a different axis entirely.
   is FOR. One capability routinely spans both (`adversarial-review` is role judgment invoked by a
   rail gate and recorded over a rail acceptance edge).
 - **The admission parts are not the definition of a capability.** A caller, heartbeat, outcome path,
-  fixture, kill switch, rollback, expiry and dedup finding are the components that must be present
-  for a capability to WORK WITH THIS SYSTEM — to be invocable, observable and improvable. Do not
-  describe a capability by its admission parts; describe it by what it does, then check the parts.
+  fixture, kill switch, rollback, expiry, dedup finding and a surface that can offer it are the
+  components that must be present for a capability to WORK WITH THIS SYSTEM — to be invocable,
+  observable, findable and improvable. Do not describe a capability by its admission parts; describe
+  it by what it does, then check the parts.
 
 **Two kinds of capability, and their measurement stories differ — do not average across them:**
 
@@ -68,7 +69,12 @@ Three layers, ordered by when each starts working — see `ARCHITECTURE.md` for 
 
 1. **`capability_advisor.SURFACE_BINDINGS`** — declared per surface, 3–7 entries, each carrying its
    reason. Works on day one with no classifier and no history. When adding or reviving a capability,
-   say which surfaces bind it, or say why none does.
+   say which surfaces bind it, or say why none does — **and this is now the ninth admission
+   requirement, not advice**: `capability_admission.req_findable` fails a new capability that no
+   surface can offer, distinguishing `bound_nowhere` from `bound_to_unconsulted_surface`, because the
+   fixes differ. A binding is only half of it; `capability_advisor.CONSULT_SITES` declares which
+   surfaces a caller actually NAMES, and a binding to a surface nobody consults is indistinguishable
+   from no binding at all.
 2. **`capability_propensity.rank`** — orders *within* the bound set by measured usefulness.
 3. **`capability_advisor.learned_associations`** — corrects the table from observed use.
 
@@ -169,10 +175,16 @@ after it was written.
 **`ADDING_CAPABILITIES.md` is the procedure, and it is ENFORCED.** Run
 `python3 capability_admission.py --preflight '<spec json>'` before writing code: a capability must
 arrive with a dedup finding, a caller, a heartbeat, a recurrence fixture, an outcome path, a kill
-switch, a rollback and an expiry-or-cadence. `test_capability_admission.py` fails the suite
-otherwise, and also fails on a citation to a dated record that does not exist or a deadline that
-passed with no record. That doc lists the nine failure modes behind those eight requirements; read
-it before adding or reviving a capability.
+switch, a rollback, an expiry-or-cadence, **and a surface that can offer it**.
+`test_capability_admission.py` fails the suite otherwise, and also fails on a citation to a dated
+record that does not exist or a deadline that passed with no record. That doc lists the failure modes
+behind those nine requirements; read it before adding or reviving a capability.
+
+The ninth is the newest and the one `--preflight` exists for: findability is **declarable**, so a
+capability no surface will ever offer is a design answer you get before writing code rather than a
+second project afterwards. Each requirement carries its own enforcement date
+(`capability_admission.REQUIREMENT_ENFORCED_FROM`), because a rule added later is red on arrival for
+everything that predates it, and a gate red on arrival gets switched off.
 
 For model/profile or compiler work, also inspect `execution_profiles.py`,
 `completion_event_adapter.py`, `pattern_miner.py`, `capability_compiler.py`, `evidence_schema.py`,
