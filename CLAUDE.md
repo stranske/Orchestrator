@@ -261,6 +261,13 @@ Do not create a second event log, model registry, or capability inventory.
   elsewhere.** The three checks and the `verify.py` summary now say so themselves, from
   `capability_activation_audit.entrypoint_presence` / `absent_entrypoint_note`, which name the
   sibling checkout the code was found in — but read the message rather than the missing-parts list.
+  **And FETCH BEFORE you conclude the code is nowhere.** An empty
+  `git log --all --oneline -- <file>` proves nothing until the refs exist locally: `--all` searches
+  the refs this checkout HAS, so an unfetched sibling branch reads as "no such file was ever
+  committed anywhere". That false negative is what produced the wrong verdict on 2026-08-22 and cost
+  a full session. `git fetch origin` first, then search. The honest verdict on a branch carrying
+  someone else's ledger row comes from a fresh-state run with BOTH `ORCH_STATE_DIR` and
+  `ORCH_LOCAL_RUNTIME` pointed at empty directories, which is what CI does.
 - **The split is TOOL vs EVIDENCE.** Generic capabilities, gates and tests are committed. This
   instance's evidence is not: `CAPABILITY_USEFULNESS.md`, `LOCAL_POLICY.md`, `*.local.md`,
   `experiments/`, `ux_reviews/`, `data/`, `Audits/` — gitignored in the tree — plus the ledger, the

@@ -736,7 +736,14 @@ def _selftest() -> None:
         assert plan["planned_jobs"] and plan["planned_jobs"][0]["target"] == "o/r#1", plan[
             "planned_jobs"
         ]
-        assert {"cursor", "vibe"} <= set(plan["planned_jobs"][0]["agents"]), plan["planned_jobs"][0]
+        planned_job = plan["planned_jobs"][0]
+        assert {"cursor", "vibe"} <= set(planned_job["agents"]), planned_job
+        # The exp_id TEMPLATE is a derived contract, not a passthrough: `o/r#1` must become
+        # `backfill-o-r-1`, because `schedule_backfill` builds the real exp_id by appending a
+        # timestamp to it (`f"{job.get('exp_id_template')}-{int(time.time())}"`). Nothing asserted
+        # the derivation, so a change to the slugging would rename every backfill experiment
+        # silently and only surface as unjoinable experiment artifacts much later.
+        assert planned_job["exp_id_template"] == "backfill-o-r-1", planned_job
         assert "ORCH_EXPLORATION_BACKFILL=1" in format_human(plan), format_human(plan)
 
         calls: list[dict] = []
@@ -783,6 +790,10 @@ def _selftest() -> None:
             exploration_evidence_plan._backlog_items = original_backlog_items  # type: ignore
         assert launched["active"] is True and calls, launched
         assert calls[0]["task_type"] == "implement", calls
+        # ...and the DISPATCHED exp_id must actually derive from that template. Asserting the
+        # template alone would leave the two halves free to drift apart, which is the same shape
+        # as a gate whose measuring window differs from its draining window.
+        assert calls[0]["exp_id"].startswith(f"{planned_job['exp_id_template']}-"), calls
         assert claims.holder("o/r#1")["agent"] == BACKFILL_CLAIM_AGENT, claims.holder("o/r#1")
 
         no_progress_db = Path(tmp) / "no-progress.db"
