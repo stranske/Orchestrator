@@ -33,8 +33,15 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 REPOS_DIR = Path(os.environ.get("ORCH_REPOS_DIR", LOCAL_RUNTIME / "repos"))            # local canonical clones
 WORKTREES_DIR = Path(os.environ.get("ORCH_WORKTREE_BASE", LOCAL_RUNTIME / "worktrees"))  # per-target worktrees
 
-# Base branch a NEW opener branch is cut from. Trend uses phase-3 (memory:
-# trend_default_branch_phase3); everything else uses the repo's default branch.
+# Base branch a NEW opener branch is cut from, when it must NOT be the repo's default branch.
+# The Trend pin is currently a NO-OP and is kept deliberately: `phase-3` IS that repo's default
+# branch (`gh repo view stranske/Trend_Model_Project --json defaultBranchRef` -> phase-3), so the
+# override and the fallback agree today. The old comment here said Trend "uses phase-3" as though
+# that were distinct from the default, and the repo playbook had copied the same wrong belief as
+# "Trend opener work cuts from phase-3, not the default branch" -- which sent readers looking for a
+# `main` that does not exist. Keeping the pin means the base stays phase-3 if the default ever moves.
+# repo_knowledge's SEED reads this dict rather than repeating the branch name; a matching pair of
+# literals would be free to drift, one name cannot.
 BASE_BRANCH_OVERRIDES = {"stranske/Trend_Model_Project": "phase-3"}
 
 

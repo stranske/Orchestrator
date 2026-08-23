@@ -206,6 +206,41 @@ def reachable_set(*, path=None) -> dict:
             "reachable_count": len(out), "ledger_count": len(caps)}
 
 
+def _annotate_contraindications(entries: list[dict], repository: str) -> list[str]:
+    """Flag candidates this repository's own record says do not work here. Returns the flagged ids.
+
+    THE TWO CAPABILITIES MUST DISAGREE OUT LOUD. A real audit run was offered `frontend-verifier`
+    and `repo-playbook` in the same response for a repo whose own audit record says
+    `frontend_verify.py` does not work against its Streamlit SPA -- and the reconciliation existed
+    only in the auditor's memory. This is the seam where the playbook answers back.
+
+    It ANNOTATES, never removes: a concealed candidate can never be selected, so it can never earn
+    the evidence that would clear the contraindication -- the same reason binding does not conceal.
+    Repo-scoped on purpose, too. A per-surface demotion learned here would unbind the capability for
+    every OTHER repo, which is the wrong granularity for "broken against this one app".
+    """
+    if not repository or not entries:
+        return []
+    try:
+        import repo_knowledge
+        notes = repo_knowledge.contraindications_for(repository)
+    except Exception:                                              # noqa: BLE001
+        # Advice must still be given when the registry is unreadable, exactly like propensity.
+        return []
+    flagged = []
+    for entry in entries:
+        note = notes.get(entry["capability_id"])
+        if not note:
+            continue
+        entry["contraindicated"] = True
+        entry["contraindication_reason"] = note.get("reason") or ""
+        entry["contraindication_evidence"] = note.get("evidence") or ""
+        if note.get("instead"):
+            entry["use_instead"] = note["instead"]
+        flagged.append(entry["capability_id"])
+    return sorted(flagged)
+
+
 def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str = "",
            record: bool = True, path=None, context: dict | None = None,
            surface: str = "") -> dict:
@@ -229,7 +264,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         return {
             "task": text, "experiment_id": experiment_id(text),
             "useful": False, "confidence": "suppressed", "skill": skill or None,
-            "surface": surface, "repository": repository,
+            "surface": surface, "repository": repository, "contraindicated": [],
             "task_types": [], "capabilities": [], "dispatch_ready_count": 0,
             "bound_count": 0, "bound_capabilities": [], "not_applicable": [],
             "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
@@ -257,10 +292,19 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
                 entries = capability_propensity.rank(entries, path=path)
             except Exception:                                          # noqa: BLE001
                 pass
+            # The classification-miss path takes the SAME contraindication pass as the main one --
+            # it is the path a free-text audit consult actually lands on, so annotating only the
+            # other one would leave the reported case uncovered. Runs BEFORE the result dict is
+            # built and before `_record_matches`, so the recorded candidate set is the same list
+            # the caller was shown.
+            warned = _annotate_contraindications(entries, repository)
+            if warned:
+                entries.sort(key=lambda e: 1 if e.get("contraindicated") else 0)
             result = {
                 "task": text, "experiment_id": experiment_id(text),
                 "useful": True, "confidence": "binding_only", "skill": skill or None,
                 "surface": (surface or skill) or None, "repository": repository,
+                "contraindicated": warned,
                 "task_types": [], "capabilities": entries,
                 "dispatch_ready_count": sum(1 for e in entries if e["dispatch_ready"]),
                 "bound_count": len(live), "bound_capabilities": sorted(c for c, _ in live),
@@ -287,7 +331,8 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         return {
             "task": text, "experiment_id": experiment_id(text),
             "useful": False, "confidence": "none", "skill": skill or None,
-            "repository": repository, "task_types": [], "capabilities": [],
+            "repository": repository, "contraindicated": [],
+            "task_types": [], "capabilities": [],
             "dispatch_ready_count": 0,
             "not_applicable": [],
             "surface": (surface or skill) or None,
@@ -382,10 +427,14 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         # Ranking is an enhancement, never a dependency: advice must still be given when the
         # propensity store is unreadable.
         pass
-    if bound:
+    warned = _annotate_contraindications(matched, repository)
+    if bound or warned:
         # Stable partition: bound set first in propensity order, then the rest in propensity order.
         # Small-and-specific beats long-and-general -- that is the measured effect this implements.
-        matched.sort(key=lambda m: 0 if m.get("bound") else 1)
+        # A documented per-repo contraindication ranks LAST WITHIN its partition: still offered, so
+        # it can still be chosen and still earn evidence, but no longer the first thing read.
+        matched.sort(key=lambda m: (0 if (m.get("bound") or not bound) else 1,
+                                    1 if m.get("contraindicated") else 0))
     usable = [m for m in matched if m["dispatch_ready"]]
     # A capability that matched for ANY classified task type is not "not applicable".
     for entry in matched:
@@ -410,6 +459,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         "capabilities": matched,
         "dispatch_ready_count": len(usable),
         "surface": (surface or skill) or None,
+        "contraindicated": warned,
         "bound_count": len(bound),
         "bound_capabilities": sorted(bound),
         "not_applicable": not_applicable,
@@ -1064,6 +1114,93 @@ def _selftest_reach() -> None:
     # on a clean runner, spending a skip ceiling to check nothing where it matters.
 
 
+def _selftest_contraindications() -> None:
+    """A repo's recorded contraindication must reach the CALLER, on both answer paths.
+
+    Reproduces the reported case exactly: `repo-audit:phase-2` on a repo whose own audit record says
+    `frontend_verify.py` does not work against its Streamlit SPA. The candidate must still be
+    offered (concealing it would deny it the evidence that could clear it), must carry the reason
+    and the alternative, and must rank last within its partition.
+    """
+    import json
+    import tempfile
+    from pathlib import Path
+
+    import repo_knowledge
+
+    with tempfile.TemporaryDirectory(prefix="contra-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("frontend-verifier", "repo-playbook"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"kind": "closer_gate", "name": "g"}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        registry = Path(td) / "repo_knowledge.json"
+        registry.write_text(json.dumps({"schema_version": repo_knowledge.SEED_SCHEMA_VERSION, "repos": {
+            "o/spa": {"summary": "s", "contraindications": [{
+                "capability": "frontend-verifier",
+                "reason": "snapshots before the websocket render completes",
+                "instead": "drive a real browser",
+                "evidence": "the repo's own audit record",
+            }]},
+            "o/plain": {"summary": "s"},
+        }}, indent=2) + "\n")
+
+        real_reg, real_binding = repo_knowledge.REG, SURFACE_BINDINGS.get("t-contra")
+        repo_knowledge.REG = registry
+        SURFACE_BINDINGS["t-contra"] = {"frontend-verifier": "bound in general",
+                                        "repo-playbook": "carries the per-repo gotchas"}
+        try:
+            for task in ("xyzzy plugh frobnicate",                    # binding_only path
+                         "review the closer gate"):                   # classified path
+                got = advise(task, surface="t-contra", repository="o/spa",
+                             path=ledger, record=False)
+                ids = [m["capability_id"] for m in got["capabilities"]]
+                assert "frontend-verifier" in ids, (task, ids)        # offered, never concealed
+                assert got["contraindicated"] == ["frontend-verifier"], (task, got["contraindicated"])
+                flagged = [m for m in got["capabilities"] if m["capability_id"] == "frontend-verifier"][0]
+                assert flagged["contraindicated"] is True, flagged
+                assert "websocket" in flagged["contraindication_reason"], flagged
+                assert flagged["use_instead"] == "drive a real browser", flagged
+                assert flagged["contraindication_evidence"], flagged
+                assert ids[-1] == "frontend-verifier", (task, ids)    # last within its partition
+
+            # A repo with no recorded contraindication is untouched, and so is a missing repository.
+            for repository in ("o/plain", ""):
+                quiet = advise("xyzzy plugh frobnicate", surface="t-contra",
+                               repository=repository, path=ledger, record=False)
+                assert quiet["contraindicated"] == [], (repository, quiet["contraindicated"])
+                assert not any(m.get("contraindicated") for m in quiet["capabilities"]), quiet
+
+            # DELIBERATE BREAK -> REVERT: an unreadable registry must degrade to plain advice, not
+            # to an exception -- the same discipline as the propensity import. The path must be
+            # genuinely UNUSABLE, not merely absent: repo_knowledge.load() CREATES an absent
+            # registry from its SEED, so a missing path would return [] because the seed has no such
+            # repo, and the assertion would pass without ever reaching the failure branch. Parenting
+            # it under a regular file makes the mkdir raise for real.
+            blocker = Path(td) / "not-a-directory"
+            blocker.write_text("")
+            repo_knowledge.REG = blocker / "x.json"
+            degraded = advise("xyzzy plugh frobnicate", surface="t-contra", repository="o/spa",
+                              path=ledger, record=False)
+            assert degraded["contraindicated"] == [], degraded["contraindicated"]
+            assert len(degraded["capabilities"]) == 2, degraded
+            repo_knowledge.REG = registry
+            assert advise("xyzzy plugh frobnicate", surface="t-contra", repository="o/spa",
+                          path=ledger, record=False)["contraindicated"] == ["frontend-verifier"]
+        finally:
+            repo_knowledge.REG = real_reg
+            if real_binding is None:
+                SURFACE_BINDINGS.pop("t-contra", None)
+            else:
+                SURFACE_BINDINGS["t-contra"] = real_binding
+    print("capability_advisor contraindication selftest: OK (offered not concealed, reason + "
+          "alternative reach the caller on both paths, ranks last, degrades quietly)")
+
+
 def _selftest_bindings() -> None:
     """The declared binding must work where the classifier does not, and must never conceal.
 
@@ -1355,6 +1492,7 @@ def main(argv: list[str]) -> int:
         _selftest()
         _selftest_front_door()
         _selftest_bindings()
+        _selftest_contraindications()
         _selftest_reach()
         return 0
     if not args.task:
