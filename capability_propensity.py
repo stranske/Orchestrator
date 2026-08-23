@@ -126,11 +126,27 @@ records, per trial, the candidates named for that exact task and NOT triggered
 (`not_triggered` / `not_triggered_silently`), which is the same task, same context, divergent
 treatment. `propensity()` now reports that arm beside the posterior. Nothing new was added for it.
 
+AND A DEFECT FOUND IS THE STRONGEST SIGNAL THERE IS, so it must be recordable (2026-08-23).
+Instrumented work found SEVEN defects in this system's own code that its author had not. Two were
+attributable to a capability and were recorded; the other FIVE were found by the PROCESS -- an audit
+noticing that a suppressed surface still offered capabilities, an agent reading this module and
+finding a branch that recorded nothing -- so they had no capability to attribute to, became PRs and
+prose, and taught the loop nothing. `record_find` accepts a finder that is EITHER a capability (which
+feeds that capability's usefulness at `defect_found` provenance -- outcome evidence, not an opinion)
+OR a surface (which feeds BINDING QUALITY, the thing that had nowhere to go: "consulting at
+repo-audit:phase-1 surfaced a defect in the advisor itself" is evidence about the surface). `defect`
+and `artifact` are both REQUIRED and refused when blank -- a CLAIMED find with no artifact is worth
+nothing -- and the correlated-arm discount caps it, so ten artifact-backed finds from one arm are
+still one observation and only an independent arm moves the number.
+
     python3 capability_propensity.py report
     python3 capability_propensity.py experiments
     python3 capability_propensity.py decline --capability X --experiment advice:abc --reason "..."
     python3 capability_propensity.py useful --capability X --experiment advice:abc \
         --evidence "..." --provenance outcome_corroborated --judge codex --corroboration "..."
+    python3 capability_propensity.py find --defect "..." --artifact "issue #77" \
+        --surface repo-audit:phase-1 [--capability X --experiment advice:abc]
+    python3 capability_propensity.py binding-quality --surface repo-audit:phase-1
     python3 capability_propensity.py --json report
     python3 capability_propensity.py --selftest
 """
@@ -829,6 +845,7 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
             corpus_mix[prov] = corpus_mix.get(prov, 0) + n
     verdict_total = sum(corpus_mix.values())
     self_total = sum(n for p, n in corpus_mix.items() if provenance_self_assessed(p))
+    recorded_finds = finds(path=path, window_days=window_days, now=now)
     return {
         "window_days": window_days,
         "capability_count": stats["capability_count"],
@@ -864,6 +881,16 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # Both quantities again: how many declines exist, and how many of them are actually a
         # statement about the binding rather than about the work's shape.
         "decline_demotable_count": sum(len(t["declined_demotable"]) for t in trials),
+        # DEFECT FINDS. Counted here so a run that surfaced defects cannot read as a quiet one.
+        # The capability-attributed half is ALSO in `verdicts_by_provenance` as `defect_found`; the
+        # surface-attributed half is in no rate at all, by construction, and is the binding-quality
+        # evidence that previously had nowhere to go.
+        "find_count": len(recorded_finds),
+        "finds_by_finder_kind": {
+            k: sum(1 for f in recorded_finds if f["finder_kind"] == k)
+            for k in sorted({f["finder_kind"] for f in recorded_finds})
+        },
+        "find_subjects": sorted({f["subject"] for f in recorded_finds if f["subject"]}),
         "declines_by_kind": {
             k: sum(v for r in ranked for kk, v in r["declines_by_kind"].items() if kk == k)
             for k in sorted(DECLINE_KINDS)
@@ -2178,6 +2205,439 @@ def record_decline(
     )
 
 
+# ---------------------------------------------------------------------------
+# DEFECT FINDS — what was found, and by whom. The strongest signal the loop was throwing away.
+#
+# MEASURED (2026-08-23). Instrumented work found SEVEN defects in this system's own code that its
+# author had not found. TWO were attributable to a capability and were recorded:
+# `adversarial-review` supplied citations that became the strongest facts in two issue bodies, and
+# `deliberate-break-verifier` caught an auditor's own methodological error. The other FIVE were
+# found by the PROCESS -- an audit noticing that a suppressed surface still offered capabilities; an
+# agent reading this module and finding a branch that recorded nothing. Those had no capability to
+# attribute to, so they became PRs and prose and taught the loop nothing at all.
+#
+# SO THE FINDER MAY BE A CAPABILITY *OR* A SURFACE, and the two feed different things:
+#
+#   * CAPABILITY-attributed -> that capability's USEFULNESS, at `defect_found` provenance. A defect
+#     found is an OUTCOME, not an opinion: the artifact naming it is checkable by someone who was
+#     not there. It reaches the posterior through the provenance weighting and by NO other route.
+#   * SURFACE-attributed -> BINDING QUALITY. "Consulting at `repo-audit:phase-1` surfaced a defect
+#     in the advisor itself" is evidence about the SURFACE, not about any capability, and there was
+#     nowhere at all to put it. `binding_quality()` is that place.
+#
+# NO NEW STORE AND NO NEW EVENT TYPE (`CLAUDE.md` forbids a second one). A find rides on a `match`
+# event tagged `source=capability_find`, exactly as `record_decline` and `record_promotion` already
+# carry non-match facts there. Its ref is `find:<digest>`, NOT `advice:<digest>` -- so
+# `_experiment_id()` returns None for it and `experiments()`, `usefulness()` and `propensity()`
+# cannot see it AT ALL. That is structural, not conventional: no metadata a caller could set would
+# make a find record reach a posterior.
+#
+# IT MUST NOT BECOME A WAY TO INFLATE A CAPABILITY'S STANDING. Three guards, and the third is the
+# one that actually binds:
+#   1. `artifact` is REQUIRED and refused when blank, exactly as `record_usefulness` refuses an
+#      unevidenced verdict. A CLAIMED find with no artifact is worth nothing.
+#   2. `defect` is REQUIRED and must name WHAT was defective, not that something was found.
+#   3. The correlated-arm discount caps it. N finds from one judge arm total ONE observation, so ten
+#      artifact-backed finds from one agent cannot lift a capability past 0.667; only an independent
+#      arm can. The incentive is corroboration, not volume.
+FIND_SOURCE = "capability_find"
+FIND_REF_PREFIX = "find:"
+# The carrier row for a SURFACE-attributed find. The ledger is keyed by capability, so a fact about
+# a surface needs a row to sit on; this module owns binding quality (`detect`, `propose_bindings`,
+# `propose_demotions`), so its own row is the honest carrier. The record is `find:`-reffed, so it
+# sits outside every rate on every row INCLUDING this one -- it cannot flatter its own carrier.
+FIND_CARRIER = "capability-propensity"
+FIND_DEFECT_KEY = "defect"
+FIND_ARTIFACT_KEY = "artifact"
+FIND_SUBJECT_KEY = "subject"
+FIND_FINDER_KEY = "finder"
+FIND_FINDER_KIND_KEY = "finder_kind"
+
+
+def find_id(defect: str, *, surface: str = "", capability_id: str = "") -> str:
+    """A stable id for one find, so replaying a backfill cannot inflate the count.
+
+    Keyed on the DEFECT plus its finder, not on a timestamp: the same defect found again by the same
+    finder is the same find, and a second record of it is not a second piece of evidence.
+    """
+    payload = "|".join((str(defect).strip().lower(), str(surface or ""), str(capability_id or "")))
+    return f"{FIND_REF_PREFIX}{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
+
+
+def record_find(
+    *,
+    defect: str,
+    artifact: str,
+    surface: str = "",
+    capability_id: str = "",
+    experiment_id: str = "",
+    subject: str = "",
+    judge: str = "",
+    path=None,
+) -> dict:
+    """A defect was found. Record WHO found it and WHAT proves it.
+
+    `defect` names what was defective. `artifact` is the thing a stranger could check — the PR, the
+    issue, the file:line, the failing test. Both are REQUIRED and refused when blank, for the same
+    reason `record_usefulness` refuses an unevidenced verdict and `record_decline` an unexplained
+    one: a claimed find with no artifact is worth nothing, and letting one through would make this
+    the cheapest way to inflate a capability's standing.
+
+    THE FINDER IS EITHER A CAPABILITY OR A SURFACE, and at least one must be named:
+
+      * `capability_id` (with the `experiment_id` it was offered under) -> the find ALSO writes a
+        usefulness verdict at `defect_found` provenance, whose `corroboration` is the artifact. That
+        is the ONLY path from a find to a posterior, and it is the provenance weighting -- so N finds
+        from one judge arm still total one observation.
+      * `surface` alone -> the find feeds BINDING QUALITY only. "Consulting here surfaced a defect"
+        is evidence about the surface, and `binding_quality()` reads it. It touches no posterior.
+
+    `subject` optionally names what the defect was IN (a module, a capability, a doc). Recorded for
+    the audit trail; it is never scored, because a capability must not be debited for having had a
+    bug found in it.
+
+    Idempotent on `find_id`, so a replay records nothing twice. Returns what happened, including
+    `affects_propensity`, because a caller that thinks it just scored a capability has been misled.
+    """
+    if not str(defect).strip():
+        raise ValueError("a find requires `defect` naming WHAT was defective")
+    if not str(artifact).strip():
+        raise ValueError(
+            "a find requires `artifact` — the PR, issue, file:line or failing test a stranger "
+            "could check; a claimed find with no artifact is worth nothing"
+        )
+    if not str(surface).strip() and not str(capability_id).strip():
+        raise ValueError(
+            "a find needs a FINDER: either `capability_id` (the capability that surfaced it) or "
+            "`surface` (the surface whose consult surfaced it). An unattributed find teaches "
+            "nothing, which is the state this replaces"
+        )
+    if str(capability_id).strip() and not str(experiment_id).startswith(ADVICE_REF_PREFIX):
+        raise ValueError(
+            "a capability-attributed find must carry the `experiment_id` "
+            f"({ADVICE_REF_PREFIX}<digest>) it was offered under, or its usefulness verdict "
+            "belongs to no trial"
+        )
+    cap_id = str(capability_id).strip()
+    finder_kind = "capability" if cap_id else "surface"
+    finder = cap_id or str(surface).strip()
+    ref = find_id(defect, surface=surface, capability_id=cap_id)
+    carrier = cap_id or FIND_CARRIER
+    recorded = capabilities.heartbeat(
+        carrier,
+        "match",
+        ref=ref,
+        path=path or capabilities.REG,
+        idempotency_key=f"find:{finder}:{ref}",
+        metadata={
+            "source": FIND_SOURCE,
+            FIND_DEFECT_KEY: str(defect)[:400],
+            FIND_ARTIFACT_KEY: str(artifact)[:400],
+            FIND_SUBJECT_KEY: str(subject)[:200] or None,
+            FIND_FINDER_KEY: finder,
+            FIND_FINDER_KIND_KEY: finder_kind,
+            SURFACE_KEY: str(surface).strip() or None,
+        },
+    )
+    verdict = False
+    if cap_id:
+        verdict = record_usefulness(
+            cap_id,
+            experiment_id,
+            useful=True,
+            evidence=f"found a defect: {str(defect)[:280]}",
+            provenance="defect_found",
+            judge=judge,
+            corroboration=str(artifact),
+            path=path,
+            metadata={SURFACE_KEY: str(surface).strip() or None},
+        )
+    return {
+        "find_id": ref,
+        "recorded": bool(recorded),
+        "finder": finder,
+        "finder_kind": finder_kind,
+        "carrier": carrier,
+        "surface": str(surface).strip() or None,
+        "subject": str(subject).strip() or None,
+        "feeds": "capability_usefulness" if cap_id else "binding_quality",
+        "usefulness_recorded": bool(verdict),
+        # SAY WHAT THIS DID. A surface find scores nothing; a capability find scores one
+        # PROVENANCE-WEIGHTED observation, shared with every other verdict from the same arm.
+        "affects_propensity": bool(cap_id),
+        "provenance": "defect_found" if cap_id else None,
+    }
+
+
+def finds(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> list[dict]:
+    """Every recorded find in the window, from the ledger. No second store to read."""
+    caps = capabilities.load_declared(path or capabilities.REG)
+    now = capabilities._now() if now is None else now
+    out = []
+    for cap_id, cap in sorted(caps.items()):
+        for event in _events(cap):
+            meta = event.get("metadata") or {}
+            if meta.get("source") != FIND_SOURCE:
+                continue
+            if not _within_window(event, now=now, window_days=window_days):
+                continue
+            out.append(
+                {
+                    "find_id": str(event.get("ref") or ""),
+                    "carrier": cap_id,
+                    "finder": str(meta.get(FIND_FINDER_KEY) or ""),
+                    "finder_kind": str(meta.get(FIND_FINDER_KIND_KEY) or ""),
+                    "surface": meta.get(SURFACE_KEY),
+                    "defect": str(meta.get(FIND_DEFECT_KEY) or ""),
+                    "artifact": str(meta.get(FIND_ARTIFACT_KEY) or ""),
+                    "subject": meta.get(FIND_SUBJECT_KEY),
+                    "timestamp": int(event.get("timestamp") or 0),
+                }
+            )
+    return sorted(out, key=lambda f: (f["timestamp"], f["find_id"]))
+
+
+def binding_quality(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> dict:
+    """Is consulting at this surface producing anything? THE PLACE A SURFACE FIND HAD TO GO.
+
+    The three layers rank a capability by fit to a surface. Nothing measured the surface itself, so
+    "consulting at `repo-audit:phase-1` surfaced a defect in the advisor" was evidence with no home.
+    This is the home: the bound set, what it was offered and what came of it, and the FINDS the
+    consults at this surface produced -- capability-attributed and surface-attributed separately,
+    because only the first is also a verdict on a capability.
+
+    REPORT ONLY. Nothing here promotes, demotes or scores; `propose_bindings` and
+    `propose_demotions` keep their existing, external, evidence rules unchanged. A surface find is a
+    number about a surface, and a number about a surface must not become selection pressure on a
+    capability -- that is the ratchet the detection loop already refuses.
+    """
+    import capability_advisor
+
+    counts = surface_decline_counts(surface, path=path, window_days=window_days)
+    here = [
+        f
+        for f in finds(path=path, window_days=window_days)
+        if f["surface"] == surface or f["finder"] == surface
+    ]
+    by_kind: dict[str, int] = {}
+    for f in here:
+        by_kind[f["finder_kind"]] = by_kind.get(f["finder_kind"], 0) + 1
+    return {
+        "surface": surface,
+        "bound": sorted(capability_advisor.binding_for(surface, path=path)),
+        "offers": sum(counts["offered"].values()),
+        "triggers": sum(counts["triggered"].values()),
+        "declines": sum(counts["declined"].values()),
+        # BOTH quantities: how many defects the consults here surfaced, and how many of those are
+        # ALSO a verdict on a capability. A surface that produces finds while triggering nothing is
+        # not an idle surface, and those were indistinguishable before this existed.
+        "finds": len(here),
+        "finds_by_finder_kind": dict(sorted(by_kind.items())),
+        "find_subjects": sorted({f["subject"] for f in here if f["subject"]}),
+        "find_defects": [f["defect"] for f in here][:10],
+        "window_days": window_days,
+    }
+
+
+def _selftest_finds() -> None:
+    """A FIND IS AN ATTRIBUTION RECORD, and the finder may be a capability OR a surface.
+
+    Every assertion was written by breaking it first:
+
+      * dropping the `artifact` guard -> a claimed find with no artifact is accepted, caught here;
+      * dropping the `defect` guard -> likewise;
+      * letting a surface find write a usefulness verdict -> the posterior moves for a capability
+        nobody credited, caught here;
+      * giving the find record an `advice:` ref -> `experiments()` sees it, the candidate count
+        moves, and the structural separation becomes conventional; caught here;
+      * dropping the idempotency key -> re-recording one find inflates the count, caught here;
+      * dropping `defect_found` from the provenance table's corroboration requirement -> covered by
+        `_selftest_provenance`, and the interlock below proves the discount still caps volume.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import capability_advisor
+
+    with tempfile.TemporaryDirectory(prefix="finds-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("finder-cap", FIND_CARRIER):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["review"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        real = capability_advisor.SURFACE_BINDINGS.get("f-surf")
+        capability_advisor.SURFACE_BINDINGS["f-surf"] = {"finder-cap": "bound for the test"}
+        try:
+            # ---- 1. A CLAIM WITHOUT AN ARTIFACT IS WORTH NOTHING, and is refused.
+            for kwargs in (
+                {"defect": "the advisor still offered a suppressed surface", "artifact": ""},
+                {"defect": "", "artifact": "PR #123"},
+                {"defect": "   ", "artifact": "   "},
+            ):
+                try:
+                    record_find(surface="f-surf", path=ledger, **kwargs)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"an unevidenced find must be refused: {kwargs}")
+            # ...and a find with NO finder at all teaches nothing, so it is refused too.
+            try:
+                record_find(defect="d", artifact="PR #1", path=ledger)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("a find with no finder must be refused")
+            # ...and a capability-attributed find without its experiment id belongs to no trial.
+            try:
+                record_find(defect="d", artifact="PR #1", capability_id="finder-cap", path=ledger)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("a capability find with no experiment id must be refused")
+
+            # ---- 2. A SURFACE-ATTRIBUTED FIND FEEDS BINDING QUALITY AND SCORES NOTHING.
+            before = propensity("finder-cap", path=ledger)
+            res = record_find(
+                defect="the advisor offered capabilities at a suppressed surface",
+                # A SYNTHETIC artifact string, deliberately not a dated filename:
+                # `capability_admission.commitments()` treats `<date>-<name>.md` in committed code
+                # as a CITATION to a decision record and fails the suite when the record does not
+                # exist. A fixture must not look like a promise.
+                artifact="finding A2 of the audit run, recorded in the audit's own ledger",
+                surface="f-surf",
+                subject="capability-advisor",
+                path=ledger,
+            )
+            assert res["recorded"] and res["finder_kind"] == "surface", res
+            assert res["feeds"] == "binding_quality", res
+            assert res["affects_propensity"] is False and not res["usefulness_recorded"], res
+            assert res["carrier"] == FIND_CARRIER, res
+            after = propensity("finder-cap", path=ledger)
+            assert after["propensity"] == before["propensity"], (before, after)
+            assert after["evidence_weight"] == before["evidence_weight"], (before, after)
+            # ...and it did not touch the CARRIER's numbers either, because `find:` is not `advice:`.
+            carrier = usefulness(path=ledger)["rows"][FIND_CARRIER]
+            assert carrier["candidates"] == 0 and carrier["resolved"] == 0, carrier
+            assert experiments(path=ledger) == [], "a find must be invisible to experiments()"
+
+            # ...and it IS visible where it belongs.
+            bq = binding_quality("f-surf", path=ledger)
+            assert bq["finds"] == 1, bq
+            assert bq["finds_by_finder_kind"] == {"surface": 1}, bq
+            assert bq["find_subjects"] == ["capability-advisor"], bq
+
+            # ---- 3. IDEMPOTENT: the same defect from the same finder is ONE find.
+            again = record_find(
+                defect="The Advisor Offered Capabilities At A Suppressed Surface",
+                artifact="same finding, recorded twice",
+                surface="f-surf",
+                path=ledger,
+            )
+            assert again["recorded"] is False, again
+            assert binding_quality("f-surf", path=ledger)["finds"] == 1, "a replay must not inflate"
+
+            # ---- 4. A CAPABILITY-ATTRIBUTED FIND IS OUTCOME EVIDENCE, at `defect_found`.
+            capabilities.heartbeat(
+                "finder-cap",
+                "match",
+                ref="advice:findtrial01",
+                path=ledger,
+                idempotency_key="m:fc:1",
+                metadata={"surface": "f-surf"},
+            )
+            got = record_find(
+                defect="gui/app.py:884 offers an exporter that export.EXPORTERS never registers",
+                artifact="issue #77, verified at gui/app.py:884-888",
+                surface="f-surf",
+                capability_id="finder-cap",
+                experiment_id="advice:findtrial01",
+                judge="codex",
+                path=ledger,
+            )
+            assert got["recorded"] and got["usefulness_recorded"], got
+            assert got["finder_kind"] == "capability" and got["affects_propensity"], got
+            scored = propensity("finder-cap", path=ledger)
+            assert scored["provenance_mix"] == {"defect_found": 1}, scored
+            assert scored["evidence_weight"] == 1.0, scored
+            assert scored["outcome_derived_verdicts"] == 1, scored
+            # A defect found outweighs a self-report: 0.6667 against 0.5556, both literals.
+            assert scored["propensity"] == 0.6667, scored
+            assert binding_quality("f-surf", path=ledger)["finds_by_finder_kind"] == {
+                "capability": 1,
+                "surface": 1,
+            }, binding_quality("f-surf", path=ledger)
+
+            # ---- 5. THE INFLATION INTERLOCK. Nine more artifact-backed finds from the SAME arm
+            #        must not move the number, because one arm is one observation. This is the
+            #        guard that makes `defect_found` safe to weigh at 1.0.
+            for i in range(9):
+                exp = f"advice:spamfind{i:03d}"
+                capabilities.heartbeat(
+                    "finder-cap",
+                    "match",
+                    ref=exp,
+                    path=ledger,
+                    idempotency_key=f"m:spam{i}",
+                    metadata={"surface": "f-surf"},
+                )
+                record_find(
+                    defect=f"another distinct defect {i}",
+                    artifact=f"issue #{100 + i}",
+                    surface="f-surf",
+                    capability_id="finder-cap",
+                    experiment_id=exp,
+                    judge="codex",
+                    path=ledger,
+                )
+            spammed = propensity("finder-cap", path=ledger)
+            assert spammed["evidence_count"] == 10, spammed
+            # TEN finds, ONE arm, still ONE observation's worth -- and the number has not budged.
+            assert spammed["evidence_weight"] == 1.0, spammed
+            assert spammed["propensity"] == 0.6667, spammed
+            assert spammed["independent_arms"] == 1, spammed
+            # ...while ONE find from a SECOND arm does move it, which is the incentive we want.
+            capabilities.heartbeat(
+                "finder-cap",
+                "match",
+                ref="advice:secondarm01",
+                path=ledger,
+                idempotency_key="m:arm2",
+                metadata={"surface": "f-surf"},
+            )
+            record_find(
+                defect="a defect the other reviewer found",
+                artifact="issue #200",
+                surface="f-surf",
+                capability_id="finder-cap",
+                experiment_id="advice:secondarm01",
+                judge="gemini",
+                path=ledger,
+            )
+            corroborated = propensity("finder-cap", path=ledger)
+            assert corroborated["independent_arms"] == 2, corroborated
+            assert corroborated["evidence_weight"] == 2.0, corroborated
+            assert corroborated["propensity"] > spammed["propensity"], (
+                corroborated,
+                spammed,
+            )
+        finally:
+            if real is None:
+                capability_advisor.SURFACE_BINDINGS.pop("f-surf", None)
+            else:
+                capability_advisor.SURFACE_BINDINGS["f-surf"] = real
+
+    print(
+        "capability_propensity finds selftest: OK (a claimed find with no artifact is refused, a "
+        "surface find feeds binding quality and scores nothing, a capability find is defect_found "
+        "outcome evidence, replays do not inflate, and ten finds from one arm are still one "
+        "observation)"
+    )
+
+
 def _selftest_declines() -> None:
     """A DECLINE IS A THIRD STATE. It must be visible, attributable, and inert on the posterior.
 
@@ -3136,6 +3596,9 @@ def _fmt(rep: dict) -> str:
         f"  capabilities with non-self-reported evidence: "
         f"{rep['capabilities_with_outcome_derived_evidence']}; with >1 judge arm: "
         f"{rep['capabilities_with_multiple_judge_arms']}",
+        f"  defect finds: {rep['find_count']} — {rep['finds_by_finder_kind'] or '(none)'} "
+        f"(capability-attributed finds also score; surface-attributed ones feed binding quality "
+        f"and score nothing)",
         f"  reasoned declines recorded: {rep['decline_count']} across "
         f"{rep['capabilities_declined_with_reason']} capability(ies) — counted, never scored; "
         f"{rep['decline_demotable_count']} attributable to a binding",
@@ -3173,6 +3636,8 @@ def main(argv: list[str]) -> int:
             "trigger",
             "useful",
             "decline",
+            "find",
+            "binding-quality",
             "detect",
             "tick-evidence",
         ],
@@ -3257,11 +3722,31 @@ def main(argv: list[str]) -> int:
         default=TICK_EVIDENCE_BUDGET_S,
         help="tick-evidence: wall-clock ceiling; the tick must never wait longer",
     )
+    # A FIND, FROM BASH. The surfaces that find defects are skills and lanes, which run shells, so
+    # a verb reachable only from Python is a verb the finders cannot use -- the same reason `decline`
+    # has a subcommand.
+    ap.add_argument(
+        "--defect",
+        default="",
+        help="find: WHAT was defective (required). Not 'something was found'",
+    )
+    ap.add_argument(
+        "--artifact",
+        default="",
+        help="find: the PR, issue, file:line or failing test a stranger could check (required). "
+        "A claimed find with no artifact is worth nothing",
+    )
+    ap.add_argument(
+        "--subject",
+        default="",
+        help="find: what the defect was IN (module, capability, doc). Recorded, never scored",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
         _selftest_provenance()
+        _selftest_finds()
         _selftest_declines()
         _selftest_detection()
         _selftest_tick_evidence()
@@ -3276,6 +3761,39 @@ def main(argv: list[str]) -> int:
         )
         print(json.dumps(rep, indent=2) if args.json else format_tick_evidence(rep))
         return 0
+    if args.command == "find":
+        ledger = pathlib.Path(args.ledger) if args.ledger else None
+        try:
+            res = record_find(
+                defect=args.defect,
+                artifact=args.artifact,
+                surface=args.surface,
+                capability_id=args.capability,
+                experiment_id=args.experiment,
+                subject=args.subject,
+                judge=args.judge,
+                path=ledger,
+            )
+        except ValueError as exc:
+            ap.error(str(exc))
+        res["ledger"] = str(ledger) if ledger else "live"
+        print(json.dumps(res, indent=2 if args.json else None))
+        return 0
+    if args.command == "binding-quality":
+        if not args.surface:
+            ap.error("--surface is required: binding quality is a property OF a surface")
+        rep = binding_quality(args.surface, window_days=args.window_days)
+        if args.json:
+            print(json.dumps(rep, indent=2))
+        else:
+            print(
+                f"binding quality — {rep['surface']} ({rep['window_days']}d)\n"
+                f"  bound: {len(rep['bound'])}  offers: {rep['offers']}  "
+                f"triggers: {rep['triggers']}  declines: {rep['declines']}\n"
+                f"  finds: {rep['finds']} {rep['finds_by_finder_kind'] or ''}  "
+                f"subjects: {rep['find_subjects'] or '(none)'}"
+            )
+        return 0
     if args.command == "detect":
         rep = detect(apply_promotions=args.apply)
         _capability_heartbeat("invocation", f"detect:{len(rep['promotions'])}")
@@ -3286,7 +3804,10 @@ def main(argv: list[str]) -> int:
                 f"capability selection detection — {len(rep['surfaces'])} surface(s) with records"
             )
             for s_, info in rep["surfaces"].items():
-                print(f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])}")
+                print(
+                    f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])} "
+                    f"finds={info['finds']}"
+                )
             print(
                 f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
                 + (
@@ -3522,7 +4043,8 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
     """
     import capability_advisor
 
-    out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": []}
+    out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": [], "finds": 0}
+    all_finds = finds(path=path)
     # EVERY SURFACE THAT HAS EITHER A DECLARATION OR EVIDENCE. Enumerating only the declared keys
     # missed the inherited ones entirely: `repo-audit:dimension-1` has no table entry of its own --
     # it inherits `offload` surface-wide -- so three independent audits declining `offload` there
@@ -3537,10 +4059,21 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
         proms = propose_bindings(surface, recs, path=path) if recs else []
         dems = propose_demotions(surface, path=path)
         counts = surface_decline_counts(surface, path=path)
-        if recs or proms or dems or counts["declined"]:
+        # BINDING QUALITY, reported per surface. A surface that triggers nothing while its consults
+        # keep surfacing defects is not an idle surface, and the two were indistinguishable before
+        # finds existed. Read here, never acted on: a number about a surface must not become
+        # selection pressure on a capability.
+        here = [f for f in all_finds if f["surface"] == surface or f["finder"] == surface]
+        if recs or proms or dems or counts["declined"] or here:
             out["surfaces"][surface] = {
                 "records": len(recs),
                 "bound": sorted(capability_advisor.binding_for(surface, path=path)),
+                "finds": len(here),
+                "finds_by_finder_kind": {
+                    k: sum(1 for f in here if f["finder_kind"] == k)
+                    for k in sorted({f["finder_kind"] for f in here})
+                },
+                "find_subjects": sorted({f["subject"] for f in here if f["subject"]}),
                 # THE DRAINABLE QUANTITY, printed whether or not the floor was reached. "0 proposals"
                 # beside "3 declines accumulating, floor 2" reads completely differently from "0
                 # proposals" beside nothing at all, and only one of those is a healthy silence.
@@ -3554,6 +4087,11 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
             }
         out["promotions"].extend(proms)
         out["demotions"].extend(dems)
+    out["finds"] = len(all_finds)
+    out["finds_by_finder_kind"] = {
+        k: sum(1 for f in all_finds if f["finder_kind"] == k)
+        for k in sorted({f["finder_kind"] for f in all_finds})
+    }
     if apply_promotions:
         for prom in out["promotions"]:
             # Respect the ceiling the binding exists to enforce; a promotion that pushes a context
