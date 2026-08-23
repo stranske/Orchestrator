@@ -933,7 +933,12 @@ def _selftest() -> None:
     assert isinstance(ci_consult_line(), str)
     # AND A HANG IS A REPORTED LINE, NOT A HUNG VERDICT. The consult reads the ledger and
     # `capabilities.load()` takes a BLOCKING flock; unbounded, a stuck lock would hang verify.py
-    # itself. Exercised by making the inner call raise, which is what the SIGALRM handler does.
+    # itself. BOTH DIRECTIONS ARE EXERCISED THROUGH A SUBSTITUTED INNER CALL, never through the real
+    # ledger: the first version of this asserted `"NOT CHECKED" not in ci_consult_line()` against the
+    # live ledger and went red the same afternoon, because a dozen concurrent verify runs and the
+    # hourly tick were contending for that lock — the guard doing exactly its job, failing a test
+    # about the guard. A machine-dependent assertion inside a check written to prove robustness is
+    # the same defect one level up.
     real_inner = globals()["_ci_consult_line_inner"]
     try:
 
@@ -942,13 +947,19 @@ def _selftest() -> None:
 
         globals()["_ci_consult_line_inner"] = _boom
         timed_out = ci_consult_line()
+        globals()["_ci_consult_line_inner"] = lambda: "  ci consult:  healthy fixture line"
+        healthy = ci_consult_line()
     finally:
         globals()["_ci_consult_line_inner"] = real_inner
     assert timed_out.startswith("  ci consult:  NOT CHECKED"), timed_out
     assert "TimeoutError" in timed_out, timed_out
     assert PREREQ_ABSENT_MARK not in timed_out, timed_out
-    # ...and the real one still works, so the guard is not swallowing the healthy path.
-    assert "NOT CHECKED" not in ci_consult_line(), ci_consult_line()
+    # ...and the guard must NOT swallow a healthy answer, or "NOT CHECKED" would mean nothing.
+    assert healthy == "  ci consult:  healthy fixture line", healthy
+    # The real call still has to return a well-formed line on THIS machine, whatever the lock is
+    # doing — asserted on the shape only, which both branches satisfy.
+    live = ci_consult_line()
+    assert live.startswith("  ci consult:") and PREREQ_ABSENT_MARK not in live, live
 
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
