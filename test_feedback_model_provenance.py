@@ -837,3 +837,132 @@ def test_every_seat_with_a_session_store_can_report_and_is_read_from_its_own_sto
         )
         == "Gemini 3.6 Flash (High)"
     )
+
+
+def test_late_sweep_completes_terminal_attempts_never_one_in_flight(tmp_path, monkeypatch):
+    """The sweep may finish a TERMINAL unresolved attempt; it must not finish a running one.
+
+    The profile attempt row is written `started` BEFORE the subprocess is spawned, so an in-flight
+    attempt matches every other clause of the sweep's query -- worker role, profile set,
+    `resolved_model` still NULL. `cli_reported_model` reads the first model in the session log
+    within a 2h window of `started_ts`, and that log exists from the moment the CLI starts, so a
+    run that is still executing probes CLEAN. Before the status filter, `--apply` stamped it
+    `complete` with a resolved model and a `completed_ts` taken from the sweep's own clock: the one
+    row shape allowed to support an exact-model claim, minted for a worker that had not finished and
+    could still fall back, retry onto another model, or fail outright.
+
+    All three runs below share one workspace, so the probe resolves for ALL of them. The status
+    filter is therefore the only thing that can protect the two ineligible rows.
+    """
+    import json
+
+    import adapters
+    import ledger_reconcile
+
+    old_db = feedback.DB_PATH
+    feedback.DB_PATH = tmp_path / "feedback.db"
+    try:
+        workspace = tmp_path / "offloads" / "ws-sweep"
+        workspace.mkdir(parents=True)
+        sessions = tmp_path / "sessions"
+        (sessions / "2026").mkdir(parents=True)
+        started = int(time.time())
+        stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime(started))
+        (sessions / "2026" / f"rollout-{stamp}-x.jsonl").write_text(
+            json.dumps({"type": "session_meta", "payload": {"cwd": str(workspace.resolve())}})
+            + "\n"
+            + json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.6-terra"}})
+            + "\n"
+        )
+        monkeypatch.setattr(adapters, "CODEX_SESSIONS", sessions)
+
+        def _pending(run_id):
+            """A pre-dispatch worker attempt: exactly what the dispatcher writes before spawning."""
+            feedback.record_run(run_id, f"offload:{workspace}", "offload", "codex")
+            feedback.record_execution_attempt(
+                run_id,
+                attempt_id=f"attempt:profile:{run_id}",
+                operation_role="worker",
+                profile_id="codex-5.6-terra-high",
+                requested_provider="openai",
+                requested_model="gpt-5.6-terra",
+                status="started",
+                source="orchestrator-profile-decision",
+                started_ts=started,
+            )
+
+        def _row(run_id):
+            return (
+                sqlite3.connect(feedback.DB_PATH)
+                .execute(
+                    "SELECT status, resolved_model, completed_ts FROM execution_attempts "
+                    "WHERE run_id=?",
+                    (run_id,),
+                )
+                .fetchone()
+            )
+
+        # TERMINAL: the completion path closed it unresolved. This is the sweep's whole purpose.
+        _pending("sweep-terminal")
+        feedback.complete_profile_attempt_unresolved(
+            "sweep-terminal",
+            selected_profile_id="codex-5.6-terra-high",
+            fallback_reason="resolved_model_not_reported_by_completion",
+        )
+        # IN FLIGHT: the worker is still running, so nothing has closed it.
+        _pending("sweep-inflight")
+        # TERMINAL BUT NEVER RAN: the process failed to start, so no model ever served it.
+        _pending("sweep-failed")
+        feedback.complete_profile_attempt_unresolved(
+            "sweep-failed",
+            selected_profile_id="codex-5.6-terra-high",
+            fallback_reason="profile_process_start_failed",
+            status="failed",
+        )
+
+        report = ledger_reconcile.resolve_unresolved_worker_attempts(apply=True)
+
+        # The terminal unresolved row gains the identity its log always carried.
+        assert _row("sweep-terminal")[:2] == ("complete", "gpt-5.6-terra")
+        # The in-flight row is untouched: no resolved model, no invented completion timestamp.
+        assert _row("sweep-inflight") == ("started", None, None)
+        # The never-ran row keeps its terminal failure rather than borrowing a neighbour's model.
+        assert _row("sweep-failed")[:2] == ("failed", None)
+        assert report["resolved_by_agent"] == {"codex": 1}
+        # `candidates` counts only what a reader could still drain.
+        assert report["candidates"] == 1
+        # The exclusions are NAMED, not silently narrowed away: `candidates: 0` next to
+        # `{"started": 1}` reads as "wait for that run"; `candidates: 0` alone reads as "broken".
+        assert report["excluded_not_terminal"] == {"started": 1, "failed": 1}
+
+        # DELIBERATE BREAK: drop the status clause, restoring the pre-fix query exactly.
+        real_conn = feedback._conn
+
+        class _Unfiltered:
+            def __init__(self, c):
+                self._c = c
+
+            def execute(self, sql, *a):
+                return self._c.execute(sql.replace("AND ea.status='unresolved' ", ""), *a)
+
+            def __getattr__(self, name):
+                return getattr(self._c, name)
+
+            def __enter__(self):
+                self._c.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self._c.__exit__(*exc)
+
+        monkeypatch.setattr(feedback, "_conn", lambda: _Unfiltered(real_conn()))
+        ledger_reconcile.resolve_unresolved_worker_attempts(apply=True)
+        broken_status, broken_model, broken_completed = _row("sweep-inflight")
+        assert (broken_status, broken_model) == ("complete", "gpt-5.6-terra"), (
+            "the break must reproduce the corruption: a running worker stamped with an "
+            "exact resolved model"
+        )
+        assert broken_completed is not None, "and with a completion timestamp it never earned"
+        # REVERTED by monkeypatch teardown; the filtered assertions above are the guard.
+    finally:
+        feedback.DB_PATH = old_db
