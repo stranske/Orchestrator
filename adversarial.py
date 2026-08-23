@@ -155,8 +155,22 @@ def _threshold_reachable(n_reviewers: int, veto_threshold: int) -> bool:
     return n_reviewers >= veto_threshold
 
 
+def _coverage_floor(findings_submitted: int | None, n_reviewers: int) -> tuple[int | None, int | None]:
+    """(claims a verdict COULD have settled, claims that provably got none). None means unknown.
+
+    Both are floors, not estimates: `refute_prompt` asks for one problem and `_first_json` keeps one
+    object, so a reviewer settles at most one claim. Named, like `_threshold_reachable`, so the
+    selftest can break it and prove the coverage branch is load-bearing.
+    """
+    if findings_submitted is None:
+        return None, None
+    n = int(findings_submitted)
+    return min(n, n_reviewers), max(0, n - n_reviewers)
+
+
 def aggregate_veto(verdicts: list[dict], veto_threshold: int = 2,
-                   reviewers_requested: int | None = None) -> dict:
+                   reviewers_requested: int | None = None,
+                   findings_submitted: int | None = None) -> dict:
     """Minority-veto: count SUBSTANTIATED blockers (blocker=true AND severity in VETO_SEVERITIES). If at
     least `veto_threshold` reviewers veto, the verdict is BLOCKED. Pure + testable — the heart of the feature.
 
@@ -184,6 +198,26 @@ def aggregate_veto(verdicts: list[dict], veto_threshold: int = 2,
     Fails toward motion, not silence: a shortfall returns INCONCLUSIVE and still carries whatever
     blockers were found. PASS now means what it says — the panel WAS large enough to block and
     declined to, which is the no-single-voice-tyranny property the minority-veto design is for.
+
+    SECOND SHORTFALL AXIS, added 2026-08-23: FINDING coverage. The same audit run recorded a
+    second limitation next to the reviewer one — five refutable claims went in and four received
+    no verdict at all. That is structural, not a fluke: `refute_prompt` asks each reviewer for
+    "the single most serious problem", and `_first_json` keeps the FIRST object carrying a
+    `blocker` key, so a reviewer contributes AT MOST ONE verdict however many claims the context
+    held. Verdicts are also unattributed — nothing maps a verdict back to the claim it judges.
+
+    So a caller submitting N claims to R reviewers has at least `N - R` claims that provably
+    received no verdict, and the old payload said nothing about it: the reviewer denominator was
+    visible while the finding denominator stayed invisible. That made the fix above WORSE in one
+    respect — reporting one shortfall makes silence about the other read as deliberate.
+
+    `findings_submitted` closes it. Left None the behaviour is unchanged (unknown, not zero — the
+    same rule as missing cost telemetry: absence must never read as "all covered"). Given a count,
+    the payload reports `findings_adjudicated_max` and `findings_unexamined_min` — a rigorous
+    floor, since one verdict can settle at most one claim — and incomplete coverage is
+    INCONCLUSIVE for the same reason a short panel is: asserting PASS over five claims having
+    examined at most one is a claim the evidence cannot support. A substantiated BLOCKED still
+    wins, because a corroborated blocker is actionable no matter what else went unexamined.
     """
     valid = [v for v in verdicts if v]
     vetoes = [v for v in valid if v.get("blocker") and str(v.get("severity", "")).lower() in VETO_SEVERITIES]
@@ -192,9 +226,11 @@ def aggregate_veto(verdicts: list[dict], veto_threshold: int = 2,
     # the number that returned; a caller understating it must not produce "returned 2 of 1".
     requested = max(len(verdicts) if reviewers_requested is None else int(reviewers_requested), len(valid))
     reachable = _threshold_reachable(len(valid), veto_threshold)
+    # A FLOOR on the claims nobody judged, not an estimate. None means unknown, never zero.
+    covered_max, unexamined_min = _coverage_floor(findings_submitted, len(valid))
     if len(vetoes) >= veto_threshold:
         verdict = "BLOCKED"
-    elif not reachable:
+    elif not reachable or (unexamined_min or 0) > 0:
         verdict = INCONCLUSIVE
     else:
         verdict = "PASS"
@@ -203,22 +239,45 @@ def aggregate_veto(verdicts: list[dict], veto_threshold: int = 2,
     # "reviewers returned 1 of 2" makes the shortfall unmissable at a glance.
     summary = (f"{len(vetoes)} veto{'' if len(vetoes) == 1 else 'es'} / threshold {veto_threshold}, "
                f"reviewers returned {len(valid)} of {requested}")
+    if findings_submitted is not None:
+        summary += f", findings adjudicated at most {covered_max} of {int(findings_submitted)}"
     out = {"verdict": verdict, "n_reviewers": len(valid), "reviewers_requested": requested,
            "reviewers_missing": requested - len(valid), "n_vetoes": len(vetoes),
            "veto_threshold": veto_threshold, "threshold_reachable": reachable, "summary": summary,
            "blockers": [{"severity": v.get("severity"), "finding": v.get("finding"),
                          "confidence": v.get("confidence")} for v in vetoes]}
+    if findings_submitted is not None:
+        out["findings_submitted"] = int(findings_submitted)
+        out["findings_adjudicated_max"] = covered_max
+        out["findings_unexamined_min"] = unexamined_min
+        # The panel cannot say WHICH claim a verdict judged, so never let a reader infer it did.
+        out["findings_attributed"] = False
     if verdict == INCONCLUSIVE:
-        out["inconclusive_reason"] = (
-            f"only {len(valid)} of {requested} reviewers returned a verdict, so the veto threshold of "
-            f"{veto_threshold} was unreachable — this is NOT a pass; re-run the missing reviewers")
+        reasons = []
+        if not reachable:
+            reasons.append(
+                f"only {len(valid)} of {requested} reviewers returned a verdict, so the veto threshold "
+                f"of {veto_threshold} was unreachable")
+        if (unexamined_min or 0) > 0:
+            reasons.append(
+                f"at least {unexamined_min} of {int(findings_submitted)} submitted findings received no "
+                f"verdict (one verdict settles at most one finding, and verdicts are unattributed)")
+        out["inconclusive_reason"] = ("; ".join(reasons)
+                                     + " — this is NOT a pass; re-run the missing coverage")
     return out
 
 
 def review(worktree: str, reviewers: list[str], context: str, veto_threshold: int = 2,
-           timeout: int = 900) -> dict:
+           timeout: int = 900, findings_submitted: int | None = None) -> dict:
     """Run N adversarial reviewers (read-only) over a worktree and adjudicate by minority-veto. Returns the
-    aggregate + raw verdicts for the orchestrator to ADJUDICATE against ground truth (never auto-obey)."""
+    aggregate + raw verdicts for the orchestrator to ADJUDICATE against ground truth (never auto-obey).
+
+    ONE VERDICT PER REVIEWER. `refute_prompt` asks for "the single most serious problem" and
+    `_first_json` keeps the first object carrying a `blocker` key, so packing several refutable
+    claims into `context` does NOT get you one verdict each — it gets you one verdict, about
+    whichever claim that reviewer judged worst, and nothing says which. When `context` holds more
+    than one claim, pass `findings_submitted=<count>` so the aggregate can report the coverage
+    floor instead of implying the whole set was examined."""
     # Credit at the function the driver actually calls. tick.py calls adversarial.review()
     # / high_stakes_reason(); the heartbeat sat only in main(), so the panel could run
     # without the capability ever being credited. (2026-08-20)
@@ -234,7 +293,8 @@ def review(worktree: str, reviewers: list[str], context: str, veto_threshold: in
             verdicts.append(v)
     # reviewers_requested is the drainable population: without it the aggregate cannot tell a
     # 1-of-1 panel from a 1-of-3 panel, which is how the shortfall used to read as PASS.
-    agg = aggregate_veto(verdicts, veto_threshold, reviewers_requested=len(reviewers))
+    agg = aggregate_veto(verdicts, veto_threshold, reviewers_requested=len(reviewers),
+                         findings_submitted=findings_submitted)
     agg["by_reviewer"] = raw
     return agg
 
@@ -277,6 +337,52 @@ def _selftest():
     assert minority["verdict"] == "PASS" and minority["threshold_reachable"] is True, minority
     assert minority["summary"] == "1 veto / threshold 2, reviewers returned 3 of 3", minority
 
+    # ---- FINDING coverage, the second shortfall axis ------------------------------------------
+    # Unknown must stay unknown: with findings_submitted omitted, nothing is asserted and the
+    # payload is byte-identical to before, so existing callers are untouched.
+    assert "findings_submitted" not in minority and "findings_unexamined_min" not in minority, minority
+    assert minority["summary"].endswith("reviewers returned 3 of 3"), minority
+
+    # 5 claims submitted, 3 reviewers returned -> at least 2 claims got NO verdict. Not a pass.
+    five = aggregate_veto(lone + [{"blocker": False, "severity": "none"},
+                                  {"blocker": False, "severity": "low"}], 2, findings_submitted=5)
+    assert five["verdict"] == INCONCLUSIVE, five
+    assert five["findings_submitted"] == 5 and five["findings_adjudicated_max"] == 3, five
+    assert five["findings_unexamined_min"] == 2, five
+    assert five["findings_attributed"] is False, five
+    assert five["summary"] == ("1 veto / threshold 2, reviewers returned 3 of 3, "
+                              "findings adjudicated at most 3 of 5"), five
+    assert "received no verdict" in five["inconclusive_reason"], five
+    # The exact audit shape: 5 claims, 1 of 2 reviewers returned -> BOTH shortfalls named at once.
+    both = aggregate_veto(lone, 2, reviewers_requested=2, findings_submitted=5)
+    assert both["verdict"] == INCONCLUSIVE, both
+    assert both["findings_unexamined_min"] == 4, both
+    assert "threshold" in both["inconclusive_reason"] and "no verdict" in both["inconclusive_reason"], both
+    # Full coverage of a single claim by a big-enough panel is still a genuine PASS.
+    one_of_one = aggregate_veto([{"blocker": False, "severity": "none"},
+                                 {"blocker": False, "severity": "low"}], 2, findings_submitted=1)
+    assert one_of_one["verdict"] == "PASS" and one_of_one["findings_unexamined_min"] == 0, one_of_one
+    # A corroborated block still wins over incomplete coverage — a real blocker is actionable.
+    blocked = aggregate_veto([{"blocker": True, "severity": "high", "finding": "a"},
+                              {"blocker": True, "severity": "critical", "finding": "b"}],
+                             2, findings_submitted=9)
+    assert blocked["verdict"] == "BLOCKED" and blocked["findings_unexamined_min"] == 7, blocked
+
+    # DELIBERATE BREAK -> REVERT on the coverage floor: claim everything was examined and the
+    # 5-claim/3-verdict case reverts to exactly the latched PASS this axis exists to stop.
+    _panel = lone + [{"blocker": False, "severity": "none"}, {"blocker": False, "severity": "low"}]
+    _saved_floor = _coverage_floor
+    try:
+        globals()["_coverage_floor"] = lambda submitted, n: (submitted, 0)
+        broken_cov = aggregate_veto(_panel, 2, findings_submitted=5)
+        assert broken_cov["verdict"] == "PASS", "break did not change behaviour — test is vacuous"
+        assert broken_cov["findings_unexamined_min"] == 0, broken_cov
+    finally:
+        globals()["_coverage_floor"] = _saved_floor
+    reverted = aggregate_veto(_panel, 2, findings_submitted=5)
+    assert reverted["verdict"] == INCONCLUSIVE and reverted["findings_unexamined_min"] == 2, \
+        "revert did not restore the coverage floor"
+
     # DELIBERATE BREAK -> REVERT on the shortfall check, the correctness-critical half of the fix:
     # pretend the panel is always big enough and the 1-of-2 case reverts to the latched PASS.
     _saved_reachable = _threshold_reachable
@@ -299,7 +405,8 @@ def _selftest():
     assert review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "1"})
     assert not review_enabled({"ORCH_RUN_ADVERSARIAL_REVIEW": "0"})
     print("adversarial.py selftest: OK (refute prompt, minority-veto aggregation, reviewer-shortfall "
-          "guard w/ break->revert, json extract, high-stakes detection, env helpers)")
+          "and finding-coverage guards each w/ break->revert, json extract, high-stakes "
+          "detection, env helpers)")
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
