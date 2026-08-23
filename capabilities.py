@@ -2004,6 +2004,20 @@ def gate_readiness(cap: dict[str, Any], *, now: int | None = None) -> dict[str, 
     }
 
 
+def _has_default_off_switch(cap: dict[str, Any]) -> bool:
+    """True when this capability is held closed by a documented default-off flag.
+
+    Read from the capability's own declared `kill_switch`/`rollback` prose rather than a second list
+    of flag names, so a capability cannot drift out of this check by being renamed. Deliberately
+    conservative: it looks for the documented phrasing this ledger already uses, and an unmatched
+    switch reads as NOT default-off, which keeps a genuinely feedable capability feedable.
+    """
+    text = " ".join(
+        str(cap.get(field) or "") for field in ("kill_switch", "rollback", "gate_note")
+    ).lower()
+    return "default-off" in text or "default off" in text
+
+
 def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None = None) -> dict[str, Any]:
     """The single next action that would move this capability, and whether it is worth feeding.
 
@@ -2146,6 +2160,23 @@ def unblock(cap: dict[str, Any], *, liveness: str | None = None, now: int | None
             return {"blocker": gate["reason"],
                     "action": "wire the missing observation, or accept the gate stays manual",
                     "feed": False, "needs_trigger": False, "retire_candidate": False}
+        # A DEFAULT-OFF SWITCH CANNOT BE FED. Found 2026-08-22 while building Layer 3: the only two
+        # capabilities this branch called feedable (range-lane-rollout, synthesis-promotion) are both
+        # held by a documented default-off flag ("restore documented default-off gate"). Routing work
+        # at a switched-off capability manufactures work it cannot execute, so no durable reuse is
+        # produced, so the debt never falls, so it is fed again next cycle -- forever. The drain is
+        # blocked by the very switch the feed ignored, which is this workspace's signature defect.
+        #
+        # Reported, never silently dropped: the remaining count still shows, so the capability stays
+        # visible as evidence-starved. What changes is that capacity is not spent on it until the
+        # owner flips the switch, which is a decision only the owner makes.
+        if _has_default_off_switch(cap):
+            return {
+                "blocker": (f"needs {debt['remaining']} more independent durable reuse(s), but a "
+                            f"documented default-off switch prevents any from being produced"),
+                "action": "owner decision: flip the documented default-off gate, or leave it off",
+                "feed": False, "needs_trigger": False, "retire_candidate": False,
+            }
         return {
             "blocker": f"needs {debt['remaining']} more independent durable reuse(s)",
             "action": f"route {debt['remaining']} matching item(s) here to satisfy the gate",
@@ -2475,6 +2506,27 @@ def _selftest() -> None:
         "readiness": {"durable_subjects": ["a", "b", "c"], "failures": 1, "rework": 0, "ready": False}})
     assert evidence_debt(broken)["blocked_by"], evidence_debt(broken)
     assert unblock(broken, now=now)["feed"] is False, "failed gates must not be fed"
+
+    # A DEFAULT-OFF SWITCH MUST NOT BE FED EITHER. The sibling assertion above covers a FAILED gate;
+    # this covers a gate that is fine but held closed by a documented default-off flag. Feeding it
+    # manufactures work the capability cannot execute, so the durable reuse it needs can never be
+    # produced and the same capability is fed every cycle forever -- the drain blocked by the very
+    # switch the feed ignored. The remaining count must still be REPORTED, so the capability stays
+    # visible as evidence-starved rather than disappearing from the queue.
+    gated_off = dict(
+        gated,
+        kill_switch="restore documented default-off gate",
+        evidence_threshold={"independent_durable_reuse": 3},
+    )
+    off = unblock(gated_off, now=now)
+    assert off["feed"] is False, ("a documented default-off switch cannot be fed", off)
+    assert "default-off switch" in off["blocker"], off
+    assert "more independent durable reuse" in off["blocker"], (
+        "the evidence debt must still be reported, not hidden", off)
+    assert "owner decision" in off["action"], off
+    # And a capability with the SAME debt but no default-off switch stays feedable, so the guard
+    # narrows nothing it should not.
+    assert unblock(dict(gated_off, kill_switch="disable via config"), now=now)["feed"] is True
 
     # Satisfied thresholds surface as READY TO LIFT, and are not fed further.
     ready = _cap(status="shadow", gate_reason="advisory only",
