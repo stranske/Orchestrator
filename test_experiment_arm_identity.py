@@ -117,6 +117,150 @@ def test_parallel_members_have_independent_phase_artifacts(tmp_path, monkeypatch
     assert len({row["path"] for row in collected["diffs"].values()}) == 2
 
 
+def _write_experiment(
+    root: Path, exp_id: str, meta: dict, *, log_names: list[str], idle_s: int = 3600
+) -> Path:
+    """One experiment directory as the launchers leave it, aged so followup sees it as idle."""
+    import os
+    import time
+
+    edir = root / exp_id
+    edir.mkdir(parents=True)
+    (edir / "meta.json").write_text(json.dumps(meta))
+    (edir / "spec.md").write_text("SPEC")
+    old = time.time() - idle_s
+    for name in log_names:
+        log = edir / name
+        log.write_text("done")
+        os.utime(log, (old, old))
+    os.utime(edir / "meta.json", (old, old))
+    return edir
+
+
+def test_followup_collects_and_evaluates_a_v2_manifest(tmp_path, monkeypatch) -> None:
+    """The v2 lifecycle's missing half: eligibility was measured per AGENT, not per MEMBER.
+
+    `research_v2_arms()` feeds v2 manifests to the tick and backfill launchers and `prepare_arms()`
+    writes one log per member (`<member_id>.log`), but followup listed `meta["agents"]` and looked
+    for `<agent>.log`. Those names never coincide for a v2 member, so every v2 experiment failed the
+    `all(log.exists())` gate, never reached collect/evaluate, and produced no `evaluations_v2`
+    evidence at all -- the exact outcome the v2 identity work existed to prevent.
+
+    Deliberate break for this gate: restore `logs = [edir / f"{a}.log" for a in meta["agents"]]` and
+    the v2 experiment below is skipped while the legacy one still passes, which is precisely the
+    half-fixed state that made this invisible.
+    """
+    monkeypatch.setenv("ORCH_FOLLOWUP_SHIP_GATE", "0")
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(exp_abcd.capabilities, "production_heartbeat", lambda *a, **kw: None)
+
+    # The manifest the production launchers build, via the same function they call.
+    v2_meta = _v2_meta("v2-exp", exp_abcd.research_v2_arms(["codex", "cursor"]))
+    members = exp_abcd.experiment_members(v2_meta)
+    assert [m["legacy"] for m in members] == [False, False], members
+    member_logs = [exp_abcd.exp_log_path(m["agent"], m["member_id"]) for m in members]
+    # The names really are distinct from the agent names, which is why the old gate never matched.
+    assert not ({"codex.log", "cursor.log"} & set(member_logs)), member_logs
+    _write_experiment(tmp_path, "v2-exp", v2_meta, log_names=member_logs)
+
+    # A LEGACY experiment alongside it: a recovered directory has no members, and its log IS
+    # `<agent>.log`. Both shapes must stay eligible through one code path.
+    _write_experiment(
+        tmp_path,
+        "legacy-exp",
+        {"repo": "o/r", "base": "main", "agents": ["codex"]},
+        log_names=["codex.log"],
+    )
+
+    collected: list[str] = []
+    evaluated: list[str] = []
+
+    def fake_collect(repo, exp_id):
+        collected.append(exp_id)
+        diffs = {
+            m["member_id"]: {"bytes": 40}
+            for m in exp_abcd.experiment_members(
+                json.loads((tmp_path / exp_id / "meta.json").read_text())
+            )
+        }
+        return {"exp_id": exp_id, "diffs": diffs}
+
+    def fake_evaluate(repo, spec_file, exp_id, evs, timeout=600):
+        evaluated.append(exp_id)
+        (tmp_path / exp_id / "eval-maps.json").write_text("{}")
+        return {"exp_id": exp_id, "evaluators": ["claude"], "objective_anchors": {"anchored": []}}
+
+    out = exp_abcd.followup(
+        max_experiments=2,
+        collect_fn=fake_collect,
+        evaluate_fn=fake_evaluate,
+        subject_lifecycle_fn=lambda *a, **kw: True,
+    )
+    assert sorted(collected) == ["legacy-exp", "v2-exp"], out
+    assert sorted(evaluated) == ["legacy-exp", "v2-exp"], out
+    assert out["eligible"] == 2, out
+    assert {row["exp_id"]: row["evaluated"] for row in out["processed"]} == {
+        "v2-exp": True,
+        "legacy-exp": True,
+    }, out
+    # Idempotent afterwards, by the same eval-maps.json contract the legacy path uses.
+    again = exp_abcd.followup(
+        max_experiments=2,
+        collect_fn=fake_collect,
+        evaluate_fn=fake_evaluate,
+        subject_lifecycle_fn=lambda *a, **kw: True,
+    )
+    assert again["processed"] == [] and again["eligible"] == 0, again
+
+
+def test_branch_recovery_resolves_the_v2_member_branch(tmp_path, monkeypatch) -> None:
+    """A reclaimed v2 worktree recovers from `exp/<exp_id>-<member_id>`, not `exp/<exp_id>-<agent>`.
+
+    `collect()` falls back to the shared per-repo branch store when the worktree is gone, and that
+    fallback is what keeps an aged experiment's evidence alive. It passed only the agent, so for a
+    v2 member it asked for a branch that cannot exist, read that as "the branch is gone", and
+    followup then wrote `followup-skip.json` -- marking evidence permanently lost while the commits
+    sat intact in the store.
+    """
+    import experiment_recovery
+
+    exp_id = "v2-recovery"
+    meta = _v2_meta(exp_id, exp_abcd.research_v2_arms(["codex"]))
+    member = exp_abcd.experiment_members(meta)[0]
+    edir = tmp_path / exp_id
+    edir.mkdir()
+    (edir / "meta.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+    # No worktree on disk -> the branch-recovery path is the one under test.
+    monkeypatch.setattr(exp_abcd.provision, "WORKTREES_DIR", tmp_path / "gone")
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setattr(experiment_recovery, "repo_store", lambda _repo: store)
+    asked: list[tuple] = []
+
+    def fake_git(_store, *args, timeout=None):
+        asked.append(args)
+        if args[0] == "rev-parse":
+            # Only the real member branch exists in the store.
+            return (
+                "sha\n"
+                if args[-1] == exp_abcd.exp_branch(exp_id, "codex", member["member_id"])
+                else ""
+            )
+        if args[0] == "merge-base":
+            return "mergebase\n"
+        return "diff --git a/x b/x\n"
+
+    monkeypatch.setattr(experiment_recovery, "_git", fake_git)
+    got = exp_abcd.collect("o/r", exp_id)
+    assert got["diffs"][member["member_id"]]["source"] == "branch", got
+    assert got["diffs"][member["member_id"]]["bytes"] > 0, got
+    branches = [args[-1] for args in asked if args[0] == "rev-parse"]
+    assert branches == [exp_abcd.exp_branch(exp_id, "codex", member["member_id"])], branches
+    assert exp_abcd.exp_branch(exp_id, "codex") not in branches, branches
+
+
 def test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy(tmp_path, monkeypatch) -> None:
     exp_id = "evaluate-v2"
     meta = _v2_meta(

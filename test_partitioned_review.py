@@ -519,8 +519,13 @@ def test_review_round_is_registered_as_one_subject_and_stamped_on_every_partitio
     assert info["registered"] is True, info
     expected_target = research_subjects.domain_target(plan["review_id"])
     assert info["round_id"] == f"{expected_target}:review-corpus:2026-08-22", info
-    # THE ARM SET IS THE AGENTS THAT DID THE WORK, in the order the round declared them.
-    assert info["arms"] == ["gemini", "cursor", "codex"], info
+    # THE ARM SET IS THE AGENTS THAT DID THE WORK -- and this invocation dispatched only gemini.
+    # `--round-agents gemini,cursor,codex` is a DECLARATION; cursor and codex have no round-bound
+    # attempt, so registering them would forge two arms of comparative evidence and could later
+    # hand this round's issue durability to an agent that reviewed nothing.
+    assert info["arms"] == ["gemini"], info
+    assert info["arms_unproven"] == ["cursor", "codex"], info
+    assert info["executing_agent"] == "gemini", info
 
     # Every partition offload carries the round, so the attempts join back to one subject.
     assert seen_rounds and all(r == info["round_id"] for r in seen_rounds), seen_rounds
@@ -542,9 +547,26 @@ def test_review_round_is_registered_as_one_subject_and_stamped_on_every_partitio
 
     # A ONE-AGENT ROUND IS ONE ARM. Padding it would make one opinion look like a panel's
     # agreement, so the default must never invent companions.
-    solo = review.register_review_round(plan, ["gemini"], date="2026-08-23")
+    solo = review.register_review_round(
+        plan, ["gemini"], date="2026-08-23", executing_agent="gemini"
+    )
     assert solo["arms"] == ["gemini"], solo
-    assert solo["subject_id"] != info["subject_id"], "arm set must change the subject identity"
+    # The same arm set on a later date is the SAME subject reached by a NEW round id: the date
+    # scopes the round, the arm set is what the identity is made of.
+    assert solo["subject_id"] == info["subject_id"], solo
+    assert solo["round_id"] != info["round_id"], solo
+    # AND A DIFFERENT ARM SET IS A DIFFERENT SUBJECT, so two seats' rounds can never be averaged
+    # into one another.
+    other_seat = review.register_review_round(
+        plan, ["cursor"], date="2026-08-26", executing_agent="cursor"
+    )
+    assert other_seat["arms"] == ["cursor"], other_seat
+    assert other_seat["subject_id"] != info["subject_id"], "arm set must change subject identity"
+
+    # NO EXECUTING SEAT AND NO RECORDS IS NOT AN ARM SET. A fresh round with nothing dispatching
+    # and nothing recorded is pure declaration, which is the defect this test exists for.
+    nobody = review.register_review_round(plan, ["gemini", "cursor"], date="2026-08-27")
+    assert nobody == {"registered": False, "reason": "no agent actually did the work"}, nobody
 
     # Capture is SUBORDINATE to the review: a Brain failure is reported, never fatal, never silent.
     monkeypatch.setattr(
@@ -552,9 +574,72 @@ def test_review_round_is_registered_as_one_subject_and_stamped_on_every_partitio
         "record_research_round",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("brain offline")),
     )
-    broken = review.register_review_round(plan, ["gemini"], date="2026-08-24")
+    broken = review.register_review_round(
+        plan, ["gemini"], date="2026-08-24", executing_agent="gemini"
+    )
     assert broken["registered"] is False
     assert "brain offline" in broken["reason"], broken
+
+
+def test_multi_agent_arm_set_is_admitted_only_on_a_round_bound_attempt(tmp_path, monkeypatch):
+    """A declared arm is not an arm. `run_plan` dispatches every partition to ONE agent.
+
+    `--agent gemini --round-agents gemini,cursor` registered a two-arm subject in which cursor had
+    no round-bound attempt at all -- false comparative evidence, and a path for
+    `resolve_round_durability` to hand an issue's durability to an agent that never reviewed
+    anything. So the round is REGISTERED FROM RECORDS: the agent being dispatched, plus whoever
+    already has a run bound to this round, plus whoever was already registered on it.
+
+    The three cases below are the three the reviewer named -- dropped, correctly scheduled, and
+    never shrinking -- because a set that shrank would make `record_finding_issue` start refusing
+    the other seats' real findings.
+    """
+    import feedback
+    import research_subjects
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    plan = review.partition_corpus(
+        _corpus([_item("CW-81", "source-pr-81")]), max_items=1, max_prompt_chars=12_000
+    )
+    round_id = research_subjects.research_round_id(
+        research_subjects.domain_target(plan["review_id"]), "review-corpus", "2026-08-25"
+    )
+
+    # 1. DROPPED: cursor is declared but nothing records it working this round.
+    first = review.register_review_round(
+        plan, ["gemini", "cursor"], date="2026-08-25", executing_agent="gemini"
+    )
+    assert first["arms"] == ["gemini"], first
+    assert first["arms_unproven"] == ["cursor"], first
+    assert research_subjects.round_arm_evidence(round_id)["registered"] == ["gemini"], round_id
+
+    # 2. CORRECTLY SCHEDULED: cursor really works the round, so its own invocation registers both.
+    # This is exactly what `dispatcher.offload(research_round=...)` writes for each partition.
+    feedback.record_run(
+        "offload:cursor:1", "offload:/tmp/cursor", "review", "cursor", experiment_id=round_id
+    )
+    second = review.register_review_round(
+        plan, ["gemini", "cursor"], date="2026-08-25", executing_agent="cursor"
+    )
+    assert second["arms"] == ["gemini", "cursor"], second
+    assert second["arms_unproven"] == [], second
+
+    # 3. NEVER SHRINKS: a resumed single-seat run keeps the seats already bound to the round.
+    resumed = review.register_review_round(
+        plan, ["gemini"], date="2026-08-25", executing_agent="gemini"
+    )
+    assert sorted(resumed["arms"]) == ["cursor", "gemini"], resumed
+
+    # And the arm set the round ends up with is the one `record_finding_issue` validates against,
+    # so both real seats can file and a third agent cannot.
+    identity = research_subjects.round_identity(round_id)
+    research_subjects.record_finding_issue(
+        round_id, "stranske/Repo#41", arm="cursor", identity=identity
+    )
+    with pytest.raises(ValueError, match="arm_not_in_subject_set"):
+        research_subjects.record_finding_issue(
+            round_id, "stranske/Repo#42", arm="codex", identity=identity
+        )
 
 
 def test_audit_round_inherits_downstream_durability_and_never_infers_it(tmp_path, monkeypatch):
