@@ -276,7 +276,11 @@ safety switch, not dead code.
   `kind`. No dispatch through this door. A decline is append-only evidence and never a verdict: it
   cannot reach the usefulness posterior, because the capability did not run. Only the kinds that
   indict a binding (`wrong_match`, `scope_too_small`) can propose a demotion — a correct match with
-  nowhere to land is recorded and never counted against the capability.
+  nowhere to land is recorded and never counted against the capability. `capability_advice` also
+  takes `repo_path`, a checkout of the repository under discussion, which lets a capability's
+  declared precondition (`applies_to: self | audited_repo | both`, or a named repo fact such as
+  "does this repo have an observable surface at all") actually be EVALUATED. A failed precondition
+  is explained and never enforced: the offer keeps its place in the list.
 - **Cadence resilience** — failing daily/weekly steps back off (`.fail-<step>` stamps,
   `ORCH_CADENCE_RETRY_HOURS`) and ALERT after N consecutive failures instead of retrying hourly.
 - **Per-step kill switch** — `ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"` (comma or space

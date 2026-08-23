@@ -276,12 +276,18 @@ def _annotate_contraindications(entries: list[dict], repository: str) -> list[st
 
 def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str = "",
            record: bool = True, path=None, context: dict | None = None,
-           surface: str = "") -> dict:
+           surface: str = "", repo_path: str = "") -> dict:
     """Should the Orchestrator be used for this task, and which capabilities apply?
 
     `skill` names the skill that surfaced this work, if any; it is recorded with each match so the
     skill -> capability association can be LEARNED rather than declared. `record=False` makes the
     call a pure query (used by tests and by dry inspection).
+
+    `repo_path` is a checkout of `repository`, when the caller has one. It is the input that lets a
+    declared repo-fact precondition actually be EVALUATED rather than merely stated — the defect
+    three audit rounds hit was a conditional binding reason ("when observable surfaces exist") that
+    nothing could even attempt to check. Absent it, such a precondition reports UNEVALUATED with the
+    missing input named. It never guesses, and it never withholds or reorders the offer.
     """
     caps = capabilities.load(path or capabilities.REG)
 
@@ -302,6 +308,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
             "bound_count": 0, "bound_capabilities": [], "not_applicable": [],
             "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
                          "by_entry_mode": {}},
+            "precondition": _annotate_preconditions([], repository, repo_path),
             "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
         }
 
@@ -320,6 +327,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
                         "bound_only": True, "binding_reason": why,
                         "entrypoint": caps[cid].get("entrypoint"), **_usability(caps[cid])}
                        for cid, why in live]
+            precondition = _annotate_preconditions(entries, repository, repo_path)
             try:
                 import capability_propensity
                 entries = capability_propensity.rank(entries, path=path)
@@ -342,6 +350,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
                 "dispatch_ready_count": sum(1 for e in entries if e["dispatch_ready"]),
                 "bound_count": len(live), "bound_capabilities": sorted(c for c, _ in live),
                 "not_applicable": [],
+                "precondition": precondition,
                 "coverage": {"ledger_count": len(caps), "matched": len(entries),
                              "not_applicable": 0, "by_entry_mode": {}},
                 "reason": (f"could not classify this task, but {len(live)} capability(ies) are "
@@ -370,6 +379,7 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
             "not_applicable": [],
             "surface": (surface or skill) or None,
             "bound_count": 0, "bound_capabilities": [],
+            "precondition": _annotate_preconditions([], repository, repo_path),
             "coverage": {"ledger_count": len(caps), "matched": 0, "not_applicable": 0,
                          "by_entry_mode": {}},
             "reason": ("could not classify this task into any work type the fleet records; "
@@ -453,6 +463,12 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
             entry["bound"] = entry["capability_id"] in bound
             if entry["bound"]:
                 entry["binding_reason"] = bound[entry["capability_id"]]
+    # PRECONDITIONS. Pure annotation: this adds a verdict and a reason to each entry and changes
+    # neither the SET nor the ORDER. That restraint is the finding, not an oversight — the same
+    # capability that was noise on two frontend-less repositories produced the highest
+    # evidence-to-effort finding of a third audit on a repository that has a display surface, so two
+    # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
+    precondition = _annotate_preconditions(matched, repository, repo_path)
     try:
         import capability_propensity
         matched = capability_propensity.rank(matched, path=path)
@@ -496,6 +512,11 @@ def advise(text: str, *, repository: str = "", lane: str = "opener", skill: str 
         "bound_count": len(bound),
         "bound_capabilities": sorted(bound),
         "not_applicable": not_applicable,
+        # THE AXIS, reported rather than acted on. `unmet` names what was offered anyway and can now
+        # be dismissed in one line instead of investigated — the cost three audit rounds actually
+        # paid. `unevaluated` names what could not be checked AND the input that was missing, so
+        # "nothing failed" and "nothing was checked" can never read alike.
+        "precondition": precondition,
         "coverage": {
             "ledger_count": len(caps),
             "matched": len(matched),
@@ -871,6 +892,317 @@ def _promoted_bindings(surface: str, *, path=None) -> dict[str, str]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# THE `applies_to` AXIS, AND PRECONDITIONS GENERALLY — evaluate the condition; do not weaken the
+# binding.
+#
+# WHY, from three independent audit rounds on 2026-08-23 which between them ruled out the obvious fix:
+#
+#   * FALSE POSITIVE. `frontend-verifier` was offered at `repo-audit:phase-2` and
+#     `repo-audit:dimension-4` on two repositories with no application UI at all. Its own binding
+#     reason is CONDITIONAL — "dimension 4 uses the ux-review-overlay WHEN OBSERVABLE SURFACES
+#     EXIST" — and the condition lived in prose that nothing read.
+#   * FALSE NEGATIVE, the mirror image. `capability:reference-sync-hygiene-test-gate` was filtered
+#     out as not-applicable during an audit OF SYNC HYGIENE. Both rounds diagnosed one cause: the
+#     capability is scoped to the Orchestrator's own runtime while the audit target is another repo,
+#     and `repo-audit:dimension-8` was the clearest case — four well-chosen capabilities whose
+#     concepts transferred to the audited repo and whose INSTRUMENTS did not.
+#   * AND THE REFUTATION, which is why this annotates instead of suppressing. On a third repo, one
+#     that does have a display surface, `frontend-verifier` was READY on its first `--doctor` call
+#     and produced the finding with the highest evidence-to-effort ratio of that audit — a provenance
+#     banner promising "every number below was measured on your Mac" three lines above fabricated
+#     grant scope, which the code-reading path had already missed. Its propensity moved off the floor
+#     onto real positive evidence. That round's own conclusion: "removing or down-weighting the
+#     binding on the strength of the two negative observations alone would have cost this audit its
+#     second-strongest finding."
+#
+# SO THIS AXIS CHANGES NO ORDER AND NO MEMBERSHIP. It turns "investigate this offer in order to find
+# out that it cannot apply" into "dismiss it in one line" — which is the cost those rounds actually
+# paid — and where the precondition HOLDS the capability is offered exactly as it was before.
+#
+# DEFAULT IS CONSERVATIVE, AND THAT IS THE WHOLE DESIGN. An UNDECLARED capability behaves exactly as
+# it did before this axis existed: `precondition_met` is None, no note. So the 43 existing
+# capabilities are not silently reclassified, and the set that DOES declare is a diffable table
+# rather than a heuristic. A consult naming no repository is `unknown` and never a mismatch either;
+# widening what can be ANSWERED must never widen what is ASSUMED.
+#
+# LATCHED-GATE ANSWERS. A precondition gates how an offer READS, never whether it is made:
+#   1. WHAT DECREMENTS IT? Nothing needs to. A capability whose precondition does not hold is still
+#      returned, ranked identically, selectable, and able to earn a trigger or a classified decline —
+#      which are the evidence that would correct the declaration.
+#   2. CAN THE DRAIN RUN WHILE CLOSED? There is nothing to drain, because nothing is withheld. A
+#      concealed or down-ranked capability could not earn the evidence that would un-conceal it, and
+#      that starvation is exactly the false negative above — and on the third repo it would have cost
+#      a real finding.
+#   3. SAME WINDOW BOTH WAYS? No window exists: a declaration evaluated per consult from the
+#      consult's own inputs. There is no counter that can drift.
+#
+# AND IT NAMES THE DECLINE KIND IT IMPLIES (`precondition_unmet`), which
+# `capability_propensity.DECLINE_KINDS` marks NON-DEMOTABLE on purpose. The two halves have to agree:
+# an axis that explained a mismatch while the ledger quietly demoted the binding for it would be the
+# forbidden correction taking the long way round.
+#
+# DEDUP (CLAUDE.md §0, checked against the tip before writing this). `_annotate_contraindications` +
+# `repo_knowledge.contraindications_for` ALREADY annotate a candidate the repository's own record says
+# does not work there, and they cover the `frontend-verifier`-against-a-Streamlit-SPA case exactly.
+# This is NOT a second copy of that, and the two must not become one:
+#
+#   * A CONTRAINDICATION is a RECORDED, per-(repo, capability) human judgement — "broken against THIS
+#     app" — read from the repo registry. It is per-REPO on purpose, and it ranks last within its
+#     partition, because a recorded judgement about one app is high-confidence and should not lead.
+#   * A PRECONDITION is an INTRINSIC, per-capability declaration evaluated per consult — "acts on the
+#     Orchestrator's own runtime", "needs an observable surface at all". `switch-review` is
+#     Orchestrator-scoped for EVERY audited repo, so expressing it as a contraindication would mean a
+#     hand-written note in all 13 repo records: an N x M table nobody maintains, which is the
+#     parallel-inventory defect this project forbids. And the Workflows false positive happened
+#     precisely BECAUSE no note existed; a mechanism that requires someone to have written the note
+#     cannot catch the case where nobody did.
+#
+# So: recorded-and-per-repo ranks last; declared-and-derived only annotates. A capability can be both,
+# and both reach the caller — the selftest pins that, because silently letting one shadow the other is
+# how two mechanisms become one broken one.
+# ---------------------------------------------------------------------------
+
+APPLIES_SELF = "self"
+APPLIES_AUDITED_REPO = "audited_repo"
+APPLIES_BOTH = "both"
+APPLIES_TO_VALUES = (APPLIES_SELF, APPLIES_AUDITED_REPO, APPLIES_BOTH)
+# What a consult with no `repository` targets. NOT `self`: guessing would make every bare consult
+# report mismatches against `audited_repo` capabilities, which is reclassification by default.
+TARGET_UNKNOWN = "unknown"
+
+# This repository, as the fleet names it. A consult whose `repository` is this one is about the
+# Orchestrator's own runtime; any OTHER named repository is a repo under audit.
+SELF_REPOSITORY = "stranske/Orchestrator"
+
+# THE DECLARED SET. Committed and diffable like `SURFACE_BINDINGS`, and every entry cites the audit
+# row that establishes it. Absence is the default and is not an omission: a capability never observed
+# to care about the distinction should not be given an opinion about it.
+#
+#   `applies_to` — which SYSTEM it acts on. Evaluable from `repository` alone.
+#   `requires`   — a named one-time repo FACT from `REPO_FACT_PROBES`, evaluated against a checkout
+#                  when the caller supplies `repo_path`, and reported as UNEVALUATED with the missing
+#                  input NAMED when it does not. That naming is the fix: the defect was a condition
+#                  nothing could even attempt to check.
+CAPABILITY_PRECONDITIONS: dict[str, dict] = {
+    # Workflows consult #10 (`repo-audit:dimension-8`): "switch_review.py audits ORCHESTRATOR
+    # switches, and the gate under audit is config/template-drift-allowlist.txt in another repo. ...
+    # Same for the two capability monitors. The concepts transferred; the instruments did not."
+    # Independently reproduced by the Fine-Art-Archive round, 4 declines in one run:
+    # "Orchestrator-side monitor, and the task forbids touching that repo."
+    "switch-review": {"applies_to": APPLIES_SELF},
+    "capability-activation-audit": {"applies_to": APPLIES_SELF},
+    "capability-firing-monitor": {"applies_to": APPLIES_SELF},
+    # Same rows; and it reads this instance's own ledger by construction.
+    "capability-propensity": {"applies_to": APPLIES_SELF},
+    # Workflows consult #8 (`dimension-6`): "feature_scan.py reports reusable structures IN THE
+    # ORCHESTRATOR'S OWN REGISTRY ... Wrong repository, right concept."
+    "feature-scan": {"applies_to": APPLIES_SELF},
+    # Gate 1 drives the AUDITED repo's application surface, never this tool's — and its condition is
+    # that such a surface exists. This is the capability the whole axis is about, and the declaration
+    # makes "no observable surface here" a one-line dismissal WITHOUT touching a binding that earned
+    # a real finding on the repo where the condition held.
+    "frontend-verifier": {"applies_to": APPLIES_AUDITED_REPO, "requires": "observable_surface"},
+    # `both` is behaviourally identical to undeclared. It is here to record that the most-offered
+    # capability in the catalogue was CONSIDERED, not overlooked: one round declined it at nine
+    # surfaces and another used it successfully against an audited repo.
+    "offload": {"applies_to": APPLIES_BOTH},
+}
+
+
+def applies_to(capability_id: str) -> str | None:
+    """The declared system this capability acts on, or None when it declares none."""
+    return (CAPABILITY_PRECONDITIONS.get(capability_id) or {}).get("applies_to")
+
+
+def required_repo_fact(capability_id: str) -> str | None:
+    """The named repo fact this capability requires, or None."""
+    return (CAPABILITY_PRECONDITIONS.get(capability_id) or {}).get("requires")
+
+
+def consult_target(repository: str) -> str:
+    """What this consult is about: `self`, `audited_repo`, or `unknown` when no repo was named."""
+    repo = str(repository or "").strip()
+    if not repo:
+        return TARGET_UNKNOWN
+    return APPLIES_SELF if repo == SELF_REPOSITORY else APPLIES_AUDITED_REPO
+
+
+# ---- REPO FACTS. Deterministic probes over a checkout, so the answer is EVIDENCE rather than a
+# guess: each returns the markers it matched, and a wrong verdict is inspectable instead of silent. A
+# bare boolean from a heuristic is how the false positive this replaces got believed in the first
+# place. Validated against the three repositories the audits actually ran on: false for the two with
+# no application UI (and for this repository), true for the Streamlit SPA and for the one with
+# `src/fine_art_archive/ui/index.html` — which are exactly the two negative and one positive
+# observations on record.
+
+_SURFACE_SKIP_DIRS = frozenset({
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache",
+    "docs", "site", ".github", "htmlcov", "build", "dist", ".mypy_cache", "coverage", ".tox",
+    ".eggs", "vendor", "third_party", "examples", "fixtures",
+})
+# `docs/` and `site/` are skipped deliberately: a generated API-docs tree is full of HTML and is not
+# an application surface. Counting it is precisely what would turn this probe back into the false
+# positive it exists to remove.
+_SURFACE_FRAMEWORKS = ("streamlit", "flask", "fastapi", "django", "dash", "gradio", "panel",
+                       "nicegui")
+_SURFACE_DEP_FILES = frozenset({
+    "pyproject.toml", "requirements.txt", "requirements-dev.txt", "package.json", "setup.cfg",
+    "Pipfile", "environment.yml",
+})
+_SURFACE_COMPONENT = re.compile(r"\.(jsx|tsx|vue|svelte)$")
+# Bounded on both axes, so a probe can never become the expensive part of an advisory call: it stops
+# at the first few markers and gives up rather than walking an unbounded tree.
+_SURFACE_MAX_MARKERS = 6
+_SURFACE_MAX_FILES = 40000
+
+
+def detect_observable_surface(root) -> dict:
+    """Does this checkout contain an application surface a browser could drive?
+
+    A ONE-TIME REPO FACT, in the audit's own words, not a per-task classification. `observable` is
+    None when there is nothing to look at — never False, because "no checkout" and "no surface" are
+    opposite findings and conflating them would re-create the defect in the other direction.
+    """
+    import os
+    import pathlib as _pathlib
+    base = _pathlib.Path(str(root)).expanduser()
+    if not base.is_dir():
+        return {"observable": None, "markers": [],
+                "detail": f"no readable checkout at {str(root)!r}"}
+    markers: list[str] = []
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames
+                       if d not in _SURFACE_SKIP_DIRS and not d.startswith(".")]
+        for name in filenames:
+            seen += 1
+            if seen > _SURFACE_MAX_FILES:
+                return {"observable": bool(markers), "markers": markers, "truncated": True,
+                        "detail": f"stopped after {_SURFACE_MAX_FILES} files"}
+            rel = os.path.relpath(os.path.join(dirpath, name), base)
+            low = name.lower()
+            if low.endswith((".html", ".htm")):
+                markers.append(f"html:{rel}")
+            elif _SURFACE_COMPONENT.search(low):
+                markers.append(f"component:{rel}")
+            elif name in _SURFACE_DEP_FILES:
+                try:
+                    text = _pathlib.Path(dirpath, name).read_text(errors="ignore")[:200000].lower()
+                except OSError:
+                    continue
+                for framework in _SURFACE_FRAMEWORKS:
+                    if re.search(rf"(?<![a-z]){framework}(?![a-z])", text):
+                        markers.append(f"dependency:{framework}:{rel}")
+            if len(markers) >= _SURFACE_MAX_MARKERS:
+                return {"observable": True, "markers": markers,
+                        "detail": f"{len(markers)} surface marker(s) found"}
+    return {"observable": bool(markers), "markers": markers,
+            "detail": (f"{len(markers)} surface marker(s) found" if markers else
+                       "no HTML entrypoint, UI component or web-framework dependency found")}
+
+
+REPO_FACT_PROBES = {"observable_surface": detect_observable_surface}
+
+
+def evaluate_precondition(capability_id: str, *, repository: str = "", repo_path: str = "",
+                          facts: dict | None = None) -> dict:
+    """Does this capability's declared precondition hold for this consult?
+
+    THREE-VALUED, and that is load-bearing. True and False are verdicts; None means NOT EVALUATED —
+    the capability declares nothing, or the consult named no repository, or a repo fact needs a
+    checkout nobody supplied. Collapsing None into False would silently reclassify the whole
+    catalogue; collapsing it into True would restore the original defect, a condition never checked.
+
+    `facts` is a per-call memo, so one probe answers for every candidate in one advisory call.
+    """
+    declared = applies_to(capability_id)
+    needs = required_repo_fact(capability_id)
+    target = consult_target(repository)
+    out = {"applies_to": declared, "scope_target": target, "scope_match": None,
+           "requires": needs, "requirement_met": None, "requirement_evidence": None,
+           "precondition_met": None, "precondition_note": None, "unevaluated_because": []}
+
+    if declared is not None:
+        if target == TARGET_UNKNOWN:
+            out["unevaluated_because"].append(
+                f"applies_to={declared!r} needs a `repository`, and none was named")
+        else:
+            out["scope_match"] = declared in (APPLIES_BOTH, target)
+            if not out["scope_match"]:
+                where = ("the Orchestrator's own runtime" if target == APPLIES_SELF
+                         else f"the repository under audit, {str(repository)!r}")
+                out["precondition_note"] = (
+                    f"declared applies_to={declared!r} but this consult targets {where} — the "
+                    f"concept may transfer; the instrument does not")
+
+    if needs:
+        probe = REPO_FACT_PROBES.get(needs)
+        if probe is None:
+            out["unevaluated_because"].append(f"no probe is registered for {needs!r}")
+        elif not repo_path:
+            out["unevaluated_because"].append(
+                f"{needs!r} is a one-time repo fact and needs `repo_path`, a checkout to look at")
+        else:
+            memo = facts if facts is not None else {}
+            key = (needs, str(repo_path))
+            if key not in memo:
+                try:
+                    memo[key] = probe(repo_path)
+                except Exception as exc:                                   # noqa: BLE001
+                    memo[key] = {"observable": None, "markers": [],
+                                 "detail": f"probe failed: {type(exc).__name__}"}
+            result = memo[key]
+            value = result.get("observable")
+            out["requirement_met"] = None if value is None else bool(value)
+            out["requirement_evidence"] = result
+            if value is None:
+                out["unevaluated_because"].append(f"{needs!r}: {result.get('detail')}")
+            elif not value:
+                out["precondition_note"] = (
+                    f"requires {needs} and this repository has none: {result.get('detail')} — "
+                    f"dismissible without investigating it")
+
+    verdicts = [v for v in (out["scope_match"], out["requirement_met"]) if v is not None]
+    out["precondition_met"] = all(verdicts) if verdicts else None
+    # THE DECLINE KIND THIS IMPLIES, handed to the caller so the RIGHT correction gets recorded.
+    # `capability_propensity` marks `precondition_unmet` non-demotable on purpose: the fix is to
+    # evaluate the condition, never to unbind a capability that fires where the condition holds.
+    out["suggested_decline_kind"] = ("precondition_unmet" if out["precondition_met"] is False
+                                     else None)
+    return out
+
+
+def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str) -> dict:
+    """Stamp every entry with its precondition verdict. ORDER AND MEMBERSHIP ARE UNTOUCHED.
+
+    Returns a summary: which capabilities declared a precondition, which failed it, and which could
+    not be evaluated with the inputs this consult supplied. All three populations are reported,
+    because "nothing failed" and "nothing was checked" must never look alike — that identity IS the
+    original defect, one level up.
+    """
+    facts: dict = {}
+    declared, unmet, unevaluated = [], [], {}
+    for entry in entries:
+        verdict = evaluate_precondition(entry["capability_id"], repository=repository,
+                                        repo_path=repo_path, facts=facts)
+        entry.update(verdict)
+        if verdict["applies_to"] or verdict["requires"]:
+            declared.append(entry["capability_id"])
+        if verdict["precondition_met"] is False:
+            unmet.append(entry["capability_id"])
+        if verdict["unevaluated_because"]:
+            unevaluated[entry["capability_id"]] = list(verdict["unevaluated_because"])
+    return {"repository": repository, "target": consult_target(repository),
+            "repo_path": repo_path or None, "declared": sorted(declared), "unmet": sorted(unmet),
+            "unevaluated": dict(sorted(unevaluated.items())),
+            "declared_capabilities": sorted(CAPABILITY_PRECONDITIONS),
+            "note": ("a failed precondition is REPORTED, never enforced: the capability is offered "
+                     "and ranked exactly as it would be without this axis, because a binding that "
+                     "fires where the condition holds must not be weakened by the cases where it "
+                     "does not")}
+
+
 def experiment_id(task: str) -> str:
     """The natural-experiment id for this task text.
 
@@ -1018,6 +1350,20 @@ def format_advice(a: dict) -> str:
                      else f"    next step:  {cap['next_step']}")
         if cap.get("entered_directly"):
             lines.append("    note:       entered directly in code — not routed by task type")
+        if cap.get("contraindicated"):
+            # A recorded per-repo gotcha that only appears under `--json` is prose nothing reads,
+            # which is the defect one level up. Print it where a reader will see it.
+            lines.append(f"    CONTRAINDICATED HERE: {cap.get('contraindication_reason')}")
+            if cap.get("use_instead"):
+                lines.append(f"    use instead:          {cap['use_instead']}")
+        if cap.get("precondition_note"):
+            lines.append(f"    PRECONDITION NOT MET: {cap['precondition_note']}")
+            lines.append(f"    if you decline:       record kind "
+                         f"{cap.get('suggested_decline_kind')!r} — it never counts against the "
+                         f"binding")
+        elif cap.get("unevaluated_because"):
+            lines.append("    precondition unevaluated: "
+                         + "; ".join(cap["unevaluated_because"]))
     return "\n".join(lines) + "\n"
 
 
@@ -1415,6 +1761,249 @@ def _selftest_bindings() -> None:
           "an unbound match, filters retired, bound sets stay small)")
 
 
+def _selftest_preconditions() -> None:
+    """The `applies_to` axis EXPLAINS an offer and changes nothing about it.
+
+    The invariance assertion is the important one, and it is the coordinate the third audit round
+    forced: the identical capability that was noise on two frontend-less repositories produced the
+    highest evidence-to-effort finding of an audit on a repository that has a display surface. So
+    this axis may add a verdict and a reason, and may NOT change the returned SET or its ORDER.
+
+    Every assertion below was written by breaking it first:
+      * making a failed precondition drop or sink the entry -> caught by the invariance checks;
+      * treating an undeclared capability as a mismatch -> caught;
+      * treating an unnamed repository as `self` -> caught;
+      * treating `both` as a mismatch -> caught;
+      * conflating "no checkout" with "no surface" -> caught.
+    """
+    import tempfile
+    from pathlib import Path
+
+    # ---- PART 1: THE VOCABULARY AND THE TABLE, code vs code, no ledger. Runs on any machine.
+    for cap_id, spec in sorted(CAPABILITY_PRECONDITIONS.items()):
+        assert set(spec) <= {"applies_to", "requires"}, (cap_id, sorted(spec))
+        if "applies_to" in spec:
+            assert spec["applies_to"] in APPLIES_TO_VALUES, (cap_id, spec)
+        if "requires" in spec:
+            assert spec["requires"] in REPO_FACT_PROBES, (cap_id, spec)
+    assert CAPABILITY_PRECONDITIONS, "the declared set must not be empty, or nothing is evaluated"
+    # The three-way target, and the conservative default that keeps the axis from reclassifying.
+    assert consult_target(SELF_REPOSITORY) == APPLIES_SELF
+    assert consult_target("stranske/Workflows") == APPLIES_AUDITED_REPO
+    for blank in ("", "   ", None):
+        assert consult_target(blank) == TARGET_UNKNOWN, blank
+
+    # UNDECLARED IS UNTOUCHED: this is the "does not silently reclassify the 43" guarantee.
+    v = evaluate_precondition("no-such-capability", repository="stranske/Workflows")
+    assert v["applies_to"] is None and v["requires"] is None, v
+    assert v["precondition_met"] is None and v["precondition_note"] is None, v
+    assert v["unevaluated_because"] == [] and v["suggested_decline_kind"] is None, v
+
+    # A `self` instrument aimed at an audited repo: FALSE, with a reason, and the decline kind that
+    # `capability_propensity` treats as NON-DEMOTABLE. The two halves must agree or the axis explains
+    # a mismatch while the ledger quietly demotes the binding for it.
+    mism = evaluate_precondition("switch-review", repository="stranske/Workflows")
+    assert mism["scope_match"] is False and mism["precondition_met"] is False, mism
+    assert "the concept may transfer" in mism["precondition_note"], mism
+    assert mism["suggested_decline_kind"] == "precondition_unmet", mism
+    import capability_propensity
+    assert capability_propensity.DECLINE_KINDS[mism["suggested_decline_kind"]]["demotable"] is False
+
+    # Same instrument, this repository: TRUE.
+    assert evaluate_precondition("switch-review",
+                                 repository=SELF_REPOSITORY)["precondition_met"] is True
+    # `both` matches either target; declaring it is behaviourally identical to declaring nothing.
+    for repo in (SELF_REPOSITORY, "stranske/Workflows"):
+        assert evaluate_precondition("offload", repository=repo)["precondition_met"] is True, repo
+    # NO REPOSITORY NAMED must be UNEVALUATED, never a mismatch -- guessing `self` here would make
+    # every bare consult report failures against every `audited_repo` capability.
+    bare = evaluate_precondition("switch-review", repository="")
+    assert bare["scope_match"] is None and bare["precondition_met"] is None, bare
+    assert bare["unevaluated_because"] and "repository" in bare["unevaluated_because"][0], bare
+    assert bare["suggested_decline_kind"] is None, bare
+
+    # ---- PART 2: THE REPO FACT. A real probe over real trees, so the verdict is evidence.
+    with tempfile.TemporaryDirectory(prefix="surface-probe-") as td:
+        root = Path(td)
+        (root / "src").mkdir()
+        (root / "src" / "thing.py").write_text("x = 1\n")
+        (root / "docs").mkdir()
+        # A generated docs tree is FULL of HTML and is not an application surface. Counting it is
+        # exactly what would turn this probe back into the false positive it exists to remove.
+        (root / "docs" / "index.html").write_text("<html>api docs</html>")
+        none = detect_observable_surface(root)
+        assert none["observable"] is False, none
+        assert "no HTML entrypoint" in none["detail"], none
+        # ...now give it a real one.
+        (root / "src" / "index.html").write_text("<html><body>app</body></html>")
+        some = detect_observable_surface(root)
+        assert some["observable"] is True, some
+        assert any(m.startswith("html:") for m in some["markers"]), some
+        # A DEPENDENCY on a web framework counts, and the marker says which.
+        (root / "src" / "index.html").unlink()
+        (root / "pyproject.toml").write_text('dependencies = ["streamlit>=1.0"]\n')
+        dep = detect_observable_surface(root)
+        assert dep["observable"] is True and any("streamlit" in m for m in dep["markers"]), dep
+
+    # NO CHECKOUT is None, never False. "No checkout" and "no surface" are opposite findings, and
+    # conflating them would re-create the defect in the other direction.
+    absent = detect_observable_surface("/nonexistent/path/for/the/selftest")
+    assert absent["observable"] is None, absent
+    unev = evaluate_precondition("frontend-verifier", repository="stranske/X",
+                                 repo_path="/nonexistent/path/for/the/selftest")
+    assert unev["requirement_met"] is None, unev
+    assert unev["precondition_met"] is True, (
+        "a scope match with an UNEVALUATED repo fact must not become a failure", unev)
+    assert unev["unevaluated_because"], unev
+    # And with no `repo_path` at all, the MISSING INPUT IS NAMED. A condition nothing can attempt to
+    # check is the original defect; naming the input is the fix.
+    silent = evaluate_precondition("frontend-verifier", repository="stranske/X")
+    assert any("repo_path" in why for why in silent["unevaluated_because"]), silent
+
+    # ---- PART 3: WHAT A CALLER RECEIVES. Synthetic ledger, so this asserts the ANSWER on any
+    # machine rather than this instance's 43 rows -- asserting the table instead of the answer is how
+    # a suppression bug shipped one function over.
+    with tempfile.TemporaryDirectory(prefix="precond-advise-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        # NAMES CHOSEN SO A SINK IS OBSERVABLE. With no usefulness evidence every candidate carries
+        # the same propensity, so the tie-break is the capability id -- and the FIRST attempt at this
+        # fixture used `switch-review`, which is already LAST alphabetically. A break that sank a
+        # failing entry therefore changed nothing and stayed green. The failing capability must sort
+        # FIRST for the invariance assertion below to be able to fail.
+        for cid in ("aaa-self-only", "mmm-both", "zzz-undeclared"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        real = SURFACE_BINDINGS.get("t-precond")
+        real_pre = {k: dict(v) for k, v in CAPABILITY_PRECONDITIONS.items()}
+        SURFACE_BINDINGS["t-precond"] = {"aaa-self-only": "bound, self-scoped",
+                                         "mmm-both": "bound, both",
+                                         "zzz-undeclared": "bound, undeclared"}
+        CAPABILITY_PRECONDITIONS["aaa-self-only"] = {"applies_to": APPLIES_SELF}
+        CAPABILITY_PRECONDITIONS["mmm-both"] = {"applies_to": APPLIES_BOTH}
+        try:
+            task = "add unit tests for the retry helper"
+            got = advise(task, surface="t-precond", repository="stranske/Workflows",
+                         path=ledger, record=False)
+            ids = [m["capability_id"] for m in got["capabilities"]]
+            assert set(ids) >= {"aaa-self-only", "mmm-both", "zzz-undeclared"}, ids
+
+            # THE VERDICT REACHES THE CALLER, per entry.
+            sr = next(m for m in got["capabilities"] if m["capability_id"] == "aaa-self-only")
+            assert sr["precondition_met"] is False, sr
+            assert sr["suggested_decline_kind"] == "precondition_unmet", sr
+            assert "the concept may transfer" in sr["precondition_note"], sr
+            pt = next(m for m in got["capabilities"] if m["capability_id"] == "zzz-undeclared")
+            assert pt["precondition_met"] is None and pt["precondition_note"] is None, pt
+
+            # NO RANK PENALTY, asserted directly and not only by comparison: the capability whose
+            # precondition FAILED must still be FIRST, because that is where its propensity and its
+            # id put it. Any sink moves it, and this fails.
+            assert ids[0] == "aaa-self-only", (
+                "a failed precondition changed the position a caller receives; the axis may only "
+                f"annotate. order={ids}")
+
+            # AND THE SUMMARY BLOCK names all three populations, so "nothing failed" and "nothing
+            # was checked" cannot read alike.
+            block = got["precondition"]
+            assert block["target"] == APPLIES_AUDITED_REPO, block
+            assert block["unmet"] == ["aaa-self-only"], block
+            assert {"aaa-self-only", "mmm-both"} <= set(block["declared"]), block
+            assert "zzz-undeclared" not in block["declared"], block
+
+            # ---- THE INVARIANCE. Neither the SET nor the ORDER may differ from what the same call
+            # returns with the axis emptied. This is the assertion the third audit round demands:
+            # explain the mismatch, never down-weight the binding.
+            saved = {k: dict(v) for k, v in CAPABILITY_PRECONDITIONS.items()}
+            CAPABILITY_PRECONDITIONS.clear()
+            try:
+                without = advise(task, surface="t-precond", repository="stranske/Workflows",
+                                 path=ledger, record=False)
+            finally:
+                CAPABILITY_PRECONDITIONS.clear()
+                CAPABILITY_PRECONDITIONS.update(saved)
+            assert [m["capability_id"] for m in without["capabilities"]] == ids, (
+                "the applies_to axis changed the ORDER or the SET a caller receives; it may only "
+                f"annotate. with={ids} without={[m['capability_id'] for m in without['capabilities']]}")
+            assert without["bound_capabilities"] == got["bound_capabilities"], got
+            assert without["dispatch_ready_count"] == got["dispatch_ready_count"], got
+            # ...and the same for a classification MISS, which takes the other return branch.
+            miss_with = advise("xyzzy plugh frobnicate", surface="t-precond",
+                               repository="stranske/Workflows", path=ledger, record=False)
+            CAPABILITY_PRECONDITIONS.clear()
+            try:
+                miss_without = advise("xyzzy plugh frobnicate", surface="t-precond",
+                                      repository="stranske/Workflows", path=ledger, record=False)
+            finally:
+                CAPABILITY_PRECONDITIONS.clear()
+                CAPABILITY_PRECONDITIONS.update(saved)
+            assert ([m["capability_id"] for m in miss_with["capabilities"]]
+                    == [m["capability_id"] for m in miss_without["capabilities"]]), (
+                "the axis reordered the binding-only branch")
+            assert [m["capability_id"] for m in miss_with["capabilities"]][0] == "aaa-self-only", \
+                [m["capability_id"] for m in miss_with["capabilities"]]
+            assert miss_with["precondition"]["unmet"] == ["aaa-self-only"], miss_with["precondition"]
+
+            # EVERY return branch carries the key, so a caller can rely on it.
+            for probe in (advise("xyzzy plugh", path=ledger, record=False),
+                          advise(task, surface="repo-audit:phase-1", path=ledger, record=False)):
+                assert "precondition" in probe, sorted(probe)
+
+            # ---- THE TWO MECHANISMS ARE ORTHOGONAL AND BOTH REACH THE CALLER. A recorded per-repo
+            # CONTRAINDICATION ("broken against THIS app", ranks last) and a declared PRECONDITION
+            # ("acts on another system", annotates only) answer different questions, and letting one
+            # silently shadow the other is how two mechanisms become one broken one.
+            import json as _json
+            import repo_knowledge
+            registry = Path(td) / "repo_knowledge.json"
+            registry.write_text(_json.dumps(
+                {"schema_version": repo_knowledge.SEED_SCHEMA_VERSION,
+                 "repos": {"stranske/Workflows": {"summary": "s", "contraindications": [
+                     {"capability": "aaa-self-only",
+                      "reason": "recorded as broken against this repo",
+                      "instead": "do it by hand"}]}}}, indent=2) + "\n")
+            real_reg = repo_knowledge.REG
+            repo_knowledge.REG = registry
+            try:
+                both = advise(task, surface="t-precond", repository="stranske/Workflows",
+                              path=ledger, record=False)
+                row = next(m for m in both["capabilities"]
+                           if m["capability_id"] == "aaa-self-only")
+                # `.get`, not `[]`: a suppressed annotation must fail as a legible ASSERTION about
+                # the answer, not as a KeyError that reads like a crash.
+                assert row.get("contraindicated") is True, (
+                    "the precondition pass suppressed the recorded contraindication", row)
+                assert row.get("precondition_met") is False, row
+                assert row.get("contraindication_reason") and row.get("precondition_note"), row
+                # ONE DIRECTION IS ASSERTED AND THE OTHER IS STRUCTURAL. `_annotate_preconditions`
+                # runs BEFORE `_annotate_contraindications` on both answer paths, so a precondition
+                # pass cannot see (and therefore cannot suppress) a contraindication that has not
+                # been stamped yet. Saying so beats asserting it: a break in that direction cannot
+                # be written, and an assertion that cannot fail is decoration.
+                assert both["contraindicated"] == ["aaa-self-only"], both["contraindicated"]
+                assert both["precondition"]["unmet"] == ["aaa-self-only"], both["precondition"]
+                # Still OFFERED: neither mechanism conceals.
+                assert "aaa-self-only" in [m["capability_id"] for m in both["capabilities"]]
+                # And BOTH reasons reach a human reader, not only the JSON.
+                text = format_advice(both)
+                assert "CONTRAINDICATED HERE" in text and "PRECONDITION NOT MET" in text, text
+            finally:
+                repo_knowledge.REG = real_reg
+        finally:
+            if real is None:
+                SURFACE_BINDINGS.pop("t-precond", None)
+            else:
+                SURFACE_BINDINGS["t-precond"] = real
+            CAPABILITY_PRECONDITIONS.clear()
+            CAPABILITY_PRECONDITIONS.update(real_pre)
+    print("capability_advisor precondition selftest: OK (applies_to explains an offer and changes "
+          "neither the set nor the order; undeclared and unevaluated are never failures)")
+
+
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
@@ -1577,6 +2166,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--lane", default="opener")
     ap.add_argument("--surface", default="",
                     help="the skill or automation asking (e.g. closer-lane); selects its declared binding")
+    ap.add_argument("--repo-path", default="",
+                    help="a checkout of --repository, if you have one; lets a declared repo-fact "
+                         "precondition (e.g. frontend-verifier's observable surface) actually be "
+                         "EVALUATED instead of reported as unevaluated")
     ap.add_argument("--context", default="",
                     help='JSON of trigger context you actually know, e.g. '
                          '\'{"closer_gate":"high_stakes_review"}\'')
@@ -1588,13 +2181,14 @@ def main(argv: list[str]) -> int:
         _selftest_front_door()
         _selftest_bindings()
         _selftest_contraindications()
+        _selftest_preconditions()
         _selftest_reach()
         return 0
     if not args.task:
         ap.error("give the task in plain words, or use --selftest")
     result = advise(" ".join(args.task), repository=args.repository, lane=args.lane,
                     context=json.loads(args.context) if args.context else None,
-                    surface=args.surface)
+                    surface=args.surface, repo_path=args.repo_path)
     print(json.dumps(result, indent=2) if args.json else format_advice(result), end="")
     return 0
 

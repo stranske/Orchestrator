@@ -86,6 +86,16 @@ TOOLS = [
                                            "answers even when the task wording does not classify. "
                                            "A long multi-phase process should pass its phase, "
                                            "because the capabilities that apply differ per phase."},
+                "repo_path": {"type": "string",
+                              "description": "an absolute path to a checkout of `repository`, if "
+                                             "you have one. Lets a capability's declared repo-fact "
+                                             "precondition actually be EVALUATED — e.g. whether "
+                                             "this repository has an observable surface at all, "
+                                             "which is what frontend-verifier requires. Without it "
+                                             "the answer says the precondition was NOT EVALUATED "
+                                             "and names this field as the missing input; it never "
+                                             "guesses, and a failed precondition never withholds "
+                                             "or reorders the offer."},
                 "previous": {"type": "object",
                              "description": "the prior capability_advice result; when supplied, the "
                                             "response adds reask{} saying whether the work has "
@@ -233,6 +243,9 @@ def _call_tool(name: str, args: dict):
             # Without this the declared binding is unreachable from the MCP tool, which is the only
             # way the skills call the advisor -- the callers would name a surface nothing read.
             surface=str(args.get("surface") or ""),
+            # Same rule for the precondition input: a declared condition the caller cannot supply an
+            # answer for is a condition nothing evaluates, which is the defect being fixed.
+            repo_path=str(args.get("repo_path") or ""),
         )
         previous = args.get("previous")
         if isinstance(previous, dict):
@@ -358,6 +371,16 @@ def _selftest_advice_schema_matches_advise() -> None:
     assert not missing, (
         f"capability_advice does not advertise {missing}, so a caller setting them is silently "
         f"ignored. Add them to the inputSchema AND pass them through in _call_tool.")
+
+    # ADVERTISED IS NOT FORWARDED, read off the AST of the handler's own `advise(...)` call. The
+    # spot-check below covers `surface`; this covers EVERY caller-settable field at once, so the next
+    # parameter cannot be advertised and dropped. Containment rather than equality: the tool also
+    # advertises `previous`, which drives `should_reask` and is deliberately not an `advise()` field.
+    forwarded = _forwarded_args(_call_tool, "advise")
+    unforwarded = sorted((callable_kw | {"task"}) - forwarded)
+    assert not unforwarded, (
+        f"capability_advice advertises {unforwarded} and never passes them to advise(); the request "
+        f"succeeds and the field vanishes, which is exactly the failure this selftest exists for.")
 
     # ...and advertised is not enough: it must actually be FORWARDED. Assert the FORWARDING, never
     # which capabilities come back -- `advise()` only returns bound capabilities that exist in the

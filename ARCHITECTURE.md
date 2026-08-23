@@ -167,7 +167,7 @@ are ordered by when each starts working:
 
 | Layer | Mechanism | Works from |
 |---|---|---|
-| 1 | `capability_advisor.SURFACE_BINDINGS` — declared, per surface, 3–7 entries, each with its reason | day one; no classifier, no history |
+| 1 | `capability_advisor.SURFACE_BINDINGS` — declared, per surface, 3–7 entries, each with its reason; plus `CAPABILITY_PRECONDITIONS`, which explains an offer without changing it | day one; no classifier, no history |
 | 2 | `capability_propensity.rank` — orders *within* the bound set by measured usefulness | first resolved trials |
 | 3 | `capability_advisor.learned_associations` — corrects the table from what a surface actually reaches for | once observations accumulate |
 
@@ -191,6 +191,43 @@ consult actually lands on. It follows the same two rules as binding: it **annota
 (a concealed candidate can never earn the evidence that would clear it), and it is **data, not prose**.
 It is deliberately **repo-scoped rather than surface-scoped**: a demotion learned here would unbind
 the capability for every other repo, which is the wrong granularity for "broken against this one app".
+
+**And a fifth input, which is NOT that one: the capability's own declared PRECONDITION**
+(`applies_to: self | audited_repo | both`, plus named one-time repo facts —
+`capability_advisor.CAPABILITY_PRECONDITIONS`). The distinction matters and the two must not merge. A
+*contraindication* is a **recorded, per-(repo, capability) human judgement** — "broken against THIS
+app" — and it ranks last within its partition because a recorded judgement is high-confidence. A
+*precondition* is an **intrinsic, per-capability declaration evaluated per consult** — "acts on the
+Orchestrator's own runtime", "needs an observable surface at all" — and it only annotates.
+`switch-review` is Orchestrator-scoped for *every* audited repo, so expressing it as a
+contraindication would mean a hand-written note in all thirteen repo records: an N×M table nobody
+maintains. And the `frontend-verifier`-on-`Workflows` false positive happened *because* no note
+existed, so a mechanism that requires someone to have written one cannot catch the case where nobody
+did.
+Three audit rounds on 2026-08-23 hit the same defect from both sides. `frontend-verifier` was offered
+to two repositories with no application UI, its binding reason conditional — "when observable surfaces
+exist" — in prose nothing read; and `capability:reference-sync-hygiene-test-gate` was filtered out as
+not-applicable during an audit *of sync hygiene*, because it is scoped to this tool's runtime while
+the audit target was another repo. `repo-audit:dimension-8` was the clearest case: four well-chosen
+capabilities whose concepts transferred and whose instruments did not — eleven declines across the
+three rounds, all of that one shape.
+
+**But the axis ANNOTATES and changes neither the set nor the order, and that restraint is the
+finding.** On a third repository — one that does have a display surface — `frontend-verifier` was
+ready on its first `--doctor` call and produced that audit's highest evidence-to-effort finding, one
+the code-reading path had missed, moving its propensity off the floor onto real positive evidence.
+Down-weighting the binding on the two negatives alone would have cost that finding. So the axis turns
+"investigate this offer to discover it cannot apply" into "dismiss it in one line", and nothing else:
+a selftest asserts the returned list is identical, in membership and order, with the axis populated
+and emptied. `evaluate_precondition` also hands back `suggested_decline_kind: precondition_unmet` —
+the kind `capability_propensity` marks NON-demotable — so the two halves cannot disagree.
+
+Verdicts are three-valued. Undeclared, an unnamed repository, and a repo fact whose checkout was not
+supplied are all **not evaluated**, never failures: collapsing them into False would silently
+reclassify the catalogue, and collapsing them into True would restore the original defect. An
+unevaluated precondition NAMES its missing input (`repo_path`), because a condition nothing can even
+attempt to check is what this replaces. The repo-fact probes return the markers they matched, so a
+verdict is evidence that can be argued with rather than a heuristic's bare boolean.
 
 **And the binding is DATA, not prose, deliberately.** The recursive loop below must be able to change
 what a surface reaches for without rewriting that surface's prompt. `CLAUDE.md` §1 makes the manual
