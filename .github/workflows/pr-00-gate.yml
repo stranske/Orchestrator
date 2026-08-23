@@ -116,9 +116,9 @@ jobs:
           # so there is exactly one literal per toggle and the call site cannot drift from the
           # summary's idea of what ran. Do not repeat a `false` in the `with:` block.
           #
-          # EVERY DISABLED CHECK STATES ITS BLOCKING **AND** DRAINABLE QUANTITY. A bare "604
-          # errors" reads as be-patient; "604 errors, drainable 0 per PR" reads as the deadlock it
-          # is. Full baseline, measurement commands and rule-by-rule drains:
+          # EVERY DISABLED CHECK STATES ITS BLOCKING **AND** DRAINABLE QUANTITY. A bare error
+          # count reads as be-patient; the same count with "drainable 0 per PR" beside it reads as
+          # the deadlock it is. Full baseline, measurement commands and rule-by-rule drains:
           # docs/CI_LINT_BASELINE.md. Regenerate with `python3 scripts/ci_lint_baseline.py`.
           #
           # HISTORY, so nobody re-derives it: until 2026-08-23 all five python-ci jobs failed at
@@ -131,16 +131,20 @@ jobs:
           pytest_markers = 'not quarantine and not slow'
 
           # typecheck (and its deprecated `run-mypy` alias) -- OFF.
-          #   blocking:  604 mypy errors across 90 of 189 files (measured 2026-08-23,
-          #              `mypy --exclude .workflows-lib .`, mypy 2.3.1 as pinned).
+          #   blocking:  608 mypy errors across 89 of 189 files (measured 2026-08-23 on 24cb115 with
+          #              `python3 scripts/ci_lint_baseline.py`, which runs
+          #              `mypy --exclude .workflows-lib .` under the pinned mypy 2.3.1).
+          #              THIS NUMBER DRIFTS: it moved 601 -> 604 -> 607 -> 608 during
+          #              2026-08-23 as typed code landed, and nothing couples it to a
+          #              measurement, so re-run that script rather than trusting it.
           #   drainable: 0 per PR. Every one is a real annotation or logic change in a distinct
           #              module; there is no formatter and no `--fix` for this.
           #   drains by: typed modules landing incrementally. Turn this on the same day the count
-          #              reaches 0, not before -- a `disable_error_code` list covering 15 codes
-          #              would make the job green while checking nothing, which is the defect
-          #              verify.py exists to stop.
+          #              reaches 0, not before -- the 15 commonest of the 19 codes cover 603
+          #              of the 608, so a `disable_error_code` list would make the job green
+          #              while checking essentially nothing, the defect verify.py exists to stop.
           #   note:      mypy.ini is committed even though the check is off, because without it
-          #              `mypy .` aborts on a duplicate-module setup error and the 604 above would
+          #              `mypy .` aborts on a duplicate-module setup error and the count above would
           #              be unverifiable prose instead of a number anyone can regenerate.
           typecheck = False
 
@@ -1104,6 +1108,22 @@ jobs:
               github,
               core,
               task: 'gate-commit-status',
+              // `env: {}` PINS THIS CALL TO THE WORKFLOW TOKEN, and it is load-bearing.
+              // With the default `env: process.env` the token load balancer collects every App
+              // and PAT secret this job exposes and picks by remaining capacity, so which token
+              // posts the status varies run to run. `POST /statuses/{sha}` needs the `statuses`
+              // scope, which `GITHUB_TOKEN` has here (the job declares `statuses: write`) but the
+              // WORKFLOWS App installation does NOT. When the balancer picks the App the post
+              // 403s, `isIntegrationPermissionError` swallows it as best-effort, and the PREVIOUS
+              // status survives -- so a green run leaves a red `Gate / gate` that nothing clears.
+              // Measured on PR #54 (2026-08-23): `Selected token: WORKFLOWS_APP` then
+              // `POST /repos/stranske/Orchestrator/statuses/bfb6fb1... - 403`, with `STATE: success`
+              // computed one line earlier; run 32659615306 posted fine minutes before with the
+              // same declared permissions, because the balancer happened to pick another token.
+              // Declaring `capabilities: ['statuses:write']` would NOT fix it: token_load_balancer
+              // aliases that to the generic `write-repo`, which all three token types claim.
+              // Retries still apply -- only the token source is fixed.
+              env: {},
             });
             const owner = context.repo.owner;
             const repo = context.repo.repo;

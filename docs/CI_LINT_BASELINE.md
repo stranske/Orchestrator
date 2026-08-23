@@ -56,12 +56,12 @@ Measured 2026-08-23 with the pinned versions, after the drain described below.
 | --- | --- | --- | --- | --- |
 | `lint-ruff` | `ruff check --extend-exclude .workflows-lib .` | **0 findings** | 0 | **ON, green** |
 | `lint-format` | `black --check --line-length 100 --exclude '(\.venv\|\.workflows-lib\|node_modules)' .` | **0 files** | 0 | **ON, green** |
-| `typecheck-mypy` | `mypy --exclude .workflows-lib .` | **604 errors in 89 of 189 files** | **0 per PR** | OFF |
+| `typecheck-mypy` | `mypy --exclude .workflows-lib .` | **608 errors in 89 of 189 files** | **0 per PR** | OFF |
 | `coverage` | `pytest --cov` | **0 startup errors** | 0 | **ON, green** |
 | `python 3.12` / `python 3.13` | `pytest -m 'not quarantine and not slow' -n auto --dist=loadgroup` | **0 failures** (393 passed, 9 skipped) | 0 | **ON, green** |
 
-One OFF row remains, and it states both quantities on purpose. `604 errors` alone reads as
-*be patient*; `604 errors, drainable 0 per PR` reads as what it is. (`coverage` was the second such
+One OFF row remains, and it states both quantities on purpose. An error count alone reads as
+*be patient*; the same count with `drainable 0 per PR` beside it reads as what it is. (`coverage` was the second such
 row until 2026-08-23; the entry below records how it drained rather than deleting the history.) The authoritative
 copy of each of those annotations lives beside the toggle itself, in the `Compute Python CI toggles`
 step of `.github/workflows/pr-00-gate.yml` — one place, so the call site and the `summary` job's
@@ -126,19 +126,26 @@ so hoisting it would break the module. The rule stays on for every other file.
 
 ## Deferred: mypy
 
-* **Blocking:** 601 errors in 89 of 189 files. Top codes: `arg-type` 149, `index` 111, `assignment`
-  78, `union-attr` 43, `no-redef` 43, `attr-defined` 42, `operator` 37, `import-not-found` 25.
+* **Blocking:** 608 errors in 89 of 189 files, across 19 distinct codes. Top codes: `arg-type` 151,
+  `index` 111, `assignment` 79, `attr-defined` 46, `no-redef` 43, `union-attr` 43, `operator` 37,
+  `import-not-found` 25.
+* **This figure drifts, and nothing couples it to a measurement.** It read 601, then 604, then 607,
+  then 608 during 2026-08-23 alone, as typed code landed; the three places that recorded it
+  disagreed with each other and with reality at the same time. `test_ci_gate_config.py` asserts only
+  that a disabled toggle *states* a blocking and a drainable quantity, never that the number is
+  right — it cannot, without making the suite depend on an installed mypy. Re-run
+  `python3 scripts/ci_lint_baseline.py` before quoting it.
 * **Drainable:** 0 per PR. There is no `mypy --fix`; every one is an annotation or logic change in a
   distinct module.
 * **Drains by:** typed modules landing incrementally. Flip `typecheck` on the day the count reaches
-  zero — **not** by adding a `disable_error_code` list. Fifteen codes cover 597 of the 601 and would
-  produce a green job that checks essentially nothing, which is precisely the defect `verify.py`
-  exists to stop.
+  zero — **not** by adding a `disable_error_code` list. The 15 commonest of the 19 codes cover 603 of
+  the 608, so such a list would produce a green job that checks essentially nothing, which is
+  precisely the defect `verify.py` exists to stop.
 * **`mypy.ini` is committed even though the check is off**, and for one reason: without it `mypy .`
   aborts with `Source file found twice under different module names: "_llm_client" and
   "scripts.langchain._llm_client" ... (errors prevented further checking)`. That single setup error
   is all a reader of the failed job would have seen; it masked the real number entirely. With
-  `explicit_package_bases = True` the 601 above is a number anyone can regenerate rather than prose.
+  `explicit_package_bases = True` the count above is one anyone can regenerate rather than prose.
   It must be `mypy.ini` and not `pyproject.toml` or `setup.cfg` — see the next section.
 
 ## Drained 2026-08-23: coverage

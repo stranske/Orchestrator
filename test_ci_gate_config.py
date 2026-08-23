@@ -17,14 +17,15 @@ What these tests defend, and why each one has a scar behind it:
     the SAME rule set. Lose it and the Gate silently reverts to `--select E4,E7,E9,F` while Autofix
     reverts to Ruff 0.16's much wider default — the disagreement that produced four 143-file
     `chore(autofix)` commits on PR #42.
-4.  **A disabled check states its blocking AND drainable quantity.** "601 errors" reads as
-    be-patient; "601 errors, drainable 0 per PR" reads as a deadlock. The pair is the diagnosis.
+4.  **A disabled check states its blocking AND drainable quantity.** An error count alone reads
+    as be-patient; the same count with "drainable 0 per PR" beside it reads as a deadlock. The
+    pair is the diagnosis.
 5.  **One literal per toggle.** The `with:` block and the `summary` job's coverage branch both read
     `needs.detect.outputs.*`, so a second hardcoded `false` would be a literal that can drift.
 6.  **The recorded baseline moves with the pins.** The counts are version-specific, so bumping a
     pin without re-measuring must go red rather than quietly re-describing a toolchain nobody runs.
 7.  **`mypy.ini` never silences an error code.** Fifteen `disable_error_code` entries would cover
-    597 of the 601 findings and produce a green job that checks nothing.
+    603 of the 608 findings and produce a green job that checks nothing.
 8.  **A citation names a file that is there.** These configs are prose-heavy on purpose: each
     tells the next reader where to re-measure before touching a pin. The pin file shipped citing
     `docs/ci/LINT_BASELINE.md` while the real path was `docs/CI_LINT_BASELINE.md`, so the single
@@ -229,8 +230,9 @@ def test_every_disabled_toggle_states_blocking_and_drainable():
         for field in ("blocking:", "drainable:", "drains by:"):
             assert field in block, (
                 f"the `{name} = False` toggle does not state `{field}` in the comment above it. "
-                "Both quantities belong in the same place: '601 errors' reads as be-patient, "
-                "'601 errors, drainable 0 per PR' reads as the deadlock it is. See "
+                "Both quantities belong in the same place: an error count alone reads as "
+                "be-patient, the same count with 'drainable 0 per PR' beside it reads as the "
+                "deadlock it is. See "
                 f"{BASELINE_DOC.relative_to(HERE)}."
             )
 
@@ -290,12 +292,12 @@ def test_mypy_config_silences_nothing():
     require_checkout()
     assert MYPY_INI.is_file(), (
         "mypy.ini is missing. Without it `mypy .` aborts on 'Source file found twice under "
-        "different module names' and the recorded 601 becomes unverifiable prose."
+        "different module names' and the recorded count becomes unverifiable prose."
     )
     text = MYPY_INI.read_text(encoding="utf-8")
     for forbidden in ("disable_error_code", "ignore_errors", "follow_imports = skip"):
         assert forbidden not in text, (
-            f"mypy.ini sets `{forbidden}`. Fifteen disabled codes would cover 597 of the 601 "
+            f"mypy.ini sets `{forbidden}`. Fifteen disabled codes would cover 603 of the 608 "
             "findings and make typecheck-mypy green while checking nothing — the exact defect "
             "verify.py exists to stop. Leave the check OFF and drain the findings instead."
         )
