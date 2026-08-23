@@ -219,10 +219,19 @@ def _dedupe_candidate(
             seen_issue_numbers.add(issue_number)
             issues.append(issue)
     seed_tokens = _tokens(title) or _tokens(candidate["seed"])
+    # Matching below is on `issue_title` and on `candidate["seed"]` -- deliberately NOT on a
+    # combined f"#{issue_number} {issue_title}". Prepending the issue's OWN number widens the
+    # match by exactly one condition, issue_number == pr_number, and that condition is dead twice
+    # over: GitHub draws issue and PR numbers from a single per-repo sequence so the two can never
+    # be equal, and the seed disjunct already covers it anyway, since every seed built in
+    # evidence_for_repo opens with "PR #{pr_number}". If it ever did fire it would claim
+    # duplication from a bare numeric coincidence. Note `_contains_pr_ref` already matches a bare
+    # "#N" inside a title (the "#" in `#?` is optional), so the combined form buys nothing there
+    # either. To genuinely match more, widen the TEXT searched -- title -> title+body, as
+    # durability_sweep does. The selftest pins both halves of this.
     for issue in issues or []:
         issue_number = issue.get("number")
         issue_title = str(issue.get("title") or "")
-        haystack = f"#{issue_number} {issue_title}"
         if _contains_pr_ref(issue_title, pr_number) or _contains_pr_ref(
             candidate["seed"], issue_number
         ):
@@ -634,6 +643,42 @@ def _selftest() -> None:
         assert clean["candidates"] == [], clean
         assert clean["process_signals"] == [], clean
         assert clean["signals"]["durable_rate"] == 1.0, clean["signals"]
+
+        # _dedupe_candidate deliberately does NOT search a combined "#{issue_number} {title}".
+        # Two assertions pin that decision so a later lint or tidy pass cannot quietly wire it in.
+        # 1. The isolated case the combined form -- and only the combined form -- would match: an
+        #    issue whose own number equals the candidate PR's, with an unrelated title and a seed
+        #    that does not name the number. It must NOT be called a duplicate.
+        collision = {
+            "type": "reversal",
+            "severity": "HIGH",
+            "seed": "A merged change was REVERTED; open a durable-fix + regression-test issue.",
+            "evidence": {"run_id": "x", "pr": 4242, "agent": "codex", "durability": "reverted"},
+            "possible_duplicate": False,
+            "dup_issue": None,
+        }
+        _dedupe_candidate(
+            collision,
+            "o/r",
+            issue_search_fn=lambda _repo, _query: [
+                {"number": 4242, "title": "unrelated maintenance chore"}
+            ],
+            linked_issues_fn=lambda _repo, _pr: [],
+        )
+        assert collision["possible_duplicate"] is False, collision
+        assert collision["dup_issue"] is None, collision
+        # 2. ...and that stays a no-op in production only because every seed evidence_for_repo
+        #    builds opens with "PR #<pr>", so the seed disjunct already covers issue_number ==
+        #    pr_number. If a seed ever stops naming its PR, the decision needs re-examining.
+        seeded = [
+            candidate
+            for candidate in result["candidates"]
+            if (candidate.get("evidence") or {}).get("pr") is not None
+        ]
+        assert len(seeded) == 2, seeded
+        for candidate in seeded:
+            assert _contains_pr_ref(candidate["seed"], candidate["evidence"]["pr"]), candidate
+
         print("keepalive_evidence.py selftest: OK")
     finally:
         feedback.DB_PATH = old_db
