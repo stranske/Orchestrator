@@ -320,13 +320,49 @@ def _format_ci_consult_line(declared: int, offered: int, bound_rows: int, total_
     )
 
 
+# The consult reads the ledger, and `capabilities.load()` takes a BLOCKING flock. verify.py is the
+# project's verdict, so an unbounded wait here could hang the whole run -- and this machine routinely
+# has a dozen concurrent verify runs plus an hourly tick contending for that lock. Bounded for the
+# same reason `capability_propensity.tick_evidence_guarded` bounds its own path.
+CI_CONSULT_BUDGET_S = 20
+
+
 def ci_consult_line() -> str:
     """Consult the advisor as the CI surface and report it in one line. Never a verdict.
 
-    An import or advisor failure is REPORTED rather than swallowed, for the same reason as
+    An import, advisor or LOCK-WAIT failure is REPORTED rather than swallowed, for the same reason as
     `absent_entrypoint_line`: a diagnostic that silently stops appearing is indistinguishable from
-    one that has nothing to say.
+    one that has nothing to say. The SIGALRM budget covers the ledger flock; outside the main thread
+    (or on a platform without SIGALRM) it runs unbounded rather than not at all.
     """
+    import signal
+
+    def _expired(_signum, _frame):
+        raise TimeoutError(f"ci consult exceeded {CI_CONSULT_BUDGET_S}s waiting on the ledger")
+
+    armed, previous = False, None
+    try:
+        previous = signal.signal(signal.SIGALRM, _expired)
+        signal.alarm(CI_CONSULT_BUDGET_S)
+        armed = True
+    except (ValueError, AttributeError, OSError):
+        armed = False
+    try:
+        return _ci_consult_line_inner()
+    except BaseException as exc:  # noqa: BLE001
+        return f"  ci consult:  NOT CHECKED ({type(exc).__name__}: {exc})"
+    finally:
+        if armed:
+            try:
+                signal.alarm(0)
+                if previous is not None:
+                    signal.signal(signal.SIGALRM, previous)
+            except (ValueError, OSError):
+                pass
+
+
+def _ci_consult_line_inner() -> str:
+    """The consult itself. Split out so the guard above is the only place that catches."""
     try:
         import capabilities
         import capability_advisor as advisor
@@ -348,10 +384,7 @@ def ci_consult_line() -> str:
         bound = sum(
             1
             for cap_id in rows
-            if any(
-                cap_id in advisor.binding_for(surface)
-                for surface in advisor.SURFACE_BINDINGS
-            )
+            if any(cap_id in advisor.binding_for(surface) for surface in advisor.SURFACE_BINDINGS)
         )
         return _format_ci_consult_line(declared, offered, bound, len(rows))
     except Exception as exc:  # noqa: BLE001
@@ -898,6 +931,24 @@ def _selftest() -> None:
     # selftests, gates, the floor and the ceilings; this line is appended to `lines` afterwards and
     # can never reach it. Pinned by construction: the renderer returns a string, never a problem.
     assert isinstance(ci_consult_line(), str)
+    # AND A HANG IS A REPORTED LINE, NOT A HUNG VERDICT. The consult reads the ledger and
+    # `capabilities.load()` takes a BLOCKING flock; unbounded, a stuck lock would hang verify.py
+    # itself. Exercised by making the inner call raise, which is what the SIGALRM handler does.
+    real_inner = globals()["_ci_consult_line_inner"]
+    try:
+
+        def _boom():
+            raise TimeoutError("ci consult exceeded 20s waiting on the ledger")
+
+        globals()["_ci_consult_line_inner"] = _boom
+        timed_out = ci_consult_line()
+    finally:
+        globals()["_ci_consult_line_inner"] = real_inner
+    assert timed_out.startswith("  ci consult:  NOT CHECKED"), timed_out
+    assert "TimeoutError" in timed_out, timed_out
+    assert PREREQ_ABSENT_MARK not in timed_out, timed_out
+    # ...and the real one still works, so the guard is not swallowing the healthy path.
+    assert "NOT CHECKED" not in ci_consult_line(), ci_consult_line()
 
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "

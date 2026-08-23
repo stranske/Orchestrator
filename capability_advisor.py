@@ -2842,9 +2842,7 @@ def _selftest_phase_consult() -> None:
             assert not resolved, f"the phase consult recorded usefulness verdicts: {resolved}"
 
             # record=False is a pure query: an offer, and no trial at all.
-            pure = consult_phases(
-                day="2026-01-04", surfaces=phases, path=ledger, record=False
-            )
+            pure = consult_phases(day="2026-01-04", surfaces=phases, path=ledger, record=False)
             assert pure["offered"] == rep["offered"], pure
             assert pure["recorded"] == 0, pure
             trials = {t["experiment_id"] for t in _prop.experiments(path=ledger)}
