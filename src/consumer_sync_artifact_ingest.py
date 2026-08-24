@@ -1713,7 +1713,7 @@ def main(argv: list[str] | None = None) -> int:
         # throttled call: at LOW budget gh_capacity paces up to 10s each.
         blob_reader = BlobReader(state.setdefault("blob_digests", {}))
         needs_processing_lower = {repo.lower() for repo in needs_processing}
-        report_repos = {
+        report_repos: dict[str, dict[str, Any]] = {
             repo.lower(): {"status": "already_recorded"}
             for repo in deduped_cohort
             if repo.lower() not in needs_processing_lower

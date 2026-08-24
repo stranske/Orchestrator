@@ -19,6 +19,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.parse import quote
 
 import feedback
@@ -280,7 +281,7 @@ def resolve_issue_records(
     )
     body_keys: set[tuple[str, int]] = set()
     for repo, pr_number in linked_cache:
-        issue_numbers = list(linked_cache.get((repo, pr_number)) or [])
+        issue_numbers = cast(list, linked_cache.get((repo, pr_number)) or [])
         if not isinstance(issue_numbers, list):
             continue
         for issue_number in issue_numbers:
@@ -291,7 +292,7 @@ def resolve_issue_records(
     body_cache = parallel_fetch(body_keys, fetch_body)
 
     for row, repo, pr_number in parsed_rows:
-        issue_numbers = list(linked_cache.get((repo, pr_number)) or [])
+        issue_numbers = cast(list, linked_cache.get((repo, pr_number)) or [])
         if not issue_numbers:
             skipped.append(
                 {

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Mapping
 
 import dispatcher
 
@@ -110,14 +111,14 @@ def is_high_stakes(item: dict) -> bool:
     return high_stakes_reason(item) is not None
 
 
-def reviewers_from_env(env: dict | None = None) -> list[str]:
+def reviewers_from_env(env: Mapping[str, str] | None = None) -> list[str]:
     env = env or {}
     raw = env.get("ORCH_ADVERSARIAL_REVIEWERS", "")
     reviewers = [part.strip() for part in raw.split(",") if part.strip()]
     return reviewers or list(DEFAULT_REVIEWERS)
 
 
-def review_enabled(env: dict | None = None) -> bool:
+def review_enabled(env: Mapping[str, str] | None = None) -> bool:
     env = env or {}
     return env.get("ORCH_RUN_ADVERSARIAL_REVIEW") == "1"
 

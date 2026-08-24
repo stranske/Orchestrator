@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import Any
 from urllib.parse import quote
 
 import feedback
@@ -291,7 +292,7 @@ def _live_revert_status(pr: dict, revert_cache: dict | None = None) -> tuple[boo
     if not repo:
         return None, "missing repo"
 
-    pr_check = (None, "missing PR number")
+    pr_check: tuple[bool | None, str] = (None, "missing PR number")
     if pr_number is not None:
         pr_check = _revert_pr_status(repo, int(pr_number), revert_cache=revert_cache)
         if pr_check[0] is True:
@@ -449,7 +450,7 @@ def sweep_durability(
     _now: int | None = None,
 ) -> dict:
     """Patch old merged+pending outcomes when their durability can be resolved with confidence."""
-    summary = {
+    summary: dict[str, Any] = {
         "checked": 0,
         "durable": 0,
         "reverted": 0,
@@ -590,7 +591,7 @@ def _selftest_live_revert_scan(now: int):
     assert _verdict_for([{"path": ".agents/x.yml"}, {"path": "app.py"}])["durability"] == "durable"
 
     # FAIL-SAFE: unknowable delivery must never manufacture a failure.
-    for unknown in (None, []):
+    for unknown in (None, []):  # type: ignore[var-annotated]  # deliberate mixed-type probe
         got = _verdict_for(unknown)
         assert got["durability"] == "durable", (unknown, got)
 

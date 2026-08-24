@@ -48,6 +48,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import backlog
 import capabilities
@@ -968,7 +969,7 @@ def heartbeat_env_gate(*, here: Path | None = None) -> dict:
     # Shell drivers live at the CHECKOUT root, not beside the modules. `here` is still honoured so
     # the selftest can point this at a synthetic tree.
     root = here or paths.checkout_root(HERE)
-    out = {
+    out: dict[str, Any] = {
         "flag": HEARTBEAT_ENV_FLAG,
         "anchor": HEARTBEAT_EXPORT_ANCHOR,
         "drivers": {},
@@ -1222,7 +1223,7 @@ def audit_capability(
                 defects.append("no_prompt_template")
                 notes.append(f"no PROMPT_TEMPLATES[{value!r}]")
             cov = label_coverage(value, label_index)
-            row.setdefault("label_coverage", {})[value] = cov
+            row.setdefault("label_coverage", {})[value] = cov  # type: ignore[index]
             if cov.get("repos_with") == 0:
                 defects.append("label_absent_from_fleet")
                 notes.append(f"no repo carries a label producing {value!r}")
@@ -2049,8 +2050,8 @@ def _selftest() -> None:
 
             # An UNREADABLE ledger must degrade to a visible note, never to an exception that
             # replaces the real assertion with a complaint about the diagnostic.
-            broken = absent_entrypoint_note(sorted(rows), path=droot / "not-a-ledger-dir")
-            assert broken == "" or "diagnostic unavailable" in broken, broken
+            broken_note = absent_entrypoint_note(sorted(rows), path=droot / "not-a-ledger-dir")
+            assert broken_note == "" or "diagnostic unavailable" in broken_note, broken_note
         finally:
             globals()["HERE"] = saved_here
     # (b) a mention inside a shell COMMENT is not a caller — matching it reported a
