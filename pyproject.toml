@@ -25,7 +25,13 @@
 # import path has to say so; without it every `import capabilities` in the suite fails at
 # collection. Modules invoked directly (`python3 src/tick.py`) do not need it — Python puts the
 # script's own directory on `sys.path` — which is why the move required no import rewrites at all.
-pythonpath = ["src"]
+# `"."` as well as `"src"`, and BOTH entries are load-bearing in different trees. A checkout has
+# the modules in `src/`; the EXEC MIRROR is flat (orch-sync-mirror.sh copies them to its root), so
+# `src` does not exist there and `.` is what resolves `import capabilities`. pytest ignores a
+# pythonpath entry that is not present, so one list is correct in both shapes — the same
+# detect-don't-assume rule paths.py applies in Python and orchestrate.sh in shell. Measured, not
+# assumed: with only `["src"]` a mirror run collected ZERO tests while reporting the floor unmet.
+pythonpath = ["src", "."]
 # No `testpaths`. `verify.py` enforces a collection floor as an EQUALITY, so anything here that
 # narrows discovery would read as tests silently ceasing to run. Discovery stays as it was.
 minversion = "7.0"

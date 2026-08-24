@@ -494,10 +494,16 @@ def _selftest() -> None:
     absent = repo_files_absent("definitely-not-a-file-here")
     assert absent and "definitely-not-a-file-here" in absent, absent
     assert repo_files_absent("pyproject.toml") is None, "a file that IS here must not skip"
-    # A MODULE is not a repo-root path any more: this detector answers "is this
-    # checkout complete", and the modules live under src/.
-    assert repo_files_absent("env_prereq.py") is not None, "a module is not a root path"
-    assert repo_files_absent("env_prereq.py", "definitely-not-a-file-here"), "one missing is enough"
+    # NOT asserted: that a MODULE name is absent from the checkout root. That is true in a src/
+    # checkout and FALSE in the flat exec mirror, where the module dir and the checkout root are the
+    # same directory — so the assertion passed here and failed there. It was caught by running
+    # verify FROM THE MIRROR, which is the entire reason CLAUDE.md 1 requires that ("cmp-clean is
+    # not agreement: a path resolved relative to a module's own directory is right in one tree and
+    # wrong in the other"). The detector's real contract is layout-independent and is what is
+    # asserted above and below: present => None, absent => a reason naming it.
+    assert repo_files_absent(
+        "pyproject.toml", "definitely-not-a-file-here"
+    ), "one missing entry is enough to skip"
 
     # A skipped selftest must SPEAK, and its line must carry the shared mark verify.py greps
     # for. A skip that prints nothing is a silent zero-exit by another name.
