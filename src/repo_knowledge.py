@@ -2602,7 +2602,7 @@ def main(argv: list[str]) -> int:
             if "--max-lines" in argv
             else AGENTS_EXPORT_MAX_LINES
         )
-        result = validate_agents_md_export(repo_path, repo_arg=repo_arg, max_lines=max_lines)
+        result = validate_agents_md_export(repo_path, repo=repo_arg, max_lines=max_lines)
         print(json.dumps(result, indent=2) if "--json" in argv else result)
         return 0 if result["ok"] else 1
     if "--suggest-from-snapshot" in argv:
@@ -2667,7 +2667,7 @@ def main(argv: list[str]) -> int:
             json.dumps(
                 suggest_from_docs(
                     repo_path,
-                    repo_arg=repo_arg,
+                    repo=repo_arg,
                     max_per_repo=max_per_repo,
                     include_root_docs="--include-root-docs" in argv,
                     sections=sections,

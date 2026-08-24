@@ -183,7 +183,7 @@ def validate_campaign(campaign: dict[str, Any]) -> list[str]:
         campaign_id = meta.get("id")
         if not _is_nonempty_string(campaign_id):
             errors.append("campaign.id must be a non-empty string")
-        elif not _looks_like_slug(campaign_id.strip()):
+        elif not _looks_like_slug(str(campaign_id or "").strip()):
             errors.append("campaign.id must be a lowercase slug")
         if not _is_nonempty_string(meta.get("title")):
             errors.append("campaign.title must be a non-empty string")
@@ -333,7 +333,10 @@ def _recipe_dry_run_command(
 
     if tool == "ast-grep":
         if _is_nonempty_string(rule_file):
-            return " ".join(["ast-grep", "scan", "--rule", shlex.quote(rule_file.strip())]), None
+            return (
+                " ".join(["ast-grep", "scan", "--rule", shlex.quote(str(rule_file or "").strip())]),
+                None,
+            )
         if _is_nonempty_string(match):
             return (
                 " ".join(
@@ -343,7 +346,7 @@ def _recipe_dry_run_command(
                         "-l",
                         shlex.quote(language),
                         "-p",
-                        shlex.quote(match.strip()),
+                        shlex.quote(str(match or "").strip()),
                     ]
                 ),
                 None,
@@ -356,8 +359,8 @@ def _recipe_dry_run_command(
             " ".join(
                 [
                     "comby",
-                    shlex.quote(match.strip()),
-                    shlex.quote(rewrite.strip()),
+                    shlex.quote(str(match or "").strip()),
+                    shlex.quote(str(rewrite or "").strip()),
                     shlex.quote(target),
                     "-matcher",
                     shlex.quote(matcher),
@@ -375,7 +378,7 @@ def _recipe_dry_run_command(
                     [
                         "jscodeshift",
                         "-t",
-                        shlex.quote(rule_file.strip()),
+                        shlex.quote(str(rule_file or "").strip()),
                         "--dry",
                         "--print",
                         shlex.quote(target),
@@ -384,14 +387,14 @@ def _recipe_dry_run_command(
                 None,
             )
         if _is_nonempty_string(command_template):
-            cmd = command_template.strip()
+            cmd = str(command_template or "").strip()
             if _template_is_safe_dry_run(cmd) and _has_dry_run_marker(cmd):
                 return cmd, None
             return None, "jscodeshift command_template omitted because it is not clearly dry-run"
 
     if tool == "openrewrite":
         if _is_nonempty_string(command_template):
-            cmd = command_template.strip()
+            cmd = str(command_template or "").strip()
             if _template_is_safe_dry_run(cmd) and _has_dry_run_marker(cmd):
                 return cmd, None
             return (
@@ -403,7 +406,7 @@ def _recipe_dry_run_command(
                 " ".join(
                     [
                         "./mvnw",
-                        f"-Drewrite.activeRecipes={shlex.quote(rule_file.strip())}",
+                        f"-Drewrite.activeRecipes={shlex.quote(str(rule_file or "").strip())}",
                         "rewrite:dryRun",
                     ]
                 ),
@@ -411,7 +414,7 @@ def _recipe_dry_run_command(
             )
 
     if tool == "custom" and _is_nonempty_string(command_template):
-        cmd = command_template.strip()
+        cmd = str(command_template or "").strip()
         if _template_is_safe_dry_run(cmd) and _has_dry_run_marker(cmd):
             return cmd, None
         return None, "custom command_template omitted because it is not clearly safe dry-run"
