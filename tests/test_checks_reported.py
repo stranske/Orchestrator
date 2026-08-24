@@ -56,3 +56,42 @@ def test_a_holed_pr_cannot_erode_the_expected_set():
     # Had two holed PRs been counted, the threshold would rise to 7 and the check would vanish
     # from the expected set — the erosion this guards against.
     assert mod.expected_from_counts({"summary": 6}, 10) == set()
+
+
+def test_the_ratchet_only_raises(tmp_path, monkeypatch):
+    """A name that has ever been expected stays expected until a human deletes its line.
+
+    THE CASE THIS EXISTS FOR, found by dogfooding rather than by review: while `pr-00-gate.yml` sat
+    held, every newly merged PR merged WITHOUT the Gate, so after twelve such merges the Gate's
+    checks no longer appeared on 75% of the reference window and stopped counting as "normally
+    reporting". The expected set fell 23 -> 14 and PR #91 was pronounced clean by the very tool
+    written to catch that. A sustained outage is the case that matters most and it was the one the
+    frequency rule could not see.
+
+    DELIBERATE BREAK -> REVERT: make `reference_set` return `observed` instead of
+    `observed | ratchet_names()` and this fails — the ratchet is present but unconsulted, which is
+    this repo's founding defect (built and not wired).
+    """
+    ratchet = tmp_path / "expected-checks.json"
+    ratchet.write_text('{"expected": ["python ci / lint-ruff", "summary"]}', encoding="utf-8")
+    monkeypatch.setattr(mod, "RATCHET", ratchet)
+    assert mod.ratchet_names() == {"python ci / lint-ruff", "summary"}
+
+    # An absent file means "nothing ratcheted yet", never zero-expected: reading a missing ratchet
+    # as an empty expectation would silently disable the check on a fresh checkout.
+    monkeypatch.setattr(mod, "RATCHET", tmp_path / "does-not-exist.json")
+    assert mod.ratchet_names() == set()
+
+
+def test_the_ratchet_is_wired_into_the_expected_set():
+    """The union with the ratchet must happen in `reference_set`, not merely be available."""
+    src = (
+        Path(__file__).resolve().parent.parent / "scripts" / "check_checks_reported.py"
+    ).read_text(encoding="utf-8")
+    # Split so the needle cannot match this line, and pinned to the FRAGMENT that carries the
+    # meaning rather than the whole statement — CLAUDE.md's wiring-pin rule.
+    needle = "observed | " + "ratchet_names()"
+    assert needle in src, (
+        "reference_set no longer unions the ratchet — the expected set can erode to nothing "
+        "during a sustained outage, which is exactly when this check matters"
+    )

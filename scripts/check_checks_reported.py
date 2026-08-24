@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from pathlib import Path
 
 REPO = "stranske/Orchestrator"
 # Bot/advisory checks whose absence means nothing: they are opt-in, rate-limited, or driven by
@@ -110,6 +111,21 @@ def reported_names(sha: str) -> set[str]:
 REFERENCE_PRS = 12
 EXPECTED_FRACTION = 0.75
 
+# THE RATCHET, and it exists because dogfooding this tool caught it disarming itself.
+#
+# Frequency alone erodes. While `pr-00-gate.yml` sat held, every newly merged PR merged WITHOUT the
+# Gate -- so after twelve such merges the Gate's checks no longer appeared on 75% of the reference
+# window, stopped counting as "normally reporting", and their absence stopped being flagged. The
+# expected set fell from 23 names to 14 and PR #91 was pronounced clean by a tool written to catch
+# exactly that. A sustained outage is the case that matters most, and it was the one case the
+# frequency rule could not see.
+#
+# `expected-checks.json` is the high-water mark: a name that has ever been expected stays expected
+# until somebody DELETES ITS LINE, which is a visible act in a diff. Same shape as the mypy exempt
+# ratchet in pyproject.toml -- a ceiling that can only come down deliberately -- and the same
+# reason: an automatic downward move is indistinguishable from the defect.
+RATCHET = Path(__file__).resolve().parent.parent / "config" / "expected-checks.json"
+
 
 def reference_set(exclude_pr: int | None = None) -> tuple[set[str], list[int]]:
     """Check names that report on at least EXPECTED_FRACTION of recent merged PRs."""
@@ -132,7 +148,15 @@ def reference_set(exclude_pr: int | None = None) -> tuple[set[str], list[int]]:
                 counts[name] = counts.get(name, 0) + 1
     if not contributors:
         raise SystemExit("no merged PR in the last 40 closed PRs reported any check")
-    return expected_from_counts(counts, len(contributors)), contributors
+    observed = expected_from_counts(counts, len(contributors))
+    return observed | ratchet_names(), contributors
+
+
+def ratchet_names() -> set[str]:
+    """Names that have ever been expected. Missing file means "nothing ratcheted yet", not zero."""
+    if not RATCHET.is_file():
+        return set()
+    return set(json.loads(RATCHET.read_text(encoding="utf-8")).get("expected", []))
 
 
 def expected_from_counts(counts: dict[str, int], contributors: int) -> set[str]:
@@ -207,10 +231,35 @@ def sweep() -> int:
     return 0
 
 
+def update_ratchet() -> int:
+    """Raise the high-water mark. Never lowers it — see RATCHET."""
+    observed, contributors = reference_set()
+    before = ratchet_names()
+    after = before | observed
+    RATCHET.parent.mkdir(parents=True, exist_ok=True)
+    RATCHET.write_text(json.dumps({"expected": sorted(after)}, indent=1) + "\n", encoding="utf-8")
+    added = sorted(after - before)
+    print(f"ratchet: {len(before)} -> {len(after)} name(s) over {len(contributors)} merged PR(s)")
+    for name in added:
+        print(f"  + {name}")
+    if not added:
+        print("  (no new names; nothing removed — this command never removes)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--pr", type=int, help="assert every expected check REPORTED on this PR's head")
+    g.add_argument(
+        "--update-ratchet",
+        action="store_true",
+        help=(
+            "add currently-observed check names to config/expected-checks.json. RAISES ONLY -- it "
+            "never removes a name, because an automatic downward move is indistinguishable from "
+            "the defect this tool exists to find. To drop a name, delete its line by hand."
+        ),
+    )
     g.add_argument(
         "--sweep",
         action="store_true",
@@ -218,6 +267,8 @@ def main() -> int:
     )
     ap.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.update_ratchet:
+        return update_ratchet()
     return sweep() if args.sweep else check_pr(args.pr)
 
 
