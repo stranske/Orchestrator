@@ -2398,7 +2398,9 @@ def _selftest_how_to_use() -> None:
     # pins the true mechanical facts instead (workspace-write default, isolate for parallel code
     # offloads), which is strictly stronger: re-introducing the read-only wording cannot satisfy it.
     assert "workspace-write" in off and "isolate=True" in off, off
-    assert "read-only" not in off, "offload is not read-only; see adapters sandbox selection: " + off
+    assert "read-only" not in off, (
+        "offload is not read-only; see adapters sandbox selection: " + off
+    )
     adv = HOW_TO_USE["adversarial-review"]
     assert "CALLABLE AT ANY SURFACE" in adv, adv
     assert "closer_gate" in adv and "not a precondition for calling it" in adv, adv
