@@ -333,6 +333,13 @@ cursor-agent live outside the default PATH):
   copy. Verdicts are `PASS`, `FAIL_BROKEN`, or `FAIL_HOLLOW`. The live worktree is not mutated. Add
   `--record-run-id <run_id>` to patch `outcomes.verifier_verdict`; `FAIL_HOLLOW`/`FAIL_BROKEN` count against
   relearn even if a PR otherwise looks successful.
+  **Read `hollow_nodes` as well as `verdict`.** `verdict` grades the whole COMMAND, so one discriminating
+  test earns a `PASS` for every tautology beside it in the same file. `hollow_nodes`, `node_verdict` and
+  `node_analysis.counts` grade it per test NODE: a node listed in `hollow_nodes` PASSED against the base and
+  is therefore no part of the proof. The per-node pass is advisory — it never moves `verdict`, `ok` or the
+  exit code — and when it cannot attribute (no pytest, a collection error, a non-Python command) it reports
+  `node_verdict: INDETERMINATE` with the missing prerequisite named, so a `PASS` never implies per-node
+  precision it did not have. The names ride into `outcomes.notes` through `reason`.
 - **Ingest LangSmith trace artifacts (NEW)** — `python3 src/langsmith_pull.py --ndjson <langsmith-fleet.ndjson>
   [--dry-run] [--json]` → joins Workflows `langsmith-fleet/v1` NDJSON records to known Orchestrator runs
   by exact `run_id`, then by `github_pr`/`github_issue` + `domain.agent` when the trace run_id is LangSmith's
