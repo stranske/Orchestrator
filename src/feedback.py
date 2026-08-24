@@ -34,6 +34,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import execution_profiles
 
@@ -675,7 +676,7 @@ def _sanitize_completion_value(value, redacted: list[str], path: str):
             for index, item in enumerate(items[:MAX_COMPLETION_LIST_ITEMS])
         ]
     if isinstance(value, dict):
-        clean = {}
+        clean: dict[str, Any] = {}
         for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
             name = str(key)
             child_path = f"{path}.{name}" if path else name
@@ -719,7 +720,7 @@ def _sanitize_artifact_refs(value, redacted: list[str]) -> list[dict]:
         unsafe = sorted(set(row) - allowed)
         if unsafe:
             redacted.extend(f"artifact_refs[{index}].{key}" for key in unsafe)
-        clean = {}
+        clean: dict[str, Any] = {}
         for key in sorted(allowed & set(row)):
             item = row.get(key)
             if item in (None, ""):
@@ -760,7 +761,7 @@ def _sanitize_completion_payload(payload: dict | None) -> tuple[dict, str, int]:
     raw = dict(payload or {})
     redacted: list[str] = []
     rejection_codes = []
-    clean = {}
+    clean: dict[str, Any] = {}
     for key, value in sorted(raw.items()):
         name = str(key)
         if name not in COMPLETION_PAYLOAD_FIELDS:
@@ -2574,7 +2575,7 @@ def _record_outcome_in_conn(
             # episode stays ineligible -- the honest outcome, not a gap to paper over with a
             # constant. (A caller-supplied gate id would be better still; this uses evidence
             # record_outcome already holds rather than inventing a parameter.)
-            verification_payload = dict(payload)
+            verification_payload: dict[str, Any] = dict(payload)
             if stored_ci:
                 verification_payload["acceptance_gate_ids"] = ["ci"]
             _record_completion_event_in_conn(
@@ -2818,7 +2819,7 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
             role_runs = int(
                 c.execute("SELECT COUNT(*) FROM runs WHERE role_name=?", (role,)).fetchone()[0]
             )
-            out = selector[role]
+            out: dict[str, Any] = selector[role]
             out["role_runs"] = role_runs
             out["linked"] = int(linked or 0)
             out["durable"] = int(durable or 0)
@@ -3327,7 +3328,7 @@ def completion_event_episodes(
                         derived_subject = research_subjects.subject_identity_from_hash(
                             canonical_target,
                             canonical_task_type,
-                            raw_spec_hash,
+                            str(raw_spec_hash or ""),
                             base_sha,
                             normalized_arms,
                             profile_value,
@@ -3629,7 +3630,7 @@ def _record_execution_attempt_in_conn(
 ) -> None:
     role = validate_operation_role(operation_role)
     if role == "worker":
-        resolved_model = validate_resolved_worker_model(resolved_model)
+        validated_model = validate_resolved_worker_model(resolved_model)
     try:
         ordinal = max(1, int(attempt_ordinal or 1))
     except (TypeError, ValueError):
@@ -3821,7 +3822,11 @@ def complete_profile_attempt(
     """
     if not str(resolved_model or "").strip():
         raise ValueError("profile completion requires actually reported resolved_model")
-    resolved_model = validate_resolved_worker_model(resolved_model)
+    # A SEPARATE BINDING, not a reassignment: `validate_resolved_worker_model` returns None for a
+    # rejected adapter tag, and the write below must still see that None. Reassigning `resolved_model`
+    # (typed `str`) widened it, and coercing the None away — the first fix attempted here — turned a
+    # deliberate refusal into an empty string, which broke three provenance tests.
+    validated_model: str | None = validate_resolved_worker_model(resolved_model)
     attempt_id = f"attempt:profile:{run_id}"
     with _conn() as c:
         row = c.execute(
@@ -3846,7 +3851,7 @@ def complete_profile_attempt(
             "WHERE attempt_id=?",
             (
                 resolved_provider,
-                resolved_model,
+                validated_model,
                 status,
                 int(completed_ts or time.time()),
                 attempt_id,
@@ -4785,7 +4790,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
             for m in metrics
         }
 
-        def _effective(cell_agent: str, s: dict, m: str) -> tuple[float, str]:
+        def _effective(cell_agent: str, s: dict, m: str) -> tuple[float | None, str]:
             if s[m]:
                 return float(s[m]), "m"
             if cell_agent in agent_mean[m]:

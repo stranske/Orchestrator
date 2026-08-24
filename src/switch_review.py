@@ -37,6 +37,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import capabilities
@@ -89,7 +90,7 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 MIRROR_DIR = Path(os.environ.get("ORCH_MIRROR", Path.home() / ".codex" / "orchestrator-mirror"))
 
 
-def stale_runners(*, now: int | None = None, mirror: Path | None = None) -> list[dict]:
+def stale_runners(*, now: float | None = None, mirror: Path | None = None) -> list[dict]:
     """Long-lived processes running mirror code OLDER than the mirror on disk.
 
     WHY THIS IS THE SAME DEFECT CLASS AS A HELD SWITCH. `orch-sync-mirror.sh` is treated as the
@@ -119,7 +120,7 @@ def stale_runners(*, now: int | None = None, mirror: Path | None = None) -> list
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return []
-    now = float(now if now is not None else time.time())
+    resolved_now = float(now if now is not None else time.time())
     stale: list[dict] = []
     for line in out.splitlines():
         parts = line.strip().split(None, 2)
@@ -129,7 +130,7 @@ def stale_runners(*, now: int | None = None, mirror: Path | None = None) -> list
         age = _etime_seconds(etime)
         if age is None:
             continue
-        started = now - age
+        started = resolved_now - age
         if started >= newest:
             continue
         stale.append(
@@ -167,7 +168,7 @@ def _etime_seconds(etime: str) -> int | None:
     return days * 86400 + nums[0] * 3600 + nums[1] * 60 + nums[2]
 
 
-def review(*, now: int | None = None, env: dict | None = None, path=None) -> dict:
+def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path=None) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why."""
     import capability_recurrence_check as rc
 
@@ -241,7 +242,9 @@ def review(*, now: int | None = None, env: dict | None = None, path=None) -> dic
 
 def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
     """Record ONE non-blocking, auto-expiring owner question per due switch."""
-    raised, deduped, errors = [], [], []
+    raised: list = []
+    deduped: list = []
+    errors: list = []
     for row in rep["held_off"] + rep["on_but_idle"]:
         flag, cap_id, state = row["flag"], row["capability"], row["state"]
         if state == "off":

@@ -52,6 +52,7 @@ import os
 import re
 import subprocess
 import sys
+from typing import Any
 
 import backlog
 
@@ -206,7 +207,9 @@ def classify_issue(issue: dict) -> dict:
 
 def assess(issues: list[dict]) -> dict:
     """Classify a list of issues and roll up. Exclusions are COUNTED, never silently dropped."""
-    rows, counts, reasons = [], {v: 0 for v in VERDICTS}, {}
+    rows: list = []
+    counts = {v: 0 for v in VERDICTS}
+    reasons: dict[str, Any] = {}
     for issue in issues:
         verdict = classify_issue(issue)
         repo = (issue.get("repository") or {}).get("name") or issue.get("repo") or "?"
@@ -454,13 +457,15 @@ TRANSIENT_TITLE = re.compile(
     r"|\b\d{4}-\d{2}-\d{2}\b|\(run \d+\)|#\d+\b",
     re.IGNORECASE,
 )
-BOT_AUTHOR = re.compile(r"\[bot\]$|^app/|^(renovate|dependabot|github-actions)$", re.IGNORECASE)
+BOT_AUTHOR: re.Pattern[str] = re.compile(
+    r"\[bot\]$|^app/|^(renovate|dependabot|github-actions)$", re.IGNORECASE
+)
 _TITLE_NOISE = re.compile(
     r"[\U0001F300-\U0001FAFF\u2600-\u27BF]|#\d+|\b\d{4}-\d{2}-\d{2}\b|\b\d+\b"
 )
 
 
-def normalize_title(title: str) -> str:
+def normalize_title(title: str | None) -> str:
     """Strip emoji, dates and numbers so the same recurring tracker matches across repos."""
     return re.sub(r"\s+", " ", _TITLE_NOISE.sub("", str(title or ""))).strip().lower()
 
@@ -934,7 +939,9 @@ def _selftest() -> None:
     # one hardcoded variant silently under-applies. Resolution must follow the repo, and a repo
     # with no ready label at all must produce an error rather than a skipped no-op.
     spellings = {"spaced": "status: ready", "tight": "status:ready", "none": None}
-    live_cache = repo_ready_label.__defaults__[0]  # the module's own memo, primed for the test
+    live_cache = (repo_ready_label.__defaults__ or (None,))[
+        0
+    ]  # the module's own memo, primed for the test
     saved_run, calls = subprocess.run, []
     try:
         live_cache.update(spellings)
@@ -948,7 +955,7 @@ def _selftest() -> None:
                 calls.append((cmd[cmd.index("--repo") + 1], cmd[cmd.index("--add-label") + 1]))
             return R()
 
-        subprocess.run = fake_run
+        subprocess.run = fake_run  # type: ignore[assignment]  # deliberate selftest monkeypatch
         out = apply_ready(rows, dry_run=False)
     finally:
         subprocess.run = saved_run
@@ -1117,7 +1124,9 @@ def _selftest() -> None:
     # DELIBERATE BREAK -> REVERT on the guard: without it, a testgen issue is stolen by codemod.
     _saved_classify = backlog.classify
     try:
-        backlog.classify = lambda _labels: "implement"  # pretend there is never a signal
+        backlog.classify = (
+            lambda _labels: "implement"
+        )  # pretend there is never a signal  # type: ignore[assignment]  # deliberate selftest monkeypatch
         stolen = task_label_for(dict(camp, labels=[{"name": "testing"}]))
         assert stolen == "refactor", "break did not change behaviour — test is vacuous"
     finally:
