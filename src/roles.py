@@ -29,7 +29,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1453,12 +1453,12 @@ def select_role_activation(
     return out
 
 
-def _shadow_gate(env: dict | None) -> bool:
+def _shadow_gate(env: Mapping[str, str] | None) -> bool:
     source = os.environ if env is None else env
     return str(source.get("ORCH_ROLE_SHADOW", "0")).strip() == "1"
 
 
-def _role_cap(env: dict | None, role_name: str) -> int:
+def _role_cap(env: Mapping[str, str] | None, role_name: str) -> int:
     source = os.environ if env is None else env
     specific = source.get(f"ORCH_{role_name.upper()}_ROLE_MAX_PER_CYCLE")
     raw = specific if specific is not None else source.get("ORCH_ROLE_MAX_PER_CYCLE", "1")
@@ -1504,7 +1504,7 @@ def activate_dispatch_roles(
     baseline_prompt: str,
     *,
     cwd: str,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     cap: dict | None = None,
     dry_run: bool = False,
     prompt_runner=None,
@@ -1617,7 +1617,7 @@ def activate_tick_triage(
     items: list[dict],
     cap: dict,
     *,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     dry_run: bool = False,
     runner=None,
 ) -> dict:
@@ -1714,7 +1714,7 @@ def activate_adjudicator_disagreement(
     review_status: dict | None,
     cap: dict,
     *,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     dry_run: bool = False,
     runner=None,
 ) -> dict:

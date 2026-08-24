@@ -109,8 +109,8 @@ explicit_package_bases = true
 # affects RESOLUTION only — the check target stays `src`, so the tests are not themselves checked.
 mypy_path = ["src", "tests"]
 
-# THE RATCHET, and the reason the check can be ON at all. 73 of the 99 modules are already clean;
-# the 26 below are not, and each is exempt BY NAME so the check can run TODAY over the
+# THE RATCHET, and the reason the check can be ON at all. 79 of the 99 modules are already clean;
+# the 20 below are not, and each is exempt BY NAME so the check can run TODAY over the
 # clean two-thirds instead of being off over everything. A blanket `ignore_errors` or a
 # `disable_error_code` list was rejected: both make the job green while checking nothing, which is
 # the defect verify.py exists to stop, and neither has anything to count.
@@ -127,21 +127,16 @@ mypy_path = ["src", "tests"]
 [[tool.mypy.overrides]]
 module = [
     "capabilities",
-    "capability_activation_audit",
     "capability_advisor",
     "capability_compiler",
     "capability_outcome_bridge",
     "capability_propensity",
     "capability_recurrence_check",
     "codemod_lane",
-    "consumer_sync_artifact_ingest",
     "dispatcher",
-    "durability_sweep",
     "exp_abcd",
     "feedback",
-    "issue_quality",
     "issue_readiness",
-    "keepalive_evidence",
     "keepalive_outcomes",
     "observability_dashboard",
     "redirect_sweep",
@@ -151,6 +146,5 @@ module = [
     "runtime_ac",
     "runtime_ac_gate",
     "switch_review",
-    "tick",
 ]
 ignore_errors = true

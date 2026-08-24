@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import feedback
 import provision
@@ -189,7 +190,7 @@ SUPERSEDED_TEXT = {
     },
 }
 
-SEED = {
+SEED: dict[str, Any] = {
     "schema_version": SEED_SCHEMA_VERSION,
     "repos": {
         "stranske/Workflows": {
@@ -1915,7 +1916,7 @@ def approve_suggestion(
         "already_present": already,
     }
     if apply and not already:
-        item = {"text": text}
+        item: dict[str, Any] = {"text": text}
         if suggestion.get("task_type"):
             item["task_types"] = [suggestion["task_type"]]
         entry.setdefault(chosen, []).append(item)
@@ -2595,13 +2596,13 @@ def main(argv: list[str]) -> int:
     if "--validate-agents-md" in argv:
         idx = argv.index("--validate-agents-md")
         repo_path = Path(argv[idx + 1]) if len(argv) > idx + 1 else Path(".")
-        repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
+        repo_arg = argv[argv.index("--repo") + 1] if "--repo" in argv else None
         max_lines = (
             int(argv[argv.index("--max-lines") + 1])
             if "--max-lines" in argv
             else AGENTS_EXPORT_MAX_LINES
         )
-        result = validate_agents_md_export(repo_path, repo=repo, max_lines=max_lines)
+        result = validate_agents_md_export(repo_path, repo_arg=repo_arg, max_lines=max_lines)
         print(json.dumps(result, indent=2) if "--json" in argv else result)
         return 0 if result["ok"] else 1
     if "--suggest-from-snapshot" in argv:
@@ -2657,7 +2658,7 @@ def main(argv: list[str]) -> int:
     if "--suggest-from-docs" in argv:
         idx = argv.index("--suggest-from-docs")
         repo_path = Path(argv[idx + 1]) if len(argv) > idx + 1 else Path(".")
-        repo = argv[argv.index("--repo") + 1] if "--repo" in argv else None
+        repo_arg = argv[argv.index("--repo") + 1] if "--repo" in argv else None
         max_per_repo = int(argv[argv.index("--max") + 1]) if "--max" in argv else 10
         sections = [
             argv[i + 1] for i, arg in enumerate(argv) if arg == "--section" and i + 1 < len(argv)
@@ -2666,7 +2667,7 @@ def main(argv: list[str]) -> int:
             json.dumps(
                 suggest_from_docs(
                     repo_path,
-                    repo=repo,
+                    repo_arg=repo_arg,
                     max_per_repo=max_per_repo,
                     include_root_docs="--include-root-docs" in argv,
                     sections=sections,

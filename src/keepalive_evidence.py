@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 import feedback
@@ -374,7 +374,7 @@ def _process_signals(
     signals = []
     for work_type in sorted(grouped):
         bucket = grouped[work_type]
-        prs = list(bucket["prs"] or [])
+        prs = cast(list, bucket["prs"] or [])
         count = len(prs)
         signals.append(
             {

@@ -360,7 +360,7 @@ def research_tick(
                 metadata={"target": target, "task_type": task_type},
             )
             prepare_result = prepare(
-                repo,
+                str(repo),
                 str(spec_file),
                 exp_id,
                 research_v2_arms(arms, item.get("profiles")),
