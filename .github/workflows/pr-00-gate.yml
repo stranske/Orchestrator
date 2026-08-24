@@ -14,6 +14,23 @@ name: Gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
+  # ALSO ON PUSH TO MAIN, and the reason is an incident rather than a preference.
+  #
+  # This workflow used to run on `pull_request` only. On 2026-08-24 its PR run was held at
+  # `action_required` with ZERO jobs, so #90 merged with no lint, no format and no typecheck --
+  # and because pushes to main did not trigger the Gate either, main was never checked afterwards
+  # either. Six F821s sat on main and were found only because somebody ran ruff by hand.
+  #
+  # A held PR run cannot be fixed from here (no API clears it). What CAN be fixed is the silence
+  # AFTER the merge: with this trigger the same commit is checked on main, so an unverified merge
+  # becomes a red on main within one run instead of never. That is strictly worse than catching it
+  # pre-merge and strictly better than not catching it -- fail toward noise, not toward silence.
+  #
+  # It does not make the Gate a merge blocker (main has no branch protection) and it is not a
+  # substitute for `scripts/check_checks_reported.py`, which is what catches the absence while the
+  # PR is still open.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
