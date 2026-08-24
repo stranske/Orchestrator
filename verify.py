@@ -658,8 +658,13 @@ def verify(*, update_floor: bool = False, forgive_healed_drift: bool = False) ->
         )
         FLOOR.write_text(json.dumps(blob, indent=1) + "\n", encoding="utf-8")
         wrote_floor = True
+        # Report the number WRITTEN, not `py["passed"]`. The blob records `passed + skipped`
+        # (machine-invariant, see above), so printing the bare pass count made the line disagree
+        # with the file it had just written: the first production run logged `passed=416` while
+        # recording 442. A log that contradicts the artifact is how a correct write comes to look
+        # like a bug -- and how a real one could hide.
         lines.append(
-            f"  floor updated: collected={py['collected']} passed={py['passed']} "
+            f"  floor updated: collected={blob['collected']} passed={blob['passed']} "
             f"(ceilings preserved)"
         )
 

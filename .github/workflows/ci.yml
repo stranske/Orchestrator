@@ -108,8 +108,20 @@ jobs:
   # unchanged, so a drift is still REPORTED red there on the commit that introduced it; this job
   # heals it for the next one rather than hiding it.
   #
-  # Converges without a loop guard: the commit it pushes re-triggers this workflow, that run finds
-  # no drift, writes nothing, and pushes nothing.
+  # WHY THERE IS NO LOOP, and the first version of this comment got the reason WRONG. It claimed
+  # "the commit it pushes re-triggers this workflow, that run finds no drift, and pushes nothing".
+  # It does not re-trigger anything: a push made with the default GITHUB_TOKEN does not start a
+  # workflow run at all. Measured on the first real reconcile (2026-08-23): the pushed commit
+  # 349cb1c6 has ZERO workflow runs. So the loop is impossible, but for a stronger reason than
+  # convergence.
+  #
+  # TWO CONSEQUENCES, both of which the wrong reason hid:
+  #   * the reconcile commit is never verified by ci.yml. Harmless as written -- it changes only
+  #     the two integers this run just measured -- but it does mean main carries a commit CI never
+  #     saw, so keep this job's write narrow enough that that is obviously safe.
+  #   * IF ANYONE SWAPS THIS FOR A PAT OR AN APP TOKEN to get CI on the commit, the loop becomes
+  #     REAL and this job needs an explicit guard. That is the change to be careful about, and the
+  #     old comment would have told you it was already handled.
   reconcile-floor:
     name: reconcile the collection floor (main only)
     # Never on a pull_request: a PR's floor is the author's claim about their own delta, and
