@@ -1353,6 +1353,21 @@ def evaluate(
     }
 
 
+def _bind_synthesis(fn, repo: str, exp_id: str):
+    """Bind THIS iteration's repo/exp_id, which a bare lambda in a loop would not.
+
+    Was `lambda repo=repo, exp_id=edir.name: fn(repo, exp_id)`. The default-arg trick is what made
+    it correct — it captures the current values so a later loop turn cannot rebind them — and it is
+    also what stopped mypy inferring the lambda's type. A closure over explicit parameters says the
+    same thing and is checkable.
+    """
+
+    def launch():
+        return fn(repo, exp_id)
+
+    return launch
+
+
 def followup(
     *,
     max_experiments: int = 1,
@@ -1563,9 +1578,7 @@ def followup(
                     if launch_available and not promotion_inflight:
                         promotion = promotion_reconcile(
                             edir,
-                            launch_fn=lambda repo=repo, exp_id=edir.name: (
-                                (synthesize_fn or synthesize)(repo, exp_id)
-                            ),
+                            launch_fn=_bind_synthesis(synthesize_fn or synthesize, repo, edir.name),
                             completion_fn=promotion_completion_fn,
                             resume_fn=promotion_resume_fn or _resume_synthesis_promotion,
                             verify_fn=promotion_verify_fn,
@@ -1657,7 +1670,7 @@ def _winner_and_harvest(
         denom = sum(w for _, w in scs)
         means[agent] = (sum(score * w for score, w in scs) / denom) if denom else 0.0
         notes[agent] = ns
-    winner = max(means, key=means.get)
+    winner = max(means, key=lambda k: means[k])
     return {
         "winner": winner,
         "winner_mean": means[winner],

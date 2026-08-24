@@ -39,7 +39,7 @@ def _fixture_capabilities() -> set[str]:
     """Every capability named by a fixture (guards and flag probes excluded)."""
     named = [f.get("capability") for f in recurrence.FIXTURES]
     named += [f.get("capability") for f in recurrence.PREDICATE_FIXTURES]
-    return {n for n in named if n and not str(n).endswith("-flag")}
+    return {str(n) for n in named if n and not str(n).endswith("-flag")}
 
 
 def test_every_capability_has_a_recurrence_fixture():
@@ -384,7 +384,8 @@ def roster() -> str:
         row = rows.get(cap_id) or {}
         fx = "yes" if cap_id in covered else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
         can = "yes" if row.get("reachable") else "NO"
-        fire = {True: "fires", False: "miss"}.get(fired.get(cap_id), "—")
+        verdict = fired.get(cap_id)
+        fire = "—" if verdict is None else ("fires" if verdict else "miss")
         out.append(
             f"| {cap_id} | {fx} | {can} | {fire} | "
             f"{', '.join(row.get('defects') or []) or '—'} |"

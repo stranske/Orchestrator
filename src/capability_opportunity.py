@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Mapping
 
 import capabilities
 import feedback
@@ -99,7 +100,12 @@ def _role_invocation_counts(conn=None) -> dict[str, int]:
 
 
 def assess(
-    cap_id: str, cap: dict, *, task_counts: dict, role_counts: dict, env: dict | None = None
+    cap_id: str,
+    cap: dict,
+    *,
+    task_counts: dict,
+    role_counts: dict,
+    env: Mapping[str, str] | None = None,
 ) -> dict:
     """One capability: its trigger, the work that matched it, and the resulting verdict."""
     env = os.environ if env is None else env
@@ -153,7 +159,7 @@ def assess(
     }
 
 
-def report(*, path=None, env: dict | None = None) -> dict:
+def report(*, path=None, env: Mapping[str, str] | None = None) -> dict:
     caps = capabilities.load(path or capabilities.REG)
     task_counts = _task_type_counts()
     role_counts = _role_invocation_counts()

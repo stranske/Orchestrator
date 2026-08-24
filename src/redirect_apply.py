@@ -916,7 +916,7 @@ def _selftest() -> None:
         assert any("daily bound" in b for b in bounded["blocks"]), bounded
 
         # ---- --dry-run must not be a cheap-looking door onto a per-candidate offload ------
-        spent = []
+        spent: list = []
         guarded = apply_candidates(
             report_dir=tmp,
             corpus_path=corpus,

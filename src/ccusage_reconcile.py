@@ -145,12 +145,12 @@ def _run_windows(
             skipped["unsupported_agent"] += 1
             continue
         starts = [
-            int(row.get("ts"))
+            int(row.get("ts") or 0)
             for row in run_rows
             if row.get("event") == "start" and isinstance(row.get("ts"), (int, float))
         ]
         completes = [
-            int(row.get("ts"))
+            int(row.get("ts") or 0)
             for row in run_rows
             if row.get("event") == "complete" and isinstance(row.get("ts"), (int, float))
         ]
@@ -237,7 +237,7 @@ def _match_window(
     if agent not in ATTRIBUTABLE_AGENTS:
         return None, "unsupported_agent"
     metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-    last_ts = _parse_iso_ts(metadata.get("lastActivity"))
+    last_ts = _parse_iso_ts((metadata or {}).get("lastActivity"))
     if last_ts is None:
         return None, "missing_last_activity"
     matches = [

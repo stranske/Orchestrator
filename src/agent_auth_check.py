@@ -201,7 +201,7 @@ def _render(rows: list[dict]) -> str:
 
 
 def _selftest() -> None:
-    rows = [
+    rows: list[dict] = [
         {
             "agent": "a",
             "verdict": "OK",
@@ -279,7 +279,10 @@ def _selftest() -> None:
                     raise OSError("Resource temporarily unavailable")
                 return _real_read(self, *a, **k)
 
-            Path.read_text = _boom
+            # Deliberate monkeypatch inside the selftest: the point is to make a real read FAIL
+            # so the OSError path is exercised. `method-assign` is right in general and wrong
+            # here, so the exemption is narrow and stated rather than configured away.
+            Path.read_text = _boom  # type: ignore[method-assign]
             _bad = _credential_file_state("vibe")
             assert _bad["key_present"] is None, _bad
             assert _bad["reason_class"] == "environment", _bad
@@ -288,12 +291,12 @@ def _selftest() -> None:
             assert CRED_READ_ATTEMPTS >= 2, "the retry is the point; one attempt is no retry"
             assert len(_calls) == CRED_READ_ATTEMPTS, (len(_calls), CRED_READ_ATTEMPTS)
             # A file that is genuinely ABSENT stays a hard failure and is NOT retried.
-            Path.read_text = _real_read
+            Path.read_text = _real_read  # type: ignore[method-assign]
             CREDENTIAL_FILES["vibe"] = (Path(_td) / "nope.env", "MISTRAL_API_KEY")
             _gone = _credential_file_state("vibe")
             assert _gone["present"] is False and not _gone.get("reason_class"), _gone
         finally:
-            Path.read_text = _real_read
+            Path.read_text = _real_read  # type: ignore[method-assign]
             if _saved is not None:
                 CREDENTIAL_FILES["vibe"] = _saved
 

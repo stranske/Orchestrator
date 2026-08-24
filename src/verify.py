@@ -808,7 +808,7 @@ def _selftest() -> None:
         ("5 passed in 1s", 5, 5),
         ("no tests ran in 0.01s", 0, 0),
     ):
-        counts = {}
+        counts: dict[str, int] = {}
         for n, kind in COUNT_RE.findall(text):
             kind = "error" if kind.startswith("error") else kind
             counts[kind] = counts.get(kind, 0) + int(n)
@@ -1063,6 +1063,7 @@ def _selftest() -> None:
             ],
         }
     )
+    assert one is not None, "the absent-module line must render for a non-empty report"
     for phrase in (
         "1 of 43",
         "evidence-acquisition",
@@ -1083,7 +1084,7 @@ def _selftest() -> None:
             "absent": [{"capability_id": "ghost", "entrypoint": "ghost.py", "found_in": []}],
         }
     )
-    assert "not found in any sibling checkout" in nowhere, nowhere
+    assert nowhere is not None and "not found in any sibling checkout" in nowhere, nowhere
 
     # THE TWO ROOTS. On a flat tree they coincide, which is exactly why an assertion is needed:
     # without one, code that re-merged them would pass here and only fail after the layout moved.

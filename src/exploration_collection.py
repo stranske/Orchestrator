@@ -26,6 +26,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import claims
 import dispatcher
@@ -128,6 +129,8 @@ def _filter_backlog(
 
 def _entry_is_late(task_type: str, assignment: dict) -> bool:
     for entry in (router.ROUTE_TABLE.get(task_type, {}) or {}).get("agents") or []:
+        if not isinstance(entry, dict):
+            continue
         if entry.get("agent") == assignment.get("agent") and entry.get("mode") == assignment.get(
             "mode"
         ):
@@ -421,7 +424,7 @@ def build_window(
                 require_exploration=True,
             )
             count = _exploratory_count(probe_decision)
-            seed_search["attempted"] += 1
+            seed_search["attempted"] = int(seed_search.get("attempted") or 0) + 1
             if count > best_count:
                 best_count = count
                 best_decision = probe_decision
@@ -456,7 +459,7 @@ def build_window(
         if not dry_run and rejected_assignments:
             _release_rejected_claims(rejected_assignments)
         if not dry_run and _exploratory_count(decision) < min_exploratory:
-            _release_assignments(decision.get("assignments") or [])
+            _release_assignments(cast(list, decision.get("assignments") or []))
             blocked_reasons.append(
                 "active claim race left too few direct exploration assignments to dispatch"
             )

@@ -20,6 +20,7 @@ import shlex
 import shutil
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import claims
@@ -505,7 +506,7 @@ def schedule_backfill(
     backlog_path: Path | None = None,
     backlog_payload: dict | None = None,
     confirm: bool = False,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     prepare_fn=None,
     issue_body_fn=None,
 ) -> dict:
@@ -794,7 +795,8 @@ def _selftest() -> None:
         # template alone would leave the two halves free to drift apart, which is the same shape
         # as a gate whose measuring window differs from its draining window.
         assert calls[0]["exp_id"].startswith(f"{planned_job['exp_id_template']}-"), calls
-        assert claims.holder("o/r#1")["agent"] == BACKFILL_CLAIM_AGENT, claims.holder("o/r#1")
+        held = claims.holder("o/r#1")
+        assert held and held["agent"] == BACKFILL_CLAIM_AGENT, held
 
         no_progress_db = Path(tmp) / "no-progress.db"
         feedback.DB_PATH = no_progress_db

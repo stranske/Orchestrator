@@ -34,7 +34,7 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from capability_ir import (
     CandidateTombstone,
@@ -399,8 +399,8 @@ def normalize_episode(events: dict[str, CompletionEvent]) -> NormalizedEpisode:
             "kind": _derive_kind(decision),
             "signature": selected_ids
             or {
-                "action_id": _norm_string(_result(decision).get("action_id")),
-                "decision_source_id": _norm_string(_result(decision).get("decision_source_id")),
+                "action_id": (_norm_string(_result(decision).get("action_id")),),
+                "decision_source_id": (_norm_string(_result(decision).get("decision_source_id")),),
             },
             "selected_ids": selected_ids,
         },
@@ -425,7 +425,7 @@ def normalize_episode(events: dict[str, CompletionEvent]) -> NormalizedEpisode:
     }
     semantic_graph = {
         **graph,
-        "execution": {"operation": graph["execution"]["operation"]},
+        "execution": {"operation": cast(dict, graph["execution"])["operation"]},
     }
     output_graph = {
         "trigger": graph["trigger"],
@@ -711,7 +711,7 @@ class PatternMiner:
             progress["next_action"] = "wait_for_new_completion_evidence"
             progress["reasons"] = reasons
             self.rejections.append(
-                Rejection(progress["fingerprint"], "evidence_gate", tuple(reasons))
+                Rejection(str(progress["fingerprint"]), "evidence_gate", tuple(reasons))
             )
             return None, progress
 

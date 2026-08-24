@@ -104,10 +104,13 @@ explicit_package_bases = true
 # config rather than the code — 769 instead of 601 when first measured, all of the difference
 # spurious. The same reason `pythonpath = ["src"]` exists for pytest above: one relocation, two
 # tools that each need telling.
-mypy_path = ["src"]
+# `tests` as well as `src`: `capability_admission` reads the recurrence-fixture roster from
+# `test_capability_set_coverage`, a real and declared dependency (see paths.TESTS_DIR). mypy_path
+# affects RESOLUTION only — the check target stays `src`, so the tests are not themselves checked.
+mypy_path = ["src", "tests"]
 
-# THE RATCHET, and the reason the check can be ON at all. 56 of the 99 modules are already clean;
-# the 43 below are not, and each is exempt BY NAME so the check can run TODAY over the
+# THE RATCHET, and the reason the check can be ON at all. 73 of the 99 modules are already clean;
+# the 26 below are not, and each is exempt BY NAME so the check can run TODAY over the
 # clean two-thirds instead of being off over everything. A blanket `ignore_errors` or a
 # `disable_error_code` list was rejected: both make the job green while checking nothing, which is
 # the defect verify.py exists to stop, and neither has anything to count.
@@ -123,48 +126,31 @@ mypy_path = ["src"]
 # module is now a red, and a module can never quietly rejoin the exempt set.
 [[tool.mypy.overrides]]
 module = [
-    "agent_auth_check",
     "capabilities",
     "capability_activation_audit",
-    "capability_admission",
     "capability_advisor",
     "capability_compiler",
-    "capability_effectiveness",
-    "capability_opportunity",
     "capability_outcome_bridge",
     "capability_propensity",
     "capability_recurrence_check",
-    "ccusage_reconcile",
-    "claims",
     "codemod_lane",
     "consumer_sync_artifact_ingest",
-    "cross_repo_lane",
     "dispatcher",
     "durability_sweep",
     "exp_abcd",
-    "exploration_backfill",
-    "exploration_collection",
-    "exploration_evidence_plan",
     "feedback",
     "issue_quality",
     "issue_readiness",
     "keepalive_evidence",
     "keepalive_outcomes",
-    "mcp_server",
     "observability_dashboard",
-    "pattern_miner",
-    "range_lane_rollout",
-    "redirect_apply",
     "redirect_sweep",
     "repo_knowledge",
-    "research_scheduler",
-    "research_subjects",
     "roles",
     "router",
     "runtime_ac",
     "runtime_ac_gate",
     "switch_review",
     "tick",
-    "verify",
 ]
 ignore_errors = true

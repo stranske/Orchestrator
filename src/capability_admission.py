@@ -473,7 +473,8 @@ def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | N
     if cap is None:
         raise ValueError(f"unknown capability: {capability_id}")
     ctx = ctx or _context(path)
-    checks, missing = {}, []
+    checks: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
     for name, fn in REQUIREMENTS:
         try:
             ok, detail = fn(cap, ctx)
@@ -537,7 +538,8 @@ def preflight(spec: dict) -> dict:
         "fixtures": set(),
         **_findability_context([stub["capability_id"]]),
     }
-    checks, missing = {}, []
+    checks: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
     # Caller/heartbeat/fixture cannot be verified for code that does not exist; they are reported as
     # OBLIGATIONS rather than silently skipped, because silently skipping is how they got skipped.
     obligations = {"caller_exists", "heartbeat", "fixture"}
