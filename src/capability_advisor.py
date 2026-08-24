@@ -2215,16 +2215,45 @@ def learned_associations(*, path=None) -> dict:
 # is a defect in the dispatcher — it is offload's intrinsic boundary, and it was written down nowhere
 # a caller could see. A capability that cannot say what it cannot take is investigated and declined
 # once per surface, forever.
+#
+# CORRECTED 2026-08-24, AND THE CORRECTION IS THE POINT OF THIS PARAGRAPH. The six declines above were
+# real, but the sentence written from them over-generalised into a claim about the MECHANISM that is
+# false: it said offload was "a read-only, text-returning hand-off" that "cannot run code and read
+# exit codes". Offload has never been read-only. `adapters` sends `--sandbox workspace-write` unless
+# `mode="assess"` (adapters.py, the `sandbox = "read-only" if mode == "assess"` line), and can send
+# `--dangerously-bypass-approvals-and-sandbox` with no sandbox at all; `dispatcher.offload`'s own
+# docstring gives `isolate=True` the job of letting "multiple code-building offloads run in parallel";
+# and the orchestrate skill's pitfall #1 says the DEFAULT is the coding mode. The offloaded agent runs
+# code, edits files and reads exit codes routinely.
+#
+# WHY THE ERROR MATTERED, since it read as helpful either way: this table is stamped onto every
+# advisor answer, so a false narrowing does not merely mis-describe — it removes the capability from
+# consideration for exactly the work it is best at. It did: a caller reading this entry planned a
+# 12-module type-drain around read-only classification passes instead of write-mode offloads, which is
+# the capability being talked out of its own job by its own documentation.
+#
+# WHAT IS ACTUALLY TRUE, and what the six declines were really about, is one step in from the
+# mechanism: FIRST-PERSON OBSERVATION does not survive the hand-off. The agent can run the guard; the
+# orchestrator does not WITNESS it, and gets a report instead of evidence. That is why a deliberate
+# break→revert demonstration and a split grep trace are still declines — not because the sandbox
+# forbids the typing, but because the seeing is the deliverable. State the boundary at that level; a
+# boundary stated one level too coarse is indistinguishable from the capability being unavailable.
 HOW_TO_USE = {
     "offload": (
         "dispatcher.offload('gemini', prompt, cwd=repo) — spends the cheap agent's context "
-        "instead of this seat's; returns the result, opens no PR. BOUNDARY: a read-only, "
-        "text-returning hand-off. It cannot run code and read exit codes, re-run a guard with a "
-        "deliberate break in place, drive a browser, or interleave runtime experiments with "
-        "reading — work that has to be first-person does not survive the hand-off. Nor split a "
-        "trace whose whole is the point: a wiring claim scoped to one half of a grep is how a "
-        "'no caller' refutation goes wrong. Either is the decline to make in one line rather "
-        "than investigate"
+        "instead of this seat's; returns the result, opens no PR. IT IS WRITE-CAPABLE BY "
+        "DEFAULT: adapters sends --sandbox workspace-write unless mode='assess', and "
+        "isolate=True copies the cwd so several code-building offloads run in parallel without "
+        "same-dir races. So the offloaded agent CAN edit files, run commands and read exit "
+        "codes — that is not the boundary, and briefs have been wrongly narrowed to reading "
+        "because this line once said it was. BOUNDARY: what does not survive the hand-off is "
+        "first-person OBSERVATION. You get the agent's report, not your own witness, so work "
+        "whose value IS the seeing — re-running a guard with a deliberate break in place and "
+        "watching it go RED, driving a browser, interleaving runtime experiments with reading — "
+        "stays in this seat, and anything the agent does write is re-verified here rather than "
+        "believed. Nor split a trace whose whole is the point: a wiring claim scoped to one "
+        "half of a grep is how a 'no caller' refutation goes wrong. Either is the decline to "
+        "make in one line rather than investigate"
     ),
     "codemod-campaign": (
         "label the issue `refactor` (or let the daily issue_readiness task-label "
@@ -2364,7 +2393,12 @@ def _selftest_how_to_use() -> None:
     # merely the presence of a key.
     off = HOW_TO_USE["offload"]
     assert "BOUNDARY" in off and "first-person" in off, off
-    assert "read-only" in off and "text-returning" in off, off
+    # CORRECTED 2026-08-24. This line used to assert "read-only" and "text-returning" — it pinned a
+    # FALSE claim, so the test actively defended the defect and would have failed the fix. It now
+    # pins the true mechanical facts instead (workspace-write default, isolate for parallel code
+    # offloads), which is strictly stronger: re-introducing the read-only wording cannot satisfy it.
+    assert "workspace-write" in off and "isolate=True" in off, off
+    assert "read-only" not in off, "offload is not read-only; see adapters sandbox selection: " + off
     adv = HOW_TO_USE["adversarial-review"]
     assert "CALLABLE AT ANY SURFACE" in adv, adv
     assert "closer_gate" in adv and "not a precondition for calling it" in adv, adv
