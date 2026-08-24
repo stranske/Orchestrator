@@ -18,7 +18,7 @@ import tempfile
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import capabilities
 import cross_repo_lane
@@ -808,8 +808,8 @@ def compile_evidence_contract(source: dict[str, Any]) -> dict[str, Any]:
         "schema": EVIDENCE_CONTRACT_PLAN_SCHEMA,
         "version": EVIDENCE_CONTRACT_VERSION,
         "plan_id": plan_id,
-        "candidate_id": candidate["candidate_id"],
-        "candidate_name": candidate["name"],
+        "candidate_id": (candidate or {})["candidate_id"],
+        "candidate_name": (candidate or {})["name"],
         "effective_subject_count": effective,
         "capture_hook": hook,
         "named_test_id": named_test_id,
@@ -2129,9 +2129,9 @@ def compile_role_capability(
         raise RoleCompileError(errors)
     normalized_protocol = {
         "version": 1,
-        "purpose": protocol["purpose"].strip(),
-        "instructions": [item.strip() for item in protocol["instructions"]],
-        "max_context_chars": protocol["max_context_chars"],
+        "purpose": str((protocol or {})["purpose"]).strip(),
+        "instructions": [item.strip() for item in (protocol or {})["instructions"]],
+        "max_context_chars": (protocol or {})["max_context_chars"],
         "output_format": "strict_json",
     }
     lifecycle = {
@@ -2153,8 +2153,8 @@ def compile_role_capability(
         "route_as": route_as,
         "input_schema": input_schema,
         "output_schema": output_schema,
-        "selector": dict(selector),
-        "capacity_policy": dict(capacity),
+        "selector": dict(selector or {}),
+        "capacity_policy": dict(capacity or {}),
         "prompt_protocol": normalized_protocol,
         "prompt_hash": stable_hash("generated-role-prompt-protocol", normalized_protocol),
         "lifecycle": lifecycle,
@@ -2286,7 +2286,7 @@ def reference_role_candidate(*, now: int | None = None) -> CapabilityIR:
         counterexamples=(),
         independent_subjects=tuple(item.subject_id for item in occurrences),
         independent_repositories=tuple(item.repository for item in occurrences),
-        selector=contract["selector"],
+        selector=cast(dict, contract["selector"]),
         graph={
             "phase_order": [
                 "trigger",
@@ -2462,7 +2462,7 @@ def compile_playbook_capability(
         ):
             errors.append("playbook selector lanes are unsupported")
     refs_result = repo_knowledge.validate_current_refs(
-        Path(repo_root), contract.get("current_refs")
+        Path(repo_root), cast(dict, contract.get("current_refs") or {})
     )
     if not refs_result["valid"]:
         errors.extend(refs_result["errors"] or ["stale current path"])
@@ -2608,7 +2608,9 @@ def compile_playbook_candidate(
             }
             core["owner_question"] = question
             if record_owner_question:
-                core["owner_question_result"] = feedback.record_owner_question(**question)
+                core["owner_question_result"] = feedback.record_owner_question(
+                    **cast(dict, question)
+                )
         return {**core, "decision_id": stable_hash("repo-playbook-decision", core)}
     return {
         "schema": PLAYBOOK_DECISION_SCHEMA,
@@ -2742,7 +2744,7 @@ def record_playbook_invocation(
         status="recorded",
         payload={
             **common,
-            "result": {**common["result"], "matched": True, "status": "matched"},
+            "result": {**cast(dict, common["result"]), "matched": True, "status": "matched"},
         },
         timestamp=current,
     )
@@ -2755,7 +2757,7 @@ def record_playbook_invocation(
         payload={
             **common,
             "result": {
-                **common["result"],
+                **cast(dict, common["result"]),
                 "matched": True,
                 "invoked": True,
                 "action_id": "playbook-injection",

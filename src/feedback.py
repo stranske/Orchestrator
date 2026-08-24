@@ -2796,7 +2796,7 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
             role_ids = payload.get("role_ids") or []
             if not role_ids or role_ids[0] not in selector:
                 continue
-            out = selector[role_ids[0]]
+            out: dict[str, Any] = selector[role_ids[0]]
             result = payload.get("result") or {}
             status = result.get("selector_status")
             if status in out:
@@ -2819,7 +2819,7 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
             role_runs = int(
                 c.execute("SELECT COUNT(*) FROM runs WHERE role_name=?", (role,)).fetchone()[0]
             )
-            out: dict[str, Any] = selector[role]
+            out = selector[role]
             out["role_runs"] = role_runs
             out["linked"] = int(linked or 0)
             out["durable"] = int(durable or 0)
@@ -4790,13 +4790,22 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
             for m in metrics
         }
 
-        def _effective(cell_agent: str, s: dict, m: str) -> tuple[float | None, str]:
+        def _effective(cell_agent: str, s: dict, m: str) -> tuple[float, str]:
+            """Every branch returns a real number — the `0.0` fallback is the point of the last one.
+
+            The return type was widened to `float | None` in an earlier pass to quiet the checker,
+            which then pushed three arithmetic errors onto the CALLER. It was never optional: the
+            `global_median[m] is not None` guard already proves the value. Binding it makes that
+            narrowing visible instead of hiding it behind an indexed access mypy cannot follow, so
+            the signature is honest again and the caller needs no coercion.
+            """
             if s[m]:
                 return float(s[m]), "m"
             if cell_agent in agent_mean[m]:
-                return agent_mean[m][cell_agent], "a"
-            if global_median[m] is not None:
-                return global_median[m], "g"
+                return float(agent_mean[m][cell_agent]), "a"
+            median = global_median[m]
+            if median is not None:
+                return float(median), "g"
             return 0.0, "0"
 
         # Pass 2: score with effective effort and write the version.
