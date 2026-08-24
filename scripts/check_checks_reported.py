@@ -57,7 +57,17 @@ def _gh_json(path: str) -> object:
         ["gh", "api", path, "--paginate"], capture_output=True, text=True, check=False
     )
     if proc.returncode != 0:
-        raise SystemExit(f"gh api {path} failed: {proc.stderr.strip()}")
+        err = proc.stderr.strip()
+        # A rate limit is the expected degraded case, not a bug, and this runs every lane round --
+        # dumping GitHub's full paragraph hourly would train the reader to skip the whole section.
+        # One line, and it says plainly that absence is now UNKNOWN rather than absent-of-problems:
+        # a reporter that cannot report must not read as a clean bill of health.
+        if "rate limit" in err.lower():
+            raise SystemExit(
+                "GitHub rate limit reached — absent-check status is UNKNOWN this round, "
+                "which is not the same as clean. Re-run after the limit resets."
+            )
+        raise SystemExit(f"gh api {path} failed: {err}")
     # --paginate concatenates JSON documents; take the objects in order.
     out, decoder, idx = [], json.JSONDecoder(), 0
     text = proc.stdout.strip()
