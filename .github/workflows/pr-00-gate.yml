@@ -1053,7 +1053,27 @@ jobs:
         if: ${{ always() && steps.coverage_stats.outputs.stats_json != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: gate-coverage.json
+          # ARTIFACT NAME `gate-coverage`, FILE NAME `gate-coverage.json`. They are different
+          # things and this step used to conflate them, which is why Maint Coverage Guard failed
+          # the moment it was unheld:
+          #
+          #   error: Coverage verification could not find required coverage artifacts on a
+          #          successful Gate run.
+          #   warn:  Unable to locate a recent successful Gate workflow run with required coverage
+          #          artifacts: gate-coverage-trend, gate-coverage-trend-history, gate-coverage.
+          #
+          # maint-coverage-guard.yml downloads exactly three artifact NAMES (L251/261/271):
+          # `gate-coverage-trend`, `gate-coverage-trend-history`, `gate-coverage`. The Gate
+          # produced the first two under those names and the third as `gate-coverage.json`, so the
+          # guard probed ten successful runs, found two of three every time, and reported no usable
+          # run at all. A paired literal in two files that disagreed -- this repo's signature
+          # defect, and it stayed invisible for as long as the guard was held.
+          #
+          # Renaming the ARTIFACT is safe and was checked, not assumed: `gate-coverage.json` as an
+          # artifact name appears nowhere else in this repo, and the only download-artifact steps
+          # in any workflow here are the guard's three. The FILE inside is still
+          # gate-coverage.json, so anything reading the contents is unaffected.
+          name: gate-coverage
           path: gate-coverage.json
           if-no-files-found: warn
           retention-days: 7
