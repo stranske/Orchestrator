@@ -1,0 +1,5 @@
+# First-party test modules imported directly by sibling tests.
+test_consumer_sync_shadow
+test_evidence_contract_compiler
+test_playbook_compiler
+test_role_compiler

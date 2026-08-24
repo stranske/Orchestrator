@@ -83,7 +83,7 @@ def _make_client():
         )
     os.environ.setdefault("LANGCHAIN_API_KEY", key)
     try:
-        from langsmith import Client
+        from langsmith import Client  # type: ignore[import-not-found]
 
         return Client(api_key=key)
     except ModuleNotFoundError as exc:
