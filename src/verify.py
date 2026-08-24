@@ -412,7 +412,11 @@ def _blocks_floor_update(problems: list[str]) -> list[str]:
 
 
 def _failing_problems(
-    problems: list[str], *, forgive_healed_drift: bool, wrote_floor: bool
+    problems: list[str],
+    *,
+    forgive_healed_drift: bool,
+    wrote_floor: bool,
+    floor_may_lag: bool = False,
 ) -> list[str]:
     """Which problems make the run RED? Normally all of them. Pure, so the selftest holds the rule.
 
@@ -442,7 +446,25 @@ def _failing_problems(
     DROP, so the write never happens in that direction and there is nothing to forgive. Raising a
     floor to observed reality makes the gate STRICTER, never weaker.
     """
-    if forgive_healed_drift and wrote_floor:
+    # THE THIRD CONSUMER OF ONE PREDICATE. `floor_may_lag` is for a PULL REQUEST, where the
+    # recorded floor is main's and main moves under the branch: the correct number is only knowable
+    # on the merge result, so demanding it from the author is demanding something no amount of care
+    # delivers. Measured: one one-line change needed SIX re-measurements in two hours while main
+    # moved eight times, and this file's own note records the floor being found behind reality four
+    # separate times before that.
+    #
+    # WHY THIS IS NOT THE "GATE THAT OPENS BECAUSE IT WAS ASKED" that `wrote_floor` exists to stop.
+    # There the drift was on MAIN with nothing recording it, so forgiving it left the gate
+    # permanently permissive. Here the drift is on a BRANCH, and main's equality is enforced
+    # separately by the push-to-main run plus the reconcile job that heals it. The lag is
+    # structural and lasts exactly one CI run.
+    #
+    # WHAT IS STILL ENFORCED ON A PR, and it is the direction that matters: a collection DROP is
+    # NOT drift, so `_blocks_floor_update` keeps it fatal. Tests silently ceasing to be collected
+    # still fails on every branch. Only "you added tests and main moved" is forgiven — and it is
+    # still PRINTED, because the problems are reported before this function is consulted. Forgiven
+    # is not hidden.
+    if floor_may_lag or (forgive_healed_drift and wrote_floor):
         return _blocks_floor_update(problems)
     return problems
 
@@ -630,7 +652,12 @@ def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
     return problems
 
 
-def verify(*, update_floor: bool = False, forgive_healed_drift: bool = False) -> tuple[int, str]:
+def verify(
+    *,
+    update_floor: bool = False,
+    forgive_healed_drift: bool = False,
+    floor_may_lag: bool = False,
+) -> tuple[int, str]:
     py = run_pytest()
     floor = load_floor()
     mods = selftest_modules()
@@ -795,7 +822,10 @@ def verify(*, update_floor: bool = False, forgive_healed_drift: bool = False) ->
         )
 
     failing = _failing_problems(
-        problems, forgive_healed_drift=forgive_healed_drift, wrote_floor=wrote_floor
+        problems,
+        forgive_healed_drift=forgive_healed_drift,
+        wrote_floor=wrote_floor,
+        floor_may_lag=floor_may_lag,
     )
     return (1 if failing else 0), "\n".join(lines) + "\n"
 
@@ -1029,6 +1059,36 @@ def _selftest() -> None:
         "to main on every push again, appending a stamp that records nothing"
     )
 
+    # ---- --floor-may-lag forgives a LAGGING floor on a PR, never a DROP -----------------------
+    # DELIBERATE-BREAK DEMO: widen it to `return []` and the third assert fails — a collection
+    # drop would stop failing on every branch, which is the one direction that must never be
+    # forgiven anywhere.
+    _lag = [f"{DRIFT_PREFIX}: 443 collected > floor 442 — ..."]
+    _drop = ["collection DROPPED: 400 < floor 442 — tests stopped running"]
+    # A PR whose floor lags because main moved: reported, not fatal.
+    assert (
+        _failing_problems(_lag, forgive_healed_drift=False, wrote_floor=False, floor_may_lag=True)
+        == []
+    )
+    # The SAME input without the flag still fails — main and local runs are unchanged.
+    assert (
+        _failing_problems(_lag, forgive_healed_drift=False, wrote_floor=False, floor_may_lag=False)
+        == _lag
+    )
+    # A collection DROP is fatal even on a PR. This is the assertion that makes the flag safe:
+    # `_blocks_floor_update` is what distinguishes them, so the flag can never widen into it.
+    assert (
+        _failing_problems(_drop, forgive_healed_drift=False, wrote_floor=False, floor_may_lag=True)
+        == _drop
+    )
+    # A real failure is never forgiven either.
+    assert _failing_problems(
+        _lag + ["3 pytest failure(s)/error(s)"],
+        forgive_healed_drift=False,
+        wrote_floor=False,
+        floor_may_lag=True,
+    ) == ["3 pytest failure(s)/error(s)"]
+
     # ---- --update-floor APPENDS to the note, so the ceiling rationale survives the tool -------
     # DELIBERATE-BREAK DEMO: restore the old `blob["note"] = (...)` literal and the first assert
     # fails — the prior text, which is the only record of why each ceiling is what it is, is gone.
@@ -1123,6 +1183,7 @@ def _selftest() -> None:
         "not, floor counts passed+skipped, floor fails BEHIND reality as loudly as below "
         "it and names the integers to write, --update-floor appends to the note instead of "
         "clobbering the ceiling rationale, a no-op floor write is skipped entirely, "
+        "--floor-may-lag forgives a lagging floor on a PR but never a collection drop, "
         "--reconcile-floor forgives ONLY a drift it "
         "healed and never an unwritten one, absent-module line is silent when clean and is "
         "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail)"
@@ -1136,6 +1197,16 @@ def main() -> int:
         "--update-floor",
         action="store_true",
         help="record the current counts as the floor (only when everything passes)",
+    )
+    ap.add_argument(
+        "--floor-may-lag",
+        action="store_true",
+        help=(
+            "for a PULL REQUEST: a floor BEHIND reality is reported but does not fail the run, "
+            "because the correct number is only knowable on the merge result. A collection DROP "
+            "still fails. Never pass this on main — the push-to-main run is what keeps the "
+            "equality honest."
+        ),
     )
     ap.add_argument(
         "--reconcile-floor",
@@ -1165,6 +1236,7 @@ def main() -> int:
     code, text = verify(
         update_floor=args.update_floor or args.reconcile_floor,
         forgive_healed_drift=args.reconcile_floor,
+        floor_may_lag=args.floor_may_lag,
     )
     print(text, end="")
     if args.coverage:

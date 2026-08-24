@@ -222,6 +222,21 @@ Do not create a second event log, model registry, or capability inventory.
   `docs/MIRROR_SYNC_PATCH.md`. Until it is applied the mirror has no modules.
 - Run the touched module's `--selftest` (the project's test suite). Add a selftest case for new
   behavior, including a deliberate-break→revert demonstration for correctness-critical logic.
+- **A WIRING PIN NAMES THE FRAGMENT, NEVER THE STATEMENT.** Several checks here assert that a
+  helper is actually CALLED by searching the module's own source, because this repo's founding
+  defect is code that exists and is never invoked. That technique is right and it stays — but three
+  of those pins fired on 2026-08-23/24 against changes that were entirely correct, because each
+  pinned a whole line: the pin file's baseline citation, `test_verify_coverage_mode`'s
+  `verify(...)` call, and `verify.py`'s own `--update-floor` guard. Reformatting a call across
+  lines, or adding an argument, is not a regression; a test that says it is gets waived, and a
+  waived test protects nothing.
+  **Pin the smallest fragment that would be ABSENT if the wiring were removed.** No newlines, no
+  indentation, no trailing `:`, no full argument list — nothing a formatter owns. Keep splitting
+  the literal (`"and not " + "_blocks_floor_update(problems)"`) so the needle cannot match its own
+  line, and put the reason beside it. Where it is cheap, assert the BEHAVIOUR instead and delete
+  the pin: `test_coverage_never_changes_the_exit_code` now asserts "coverage is not among the
+  kwargs" rather than "the call reads exactly thus", which is strictly stronger — it catches a
+  coverage input in any formatting.
 - Register or update lifecycle state in `capabilities.py` for any new/wired capability. Run
   `python3 src/capabilities.py --selftest` and `python3 src/capabilities.py --json validate`. Never mark a
   capability active from code existence, a passing selftest, or a feature-registry maturity alone;
