@@ -3630,7 +3630,7 @@ def _record_execution_attempt_in_conn(
 ) -> None:
     role = validate_operation_role(operation_role)
     if role == "worker":
-        validated_model = validate_resolved_worker_model(resolved_model)
+        validate_resolved_worker_model(resolved_model)
     try:
         ordinal = max(1, int(attempt_ordinal or 1))
     except (TypeError, ValueError):
