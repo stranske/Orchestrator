@@ -282,6 +282,39 @@ unevaluated precondition NAMES its missing input (`repo_path`), because a condit
 attempt to check is what this replaces. The repo-fact probes return the markers they matched, so a
 verdict is evidence that can be argued with rather than a heuristic's bare boolean.
 
+**But naming the missing input is a diagnosis, and a diagnosis is not an instruction.** The axis went
+in with `unevaluated_because` saying *"'observable_surface' is a one-time repo fact and needs
+`repo_path`, a checkout to look at"* — and the sole caller kept consulting with neither `repository`
+nor `repo_path`, so `frontend-verifier` accumulated four decline records all reading *"the binding's
+own precondition is never evaluated"* while the declaration, the probe and both parameters existed and
+worked. That is this workspace's runtime rule one level down: a gate must report its **drainable**
+quantity beside its blocking one. So `advise()` now returns `precondition.missing_inputs` — the consult
+inputs that would turn UNEVALUATED into a verdict, derived from the declarations through one
+`PRECONDITION_INPUT_FOR` table so the remedy cannot drift from what is actually read — and
+`precondition.how_to_evaluate`, the re-ask in words, printed loudly rather than left under `--json`.
+It goes **empty** once the inputs are supplied, because a remedy that prints when nothing is missing
+is noise a reader learns to skip.
+
+**The same defect had a second instance, and it was pure delivery: `HOW_TO_USE` was read by
+`format_advice` alone.** Every real consult arrives through the `capability_advice` MCP tool and
+receives the result **dict**, which carried `entrypoint`, `blocker` and `next_step` and never this — so
+a caller was offered `adversarial-review` with `blocker: "matched but a gate blocked invocation"` and
+no gate NAMED, went and read the ledger row, found `{kind: closer_gate, name: high_stakes_review}` and
+declined it as *"a lane gate, not an audit dimension"* — while the table held the direct call that
+answers exactly that. `_attach_how_to_use` stamps it onto every entry on both answer branches, and
+`format_advice` now reads it **from the entry**, one lookup, because reading the table twice is how the
+render and the answer came apart. The field is always present and `None` when unknown: "no guidance
+recorded" and "this answer does not carry the field" must not look alike.
+
+**And the boundary belongs in that field as much as the call does.** Six `offload` declines in one
+window were one sentence repeated — the work had to be first-person (run the code and read exit codes,
+re-run a guard with the break in place, hold a whole grep trace, drive a browser). That is neither a
+scope judgement nor a defect in the dispatcher; it is offload's intrinsic boundary, and it was written
+down nowhere a caller could see. A capability that cannot say what it **cannot** take gets
+investigated and declined once per surface, forever. The counter-rule holds here too: the boundary is
+stated in the offer, and the binding is not narrowed — narrowing on structural declines is the
+demotion path, and demoting the fleet's most-used capability would silence what should be explained.
+
 **And the binding is DATA, not prose, deliberately.** The recursive loop below must be able to change
 what a surface reaches for without rewriting that surface's prompt. `CLAUDE.md` §1 makes the manual
 mirror sync "the only circuit breaker between an agent's change and the dispatcher that dispatches

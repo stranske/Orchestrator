@@ -342,6 +342,25 @@ def _annotate_contraindications(entries: list[dict], repository: str) -> list[st
     return sorted(flagged)
 
 
+def _attach_how_to_use(entries: list[dict]) -> list[str]:
+    """Stamp each entry with its `how_to_use`, and return the ids that got one.
+
+    ONE stamping site, consumed by both the answer and `format_advice`, because `HOW_TO_USE` used to
+    be read only by the text rendering — so the MCP callers, which are every real consult, never saw
+    it. A second lookup at the render site is how the two would drift back apart.
+
+    Absent is not an error: most capabilities have no entry, and inventing one would be worse than
+    silence. The field is always PRESENT (None when unknown) so a caller can test it.
+    """
+    named = []
+    for entry in entries:
+        how = HOW_TO_USE.get(entry["capability_id"])
+        entry["how_to_use"] = how
+        if how:
+            named.append(entry["capability_id"])
+    return named
+
+
 def advise(
     text: str,
     *,
@@ -430,6 +449,7 @@ def advise(
                 for cid, why in live
             ]
             precondition = _annotate_preconditions(entries, repository, repo_path)
+            _attach_how_to_use(entries)
             try:
                 import capability_propensity
 
@@ -624,6 +644,7 @@ def advise(
     # evidence-to-effort finding of a third audit on a repository that has a display surface, so two
     # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
     precondition = _annotate_preconditions(matched, repository, repo_path)
+    _attach_how_to_use(matched)
     try:
         import capability_propensity
 
@@ -1982,6 +2003,32 @@ def evaluate_precondition(
     return out
 
 
+# WHICH CONSULT INPUT ANSWERS WHICH DECLARATION. Declared once so the answer's remedy cannot drift
+# from the thing `evaluate_precondition` actually reads: `applies_to` is decided by `repository`
+# alone, a named repo FACT additionally needs a checkout.
+PRECONDITION_INPUT_FOR = {"applies_to": "repository", "requires": "repo_path"}
+
+
+def missing_precondition_inputs(
+    capability_ids, *, repository: str = "", repo_path: str = ""
+) -> list:
+    """The consult inputs that would turn an UNEVALUATED precondition into a real verdict.
+
+    THE DRAINABLE QUANTITY, beside the blocking one. `unevaluated_because` already named what was
+    missing per capability; three audit rounds read it and re-asked nothing, because a diagnosis is
+    not an instruction. `frontend-verifier` was declined four times as "the binding's own precondition
+    is never evaluated" while the probe, the declaration and the two parameters that drive them all
+    existed — nothing in the answer said a caller could supply them.
+    """
+    needed: set[str] = set()
+    for cap_id in capability_ids:
+        if applies_to(cap_id) and not str(repository).strip():
+            needed.add(PRECONDITION_INPUT_FOR["applies_to"])
+        if required_repo_fact(cap_id) and not str(repo_path).strip():
+            needed.add(PRECONDITION_INPUT_FOR["requires"])
+    return sorted(needed)
+
+
 def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str) -> dict:
     """Stamp every entry with its precondition verdict. ORDER AND MEMBERSHIP ARE UNTOUCHED.
 
@@ -1989,6 +2036,9 @@ def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str
     not be evaluated with the inputs this consult supplied. All three populations are reported,
     because "nothing failed" and "nothing was checked" must never look alike — that identity IS the
     original defect, one level up.
+
+    ...and `missing_inputs` / `how_to_evaluate`, which are the fourth population and the one that
+    makes the third one ACTIONABLE rather than merely honest.
     """
     facts: dict = {}
     declared, unmet, unevaluated = [], [], {}
@@ -2003,6 +2053,7 @@ def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str
             unmet.append(entry["capability_id"])
         if verdict["unevaluated_because"]:
             unevaluated[entry["capability_id"]] = list(verdict["unevaluated_because"])
+    missing = missing_precondition_inputs(declared, repository=repository, repo_path=repo_path)
     return {
         "repository": repository,
         "target": consult_target(repository),
@@ -2011,6 +2062,19 @@ def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str
         "unmet": sorted(unmet),
         "unevaluated": dict(sorted(unevaluated.items())),
         "declared_capabilities": sorted(CAPABILITY_PRECONDITIONS),
+        # THE REMEDY, named in the same place as the gap. Empty when this consult already supplied
+        # everything the offered set declares — so an empty list is a real "nothing left to supply",
+        # not an absence of opinion.
+        "missing_inputs": missing,
+        "how_to_evaluate": (
+            "re-ask this consult with "
+            + ", ".join(f"`{name}`" for name in missing)
+            + " and the declared precondition(s) above are answered for you instead of "
+            "investigated; a failed one is then dismissible in one line, recorded as decline "
+            "kind 'precondition_unmet', which never counts against the binding"
+            if missing
+            else None
+        ),
         "note": (
             "a failed precondition is REPORTED, never enforced: the capability is offered "
             "and ranked exactly as it would be without this axis, because a binding that "
@@ -2133,10 +2197,34 @@ def learned_associations(*, path=None) -> dict:
 # lifecycle question ("lift the gate, or accept it is deliberately off"), which is the wrong answer
 # for someone who just wants to route the task in front of them. This maps capability -> the concrete
 # thing to run or do. Absent entries fall back to the lifecycle text rather than inventing a command.
+# HOW TO USE, AND — JUST AS LOAD-BEARING — WHAT IT CANNOT TAKE.
+#
+# THIS TABLE WAS PROSE NOTHING READ, which is this tree's named defect wearing the same hat as the
+# conditional binding reason one axis over. It was consumed ONLY by `format_advice`, the text
+# rendering, while every real consult arrives through the `capability_advice` MCP tool and receives
+# the RESULT DICT — which carried `entrypoint`, `blocker` and `next_step` and never this. So a caller
+# was offered `adversarial-review` with `entrypoint: adversarial.py`, `blocker: "matched but a gate
+# blocked invocation"` and no gate NAMED, went and read the ledger row itself, found
+# `{kind: closer_gate, name: high_stakes_review}` and declined `wrong_match` — "a lane gate, not an
+# audit dimension" — while THIS TABLE held the direct call that answers it. `_attach_how_to_use`
+# stamps it onto every entry, so the answer a caller receives carries it on both branches.
+#
+# AND THE BOUNDARY BELONGS HERE TOO. Six `offload` declines in one window were one sentence repeated:
+# the work had to be first-person (run the code and read exit codes, re-run a guard with the break in
+# place, hold a whole grep trace, drive a browser). None of that is a scope judgement and none of it
+# is a defect in the dispatcher — it is offload's intrinsic boundary, and it was written down nowhere
+# a caller could see. A capability that cannot say what it cannot take is investigated and declined
+# once per surface, forever.
 HOW_TO_USE = {
     "offload": (
         "dispatcher.offload('gemini', prompt, cwd=repo) — spends the cheap agent's context "
-        "instead of this seat's; returns the result, opens no PR"
+        "instead of this seat's; returns the result, opens no PR. BOUNDARY: a read-only, "
+        "text-returning hand-off. It cannot run code and read exit codes, re-run a guard with a "
+        "deliberate break in place, drive a browser, or interleave runtime experiments with "
+        "reading — work that has to be first-person does not survive the hand-off. Nor split a "
+        "trace whose whole is the point: a wiring claim scoped to one half of a grep is how a "
+        "'no caller' refutation goes wrong. Either is the decline to make in one line rather "
+        "than investigate"
     ),
     "codemod-campaign": (
         "label the issue `refactor` (or let the daily issue_readiness task-label "
@@ -2150,7 +2238,24 @@ HOW_TO_USE = {
     "adversarial-review": (
         "adversarial.review(worktree, reviewers=['vibe','gemini']) — refute-mode "
         "minority-veto panel; use when being wrong is expensive, not for routine "
-        "review"
+        "review. CALLABLE AT ANY SURFACE: its `{kind: closer_gate, name: "
+        "high_stakes_review}` matcher is how the CLOSER LANE enters it automatically, "
+        "not a precondition for calling it — an audit phase invokes this function "
+        "directly and needs no gate lifted. BOUNDARY: it buys JUDGEMENT under "
+        "disagreement. Where the refutation is mechanical — re-run the guard with the "
+        "break in place and read the exit code — a panel adds nothing a shell does not"
+    ),
+    "frontend-verifier": (
+        "frontend_verify.py --doctor first (it reports its own readiness), then drive the "
+        "audited repo's surface. BOUNDARY: it acts on the AUDITED repo, never this tool, and "
+        "needs an observable surface to exist at all — pass `repository` and `repo_path` to the "
+        "consult and that condition is answered for you instead of investigated"
+    ),
+    "repo-playbook": (
+        "repo_knowledge.context_for(repo, task_type=...) — the per-repo conventions, gotchas, "
+        "base branch and recorded per-capability contraindications for one fleet repo; a repo "
+        "invariant carries no task_type scope, so a review consult sees the same set an "
+        "implement consult does"
     ),
     "ux-review": "run the /ux-review skill; drives every primary surface, not the happy path",
     "epic-decomposition": (
@@ -2189,6 +2294,12 @@ def format_advice(a: dict) -> str:
             f"the phase's. Substitute the real value (e.g. `repo-audit:phase-3`) and re-ask.",
             "",
         ]
+    remedy = (a.get("precondition") or {}).get("how_to_evaluate")
+    if remedy:
+        # THE DRAINABLE QUANTITY, printed beside the blocking one. Without this the reader sees only
+        # "precondition unevaluated" per entry and has no reason to think they could change that —
+        # which is exactly what happened across three audit rounds.
+        lines += [f"?? PRECONDITION(S) NOT EVALUATED — {remedy}", ""]
     if a["task_types"]:
         lines.append(f"classified as: {', '.join(a['task_types'])} (confidence: {a['confidence']})")
         for tt, hits in (a.get("classification_evidence") or {}).items():
@@ -2199,7 +2310,9 @@ def format_advice(a: dict) -> str:
         lines.append(f"- {cap['capability_id']}  [{flag}] via {cap['matched_task_type']}")
         lines.append(f"    entrypoint: {cap['entrypoint']}")
         lines.append(f"    blocker:    {cap['blocker']}")
-        how = HOW_TO_USE.get(cap["capability_id"])
+        # READ FROM THE ENTRY, not from the table: the entry is what a caller receives, so a second
+        # lookup here is how the rendering and the answer drifted apart in the first place.
+        how = cap.get("how_to_use")
         lines.append(f"    how to use: {how}" if how else f"    next step:  {cap['next_step']}")
         if cap.get("entered_directly"):
             lines.append("    note:       entered directly in code — not routed by task type")
@@ -2219,6 +2332,100 @@ def format_advice(a: dict) -> str:
         elif cap.get("unevaluated_because"):
             lines.append("    precondition unevaluated: " + "; ".join(cap["unevaluated_because"]))
     return "\n".join(lines) + "\n"
+
+
+def _selftest_how_to_use() -> None:
+    """`how_to_use` must reach a CALLER, and it must state the boundary as well as the call.
+
+    ASSERTED ON THE ANSWER, NOT ON THE TABLE, because the table was never the problem: `HOW_TO_USE`
+    was correct and complete and read by exactly one function — `format_advice`, the text rendering —
+    while every real consult arrives through the MCP tool and receives the result DICT. The
+    `adversarial-review` and `offload` repair proposals are what that costs: six offload declines all
+    saying the work had to be first-person, and an adversarial-review decline naming a closer-lane
+    matcher, both answered by text in this table that the decliner could not see.
+
+    Every assertion below was written by breaking it first:
+      * dropping `_attach_how_to_use` from the classified branch -> the classified probe fails;
+      * dropping it from the classification-miss branch -> the binding-only probe fails (that branch
+        is the one a free-text audit consult actually lands on, so covering only the other would
+        leave the reported case untested);
+      * deleting either boundary clause from the table -> part 1 fails.
+
+    The ENTRY assertion is the load-bearing one and the render assertion is not a second copy of it:
+    reverting `format_advice` to its own `HOW_TO_USE` lookup while the answer stops carrying the
+    field leaves the printed line intact and fails only on the entry — which is the right way round,
+    because the entry is what a caller receives and the text is what nobody consulting by MCP sees.
+    """
+    import tempfile
+    from pathlib import Path
+
+    # ---- PART 1: THE DATA. Code vs code, no ledger, so it runs on any machine. Each clause below is
+    # a specific standing repair proposal's evidence, which is why the words are asserted and not
+    # merely the presence of a key.
+    off = HOW_TO_USE["offload"]
+    assert "BOUNDARY" in off and "first-person" in off, off
+    assert "read-only" in off and "text-returning" in off, off
+    adv = HOW_TO_USE["adversarial-review"]
+    assert "CALLABLE AT ANY SURFACE" in adv, adv
+    assert "closer_gate" in adv and "not a precondition for calling it" in adv, adv
+    fev = HOW_TO_USE["frontend-verifier"]
+    assert "repo_path" in fev and "observable surface" in fev, fev
+    for cap_id, how in sorted(HOW_TO_USE.items()):
+        assert isinstance(how, str) and how.strip(), cap_id
+
+    # ---- PART 2: WHAT A CALLER RECEIVES. Synthetic ledger and a synthetic table entry, so this
+    # asserts the ANSWER on any machine rather than this instance's rows.
+    with tempfile.TemporaryDirectory(prefix="howto-advise-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("aaa-documented", "zzz-undocumented"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            cap["entrypoint"] = f"{cid}.py"
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+        real_surface = SURFACE_BINDINGS.get("t-howto")
+        SURFACE_BINDINGS["t-howto"] = {
+            "aaa-documented": "bound, documented",
+            "zzz-undocumented": "bound, undocumented",
+        }
+        HOW_TO_USE["aaa-documented"] = "call aaa_documented.run(); BOUNDARY: it cannot do zzz"
+        try:
+            # Both return branches: a task that CLASSIFIES, and one that does not.
+            for task, branch in (
+                ("add unit tests for the retry helper", "classified"),
+                ("xyzzy plugh frobnicate", "binding_only"),
+            ):
+                got = advise(task, surface="t-howto", path=ledger, record=False)
+                by_id = {c["capability_id"]: c for c in got["capabilities"]}
+                assert "aaa-documented" in by_id, (branch, sorted(by_id))
+                assert by_id["aaa-documented"]["how_to_use"] == HOW_TO_USE["aaa-documented"], (
+                    f"the {branch} branch did not hand the caller `how_to_use`; the MCP tool "
+                    "returns this dict, so a field only `format_advice` reads is invisible to "
+                    "every real consult",
+                    branch,
+                    by_id["aaa-documented"],
+                )
+                # PRESENT AND None, never absent: a caller must be able to tell "no guidance
+                # recorded" from "this answer does not carry the field at all".
+                assert "how_to_use" in by_id["zzz-undocumented"], by_id["zzz-undocumented"]
+                assert by_id["zzz-undocumented"]["how_to_use"] is None, by_id["zzz-undocumented"]
+                # ...and the RENDER must agree with the ANSWER. Reading the table twice is how the
+                # two drifted apart, so the printed line has to come from the entry.
+                text = format_advice(got)
+                assert "how to use: call aaa_documented.run()" in text, (branch, text)
+                assert "next step:" in text, (branch, text)
+        finally:
+            HOW_TO_USE.pop("aaa-documented", None)
+            if real_surface is None:
+                SURFACE_BINDINGS.pop("t-howto", None)
+            else:
+                SURFACE_BINDINGS["t-howto"] = real_surface
+    print(
+        "capability_advisor how-to-use selftest: OK (delivered on both branches, boundary clauses "
+        "present, render reads the entry)"
+    )
 
 
 def _selftest_front_door() -> None:
@@ -3083,6 +3290,43 @@ def _selftest_preconditions() -> None:
             assert {"aaa-self-only", "mmm-both"} <= set(block["declared"]), block
             assert "zzz-undeclared" not in block["declared"], block
 
+            # ---- THE REMEDY, beside the gap. `unevaluated_because` already named the missing input
+            # per capability and three audit rounds re-asked nothing, because a diagnosis is not an
+            # instruction: `frontend-verifier` was declined four times for a precondition "never
+            # evaluated" while the declaration, the probe and both parameters existed. So the answer
+            # now carries the DRAINABLE quantity — which inputs would turn UNEVALUATED into a
+            # verdict — and it must go EMPTY once they are supplied, or it is noise a reader learns
+            # to skip. Break->revert: hard-coding `missing_inputs` to [] loses the first assertion;
+            # hard-coding it non-empty loses the second.
+            CAPABILITY_PRECONDITIONS["aaa-self-only"]["requires"] = "observable_surface"
+            try:
+                bare = advise(task, surface="t-precond", path=ledger, record=False)
+                bare_block = bare["precondition"]
+                assert bare_block["missing_inputs"] == ["repo_path", "repository"], bare_block
+                assert bare_block["how_to_evaluate"], bare_block
+                assert "`repository`" in bare_block["how_to_evaluate"], bare_block
+                assert "`repo_path`" in bare_block["how_to_evaluate"], bare_block
+                # It must be RENDERED too, not only carried: a remedy that appears under --json
+                # alone is prose nothing reads, which is the defect one level up.
+                assert "PRECONDITION(S) NOT EVALUATED" in format_advice(bare), format_advice(bare)
+                # SUPPLY BOTH -> nothing left to ask for. `repo_path` points at a real directory so
+                # the probe answers rather than reporting no checkout.
+                full = advise(
+                    task,
+                    surface="t-precond",
+                    repository="stranske/Workflows",
+                    repo_path=td,
+                    path=ledger,
+                    record=False,
+                )
+                assert full["precondition"]["missing_inputs"] == [], full["precondition"]
+                assert full["precondition"]["how_to_evaluate"] is None, full["precondition"]
+                assert "PRECONDITION(S) NOT EVALUATED" not in format_advice(full), format_advice(
+                    full
+                )
+            finally:
+                CAPABILITY_PRECONDITIONS["aaa-self-only"].pop("requires", None)
+
             # ---- THE INVARIANCE. Neither the SET nor the ORDER may differ from what the same call
             # returns with the axis emptied. This is the assertion the third audit round demands:
             # explain the mismatch, never down-weight the binding.
@@ -3589,6 +3833,7 @@ def main(argv: list[str]) -> int:
     if args.selftest:
         _selftest()
         _selftest_front_door()
+        _selftest_how_to_use()
         _selftest_bindings()
         _selftest_phase_consult()
         _selftest_contraindications()
