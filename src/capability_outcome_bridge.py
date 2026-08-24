@@ -332,7 +332,8 @@ def backfill_offload_capability_edges(*, dry_run: bool = False, conn=None) -> di
     created, resolved = [], 0
     # feedback's own resolver, so the edge carries the same immutable version id every other
     # capability edge carries; _record_influence_edge_in_conn refuses an id without a version.
-    version = (feedback._resolve_capability_versions(["offload"]) or [None])[0]
+    versions = feedback._resolve_capability_versions(["offload"]) or []
+    version = versions[0] if versions else None
     try:
         rows = c.execute("""SELECT r.run_id, r.decomposition FROM runs r
                 WHERE r.role_name IS NOT NULL AND r.decomposition IS NOT NULL
@@ -829,16 +830,20 @@ def _selftest() -> None:
                 feedback.record_outcome(
                     run_id=rid, verifier_verdict="PASS", merged=True, durability="durable"
                 )
-            got = attribute_compiled_workflow_edges(path=ledger, dry_run=True)
+            edge_report: dict[str, Any] = attribute_compiled_workflow_edges(
+                path=ledger, dry_run=True
+            )
         finally:
             feedback.DB_PATH = saved_db
 
-    targets = {entry["target_run_id"] for entry in got["links"]}
+    targets = {entry["target_run_id"] for entry in edge_report["links"]}
     # EXPLICIT LINK ONLY. "The rail ran on repo R and later a durable PR landed in R" is correlation;
     # manufacturing an edge from it would fake the un-gameable durability label. Deleting the
     # `claimed != cap_id` guard makes `unlinked` appear here and fails this assertion.
-    assert targets == {"linked"}, f"only an explicitly-linked delivery may be attributed: {got}"
-    assert got["subjects_seen"] == 2, got
+    assert targets == {
+        "linked"
+    }, f"only an explicitly-linked delivery may be attributed: {edge_report}"
+    assert edge_report["subjects_seen"] == 2, edge_report
 
     # Idempotency: applying the same link twice writes once.
     with tempfile.TemporaryDirectory(prefix="cap-bridge-selftest-") as td:
@@ -910,10 +915,10 @@ def _selftest() -> None:
                 feedback.record_outcome(
                     "tagged:run", adjudicated_verdict="PASS", merged=True, durability="durable"
                 )
-                rows = collect()
-                row = [r for r in rows if r["run_id"] == "tagged:run"][0]
+                tagged_rows: list[dict[str, Any]] = collect()
+                row = [r for r in tagged_rows if r["run_id"] == "tagged:run"][0]
                 assert row["capability_ids"] == ["agy-runtime-isolation"], row
-                mapped = attribute(rows, known={"agy-runtime-isolation"})
+                mapped = attribute(tagged_rows, known={"agy-runtime-isolation"})
                 assert [entry["capability_id"] for entry in mapped["links"]] == [
                     "agy-runtime-isolation"
                 ], mapped

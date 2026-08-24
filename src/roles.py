@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import backlog as backlog_mod
 import capabilities
@@ -592,10 +592,10 @@ def _validate_triage_context(proposal: dict, backlog_items: list[dict]) -> list[
     recs = proposal.get("recommendations") or []
     rec_targets = [rec.get("target") for rec in recs if isinstance(rec, dict)]
     seen = set(rec_targets)
-    duplicates = sorted({target for target in rec_targets if rec_targets.count(target) > 1})
+    duplicates = sorted({str(target) for target in rec_targets if rec_targets.count(target) > 1})
     if duplicates:
         errs.append(f"duplicate recommendations for targets: {duplicates}")
-    unknown = sorted(target for target in seen if target not in known)
+    unknown = sorted(str(target) for target in seen if target not in known)
     missing = sorted(known - seen)
     if unknown:
         errs.append(f"recommendations reference unknown targets: {unknown}")
@@ -1055,7 +1055,9 @@ def role_from_generated_manifest(manifest: dict[str, Any]) -> Role:
         raise ValueError("generated role has unsupported route prior")
     # Resolve eligible backends from the existing router at registration time;
     # the manifest itself never embeds provider/model/profile identity.
-    eligible = frozenset(str(item["agent"]) for item in router.ROUTE_TABLE[route_as]["agents"])
+    eligible = frozenset(
+        str(item["agent"]) for item in cast(dict, router.ROUTE_TABLE[route_as])["agents"]
+    )
     output_schema = manifest["output_schema"]
     return Role(
         name=manifest["name"],
@@ -1111,7 +1113,8 @@ def get_role(name: str) -> Role:
 
 def _generated_selector_matches(role: Role, context: dict[str, Any]) -> bool:
     selector = role.selector or {}
-    value = context.get(selector.get("field"))
+    field = selector.get("field")
+    value = context.get(field) if isinstance(field, str) else None
     if selector.get("operator") == "equals":
         return value == selector.get("value")
     if selector.get("operator") == "in":
@@ -1194,7 +1197,7 @@ def run_generated_shadow_role(
         matched=matched,
         gate_enabled=gate_enabled,
         capacity_available=capacity_available,
-        max_invocations=int(role.capacity_policy["max_invocations_per_cycle"]),
+        max_invocations=int((role.capacity_policy or {})["max_invocations_per_cycle"]),
         reason="generated_role_selector",
         target=target,
         record=False,
@@ -1521,7 +1524,7 @@ def activate_dispatch_roles(
     decomposer_runner = decomposer_runner or run_decomposer_agent
     gate = _shadow_gate(env) and not dry_run
     matches = _dispatch_role_matches(assignment)
-    out = {
+    out: dict[str, Any] = {
         "prompt": baseline_prompt,
         "accepted_role_run_ids": [],
         "rejected_role_run_ids": [],
@@ -2983,7 +2986,7 @@ def _selftest() -> None:
             }
 
         try:
-            dispatcher.offload = fake_gemini_offload
+            dispatcher.offload = fake_gemini_offload  # type: ignore[assignment]  # deliberate selftest monkeypatch
             gemini_failure = run_redirect_agent(
                 report,
                 "AC",
@@ -3472,9 +3475,26 @@ def _selftest() -> None:
 
 
 def _read_backlog_items(path: str) -> list[dict]:
+    """Backlog items from an explicit path, stdin, or the producer's canonical artifact.
+
+    A REAL BUG mypy found (2026-08-24): the no-path branch called `backlog_mod.load_backlog()`,
+    which does not exist — `backlog.py` exposes `build_backlog(repos, fetch_issues, fetch_prs)`,
+    a producer with an entirely different signature. So `python3 src/roles.py triage` with no
+    `--backlog-json` raised `AttributeError`, not a usable message. It now reads
+    `backlog.BACKLOG_JSON` (`~/.codex/handoff/backlog.json`), which is the artifact that producer
+    WRITES and the file `--backlog-json` is normally pointed at — and says so plainly when it is
+    absent, rather than failing on an attribute lookup.
+    """
     if not path:
-        return backlog_mod.load_backlog()
-    data = json.load(sys.stdin) if path == "-" else json.loads(Path(path).read_text())
+        default = backlog_mod.BACKLOG_JSON
+        if not default.is_file():
+            raise ValueError(
+                f"no --backlog-json given and the default artifact is absent: {default}. "
+                f"Run `python3 src/backlog.py --live` to produce it, or pass --backlog-json."
+            )
+        data = json.loads(default.read_text())
+    else:
+        data = json.load(sys.stdin) if path == "-" else json.loads(Path(path).read_text())
     if isinstance(data, list):
         return data
     if isinstance(data, dict):

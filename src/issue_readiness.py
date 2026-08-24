@@ -1125,7 +1125,7 @@ def _selftest() -> None:
     _saved_classify = backlog.classify
     try:
         backlog.classify = (
-            lambda _labels: "implement"
+            lambda _labels: "implement"  # type: ignore[assignment]
         )  # pretend there is never a signal  # type: ignore[assignment]  # deliberate selftest monkeypatch
         stolen = task_label_for(dict(camp, labels=[{"name": "testing"}]))
         assert stolen == "refactor", "break did not change behaviour — test is vacuous"
@@ -1137,13 +1137,13 @@ def _selftest() -> None:
 
     # DELIBERATE BREAK -> REVERT: drop the bot-author guard and the human issue gets hidden.
     global BOT_AUTHOR
-    saved = BOT_AUTHOR
+    saved_bot_author = BOT_AUTHOR
     try:
         BOT_AUTHOR = re.compile(r".*")  # everyone looks like a bot
         broken = durability_of(human, hrec)
         assert broken["durable"], "break did not change behaviour — test is vacuous"
     finally:
-        BOT_AUTHOR = saved
+        BOT_AUTHOR = saved_bot_author
     assert not durability_of(human, hrec)["durable"], "revert did not restore the author guard"
 
     print(

@@ -327,14 +327,14 @@ def _validate_check(check: Any, path: str, known_check_ids: set[str]) -> tuple[l
     check_id = check.get("id")
     if not _is_nonempty_string(check_id):
         errors.append(f"{path}.id must be a non-empty string")
-    elif not _looks_like_id(check_id.strip()):
+    elif not _looks_like_id(str(check_id or "").strip()):
         errors.append(
             f"{path}.id must start with a letter and contain only letters, numbers, dots, underscores, or hyphens"
         )
     elif check_id in known_check_ids:
         errors.append(f"{path}.id duplicates {check_id!r}")
     else:
-        known_check_ids.add(check_id)
+        known_check_ids.add(str(check_id))
 
     check_type = check.get("type")
     if check_type not in VALID_CHECK_TYPES:
@@ -349,7 +349,7 @@ def _validate_check(check: Any, path: str, known_check_ids: set[str]) -> tuple[l
         if not _is_nonempty_string(command):
             errors.append(f"{path}.command must be a non-empty string")
         else:
-            unsafe = _unsafe_command_reason(command)
+            unsafe = _unsafe_command_reason(str(command or ""))
             if unsafe:
                 errors.append(f"{path}.command {unsafe}")
         expected = check.get("expected")
@@ -384,7 +384,7 @@ def _validate_check(check: Any, path: str, known_check_ids: set[str]) -> tuple[l
         if not _is_nonempty_string(test_cmd):
             errors.append(f"{path}.test_cmd must be a non-empty string")
         else:
-            unsafe = _unsafe_command_reason(test_cmd)
+            unsafe = _unsafe_command_reason(str(test_cmd or ""))
             if unsafe:
                 errors.append(f"{path}.test_cmd {unsafe}")
         errors.extend(
@@ -426,7 +426,7 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
         verification_id = meta.get("id")
         if not _is_nonempty_string(verification_id):
             errors.append("verification.id must be a non-empty string")
-        elif not _looks_like_slug(verification_id.strip()):
+        elif not _looks_like_slug(str(verification_id or "").strip()):
             errors.append("verification.id must be a lowercase slug")
         for key in ("title", "goal"):
             if not _is_nonempty_string(meta.get(key)):
@@ -483,14 +483,14 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
         ac_id = criterion.get("id")
         if not _is_nonempty_string(ac_id):
             errors.append(f"{path}.id must be a non-empty string")
-        elif not _looks_like_id(ac_id.strip()):
+        elif not _looks_like_id(str(ac_id or "").strip()):
             errors.append(
                 f"{path}.id must start with a letter and contain only letters, numbers, dots, underscores, or hyphens"
             )
         elif ac_id in known_ac_ids:
             errors.append(f"{path}.id duplicates {ac_id!r}")
         else:
-            known_ac_ids.add(ac_id)
+            known_ac_ids.add(str(ac_id))
         if not _is_nonempty_string(criterion.get("statement")):
             errors.append(f"{path}.statement must be a non-empty string")
         errors.extend(
@@ -540,8 +540,8 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
             command = entry.get("command")
             if not _is_nonempty_string(command):
                 errors.append(f"{path}.command must be a non-empty string")
-            elif _unsafe_command_reason(command):
-                errors.append(f"{path}.command {_unsafe_command_reason(command)}")
+            elif _unsafe_command_reason(str(command or "")):
+                errors.append(f"{path}.command {_unsafe_command_reason(str(command or ''))}")
         else:
             errors.append(f"{path} must be a string command or object")
 
@@ -892,7 +892,7 @@ def evaluate_results(
         status = str(result.get("status") or "NEEDS_REVIEW").upper()
         if status not in BLOCKING_STATUSES | INCOMPLETE_STATUSES | {"PASS"}:
             status = "NEEDS_REVIEW"
-        by_id[check_id] = {**result, "status": status}
+        by_id[str(check_id)] = {**result, "status": status}
     if duplicates:
         raise ValueError(f"duplicate result ids: {sorted(set(duplicates))}")
 
@@ -912,7 +912,7 @@ def evaluate_results(
         for check in criterion["checks"]:
             check_id = check["id"]
             required = check_id in required_ids
-            result = by_id.get(check_id)
+            result = by_id.get(str(check_id))
             if result is None:
                 status = "MISSING"
                 result = {"id": check_id, "status": status, "reason": "no result supplied"}
@@ -1010,7 +1010,7 @@ def evaluate_results(
 
 def record_gate_verdict(run_id: str, gate: dict[str, Any]) -> dict[str, Any]:
     verifier_verdict = gate.get("verifier_verdict") or VERDICT_BY_GATE.get(
-        gate.get("verdict"), "NEEDS_REVIEW_RUNTIME_AC"
+        gate.get("verdict") or "NEEDS_REVIEW_RUNTIME_AC", "NEEDS_REVIEW_RUNTIME_AC"
     )
     feedback.record_outcome(
         run_id,
@@ -1216,7 +1216,7 @@ def run_verification(
             continue
         shell_candidate = ""
         if check_type in {"command", "non_regression"}:
-            shell_candidate = command
+            shell_candidate = str(command or "")
         elif check_type == "deliberate_break":
             shell_candidate = check.get("test_cmd") or ""
         if shell_candidate and _has_shell_marker(shell_candidate):

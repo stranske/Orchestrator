@@ -37,6 +37,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import Any, cast
 
 import backlog
 import capabilities
@@ -50,7 +51,7 @@ import paths
 #   kind="high_stakes"-> does adversarial.high_stakes_reason() fire for this item?
 #   kind="predicate"  -> a named callable answers it (used for non-routing machinery)
 #
-FIXTURES = (
+FIXTURES: tuple[dict[str, Any], ...] = (
     # ---- task-routed lanes, replayed against the real issues that occurred -------------------
     {
         "capability": "codemod-campaign",
@@ -450,7 +451,9 @@ def _predicate_flag(flag: str, want: str = "1") -> dict:
     }
     criterion = SWITCH_ON_CRITERIA.get(flag)
     if criterion and not out["fires"]:
-        out["detail"]["switch_on_when"] = criterion
+        # Same object as `out["detail"]`, bound so the nested write types.
+        detail = cast("dict[str, Any]", out["detail"])
+        detail["switch_on_when"] = criterion
     return out
 
 
@@ -750,7 +753,7 @@ def _check_reference_sync_gate() -> dict:
 
 # Non-routing machinery: these capabilities are entered directly or gated, so "would it fire"
 # means "is it on the executed path / is its switch on".
-PREDICATE_FIXTURES = (
+PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
     {
         "capability": "offload",
         "check": lambda: _predicate_heartbeat("offload"),
@@ -1064,7 +1067,7 @@ def replay(*, offline: bool = False) -> dict:
         }
 
         if fixture["kind"] == "predicate_note":
-            row.update(_external_caller_state(fixture["capability"]))
+            row.update(_external_caller_state(str(fixture["capability"])))
 
         elif fixture["kind"] == "classify":
             effective = list(labels)
@@ -1138,14 +1141,14 @@ def replay(*, offline: bool = False) -> dict:
         try:
             got = fixture["check"]()
         except Exception as exc:  # noqa: BLE001
-            got = {"fires": False, "detail": {"error": str(exc)[:80]}}
+            got = {"fires": False, "detail": {"error": str(exc)[:80]}}  # type: ignore[assignment]
         rows.append(
             {
                 "capability": fixture["capability"],
                 "kind": "predicate",
                 "source": fixture["source"],
-                "fires": bool(got.get("fires")),
-                "detail": got.get("detail"),
+                "fires": bool(cast(dict, got).get("fires")),
+                "detail": cast(dict, got).get("detail"),
             }
         )
 

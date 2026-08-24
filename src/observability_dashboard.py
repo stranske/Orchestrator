@@ -15,7 +15,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import cadence_registry
 import capabilities
@@ -209,7 +209,7 @@ def _capability_rows(report: dict) -> list[dict]:
 
 
 def _activation_state(report: dict, cadence: dict) -> dict:
-    range_step = next(
+    range_step: Any = next(
         (row for row in cadence.get("steps") or [] if row.get("key") == "range-rollout"),
         {},
     )
@@ -418,7 +418,7 @@ def _learning(report: dict) -> dict:
         observed_cells += sum(1 for row in rows if row.get("n_obs"))
         learned_order = task.get("learned_order") or []
         top = learned_order[0] if learned_order else None
-        top_row = next((row for row in rows if row.get("agent") == top), {})
+        top_row: dict[str, Any] = next((row for row in rows if row.get("agent") == top), {})
         top_by_task.append(
             {
                 "task_type": task_type,
@@ -1369,7 +1369,7 @@ def _classify_alert_actionability(alert: dict, dashboard: dict) -> dict:
 
 
 def _classify_actionability(alerts: list[dict], dashboard: dict) -> dict:
-    buckets = {"actionable": [], "gated": [], "informational": []}
+    buckets: dict[str, list] = {"actionable": [], "gated": [], "informational": []}
     for alert in alerts:
         item = _classify_alert_actionability(alert, dashboard)
         buckets[item["status"]].append(item)
@@ -1470,9 +1470,12 @@ def build_dashboard(report: dict, capacity_snapshot: dict | None = None) -> dict
     }
     actionability = _classify_actionability(alerts, dashboard)
     dashboard["actionability"] = actionability
-    dashboard["scorecard"]["actionable_alert_count"] = actionability["actionable_count"]
-    dashboard["scorecard"]["gated_alert_count"] = actionability["gated_count"]
-    dashboard["scorecard"]["informational_alert_count"] = actionability["informational_count"]
+    # Bind the nested dict once. `dashboard["scorecard"][...]` made mypy resolve the OUTER value
+    # union on every assignment; a local binding is the same object, so the writes still land.
+    scorecard = cast("dict[str, Any]", dashboard["scorecard"])
+    scorecard["actionable_alert_count"] = actionability["actionable_count"]
+    scorecard["gated_alert_count"] = actionability["gated_count"]
+    scorecard["informational_alert_count"] = actionability["informational_count"]
     return dashboard
 
 
