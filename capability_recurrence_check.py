@@ -41,6 +41,7 @@ import time
 import backlog
 import capabilities
 import env_prereq
+import paths
 
 # --------------------------------------------------------------------------- fixtures
 # Each entry: the capability under test, the real instance, and how to decide if it would fire.
@@ -176,7 +177,8 @@ def _predicate_heartbeat(capability_id: str) -> dict:
         return {"fires": False, "detail": {"error": str(exc)[:90]}}
 
 
-ORCHESTRATE = pathlib.Path(__file__).resolve().parent / "orchestrate.sh"
+# The tick driver sits at the CHECKOUT root, which is only the module dir on a flat tree.
+ORCHESTRATE = paths.orchestrate_sh()
 _TICK_ENV: dict[str, str] | None = None
 _TICK_ENV_DIAG: dict | None = None
 
@@ -1240,12 +1242,8 @@ def _selftest() -> None:
     _line_citation = re.compile(r"\b[A-Za-z0-9_]+\.(?:py|sh|json|md):\d+")
     _anchor = re.compile(r"ORCH-ANCHOR: ([a-z0-9-]+)")
     _tree_text = "\n".join(
-        p.read_text(errors="ignore")
-        for p in sorted(pathlib.Path(__file__).resolve().parent.glob("*.py"))
-    ) + "\n".join(
-        p.read_text(errors="ignore")
-        for p in sorted(pathlib.Path(__file__).resolve().parent.glob("*.sh"))
-    )
+        p.read_text(errors="ignore") for p in sorted(paths.MODULE_DIR.glob("*.py"))
+    ) + "\n".join(p.read_text(errors="ignore") for p in sorted(paths.REPO_ROOT.glob("*.sh")))
     _anchors_cited = 0
     for flag, criterion in SWITCH_ON_CRITERIA.items():
         bad = _line_citation.findall(criterion)

@@ -48,6 +48,7 @@ import pathlib
 import re
 
 import capabilities
+import paths
 import env_prereq
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -70,7 +71,7 @@ def _audits_dir() -> pathlib.Path:
             if os.environ.get("ORCH_FLEET_ROOT")
             else None
         ),
-        HERE.parent,
+        paths.FLEET_ROOT,
         pathlib.Path.home() / "Library/CloudStorage/Dropbox/Learning/Code",
     ]
     for root in candidates:
@@ -403,10 +404,11 @@ def known_controls() -> set[str]:
     delegating a control and asserting one.
     """
     controls: set[str] = set()
-    here = pathlib.Path(__file__).resolve().parent
     for name in ("orchestrate.sh", "dispatcher.py", "repo_knowledge.py", "router.py"):
+        # orchestrate.sh is at the checkout root; the modules sit beside this one.
+        base = paths.REPO_ROOT if name.endswith(".sh") else paths.MODULE_DIR
         try:
-            text = (here / name).read_text()
+            text = (base / name).read_text()
         except OSError:
             continue
         controls |= set(re.findall(r"ORCH_[A-Z0-9_]+", text))

@@ -100,7 +100,11 @@ SRC_SQUASHED = re.sub(r"\s+", "", VERIFY_SRC)
     "runner,needle",
     [
         ("pytest", 'cmd=child_argv([sys.executable,"-m","pytest"'),
-        ("selftests", 'child_argv([sys.executable,f"{mod}.py","--selftest"])'),
+        # The module is named by PATH, not by bare filename: `verify.py` runs with cwd at the
+        # CHECKOUT root while the modules may live under `src/`, so a bare `{mod}.py` would resolve
+        # against the wrong directory. The needle tracks the real call so instrumentation and
+        # layout cannot drift apart silently.
+        ("selftests", 'child_argv([sys.executable,str(MODULES/f"{mod}.py"),"--selftest"])'),
         ("gates", "child_argv([sys.executable,*argv])"),
     ],
 )

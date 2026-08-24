@@ -179,6 +179,7 @@ import sys
 import time
 
 import capabilities
+import paths
 
 # KILL SWITCH. Off means the advisor stops ranking by propensity and falls back to its previous
 # order; the recording edges still work, so turning this off never destroys evidence -- it only
@@ -1939,7 +1940,7 @@ def _selftest_tick_evidence() -> None:
     #       catches it for THIS subcommand specifically, and catches (a), which nothing else does.
     # Resolved relative to THIS module's own directory on purpose: the check must verify the driver
     # in the same tree as the code, which is right in both the repo and the exec mirror.
-    driver = pathlib.Path(__file__).resolve().parent / "orchestrate.sh"
+    driver = paths.orchestrate_sh()
     if driver.exists():
         text = driver.read_text(errors="ignore")
         call = text.find('capability_propensity.py" tick-evidence')

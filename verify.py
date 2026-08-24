@@ -55,8 +55,18 @@ import re
 import subprocess
 import sys
 
+# TWO ROOTS, and verify.py is the module that most needs them separated: it DISCOVERS modules
+# (beside itself) and it READS repo files — the floor, the coverage artifacts — and RUNS pytest,
+# all of which belong to the checkout. They are the same directory only on a flat tree.
 HERE = pathlib.Path(__file__).resolve().parent
-FLOOR = HERE / ".verify-floor.json"
+try:
+    import paths
+
+    MODULES = paths.MODULE_DIR
+    ROOT = paths.checkout_root(HERE)
+except Exception:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
+    MODULES = ROOT = HERE
+FLOOR = ROOT / ".verify-floor.json"
 
 # --- coverage instrumentation, OFF unless asked for -------------------------------------------
 # Every runner below spawns a SUBPROCESS. That is deliberate (a selftest must be exercised the way
@@ -89,7 +99,7 @@ def child_argv(argv: list[str]) -> list[str]:
 
 def coverage_reset() -> None:
     """Delete stale parallel data files so a combine cannot mix runs."""
-    for stale in list(HERE.glob(".coverage.*")) + [HERE / ".coverage"]:
+    for stale in list(ROOT.glob(".coverage.*")) + [ROOT / ".coverage"]:
         try:
             stale.unlink()
         except OSError:
@@ -103,18 +113,18 @@ def coverage_combine_and_report() -> str:
     number nobody produced must not be mistaken for a coverage number that is bad, and neither may
     look like success. That is the same rule the selftest three-way split follows.
     """
-    files = sorted(HERE.glob(".coverage.*"))
+    files = sorted(ROOT.glob(".coverage.*"))
     if not files:
         return "coverage: NO DATA — no instrumented child wrote a data file (did any test run?)\n"
     subprocess.run(
         [sys.executable, "-m", "coverage", "combine", "--quiet"],
-        cwd=HERE,
+        cwd=ROOT,
         capture_output=True,
         text=True,
     )
     proc = subprocess.run(
         [sys.executable, "-m", "coverage", "report"],
-        cwd=HERE,
+        cwd=ROOT,
         capture_output=True,
         text=True,
     )
@@ -149,7 +159,7 @@ def run_pytest(*, extra: list[str] | None = None) -> dict:
         [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "--no-header"]
     )
     cmd += extra or []
-    proc = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     tail = (proc.stdout or "") + (proc.stderr or "")
     counts: dict[str, int] = {}
     for n, kind in COUNT_RE.findall(tail):
@@ -188,7 +198,7 @@ def run_pytest(*, extra: list[str] | None = None) -> dict:
 def selftest_modules() -> list[str]:
     """Discover modules exposing --selftest instead of hardcoding a list that goes stale."""
     found = []
-    for path in sorted(HERE.glob("*.py")):
+    for path in sorted(MODULES.glob("*.py")):
         if path.name.startswith("test_") or path.name == "verify.py":
             continue
         try:
@@ -213,8 +223,8 @@ def run_selftests(modules: list[str]) -> dict:
     ok, bad, skipped = [], {}, {}
     for mod in modules:
         proc = subprocess.run(
-            child_argv([sys.executable, f"{mod}.py", "--selftest"]),
-            cwd=HERE,
+            child_argv([sys.executable, str(MODULES / f"{mod}.py"), "--selftest"]),
+            cwd=ROOT,
             capture_output=True,
             text=True,
         )
@@ -252,7 +262,7 @@ def run_gates() -> dict:
     out = {}
     for name, argv in GATES:
         proc = subprocess.run(
-            child_argv([sys.executable, *argv]), cwd=HERE, capture_output=True, text=True
+            child_argv([sys.executable, *argv]), cwd=ROOT, capture_output=True, text=True
         )
         text = (proc.stdout or "") + (proc.stderr or "")
         # Same three-way split as the selftests: a gate that could not judge here says so with
@@ -703,7 +713,7 @@ def _selftest() -> None:
     # does precisely that and confirm it is classified as failed, not ok.
     import tempfile
 
-    saved = globals()["HERE"]
+    saved, saved_mods = globals()["HERE"], globals()["MODULES"]
     with tempfile.TemporaryDirectory(prefix="verify-") as td:
         (pathlib.Path(td) / "silent_mod.py").write_text(
             'import sys\nif "--selftest" in sys.argv:\n    sys.exit(0)\n'
@@ -720,10 +730,10 @@ def _selftest() -> None:
             f'    print("skipping_mod selftest: {PREREQ_ABSENT_MARK} the widget is not installed")\n'
         )
         try:
-            globals()["HERE"] = pathlib.Path(td)
+            globals()["HERE"] = globals()["MODULES"] = pathlib.Path(td)
             got = run_selftests(["silent_mod", "loud_mod", "skipping_mod"])
         finally:
-            globals()["HERE"] = saved
+            globals()["HERE"], globals()["MODULES"] = saved, saved_mods
     assert "silent_mod" in got["failed"], f"a silent zero-exit must FAIL: {got}"
     assert "did it run?" in got["failed"]["silent_mod"], got
     assert got["ok"] == ["loud_mod"], f"a skipped selftest must not be counted as ok: {got}"
@@ -923,6 +933,12 @@ def _selftest() -> None:
         }
     )
     assert "not found in any sibling checkout" in nowhere, nowhere
+
+    # THE TWO ROOTS. On a flat tree they coincide, which is exactly why an assertion is needed:
+    # without one, code that re-merged them would pass here and only fail after the layout moved.
+    assert ROOT == paths.checkout_root(HERE), (ROOT, HERE)
+    assert MODULES == HERE or MODULES.name == "src", (MODULES, HERE)
+    assert FLOOR.parent == ROOT, "the floor belongs to the checkout, not the module dir"
 
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "

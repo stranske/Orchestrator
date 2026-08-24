@@ -51,6 +51,7 @@ from pathlib import Path
 
 import backlog
 import capabilities
+import paths
 
 HERE = Path(__file__).resolve().parent
 STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
@@ -297,11 +298,19 @@ ENTRYPOINT_EXTERNAL = "external_repo"
 ENTRYPOINT_UNDECLARED = "undeclared"
 
 
+def _driver_path(driver: str) -> Path:
+    """Where a DRIVER_MODULES entry actually lives: shell drivers at the checkout root, modules
+    beside their siblings. One accident kept these the same directory until `src/` separated them.
+    """
+    return (paths.checkout_root(HERE) if driver.endswith(".sh") else HERE) / driver
+
+
 def _repo_root() -> Path:
     """The checkout that `.claude/worktrees/*` hangs off, whether we are IN it or in a worktree."""
-    if HERE.parent.name == "worktrees" and HERE.parent.parent.name == ".claude":
-        return HERE.parent.parent.parent
-    return HERE
+    base = paths.checkout_root(HERE)
+    if base.parent.name == "worktrees" and base.parent.parent.name == ".claude":
+        return base.parent.parent.parent
+    return base
 
 
 def sibling_checkouts() -> list[tuple[Path, str]]:
@@ -731,7 +740,9 @@ def _fleet_roots() -> list[tuple[pathlib.Path, str]]:
     env = os.environ.get("ORCH_FLEET_ROOT")
     if env:
         roots.append((pathlib.Path(env).expanduser(), "ORCH_FLEET_ROOT"))
-    roots.append((HERE.parent, "sibling-of-module"))
+    # From HERE, not the module constant: the selftest patches HERE to build synthetic trees,
+    # and a constant would ignore the tree the caller believes it is inspecting.
+    roots.append((paths.fleet_root(HERE), "sibling-of-checkout"))
     roots.append(
         (
             pathlib.Path.home() / "Library/CloudStorage/Dropbox/Learning/Code",
