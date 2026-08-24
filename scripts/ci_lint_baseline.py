@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import re
 import shutil
 import subprocess
@@ -191,6 +192,34 @@ def measure_black() -> dict:
     }
 
 
+def _measure_behind_exempt_list(target: str) -> tuple[int, int]:
+    """Findings hidden by `[[tool.mypy.overrides]] ignore_errors`, and how many modules hide them.
+
+    Run against a COPY of pyproject.toml with that override removed, so the real config is never
+    mutated even transiently -- a crash mid-measure must not leave the repo's gate config edited.
+    """
+    import re
+    import tempfile
+
+    text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    stripped = re.sub(
+        r"\n\[\[tool\.mypy\.overrides\]\]\nmodule = \[[\s\S]*?\]\nignore_errors = true\n",
+        "\n",
+        text,
+    )
+    exempt = len(re.findall(r'^    "[a-z_]+",$', text, re.M))
+    if stripped == text:
+        return 0, 0
+    with tempfile.TemporaryDirectory(prefix="lint-baseline-") as td:
+        cfg = pathlib.Path(td) / "pyproject.toml"
+        cfg.write_text(stripped, encoding="utf-8")
+        out = _run(
+            ["mypy", "--config-file", str(cfg), "--exclude", GATE_EXCLUDE_RUFF, target]
+        ).stdout
+    match = re.search(r"Found (\d+) errors?", out)
+    return (int(match.group(1)) if match else 0), exempt
+
+
 def measure_mypy() -> dict:
     """`mypy --config-file pyproject.toml --exclude .workflows-lib src` -- the Gate's own command.
 
@@ -209,12 +238,20 @@ def measure_mypy() -> dict:
         codes[match.group(1)] = codes.get(match.group(1), 0) + 1
     match = re.search(r"Found (\d+) errors? in (\d+) files?", out)
     blocking = int(match.group(1)) if match else len(codes)
+    # BOTH NUMBERS, or this report stops being able to see its own subject. Once the per-module
+    # exempt list landed, the gate-facing count became 0 -- true, and useless for tracking the
+    # drain, because the findings behind the list vanished from the only report that counts them.
+    # So measure a SECOND time with the `ignore_errors` override stripped: that is the number the
+    # campaign is against, and `mypy_exempt_max` in .verify-floor.json is what stops it growing.
+    behind_ratchet, exempt_modules = _measure_behind_exempt_list(target)
     setup_abort = "errors prevented further checking" in out
     return {
         "check": "typecheck-mypy",
         "command": " ".join(cmd),
         "blocking": blocking,
         "blocking_unit": "errors",
+        "behind_exempt_list": behind_ratchet,
+        "exempt_modules": exempt_modules,
         # No `mypy --fix` exists. This 0 is a fact about the toolchain, not a judgement about
         # how hard the work is.
         "drainable": 0,
@@ -303,6 +340,22 @@ def render(report: dict) -> str:
             f"  {entry['check']:<16}{blocking:>22}{entry['drainable']:>12}   "
             f"{entry['drain'][:60]}{'  <-- ' + verdict if verdict else ''}"
         )
+    # The exempt list is the campaign's subject, so it gets a line of its own. Without it the
+    # table reads "typecheck-mypy 0 errors" and the work behind the list is invisible — the exact
+    # both-numbers rule this report exists to serve.
+    for entry in report["checks"]:
+        behind = entry.get("behind_exempt_list") or 0
+        if behind:
+            lines.append("")
+            lines.append(
+                f"  {entry['check']}: {entry['blocking']} at the gate, but {behind} finding(s) "
+                f"remain behind {entry.get('exempt_modules', 0)} per-module `ignore_errors` "
+                f"exemption(s)."
+            )
+            lines.append(
+                "    That list may only SHRINK — `mypy_exempt_max` in .verify-floor.json fails if "
+                "it grows. Drain it by typing a module and deleting its line."
+            )
     lines.append("")
     for entry in report["checks"]:
         if entry.get("by_code"):

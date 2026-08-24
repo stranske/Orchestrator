@@ -346,7 +346,7 @@ def compute(
     raw_mae = None
     if pairs:
         raw_mae = sum(
-            abs(float(row["proxy_score"]) - float(row["human_score"])) for row in pairs
+            abs(float(str(row["proxy_score"])) - float(str(row["human_score"]))) for row in pairs
         ) / len(pairs)
     return {
         "generated_at": generated_at or int(time.time()),

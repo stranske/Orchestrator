@@ -35,6 +35,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
 GH_LEDGER = (
@@ -200,7 +201,9 @@ def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runn
     except Exception:
         return 1, None
     headers, body = _split_headers_body(getattr(r, "stdout", "") or "")
-    _append_ledger([_ratelimit_row_from_headers(headers, fallback_resource=resource)])
+    row = _ratelimit_row_from_headers(headers, fallback_resource=resource)
+    if row is not None:
+        _append_ledger([row])
     parsed = None
     if body:
         try:
@@ -301,7 +304,11 @@ def throttle_if_enabled(resource: str, **kw) -> dict | None:
 def build(*, runner=subprocess.run) -> dict:
     """Probe + snapshot the tracked resources (what `gh_capacity.py` with no args writes/prints)."""
     resources = probe(runner=runner)
-    out = {"generated_at": int(time.time()), "probe_ok": resources is not None, "resources": {}}
+    out: dict[str, Any] = {
+        "generated_at": int(time.time()),
+        "probe_ok": resources is not None,
+        "resources": {},
+    }
     for name in TRACKED:
         st, meta = state(name)
         out["resources"][name] = {"state": st, **meta}

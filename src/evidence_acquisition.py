@@ -37,6 +37,7 @@ import argparse
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,7 @@ MAX_ITEMS_PER_CAPABILITY = int(os.environ.get("ORCH_EVIDENCE_ACQUISITION_MAX_ITE
 LIVE_FLAG = "ORCH_EVIDENCE_ACQUISITION"
 
 
-def live_enabled(env: dict | None = None) -> bool:
+def live_enabled(env: Mapping[str, str] | None = None) -> bool:
     """True only when the documented default-off switch is explicitly set to 1."""
     env = os.environ if env is None else env
     return str(env.get(LIVE_FLAG, "")).strip() == "1"

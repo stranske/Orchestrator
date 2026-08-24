@@ -478,7 +478,7 @@ def record_completion(
             # caller left EMPTY -- an explicitly supplied resolved_model always wins, because the
             # caller may have provenance this reader cannot see.
             probed = adapters.cli_reported_model(
-                agent, target[len("offload:") :], started_ts=started_ts, log_file=log_file
+                agent, str(target)[len("offload:") :], started_ts=started_ts, log_file=log_file
             )
             probe_reason = probed.get("reason")
             if probed.get("model"):

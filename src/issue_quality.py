@@ -280,7 +280,7 @@ def resolve_issue_records(
     )
     body_keys: set[tuple[str, int]] = set()
     for repo, pr_number in linked_cache:
-        issue_numbers = linked_cache.get((repo, pr_number)) or []
+        issue_numbers: list[int] = linked_cache.get((repo, pr_number)) or []
         if not isinstance(issue_numbers, list):
             continue
         for issue_number in issue_numbers:

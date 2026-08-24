@@ -300,7 +300,7 @@ def aggregate_veto(
             )
         if (unexamined_min or 0) > 0:
             reasons.append(
-                f"at least {unexamined_min} of {int(findings_submitted)} submitted findings received no "
+                f"at least {unexamined_min} of {int(findings_submitted or 0)} submitted findings received no "
                 f"verdict (one verdict settles at most one finding, and verdicts are unattributed)"
             )
         out["inconclusive_reason"] = (

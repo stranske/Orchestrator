@@ -347,7 +347,9 @@ def inspect_cadence(
         elif success_ts is None:
             success_status = "missing"
         else:
-            success_status = "stale" if success_age > stale_after_s else "fresh"
+            # `success_ts is None` was ruled out above, so the age is a real int here; stating it
+            # keeps the comparison typed without changing the branch logic.
+            success_status = "stale" if int(success_age or 0) > stale_after_s else "fresh"
         try:
             failure_count = int(failure_path.read_text().strip()) if failure_ts is not None else 0
         except (OSError, ValueError):
