@@ -56,7 +56,25 @@ jobs:
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
         run: |
           mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
-          python3 src/verify.py
+          # `--floor-may-lag` ON PULL REQUESTS ONLY, and the asymmetry is the whole point.
+          #
+          # `.verify-floor.json`'s `collected` is an EQUALITY, which is right: a floor behind
+          # reality is permissive by exactly the gap. But the correct number is only knowable on
+          # the MERGE RESULT, and this repo merges fast — one one-line change needed SIX
+          # re-measurements in two hours while main moved eight times, and that file's own note
+          # records the floor being found behind reality four separate times before that. Demanding
+          # the exact number from a branch author is demanding something no amount of care delivers.
+          #
+          # So on a PR a LAGGING floor is reported and not fatal, while a collection DROP stays
+          # fatal (see `_blocks_floor_update`). On main the equality is enforced by this same job
+          # WITHOUT the flag, and the reconcile-floor job below heals a lag within one run — so the
+          # invariant "main's floor equals main's reality" is unchanged. Nothing is skipped and
+          # nothing is silenced: the lag still prints.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 src/verify.py --floor-may-lag
+          else
+            python3 src/verify.py
+          fi
 
       # verify.py already fails on: any pytest failure, ZERO tests collected, a collection count
       # below the recorded floor, passed+skipped dropping below the floor, MORE SKIPS THAN THE
