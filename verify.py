@@ -404,6 +404,32 @@ def _failing_problems(
     return problems
 
 
+def _floor_needs_writing(floor: dict, collected: int, passed: int) -> bool:
+    """Would writing actually change the recorded numbers? Pure, so the selftest holds the rule.
+
+    THE DEFECT THIS CLOSES, and it was introduced by automating the write. `--update-floor` wrote
+    on every fully-green run, drift or not: with no problems at all, `_blocks_floor_update([])` is
+    empty and the guard passes. Harmless while a human ran it by hand — the redundant write
+    recorded the same integers and appended one dated stamp. But ci.yml's reconcile job runs it on
+    EVERY push to main, so each push produced a bot commit that changed nothing but the note, and
+    the note grew +150 chars a time: 22217 -> 22367 -> 22517 over three pushes, measured. A commit
+    that records nothing is noise on main, and unbounded growth in the one file whose note is
+    load-bearing documentation is worse than noise.
+
+    A no-op write also costs the audit trail nothing: a "FLOOR RECORDED" stamp for a write that
+    changed no number is a record of nothing having happened.
+
+    DRIFT ALWAYS STILL WRITES, which is what keeps the drain working. Drift means
+    `collected != floor["collected"]` by definition, so this predicate is True in exactly the case
+    the reconcile job exists for. An UNSET floor also writes: `{}` reads as 0, which differs from
+    any real count, so a fresh checkout still records its first floor.
+    """
+    return (
+        int(floor.get("collected", 0) or 0) != collected
+        or int(floor.get("passed", 0) or 0) != passed
+    )
+
+
 def _appended_note(prior: str | None, collected: int, passed: int, today: str) -> str:
     """Append the recorded counts to the EXISTING note. Never replace it. Pure, so the selftest
     can hold the preservation property rather than trusting it.
@@ -636,7 +662,13 @@ def verify(*, update_floor: bool = False, forgive_healed_drift: bool = False) ->
 
     # Drift does NOT block the write — see `_blocks_floor_update`. A real failure still does.
     wrote_floor = False
-    if update_floor and not _blocks_floor_update(problems):
+    if (
+        update_floor
+        and not _blocks_floor_update(problems)
+        # Third conjunct, and it is what stops the reconcile job committing on every push. See
+        # `_floor_needs_writing`: drift is always still written, a no-op never is.
+        and _floor_needs_writing(floor, py["collected"], py["passed"] + py["skipped"])
+    ):
         # `collected` and `passed` are re-measured; the CEILINGS are NOT. A ceiling re-recorded
         # from whatever the last run happened to skip is not a ceiling, it is a ratchet that
         # follows the leak — and on the machine that has every prerequisite it would record 0 and
@@ -834,7 +866,12 @@ def _selftest() -> None:
     # this very line, so `_src` would contain it no matter what the call site said and the assert
     # could never fail -- a test that cannot fail, guarding against a defect that already
     # happened once. Split, the joined form exists only at the real guard.
-    _guard = "if update_floor and not " + "_blocks_floor_update(problems):"
+    # Narrowed 2026-08-24 from the whole `if` line to just this conjunct. The guard legitimately
+    # became a multi-line `if (...)` when `_floor_needs_writing` was ANDed in, which broke a
+    # needle that pinned the entire single-line form — the same brittleness that made a reformat
+    # look like a coverage regression in test_verify_coverage_mode.py. The conjunct is the part
+    # that carries the meaning: pin that, not the formatting around it.
+    _guard = "and not " + "_blocks_floor_update(problems)"
     assert _guard in _src, (
         "the --update-floor guard no longer calls _blocks_floor_update — a floor behind reality "
         "would once again block the one command that fixes it"
@@ -866,6 +903,36 @@ def _selftest() -> None:
     assert _recon in _src, (
         "verify() no longer routes its exit code through _failing_problems — --reconcile-floor "
         "would silently stop forgiving, or worse, forgive unconditionally"
+    )
+
+    # ---- a no-op floor write is not performed at all -----------------------------------------
+    # DELIBERATE-BREAK DEMO: drop the `_floor_needs_writing` conjunct from the write guard and the
+    # first assert below still passes (the predicate is pure and unaffected) but the WIRING assert
+    # at the end fails. That ordering is the point: this defect shipped once already as a helper
+    # that existed and a guard that ignored it.
+    #
+    # WHY IT MATTERS: --update-floor wrote on every green run, so ci.yml's reconcile job committed
+    # to main on every push, changing nothing but appending a dated stamp — the note grew
+    # 22217 -> 22367 -> 22517 over three pushes before this was caught.
+    assert not _floor_needs_writing({"collected": 442, "passed": 442}, 442, 442)
+    # Drift ALWAYS still writes — this is the case the reconcile job exists for, so the guard must
+    # never suppress it.
+    assert _floor_needs_writing({"collected": 441, "passed": 441}, 442, 442)
+    # `passed` moving alone is still a real change worth recording.
+    assert _floor_needs_writing({"collected": 442, "passed": 440}, 442, 442)
+    # An UNSET floor must record its first value rather than read as "already correct".
+    assert _floor_needs_writing({}, 442, 442)
+    # A collection DROP would also "need writing", which is exactly why this conjunct is ANDed
+    # with `_blocks_floor_update` and never replaces it: that one refuses the downward write.
+    assert _floor_needs_writing({"collected": 442, "passed": 442}, 400, 400)
+    assert _blocks_floor_update(["collection DROPPED: 400 < floor 442"]) != []
+    # ...and WIRED. Split literal so the needle cannot match this line.
+    _noop_guard = (
+        "and _floor_needs_writing(floor, " + 'py["collected"], py["passed"] + py["skipped"])'
+    )
+    assert _noop_guard in _src, (
+        "the write guard no longer consults _floor_needs_writing — the reconcile job will commit "
+        "to main on every push again, appending a stamp that records nothing"
     )
 
     # ---- --update-floor APPENDS to the note, so the ceiling rationale survives the tool -------
@@ -929,7 +996,8 @@ def _selftest() -> None:
         "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
         "not, floor counts passed+skipped, floor fails BEHIND reality as loudly as below "
         "it and names the integers to write, --update-floor appends to the note instead of "
-        "clobbering the ceiling rationale, --reconcile-floor forgives ONLY a drift it "
+        "clobbering the ceiling rationale, a no-op floor write is skipped entirely, "
+        "--reconcile-floor forgives ONLY a drift it "
         "healed and never an unwritten one, absent-module line is silent when clean and is "
         "never counted as a skip)"
     )
