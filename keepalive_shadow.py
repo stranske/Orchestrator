@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """keepalive_shadow.py - shadow-mode corpus builder for keepalive PR supervision.
 
-STAGE 2 of the BRIEF_keepalive_transfers.md "#6 staged path": before any LIVE
+STAGE 2 of the docs/briefs/BRIEF_keepalive_transfers.md "#6 staged path": before any LIVE
 supervisor is justified, accumulate evidence. For a keepalive-driven PR, this
 module reads the keepalive state, reconstructs a `watch.py`-style report, asks the
 existing advisory `redirect_policy.decide()` what it WOULD recommend, compares

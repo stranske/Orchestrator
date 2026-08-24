@@ -215,7 +215,7 @@ cursor-agent live outside the default PATH):
   checks to verify the local helper, Node runtime, and CDP endpoint readiness; it emits structured JSON and
   launch commands for an authorized browser when the endpoint is absent or unreachable.
   The Trip Planner live exercise passed `/health`, `/login`, and login→signup click-flow assertions.
-  (backlog #2 / `BRIEF_expand_range.md` #1)
+  (backlog #2 / `docs/briefs/BRIEF_expand_range.md` #1)
 - **Gate generated tests (NEW)** — `python3 testgen_gate.py --repo <repo> --source <pkg>
   --baseline-pytest-args "<existing-test args>" --candidate-pytest-args "<existing + generated args>"`
   → assured-acceptance gate for LLM-generated pytest tests: collection/import, baseline non-regression,
@@ -224,7 +224,7 @@ cursor-agent live outside the default PATH):
   the generated tests on large suites. Coverage JSON generation forces `--fail-under=0`, so repo-level
   coverage thresholds do not override the gate's own delta verdict. Live exercise: Inv-Man-Intake
   `workflow_validation` via isolated Gemini offload passed with +20 covered lines and 3/3 reliability.
-  (backlog #2 / `BRIEF_expand_range.md` #2)
+  (backlog #2 / `docs/briefs/BRIEF_expand_range.md` #2)
 - **Build a test-generation lane prompt (NEW)** — `python3 testgen_lane.py --repo <repo> --source <pkg>
   --baseline-pytest-args "<existing-test args>" --candidate-pytest-args "<existing + generated args>"
   [--target owner/repo#N] [--context-file brief.md]` → writes a delegation prompt that instructs an agent

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """testgen_lane.py - build gate-backed prompts for generated-test work.
 
-BRIEF_expand_range.md option #2 already supplied `testgen_gate.py`. This helper
+docs/briefs/BRIEF_expand_range.md option #2 already supplied `testgen_gate.py`. This helper
 wires that gate into an actual orchestrator lane: the seat can generate one
 prompt file for a delegated agent, and the prompt includes the exact acceptance
 gate command that must pass before commit/PR.

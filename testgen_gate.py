@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """testgen_gate.py - assured-acceptance gate for generated tests.
 
-BRIEF_expand_range.md option #2. This widens the fleet from "implement the
+docs/briefs/BRIEF_expand_range.md option #2. This widens the fleet from "implement the
 given issue" to "propose coverage-raising tests, then accept only the tests that
 survive a gate." The gate follows the transferable TestGen-LLM pattern:
 collect/import -> non-regression -> repeated reliability -> coverage delta.

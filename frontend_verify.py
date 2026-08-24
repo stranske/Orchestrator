@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """frontend_verify.py — orchestrator capability: VISION-FREE frontend/UI verification.
 
-Backlog #2 / BRIEF_expand_range.md #1. Expands the fleet's RANGE: today agents can edit TS/React but
+Backlog #2 / docs/briefs/BRIEF_expand_range.md #1. Expands the fleet's RANGE: today agents can edit TS/React but
 cannot run + observe a UI, so frontend PRs ship unverified. This drives chromium via a LOCAL Playwright
 (node) helper and asserts against the ACCESSIBILITY TREE — token-cheap, deterministic, no multimodal
 model (Playwright-MCP-style; research: microsoft/playwright-mcp). Any fleet lane (incl. text-only Codex /

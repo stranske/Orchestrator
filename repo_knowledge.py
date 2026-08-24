@@ -154,7 +154,7 @@ DOC_ROOT_FILES = {
 DOC_DIRS = {"docs", ".github"}
 DOC_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".next", "__pycache__"}
 DOC_SKIP_FILE_PREFIXES = ("BRIEF_",)
-DOC_SKIP_FILE_NAMES = {"CODEX_BRIEF.md"}
+DOC_SKIP_FILE_NAMES = {"docs/briefs/CODEX_BRIEF.md"}
 
 # v2 (2026-08-23): corrects a factually wrong Trend summary, unscopes seeded invariants, and adds
 # the `contraindications` section. Bumping this runs `_migrate()` once against an existing registry.
