@@ -8,7 +8,9 @@
 #   orchestrate-seat.sh --agent codex ["instruction"]     # rotate the seat
 #   ORCH_SEAT_DRYRUN=1 orchestrate-seat.sh                 # print the assembled prompt + exit (no seat)
 set -euo pipefail
-ORCH="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"   # self-locating (code on Dropbox; runtime LOCAL)
+ORCH="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# This script reads a repo-root DOC, not a module, so it keeps the checkout root. The distinction
+# matters since the modules moved under src/: `$ORCH/ORCHESTRATOR.md` would resolve to nothing.   # self-locating (code on Dropbox; runtime LOCAL)
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
 
 SEAT="claude"

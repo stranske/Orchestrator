@@ -156,8 +156,8 @@ back. Adding a "new" feature that already exists is the easy mistake here.
    "calibrat", "adversar", "drain" before building routing/recovery/calibration/review/quota work).
 2. Read the historical dormancy inventory:
    `Code/Audits/Orchestrator/2026-07-08-dormancy-rescan.md`, then generate current activation truth
-   with `python3 capabilities.py inventory`. Feature maturity is not activation evidence.
-3. Search the improvement log — `python3 improvement_log.py search <term>`. Items carry status
+   with `python3 src/capabilities.py inventory`. Feature maturity is not activation evidence.
+3. Search the improvement log — `python3 src/improvement_log.py search <term>`. Items carry status
    notes and many "ideas" are already DONE. The log is machine-local evidence living outside the
    tree, so **use the accessor, never a path**: it resolves `$ORCH_LOCAL_RUNTIME` for you, prints
    each hit under the item that owns it, and — when the log is not on this machine — names what is
@@ -173,7 +173,7 @@ or "exists at file:line, dormant behind FLAG; activating." **Record it in the ca
 after it was written.
 
 **`ADDING_CAPABILITIES.md` is the procedure, and it is ENFORCED.** Run
-`python3 capability_admission.py --preflight '<spec json>'` before writing code: a capability must
+`python3 src/capability_admission.py --preflight '<spec json>'` before writing code: a capability must
 arrive with a dedup finding, a caller, a heartbeat, a recurrence fixture, an outcome path, a kill
 switch, a rollback, an expiry-or-cadence, **and a surface that can offer it**.
 `test_capability_admission.py` fails the suite otherwise, and also fails on a citation to a dated
@@ -204,16 +204,30 @@ Do not create a second event log, model registry, or capability inventory.
   (default `~/.codex/orchestrator`), the machine-local state, which is never committed.
   `cmp`-clean is not agreement: re-run the verdict FROM THE MIRROR, since a path resolved relative
   to a module's own directory is right in one tree and wrong in the other.
+- **The modules live in `src/`, the tests in `tests/`, and the CHECKOUT ROOT IS NOT THE MODULE
+  DIRECTORY.** Those were the same directory until 2026-08-23, and every path in the tree was
+  derived from that accident. Two questions with two answers now: sibling modules resolve from
+  `paths.MODULE_DIR`, while `orchestrate.sh`, `.verify-floor.json`, `pyproject.toml` and the docs
+  resolve from `paths.REPO_ROOT`. **Never write `Path(__file__).resolve().parent` for a repo-root
+  file, and never hardcode `parent.parent` for it either** — `paths.checkout_root(module_dir)`
+  applies the rule, and the rule is DETECTED (module dir named `src` ⇒ checkout is its parent, else
+  they coincide) because THE MIRROR IS FLAT. A hardcoded prefix is right in one tree and wrong in
+  the other, which is the failure `capability_activation_audit._fleet_roots` already documents.
+  `orchestrate.sh` does the same detection in shell for `$ORCH`. Verify with
+  `python3 src/verify.py`.
 - **A remote merge is inert until the mirror is synced.** Keep that gap manual. It is the only
   circuit breaker between an agent's change and the dispatcher that dispatches those agents.
+  **The `src/` move needs a one-time patch to `orch-sync-mirror.sh`, which lives outside the repo:
+  its `cp "$SRC"/*.py` now matches nothing.** The patch and how to confirm it are in
+  `docs/MIRROR_SYNC_PATCH.md`. Until it is applied the mirror has no modules.
 - Run the touched module's `--selftest` (the project's test suite). Add a selftest case for new
   behavior, including a deliberate-break→revert demonstration for correctness-critical logic.
 - Register or update lifecycle state in `capabilities.py` for any new/wired capability. Run
-  `python3 capabilities.py --selftest` and `python3 capabilities.py --json validate`. Never mark a
+  `python3 src/capabilities.py --selftest` and `python3 src/capabilities.py --json validate`. Never mark a
   capability active from code existence, a passing selftest, or a feature-registry maturity alone;
   activation requires executable producer, consumer, outcome, expiry, kill-switch, and rollback
   evidence.
-- **Verify with `python3 verify.py`, never with `for t in test_*.py; do python3 "$t"; done`.**
+- **Verify with `python3 src/verify.py`, never with `for t in test_*.py; do python3 "$t"; done`.**
   Most test files are pytest-only: run directly they define their tests, execute nothing, and exit
   0 — which is how 9 failures and a two-month-old broken selftest went unnoticed. `verify.py` runs
   real pytest, reads the COUNTS rather than the exit status, enforces a collection floor so tests
@@ -334,7 +348,7 @@ and update the gated-features list in README.md + the dormancy inventory.
 When you activate a dormant feature, un-gate a flag, or add a subsystem: update its lifecycle
 record, regenerate the capability inventory, update README.md's functionality section if the
 topology changed, and record a status note on the relevant improvement-log item with
-`python3 improvement_log.py append <item-ref> "<note>"`. Use the accessor rather than editing a
+`python3 src/improvement_log.py append <item-ref> "<note>"`. Use the accessor rather than editing a
 file: the log is machine-local (outside the tree), the accessor finds the item and places the dated
 note inside it, and it REFUSES on an ambiguous or unknown ref rather than guessing — a note filed
 against the wrong item corrupts the record it exists to improve. Do not duplicate lifecycle verdicts

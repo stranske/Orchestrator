@@ -7,9 +7,9 @@ is this instance's EVIDENCE, not the tool, so it lives outside the tree with the
 accessor, which resolves the path for you:
 
 ```bash
-python3 improvement_log.py search <term>        # CLAUDE.md §0 step 3 — is this already DONE?
-python3 improvement_log.py append <item-ref> "<note>"   # CLAUDE.md §5 — record a status note
-python3 improvement_log.py path                 # where it resolved to, and whether it is here
+python3 src/improvement_log.py search <term>        # CLAUDE.md §0 step 3 — is this already DONE?
+python3 src/improvement_log.py append <item-ref> "<note>"   # CLAUDE.md §5 — record a status note
+python3 src/improvement_log.py path                 # where it resolved to, and whether it is here
 ```
 
 `search` prints each hit under the item heading that owns it, plus the number of lines and sections it

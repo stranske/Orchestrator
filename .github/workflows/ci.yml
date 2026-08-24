@@ -56,7 +56,7 @@ jobs:
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
         run: |
           mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
-          python3 verify.py
+          python3 src/verify.py
 
       # verify.py already fails on: any pytest failure, ZERO tests collected, a collection count
       # below the recorded floor, passed+skipped dropping below the floor, MORE SKIPS THAN THE
@@ -151,7 +151,7 @@ jobs:
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
         run: |
           mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
-          python3 verify.py --reconcile-floor
+          python3 src/verify.py --reconcile-floor
 
       - name: Commit the reconciled floor
         run: |

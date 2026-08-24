@@ -656,16 +656,16 @@ unattended agent isn't caught until a bad outcome hours later), and the scaffold
 ### CLI
 
 ```bash
-python3 roles.py --selftest                       # offline contract checks
-python3 roles.py route --role redirect            # show the router-chosen backend
-python3 roles.py redirect --report-json r.json --ac "<acceptance criteria>" \
+python3 src/roles.py --selftest                       # offline contract checks
+python3 src/roles.py route --role redirect            # show the router-chosen backend
+python3 src/roles.py redirect --report-json r.json --ac "<acceptance criteria>" \
     [--proposal-json p.json]   # replay a captured proposal (offline)
-python3 roles.py redirect --report-json r.json --ac "..." --dispatch   # live offload to the backend
-python3 redirect_shadow.py record --report-json r.json --ac "..." --dispatch
-python3 redirect_shadow.py summarize
-python3 redirect_shadow.py historical-candidates
-python3 redirect_shadow.py link-outcome --role-run-id RID --influenced-run-id DOWNSTREAM_RID
-python3 roles.py link-outcome --role-run-id RID --influenced-run-id DOWNSTREAM_RID
+python3 src/roles.py redirect --report-json r.json --ac "..." --dispatch   # live offload to the backend
+python3 src/redirect_shadow.py record --report-json r.json --ac "..." --dispatch
+python3 src/redirect_shadow.py summarize
+python3 src/redirect_shadow.py historical-candidates
+python3 src/redirect_shadow.py link-outcome --role-run-id RID --influenced-run-id DOWNSTREAM_RID
+python3 src/roles.py link-outcome --role-run-id RID --influenced-run-id DOWNSTREAM_RID
 ```
 
 All `redirect` invocations print a dry-run plan and a SHADOW banner; none mutate state. Live dispatches
@@ -701,10 +701,10 @@ boundaries, risks, and confidence.
 ### CLI
 
 ```bash
-python3 roles.py route --role prompt
-python3 roles.py prompt --target owner/repo#N --goal "..." --task-type implement \
+python3 src/roles.py route --role prompt
+python3 src/roles.py prompt --target owner/repo#N --goal "..." --task-type implement \
   --target-detail "issue body or PR context" [--proposal-json p.json]
-python3 roles.py prompt --target owner/repo#N --goal "..." --task-type implement --dispatch
+python3 src/roles.py prompt --target owner/repo#N --goal "..." --task-type implement --dispatch
 ```
 
 ## DecomposerAgent — the third role (built 2026-06-20)
@@ -724,10 +724,10 @@ verification, and re-decomposition triggers.
 ### CLI
 
 ```bash
-python3 roles.py route --role decomposer
-python3 roles.py decompose --goal "..." --repo owner/repo --target owner/repo#N \
+python3 src/roles.py route --role decomposer
+python3 src/roles.py decompose --goal "..." --repo owner/repo --target owner/repo#N \
   [--subtask-count 3] [--proposal-json plan.json]
-python3 roles.py decompose --goal "..." --repo owner/repo --dispatch
+python3 src/roles.py decompose --goal "..." --repo owner/repo --dispatch
 ```
 
 ## TriageAgent — the fourth role (built 2026-06-20)
@@ -750,9 +750,9 @@ into advisory recommendations: work now, defer, needs scope, skip, monitor, and 
 ### CLI
 
 ```bash
-python3 roles.py route --role triage
-python3 roles.py triage --backlog-json ~/.codex/handoff/backlog.json [--proposal-json triage.json]
-python3 roles.py triage --backlog-json ~/.codex/handoff/backlog.json --dispatch
+python3 src/roles.py route --role triage
+python3 src/roles.py triage --backlog-json ~/.codex/handoff/backlog.json [--proposal-json triage.json]
+python3 src/roles.py triage --backlog-json ~/.codex/handoff/backlog.json --dispatch
 ```
 
 ## AdjudicatorAgent — the fifth role (built 2026-06-20)
@@ -775,7 +775,7 @@ evidence.
 ### CLI
 
 ```bash
-python3 roles.py route --role adjudicator
-python3 roles.py adjudicate --case-json case.json [--proposal-json adjudication.json]
-python3 roles.py adjudicate --case-json case.json --dispatch
+python3 src/roles.py route --role adjudicator
+python3 src/roles.py adjudicate --case-json case.json [--proposal-json adjudication.json]
+python3 src/roles.py adjudicate --case-json case.json --dispatch
 ```

@@ -14,7 +14,13 @@
 set -euo pipefail
 # Self-locating: code lives in Code/Orchestrator (Dropbox); git checkouts + feedback DB stay LOCAL
 # (defaults baked into provision.py/feedback.py). Override with ORCH_DIR.
-ORCH="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+ORCH_REPO="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# ORCH points at the MODULES, which are not the checkout root any more: a checkout keeps them under
+# src/, while the exec mirror is FLAT (orch-sync-mirror.sh copies root-level .py only). Detected,
+# never assumed — the same rule paths.py applies in Python, for the same reason: a hardcoded path
+# would be right in one tree and wrong in the other, and the mirror is the one launchd runs.
+ORCH="$ORCH_REPO/src"
+[[ -d "$ORCH" ]] || ORCH="$ORCH_REPO"
 # Tools the tick shells out to live outside the default cron/sandbox PATH: ccusage/npx/node
 # in homebrew, vibe/cursor-agent in ~/.local|.cursor/bin. Without this, capacity.py can't see
 # ccusage → codex/claude read 'unknown' and never get routed.
