@@ -624,6 +624,21 @@ def status(corpus_path: Path | None = None, *, env: dict | None = None) -> dict[
     }
 
 
+def _recording_role_runner(spent: list):
+    """Record the call and return an empty proposal.
+
+    Was `lambda *a, **k: spent.append(a) or {}` — a deliberate "record, then yield {}" idiom that
+    reads as a bug to a checker, because `list.append` returns None and `X or {}` therefore always
+    takes the right branch. Same behaviour, stated instead of implied.
+    """
+
+    def runner(*a, **k) -> dict:
+        spent.append(a)
+        return {}
+
+    return runner
+
+
 def _selftest() -> None:
     import tempfile
 
@@ -907,7 +922,7 @@ def _selftest() -> None:
             corpus_path=corpus,
             dry_run=True,
             env={},
-            role_runner=lambda *a, **k: spent.append(a) or {},
+            role_runner=_recording_role_runner(spent),
         )
         assert guarded.get("skipped") and not spent, guarded
         assert "spend-offloads" in guarded["skipped"], guarded

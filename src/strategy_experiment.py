@@ -145,7 +145,7 @@ def implementation_agents(arms: Sequence[Any]) -> list[str]:
     normalized = (
         arms if arms and isinstance(arms[0], dict) and "arm_id" in arms[0] else normalize_arms(arms)
     )
-    return _dedupe_preserve(agent for arm in normalized for agent in arm["agents"])
+    return _dedupe_preserve([agent for arm in normalized for agent in arm["agents"]])
 
 
 def load_hypothesis_arms(

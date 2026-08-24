@@ -717,7 +717,7 @@ def historical_candidates_from_keepalive(
 
 def _already_historical_replayed_targets(corpus_path: Path = CORPUS_PATH) -> set[str]:
     return {
-        e.get("target")
+        str(e.get("target"))
         for e in _iter_events(corpus_path)
         if e.get("kind") == "redirect_proposal"
         and e.get("source") == HISTORICAL_SOURCE

@@ -973,7 +973,9 @@ def _validate_adjudication(value: Any, synthesis: dict[str, Any]) -> list[str]:
         }:
             errors.append(f"{path} has an invalid shape")
             continue
-        seen.append(decision.get("assertion_key"))
+        assertion_key = decision.get("assertion_key")
+        if assertion_key is not None:
+            seen.append(assertion_key)
         if decision.get("assertion_key") not in expected:
             errors.append(f"{path}.assertion_key is not in the adjudication queue")
         if decision.get("decision") not in ADJUDICATION_DECISIONS:

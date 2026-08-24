@@ -41,6 +41,8 @@ def _route_agents(task_type: str, route_table: dict | None = None) -> list[str]:
     spec = (route_table or router.ROUTE_TABLE).get(task_type) or {}
     out: list[str] = []
     for row in spec.get("agents") or []:
+        if not isinstance(row, dict):
+            continue
         agent = row.get("agent")
         if not agent or agent in out or agent in router.BACKUP_AGENTS:
             continue

@@ -222,8 +222,8 @@ def _candidate_task_types(
     candidates.sort(
         key=lambda row: (
             not row["recommended"],
-            -row["opener_backlog_items"],
-            -row["recent_outcome_rows"],
+            -int(row["opener_backlog_items"]),
+            -int(row["recent_outcome_rows"]),
             row["task_type"],
         )
     )

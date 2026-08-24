@@ -237,24 +237,24 @@ def validate_consumer_sync_plan(raw: Any) -> dict[str, Any]:
         if not isinstance(removal, dict) or set(removal) != REMOVAL_FIELDS:
             reasons.append(f"invalid_removal_fields:{index}")
             continue
-        target = _safe_path(removal.get("target"))
-        if target is None:
+        removal_target = _safe_path(removal.get("target"))
+        if removal_target is None:
             reasons.append(f"unsafe_removal_target:{index}")
             continue
         fingerprint = str(removal.get("effect_fingerprint") or "")
         if not SHA256_RE.fullmatch(fingerprint):
             reasons.append(f"invalid_removal_effect_fingerprint:{index}")
-        if fingerprint != _stable_hash("consumer-sync-removal-effect", {"target": target}):
+        if fingerprint != _stable_hash("consumer-sync-removal-effect", {"target": removal_target}):
             reasons.append(f"removal_effect_identity_mismatch:{index}")
-        if target in target_owners:
-            reasons.append(f"duplicate_target:{target}")
-        target_owners[target] = f"removal:{index}"
+        if removal_target in target_owners:
+            reasons.append(f"duplicate_target:{removal_target}")
+        target_owners[removal_target] = f"removal:{index}"
         description = str(removal.get("description") or "").strip()
         if not description:
             reasons.append(f"invalid_removal_description:{index}")
         removals.append(
             {
-                "target": target,
+                "target": removal_target,
                 "description": description,
                 "effect_fingerprint": fingerprint,
             }

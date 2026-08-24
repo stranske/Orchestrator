@@ -203,7 +203,8 @@ def _matches(binding: Mapping[str, Any], trigger: Mapping[str, Any]) -> bool:
     if kind == "role":
         role = roles.get_role(binding["context"]["role_name"])
         selector = role.selector or {}
-        value = trigger.get(selector.get("field"))
+        field = selector.get("field")
+        value = trigger.get(field) if isinstance(field, str) else None
         expected = selector.get("value")
         return (
             value == expected if selector.get("operator") == "equals" else value in (expected or [])

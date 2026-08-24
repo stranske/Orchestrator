@@ -385,7 +385,7 @@ def select_profile(
         values = scores or {}
         selected = min(eligible, key=lambda pid: (-float(values.get(pid, 0.0)), pid))
         probability = 1.0
-    body = {
+    body: dict[str, Any] = {
         "schema_version": 2,
         "task_type": task_type,
         "target": target,

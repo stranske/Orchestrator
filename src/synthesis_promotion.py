@@ -885,7 +885,7 @@ def default_mirror_outcome(state: dict, event_key: str) -> dict:
     else:
         verifier = outcome.get("verifier_verdict") or "PASS_SYNTHESIS_PROMOTION"
         adjudicated = outcome.get("adjudicated_verdict") or "PASS"
-        merged = outcome.get("merged")
+        merged = bool(outcome.get("merged"))
         durability = outcome.get("durability") or ("durable" if phase == "durable" else "pending")
     feedback.record_outcome(
         synth_run_id,

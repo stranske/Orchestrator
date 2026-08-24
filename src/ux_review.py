@@ -27,6 +27,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import TextIO
 
 import adapters
 import dispatcher
@@ -582,7 +583,9 @@ def review(
 
     register_panel_subject(bundle, evaluators, spec=rubric_prompt)
 
-    procs: dict[str, tuple[subprocess.Popen, object, Path]] = {}
+    # The middle element is the evaluator's open log file, not an opaque object — declaring it
+    # `object` is what made every `out.write/flush/close` unreachable to the checker.
+    procs: dict[str, tuple[subprocess.Popen, TextIO, Path]] = {}
     for ev in evaluators:
         pf = rdir / f"rubric-prompt-{ev}.txt"
         pf.write_text(rubric_prompt)

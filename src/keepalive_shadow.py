@@ -35,6 +35,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import redirect_policy
 
@@ -161,7 +162,7 @@ def synthesize_report(signals: dict) -> dict:
 
     state_raw = str(signals.get("pr_state") or "open").lower()
     last_changes = bool(signals.get("last_has_changes"))
-    drift = {"severity": "none", "findings": []}
+    drift: dict[str, Any] = {"severity": "none", "findings": []}
 
     if state_raw in ("closed", "merged"):
         state = "exited"

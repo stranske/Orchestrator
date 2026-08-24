@@ -198,7 +198,7 @@ def validate_plan(plan: dict[str, Any]) -> list[str]:
         if not _is_nonempty_string(task_id):
             errors.append(f"{path}.id must be a non-empty string")
         else:
-            normalized_id = task_id.strip()
+            normalized_id = str(task_id).strip()
             if normalized_id in seen:
                 errors.append(f"{path}.id duplicates {normalized_id!r}")
             seen.add(normalized_id)
