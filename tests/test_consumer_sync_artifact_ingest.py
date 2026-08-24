@@ -7,12 +7,12 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from test_consumer_sync_shadow import stable_hash, valid_handoff, valid_plan
 
 import capabilities
 import capability_outcome_bridge
 import consumer_sync_artifact_ingest
 import consumer_sync_shadow
-from test_consumer_sync_shadow import stable_hash, valid_handoff, valid_plan
 
 
 def make_zip(files_dict: dict[str, str | bytes]) -> bytes:

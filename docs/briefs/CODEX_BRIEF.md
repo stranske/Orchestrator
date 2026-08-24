@@ -106,7 +106,7 @@ the deliverable is the comparison + the synthesized best.
 
 **Strategy experiments (H4/H5):** use `strategy_experiment.py` when the arm is a strategy rather than a
 single agent (for example, `single(claude)` vs `parallel(claude+cursor+synth)`). It is read-only by
-default: `python3 strategy_experiment.py --hypothesis H4 --repo owner/repo --spec-file spec.md --exp-id
+default: `python3 src/strategy_experiment.py --hypothesis H4 --repo owner/repo --spec-file spec.md --exp-id
 id --json` normalizes arms, expands the unique implementation agents for `exp_abcd`, and points to the
 `strategy.json` metadata path. Active prepare is guarded by both `--prepare --confirm-strategy` and
 `ORCH_STRATEGY_EXPERIMENT=1`. The cron research tick still auto-launches only simple single-agent A/B/C/D

@@ -642,7 +642,10 @@ def _callers_of(module_stem: str, func_names: set[str]) -> list[str]:
     """Driver modules that call `module_stem.<func>` for any func, or run it as a CLI."""
     found = []
     for driver in DRIVER_MODULES:
-        dpath = HERE / driver
+        # Shell drivers sit at the CHECKOUT root, python drivers beside the modules — the whole
+        # reason `_driver_path` exists. `HERE / driver` silently found NOTHING for orchestrate.sh
+        # after the move, which reported two live capabilities as having no caller.
+        dpath = _driver_path(driver)
         if not dpath.exists():
             continue
         text = dpath.read_text(errors="ignore")
@@ -962,7 +965,9 @@ def heartbeat_env_gate(*, here: Path | None = None) -> dict:
     `suppressed_modules` is the defect set. `invocations_after` is published alongside it so a zero
     can be read: 0 suppressed of 40 invocations is a correct ordering, 0 of 0 is a broken parse.
     """
-    root = here or HERE
+    # Shell drivers live at the CHECKOUT root, not beside the modules. `here` is still honoured so
+    # the selftest can point this at a synthetic tree.
+    root = here or paths.checkout_root(HERE)
     out = {
         "flag": HEARTBEAT_ENV_FLAG,
         "anchor": HEARTBEAT_EXPORT_ANCHOR,

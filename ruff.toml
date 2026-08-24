@@ -46,7 +46,7 @@ extend-exclude = [".workflows-lib"]
 # would mean a list that silently goes stale every time a module is added or renamed — the drift
 # this file exists to prevent. Both surfaces read it, since Autofix's `--select I` on the command
 # line overrides `select` but never the isort settings.
-src = ["."]
+src = ["src"]
 
 [lint]
 # E4/E7/E9/F is exactly the set the Gate was already applying, now owned here. `I` is added because

@@ -24,7 +24,8 @@ What these tests defend, and why each one has a scar behind it:
     `needs.detect.outputs.*`, so a second hardcoded `false` would be a literal that can drift.
 6.  **The recorded baseline moves with the pins.** The counts are version-specific, so bumping a
     pin without re-measuring must go red rather than quietly re-describing a toolchain nobody runs.
-7.  **`mypy.ini` never silences an error code.** Fifteen `disable_error_code` entries would cover
+7.  **The mypy config never silences an error code.** It lives in `pyproject.toml` now; CI
+    passes `--config-file pyproject.toml` whenever that file exists. Fifteen `disable_error_code` entries would cover
     603 of the 608 findings and produce a green job that checks nothing.
 8.  **A citation names a file that is there.** These configs are prose-heavy on purpose: each
     tells the next reader where to re-measure before touching a pin. The pin file shipped citing
@@ -47,17 +48,20 @@ from __future__ import annotations
 
 import re
 import tomllib
-from pathlib import Path
 
 import pytest
 
 import env_prereq
 
-HERE = Path(__file__).resolve().parent
+# Repo-root files, resolved through the shared rule rather than a local `parent.parent`:
+# these tests live in `tests/` while the things they assert on live at the checkout root.
+import paths
+
+HERE = paths.REPO_ROOT
 GATE = HERE / ".github" / "workflows" / "pr-00-gate.yml"
 PINS = HERE / ".github" / "workflows" / "autofix-versions.env"
 RUFF_TOML = HERE / "ruff.toml"
-MYPY_INI = HERE / "mypy.ini"
+PYPROJECT = HERE / "pyproject.toml"  # mypy config moved here; CI reads only this when it exists
 BASELINE_DOC = HERE / "docs" / "CI_LINT_BASELINE.md"
 BASELINE_SCRIPT = HERE / "scripts" / "ci_lint_baseline.py"
 
@@ -290,11 +294,12 @@ def test_baseline_was_measured_with_the_pinned_versions():
 def test_mypy_config_silences_nothing():
     """An OFF check is honest. A green check that examines nothing is not."""
     require_checkout()
-    assert MYPY_INI.is_file(), (
-        "mypy.ini is missing. Without it `mypy .` aborts on 'Source file found twice under "
+    assert PYPROJECT.is_file(), (
+        "pyproject.toml is missing. Without its [tool.mypy] section `mypy` aborts on 'Source "
+        "file found twice under "
         "different module names' and the recorded count becomes unverifiable prose."
     )
-    text = MYPY_INI.read_text(encoding="utf-8")
+    text = PYPROJECT.read_text(encoding="utf-8")
     for forbidden in ("disable_error_code", "ignore_errors", "follow_imports = skip"):
         assert forbidden not in text, (
             f"mypy.ini sets `{forbidden}`. Fifteen disabled codes would cover 603 of the 608 "
@@ -303,23 +308,64 @@ def test_mypy_config_silences_nothing():
         )
 
 
-@pytest.mark.parametrize("name", ["pyproject.toml", "setup.cfg", "setup.py"])
-def test_no_packaging_file_appears_without_making_this_repo_installable(name):
-    """A packaging file here must mean a REAL installable package, not a config parking spot."""
+@pytest.mark.parametrize("name", ["setup.cfg", "setup.py"])
+def test_no_filename_triggered_packaging_file_appears(name):
+    """`setup.cfg` / `setup.py` still trigger the editable install BY FILENAME, so they stay out.
+
+    `reusable-10-ci-python.yml` appends `-e '.[app,dev]'` to its install when it sees either of
+    these, with no metadata check — unlike pyproject.toml, which stranske/Workflows#3202 made
+    metadata-based. This repo has ~99 flat modules and no build backend, so that install fails and
+    both runtime jobs go red before a single test runs.
+    """
     require_checkout()
     assert not (HERE / name).is_file(), (
         f"{name} exists at the repo root. reusable-10-ci-python.yml appends `-e '.[app,dev]'` to "
-        "its install when it sees setup.cfg / setup.py, or a pyproject.toml that declares a "
-        "distribution ([project], [build-system] or [tool.poetry] — stranske/Workflows#3202 made "
-        "that gate metadata-based rather than filename-based). 129 flat root modules with no build "
-        "backend cannot be installed that way, so the tests job would fail for both runtimes. That "
-        "is why the Ruff and mypy configuration lives in ruff.toml and mypy.ini instead. Adding one "
-        "is fine, but it has to be a REAL installable package with `app` and `dev` extras. Then "
-        "delete this expectation.\n\n"
-        "Note: since #3202 a pyproject.toml carrying ONLY tool configuration no longer triggers the "
-        "install, so relaxing this for that case is a legitimate change — but make it deliberately, "
-        "and keep setup.cfg / setup.py forbidden, because those still do."
+        f"its install on the mere PRESENCE of {name} — no metadata check, unlike pyproject.toml. "
+        "With no build backend the tests job fails for both runtimes. Either make this a real "
+        "installable package with `app` and `dev` extras, or keep tool configuration in "
+        "pyproject.toml, which is metadata-gated."
     )
+
+
+def test_pyproject_carries_tool_config_only_and_not_a_distribution():
+    """THE DELIBERATE RELAXATION this file's previous expectation asked for, and its replacement.
+
+    Until stranske/Workflows#3202 the Gate appended `-e '.[app,dev]'` on the mere existence of a
+    pyproject.toml, so this repo could not have one at all and the Ruff/mypy settings lived in
+    `ruff.toml` + `mypy.ini`. #3202 made that gate metadata-based via
+    `pyproject_declares_distribution()`, and the old expectation here explicitly invited relaxing
+    it for the tool-config-only case — "but make it deliberately". This is that change.
+
+    What still has to hold, and why it is asserted rather than trusted: the moment this file grows
+    `[project]`, `[build-system]` or `[tool.poetry]`, the Gate WILL try to install the repo. That
+    is correct for a real package and fatal for ~99 flat modules with no backend, so the boundary
+    gets a test rather than a comment. Adding a genuine package is fine — declare the backend and
+    the `app`/`dev` extras, verify the install, and then change this test on purpose.
+    """
+    require_checkout()
+    assert PYPROJECT.is_file(), "pyproject.toml is where the pytest, coverage and mypy config lives"
+    import tomllib
+
+    with PYPROJECT.open("rb") as fh:
+        data = tomllib.load(fh)
+    declares = sorted(k for k in ("project", "build-system") if k in data)
+    if "poetry" in data.get("tool", {}):
+        declares.append("tool.poetry")
+    assert not declares, (
+        f"pyproject.toml now declares {declares}, which makes `pyproject_declares_distribution()` "
+        "true upstream and adds `-e '.[app,dev]'` to the install on all five Python jobs. This "
+        "repo has ~99 flat modules under src/ and no build backend, so that install fails and the "
+        "jobs go red before any test runs. If a real package is intended, add the backend and the "
+        "app/dev extras, prove `pip install -e '.[app,dev]'` succeeds, and update this test."
+    )
+    # And the tool sections that had to move here must actually BE here — a pyproject.toml that
+    # exists but omits them silently overrides .coveragerc / mypy.ini with nothing.
+    for section in ("pytest", "coverage", "mypy"):
+        assert section in data.get("tool", {}), (
+            f"[tool.{section}] is missing. CI passes --cov-config/--config-file pointing at THIS "
+            f"file whenever it exists, so an absent section is not a default — it is a silently "
+            f"dropped setting."
+        )
 
 
 def test_every_cited_repo_path_resolves():

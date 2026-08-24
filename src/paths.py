@@ -45,6 +45,12 @@ REPO_ROOT = (
 FLEET_ROOT = REPO_ROOT.parent
 
 
+# Where the test suite lives. Named here because ONE module legitimately reaches into it —
+# `capability_admission` reads the recurrence-fixture roster from `test_capability_set_coverage` —
+# and an implicit `sys.path` accident is how that dependency would rot silently.
+TESTS_DIR = REPO_ROOT / "tests"
+
+
 def checkout_root(module_dir: Path) -> Path:
     """Apply the rule to an ARBITRARY module dir, not just this file's.
 

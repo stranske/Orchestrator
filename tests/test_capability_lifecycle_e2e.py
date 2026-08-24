@@ -6,6 +6,12 @@ import time
 from pathlib import Path
 
 import pytest
+from test_evidence_contract_compiler import _plan as evidence_contract_plan
+from test_evidence_contract_compiler import gap_rows as evidence_gap_rows
+from test_playbook_compiler import REPO as PLAYBOOK_REPO
+from test_playbook_compiler import _candidate as playbook_candidate
+from test_playbook_compiler import _write_registry as write_playbook_registry
+from test_role_compiler import _candidate as role_candidate
 
 import capabilities
 import capability_compiler as compiler
@@ -14,12 +20,6 @@ import capability_targets
 import env_prereq
 import feedback
 import roles
-from test_evidence_contract_compiler import _plan as evidence_contract_plan
-from test_evidence_contract_compiler import gap_rows as evidence_gap_rows
-from test_playbook_compiler import REPO as PLAYBOOK_REPO
-from test_playbook_compiler import _candidate as playbook_candidate
-from test_playbook_compiler import _write_registry as write_playbook_registry
-from test_role_compiler import _candidate as role_candidate
 
 
 def _active_predecessor(capability_id: str, now: int) -> dict:

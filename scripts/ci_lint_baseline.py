@@ -192,8 +192,17 @@ def measure_black() -> dict:
 
 
 def measure_mypy() -> dict:
-    """`mypy --exclude .workflows-lib .` -- verbatim from the Gate's typecheck job."""
-    cmd = ["mypy", "--exclude", GATE_EXCLUDE_RUFF, "."]
+    """`mypy --config-file pyproject.toml --exclude .workflows-lib src` -- the Gate's own command.
+
+    THE TARGET IS `src`, NOT `.`, and copying the Gate exactly is the whole point of this script.
+    `reusable-10-ci-python.yml` runs `target="src"; [ -d "$target" ] || target="."`, so once the
+    modules moved the Gate began checking `src` while this script still measured the whole tree —
+    613 against the Gate's 467, with 30 of the difference `import-not-found` artefacts from
+    resolving the tests and tooling without `mypy_path`. A baseline that does not match the command
+    it claims to record is worse than no baseline: it reads as measured.
+    """
+    target = "src" if (REPO / "src").is_dir() else "."
+    cmd = ["mypy", "--config-file", "pyproject.toml", "--exclude", GATE_EXCLUDE_RUFF, target]
     out = _run(cmd).stdout
     codes: dict[str, int] = {}
     for match in re.finditer(r"\[([a-z][a-z-]+)\]\s*$", out, re.M):

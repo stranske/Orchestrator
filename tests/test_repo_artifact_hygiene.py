@@ -48,13 +48,16 @@ Each break was reverted to a byte-identical file and every case passed again.
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
 import env_prereq
 
-HERE = Path(__file__).resolve().parent
+# Repo-root files, resolved through the shared rule rather than a local `parent.parent`:
+# these tests live in `tests/` while the things they assert on live at the checkout root.
+import paths
+
+HERE = paths.REPO_ROOT
 
 # What the `langsmith-fleet/v1` emitters can leave in a working tree. The first entry is the file
 # that actually shipped on main; the rest are the sibling names the same producers already use

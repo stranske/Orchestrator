@@ -1,0 +1,101 @@
+# pyproject.toml — tool configuration for a NON-PACKAGE repo, and both halves of that matter.
+#
+# WHY IT CAN EXIST NOW, AND COULD NOT BEFORE. `reusable-10-ci-python.yml` used to append
+# `-e '.[app,dev]'` to its install whenever a pyproject.toml existed, on eight separate code paths,
+# gated on nothing but the file's presence. This repo has no build backend, so merely creating this
+# file broke all five Python jobs at the install step — which is why the Ruff and mypy settings
+# originally landed as `ruff.toml` + `mypy.ini` instead. Upstream now guards that with
+# `pyproject_declares_distribution()`: the editable install fires only when a project declares
+# `[project]`, `[build-system]` or `[tool.poetry]`.
+#
+# SO THIS FILE DELIBERATELY DECLARES NONE OF THOSE. It is tool configuration, not a distribution.
+# Adding `[project]` here would demand a build backend and an explicit list of ~99 top-level
+# modules — a hand-maintained list that goes stale on every rename, which is the drift `ruff.toml`
+# already refuses for `known-first-party`. Packaging is a separate decision; this is not it.
+#
+# WHY THE COVERAGE AND MYPY SETTINGS HAD TO MOVE IN HERE. They were not optional migrations. CI
+# passes `--cov-config=pyproject.toml` and `--config-file pyproject.toml` WHENEVER this file
+# exists, so a `.coveragerc` or `mypy.ini` sitting beside it would be silently ignored: coverage
+# would lose `parallel = true` and report whichever subprocess finished last, and mypy would lose
+# `explicit_package_bases` and abort on a setup error. Two configs where the tool reads one is
+# drift with a delay on it, so those files are deleted rather than kept as decoration.
+
+[tool.pytest.ini_options]
+# THE ONE LINE THE `src/` LAYOUT NEEDS. Tests live in `tests/` and the modules in `src/`, so the
+# import path has to say so; without it every `import capabilities` in the suite fails at
+# collection. Modules invoked directly (`python3 src/tick.py`) do not need it — Python puts the
+# script's own directory on `sys.path` — which is why the move required no import rewrites at all.
+pythonpath = ["src"]
+# No `testpaths`. `verify.py` enforces a collection floor as an EQUALITY, so anything here that
+# narrows discovery would read as tests silently ceasing to run. Discovery stays as it was.
+minversion = "7.0"
+markers = [
+    "quarantine: excluded from the PR gate by the fleet's marker expression",
+    "slow: excluded from the PR gate by the fleet's marker expression",
+]
+
+# --------------------------------------------------------------------------------- coverage
+# Migrated verbatim in intent from `.coveragerc` (deleted in the same commit — see the header).
+#
+# WHY parallel mode is the whole point. This project's primary test mechanism is a per-module
+# `--selftest`, and verify.py runs each one as a SUBPROCESS. A coverage run that instruments only
+# the pytest process therefore cannot see any of it — and that is most of the codebase: 78 modules'
+# sole test is a selftest, ~85,500 lines, 79.6% of non-test Python (measured 2026-08-23). The
+# reported 48.45% was that blind spot, not missing tests: sampling four of the modules the report
+# named as worst showed outcomes.py at 62%, adversarial.py 88%, gh_capacity.py 86%,
+# keepalive_outcomes.py 78% under their own selftests, all exiting 0.
+#
+# `parallel = true` makes every instrumented process write its own `.coverage.<host>.<pid>.<rand>`
+# file; `coverage combine` merges them. `verify.py --coverage` does both.
+[tool.coverage.run]
+parallel = true
+# `src`, not `.`: the modules moved, and pointing at the checkout root would measure the tests and
+# the tooling instead of the code under test.
+source = ["src"]
+branch = false
+omit = [
+    ".venv/*",
+    "venv/*",
+    "*/site-packages/*",
+    "tests/*",
+    "conftest.py",
+    "src/verify.py",
+]
+
+[tool.coverage.report]
+# A missing data file means the run did not happen, which must not read as 0% or as success.
+skip_empty = false
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+# --------------------------------------------------------------------------------- mypy
+# Migrated from `mypy.ini` (deleted in the same commit). The type check is currently OFF in the
+# Gate — see pr-00-gate.yml's "Compute Python CI toggles" step for the blocking and drainable
+# counts. This config exists anyway, and for one specific reason: WITHOUT IT `mypy` CANNOT RUN HERE
+# AT ALL, so the recorded count would be unverifiable prose rather than a number anyone can
+# regenerate with `python3 scripts/ci_lint_baseline.py`.
+#
+# What it fixes: `scripts/langchain/` has no `__init__.py`, so mypy resolves
+# `scripts/langchain/_llm_client.py` as both `_llm_client` and `scripts.langchain._llm_client` and
+# aborts with "Source file found twice under different module names (errors prevented further
+# checking)". That single setup error is what a reader of the failed `typecheck-mypy` job saw — it
+# masked the real number completely. `explicit_package_bases` is the resolution mypy's own error
+# message recommends.
+#
+# NOT a suppression file, deliberately. Nothing here disables an error code or narrows the check: a
+# config that silenced the findings would make the Gate green while checking nothing, which is the
+# failure `verify.py` exists to stop. The findings stay visible and counted, and the check stays
+# honestly off until they are drained.
+[tool.mypy]
+explicit_package_bases = true
+# `mypy_path` is what lets mypy resolve this repo's FLAT sibling imports (`import capabilities`)
+# now that the modules live under `src/`. Without it every cross-module import reports
+# `import-not-found` and the recorded baseline inflates with errors that are an artefact of the
+# config rather than the code — 769 instead of 601 when first measured, all of the difference
+# spurious. The same reason `pythonpath = ["src"]` exists for pytest above: one relocation, two
+# tools that each need telling.
+mypy_path = ["src"]

@@ -214,7 +214,12 @@ def repo_files_absent(*relative_paths: str) -> str | None:
 
     Detects the FILE, never the context: no `$CI`, no "am I in the mirror" heuristic.
     """
-    here = Path(__file__).resolve().parent
+    # The CHECKOUT root, not this module's directory: `.github/`, `docs/` and `scripts/` live at
+    # the repo root while the modules live under `src/`. Resolved through the shared rule, so the
+    # mirror — which is flat, and where the two coincide — still detects their absence correctly.
+    import paths
+
+    here = paths.checkout_root(Path(__file__).resolve().parent)
     missing = [rel for rel in relative_paths if not (here / rel).exists()]
     if not missing:
         return None
@@ -249,7 +254,9 @@ def git_repo_absent() -> str | None:
             "git is not on PATH — this check asks git whether a path is ignored or tracked, since "
             "reimplementing gitignore precedence in a test would only agree with itself"
         )
-    here = Path(__file__).resolve().parent
+    import paths
+
+    here = paths.checkout_root(Path(__file__).resolve().parent)
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
@@ -486,7 +493,10 @@ def _selftest() -> None:
     # green, which is worse than the red it replaced.
     absent = repo_files_absent("definitely-not-a-file-here")
     assert absent and "definitely-not-a-file-here" in absent, absent
-    assert repo_files_absent("env_prereq.py") is None, "a file that IS here must not skip"
+    assert repo_files_absent("pyproject.toml") is None, "a file that IS here must not skip"
+    # A MODULE is not a repo-root path any more: this detector answers "is this
+    # checkout complete", and the modules live under src/.
+    assert repo_files_absent("env_prereq.py") is not None, "a module is not a root path"
     assert repo_files_absent("env_prereq.py", "definitely-not-a-file-here"), "one missing is enough"
 
     # A skipped selftest must SPEAK, and its line must carry the shared mark verify.py greps

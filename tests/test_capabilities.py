@@ -1,5 +1,4 @@
 import json
-import pathlib
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -580,7 +579,10 @@ def test_verifying_the_system_never_writes_the_live_ledger():
     assert forbidden.search("x = capabilities.load(" + "REG)")
     assert not forbidden.search("x = capabilities.load_declared(" + "capabilities.REG)")
 
-    root = pathlib.Path(__file__).resolve().parent
+    import paths
+
+    # MODULE dir: this walks the orchestrator's modules, not the checkout.
+    root = paths.MODULE_DIR
     offenders = []
     for path in sorted(root.glob("*.py")):
         text = path.read_text(encoding="utf-8", errors="replace")

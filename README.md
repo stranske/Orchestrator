@@ -15,7 +15,7 @@ production duels.
 > range-lane slot, ship-gate, redirect-corpus intake, and more). The dedup-before-develop check in
 > CLAUDE.md exists to stop that recurring. The historical dormancy scan is
 > `Code/Audits/Orchestrator/2026-07-08-dormancy-rescan.md`; current activation truth is generated
-> from the local capability ledger with `python3 capabilities.py inventory`.
+> from the local capability ledger with `python3 src/capabilities.py inventory`.
 
 ## How it runs (execution topology)
 
@@ -40,7 +40,7 @@ HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lan
   canonical tree — so canonical edits are yours alone, but always re-sync so the schedule sees them.
 - **Every module has a `--selftest`.** Run it after editing that module; it is the project's test
   suite (there is no separate pytest tree). `python3 <module>.py --selftest`.
-- **`python3 verify.py` is the whole verdict.** Real pytest plus every module selftest plus the five
+- **`python3 src/verify.py` is the whole verdict.** Real pytest plus every module selftest plus the five
   capability gates, judged on the COUNTS rather than exit codes, against a recorded floor in
   `.verify-floor.json`. It also bounds SKIPPING: a check needing something only a running instance
   has (the populated capability ledger, an installed agent CLI, `~/.codex/skills`) skips with the
@@ -285,11 +285,11 @@ safety switch, not dead code.
   no-learning instrumentation. Provider-resolved identity remains null and unclaimed; the canary remains
   ineligible for Brain ingestion, quality-weight updates, and promotion. Provider-attested finalization
   is unchanged. Instrumentation completion events are excluded from Pattern Miner input. Run
-  `python3 model_profile_trial_bridge.py selftest` before preparing a canary.
+  `python3 src/model_profile_trial_bridge.py selftest` before preparing a canary.
 - **Pattern-to-capability compiler**: `pattern_miner.py` consumes those seven-phase completion
   envelopes and emits candidate-only capability IR. It is intentionally non-dispatching: inspect
   `~/.codex/orchestrator/pattern-miner-status.json`, `pattern-miner-inventory.json`, and
-  `pattern-miner-state.json` after the daily cadence (or run `python3 pattern_miner.py status`
+  `pattern-miner-state.json` after the daily cadence (or run `python3 src/pattern_miner.py status`
   and `inventory`). A useful first check-in is after 7 daily runs or 20 accepted episodes, whichever
   comes first; review candidate evidence, counterexamples, and expiry before promoting anything.
   Deterministic candidates can then be dry-compiled by `capability_compiler.py`; its reference rail
@@ -299,7 +299,7 @@ safety switch, not dead code.
   emits only read-only create/update/remove/skip/no-change proposals, and
   `runner_effect_bridge.py` validates provider-neutral runner effect evidence before recording
   idempotent outcomes or counterexamples in the existing capability ledger. Run
-  `python3 consumer_sync_shadow.py dashboard` to see distinct effects, harms, reduced-supervision
+  `python3 src/consumer_sync_shadow.py dashboard` to see distinct effects, harms, reduced-supervision
   evidence, expiry/kill-switch state, and explicit promotion blockers. The rail remains shadow-only;
   no consumer writes, dispatch, merge, or promotion authority is exposed.
   `consumer_sync_artifact_ingest.py preview` validates the latest successful producer artifact and
@@ -317,7 +317,7 @@ safety switch, not dead code.
   `ingest` for at most one artifact and five registered consumers, records only local evidence, and
   runs a self-expiring human-on-exception phase through 2026-07-25. It has no consumer or GitHub
   write path; exceptions fail the cadence and remain visible in the local report/state.
-  For a concise check-in, run `python3 periodic_report.py --json --window-days 7` and inspect the
+  For a concise check-in, run `python3 src/periodic_report.py --json --window-days 7` and inspect the
   `model_profile_trial`, `model_profile_transport_qualification`, `role_activation`, `pattern_miner`,
   and `dataset` sections alongside the
   generated status/inventory artifacts.
@@ -423,7 +423,7 @@ with its causes and its drainable count, and does not fail the suite. Rationale 
 
 ## Capability activation inventory
 
-`python3 capabilities.py usage` answers the question the inventory cannot: **why** a capability is
+`python3 src/capabilities.py usage` answers the question the inventory cannot: **why** a capability is
 not being used, and what would change that. It reports invocations/week, `evidence_debt` (how many
 further independent durable reuses the promotion policy still wants), and one next action per
 capability, rolled up into READY TO LIFT / PROMOTABLE / MEASUREMENT GAPS / WORTH FEEDING / RETIRE
@@ -440,7 +440,7 @@ and unrecognised criteria all block readiness, so silence cannot read as a pass.
 readiness; lifting a gate stays a deliberate act (see the safety-switch policy in CLAUDE.md).
 
 Do not maintain a second static list of supposedly active or gated features here. Generate the
-current inventory with `python3 capabilities.py inventory` (or inspect
+current inventory with `python3 src/capabilities.py inventory` (or inspect
 `~/.codex/orchestrator/capability-inventory.md` after an active tick). It distinguishes deliberate
 gates, canaries, no matching work, matched-but-not-invoked seams, missing outcomes, and stale active
 capabilities from ordinary code maturity.

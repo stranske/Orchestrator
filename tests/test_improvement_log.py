@@ -22,15 +22,23 @@ These are cheap, and they are the only thing that survives the next session.
 
 from __future__ import annotations
 
-import pathlib
 import re
 import subprocess
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
+# Repo-root files, resolved through the shared rule rather than a local `parent.parent`:
+# these tests live in `tests/` while the things they assert on live at the checkout root.
+import paths
+
+HERE = paths.REPO_ROOT
 POINTER = HERE / "IMPROVEMENT_BACKLOG.md"
 CLAUDE_MD = HERE / "CLAUDE.md"
+# TWO NAMES, because there are two questions. The docs cite the accessor the way a reader types it
+# (`improvement_log.py ...`), while INVOKING it needs the real path — the modules moved under src/
+# and the tests no longer share their directory. Conflating them made the doc assertions look for a
+# machine-specific absolute path inside CLAUDE.md.
 ACCESSOR = "improvement_log.py"
+ACCESSOR_PATH = str(paths.MODULE_DIR / ACCESSOR)
 
 # A pointer is a paragraph and three commands. The real log is ~480 KB / 6,000 lines, so anything in
 # between is someone having started to use this file as the log. The gap between the two is three
@@ -101,7 +109,7 @@ def test_accessor_reports_a_named_absence_to_a_caller():
     missing = HERE / "no-such-dir-for-tests" / "IMPROVEMENT_BACKLOG.md"
     assert not missing.exists()
     proc = subprocess.run(
-        [sys.executable, str(HERE / ACCESSOR), "search", "anything"],
+        [sys.executable, ACCESSOR_PATH, "search", "anything"],
         capture_output=True,
         text=True,
         cwd=str(HERE),

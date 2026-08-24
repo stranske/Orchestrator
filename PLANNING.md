@@ -179,7 +179,7 @@ running experiments opportunistically (the research scheduler) and refreshing th
       the capacity ledger does not retain start-only runs.
 - [x] **Periodic report generator.** Human-facing review of the dataset: current learned weights vs prior,
       route-weights version diffs (did a change help?), proposed schema changes, hypothesis status. Reads
-      the snapshot/DB (`python3 periodic_report.py [--json] [--snapshot-json PATH]`). Read-only by default.
+      the snapshot/DB (`python3 src/periodic_report.py [--json] [--snapshot-json PATH]`). Read-only by default.
       This is the human's window into the loop.
 - [x] **Feature reflection CLI + report surface.** `features.py record` now records task-end reusable
       structures with optional module/maturity metadata; `summary`, `candidates`, and `harden` expose the

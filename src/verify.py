@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -249,6 +250,9 @@ def run_selftests(modules: list[str]) -> dict:
     return {"ok": ok, "failed": bad, "skipped": skipped}
 
 
+# Two of the five gates are TEST files and three are modules, so they no longer live in one
+# directory. Named by bare filename and resolved below — a hardcoded prefix per entry would be a
+# second place for the layout to be recorded, and those drift.
 GATES = (
     ("activation audit", ["capability_activation_audit.py", "--no-cache"]),
     ("recurrence replay", ["capability_recurrence_check.py"]),
@@ -258,11 +262,40 @@ GATES = (
 )
 
 
+def _gate_script(name: str) -> str:
+    """Absolute path to a gate's script, whether it is a module or a test file."""
+    for base in (MODULES, ROOT / "tests"):
+        candidate = base / name
+        if candidate.is_file():
+            return str(candidate)
+    # Absent is reported by the runner as a failure, never silently skipped — so return the
+    # module-dir guess and let the "cannot open file" surface with the name in it.
+    return str(MODULES / name)
+
+
+def _child_env() -> dict:
+    """`src` on PYTHONPATH, because two of the gates are TEST files.
+
+    Running `python3 tests/test_capability_admission.py` puts `tests/` on `sys.path`, not `src/`, so
+    its `import capabilities` fails — the gate reported `ModuleNotFoundError` rather than a verdict.
+    pytest gets this from `pythonpath = ["src"]` in pyproject.toml; a bare subprocess has to be told.
+    Prepended rather than replacing any inherited PYTHONPATH.
+    """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{MODULES}{os.pathsep}{existing}" if existing else str(MODULES)
+    return env
+
+
 def run_gates() -> dict:
     out = {}
     for name, argv in GATES:
         proc = subprocess.run(
-            child_argv([sys.executable, *argv]), cwd=ROOT, capture_output=True, text=True
+            child_argv([sys.executable, _gate_script(argv[0]), *argv[1:]]),
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            env=_child_env(),
         )
         text = (proc.stdout or "") + (proc.stderr or "")
         # Same three-way split as the selftests: a gate that could not judge here says so with

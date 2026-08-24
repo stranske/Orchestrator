@@ -28,28 +28,35 @@ What is asserted here:
     would enforce a threshold nobody agreed to, against a number that was wrong until this change —
     and would reward writing pytest wrappers around already-tested modules, which raises the metric
     and adds no assurance.
-6.  **`.coveragerc` keeps `parallel = true`.** Without it every child overwrites one data file and
+6.  **The coverage config keeps `parallel = true`.** It lives in `pyproject.toml` since that
+    file was added — CI passes `--cov-config=pyproject.toml` whenever it exists, so a `.coveragerc`
+    beside it would be read by nobody. Without it every child overwrites one data file and
     the combine is meaningless — the failure would look like a plausible-but-wrong number, which is
     worse than no number.
 
-DELIBERATE BREAK -> REVERT, performed 2026-08-23: setting `parallel = false` in `.coveragerc` failed
+DELIBERATE BREAK -> REVERT, performed 2026-08-23: setting `parallel = false` in the coverage config failed
 `test_coveragerc_enables_parallel_mode`; removing `child_argv` from the selftest runner failed
 `test_all_three_runners_are_instrumented[selftests]`. Both reverted byte-identical and passed again.
 """
 
 from __future__ import annotations
 
-import configparser
 import re
-from pathlib import Path
 
 import pytest
 
+# Repo-root files, resolved through the shared rule rather than a local `parent.parent`:
+# these tests live in `tests/` while the things they assert on live at the checkout root.
+import paths
 import verify
 
-HERE = Path(__file__).resolve().parent
-COVERAGERC = HERE / ".coveragerc"
-VERIFY_SRC = (HERE / "verify.py").read_text(encoding="utf-8")
+HERE = paths.REPO_ROOT
+# The coverage settings moved into pyproject.toml when that file was added: CI passes
+# `--cov-config=pyproject.toml` whenever it exists, so a `.coveragerc` beside it would be read by
+# nobody. Asserting on the file that the tool ACTUALLY reads is the whole point of this check.
+PYPROJECT = HERE / "pyproject.toml"
+# verify.py is a module, so it lives with the modules — not at the checkout root.
+VERIFY_SRC = (paths.MODULE_DIR / "verify.py").read_text(encoding="utf-8")
 
 
 def test_coverage_is_off_by_default():
@@ -105,7 +112,8 @@ SRC_SQUASHED = re.sub(r"\s+", "", VERIFY_SRC)
         # against the wrong directory. The needle tracks the real call so instrumentation and
         # layout cannot drift apart silently.
         ("selftests", 'child_argv([sys.executable,str(MODULES/f"{mod}.py"),"--selftest"])'),
-        ("gates", "child_argv([sys.executable,*argv])"),
+        # Gates are resolved by path too — two of the five are test files, not modules.
+        ("gates", "child_argv([sys.executable,_gate_script(argv[0]),*argv[1:]])"),
     ],
 )
 def test_all_three_runners_are_instrumented(runner, needle):
@@ -116,22 +124,38 @@ def test_all_three_runners_are_instrumented(runner, needle):
     )
 
 
-def test_coveragerc_enables_parallel_mode():
-    assert COVERAGERC.is_file(), ".coveragerc is missing; without it `parallel` defaults to off"
-    cfg = configparser.ConfigParser()
-    cfg.read(COVERAGERC)
-    assert cfg.getboolean("run", "parallel", fallback=False), (
+def test_coverage_config_enables_parallel_mode():
+    """Asserted against the file the tool actually reads, which is now pyproject.toml.
+
+    When `pyproject.toml` exists, CI passes `--cov-config=pyproject.toml` unconditionally, so a
+    `.coveragerc` left beside it is silently ignored — and `parallel` would quietly revert to its
+    default of OFF. That failure mode reports whichever subprocess finished last as if it were the
+    whole run: a plausible-but-wrong number, which is worse than no number.
+    """
+    assert PYPROJECT.is_file(), "pyproject.toml is missing; coverage config has nowhere to live"
+    assert not (HERE / ".coveragerc").exists(), (
+        ".coveragerc is back alongside pyproject.toml. CI reads only the latter, so the two would "
+        "disagree with nothing to say so — delete one."
+    )
+    import tomllib
+
+    with PYPROJECT.open("rb") as fh:
+        run_cfg = tomllib.load(fh).get("tool", {}).get("coverage", {}).get("run", {})
+    assert run_cfg.get("parallel") is True, (
         "`parallel = true` is load-bearing. Without it every instrumented child overwrites the same "
         "data file and the combine silently reports whichever process finished last — a "
         "plausible-but-wrong number, which is worse than no number."
     )
 
 
-def test_coveragerc_omits_the_tests_themselves():
-    cfg = configparser.ConfigParser()
-    cfg.read(COVERAGERC)
-    omit = cfg.get("run", "omit", fallback="")
-    assert "test_*.py" in omit, (
+def test_coverage_config_omits_the_tests_themselves():
+    import tomllib
+
+    with PYPROJECT.open("rb") as fh:
+        omit = tomllib.load(fh)["tool"]["coverage"]["run"]["omit"]
+    # `tests/*` since the move — the pattern has to name where the tests actually are, and
+    # `test_*.py` would now match nothing at all while still looking like a rule.
+    assert any(pat.startswith("tests/") for pat in omit), (
         "test files must be omitted from the measurement. Counting the tests as covered source "
         "inflates the number with the one thing guaranteed to be executed."
     )
@@ -198,7 +222,7 @@ def test_the_cli_help_actually_renders():
     import sys
 
     proc = subprocess.run(
-        [sys.executable, "verify.py", "--help"],
+        [sys.executable, str(paths.MODULE_DIR / "verify.py"), "--help"],
         cwd=HERE,
         capture_output=True,
         text=True,

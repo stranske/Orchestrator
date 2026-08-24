@@ -48,8 +48,8 @@ import pathlib
 import re
 
 import capabilities
-import paths
 import env_prereq
+import paths
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -441,8 +441,19 @@ def _findability_context(capability_ids, *, path: pathlib.Path | None = None) ->
 
 
 def _context(path: pathlib.Path | None = None) -> dict:
-    import capability_activation_audit as audit
+    # The recurrence-fixture roster lives with the tests, and this gate genuinely needs it. Since
+    # the suite moved to `tests/` that directory is not importable by default, so it is added
+    # EXPLICITLY rather than left to a sys.path accident — an accident is how this dependency would
+    # rot into a silent skip.
+    import sys
+
+    import paths
+
+    if str(paths.TESTS_DIR) not in sys.path:
+        sys.path.insert(0, str(paths.TESTS_DIR))
     import test_capability_set_coverage as coverage
+
+    import capability_activation_audit as audit
 
     rows = {r["capability_id"]: r for r in audit.audit(use_cache=True)["rows"]}
     ledger = capabilities.load(path or capabilities.REG)
