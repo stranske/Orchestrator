@@ -1908,7 +1908,7 @@ def evaluate_precondition(
     declared = applies_to(capability_id)
     needs = required_repo_fact(capability_id)
     target = consult_target(repository)
-    out = {
+    out: list[Any] = {
         "applies_to": declared,
         "scope_target": target,
         "scope_match": None,

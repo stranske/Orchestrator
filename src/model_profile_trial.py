@@ -185,7 +185,7 @@ def source_manifest(root: Path) -> dict[str, Any]:
     root = root.resolve()
     if not root.is_dir():
         raise ValueError(f"source root is not a directory: {root}")
-    entries = []
+    entries: list[Any] = []
     total_bytes = 0
     # Prune derived/vendor directories before walking them.  A plain rglob
     # still descends through .git and virtualenv trees on CloudStorage even

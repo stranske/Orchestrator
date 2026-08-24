@@ -46,6 +46,7 @@ decorative. Repeated 2026-08-23 for `test_every_cited_repo_path_resolves`: resto
 
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 
@@ -219,21 +220,42 @@ def test_ruff_config_declares_an_explicit_selection():
     )
 
 
-def test_every_disabled_toggle_states_blocking_and_drainable():
-    """A gate that cannot say what would clear it is already defective."""
+def test_every_bounded_or_disabled_toggle_states_blocking_and_drainable():
+    """A gate that cannot say what would clear it is already defective.
+
+    ALL FIVE TOGGLES ARE NOW ON. `typecheck` was the last one forced off, and it went on when the
+    src/ move scoped the Gate to 99 modules and pyproject.toml's per-module override list made the
+    remaining findings exempt BY NAME — so the check runs over the clean modules today instead of
+    over nothing. That does not retire this expectation, it moves it: a toggle that is ON but
+    BOUNDED owes exactly the same three fields as one that is off, because "on" over a scoped
+    subset can hide as much as "off" if the scope is not stated. So the annotation requirement now
+    binds on any toggle that is disabled OR whose comment describes a bound, and the test asserts
+    at least one such toggle exists — otherwise it would pass vacuously the moment someone deleted
+    every annotation.
+    """
     require_checkout()
     script = toggles_script()
     disabled = re.findall(r"^\s*([a-z_]+) = False\s*$", script, re.M)
-    assert disabled, (
-        "no toggle is forced off in the `Compute Python CI toggles` step. If every check is now on, "
-        "delete this test's expectation along with the annotations it guards."
+    # A toggle whose annotation block claims a bound is held to the same standard as a disabled one.
+    bounded = [
+        name
+        for name in re.findall(r"^\s*([a-z_]+) = RUN_CORE\s*$", script, re.M)
+        if "drainable:" in script.split(f"{name} = RUN_CORE")[0].rsplit("\n\n", 1)[-1]
+    ]
+    annotated = disabled + bounded
+    assert annotated, (
+        "no toggle in the `Compute Python CI toggles` step is either forced off or annotated with a "
+        "bound. Every check being unconditionally on is a legitimate end state — but then the "
+        "blocking/drainable annotations have been deleted, and this test is the only thing that "
+        "required them, so re-read the step before deleting this expectation."
     )
-    for name in disabled:
+    for name in annotated:
+        marker = " = False" if name in disabled else " = RUN_CORE"
         # The annotation block for a toggle is the comment run immediately above its assignment.
-        block = script.split(f"{name} = False")[0].rsplit("\n\n", 1)[-1]
+        block = script.split(f"{name}{marker}")[0].rsplit("\n\n", 1)[-1]
         for field in ("blocking:", "drainable:", "drains by:"):
             assert field in block, (
-                f"the `{name} = False` toggle does not state `{field}` in the comment above it. "
+                f"the `{name}{marker}` toggle does not state `{field}` in the comment above it. "
                 "Both quantities belong in the same place: an error count alone reads as "
                 "be-patient, the same count with 'drainable 0 per PR' beside it reads as the "
                 "deadlock it is. See "
@@ -291,20 +313,71 @@ def test_baseline_was_measured_with_the_pinned_versions():
         )
 
 
-def test_mypy_config_silences_nothing():
-    """An OFF check is honest. A green check that examines nothing is not."""
+def test_mypy_config_silences_nothing_by_error_code():
+    """An OFF check is honest. A green check that examines nothing is not. But SCOPE is not SILENCE.
+
+    THE DISTINCTION THIS TEST NOW DRAWS, because the old version forbade both and the difference is
+    the whole design:
+
+      * `disable_error_code` / `follow_imports = skip` make the check blind to a CLASS of error
+        across every module, permanently, with nothing to count and no mechanism that removes it.
+        Fifteen codes would have covered 603 of 608 findings. Still forbidden.
+      * per-module `ignore_errors` names the modules that are not clean yet. Every finding stays
+        discoverable (`scripts/ci_lint_baseline.py`), deleting a name restores that module's errors
+        immediately, and `.verify-floor.json`'s `mypy_exempt_max` FAILS if the list grows. That is
+        scoping with a drain and a bound, which is what let `typecheck` go from OFF over everything
+        to ON over the clean 35.
+
+    So the list is permitted and its BOUND is asserted — because an exempt list nobody counts is
+    the same amnesty by a different route.
+
+    Parsed from the TOML, never grepped from the text: the previous version substring-matched the
+    file and tripped on a COMMENT explaining why `disable_error_code` was rejected. A check that
+    fails on prose about itself teaches people to weaken it.
+    """
     require_checkout()
     assert PYPROJECT.is_file(), (
         "pyproject.toml is missing. Without its [tool.mypy] section `mypy` aborts on 'Source "
-        "file found twice under "
-        "different module names' and the recorded count becomes unverifiable prose."
+        "file found twice under different module names' and the recorded count becomes "
+        "unverifiable prose."
     )
-    text = PYPROJECT.read_text(encoding="utf-8")
-    for forbidden in ("disable_error_code", "ignore_errors", "follow_imports = skip"):
-        assert forbidden not in text, (
-            f"mypy.ini sets `{forbidden}`. Fifteen disabled codes would cover 603 of the 608 "
-            "findings and make typecheck-mypy green while checking nothing — the exact defect "
-            "verify.py exists to stop. Leave the check OFF and drain the findings instead."
+    import tomllib
+
+    with PYPROJECT.open("rb") as fh:
+        mypy_cfg = tomllib.load(fh).get("tool", {}).get("mypy", {})
+    sections = [mypy_cfg] + list(mypy_cfg.get("overrides") or [])
+    for section in sections:
+        for forbidden in ("disable_error_code", "follow_imports"):
+            assert forbidden not in section, (
+                f"the mypy config sets `{forbidden}`, which makes the check blind to a CLASS of "
+                "error across modules — nothing to count, and no mechanism that removes it. "
+                "Fifteen disabled codes would cover 603 of the 608 findings and make "
+                "typecheck-mypy green while checking nothing, the exact defect verify.py exists to "
+                "stop. Scope by MODULE with a counted, ceilinged list instead."
+            )
+    # Top-level `ignore_errors` would exempt everything at once, which has no drain either.
+    assert "ignore_errors" not in mypy_cfg, (
+        "[tool.mypy] sets a top-level `ignore_errors`, which exempts every module in one keyword. "
+        "Use a per-module override list, which can be counted and bounded."
+    )
+    exempt = [
+        m
+        for o in (mypy_cfg.get("overrides") or [])
+        if o.get("ignore_errors")
+        for m in (o.get("module") if isinstance(o.get("module"), list) else [o.get("module")])
+    ]
+    if exempt:
+        floor = json.loads((HERE / ".verify-floor.json").read_text(encoding="utf-8"))
+        limit = floor.get("mypy_exempt_max")
+        assert limit is not None, (
+            f"{len(exempt)} module(s) are exempt from mypy but `.verify-floor.json` records no "
+            "`mypy_exempt_max`. An exemption list nobody counts can only grow — that is an amnesty, "
+            "not a ratchet. Record the bound."
+        )
+        assert len(exempt) <= int(limit), (
+            f"{len(exempt)} modules are exempt from mypy but the agreed maximum is {limit}. The "
+            "list may only ever shrink: type a module and delete its line, or raise the ceiling "
+            "deliberately and say which module and why."
         )
 
 

@@ -99,3 +99,87 @@ explicit_package_bases = true
 # spurious. The same reason `pythonpath = ["src"]` exists for pytest above: one relocation, two
 # tools that each need telling.
 mypy_path = ["src"]
+
+# THE RATCHET, and the reason the check can be ON at all. 35 of the 99 modules are already clean;
+# the 64 below are not, and each is exempt BY NAME so the check can run TODAY over the
+# clean two-thirds instead of being off over everything. A blanket `ignore_errors` or a
+# `disable_error_code` list was rejected: both make the job green while checking nothing, which is
+# the defect verify.py exists to stop, and neither has anything to count.
+#
+# The mandatory latched-gate questions, answered in writing because this IS a gate:
+#   1. What decrements it? Typing a module and deleting its line here. Not "time passes".
+#   2. Can that run while the gate is CLOSED? Yes — the check being green never blocks typing work,
+#      and shortening a plain list needs no permission from the gate it drains.
+#   3. Does the measuring window equal the draining window? Yes: ONE list, counted by verify.py and
+#      drained by editing these same lines. A second copy of this population would drift.
+# It fails toward motion, not silence: verify.py prints the remaining count every run, and
+# `.verify-floor.json`'s `mypy_exempt_max` FAILS if the list grows — so new untyped code in a clean
+# module is now a red, and a module can never quietly rejoin the exempt set.
+[[tool.mypy.overrides]]
+module = [
+    "adversarial",
+    "agent_auth_check",
+    "backlog",
+    "cadence_registry",
+    "capabilities",
+    "capability_activation_audit",
+    "capability_admission",
+    "capability_advisor",
+    "capability_compiler",
+    "capability_effectiveness",
+    "capability_opportunity",
+    "capability_outcome_bridge",
+    "capability_propensity",
+    "capability_recurrence_check",
+    "capability_targets",
+    "ccusage_reconcile",
+    "claims",
+    "codemod_lane",
+    "consumer_sync_artifact_ingest",
+    "consumer_sync_shadow",
+    "cross_repo_lane",
+    "dispatcher",
+    "durability_sweep",
+    "epic_lane",
+    "evidence_acquisition",
+    "execution_profiles",
+    "exp_abcd",
+    "exploration_backfill",
+    "exploration_collection",
+    "exploration_evidence_plan",
+    "exploration_review",
+    "features",
+    "feedback",
+    "gh_capacity",
+    "human_calibration",
+    "issue_quality",
+    "issue_readiness",
+    "judge_reliability",
+    "keepalive_evidence",
+    "keepalive_outcomes",
+    "keepalive_shadow",
+    "ledger_reconcile",
+    "mcp_server",
+    "observability_dashboard",
+    "partitioned_review",
+    "pattern_miner",
+    "range_lane_rollout",
+    "redirect_apply",
+    "redirect_shadow",
+    "redirect_sweep",
+    "repo_knowledge",
+    "research_scheduler",
+    "research_subjects",
+    "roles",
+    "router",
+    "runtime_ac",
+    "runtime_ac_gate",
+    "strategy_experiment",
+    "switch_review",
+    "synthesis_promotion",
+    "tick",
+    "ux_review",
+    "verify",
+    "watch",
+]
+ignore_errors = true

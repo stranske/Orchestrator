@@ -2395,7 +2395,7 @@ def run_triage_agent(
     if dispatch and backend_name:
         role_run_id = f"role:triage:{backend_name}:{time.time_ns()}"
         try:
-            actions = {}
+            actions: dict[str, Any] = {}
             for rec in advisory_plan.get("recommendations") or []:
                 action = rec.get("action")
                 actions[action] = actions.get(action, 0) + 1

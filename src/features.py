@@ -237,7 +237,7 @@ def summary(path: Path = REG, *, create: bool = True) -> dict:
         maturity = item.get("maturity", "ad-hoc")
         counts[maturity] = counts.get(maturity, 0) + 1
     candidates = promotion_candidates(path, create=create)
-    lifecycle = {
+    lifecycle: dict[str, Any] = {
         "path": None,
         "total": 0,
         "counts_by_status": {},

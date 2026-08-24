@@ -232,7 +232,7 @@ def raise_expired_blocker_questions(now: int | None = None) -> list[dict]:
     change failure this whole area keeps producing. Only `await_human` blockers are raised;
     a machine-reason block lapsing needs no decision from the owner.
     """
-    raised = []
+    raised: list[Any] = []
     try:
         import feedback
     except Exception:

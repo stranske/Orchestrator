@@ -309,7 +309,7 @@ def ensure_evaluated_state(
         initial_event = (
             "promotion:" + hashlib.sha256(f"{exp_id}|evaluated".encode()).hexdigest()[:24]
         )
-        state = {
+        state: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "experiment_id": exp_id,
             "repo": meta.get("repo"),

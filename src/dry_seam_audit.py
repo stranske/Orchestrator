@@ -453,7 +453,7 @@ def audit_dry_seams(
                 recommendation="Schedule exploration/production runs for high-value zero-observation cells before trusting learned order.",
             )
 
-    capability_lifecycle = {
+    capability_lifecycle: dict[str, Any] = {
         "path": str(capabilities_path) if capabilities_path else None,
         "total": 0,
         "counts_by_status": {},

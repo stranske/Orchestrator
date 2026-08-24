@@ -393,7 +393,7 @@ def compile_workflow_rail(source: dict[str, Any]) -> dict[str, Any]:
         rollback_spec = ENTRYPOINTS.get(rollback_entrypoint)
         if rollback_entrypoint not in spec["rollbacks"] or rollback_spec is None:
             errors.append(f"invalid rollback: {step_id}")
-            typed_rollback_inputs = {}
+            typed_rollback_inputs: dict[str, Any] = {}
         else:
             typed_rollback_inputs, rollback_errors = _typed_values(
                 rollback.get("inputs"), rollback_spec["inputs"], f"{path}.rollback.inputs"

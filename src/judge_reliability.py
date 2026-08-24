@@ -131,7 +131,7 @@ def compute(
         raw_counts[evaluator] += 1
 
     anchors = _human_anchor_rows(human_rows)
-    stats = {
+    stats: dict[str, Any] = {
         evaluator: {
             "consensus_errors": [],
             "human_errors": [],

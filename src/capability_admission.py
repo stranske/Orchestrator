@@ -964,7 +964,7 @@ def _selftest() -> None:
     gaps: list[str] = []
 
     # Every requirement must be able to FAIL. A predicate that always passes is decoration.
-    ctx = {"audit_rows": {}, "fixtures": set()}
+    ctx: dict[str, Any] = {"audit_rows": {}, "fixtures": set()}
     empty = capabilities._blank_capability("capability:nothing-declared")
     empty["event_history"] = [{"timestamp": _now(), "type": "migrated"}]  # not grandfathered
     for name, fn in REQUIREMENTS:

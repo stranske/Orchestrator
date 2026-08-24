@@ -130,29 +130,26 @@ jobs:
           lint = format_check = cache = RUN_CORE
           pytest_markers = 'not quarantine and not slow'
 
-          # typecheck (and its deprecated `run-mypy` alias) -- OFF.
-          #   blocking:  467 mypy errors across 66 of 99 files (measured 2026-08-23 with
-          #              `python3 scripts/ci_lint_baseline.py`, which now runs the Gate's own
-          #              command: `mypy --config-file pyproject.toml --exclude .workflows-lib src`
-          #              under the pinned mypy 2.3.1).
-          #              DOWN FROM 608 BECAUSE OF THE src/ MOVE, not because anything was typed:
-          #              the Gate does `target="src"; [ -d "$target" ] || target="."`, so it now
-          #              checks the 99 modules instead of the whole tree including tests, scripts
-          #              and tools. That is the scoping every peer repo already had for free.
-          #              THIS NUMBER DRIFTS: it moved 601 -> 604 -> 607 -> 608 during 2026-08-23
-          #              as typed code landed, and nothing couples it to a measurement, so re-run
-          #              that script rather than trusting it.
-          #   drainable: 0 per PR. Every one is a real annotation or logic change in a distinct
-          #              module; there is no formatter and no `--fix` for this.
-          #   drains by: typed modules landing incrementally. Turn this on the same day the count
-          #              reaches 0, not before -- a `disable_error_code` list covering the
-          #              commonest codes would make the job green while checking essentially
-          #              nothing, the defect verify.py exists to stop.
-          #   note:      the mypy config lives in pyproject.toml (see its header for why it had to
-          #              move there) even though the check is off, because without it
-          #              `mypy .` aborts on a duplicate-module setup error and the count above would
-          #              be unverifiable prose instead of a number anyone can regenerate.
-          typecheck = False
+          # typecheck (and its deprecated `run-mypy` alias) -- ON, over a BOUNDED scope.
+          #   It was OFF because 608 errors across the whole tree were drainable 0 per PR: an
+          #   all-or-nothing check over code that cannot be fixed in one change is a gate whose
+          #   clear path is blocked by the thing it measures, and it stayed shut.
+          #   Two changes made it openable, both real rather than cosmetic:
+          #     * the src/ move scoped the Gate's `target="src"` to the 99 modules, 608 -> 467;
+          #     * pyproject.toml's [[tool.mypy.overrides]] exempts the 66 modules that still have
+          #       findings BY NAME, so the 33 already-clean ones are checked TODAY.
+          #   blocking:  0. The check passes as configured -- `mypy --config-file pyproject.toml
+          #              --exclude .workflows-lib src` reports "no issues found in 99 source files".
+          #   drainable: 66 modules, one at a time, each by typing it and deleting its line from the
+          #              override list. That is a real mechanism, not "someone notices".
+          #   drains by: typed modules landing incrementally. Unlike the old OFF state this now
+          #              RATCHETS: `.verify-floor.json`'s `mypy_exempt_max` fails if the list grows,
+          #              so new untyped code in a clean module is a red, and verify.py prints the
+          #              remaining count on every run so green can never mean "checks nothing".
+          #   NOT a suppression: no error code is disabled anywhere. The 467 findings stay visible
+          #              (`python3 scripts/ci_lint_baseline.py`) and counted; only their MODULES are
+          #              scoped out, by name, from a list that can only shrink.
+          typecheck = RUN_CORE
 
           # coverage (and the soft gate that reads its artifacts) -- ON since 2026-08-23.
           #   was:       OFF until 2026-08-23. `reusable-10-ci-python.yml` appended

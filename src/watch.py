@@ -510,7 +510,7 @@ def classify_lane(
     # evidence of its own usefulness, and eventually reads as dead code.
     _capability_heartbeat()
     if pid is None and not log and not worktree:
-        report = {
+        report: dict[str, Any] = {
             "agent": agent,
             "target": target,
             "lane": lane,

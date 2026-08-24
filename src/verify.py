@@ -499,7 +499,49 @@ CEILINGS = (
     ("skipped_max", "skipped test(s)"),
     ("selftest_skipped_max", "skipped selftest(s)"),
     ("gate_skipped_max", "skipped gate(s)"),
+    # The mypy exempt list is bounded exactly like skipping, and for the same reason: a list of
+    # type-check exemptions that can only GROW is an amnesty with a deadline nobody set. ONE
+    # constant, defined once in the floor file and consumed by both the count and the bound — a
+    # matching pair of literals would drift, a shared name cannot.
+    ("mypy_exempt_max", "module(s) exempt from mypy"),
 )
+
+
+def mypy_exempt_modules() -> list[str] | None:
+    """Modules on `[[tool.mypy.overrides]] ignore_errors` — the ratchet's blocking quantity.
+
+    None means the question could not be answered here (no pyproject.toml, unreadable, no override).
+    REPORTED, never treated as zero: a ratchet that stops being counted is indistinguishable from
+    one that emptied, and only one of those is good news.
+    """
+    try:
+        import tomllib
+
+        data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    for override in data.get("tool", {}).get("mypy", {}).get("overrides") or []:
+        if override.get("ignore_errors"):
+            mods = override.get("module")
+            return sorted(mods) if isinstance(mods, list) else [str(mods)]
+    return None
+
+
+def _format_mypy_exempt_line(mods: list[str] | None, limit: int | None, total: int = 99) -> str:
+    """One line carrying BOTH numbers, per the runtime rule in CLAUDE.md. PURE.
+
+    `typecheck: on` alone reads as "typed". `66/66 max of 99 modules exempt` reads as "typed where
+    it is checked, and here is exactly how much is not" — the difference between a ratchet and an
+    amnesty.
+    """
+    if mods is None:
+        return "  mypy ratchet: NOT COUNTED (no readable ignore_errors override in pyproject.toml)"
+    bound = f"/{limit} max" if limit is not None else " (no ceiling set)"
+    tail = " — type a module, delete its line" if mods else " — fully drained"
+    return (
+        f"  mypy ratchet: {len(mods)}{bound} of {total} module(s) exempt, "
+        f"{total - len(mods)} checked{tail}"
+    )
 
 
 def _floor_problems(floor: dict, py: dict) -> list[str]:
@@ -578,8 +620,11 @@ def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
             continue
         if actual.get(key, 0) > int(limit):
             problems.append(
-                f"SKIP CEILING exceeded: {actual[key]} {label} > agreed maximum {limit}. "
-                f"Skipping is bounded on purpose — either the new skip is wrong, or raise "
+                # `CEILING`, not `SKIP CEILING`: the mypy exempt list is bounded by this same
+                # machinery and is not a skip, so the old wording sent a reader hunting for a skip
+                # that does not exist. The label already names WHICH population overflowed.
+                f"CEILING exceeded: {actual[key]} {label} > agreed maximum {limit}. "
+                f"This is bounded on purpose — either the new one is wrong, or raise "
                 f"`{key}` in .verify-floor.json deliberately and say why."
             )
     return problems
@@ -613,10 +658,13 @@ def verify(*, update_floor: bool = False, forgive_healed_drift: bool = False) ->
     # so a future change cannot quietly convert a red into a skip. Each ceiling reports its own
     # value against the limit in the same breath, per the house rule that a gate must always say
     # both numbers — `24/24` alone reads as "fine", `24/24 (ceiling)` reads as "at the limit".
+    exempt = mypy_exempt_modules()
     actual = {
         "skipped_max": py["skipped"],
         "selftest_skipped_max": len(st["skipped"]),
         "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
+        # None (uncountable) must not read as 0 — that would let the ceiling pass by being blind.
+        "mypy_exempt_max": len(exempt) if exempt is not None else 0,
     }
     problems += _ceiling_problems(floor, actual)
 
@@ -662,6 +710,9 @@ def verify(*, update_floor: bool = False, forgive_healed_drift: bool = False) ->
     entrypoints = absent_entrypoint_line()
     if entrypoints:
         lines.append(entrypoints)
+    # ALWAYS printed: a drained ratchet is news, and a ratchet that stopped being counted is
+    # exactly what this line exists to expose.
+    lines.append(_format_mypy_exempt_line(exempt, floor.get("mypy_exempt_max")))
 
     # WHAT DID NOT RUN, always — under a green verdict as much as a red one. A number of skips
     # with no reasons beside it is how "green" quietly stops meaning "checked".
@@ -831,7 +882,7 @@ def _selftest() -> None:
     over = _ceiling_problems(
         {"skipped_max": 24}, {"skipped_max": 25, "selftest_skipped_max": 0, "gate_skipped_max": 0}
     )
-    assert len(over) == 1 and "SKIP CEILING exceeded" in over[0], over
+    assert len(over) == 1 and "CEILING exceeded" in over[0], over
     assert "skipped_max" in over[0], "the failure must name the key to raise deliberately"
     # Each ceiling is independent — one slipping must not be masked by the others holding.
     for key in ("selftest_skipped_max", "gate_skipped_max"):
@@ -1040,6 +1091,31 @@ def _selftest() -> None:
     assert MODULES == HERE or MODULES.name == "src", (MODULES, HERE)
     assert FLOOR.parent == ROOT, "the floor belongs to the checkout, not the module dir"
 
+    # ---- the mypy ratchet ---------------------------------------------------------------------
+    # An exempt list that can only GROW is an amnesty with a deadline nobody set. Two properties
+    # make it a ratchet: the count is always PRINTED with its bound, and it is CEILINGED by the
+    # same generic machinery as the skips.
+    assert "64/64 max of 99" in _format_mypy_exempt_line(["m"] * 64, 64)
+    assert "35 checked" in _format_mypy_exempt_line(["m"] * 64, 64)
+    assert "type a module, delete its line" in _format_mypy_exempt_line(["m"], 1)
+    # A DRAINED ratchet must say so, not print a bare 0 — the drain finishing is news.
+    assert "fully drained" in _format_mypy_exempt_line([], 64)
+    # UNCOUNTABLE must never render as zero: a ratchet that stopped being counted looks identical
+    # to one that emptied, and only one of those is good news.
+    nc = _format_mypy_exempt_line(None, 64)
+    assert "NOT COUNTED" in nc and " 0" not in nc, nc
+    # It is not a skip, so it must not carry the mark that spends skip-ceiling headroom.
+    assert PREREQ_ABSENT_MARK not in _format_mypy_exempt_line(["m"], 64)
+    # Bounded by the SAME `_ceiling_problems` used for skips — one mechanism, so the measuring and
+    # draining windows cannot drift apart.
+    assert ("mypy_exempt_max", "module(s) exempt from mypy") in CEILINGS
+    _zero = {k: 0 for k, _ in CEILINGS}
+    assert _ceiling_problems({"mypy_exempt_max": 64}, {**_zero, "mypy_exempt_max": 64}) == []
+    _over = _ceiling_problems({"mypy_exempt_max": 64}, {**_zero, "mypy_exempt_max": 65})
+    assert len(_over) == 1 and "mypy_exempt_max" in _over[0], _over
+    # And the real file must be readable, or the line would silently report NOT COUNTED forever.
+    assert mypy_exempt_modules(), "pyproject.toml's ignore_errors override is unreadable"
+
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
         "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
@@ -1048,7 +1124,7 @@ def _selftest() -> None:
         "clobbering the ceiling rationale, a no-op floor write is skipped entirely, "
         "--reconcile-floor forgives ONLY a drift it "
         "healed and never an unwritten one, absent-module line is silent when clean and is "
-        "never counted as a skip)"
+        "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail)"
     )
 
 

@@ -168,7 +168,7 @@ def register_target(
     elif kind == "skill":
         context["skill_dir"] = str(Path(artifact).resolve())
 
-    record = {
+    record: dict[str, Any] = {
         "schema": "orchestrator.capability-target-binding",
         "version": VERSION,
         "kind": kind,
