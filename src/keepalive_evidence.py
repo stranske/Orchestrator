@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 import feedback
@@ -271,7 +272,7 @@ def _gotcha_lines(context: str) -> list[str]:
 def _knowledge_candidates(repo: str, *, knowledge_path: Path | None = None) -> list[dict]:
     patterns = []
     seen: set[str] = set()
-    base_kwargs = {"path": knowledge_path} if knowledge_path is not None else {}
+    base_kwargs: dict[str, Any] = {"path": knowledge_path} if knowledge_path is not None else {}
     for task_type in KNOWLEDGE_TASK_TYPES:
         kwargs = dict(base_kwargs)
         if task_type is not None:
@@ -363,7 +364,7 @@ def _process_signals(
         }
         if title:
             item["title"] = title
-        bucket = grouped.setdefault(
+        bucket: dict[str, Any] = grouped.setdefault(
             work_type, {"work_type": work_type, "prs": [], "has_revert": False}
         )
         bucket["prs"].append(item)
@@ -373,7 +374,7 @@ def _process_signals(
     signals = []
     for work_type in sorted(grouped):
         bucket = grouped[work_type]
-        prs = bucket["prs"]
+        prs = list(bucket["prs"] or [])
         count = len(prs)
         signals.append(
             {

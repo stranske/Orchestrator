@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import Any
 
 import capabilities
 import feedback
@@ -121,7 +122,7 @@ def _arm_stats(edges: list[dict]) -> dict:
     # Distinct subjects — a target counts as durable if ANY attempt on it landed durably.
     durable_subjects = {_target_of(e["run_id"]) for e in durable}
     terminal_subjects = {_target_of(e["run_id"]) for e in terminal}
-    out = {
+    out: dict[str, Any] = {
         "attributed": len(edges),
         "terminal": len(terminal),
         "durable": len(durable),

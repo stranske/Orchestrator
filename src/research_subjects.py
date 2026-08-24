@@ -514,7 +514,7 @@ def record_finding_issue(
         }
         if implementation_run_id:
             metadata["implementation_run_id"] = _validated_issue_run(
-                db, metadata["issue_target"], implementation_run_id
+                db, str(metadata["issue_target"]), implementation_run_id
             )
         return record_event(
             FINDING_FILED,
@@ -1376,7 +1376,11 @@ def _selftest() -> None:
     assert domain_target("SBA Portfolio") == "domain/sba-portfolio"
     for bad in ("", "   ", "!!!", None):
         try:
-            domain_target(bad)
+            # DELIBERATELY the wrong type: this loop's whole point is that None and blank
+            # strings are REJECTED. Wrapping it in str() made None into the valid slug
+            # "None", the rejection never fired, and the selftest failed — a type fix that
+            # changed behaviour. A narrow ignore is the honest answer for a bad-input probe.
+            domain_target(bad)  # type: ignore[arg-type]
         except ValueError:
             pass
         else:  # a blank slug must not become the target "domain/"
@@ -1416,9 +1420,9 @@ def _selftest() -> None:
         research_round_id("stranske/Workflows", "Audit", "2026-08-16")
         == "stranske/workflows:audit:2026-08-16"
     )
-    for bad in (("", "audit", "2026-01-01"), ("a", "", "2026-01-01"), ("a", "audit", "")):
+    for bad_round in (("", "audit", "2026-01-01"), ("a", "", "2026-01-01"), ("a", "audit", "")):
         try:
-            research_round_id(*bad)
+            research_round_id(*bad_round)
         except ValueError:
             pass
         else:

@@ -206,7 +206,7 @@ def build_rollout(
             }
         )
 
-    decision = {
+    decision: dict[str, Any] = {
         "generated_at": int(time.time()),
         "dry_run": True,
         "assignments": [],

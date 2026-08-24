@@ -468,8 +468,8 @@ def should_test(
         h = matches[0]
         runnable = [a for a in h["arms"] if all(spare.get(g, 0) > 0 for g in arm_agents(a))]
         if len(runnable) >= 2:
-            dh = data_hunger(task_type, runnable, conn=conn, weights=weights)
-            hunger = acquisition_hunger(task_type, runnable, conn=conn, weights=weights)
+            dh = data_hunger(str(task_type), runnable, conn=conn, weights=weights)
+            hunger = acquisition_hunger(str(task_type), runnable, conn=conn, weights=weights)
             return {
                 "trigger": "hypothesis",
                 "hypothesis": h["id"],
@@ -522,7 +522,7 @@ def learned_posteriors(
         row = (rows or {}).get(agent) if isinstance(rows, dict) else None
         try:
             out[agent] = (
-                float(row.get("posterior"))
+                float(row.get("posterior") or 0.0)
                 if isinstance(row, dict) and row.get("posterior") is not None
                 else 0.5
             )
@@ -548,7 +548,7 @@ def _hypothesis_uncertainty(hyp: dict | None) -> float:
 def _item_stakes(item: dict) -> float:
     task_type = item.get("task_type", "implement")
     lane = item.get("lane")
-    return TASK_STAKES.get(task_type, 0.80) * LANE_STAKES.get(lane, 1.0)
+    return TASK_STAKES.get(str(task_type), 0.80) * LANE_STAKES.get(str(lane), 1.0)
 
 
 def _is_launchable_arm_set(arms: list) -> bool:

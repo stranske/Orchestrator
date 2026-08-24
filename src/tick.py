@@ -20,7 +20,9 @@ import os
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import adversarial
 import capabilities
@@ -51,7 +53,7 @@ def _adversarial_review_status(
     item: dict,
     *,
     dry_run: bool,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     provision_fn=None,
     review_fn=None,
 ) -> dict | None:
@@ -208,7 +210,7 @@ def research_tick(
     *,
     learned: dict | None = None,
     dry_run: bool = True,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     max_experiments: int = RESEARCH_MAX_PER_TICK,
     conn=None,
     prepare_fn=None,
@@ -447,7 +449,7 @@ def remote_tick(
     dry_run: bool = True,
     do_ingest: bool = True,
     max_delegations: int | None = None,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     runtime_ac_gate_fn=None,
     research_tick_fn=None,
 ) -> dict:
@@ -466,14 +468,12 @@ def remote_tick(
         if max_delegations is not None
         else int(os.environ.get("ORCH_MAX_REMOTE_PER_TICK", "3"))
     )
-    chosen, no_capacity, deferred, blocked, adversarial_reviews, runtime_ac_gates = (
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-    )
+    chosen: list[Any] = []
+    no_capacity: list[Any] = []
+    deferred: list[Any] = []
+    blocked: list[Any] = []
+    adversarial_reviews: list[Any] = []
+    runtime_ac_gates: list[Any] = []
     role_shadows: list[dict] = []
     triage_shadow = roles.activate_tick_triage(items, cap, env=env, dry_run=dry_run)
     role_shadows.append(

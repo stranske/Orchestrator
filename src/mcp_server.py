@@ -20,6 +20,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 ORCH = Path(__file__).resolve().parent
 sys.path.insert(0, str(ORCH))
@@ -429,7 +430,8 @@ def _selftest_advice_schema_matches_advise() -> None:
     import capability_advisor
 
     tool = next(t for t in TOOLS if t["name"] == "capability_advice")
-    advertised = set(tool["inputSchema"]["properties"])
+    schema = cast(dict, tool["inputSchema"])
+    advertised = set(schema["properties"])
     sig = inspect.signature(capability_advisor.advise)
     # Caller-settable = keyword-only, minus the internals a remote caller must never drive.
     internal = {"record", "path", "lane", "context"}
@@ -536,7 +538,8 @@ def _selftest_decline_schema_matches_record_decline() -> None:
     import capability_propensity
 
     tool = next(t for t in TOOLS if t["name"] == "capability_decline")
-    advertised = set(tool["inputSchema"]["properties"])
+    schema = cast(dict, tool["inputSchema"])
+    advertised = set(schema["properties"])
     sig = inspect.signature(capability_propensity.record_decline)
     internal = {"path", "metadata"}
     callable_kw = {
@@ -549,7 +552,8 @@ def _selftest_decline_schema_matches_record_decline() -> None:
     )
     # The positional arguments must be reachable too, under the names the tool advertises.
     assert {"capability_id", "experiment_id"} <= advertised, sorted(advertised)
-    assert set(tool["inputSchema"]["required"]) == {
+    required_schema = cast(dict, tool["inputSchema"])
+    assert set(required_schema["required"]) == {
         "capability_id",
         "experiment_id",
         "reason",

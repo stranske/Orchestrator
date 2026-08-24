@@ -185,7 +185,7 @@ def validate_coordination(plan: dict[str, Any]) -> list[str]:
         coord_id = meta.get("id")
         if not _is_nonempty_string(coord_id):
             errors.append("coordination.id must be a non-empty string")
-        elif not _looks_like_slug(coord_id.strip()):
+        elif not _looks_like_slug(str(coord_id or "").strip()):
             errors.append("coordination.id must be a lowercase slug")
         for key in ("title", "goal", "source_repo"):
             if not _is_nonempty_string(meta.get(key)):
@@ -267,10 +267,10 @@ def validate_coordination(plan: dict[str, Any]) -> list[str]:
         repo = consumer.get("repo")
         if not _is_nonempty_string(repo):
             errors.append(f"{path}.repo must be a non-empty string")
-        elif not _looks_like_repo(repo):
+        elif not _looks_like_repo(str(repo or "")):
             errors.append(f"{path}.repo must look like owner/repo")
         else:
-            consumer_repos.append(repo)
+            consumer_repos.append(str(repo))
         if not _is_nonempty_string(consumer.get("reason")):
             errors.append(f"{path}.reason must be a non-empty string")
         errors.extend(
@@ -352,7 +352,7 @@ def validate_coordination(plan: dict[str, Any]) -> list[str]:
         template = prompts.get("consumer_prompt_template")
         if not _is_nonempty_string(template):
             errors.append("prompts.consumer_prompt_template must be a non-empty string")
-        elif "{repo}" not in template:
+        elif "{repo}" not in str(template or ""):
             errors.append("prompts.consumer_prompt_template must contain '{repo}'")
         if not _is_nonempty_string(prompts.get("review_prompt")):
             errors.append("prompts.review_prompt must be a non-empty string")

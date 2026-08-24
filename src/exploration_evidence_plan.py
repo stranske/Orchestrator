@@ -16,6 +16,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import backlog
 import capacity
@@ -182,7 +183,7 @@ def _candidate_task_types(
         if len(sample_targets[task_type]) < 3:
             sample_targets[task_type].append(item.get("target") or "")
     route_rows = {row["task_type"]: row for row in coverage.get("tasks") or []}
-    candidates = []
+    candidates: list[dict[str, Any]] = []
     for task_type in sorted(set(route_rows) | set(opener_counts) | set(outcome_counts)):
         route = route_rows.get(task_type) or {}
         opener_items = opener_counts.get(task_type, 0)

@@ -349,7 +349,8 @@ def _selftest() -> None:
         assert claim(T1, "claude") is False, "same-target collision must be blocked"
         assert claim(T2, "claude") is True
         assert claim(T1, "codex") is True, "idempotent same-agent re-claim"
-        assert holder(T1)["agent"] == "codex"
+        held = holder(T1)
+        assert held and held["agent"] == "codex"
         assert set(active_claims()) == {T1, T2}, active_claims()
         assert (
             update_metadata(T1, "codex", lane="opener", task_type="implement", pid=os.getpid())
@@ -366,7 +367,8 @@ def _selftest() -> None:
         assert holder(T1) is None
         assert claim(T1, "claude") is True
         assert release(T1, "codex") is False, "wrong-agent release must be refused"
-        assert holder(T1)["agent"] == "claude"
+        held = holder(T1)
+        assert held and held["agent"] == "claude"
 
         # stale claim owned by 'codex' (dead pid, old ts)
         stale = _claims_dir() / _slug(T3)
@@ -451,7 +453,10 @@ def _selftest() -> None:
                 }
             )
         )
-        assert holder(T3)["agent"] == "research", "any live child pid keeps a research claim held"
+        held = holder(T3)
+        assert (
+            held and held["agent"] == "research"
+        ), "any live child pid keeps a research claim held"
         release(T3)
 
         # no-meta TOCTOU guard: a fresh (unstamped) dir reads as HELD, not stale
