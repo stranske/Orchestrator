@@ -532,9 +532,19 @@ CEILINGS = (
 def mypy_exempt_modules() -> list[str] | None:
     """Modules on `[[tool.mypy.overrides]] ignore_errors` — the ratchet's blocking quantity.
 
-    None means the question could not be answered here (no pyproject.toml, unreadable, no override).
-    REPORTED, never treated as zero: a ratchet that stops being counted is indistinguishable from
-    one that emptied, and only one of those is good news.
+    None means the question COULD NOT BE ANSWERED (no pyproject.toml, or it does not parse).
+    [] means it was answered and nothing is exempt -- the drained state. REPORTED, never treated as
+    zero: a ratchet that stops being counted is indistinguishable from one that emptied, and only
+    one of those is good news.
+
+    THOSE TWO WERE THE SAME VALUE UNTIL 2026-08-24, and the docstring above was already the argument
+    against it. A readable pyproject with no `ignore_errors` override returned None, so the run that
+    FINISHED the drain printed "NOT COUNTED" -- the gate going quiet at the exact moment it
+    succeeded, which is the failure this file exists to prevent. Two things prove it was unintended:
+    `_format_mypy_exempt_line` already carries a " -- fully drained" branch that no input could
+    reach, and the selftest below asserted this function was TRUTHY, so an empty list would have
+    failed it. A gate whose own test forbids its drained state is a latched gate (CLAUDE.md), and
+    this one would have latched on the last module.
     """
     try:
         import tomllib
@@ -546,7 +556,8 @@ def mypy_exempt_modules() -> list[str] | None:
         if override.get("ignore_errors"):
             mods = override.get("module")
             return sorted(mods) if isinstance(mods, list) else [str(mods)]
-    return None
+    # Readable, and nothing is exempt: ANSWERED, not unanswerable. See the docstring.
+    return []
 
 
 def _format_mypy_exempt_line(mods: list[str] | None, limit: int | None, total: int = 99) -> str:
@@ -1174,8 +1185,16 @@ def _selftest() -> None:
     assert _ceiling_problems({"mypy_exempt_max": 64}, {**_zero, "mypy_exempt_max": 64}) == []
     _over = _ceiling_problems({"mypy_exempt_max": 64}, {**_zero, "mypy_exempt_max": 65})
     assert len(_over) == 1 and "mypy_exempt_max" in _over[0], _over
-    # And the real file must be readable, or the line would silently report NOT COUNTED forever.
-    assert mypy_exempt_modules(), "pyproject.toml's ignore_errors override is unreadable"
+    # The three states are DISTINCT, and conflating the last two is what made this a latched gate:
+    # a full drain must read as "fully drained", never as "NOT COUNTED".
+    assert "NOT COUNTED" in _format_mypy_exempt_line(None, 0), "unanswerable must say so"
+    assert "fully drained" in _format_mypy_exempt_line([], 0), "an empty ratchet is the good news"
+    assert "1/1 max" in _format_mypy_exempt_line(["m"], 1), "a live ratchet reports both numbers"
+    # And the real file must PARSE -- `is not None`, not truthiness. Asserting truthiness here meant
+    # the ratchet's own selftest failed the moment the list emptied, i.e. the gate forbade its drain.
+    assert (
+        mypy_exempt_modules() is not None
+    ), "pyproject.toml does not parse; the ratchet cannot be counted"
 
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "

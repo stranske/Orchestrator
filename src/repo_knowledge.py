@@ -2523,9 +2523,36 @@ def _selftest() -> None:
         assert clustered[1]["cluster_key"] == "always_run_pytest_before_merging", clustered
     finally:
         p.unlink(missing_ok=True)
+
+    # ---- MALFORMED current_refs IS REJECTED, WHATEVER SHAPE THE MALFORMATION TAKES.
+    # `validate_current_refs` declares `refs: list[dict]`, and its caller in capability_compiler
+    # used to pass `cast(dict, contract.get("current_refs") or {})` -- a cast that named the wrong
+    # type over a fallback of the wrong type. Harmless in practice, because a dict and an empty
+    # list both fail `not isinstance(refs, list) or not refs` and take the same branch, which is
+    # exactly why nothing noticed: the annotation was wrong and the behaviour was right. That
+    # coincidence is the reason to pin it rather than trust it -- the cast is now `list`/`[]`, and
+    # if anyone "simplifies" the isinstance guard away, a dict would start being ITERATED (yielding
+    # its string keys) instead of rejected.
+    import tempfile as _tf
+
+    with _tf.TemporaryDirectory(prefix="rk-refs-") as _td:
+        # Annotated because the ratchet now checks this module: a bare heterogeneous tuple gives
+        # mypy nothing to infer. The shapes are deliberately mixed -- that IS the test.
+        _malformed: tuple[Any, ...] = ({}, {"path": "README.md"}, [], "README.md", None)
+        for _bad in _malformed:
+            _res = validate_current_refs(_td, _bad)  # type: ignore[arg-type]  # malformed on purpose
+            assert _res["valid"] is False, (_bad, _res)
+            assert _res["errors"] == ["current refs are required"], (_bad, _res)
+            assert _res["refs"] == [], (_bad, _res)
+        # and the well-formed shape still validates, so the assertions above are not vacuous
+        (Path(_td) / "README.md").write_text("x\n")
+        _ok = validate_current_refs(_td, [{"path": "README.md"}])
+        assert _ok["valid"] is True, _ok
+
     print(
         "repo_knowledge.py selftest: OK (seed, filters, prompt append, truncation, "
-        "snapshot/docs/review suggestions, memory search, clustering, approval)"
+        "snapshot/docs/review suggestions, memory search, clustering, approval, "
+        "malformed current_refs rejected)"
     )
 
 
