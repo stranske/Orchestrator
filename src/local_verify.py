@@ -308,8 +308,12 @@ def _analyse_nodes(base_root: Path, test_cmd: str, test_paths: list[str], timeou
     }
 
 
-def _name_nodes(node_ids: list[str], limit: int = 5) -> str:
-    """Name node ids for a bounded reason string, keeping the count when the list is long."""
+def name_nodes(node_ids: list[str], limit: int = 5) -> str:
+    """Name node ids for a bounded reason string, keeping the count when the list is long.
+
+    Public because `synthesis_promotion` names the same nodes in its candidate body, and one
+    bounded formatter beats two that drift.
+    """
     extra = len(node_ids) - limit
     named = ", ".join(node_ids[:limit])
     return f"{named} (+{extra} more)" if extra > 0 else named
@@ -445,7 +449,7 @@ def verify(
     if nodes["hollow_nodes"]:
         reason += (
             f"; {len(nodes['hollow_nodes'])} of {nodes['counts']['nodes']} candidate nodes do not "
-            f"discriminate: {_name_nodes(nodes['hollow_nodes'])}"
+            f"discriminate: {name_nodes(nodes['hollow_nodes'])}"
         )
     elif nodes["verdict"] == "INDETERMINATE":
         reason += f"; per-node attribution unavailable: {nodes['reason']}"

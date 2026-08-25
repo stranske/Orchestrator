@@ -1037,6 +1037,20 @@ def record_gate_verdict(run_id: str, gate: dict[str, Any]) -> dict[str, Any]:
     return {"run_id": run_id, "verifier_verdict": verifier_verdict, "recorded": True}
 
 
+def _hollow_carry_condition(payload: dict[str, Any]) -> bool:
+    """Should a PASSING deliberate-break check still carry local_verify's reason?
+
+    True when the per-node picture is not clean: named hollow nodes, or a per-node verdict that is
+    anything other than PASS (it could not attribute, and said why). A payload with no per-node
+    fields at all -- an older local_verify -- is treated as clean, so the pre-2026-08-24 behaviour
+    is unchanged for it.
+    """
+    node_verdict = payload.get("node_verdict")
+    return bool(payload.get("hollow_nodes")) or (
+        node_verdict is not None and node_verdict != "PASS"
+    )
+
+
 def _completed_result(
     check: dict[str, Any], completed: subprocess.CompletedProcess[str], duration_s: float
 ) -> dict[str, Any]:
@@ -1066,15 +1080,24 @@ def _completed_result(
             parsed = json.loads(stdout or "{}")
         except Exception:
             parsed = None
-        verdict = parsed.get("verdict") if isinstance(parsed, dict) else None
+        payload = parsed if isinstance(parsed, dict) else {}
+        verdict = payload.get("verdict")
         status = "PASS" if verdict == "PASS" else "FAIL"
-        reason = (
-            None
-            if status == "PASS"
-            else (parsed or {}).get("reason")
-            or (parsed or {}).get("error")
-            or f"local_verify verdict {verdict!r}"
-        )
+        if status == "PASS":
+            # A PASS HERE IS NOT ALWAYS SILENT, and dropping the reason threw away the one thing
+            # this check exists to establish. local_verify's rolled-up `verdict` grades the whole
+            # test COMMAND, so it says PASS as soon as ONE candidate test fails against the base --
+            # its per-node pass is what names the tautologies that rode along on that one test, and
+            # what says so when it could not attribute at all. Carry the reason whenever the
+            # per-node picture is not clean; stay silent on a genuinely clean PASS so this does not
+            # become constant noise.
+            # SAFE BY CONSTRUCTION: `evaluate_results` computes every verdict from `status` alone
+            # and treats `reason` as explanatory text, so a reason on a PASS cannot flip a gate.
+            reason = payload.get("reason") if _hollow_carry_condition(payload) else None
+        else:
+            reason = (
+                payload.get("reason") or payload.get("error") or f"local_verify verdict {verdict!r}"
+            )
     elif check.get("type") == "command":
         expected = check.get("expected") or "exit_0"
         if expected == "exit_0":
@@ -1438,6 +1461,88 @@ def _selftest() -> None:
     assert timeout_run["check_results"][0]["status"] == "ERROR", timeout_run
     assert "timed out" in timeout_run["check_results"][0]["reason"], timeout_run
 
+    # A deliberate_break PASS must carry local_verify's per-node finding, and stay quiet without
+    # one. This is a unit on `_completed_result` rather than a run, because the input under test is
+    # local_verify's JSON, not a subprocess.
+    def _break_result(payload: dict) -> dict:
+        return _completed_result(
+            {"id": "AC1-BREAK", "type": "deliberate_break", "command": "local_verify.py ..."},
+            subprocess.CompletedProcess(
+                args=["x"], returncode=0, stdout=json.dumps(payload), stderr=""
+            ),
+            0.1,
+        )
+
+    _clean = _break_result(
+        {
+            "verdict": "PASS",
+            "reason": "pass live, fail against base",
+            "node_verdict": "PASS",
+            "hollow_nodes": [],
+        }
+    )
+    assert _clean["status"] == "PASS" and _clean["reason"] is None, _clean
+    _tautologies = _break_result(
+        {
+            "verdict": "PASS",
+            "reason": "pass live, fail against base; 2 of 3 candidate nodes do not discriminate: t.py::a, t.py::b",
+            "node_verdict": "FAIL_HOLLOW_NODES",
+            "hollow_nodes": ["t.py::a", "t.py::b"],
+        }
+    )
+    assert _tautologies["status"] == "PASS", _tautologies
+    assert "t.py::a" in (_tautologies["reason"] or ""), _tautologies
+    _unattributed = _break_result(
+        {
+            "verdict": "PASS",
+            "reason": "pass live, fail against base; per-node attribution unavailable: pytest is not importable",
+            "node_verdict": "INDETERMINATE",
+            "hollow_nodes": [],
+        }
+    )
+    assert "not importable" in (_unattributed["reason"] or ""), _unattributed
+    # An older local_verify with no per-node fields must behave exactly as it did before.
+    _legacy = _break_result({"verdict": "PASS", "reason": "pass live, fail against base"})
+    assert _legacy["status"] == "PASS" and _legacy["reason"] is None, _legacy
+    # A FAIL is untouched, including the case where the JSON is not even an object.
+    _failed = _break_result({"verdict": "FAIL_HOLLOW", "reason": "still pass against base"})
+    assert _failed["status"] == "FAIL" and _failed["reason"] == "still pass against base", _failed
+    _garbage = _completed_result(
+        {"id": "AC1-BREAK", "type": "deliberate_break", "command": "x"},
+        subprocess.CompletedProcess(args=["x"], returncode=0, stdout="[1, 2]", stderr=""),
+        0.1,
+    )
+    assert _garbage["status"] == "FAIL" and "None" in (_garbage["reason"] or ""), _garbage
+
+    # DELIBERATE BREAK -> REVERT on the carry condition, which IS the fix: go back to dropping the
+    # reason on every PASS and the tautology case reverts to a silent PASS indistinguishable from
+    # the clean one.
+    _saved_unclean = _hollow_carry_condition
+    try:
+        globals()["_hollow_carry_condition"] = lambda payload: False
+        _broken = _break_result(
+            {
+                "verdict": "PASS",
+                "reason": "... 2 of 3 candidate nodes do not discriminate: t.py::a, t.py::b",
+                "node_verdict": "FAIL_HOLLOW_NODES",
+                "hollow_nodes": ["t.py::a", "t.py::b"],
+            }
+        )
+        assert _broken["reason"] is None, "break did not change behaviour -- test is vacuous"
+    finally:
+        globals()["_hollow_carry_condition"] = _saved_unclean
+    assert "t.py::a" in (
+        _break_result(
+            {
+                "verdict": "PASS",
+                "reason": "... 2 of 3 candidate nodes do not discriminate: t.py::a, t.py::b",
+                "node_verdict": "FAIL_HOLLOW_NODES",
+                "hollow_nodes": ["t.py::a", "t.py::b"],
+            }
+        )["reason"]
+        or ""
+    ), "revert did not restore the per-node carry"
+
     expansion_spec = json.loads(json.dumps(command_spec))
     expansion_spec["verification"]["id"] = "expansion-warning-runtime-ac"
     expansion_spec["acceptance_criteria"][0]["checks"][0]["command"] = "printf $HOME"
@@ -1463,7 +1568,8 @@ def _selftest() -> None:
 
     print(
         "runtime_ac.py selftest: OK (authoring prompt, AC-bound schema validation, dry-run plan, "
-        "command emission, opt-in execution, result gate)"
+        "command emission, opt-in execution, result gate, per-node break finding carried on a "
+        "PASS w/ break->revert)"
     )
 
 
