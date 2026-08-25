@@ -310,6 +310,21 @@ answers exactly that. `_attach_how_to_use` stamps it onto every entry on both an
 render and the answer came apart. The field is always present and `None` when unknown: "no guidance
 recorded" and "this answer does not carry the field" must not look alike.
 
+**And the SURFACE itself has a state, because an invented name answered the wrong question
+(2026-08-25).** A run opened with `--surface 'audit-implementation-run'`, a name nothing declares.
+`binding_for` returned `{}`, the free text did not classify, and the answer came back
+`bound_count: 0`, `useful: false`, `capabilities: []` — which reads as *"the advisor has nothing for
+issue-filing work"*. It has three capabilities for exactly that, at `file-agent-issue`. The caller
+acted on the wrong sentence and recorded nothing at all. That is silent absence in the advisor
+itself, the same class as a binding with no caller. `capability_advisor.surface_status` answers it
+in four values — `unspecified` / `declared` / `inherited` / `unknown` — from `known_surfaces()`,
+derived from the same tables `binding_for` resolves against so a list of valid names cannot drift
+from the names that actually resolve. `inherited` exists so a legitimate phase of a known surface
+(`repo-audit:phase-9`) is not called invented, and `unspecified` so a caller who passed no surface is
+not told they made one up. Like every other axis here it **annotates and changes neither the set nor
+the order** — a selftest pins the two candidate lists identical — and, being a diagnosis, it carries
+its remedy: the closest declared surface names.
+
 **And a `null` that is a table gap must not read as a rule.** The Counter_Risk audit (2026-08-24)
 saw `how_to_use: null` on every capability whose precondition had failed and concluded the answer
 *suppresses* guidance on a failed precondition. It does not — the stamping above is unconditional on

@@ -32,6 +32,7 @@ Also exposed as the `capability_advice` MCP tool, so any session can ask at task
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import pathlib
 import re
@@ -409,6 +410,19 @@ def advise(
     missing input named. It never guesses, and it never withholds or reorders the offer.
     """
     caps = capabilities.load(path or capabilities.REG)
+    # THE SURFACE'S OWN STATE, computed once and reported on every branch. Purely additive: it
+    # changes neither the candidate set nor its order, exactly like the precondition axis. What it
+    # removes is one specific wrong reading — an invented name answering "nothing applies here".
+    surface_state = surface_status(surface or skill, path=path)
+    unknown_surface_note = (
+        (
+            f" — AND {surface_state['surface']!r} IS NOT A SURFACE THIS TOOL DECLARES, so this is "
+            f"'no such surface', not 'nothing applies'. Declared surfaces closest to it: "
+            + ", ".join(repr(s) for s in surface_state["did_you_mean"])
+        )
+        if surface_state["status"] == "unknown"
+        else ""
+    )
 
     # A SUPPRESSED SURFACE MUST BE ACTUALLY QUIET. `NO_BINDING` used to suppress only the DECLARED
     # half, so `repo-audit:phase-1` — whose whole point is that the playbook says "Orient (bash only,
@@ -442,6 +456,7 @@ def advise(
             },
             "precondition": _annotate_preconditions([], repository, repo_path),
             "surface_template": unsubstituted_surface(surface) or None,
+            "surface_status": surface_state,
             "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
         }
 
@@ -505,6 +520,7 @@ def advise(
                 "precondition": precondition,
                 "guidance": guidance_summary(entries),
                 "surface_template": unsubstituted_surface(surface or skill) or None,
+                "surface_status": surface_state,
                 "coverage": {
                     "ledger_count": len(caps),
                     "matched": len(entries),
@@ -556,15 +572,19 @@ def advise(
             "bound_capabilities": [],
             "precondition": _annotate_preconditions([], repository, repo_path),
             "surface_template": unsubstituted_surface(surface or skill) or None,
+            "surface_status": surface_state,
             "coverage": {
                 "ledger_count": len(caps),
                 "matched": 0,
                 "not_applicable": 0,
                 "by_entry_mode": {},
             },
+            # THE BRANCH AN INVENTED SURFACE LANDS ON. Nothing classified AND nothing was bound, so
+            # the old sentence blamed the task; when the surface does not exist, the task was never
+            # the problem and the caller needs the other sentence.
             "reason": (
                 "could not classify this task into any work type the fleet records; "
-                "no capability can be matched to it"
+                "no capability can be matched to it" + unknown_surface_note
             ),
         }
 
@@ -724,6 +744,7 @@ def advise(
         "precondition": precondition,
         "guidance": guidance_summary(matched),
         "surface_template": unsubstituted_surface(surface or skill) or None,
+        "surface_status": surface_state,
         "coverage": {
             "ledger_count": len(caps),
             "matched": len(matched),
@@ -741,7 +762,8 @@ def advise(
             if matched
             else f"classified as {', '.join(c['task_type'] for c in candidates)}, but no capability "
             f"declares a trigger for that work"
-        ),
+        )
+        + unknown_surface_note,
     }
     if record and matched:
         # Asking the question is itself the observation that improves the answer.
@@ -1533,6 +1555,72 @@ def unsubstituted_surface(surface: str) -> str:
     """The unsubstituted placeholder in this surface name, or '' if it looks like a real one."""
     match = SURFACE_TEMPLATE.search(str(surface or ""))
     return match.group(0) if match else ""
+
+
+# AN INVENTED SURFACE NAME RETURNS "NOTHING APPLIES", WHICH IS A DIFFERENT SENTENCE FROM
+# "NO SUCH SURFACE" (2026-08-25).
+#
+# Measured: a run opened with `--surface 'audit-implementation-run'`, a name that does not exist.
+# `binding_for` returned `{}`, the free text did not classify, and the answer came back
+# `bound_count: 0`, `useful: false`, `capabilities: []` with a long `not_applicable` list — which
+# reads as "the advisor has nothing for issue-filing work". It has three capabilities for exactly
+# that, at `file-agent-issue`. The caller acted on the wrong sentence and filed no record at all.
+#
+# Silent absence again, in the advisor itself: the same class as a binding with no caller and a
+# capability bound nowhere. So the surface gets a STATE, and it is reported rather than acted on —
+# the set and the order are untouched, exactly as the precondition and contraindication axes are.
+# Unknown is a diagnosis, so it carries its remedy: the nearest declared surface names.
+SURFACE_STATUSES = ("unspecified", "declared", "inherited", "unknown")
+_SURFACE_SUGGESTIONS = 4
+
+
+def known_surfaces(*, path=None) -> set[str]:
+    """Every surface name the tables know: declared, consulted, recorded, or promoted here.
+
+    DERIVED FROM THE SAME TABLES `binding_for` RESOLVES AGAINST — a hand-kept list of valid names
+    would be free to drift from the names that actually resolve, which is the parallel-inventory
+    defect this tree keeps paying for.
+    """
+    out = set(SURFACE_BINDINGS) | consult_keys() | set(KNOWN_UNCONSULTED)
+    out |= set(_promoted_index(path))
+    return {s for s in out if s}
+
+
+def surface_status(surface: str, *, path=None) -> dict:
+    """Is this a surface the tables know, one that inherits, or a name nobody has ever declared?
+
+    Three-valued for the same reason the precondition axis is: an empty surface was not asked
+    about, and answering "unknown" for it would manufacture a defect out of a caller who simply did
+    not pass `--surface`.
+    """
+    name = str(surface or "").strip()
+    if not name:
+        return {"surface": "", "status": "unspecified", "resolved_from": None, "did_you_mean": []}
+    known = known_surfaces(path=path)
+    if name in known:
+        return {"surface": name, "status": "declared", "resolved_from": name, "did_you_mean": []}
+    # A PHASE OF A KNOWN SURFACE IS NOT UNKNOWN. `binding_for` resolves every prefix, so
+    # `repo-audit:phase-9` legitimately inherits `repo-audit`'s surface-wide set; calling that
+    # "unknown" would fire on the normal case and the check would be switched off within a week.
+    parts = name.split(":")
+    for i in range(len(parts) - 1, 0, -1):
+        parent = ":".join(parts[:i])
+        if parent in known:
+            return {
+                "surface": name,
+                "status": "inherited",
+                "resolved_from": parent,
+                "did_you_mean": [],
+            }
+    return {
+        "surface": name,
+        "status": "unknown",
+        "resolved_from": None,
+        "did_you_mean": difflib.get_close_matches(
+            name, sorted(known), n=_SURFACE_SUGGESTIONS, cutoff=0.4
+        )
+        or sorted(known)[:_SURFACE_SUGGESTIONS],
+    }
 
 
 def tick_phase_surfaces() -> list[str]:
@@ -2533,6 +2621,18 @@ def format_advice(a: dict) -> str:
             f"the phase's. Substitute the real value (e.g. `repo-audit:phase-3`) and re-ask.",
             "",
         ]
+    state = a.get("surface_status") or {}
+    if state.get("status") == "unknown":
+        # LOUD, AND ABOVE THE ANSWER, because the answer below is about the TASK and the problem is
+        # the SURFACE. `bound_count: 0` from a name nobody declares reads as "nothing applies here",
+        # and a caller acted on exactly that reading while three capabilities sat at the surface it
+        # meant. Printed, never acted on: the set and the order are unchanged.
+        lines += [
+            f"!! NO SUCH SURFACE: {state.get('surface')!r} is not declared anywhere, so nothing "
+            f"could be bound to it. This is 'no such surface', NOT 'nothing applies'. Closest "
+            f"declared surfaces: " + ", ".join(repr(s) for s in state.get("did_you_mean") or []),
+            "",
+        ]
     remedy = (a.get("precondition") or {}).get("how_to_evaluate")
     if remedy:
         # THE DRAINABLE QUANTITY, printed beside the blocking one. Without this the reader sees only
@@ -3329,6 +3429,61 @@ def _selftest_bindings() -> None:
                 "offered"
             )
 
+            # 7. AN INVENTED SURFACE SAYS SO (2026-08-25). `bound_count: 0` from a name nobody
+            #    declares used to read as "nothing applies here", and a run acted on that reading
+            #    while three capabilities sat at the surface it meant. Asserted on the ANSWER and
+            #    the RENDER, because the MCP tool returns the dict and the CLI prints the text.
+            made_up = "totally-made-up-surface"
+            assert surface_status(made_up)["status"] == "unknown", surface_status(made_up)
+            for task in ("xyzzy plugh frobnicate", "add unit tests for the retry helper"):
+                got = advise(task, surface=made_up, path=ledger, record=False)
+                state = got["surface_status"]
+                assert state["status"] == "unknown", (task, state)
+                assert state["did_you_mean"], "a diagnosis must carry its remedy: " + str(state)
+                assert "IS NOT A SURFACE" in got["reason"], (task, got["reason"])
+                assert "NO SUCH SURFACE" in format_advice(got), task
+            # A DECLARED SURFACE THAT SIMPLY BINDS NOTHING IS NOT UNKNOWN, and this is the
+            # distinction the whole check exists to make. `t-empty` is declared and its resolved
+            # set is empty; it must never print the unknown banner.
+            real_empty = SURFACE_BINDINGS.get("t-empty")
+            SURFACE_BINDINGS["t-empty"] = {NO_BINDING: "declared, deliberately empty"}
+            try:
+                assert surface_status("t-empty")["status"] == "declared", surface_status("t-empty")
+                quiet = advise("xyzzy plugh", surface="t-empty", path=ledger, record=False)
+                assert quiet["surface_status"]["status"] == "declared", quiet["surface_status"]
+                assert "NO SUCH SURFACE" not in format_advice(quiet), format_advice(quiet)
+            finally:
+                if real_empty is None:
+                    SURFACE_BINDINGS.pop("t-empty", None)
+                else:
+                    SURFACE_BINDINGS["t-empty"] = real_empty
+            # A PHASE OF A KNOWN SURFACE INHERITS AND IS NOT UNKNOWN. `binding_for` resolves every
+            # prefix, so firing here would fire on the normal case and the check would be switched
+            # off within a week.
+            assert surface_status("repo-audit:phase-9")["status"] == "inherited", surface_status(
+                "repo-audit:phase-9"
+            )
+            # ...and NO surface at all was never asked about: three-valued, like the precondition
+            # axis, so a caller that passed no `--surface` is not told it invented one.
+            assert surface_status("")["status"] == "unspecified", surface_status("")
+            none_given = advise("xyzzy plugh frobnicate", path=ledger, record=False)
+            assert none_given["surface_status"]["status"] == "unspecified", none_given[
+                "surface_status"
+            ]
+            assert "IS NOT A SURFACE" not in none_given["reason"], none_given["reason"]
+            # AND THE AXIS CHANGES NEITHER THE SET NOR THE ORDER — the same restraint the
+            # precondition and contraindication axes keep. Both consults bind nothing, so the two
+            # candidate lists must be identical in membership AND order.
+            classified_unknown = advise(
+                "add unit tests for the retry helper", surface=made_up, path=ledger, record=False
+            )
+            classified_none = advise(
+                "add unit tests for the retry helper", path=ledger, record=False
+            )
+            assert [c["capability_id"] for c in classified_unknown["capabilities"]] == [
+                c["capability_id"] for c in classified_none["capabilities"]
+            ], (classified_unknown["capabilities"], classified_none["capabilities"])
+
             # 6. THE TICK'S PHASES, and the ONE thing that must not move. `tick_evidence` grades
             #    `binding_for("tick")` and `_selftest_tick_evidence` requires every capability with
             #    a finding projection to be in it, so sub-surfacing the tick must ADD phase keys
@@ -3365,7 +3520,8 @@ def _selftest_bindings() -> None:
                 SURFACE_BINDINGS["t-surface"] = real
     print(
         "capability_advisor binding selftest: OK (survives a classification miss, never conceals "
-        "an unbound match, filters retired, bound sets stay small)"
+        "an unbound match, filters retired, bound sets stay small, the fix arc reaches its own "
+        "instruments, and an invented surface says so instead of reading as 'nothing applies')"
     )
 
 
