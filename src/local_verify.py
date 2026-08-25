@@ -319,6 +319,157 @@ def name_nodes(node_ids: list[str], limit: int = 5) -> str:
     return f"{named} (+{extra} more)" if extra > 0 else named
 
 
+# --- the quotable artifact ----------------------------------------------------------------------
+# WHY THIS EXISTS. The Counter_Risk audit of 2026-08-24 reached for this capability at
+# `repo-audit:phase-4`, judged it "a genuinely close match to what I did by hand", and ran the
+# break-then-revert itself anyway. The stated reason was not a capability mismatch: AGENT_ISSUE_FORMAT
+# requires a named test gate with the raw before/after console output QUOTED into the issue body, and
+# `verify()` returns a structured verdict whose console output is JSON-escaped inside it. Every audit
+# on record has re-run the same proof by hand for the same reason.
+#
+# So this adds no measurement and captures nothing new -- `green` and `red` already hold both halves.
+# It is a pure formatter over the existing result, which is why it cannot change a verdict, an exit
+# code or a consumer.
+_FENCE_RUN = re.compile(r"`+")
+
+
+def _fence(*bodies: str) -> str:
+    """A fence longer than the longest backtick run in the content it must survive.
+
+    Test output really does contain backticks (a pytest assertion repr of a string with one), and a
+    three-backtick fence around it renders as two broken blocks in the issue body this exists to
+    produce.
+    """
+    longest = max(
+        (len(m.group(0)) for body in bodies for m in _FENCE_RUN.finditer(body)), default=0
+    )
+    return "`" * max(3, longest + 1)
+
+
+def _console(run: dict | None) -> str:
+    if not run:
+        return "(the run did not happen)"
+    parts = [str(run.get("stdout_tail") or "").rstrip(), str(run.get("stderr_tail") or "").rstrip()]
+    body = "\n".join(p for p in parts if p)
+    return body or "(no output)"
+
+
+def _rc(run: dict | None) -> str:
+    if not run:
+        return "n/a"
+    code = run.get("returncode")
+    return "killed/timed out" if code is None else str(code)
+
+
+def uncopied_test_paths(result: dict) -> list[str]:
+    """Declared `--test-path`s that never reached the base tree, so RED proves nothing about them.
+
+    `_copy_candidate_paths` copies a path only when it resolves to a real file or directory, and it
+    reports what it copied. A pytest NODE ID (`tests/test_x.py::test_y`) resolves to neither, so it
+    is silently skipped -- the base tree then has no candidate test at all, the command fails with
+    "file or directory not found", and `red["ok"]` is False for the wrong reason. The rolled-up
+    verdict is PASS and it means "the test is ABSENT from the base", not "the test FAILS against the
+    base". Those read identically in a JSON verdict and differently in a transcript somebody quotes
+    into a permanent record, which is why the transcript names them and the verdict is left alone.
+    """
+    if not result.get("red"):
+        return []
+    copied = {str(p) for p in result.get("copied_test_paths") or []}
+    return [str(p) for p in result.get("test_paths") or [] if str(p) not in copied]
+
+
+def break_transcript(result: dict, *, worktree_label: str = "") -> str:
+    """The red/green console transcript, in the shape an issue or PR body can quote verbatim.
+
+    RED FIRST, because that is the reading order of the claim being made: the gate fails without the
+    implementation, then passes with it. Every caveat the structured result carries is stated INSIDE
+    the block rather than beside it -- a transcript that travels into an issue body leaves its
+    caveats behind if they live anywhere else, and an overstated proof in a permanent record is worse
+    than no proof at all.
+    """
+    verdict = str(result.get("verdict") or "ERROR")
+    green, red = result.get("green"), result.get("red")
+    cmd = str((green or red or {}).get("cmd") or "")
+    lines = [f"### Deliberate-break demonstration — {verdict}", ""]
+    if result.get("error"):
+        lines += [f"**The run could not complete:** {result['error']}", ""]
+    lines += [
+        f"- gate: `{cmd}`" if cmd else "- gate: (none recorded)",
+        f"- base ref: `{result.get('base_ref')}`",
+        f"- worktree: `{worktree_label or result.get('worktree')}`",
+    ]
+    paths = [str(p) for p in result.get("test_paths") or []]
+    if paths:
+        lines.append(
+            "- candidate tests overlaid onto the base: " + ", ".join(f"`{p}`" for p in paths)
+        )
+    lines.append("")
+
+    stale = uncopied_test_paths(result)
+    if stale:
+        # LOUD, and at the top, because this is the shape of a FALSE proof: RED is red because the
+        # test never arrived, and the verdict says PASS either way.
+        lines += [
+            "> **THIS IS NOT A VALID DEMONSTRATION.** "
+            + ", ".join(f"`{p}`" for p in stale)
+            + " was not copied into the base tree — `--test-path` takes files and directories, not "
+            "pytest node ids. The base therefore ran without that test at all, so the red below "
+            "means the test was ABSENT, not that it FAILED. Re-run with the containing file as "
+            "`--test-path` (the node id may stay in `--test-cmd`, which runs verbatim).",
+            "",
+        ]
+
+    red_body, green_body = _console(red), _console(green)
+    fence = _fence(red_body, green_body)
+    red_section = [
+        f"**RED — the gate against the base implementation** (`{result.get('base_ref')}` with only "
+        f"the candidate tests overlaid). Exit code `{_rc(red)}`.",
+        "",
+        fence,
+        red_body,
+        fence,
+        "",
+    ]
+    green_section = [
+        f"**GREEN — the same gate in the worktree, with the implementation present.** Exit code "
+        f"`{_rc(green)}`.",
+        "",
+        fence,
+        green_body,
+        fence,
+        "",
+    ]
+    # RED THEN GREEN, as one expression, because that ORDER is the claim: the gate fails without the
+    # implementation and passes with it. Reversed, the same two blocks read as a regression.
+    lines += red_section + green_section
+
+    node_verdict = result.get("node_verdict")
+    hollow = [str(n) for n in result.get("hollow_nodes") or []]
+    counts = (result.get("node_analysis") or {}).get("counts") or {}
+    if hollow:
+        lines.append(
+            f"**Per-node attribution: {node_verdict}.** {len(hollow)} of {counts.get('nodes')} "
+            f"candidate nodes PASS against the base and are therefore no part of this proof: "
+            f"{name_nodes(hollow)}. The command-level red above was earned by the others."
+        )
+    elif node_verdict == "INDETERMINATE":
+        lines.append(
+            "**Per-node attribution unavailable**, so the red above is graded per COMMAND and one "
+            "discriminating test would earn it for every tautology beside it: "
+            f"{(result.get('node_analysis') or {}).get('reason')}"
+        )
+    elif node_verdict == "PASS":
+        lines.append(
+            f"**Per-node attribution: PASS.** All {counts.get('nodes')} candidate nodes fail "
+            "against the base, so no tautology is riding along on another test's red."
+        )
+    lines.append("")
+    lines.append(
+        "_Produced by `local_verify.py --transcript`; the live worktree was never mutated._"
+    )
+    return "\n".join(lines) + "\n"
+
+
 def _git(worktree: Path, args: list[str]) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(["git", "-C", str(worktree), *args], capture_output=True, check=False)
 
@@ -574,6 +725,7 @@ class TestMixed(unittest.TestCase):
             test_paths=["tests/test_math_utils.py"],
             timeout=30,
         )
+        sound_out = out
         assert out["verdict"] == "PASS", out
         assert out["node_verdict"] == "PASS", out["node_analysis"]
         assert out["hollow_nodes"] == [], out["hollow_nodes"]
@@ -643,6 +795,72 @@ class TestMixed(unittest.TestCase):
         reverted = verify_mixed()
         assert reverted["hollow_nodes"] == [taut], "revert did not restore per-node attribution"
 
+        # ---- THE QUOTABLE ARTIFACT. Phase 4 of every audit on record re-ran this proof by hand
+        # because the artifact it is graded on is the raw before/after console output in an issue
+        # body, and the verdict dict escapes it inside JSON. So the assertion that matters is
+        # VERBATIM CONTAINMENT, not the presence of a heading.
+        mixed_text = break_transcript(mixed_out)
+        # ASSERTED AGAINST THE RAW RESULT FIELDS, never through `_console`. Going through the
+        # formatter's own helper made the first version of this assertion use the very thing it
+        # guards: escaping the output escaped both sides equally and the break stayed green.
+        for half in ("red", "green"):
+            for stream in ("stdout_tail", "stderr_tail"):
+                raw = str(mixed_out[half].get(stream) or "").rstrip()
+                assert not raw or raw in mixed_text, (
+                    f"the {half} run's {stream} is not quotable verbatim out of the transcript, "
+                    "which is the entire artifact an issue body is graded on",
+                    half,
+                    stream,
+                    mixed_text,
+                )
+        assert mixed_text.index("**RED —") < mixed_text.index("**GREEN —"), (
+            "the break-then-revert claim reads red-before-green; the transcript must too",
+            mixed_text,
+        )
+        # ...AND IT MAY NOT OVERSTATE. `mixed` is a command-level PASS carrying a tautology, which
+        # is exactly the body that would claim a gate it did not earn.
+        assert taut in mixed_text and "no part of this proof" in mixed_text, mixed_text
+        sound_text = break_transcript(sound_out)
+        assert "no tautology is riding along" in sound_text, sound_text
+        assert "no part of this proof" not in sound_text, sound_text
+
+        # ---- THE COPY-SCOPE GUARD. `--test-path` takes files and directories; a pytest NODE ID is
+        # silently not copied, so the base runs without the test, red is red because it is ABSENT,
+        # and the rolled-up verdict is PASS. REPORTED, never gated: the verdict below is asserted
+        # UNCHANGED, because a rendering flag that could move a gate would make the artifact and
+        # the gate two different answers.
+        node_id_path = "tests/test_math_utils.py::TestAdd::test_add"
+        node_scoped = verify(
+            sound, base_ref="HEAD", test_cmd=cmd, test_paths=[node_id_path], timeout=30
+        )
+        assert node_scoped["verdict"] == "PASS", node_scoped
+        assert node_scoped["copied_test_paths"] == [], node_scoped["copied_test_paths"]
+        assert uncopied_test_paths(node_scoped) == [node_id_path], node_scoped
+        node_text = break_transcript(node_scoped)
+        assert "THIS IS NOT A VALID DEMONSTRATION" in node_text, node_text
+        assert node_id_path in node_text, node_text
+        # A real file path is copied, so the guard must stay silent there -- a warning on every run
+        # is a warning nobody reads.
+        assert uncopied_test_paths(sound_out) == [], sound_out
+        assert "THIS IS NOT A VALID DEMONSTRATION" not in sound_text, sound_text
+
+        # ---- THE FENCE MUST SURVIVE ITS CONTENT. Pytest really does print backticks (an assertion
+        # repr of a string containing one), and a 3-backtick fence around them renders as two broken
+        # blocks in the issue body this exists to produce. Pure function, synthetic input.
+        fenced = break_transcript(
+            {
+                "verdict": "PASS",
+                "base_ref": "HEAD",
+                "worktree": "/w",
+                "test_paths": ["tests/t.py"],
+                "copied_test_paths": ["tests/t.py"],
+                "green": {"cmd": "pytest", "returncode": 0, "stdout_tail": "ok"},
+                "red": {"cmd": "pytest", "returncode": 1, "stdout_tail": "E   assert '```x' == ''"},
+            }
+        )
+        assert "\n````\n" in fenced, fenced
+        assert "```x" in fenced, fenced
+
         # The two parse shapes that would silently UNDER-report. An outcome word inside a summary
         # error message must not be read as a node (hence the summary cut), and xdist's
         # outcome-before-node line must yield NOTHING so the run reports INDETERMINATE rather than
@@ -697,7 +915,8 @@ class TestMixed(unittest.TestCase):
 
     print(
         "local_verify.py selftest: OK (green/red deliberate-break PASS, hollow, broken, per-node "
-        "hollow attribution w/ break->revert, named-prerequisite INDETERMINATE, feedback record)"
+        "hollow attribution w/ break->revert, named-prerequisite INDETERMINATE, feedback record, "
+        "quotable transcript w/ verbatim console + copy-scope guard + fence escape)"
     )
 
 
@@ -736,6 +955,13 @@ def main(argv: list[str]) -> int:
         default="",
         help="optional feedback.run_id to patch with verifier_verdict",
     )
+    parser.add_argument(
+        "--transcript",
+        action="store_true",
+        help="print the quotable red/green console transcript instead of the JSON verdict — the "
+        "artifact AGENT_ISSUE_FORMAT asks for in an issue or PR body. Same run, same exit code; "
+        "only the rendering differs",
+    )
     args = parser.parse_args(argv)
     result = verify(
         args.worktree,
@@ -746,7 +972,13 @@ def main(argv: list[str]) -> int:
     )
     if args.record_run_id:
         result["feedback"] = record_verdict(args.record_run_id, result)
-    print(json.dumps(result, indent=2))
+    # THE EXIT CODE IS COMPUTED ONCE, ABOVE THE RENDERING CHOICE. `--transcript` changes what is
+    # printed and nothing else: a flag that could move a gate's verdict would make the artifact and
+    # the gate two different answers to the same question.
+    if args.transcript:
+        print(break_transcript(result), end="")  # already newline-terminated
+    else:
+        print(json.dumps(result, indent=2))
     return 0 if result.get("ok") else 1
 
 
