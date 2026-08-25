@@ -87,7 +87,10 @@ PYTEST_EXIT_REMEDY: dict[int, str] = {
 def pytest_exit_meaning(code: int | None) -> dict[str, Any]:
     """What a pytest exit code MEANS, and whether anything was measured. One lookup, no drift."""
     row = PYTEST_EXIT_MEANINGS.get(code) if code is not None else None
-    if row is None:
+    # `code is None` is repeated rather than implied by `row is None`: it is what narrows the type
+    # for the `PYTEST_EXIT_REMEDY` lookup below, and mypy is right that the implication is not one
+    # a reader should have to reconstruct either.
+    if code is None or row is None:
         return {
             "exit_code": code,
             "meaning": "the command did not run to completion" if code is None else "unknown",
