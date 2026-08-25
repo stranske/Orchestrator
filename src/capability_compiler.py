@@ -2462,7 +2462,7 @@ def compile_playbook_capability(
         ):
             errors.append("playbook selector lanes are unsupported")
     refs_result = repo_knowledge.validate_current_refs(
-        Path(repo_root), cast(dict, contract.get("current_refs") or {})
+        Path(repo_root), cast(list, contract.get("current_refs") or [])
     )
     if not refs_result["valid"]:
         errors.extend(refs_result["errors"] or ["stale current path"])

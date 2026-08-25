@@ -701,7 +701,7 @@ def _selftest() -> None:
 
     # Attribution is explicit: a role-influenced outcome resolves, an unlinked one does not.
     known = {"role-triage", "role-prompt"}
-    rows = [
+    rows: list[dict] = [
         {
             "run_id": "r1",
             "verdict": "PASS",

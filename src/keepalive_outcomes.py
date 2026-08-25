@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TypedDict
 
 import durability_sweep
 import feedback
@@ -227,6 +228,17 @@ KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "vibe", "aider"}
 NON_AGENT = "none"
 
 
+class IngestSummary(TypedDict):
+    repos: int
+    prs_seen: int
+    runs_recorded: int
+    outcomes_recorded: int
+    skipped_existing: int
+    non_agent_prs_seen: int
+    non_agent_runs_recorded: int
+    by_source: dict[str, int]
+
+
 def _agents_from_labels(labels: list[str]) -> list[str]:
     agents = []
     for label in labels:
@@ -410,7 +422,7 @@ def ingest_keepalive_outcomes(
     _revert_fn=None,
     include_non_agent: bool = False,
     _closure_context_fn=None,
-) -> dict:
+) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
     closure_context_fn = _closure_context_fn or _fetch_pr_context
@@ -421,7 +433,7 @@ def ingest_keepalive_outcomes(
             return (None, "dry-run skips live revert scan")
 
     revert_cache: dict = {}  # repo -> cached revert search; 1 search/repo across the ingest
-    summary = {
+    summary: IngestSummary = {
         "repos": len(repos),
         "prs_seen": 0,
         "runs_recorded": 0,
@@ -497,7 +509,7 @@ def ingest_keepalive_outcomes(
                     summary["runs_recorded"] += 1
                     summary["non_agent_runs_recorded"] += 1
 
-                if _should_record_outcome(existing_oc, oc):
+                if oc is not None and _should_record_outcome(existing_oc, oc):
                     if not dry_run:
                         feedback.record_outcome(run_id, **oc)
                     summary["outcomes_recorded"] += 1
@@ -547,7 +559,7 @@ def ingest_keepalive_outcomes(
                 elif dry_run:
                     summary["runs_recorded"] += 1
 
-                if _should_record_outcome(existing_oc, oc):
+                if oc is not None and _should_record_outcome(existing_oc, oc):
                     if not dry_run:
                         feedback.record_outcome(run_id, **oc)
                     summary["outcomes_recorded"] += 1

@@ -16,7 +16,9 @@ import re
 import sqlite3
 import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import capabilities
 import feedback
@@ -45,8 +47,13 @@ def target_slug(target: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "__", target).strip("_")
 
 
-def spec_path(target: str, *, spec_dir: str | Path | None = None, env: dict | None = None) -> Path:
-    source_env = os.environ if env is None else env
+def spec_path(
+    target: str,
+    *,
+    spec_dir: str | Path | None = None,
+    env: Mapping[str, Any] | None = None,
+) -> Path:
+    source_env: Mapping[str, Any] = os.environ if env is None else env
     root = Path(spec_dir or source_env.get("ORCH_RUNTIME_AC_SPEC_DIR", DEFAULT_RUNTIME_AC_SPEC_DIR))
     return root / f"{target_slug(target)}.json"
 
@@ -155,11 +162,11 @@ def _record_gate_event(
         return {"recorded": False, "error": str(exc)}
 
 
-def env_flag(env: dict, name: str) -> bool:
+def env_flag(env: Mapping[str, Any], name: str) -> bool:
     return str(env.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def env_int(env: dict, name: str, default: int) -> int:
+def env_int(env: Mapping[str, Any], name: str, default: int) -> int:
     try:
         return int(env.get(name, default))
     except (TypeError, ValueError):
@@ -170,7 +177,7 @@ def gate_status(
     item: dict,
     *,
     dry_run: bool,
-    env: dict | None = None,
+    env: Mapping[str, Any] | None = None,
     spec_dir: str | Path | None = None,
     run_fn=None,
     latest_run_fn=None,
@@ -183,11 +190,11 @@ def gate_status(
     """
     if item.get("lane") != "closer":
         return None
-    env = os.environ if env is None else env
+    resolved_env: Mapping[str, Any] = os.environ if env is None else env
     target = str(item.get("target") or "")
     if not target:
         return None
-    path = spec_path(target, spec_dir=spec_dir, env=env)
+    path = spec_path(target, spec_dir=spec_dir, env=resolved_env)
     eligibility_info = eligibility(item, path)
     closer_run_id, closer_lookup_error = _latest_closer_run(target, latest_run_fn)
     if not eligibility_info["required"]:
@@ -278,7 +285,7 @@ def gate_status(
             terminal_reason="required_spec_not_materialized",
         )
         return result
-    if not env_flag(env, "ORCH_RUN_RUNTIME_AC"):
+    if not env_flag(resolved_env, "ORCH_RUN_RUNTIME_AC"):
         result = {
             **base,
             "status": "required_but_not_run",
@@ -316,8 +323,8 @@ def gate_status(
         run = run_fn(
             spec,
             confirm_run=True,
-            allow_command_checks=env_flag(env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
-            timeout=env_int(env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
+            allow_command_checks=env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+            timeout=env_int(resolved_env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
         )
         gate = run["gate"]
         verdict = gate.get("verdict")
@@ -514,7 +521,7 @@ def materialize_range_spec(
         }
 
 
-def _active_preflight(status: dict, env: dict) -> dict:
+def _active_preflight(status: dict, env: Mapping[str, Any]) -> dict:
     if status.get("status") == "missing_spec":
         return {
             "status": "missing_spec",
@@ -543,19 +550,19 @@ def _active_preflight(status: dict, env: dict) -> dict:
 def scan_items(
     items: list[dict],
     *,
-    env: dict | None = None,
+    env: Mapping[str, Any] | None = None,
     spec_dir: str | Path | None = None,
 ) -> dict:
     """Read-only scan of backlog/closer items for runtime-AC gate coverage."""
-    env = os.environ if env is None else env
+    resolved_env: Mapping[str, Any] = os.environ if env is None else env
     required_rows: list[dict] = []
     status_counts: dict[str, int] = {}
     active_blockers = 0
     for item in items:
-        status = gate_status(item, dry_run=True, env=env, spec_dir=spec_dir)
+        status = gate_status(item, dry_run=True, env=resolved_env, spec_dir=spec_dir)
         if not status:
             continue
-        preflight = _active_preflight(status, env)
+        preflight = _active_preflight(status, resolved_env)
         if preflight.get("blocks_active"):
             active_blockers += 1
         status_counts[status["status"]] = status_counts.get(status["status"], 0) + 1
@@ -584,12 +591,14 @@ def scan_items(
         "status_counts": status_counts,
         "active_blocker_count": active_blockers,
         "env": {
-            "ORCH_RUN_RUNTIME_AC": env_flag(env, "ORCH_RUN_RUNTIME_AC"),
-            "ORCH_RUNTIME_AC_ALLOW_COMMANDS": env_flag(env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
-            "ORCH_RUNTIME_AC_TIMEOUT": env_int(env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
+            "ORCH_RUN_RUNTIME_AC": env_flag(resolved_env, "ORCH_RUN_RUNTIME_AC"),
+            "ORCH_RUNTIME_AC_ALLOW_COMMANDS": env_flag(
+                resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"
+            ),
+            "ORCH_RUNTIME_AC_TIMEOUT": env_int(resolved_env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
         },
         "spec_dir": str(
-            spec_dir or env.get("ORCH_RUNTIME_AC_SPEC_DIR", DEFAULT_RUNTIME_AC_SPEC_DIR)
+            spec_dir or resolved_env.get("ORCH_RUNTIME_AC_SPEC_DIR", DEFAULT_RUNTIME_AC_SPEC_DIR)
         ),
         "required": required_rows,
         "recommendation": recommendation,
@@ -862,6 +871,8 @@ def exercise_gate() -> dict:
             spec_dir=tmp,
             latest_run_fn=lambda target, mode=None: None,
         )
+        # Exercise item is a labeled closer lane; gate_status always returns a dict here.
+        assert gate is not None
         passed = (
             gate.get("status") == "executed"
             and gate.get("verdict") == "PASS"
@@ -941,17 +952,18 @@ def _selftest() -> None:
     with tempfile.TemporaryDirectory(prefix="runtime-ac-gate-") as tmp:
         old_feedback_db = feedback.DB_PATH
         feedback.DB_PATH = Path(tmp) / "feedback" / "orchestrator.db"
+        item_target = "stranske/Workflows#303"
         item = {
-            "target": "stranske/Workflows#303",
+            "target": item_target,
             "task_type": "implement",
             "lane": "closer",
             "labels": ["runtime-ac"],
             "title": "Runtime-sensitive merge",
         }
         fixture_spec = runtime_ac._valid_spec()
-        fixture_spec["verification"]["target"] = item["target"]
-        fixture_spec["verification"]["repo"] = item["target"].split("#", 1)[0]
-        path = spec_path(item["target"], spec_dir=tmp)
+        fixture_spec["verification"]["target"] = item_target
+        fixture_spec["verification"]["repo"] = item_target.split("#", 1)[0]
+        path = spec_path(item_target, spec_dir=tmp)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(fixture_spec), encoding="utf-8")
         missing_path = Path(tmp) / "missing.json"
@@ -959,13 +971,15 @@ def _selftest() -> None:
         assert required({"labels": ["Type: Runtime-AC"]}, missing_path) is True
         assert required({"labels": ["AC-CHECKS"]}, missing_path) is True
         with tempfile.TemporaryDirectory(prefix="runtime-ac-env-") as env_tmp:
-            env_path = spec_path(item["target"], env={"ORCH_RUNTIME_AC_SPEC_DIR": env_tmp})
+            env_path = spec_path(item_target, env={"ORCH_RUNTIME_AC_SPEC_DIR": env_tmp})
             env_path.parent.mkdir(parents=True, exist_ok=True)
             env_path.write_text(json.dumps(fixture_spec), encoding="utf-8")
             env_planned = gate_status(item, dry_run=True, env={"ORCH_RUNTIME_AC_SPEC_DIR": env_tmp})
+            assert env_planned is not None
             assert env_planned["spec_path"] == str(env_path), env_planned
 
         planned = gate_status(item, dry_run=True, spec_dir=tmp)
+        assert planned is not None
         assert planned["status"] == "planned" and planned["blocks"] is False, planned
         assert (
             gate_status(
@@ -982,11 +996,14 @@ def _selftest() -> None:
             env={"ORCH_RUN_RUNTIME_AC": "1"},
             spec_dir=tmp,
         )
+        assert missing is not None
         assert missing["status"] == "missing_spec" and missing["blocks"] is True, missing
         disabled = gate_status(item, dry_run=False, env={}, spec_dir=tmp)
+        assert disabled is not None
         assert disabled["status"] == "required_but_not_run" and disabled["blocks"] is True, disabled
         path.write_text("{not json", encoding="utf-8")
         malformed = gate_status(item, dry_run=False, env={"ORCH_RUN_RUNTIME_AC": "1"}, spec_dir=tmp)
+        assert malformed is not None
         assert malformed["status"] == "failed" and malformed["blocks"] is True, malformed
 
         recorded = []
@@ -1032,6 +1049,10 @@ def _selftest() -> None:
                 }
             }
 
+        def fake_record(run_id, gate):
+            recorded.append((run_id, gate["verdict"]))
+            return {"recorded": True}
+
         passed = gate_status(
             item,
             dry_run=False,
@@ -1039,9 +1060,9 @@ def _selftest() -> None:
             spec_dir=tmp,
             run_fn=fake_pass,
             latest_run_fn=lambda target, mode=None: "remote-run-303",
-            record_fn=lambda run_id, gate: recorded.append((run_id, gate["verdict"]))
-            or {"recorded": True},
+            record_fn=fake_record,
         )
+        assert passed is not None
         assert passed["status"] == "executed" and passed["blocks"] is False, passed
         assert passed["run_id"] == "remote-run-303" and recorded == [
             ("remote-run-303", "PASS")
@@ -1054,6 +1075,7 @@ def _selftest() -> None:
             run_fn=fake_pass,
             latest_run_fn=lambda target, mode=None: (_ for _ in ()).throw(RuntimeError("db busy")),
         )
+        assert feedback_error is not None
         assert (
             feedback_error["status"] == "executed" and feedback_error["blocks"] is False
         ), feedback_error
@@ -1066,6 +1088,7 @@ def _selftest() -> None:
             run_fn=fake_fail,
             latest_run_fn=lambda target, mode=None: None,
         )
+        assert failed is not None
         assert failed["status"] == "executed" and failed["blocks"] is True, failed
         assert failed["feedback"]["recorded"] is False, failed
         needs_review = gate_status(
@@ -1076,6 +1099,7 @@ def _selftest() -> None:
             run_fn=fake_needs_review,
             latest_run_fn=lambda target, mode=None: None,
         )
+        assert needs_review is not None
         assert (
             needs_review["verdict"] == "NEEDS_REVIEW" and needs_review["blocks"] is True
         ), needs_review
@@ -1119,6 +1143,7 @@ def _selftest() -> None:
             run_fn=fake_pass,
             latest_run_fn=lambda target, mode=None: None,
         )
+        assert next_gate is not None
         assert next_gate["spec_path"] == materialized["spec_path"], next_gate
         assert next_gate["spec_hash"] == materialized["spec_hash"], (next_gate, materialized)
         wrong_target = materialize_range_spec(
@@ -1142,11 +1167,12 @@ def _selftest() -> None:
             spec_dir=tmp,
             latest_run_fn=lambda target, mode=None: None,
         )
+        assert integrated is not None
         assert integrated["status"] == "executed" and integrated["verdict"] == "PASS", integrated
         assert integrated["blocks"] is False, integrated
 
         scan_item = {
-            "target": item["target"],
+            "target": item_target,
             "task_type": "implement",
             "lane": "closer",
             "labels": ["runtime-ac"],

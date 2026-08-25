@@ -912,11 +912,12 @@ def evaluate_results(
         for check in criterion["checks"]:
             check_id = check["id"]
             required = check_id in required_ids
-            result = by_id.get(str(check_id))
-            if result is None:
+            found = by_id.get(str(check_id))
+            if found is None:
                 status = "MISSING"
                 result = {"id": check_id, "status": status, "reason": "no result supplied"}
             else:
+                result = found
                 status = result["status"]
 
             counted_checks += 1

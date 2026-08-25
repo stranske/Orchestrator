@@ -177,6 +177,7 @@ import os
 import pathlib
 import sys
 import time
+from typing import Any
 
 import capabilities
 import paths
@@ -2044,11 +2045,9 @@ def _selftest_tick_evidence() -> None:
             write("deliverer.json", {"findings": [{"id": "d1"}]}, now - 100)
             write("np.json", {"anything": 1}, now - 100)
 
-            common = dict(state_dir=state_dir, path=ledger, steps=t_steps)
-
             # 1. FIRST RUN IS A BASELINE AND RECORDS NO VERDICT. Inventing one from a single
             #    observation is exactly the manufactured evidence this design forbids.
-            r1 = tick_evidence(now=now, **common)
+            r1 = tick_evidence(now=now, state_dir=state_dir, path=ledger, steps=t_steps)
             assert r1["consulted"] is True, r1
             assert (
                 r1["verdicts_recorded"] == 0
@@ -2073,7 +2072,7 @@ def _selftest_tick_evidence() -> None:
             # 2. NO FRESH ARTIFACT -> NOTHING RECORDED AT ALL. This is the bound that keeps 24
             #    ticks a day from becoming 96 data points.
             for tick in range(2, 25):
-                rn = tick_evidence(now=now + tick, **common)
+                rn = tick_evidence(now=now + tick, state_dir=state_dir, path=ledger, steps=t_steps)
                 assert rn["verdicts_recorded"] == 0, (tick, rn)
                 assert rn["triggers_recorded"] == 0, (tick, rn)
                 assert rn["matches_recorded"] == 0, (tick, rn)
@@ -2082,7 +2081,7 @@ def _selftest_tick_evidence() -> None:
             #    moved. THE central assertion: without the field projection this is `useful=True`
             #    and the ranking measures the calendar.
             write("obs-daily.json", daily(["range-lane-rollout"], [], 99), now + 1000)
-            r3 = tick_evidence(now=now + 86400, **common)
+            r3 = tick_evidence(now=now + 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r3["evaluated"]}
             assert got["obs-daily"]["graded"] is True, got
             assert got["obs-daily"]["useful"] is False, got["obs-daily"]
@@ -2091,7 +2090,7 @@ def _selftest_tick_evidence() -> None:
 
             # 4. A NEW FINDING IS USEFUL, and the evidence names what moved.
             write("obs-daily.json", daily(["range-lane-rollout", "new-defect"], [], 5), now + 2000)
-            r4 = tick_evidence(now=now + 2 * 86400, **common)
+            r4 = tick_evidence(now=now + 2 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r4["evaluated"]}
             assert got["obs-daily"]["useful"] is True, got["obs-daily"]
             assert any(d.startswith("overdue +1") for d in got["obs-daily"]["changed_keys"]), got[
@@ -2099,26 +2098,32 @@ def _selftest_tick_evidence() -> None:
             ]["changed_keys"]
             # ...and a finding that RESOLVED is also a change worth reporting.
             write("obs-daily.json", daily([], [], 7), now + 3000)
-            r4b = tick_evidence(now=now + 3 * 86400, **common)
+            r4b = tick_evidence(
+                now=now + 3 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             got = {e["capability_id"]: e for e in r4b["evaluated"]}
             assert got["obs-daily"]["useful"] is True, got["obs-daily"]
             # SILENCE IS NOT USEFULNESS: an empty finding set that STAYS empty is not useful.
             write("obs-daily.json", daily([], [], 8), now + 4000)
-            r4c = tick_evidence(now=now + 4 * 86400, **common)
+            r4c = tick_evidence(
+                now=now + 4 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             got = {e["capability_id"]: e for e in r4c["evaluated"]}
             assert got["obs-daily"]["useful"] is False, got["obs-daily"]
 
             # 5. A NON-OBSERVER GETS NO OUTPUT-CHANGE VERDICT, but its production IS recorded, so it
             #    never reads as "offered and skipped" when it really ran.
             write("deliverer.json", {"findings": [{"id": "d2"}]}, now + 5000)
-            r5 = tick_evidence(now=now + 5 * 86400, **common)
+            r5 = tick_evidence(now=now + 5 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r5["evaluated"]}
             assert got["deliverer"]["graded"] is False, got["deliverer"]
             assert got["deliverer"].get("reason") == "not_an_observer", got["deliverer"]
             assert "deliverer" not in r5["gradable"], r5["gradable"]
             # ...and a bound observer with NO declared projection is a stated verdict, not silence.
             write("np.json", {"anything": 2}, now + 5000)
-            r5b = tick_evidence(now=now + 5 * 86400 + 1, **common)
+            r5b = tick_evidence(
+                now=now + 5 * 86400 + 1, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             got = {e["capability_id"]: e for e in r5b["evaluated"]}
             assert got["no-projection"].get("reason") == "no_finding_projection", got[
                 "no-projection"
@@ -2127,7 +2132,7 @@ def _selftest_tick_evidence() -> None:
             # 6. A SHAPE CHANGE IS REPORTED, NEVER SCORED. A broken parse must not read as
             #    "nothing new" -- that is this repo's founding defect wearing a different hat.
             write("obs-weekly.json", {"generated_at": now, "renamed_bucket": []}, now + 6000)
-            r6 = tick_evidence(now=now + 6 * 86400, **common)
+            r6 = tick_evidence(now=now + 6 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r6["evaluated"]}
             assert got["obs-weekly"].get("reason") == "unprojectable", got["obs-weekly"]
             assert got["obs-weekly"]["graded"] is False, got["obs-weekly"]
@@ -2156,7 +2161,9 @@ def _selftest_tick_evidence() -> None:
             # 8. THE DAY CEILING IS STRUCTURAL. Force a second same-day evaluation and prove the
             #    idempotency key refuses it, so a bug in the freshness gate still cannot inflate.
             write("obs-daily.json", daily(["seed"], [], 0), now + 7000)
-            tick_evidence(now=now + 6 * 86400, **common)  # consumes day 6's single allowance
+            tick_evidence(
+                now=now + 6 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )  # consumes day 6's single allowance
             before = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
             assert (
                 before >= 1
@@ -2166,7 +2173,9 @@ def _selftest_tick_evidence() -> None:
                 # and the change test both say "record a verdict". Only the day-scoped idempotency
                 # key stands between that and five more rows.
                 write("obs-daily.json", daily([f"x{bump}"], [], bump), now + 7000 + bump)
-                tick_evidence(now=now + 6 * 86400 + bump, **common)
+                tick_evidence(
+                    now=now + 6 * 86400 + bump, state_dir=state_dir, path=ledger, steps=t_steps
+                )
             after = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
             assert after == before, (
                 f"five more same-day evaluations added {after - before} verdict(s); the day-scoped "
@@ -2180,7 +2189,9 @@ def _selftest_tick_evidence() -> None:
             resolved_before = usefulness(path=ledger)["rows"]
             os.environ["ORCH_TICK_EVIDENCE_DISABLED"] = "1"
             try:
-                off = tick_evidence(now=now + 9 * 86400, **common)
+                off = tick_evidence(
+                    now=now + 9 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+                )
                 assert off.get("disabled") is True, f"a disabled run still did work: {off}"
                 assert off["verdicts_recorded"] == 0, off
                 assert off["evaluated"] == [] and off["bound"] == [], off
@@ -2194,14 +2205,16 @@ def _selftest_tick_evidence() -> None:
             ), "a disabled run wrote ledger evidence"
             # ...and with the switch back off, the same fresh artifact IS evaluated, so the
             # assertion above discriminates rather than describing an inert path.
-            on = tick_evidence(now=now + 9 * 86400, **common)
+            on = tick_evidence(now=now + 9 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             assert on["verdicts_recorded"] == 1, on
 
             # 10. IT CANNOT TAKE THE TICK DOWN. A guarded run over a corrupt artifact and a broken
             #     registry must still return a report.
             (state_dir / "obs-daily.json").write_text("{not json", encoding="utf-8")
             os.utime(state_dir / "obs-daily.json", (now + 10_000, now + 10_000))
-            r10 = tick_evidence_guarded(now=now + 10 * 86400, **common)
+            r10 = tick_evidence_guarded(
+                now=now + 10 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             assert "unreadable_artifact" in {s["reason"] for s in r10["skipped"]}, r10["skipped"]
             broken = tick_evidence_guarded(
                 now=now + 11 * 86400,
@@ -3048,7 +3061,11 @@ def _selftest_repair() -> None:
         )
 
         # ---- 10. A CLAIMED REPAIR WITH NOTHING TO CHECK MUST NOT CLEAR ANYTHING.
-        for kwargs in ({"fix": "fixed it", "artifact": ""}, {"fix": "", "artifact": "PR #1"}):
+        repair_cases: tuple[dict[str, Any], ...] = (
+            {"fix": "fixed it", "artifact": ""},
+            {"fix": "", "artifact": "PR #1"},
+        )
+        for kwargs in repair_cases:
             try:
                 record_repair("worth-fixing", path=ledger, **kwargs)
             except ValueError:
@@ -4751,7 +4768,10 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
     """
     import capability_advisor
 
-    out = {"surfaces": {}, "promotions": [], "demotions": [], "applied": [], "finds": 0}
+    surfaces: dict[str, dict] = {}
+    promotions: list[dict] = []
+    demotions: list[dict] = []
+    applied: list[dict] = []
     all_finds = finds(path=path)
     # EVERY SURFACE THAT HAS EITHER A DECLARATION OR EVIDENCE. Enumerating only the declared keys
     # missed the inherited ones entirely: `repo-audit:dimension-1` has no table entry of its own --
@@ -4773,7 +4793,7 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
         # selection pressure on a capability.
         here = [f for f in all_finds if f["surface"] == surface or f["finder"] == surface]
         if recs or proms or dems or counts["declined"] or here:
-            out["surfaces"][surface] = {
+            surfaces[surface] = {
                 "records": len(recs),
                 "bound": sorted(capability_advisor.binding_for(surface, path=path)),
                 "finds": len(here),
@@ -4793,15 +4813,15 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
                 },
                 "declines_floor": DEMOTION_MIN_DECLINES,
             }
-        out["promotions"].extend(proms)
-        out["demotions"].extend(dems)
-    out["finds"] = len(all_finds)
-    out["finds_by_finder_kind"] = {
+        promotions.extend(proms)
+        demotions.extend(dems)
+    finds_count = len(all_finds)
+    finds_by_finder_kind = {
         k: sum(1 for f in all_finds if f["finder_kind"] == k)
         for k in sorted({f["finder_kind"] for f in all_finds})
     }
     if apply_promotions:
-        for prom in out["promotions"]:
+        for prom in promotions:
             # Respect the ceiling the binding exists to enforce; a promotion that pushes a context
             # past the safe zone defeats the purpose of promoting into it.
             current = capability_advisor.binding_for(prom["surface"], path=path)
@@ -4809,10 +4829,15 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
                 prom["skipped"] = "surface already at the safe-zone ceiling"
                 continue
             if record_promotion(prom["capability_id"], prom["surface"], prom["reason"], path=path):
-                out["applied"].append(
-                    {"capability_id": prom["capability_id"], "surface": prom["surface"]}
-                )
-    return out
+                applied.append({"capability_id": prom["capability_id"], "surface": prom["surface"]})
+    return {
+        "surfaces": surfaces,
+        "promotions": promotions,
+        "demotions": demotions,
+        "applied": applied,
+        "finds": finds_count,
+        "finds_by_finder_kind": finds_by_finder_kind,
+    }
 
 
 def _under_use() -> dict[str, int]:
