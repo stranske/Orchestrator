@@ -86,6 +86,16 @@ Audits/
 
 # --- python / tooling noise ---
 __pycache__/
+
+# BUILD ARTEFACTS. Added 2026-08-24 after the repo's own autofix bot COMMITTED
+# src/UNKNOWN.egg-info/ to a PR: a CI step runs `pip install -e .`, setuptools generates the
+# metadata (named UNKNOWN because pyproject.toml deliberately declares no [project]), and
+# nothing here or in test_repo_artifact_hygiene.py opposed committing it. A bot that commits
+# whatever the working tree contains makes an unignored generated file a matter of timing.
+*.egg-info/
+*.egg-info
+build/
+dist/
 *.py[cod]
 .venv/
 venv/

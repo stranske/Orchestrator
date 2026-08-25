@@ -1304,9 +1304,19 @@ def offload(
     The isolated result is NOT auto-merged; the orchestrator reviews and integrates deliberately.
 
     Runs a cheaper agent and RETURNS its output to the orchestrating seat — no claim, no PR.
-    This is how the seat offloads token-heavy READING (e.g. summarize 200 pages →
-    gemini's huge context) and gets back only the result, spending the cheap agent's capacity
-    instead of its own. Records a ledger row (it consumes the agent's budget).
+    The seat spends that agent's capacity instead of its own and gets back only the result.
+    Records a ledger row (it consumes the agent's budget).
+
+    THE WHOLE RANGE OF LLM WORK GOES THROUGH HERE, not just reading. The agent gets a real
+    workspace and a shell: it writes and edits code across files, runs builds, tests and linters
+    and reads their exit codes, iterates until something passes, debugs, refactors, reviews,
+    researches. Big-context reading (summarize 200 pages -> gemini) is ONE use, and naming only
+    that use in this docstring is part of how callers came to believe it was the only one.
+    `mode="assess"` narrows to a no-write sandbox when that is what you want; the default does not.
+
+    Exactly two things do not transfer, and neither is about how big or code-shaped the task is:
+    FLEET ACTIONS (claim/PR/label — that is `delegate`, below), and FIRST-PERSON OBSERVATION,
+    since the caller receives a report rather than having watched the thing happen.
 
     `research_round` binds this offload to a multi-agent research round (see
     `research_subjects.record_research_round`). An audit or study that fans work out to several
