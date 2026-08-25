@@ -1152,10 +1152,29 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "capability-propensity": "phase 5 reconciles and proves nothing was silently dropped; "
         "recording which capabilities helped belongs here",
     },
+    # THE FIX ARC, and the two entries added 2026-08-25 are the measured half of it. Three
+    # independent implementation runs entered this surface for real — the first runs ever to supply
+    # the filed issue and commit target the delivery capabilities need — and both additions come
+    # from what those runs DID, not from what looked plausible.
     "repo-audit:fix": {
         "codemod-campaign": "the fix arc is where consolidation findings become sweeping changes",
         "epic-decomposition": "a large audit finding becomes an epic before it becomes PRs",
         "testgen-lane": "fixes need the coverage the audit said was missing",
+        # TRIGGERED AND USEFUL HERE SIX TIMES ACROSS THREE RUNS, while reaching the caller only
+        # through the keyword classifier — so the one consult whose free text missed the vocabulary
+        # (`verbatim console record`, `red`, `green`, no `pytest`) was not offered the capability it
+        # then used successfully on that very issue. The binding is the layer that does NOT depend
+        # on classification, and this is what its absence costs. The matcher was never widened:
+        # widening `TASK_SIGNALS` to raise a hit rate corrupts the learned associations.
+        "deliberate-break-verifier": "a fix arc must prove its gate fails without the fix; used and "
+        "scored useful on every implementation issue this surface has ever seen",
+        # A UI FIX AT THIS SURFACE CLASSIFIES AS `ux_review` AND HAD NOWHERE TO GO. `frontend-verifier`
+        # was bound to `ux-review`, `repo-audit:phase-2` and `repo-audit:dimension-4` only, so the
+        # run had to consult a DIFFERENT surface to be offered the one instrument that verifies UI.
+        # Its own precondition (an observable surface must exist) still annotates the offer, so a
+        # repo with no UI dismisses it in one line rather than investigating it.
+        "frontend-verifier": "a fix whose finding was OBSERVED needs its proof observed too; the fix "
+        "arc is exactly where rendered-output evidence belongs",
     },
 }
 
@@ -1341,10 +1360,13 @@ CONSULT_SITES: dict[str, dict] = {
     },
     "repo-audit:fix": {
         "caller": "~/.claude/skills/repo-audit/SKILL.md",
-        "how": "named in the skill's surface table for the follow-up arc. NOTE THE LIMIT: the "
-        "surface is NAMED, but an audit run ends at phase 5 and hands implementation to the "
-        "lanes, so no run actually ENTERS it. A table of files cannot see that difference; "
-        "only `capability_propensity`'s trials can, from what a surface really consulted",
+        "how": "named in the skill's surface table for the follow-up arc, and ENTERED FOR REAL "
+        "since 2026-08-25 — three independent implementation runs consulted it nine times "
+        "between them, with filed issues and commit targets. This note previously recorded the "
+        "opposite ('named but no run reaches it, since an audit ends at phase 5 and hands "
+        "implementation to the lanes'), which was true when written and became a cached reason "
+        "outliving its evidence. The limit it described is still the real one: only "
+        "`capability_propensity`'s trials can tell NAMED from ENTERED, never a table of files",
     },
 }
 
@@ -3291,6 +3313,21 @@ def _selftest_bindings() -> None:
             assert "offload" in binding_for(
                 "repo-audit:dimension-5"
             ), "the playbook names offload outright for the public-field research dimension"
+            # THE FIX ARC REACHES ITS OWN INSTRUMENTS (2026-08-25). Both were needed here, both
+            # were absent, and the two absences had different symptoms: the verifier arrived only
+            # via the keyword classifier, so a consult whose free text missed the vocabulary was
+            # offered a fix arc with no way to PROVE its gate; the UI verifier was not reachable at
+            # all and the run had to consult a different surface for it. Pinned on the RESOLVED set,
+            # which is what a caller receives.
+            fix_arc = binding_for("repo-audit:fix")
+            assert "deliberate-break-verifier" in fix_arc, (
+                "a fix must prove its gate fails without it, and the binding is the layer that "
+                "does not depend on the classifier finding the right words"
+            )
+            assert "frontend-verifier" in fix_arc, (
+                "a UI fix at this surface classifies as ux_review and had no UI verifier to be "
+                "offered"
+            )
 
             # 6. THE TICK'S PHASES, and the ONE thing that must not move. `tick_evidence` grades
             #    `binding_for("tick")` and `_selftest_tick_evidence` requires every capability with

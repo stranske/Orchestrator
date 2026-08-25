@@ -225,9 +225,13 @@ live tick sets, so the capability is used and entirely uncredited.
 `reachable` via `orchestrate.sh (CLI)`, because it asks whether *some* driver reaches the heartbeat,
 not whether *this surface's* invocation is attributed to the surface — and deciding it needs the
 surface's own prompt, which lives outside this repository. And a surface that is NAMED but never
-ENTERED (`repo-audit:fix`, which the skill's table lists and no audit run reaches, since an audit ends
-at phase 5 and hands implementation to the lanes): only trial records can show that, never a table of
-files. Enforcement is per-requirement dated (`REQUIREMENT_ENFORCED_FROM`) so the 43 pre-existing rows
+ENTERED: only trial records can show that, never a table of files. `repo-audit:fix` was the worked
+example — listed by the skill and reached by no audit run, since an audit ends at phase 5 and hands
+implementation to the lanes — and on 2026-08-25 three independent implementation runs entered it nine
+times with filed issues and commit targets, which is exactly the evidence a table of files could
+never have produced. Its bound set grew by the two instruments those runs actually used
+(`deliberate-break-verifier`, `frontend-verifier`); the classifier's vocabulary was deliberately not
+widened, because widening it to raise a hit rate corrupts the learned associations. Enforcement is per-requirement dated (`REQUIREMENT_ENFORCED_FROM`) so the 43 pre-existing rows
 are reported as drainable debt instead of failing the suite; the report prints the debt, its causes,
 the surfaces that strand a binding, and the drainable count beside it.
 
