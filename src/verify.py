@@ -769,15 +769,17 @@ def verify(
         # run that never had one, and the count checks stopped applying without saying so.
         "UNREADABLE (.verify-floor.json exists but does not parse)"
         if floor.get(FLOOR_UNREADABLE)
-        else "unset"
-        if not fc
         else (
-            f"{fc}"
-            if py["collected"] == fc
+            "unset"
+            if not fc
             else (
-                f"{fc} — {py['collected'] - fc} BEHIND"
-                if py["collected"] > fc
-                else f"{fc} — NOT MET"
+                f"{fc}"
+                if py["collected"] == fc
+                else (
+                    f"{fc} — {py['collected'] - fc} BEHIND"
+                    if py["collected"] > fc
+                    else f"{fc} — NOT MET"
+                )
             )
         )
     )
@@ -922,7 +924,6 @@ def _selftest() -> None:
     # A SILENT ZERO-EXIT MUST BE A FAILURE. This is the exact hole that let 25 pytest-only files
     # read as passing: they exited 0 having executed nothing. Point run_selftests at a module that
     # does precisely that and confirm it is classified as failed, not ok.
-    import tempfile
 
     saved, saved_mods = globals()["HERE"], globals()["MODULES"]
     with tempfile.TemporaryDirectory(prefix="verify-") as td:
