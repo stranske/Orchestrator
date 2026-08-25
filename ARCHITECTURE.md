@@ -427,9 +427,13 @@ Four disciplines make that honest rather than decorative:
 3. **Down-weighted, never banned — but never DEFAULTED to either (2026-08-25).** Self-assessment is
    the only signal most capabilities have, so excluding it would empty the dataset; the gate would
    starve its own drain. It must still be *chosen*. `provenance` was optional and defaulted to
-   `self_reported`, so an omitted flag filed outcome-backed evidence at 0.25 — and because recording
-   APPENDS, that choice was **irreversible**: a second, better-labelled record does not upgrade the
-   first, it double-counts the trial. Two of three independent implementation runs on 2026-08-25 hit
+   `self_reported`, so an omitted flag filed outcome-backed evidence at 0.25 — and because the write
+   is **idempotent** on `(capability, experiment)`, that choice was **irreversible**: a second,
+   better-labelled record does not upgrade the first and does not double-count it either, it is
+   simply dropped (`recorded: false`, exit 0). There is no partial remedy — which is why the
+   countermeasure had to be a refusal at write time rather than a correction afterwards, and why a
+   late-arriving outcome cannot strengthen a verdict already filed. Two of three independent
+   implementation runs on 2026-08-25 hit
    it, with this capability's own `HOW_TO_USE` entry warning about the default in prose the whole
    time. `record_usefulness` and the `useful` CLI now REFUSE an unstated provenance
    (`unstated_provenance_refusal`, derived from `VERDICT_PROVENANCE` so the tiers offered are the
