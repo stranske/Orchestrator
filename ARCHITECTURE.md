@@ -225,9 +225,13 @@ live tick sets, so the capability is used and entirely uncredited.
 `reachable` via `orchestrate.sh (CLI)`, because it asks whether *some* driver reaches the heartbeat,
 not whether *this surface's* invocation is attributed to the surface — and deciding it needs the
 surface's own prompt, which lives outside this repository. And a surface that is NAMED but never
-ENTERED (`repo-audit:fix`, which the skill's table lists and no audit run reaches, since an audit ends
-at phase 5 and hands implementation to the lanes): only trial records can show that, never a table of
-files. Enforcement is per-requirement dated (`REQUIREMENT_ENFORCED_FROM`) so the 43 pre-existing rows
+ENTERED: only trial records can show that, never a table of files. `repo-audit:fix` was the worked
+example — listed by the skill and reached by no audit run, since an audit ends at phase 5 and hands
+implementation to the lanes — and on 2026-08-25 three independent implementation runs entered it nine
+times with filed issues and commit targets, which is exactly the evidence a table of files could
+never have produced. Its bound set grew by the two instruments those runs actually used
+(`deliberate-break-verifier`, `frontend-verifier`); the classifier's vocabulary was deliberately not
+widened, because widening it to raise a hit rate corrupts the learned associations. Enforcement is per-requirement dated (`REQUIREMENT_ENFORCED_FROM`) so the 43 pre-existing rows
 are reported as drainable debt instead of failing the suite; the report prints the debt, its causes,
 the surfaces that strand a binding, and the drainable count beside it.
 
@@ -305,6 +309,21 @@ answers exactly that. `_attach_how_to_use` stamps it onto every entry on both an
 `format_advice` now reads it **from the entry**, one lookup, because reading the table twice is how the
 render and the answer came apart. The field is always present and `None` when unknown: "no guidance
 recorded" and "this answer does not carry the field" must not look alike.
+
+**And the SURFACE itself has a state, because an invented name answered the wrong question
+(2026-08-25).** A run opened with `--surface 'audit-implementation-run'`, a name nothing declares.
+`binding_for` returned `{}`, the free text did not classify, and the answer came back
+`bound_count: 0`, `useful: false`, `capabilities: []` — which reads as *"the advisor has nothing for
+issue-filing work"*. It has three capabilities for exactly that, at `file-agent-issue`. The caller
+acted on the wrong sentence and recorded nothing at all. That is silent absence in the advisor
+itself, the same class as a binding with no caller. `capability_advisor.surface_status` answers it
+in four values — `unspecified` / `declared` / `inherited` / `unknown` — from `known_surfaces()`,
+derived from the same tables `binding_for` resolves against so a list of valid names cannot drift
+from the names that actually resolve. `inherited` exists so a legitimate phase of a known surface
+(`repo-audit:phase-9`) is not called invented, and `unspecified` so a caller who passed no surface is
+not told they made one up. Like every other axis here it **annotates and changes neither the set nor
+the order** — a selftest pins the two candidate lists identical — and, being a diagnosis, it carries
+its remedy: the closest declared surface names.
 
 **And a `null` that is a table gap must not read as a rule.** The Counter_Risk audit (2026-08-24)
 saw `how_to_use: null` on every capability whose precondition had failed and concluded the answer

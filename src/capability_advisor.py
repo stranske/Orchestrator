@@ -32,6 +32,7 @@ Also exposed as the `capability_advice` MCP tool, so any session can ask at task
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import pathlib
 import re
@@ -409,6 +410,19 @@ def advise(
     missing input named. It never guesses, and it never withholds or reorders the offer.
     """
     caps = capabilities.load(path or capabilities.REG)
+    # THE SURFACE'S OWN STATE, computed once and reported on every branch. Purely additive: it
+    # changes neither the candidate set nor its order, exactly like the precondition axis. What it
+    # removes is one specific wrong reading — an invented name answering "nothing applies here".
+    surface_state = surface_status(surface or skill, path=path)
+    unknown_surface_note = (
+        (
+            f" — AND {surface_state['surface']!r} IS NOT A SURFACE THIS TOOL DECLARES, so this is "
+            f"'no such surface', not 'nothing applies'. Declared surfaces closest to it: "
+            + ", ".join(repr(s) for s in surface_state["did_you_mean"])
+        )
+        if surface_state["status"] == "unknown"
+        else ""
+    )
 
     # A SUPPRESSED SURFACE MUST BE ACTUALLY QUIET. `NO_BINDING` used to suppress only the DECLARED
     # half, so `repo-audit:phase-1` — whose whole point is that the playbook says "Orient (bash only,
@@ -442,6 +456,7 @@ def advise(
             },
             "precondition": _annotate_preconditions([], repository, repo_path),
             "surface_template": unsubstituted_surface(surface) or None,
+            "surface_status": surface_state,
             "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
         }
 
@@ -505,6 +520,7 @@ def advise(
                 "precondition": precondition,
                 "guidance": guidance_summary(entries),
                 "surface_template": unsubstituted_surface(surface or skill) or None,
+                "surface_status": surface_state,
                 "coverage": {
                     "ledger_count": len(caps),
                     "matched": len(entries),
@@ -556,15 +572,19 @@ def advise(
             "bound_capabilities": [],
             "precondition": _annotate_preconditions([], repository, repo_path),
             "surface_template": unsubstituted_surface(surface or skill) or None,
+            "surface_status": surface_state,
             "coverage": {
                 "ledger_count": len(caps),
                 "matched": 0,
                 "not_applicable": 0,
                 "by_entry_mode": {},
             },
+            # THE BRANCH AN INVENTED SURFACE LANDS ON. Nothing classified AND nothing was bound, so
+            # the old sentence blamed the task; when the surface does not exist, the task was never
+            # the problem and the caller needs the other sentence.
             "reason": (
                 "could not classify this task into any work type the fleet records; "
-                "no capability can be matched to it"
+                "no capability can be matched to it" + unknown_surface_note
             ),
         }
 
@@ -724,6 +744,7 @@ def advise(
         "precondition": precondition,
         "guidance": guidance_summary(matched),
         "surface_template": unsubstituted_surface(surface or skill) or None,
+        "surface_status": surface_state,
         "coverage": {
             "ledger_count": len(caps),
             "matched": len(matched),
@@ -741,7 +762,8 @@ def advise(
             if matched
             else f"classified as {', '.join(c['task_type'] for c in candidates)}, but no capability "
             f"declares a trigger for that work"
-        ),
+        )
+        + unknown_surface_note,
     }
     if record and matched:
         # Asking the question is itself the observation that improves the answer.
@@ -1152,10 +1174,29 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "capability-propensity": "phase 5 reconciles and proves nothing was silently dropped; "
         "recording which capabilities helped belongs here",
     },
+    # THE FIX ARC, and the two entries added 2026-08-25 are the measured half of it. Three
+    # independent implementation runs entered this surface for real — the first runs ever to supply
+    # the filed issue and commit target the delivery capabilities need — and both additions come
+    # from what those runs DID, not from what looked plausible.
     "repo-audit:fix": {
         "codemod-campaign": "the fix arc is where consolidation findings become sweeping changes",
         "epic-decomposition": "a large audit finding becomes an epic before it becomes PRs",
         "testgen-lane": "fixes need the coverage the audit said was missing",
+        # TRIGGERED AND USEFUL HERE SIX TIMES ACROSS THREE RUNS, while reaching the caller only
+        # through the keyword classifier — so the one consult whose free text missed the vocabulary
+        # (`verbatim console record`, `red`, `green`, no `pytest`) was not offered the capability it
+        # then used successfully on that very issue. The binding is the layer that does NOT depend
+        # on classification, and this is what its absence costs. The matcher was never widened:
+        # widening `TASK_SIGNALS` to raise a hit rate corrupts the learned associations.
+        "deliberate-break-verifier": "a fix arc must prove its gate fails without the fix; used and "
+        "scored useful on every implementation issue this surface has ever seen",
+        # A UI FIX AT THIS SURFACE CLASSIFIES AS `ux_review` AND HAD NOWHERE TO GO. `frontend-verifier`
+        # was bound to `ux-review`, `repo-audit:phase-2` and `repo-audit:dimension-4` only, so the
+        # run had to consult a DIFFERENT surface to be offered the one instrument that verifies UI.
+        # Its own precondition (an observable surface must exist) still annotates the offer, so a
+        # repo with no UI dismisses it in one line rather than investigating it.
+        "frontend-verifier": "a fix whose finding was OBSERVED needs its proof observed too; the fix "
+        "arc is exactly where rendered-output evidence belongs",
     },
 }
 
@@ -1341,10 +1382,13 @@ CONSULT_SITES: dict[str, dict] = {
     },
     "repo-audit:fix": {
         "caller": "~/.claude/skills/repo-audit/SKILL.md",
-        "how": "named in the skill's surface table for the follow-up arc. NOTE THE LIMIT: the "
-        "surface is NAMED, but an audit run ends at phase 5 and hands implementation to the "
-        "lanes, so no run actually ENTERS it. A table of files cannot see that difference; "
-        "only `capability_propensity`'s trials can, from what a surface really consulted",
+        "how": "named in the skill's surface table for the follow-up arc, and ENTERED FOR REAL "
+        "since 2026-08-25 — three independent implementation runs consulted it nine times "
+        "between them, with filed issues and commit targets. This note previously recorded the "
+        "opposite ('named but no run reaches it, since an audit ends at phase 5 and hands "
+        "implementation to the lanes'), which was true when written and became a cached reason "
+        "outliving its evidence. The limit it described is still the real one: only "
+        "`capability_propensity`'s trials can tell NAMED from ENTERED, never a table of files",
     },
 }
 
@@ -1511,6 +1555,72 @@ def unsubstituted_surface(surface: str) -> str:
     """The unsubstituted placeholder in this surface name, or '' if it looks like a real one."""
     match = SURFACE_TEMPLATE.search(str(surface or ""))
     return match.group(0) if match else ""
+
+
+# AN INVENTED SURFACE NAME RETURNS "NOTHING APPLIES", WHICH IS A DIFFERENT SENTENCE FROM
+# "NO SUCH SURFACE" (2026-08-25).
+#
+# Measured: a run opened with `--surface 'audit-implementation-run'`, a name that does not exist.
+# `binding_for` returned `{}`, the free text did not classify, and the answer came back
+# `bound_count: 0`, `useful: false`, `capabilities: []` with a long `not_applicable` list — which
+# reads as "the advisor has nothing for issue-filing work". It has three capabilities for exactly
+# that, at `file-agent-issue`. The caller acted on the wrong sentence and filed no record at all.
+#
+# Silent absence again, in the advisor itself: the same class as a binding with no caller and a
+# capability bound nowhere. So the surface gets a STATE, and it is reported rather than acted on —
+# the set and the order are untouched, exactly as the precondition and contraindication axes are.
+# Unknown is a diagnosis, so it carries its remedy: the nearest declared surface names.
+SURFACE_STATUSES = ("unspecified", "declared", "inherited", "unknown")
+_SURFACE_SUGGESTIONS = 4
+
+
+def known_surfaces(*, path=None) -> set[str]:
+    """Every surface name the tables know: declared, consulted, recorded, or promoted here.
+
+    DERIVED FROM THE SAME TABLES `binding_for` RESOLVES AGAINST — a hand-kept list of valid names
+    would be free to drift from the names that actually resolve, which is the parallel-inventory
+    defect this tree keeps paying for.
+    """
+    out = set(SURFACE_BINDINGS) | consult_keys() | set(KNOWN_UNCONSULTED)
+    out |= set(_promoted_index(path))
+    return {s for s in out if s}
+
+
+def surface_status(surface: str, *, path=None) -> dict:
+    """Is this a surface the tables know, one that inherits, or a name nobody has ever declared?
+
+    Three-valued for the same reason the precondition axis is: an empty surface was not asked
+    about, and answering "unknown" for it would manufacture a defect out of a caller who simply did
+    not pass `--surface`.
+    """
+    name = str(surface or "").strip()
+    if not name:
+        return {"surface": "", "status": "unspecified", "resolved_from": None, "did_you_mean": []}
+    known = known_surfaces(path=path)
+    if name in known:
+        return {"surface": name, "status": "declared", "resolved_from": name, "did_you_mean": []}
+    # A PHASE OF A KNOWN SURFACE IS NOT UNKNOWN. `binding_for` resolves every prefix, so
+    # `repo-audit:phase-9` legitimately inherits `repo-audit`'s surface-wide set; calling that
+    # "unknown" would fire on the normal case and the check would be switched off within a week.
+    parts = name.split(":")
+    for i in range(len(parts) - 1, 0, -1):
+        parent = ":".join(parts[:i])
+        if parent in known:
+            return {
+                "surface": name,
+                "status": "inherited",
+                "resolved_from": parent,
+                "did_you_mean": [],
+            }
+    return {
+        "surface": name,
+        "status": "unknown",
+        "resolved_from": None,
+        "did_you_mean": difflib.get_close_matches(
+            name, sorted(known), n=_SURFACE_SUGGESTIONS, cutoff=0.4
+        )
+        or sorted(known)[:_SURFACE_SUGGESTIONS],
+    }
 
 
 def tick_phase_surfaces() -> list[str]:
@@ -2376,9 +2486,31 @@ HOW_TO_USE = {
         "step do it) so classify() routes it to the codemod lane; the lane hands "
         "an agent the codemod_lane.py plan schema"
     ),
+    # TWO ROUTES, AND ONLY ONE WAS DOCUMENTED. Until 2026-08-25 this entry described the lane route
+    # alone — and the lane route is unavailable to a seat that is implementing rather than
+    # dispatching, because labelling the issue hands the work to a remote agent and races it against
+    # the PR being written. The declared entrypoint has always been `testgen_lane.py/testgen_gate.py`
+    # and `testgen_gate.py --help` has always shown a complete standalone CLI. One run checked the
+    # binary rather than trusting the prose and turned a decline into the capability's FIRST trigger
+    # in 44 offers; another declined it. Guidance that names one of two routes actively steers a
+    # caller away from the other.
     "testgen-lane": (
-        "label the issue `testing`; the lane adds the testgen_gate.py acceptance gate "
-        "to the prompt and requires it to pass before the PR body is accepted"
+        "TWO ROUTES, and which one applies depends on whether you are DISPATCHING or IMPLEMENTING. "
+        "(1) THE LANE: label the issue `testing`; the lane adds the testgen_gate.py acceptance gate "
+        "to the prompt and requires it to pass before the PR body is accepted. Not available when "
+        "you are writing the PR yourself — labelling hands the work to a remote agent and races it "
+        "against you. (2) THE GATE, DIRECTLY: `testgen_gate.py --repo <r> --source <importable "
+        "module> --baseline-pytest-args '<pre-existing tests>' --candidate-pytest-args '<with the "
+        "new ones>'` is a complete standalone CLI and is the half you want in-seat. It runs "
+        "collect/import -> baseline non-regression -> repeated reliability -> covered-lines delta, "
+        "so it turns a hand-measured coverage claim into an attributed delta with flake protection. "
+        "TWO INVOCATION RULES that have each cost a wasted run: `--source` takes an IMPORTABLE "
+        "module or package resolved from --repo, not a file path (`src/pkg/mod.py` normalises to "
+        "`src.pkg.mod`, which imports only if `src` is a package); and the pytest-arg strings are "
+        "split shell-style, so a `-k` expression containing spaces must be quoted INSIDE the string "
+        "or it is shredded into tokens that select nothing. BOUNDARY: the coverage-delta check "
+        "measures covered lines in a PRODUCTION source module, so a change touching only test files "
+        "has nothing for `--source` to point at and the gate cannot return a meaningful verdict"
     ),
     "adversarial-review": (
         "adversarial.review(worktree, reviewers=['vibe','gemini']) — refute-mode "
@@ -2511,6 +2643,18 @@ def format_advice(a: dict) -> str:
             f"the phase's. Substitute the real value (e.g. `repo-audit:phase-3`) and re-ask.",
             "",
         ]
+    state = a.get("surface_status") or {}
+    if state.get("status") == "unknown":
+        # LOUD, AND ABOVE THE ANSWER, because the answer below is about the TASK and the problem is
+        # the SURFACE. `bound_count: 0` from a name nobody declares reads as "nothing applies here",
+        # and a caller acted on exactly that reading while three capabilities sat at the surface it
+        # meant. Printed, never acted on: the set and the order are unchanged.
+        lines += [
+            f"!! NO SUCH SURFACE: {state.get('surface')!r} is not declared anywhere, so nothing "
+            f"could be bound to it. This is 'no such surface', NOT 'nothing applies'. Closest "
+            f"declared surfaces: " + ", ".join(repr(s) for s in state.get("did_you_mean") or []),
+            "",
+        ]
     remedy = (a.get("precondition") or {}).get("how_to_evaluate")
     if remedy:
         # THE DRAINABLE QUANTITY, printed beside the blocking one. Without this the reader sees only
@@ -2625,6 +2769,23 @@ def _selftest_how_to_use() -> None:
     assert "closer_gate" in adv and "not a precondition for calling it" in adv, adv
     fev = HOW_TO_USE["frontend-verifier"]
     assert "repo_path" in fev and "observable surface" in fev, fev
+    # A CAPABILITY WITH TWO ROUTES MUST DOCUMENT BOTH (2026-08-25). `testgen-lane`'s declared
+    # entrypoint is `testgen_lane.py/testgen_gate.py` and this entry described only the lane half —
+    # the half unavailable to a seat that is implementing rather than dispatching. Guidance that
+    # names one of two routes does not merely omit, it STEERS AWAY: the capability was declined for
+    # "the lane route is not available here" while the gate half was a complete standalone CLI. The
+    # general rule is stated here and pinned in the specific case, in the same style as the offload
+    # and adversarial-review clauses above: each is a standing repair proposal's evidence.
+    tgl = HOW_TO_USE["testgen-lane"]
+    assert "label the issue `testing`" in tgl, "the lane route must survive: " + tgl
+    assert "testgen_gate.py --repo" in tgl, (
+        "the DIRECT route must be named — the lane route is unavailable in-seat, and an entry that "
+        "names only it converts a usable capability into a decline: " + tgl
+    )
+    # THE TWO INVOCATION RULES THAT EACH COST A WASTED RUN, pinned so a later tidy cannot drop them.
+    assert "IMPORTABLE" in tgl and "not a file path" in tgl, tgl
+    assert "shell-style" in tgl and "quoted INSIDE" in tgl, tgl
+    assert "BOUNDARY" in tgl and "PRODUCTION source module" in tgl, tgl
     for cap_id, how in sorted(HOW_TO_USE.items()):
         assert isinstance(how, str) and how.strip(), cap_id
 
@@ -3291,6 +3452,76 @@ def _selftest_bindings() -> None:
             assert "offload" in binding_for(
                 "repo-audit:dimension-5"
             ), "the playbook names offload outright for the public-field research dimension"
+            # THE FIX ARC REACHES ITS OWN INSTRUMENTS (2026-08-25). Both were needed here, both
+            # were absent, and the two absences had different symptoms: the verifier arrived only
+            # via the keyword classifier, so a consult whose free text missed the vocabulary was
+            # offered a fix arc with no way to PROVE its gate; the UI verifier was not reachable at
+            # all and the run had to consult a different surface for it. Pinned on the RESOLVED set,
+            # which is what a caller receives.
+            fix_arc = binding_for("repo-audit:fix")
+            assert "deliberate-break-verifier" in fix_arc, (
+                "a fix must prove its gate fails without it, and the binding is the layer that "
+                "does not depend on the classifier finding the right words"
+            )
+            assert "frontend-verifier" in fix_arc, (
+                "a UI fix at this surface classifies as ux_review and had no UI verifier to be "
+                "offered"
+            )
+
+            # 7. AN INVENTED SURFACE SAYS SO (2026-08-25). `bound_count: 0` from a name nobody
+            #    declares used to read as "nothing applies here", and a run acted on that reading
+            #    while three capabilities sat at the surface it meant. Asserted on the ANSWER and
+            #    the RENDER, because the MCP tool returns the dict and the CLI prints the text.
+            made_up = "totally-made-up-surface"
+            assert surface_status(made_up)["status"] == "unknown", surface_status(made_up)
+            for task in ("xyzzy plugh frobnicate", "add unit tests for the retry helper"):
+                got = advise(task, surface=made_up, path=ledger, record=False)
+                state = got["surface_status"]
+                assert state["status"] == "unknown", (task, state)
+                assert state["did_you_mean"], "a diagnosis must carry its remedy: " + str(state)
+                assert "IS NOT A SURFACE" in got["reason"], (task, got["reason"])
+                assert "NO SUCH SURFACE" in format_advice(got), task
+            # A DECLARED SURFACE THAT SIMPLY BINDS NOTHING IS NOT UNKNOWN, and this is the
+            # distinction the whole check exists to make. `t-empty` is declared and its resolved
+            # set is empty; it must never print the unknown banner.
+            real_empty = SURFACE_BINDINGS.get("t-empty")
+            SURFACE_BINDINGS["t-empty"] = {NO_BINDING: "declared, deliberately empty"}
+            try:
+                assert surface_status("t-empty")["status"] == "declared", surface_status("t-empty")
+                quiet = advise("xyzzy plugh", surface="t-empty", path=ledger, record=False)
+                assert quiet["surface_status"]["status"] == "declared", quiet["surface_status"]
+                assert "NO SUCH SURFACE" not in format_advice(quiet), format_advice(quiet)
+            finally:
+                if real_empty is None:
+                    SURFACE_BINDINGS.pop("t-empty", None)
+                else:
+                    SURFACE_BINDINGS["t-empty"] = real_empty
+            # A PHASE OF A KNOWN SURFACE INHERITS AND IS NOT UNKNOWN. `binding_for` resolves every
+            # prefix, so firing here would fire on the normal case and the check would be switched
+            # off within a week.
+            assert surface_status("repo-audit:phase-9")["status"] == "inherited", surface_status(
+                "repo-audit:phase-9"
+            )
+            # ...and NO surface at all was never asked about: three-valued, like the precondition
+            # axis, so a caller that passed no `--surface` is not told it invented one.
+            assert surface_status("")["status"] == "unspecified", surface_status("")
+            none_given = advise("xyzzy plugh frobnicate", path=ledger, record=False)
+            assert none_given["surface_status"]["status"] == "unspecified", none_given[
+                "surface_status"
+            ]
+            assert "IS NOT A SURFACE" not in none_given["reason"], none_given["reason"]
+            # AND THE AXIS CHANGES NEITHER THE SET NOR THE ORDER — the same restraint the
+            # precondition and contraindication axes keep. Both consults bind nothing, so the two
+            # candidate lists must be identical in membership AND order.
+            classified_unknown = advise(
+                "add unit tests for the retry helper", surface=made_up, path=ledger, record=False
+            )
+            classified_none = advise(
+                "add unit tests for the retry helper", path=ledger, record=False
+            )
+            assert [c["capability_id"] for c in classified_unknown["capabilities"]] == [
+                c["capability_id"] for c in classified_none["capabilities"]
+            ], (classified_unknown["capabilities"], classified_none["capabilities"])
 
             # 6. THE TICK'S PHASES, and the ONE thing that must not move. `tick_evidence` grades
             #    `binding_for("tick")` and `_selftest_tick_evidence` requires every capability with
@@ -3328,7 +3559,8 @@ def _selftest_bindings() -> None:
                 SURFACE_BINDINGS["t-surface"] = real
     print(
         "capability_advisor binding selftest: OK (survives a classification miss, never conceals "
-        "an unbound match, filters retired, bound sets stay small)"
+        "an unbound match, filters retired, bound sets stay small, the fix arc reaches its own "
+        "instruments, and an invented surface says so instead of reading as 'nothing applies')"
     )
 
 
