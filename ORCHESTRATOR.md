@@ -339,7 +339,11 @@ cursor-agent live outside the default PATH):
   is therefore no part of the proof. The per-node pass is advisory — it never moves `verdict`, `ok` or the
   exit code — and when it cannot attribute (no pytest, a collection error, a non-Python command) it reports
   `node_verdict: INDETERMINATE` with the missing prerequisite named, so a `PASS` never implies per-node
-  precision it did not have. The names ride into `outcomes.notes` through `reason`.
+  precision it did not have. The names ride into `outcomes.notes` through `reason`, into a
+  `runtime_ac` deliberate-break check's `reason` **even when that check PASSES**, and into
+  `synthesis_promotion`'s evidence plus the candidate body's Why paragraph, which would
+  otherwise claim a clean deliberate-break pass that the per-node evidence contradicts. All
+  three are reporting: no verdict, gate or exit code moves on a hollow node.
 - **Ingest LangSmith trace artifacts (NEW)** — `python3 src/langsmith_pull.py --ndjson <langsmith-fleet.ndjson>
   [--dry-run] [--json]` → joins Workflows `langsmith-fleet/v1` NDJSON records to known Orchestrator runs
   by exact `run_id`, then by `github_pr`/`github_issue` + `domain.agent` when the trace run_id is LangSmith's

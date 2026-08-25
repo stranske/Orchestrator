@@ -648,6 +648,10 @@ def verify_synthesis(state: dict, exp_dir: str | Path) -> dict:
     transient = any(row.get("transient") for row in repo_gates) or (
         (runtime_result.get("gate") or {}).get("verdict") == "ERROR"
     )
+    # Narrowed rather than coerced: an older local_verify has no such key, and a malformed one
+    # must not put a non-list into the evidence record the promotion hash is taken over.
+    _hollow = local_result.get("hollow_nodes")
+    local_hollow = [str(node) for node in _hollow] if isinstance(_hollow, list) else []
     evidence = {
         "scope": {
             "ok": scope_ok,
@@ -659,6 +663,13 @@ def verify_synthesis(state: dict, exp_dir: str | Path) -> dict:
         "local_verify": {
             "ok": local_ok,
             "verdict": local_result.get("verdict"),
+            # `verdict` grades the whole test COMMAND, so it says PASS as soon as ONE candidate
+            # test fails against the base. These two grade it per test NODE, so a promotion whose
+            # deliberate-break proof rests on one real test beside two tautologies is
+            # distinguishable in the evidence from a clean one. Advisory: `local_ok` and the
+            # promotion gates are unchanged.
+            "node_verdict": local_result.get("node_verdict"),
+            "hollow_nodes": local_hollow,
             "result_hash": _hash(local_result),
             "test_paths": local_result.get("test_paths") or local_cfg.get("test_paths") or [],
             "test_cmd": local_cfg.get("test_cmd"),
@@ -685,6 +696,29 @@ def verify_synthesis(state: dict, exp_dir: str | Path) -> dict:
     }
 
 
+def _break_caveat(local_gate: dict) -> str:
+    """Qualify the candidate body's deliberate-break claim from the per-node evidence.
+
+    Empty string on a clean per-node proof, and on evidence that predates per-node grading (no
+    `node_verdict` key), so an older record reads exactly as it did before.
+    """
+    hollow = list(local_gate.get("hollow_nodes") or [])
+    node_verdict = local_gate.get("node_verdict")
+    if hollow:
+        return (
+            f" NOT a clean per-node proof: {len(hollow)} candidate test node(s) PASS against the "
+            f"base implementation and are therefore no part of the deliberate-break evidence — "
+            f"{local_verify.name_nodes(hollow)}. Treat what those cover as unproven when reviewing "
+            f"the diff."
+        )
+    if node_verdict is not None and node_verdict != "PASS":
+        return (
+            f" The deliberate-break proof was NOT attributed per test node ({node_verdict}), so "
+            f"tautologies sharing a file with a real test cannot be ruled out from this evidence."
+        )
+    return ""
+
+
 def _candidate_body(state: dict, exp_dir: Path) -> str:
     lineage = state["lineage"]
     verification = state["verification"]
@@ -699,6 +733,13 @@ def _candidate_body(state: dict, exp_dir: Path) -> str:
     named_gate = local_gate.get("test_cmd") or (
         shlex.join(repo_gates[0].get("argv") or []) if repo_gates else "git diff --check"
     )
+    # The Why paragraph below CLAIMS the deliberate-break gate passed, and that claim is graded per
+    # test COMMAND: it holds as soon as one candidate test fails against the base. Where the
+    # per-node pass says otherwise, the claim gets its qualifier in the same sentence -- a reader
+    # of this candidate is the last party positioned to notice, and the body is what carries the
+    # claim forward. Stated, never a Task: making an unproven node BLOCK delivery is a gating
+    # decision, and this is the reporting half of it.
+    break_caveat = _break_caveat(local_gate)
     lineage_summary = {
         "experiment_id": lineage.get("experiment_id"),
         "source_arm_ids": [row.get("arm_id") for row in lineage.get("members") or []],
@@ -711,7 +752,7 @@ def _candidate_body(state: dict, exp_dir: Path) -> str:
     }
     return f"""## Why
 
-Experiment `{lineage.get('experiment_id')}` produced a locally committed synthesis whose source specification is `{exp_dir / 'spec.md'}`. The synthesis passed the recorded scope, secret, local/deliberate-break, runtime-AC, and repository gates before this candidate was created; this is a verified delivery opportunity, not an evaluator-score promotion.
+Experiment `{lineage.get('experiment_id')}` produced a locally committed synthesis whose source specification is `{exp_dir / 'spec.md'}`. The synthesis passed the recorded scope, secret, local/deliberate-break, runtime-AC, and repository gates before this candidate was created; this is a verified delivery opportunity, not an evaluator-score promotion.{break_caveat}
 
 ## Scope
 

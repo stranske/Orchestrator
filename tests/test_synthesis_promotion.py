@@ -200,6 +200,91 @@ def test_hollow_synthesis_never_becomes_candidate_ready(tmp_path: Path) -> None:
     assert not (exp / promotion.CANDIDATE_JSON).exists()
 
 
+def test_a_passing_break_names_the_tautologies_it_carried(tmp_path: Path) -> None:
+    """A PASS whose proof rests on one real test beside a tautology must SAY so.
+
+    This is the case the rolled-up verdict cannot express: `local_verify.verify` grades the whole
+    test COMMAND, so `test_real` failing against the base makes the command fail and the verdict
+    PASS -- and `test_tautology`, which proves nothing about the change, rode along invisibly. The
+    promotion still proceeds; what changes is that the evidence and the candidate body both name
+    the node, because a reader of this candidate is the last party positioned to notice.
+    """
+    exp, repo, base_sha = _init_experiment(tmp_path, "exp-mixed")
+    (repo / "math_utils.py").write_text("def add(a, b):\n    return a + b\n")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_math_utils.py").write_text(
+        "import unittest\nfrom math_utils import add\n\n"
+        "class Mixed(unittest.TestCase):\n"
+        "    def test_real(self):\n        self.assertEqual(add(2, 3), 5)\n\n"
+        "    def test_tautology(self):\n        self.assertTrue(True)\n"
+    )
+    _git(repo, "add", "math_utils.py", "tests/test_math_utils.py")
+    _git(repo, "commit", "-m", "mixed synthesis")
+    (exp / "promotion-verification.json").write_text(
+        json.dumps(
+            {
+                "base_ref": base_sha,
+                "local_verify": {
+                    "base_ref": base_sha,
+                    "test_cmd": f"{sys.executable} -m unittest discover -s tests",
+                    "test_paths": ["tests/test_math_utils.py"],
+                },
+            }
+        )
+    )
+    _to_synth_complete(exp, repo, _git(repo, "rev-parse", "HEAD"))
+    state = promotion.reconcile(
+        exp,
+        mirror_fn=lambda state, event: {"recorded": True, "event": event},
+        now=200,
+    )["state"]
+
+    gate = state["verification"]["evidence"]["local_verify"]
+    taut = "tests/test_math_utils.py::Mixed::test_tautology"
+    # The rolled-up gate is unchanged -- this is reporting, not gating.
+    assert gate["ok"] is True and gate["verdict"] == "PASS", gate
+    assert state["verification"]["evidence"]["deliberate_break_status"] == "PASS"
+    assert state["delivery_phase"] == "candidate_ready", state["delivery_phase"]
+    # ...and the tautology is named, in the evidence and in the artifact that carries the claim.
+    assert gate["node_verdict"] == "FAIL_HOLLOW_NODES", gate
+    assert gate["hollow_nodes"] == [taut], gate
+    body = (exp / promotion.CANDIDATE_BODY).read_text()
+    assert taut in body, body[:2000]
+    assert "NOT a clean per-node proof" in body, body[:2000]
+
+
+def test_the_break_caveat_is_silent_on_clean_and_on_pre_per_node_evidence() -> None:
+    """Silent when there is nothing to qualify, and specifically silent on OLD evidence.
+
+    A record written before per-node grading has no `node_verdict` key at all. Reading that
+    absence as "not PASS" would stamp a caveat on every historical candidate, which is how a
+    truthful signal turns into noise nobody reads.
+    """
+    assert (
+        promotion._break_caveat({"verdict": "PASS", "node_verdict": "PASS", "hollow_nodes": []})
+        == ""
+    )
+    assert promotion._break_caveat({"verdict": "PASS", "test_cmd": "pytest"}) == ""
+    unattributed = promotion._break_caveat(
+        {"verdict": "PASS", "node_verdict": "INDETERMINATE", "hollow_nodes": []}
+    )
+    assert "NOT attributed per test node" in unattributed, unattributed
+    assert "INDETERMINATE" in unattributed, unattributed
+    named = promotion._break_caveat(
+        {"verdict": "PASS", "node_verdict": "FAIL_HOLLOW_NODES", "hollow_nodes": ["t.py::a"]}
+    )
+    assert "t.py::a" in named and "NOT a clean per-node proof" in named, named
+    # Bounded: the body must not grow without limit on a file full of tautologies.
+    many = promotion._break_caveat(
+        {
+            "verdict": "PASS",
+            "node_verdict": "FAIL_HOLLOW_NODES",
+            "hollow_nodes": [f"t.py::n{i}" for i in range(9)],
+        }
+    )
+    assert "(+4 more)" in many, many
+
+
 def test_secret_and_scope_gates_block_candidate_without_leaking_content(
     tmp_path: Path,
 ) -> None:
