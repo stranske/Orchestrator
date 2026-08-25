@@ -693,6 +693,21 @@ silently not copied into the base tree; the base then runs without that test, th
 transcript leads with `THIS IS NOT A VALID DEMONSTRATION`. Reported, never gated: the verdict is
 deliberately unchanged, and a selftest pins that it is.
 
+**And a second cause of the same banner, from the opposite direction (2026-08-25): the overlay can
+carry the FIX.** The overlay is meant to add the candidate tests and nothing else — but when the fix
+itself lives *in test files*, the default `--test-path` scope ("every changed test file") is every
+changed file, so the base tree after the overlay is identical to the worktree in every file that
+differs. RED and GREEN then run the same code. Measured on Counter_Risk #964, where scoping
+`--test-path` to only the new module was load-bearing and had to be known in advance; the run
+otherwise reports `FAIL_HOLLOW` with every candidate node named as a tautology — a confident
+statement about the TESTS, and a false one, whose fix is the opposite of the one it implies.
+`overlay_covers_every_change()` is the exact condition rather than a heuristic about which files look
+like tests, and it is conservative: it fires only when *nothing* is left uncovered, so the correct
+usage can never trip it. Both causes now come from ONE predicate,
+`local_verify.invalid_demonstration()`, consumed by the transcript **and** by the result dict — the
+JSON consumer is the one being misled, and until this the finding reached only the rendered text,
+which is the delivery defect `how_to_use` already paid for once.
+
 ## Gate 2 — the usability review panel (`ux_review.py`, built 2026-06-22)
 
 Frontend work has two gates. **Gate 1** is `frontend_verify` (a deterministic rail: assert→click→assert
