@@ -67,10 +67,13 @@ cursor-agent live outside the default PATH):
   your prompt (auth + PATH + claim-release-on-exit all handled). **You write the prompt** — that's
   where your judgment goes. Use inline `--prompt` for compact one-off prompts and `--prompt-file`
   only when the brief is large or reusable.
-- **Offload one synchronous read/proposal** — `python3 src/dispatcher.py offload --agent <cursor|vibe|gemini|codex>
+- **Offload a whole task, synchronously** — `python3 src/dispatcher.py offload --agent <cursor|vibe|gemini|codex>
   --cwd <dir> --prompt "<text>" [--isolate]` → cheap-agent result printed back to stdout, with no claim,
-  commit, push, or PR. Prefer inline `--prompt` for bounded read/review/proposal work so the workflow
-  does not create throwaway prompt documents; `--prompt-file` remains available for large reusable briefs.
+  commit, push, or PR. **Anything an LLM can do is in scope here** — writing and editing code, running
+  builds/tests and reading exit codes, iterating to green, refactors, migrations, design, review,
+  research, big-context reading. Sizing the brief down to a question is a choice, not a constraint;
+  `--mode assess` is the opt-in that makes it no-write. Prefer inline `--prompt` so the workflow does
+  not create throwaway prompt documents; `--prompt-file` remains available for large reusable briefs.
   Offloads automatically tell the agent "non-git workspace: don't commit" when applicable. `--isolate`
   copies `cwd` to a persistent local offload workspace first, so two code-building
   offloads can run in parallel without same-dir races; you inspect/integrate the isolated result manually.
@@ -628,7 +631,7 @@ task twice and it's blocking — do the critical slice yourself, then hand the r
   (`handoff-prerun.sh` halts a lane tick when `~/.codex/handoff/orchestrator.json` is <15 min fresh). It is
   written by the fleet-DRIVING paths only: `orchestrate-seat.sh` (at launch), `orchestrate.sh --active` (the
   cron tick), and `dispatcher.run()` (dispatching a routing decision). **`dispatcher.offload()` deliberately
-  does NOT write it** (reverted 2026-06-20): an offload is read-only w.r.t. the fleet — no claim/PR/label —
+  does NOT write it** (reverted 2026-06-20): an offload touches nothing on the FLEET — no claim/PR/label —
   so there is nothing to double-dispatch, and a standalone/library offload must not freeze opener+closer for
   15 min. On a long driving session, keep the heartbeat fresh by re-running the seat command or rewriting the
   file before the 15-min staleness — do not rely on an offload to do it.

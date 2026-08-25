@@ -2229,8 +2229,24 @@ def learned_associations(*, path=None) -> dict:
 # WHY THE ERROR MATTERED, since it read as helpful either way: this table is stamped onto every
 # advisor answer, so a false narrowing does not merely mis-describe — it removes the capability from
 # consideration for exactly the work it is best at. It did: a caller reading this entry planned a
-# 12-module type-drain around read-only classification passes instead of write-mode offloads, which is
-# the capability being talked out of its own job by its own documentation.
+# 12-module type-drain around classification passes instead of write-mode offloads, which is the
+# capability being talked out of its own job by its own documentation.
+#
+# SO THE ENTRY NOW LEADS WITH THE RANGE, not with the caveat, and that ordering is the fix rather
+# than a style choice. Deleting the false sentence would have left the entry SILENT on scope, and a
+# capability whose description mentions only reading gets selected only for reading — the same
+# outcome by omission. The narrowing was never confined to this table either: `ORCHESTRATOR.md`
+# called it "one synchronous read/proposal", `dispatcher.offload`'s own docstring said it was for
+# "token-heavy READING", and the orchestrate skill listed it as "read / summarize / research". Four
+# surfaces, one story, none of them true — so all four were corrected together. A per-surface
+# correction would have left the others to re-teach the same narrowing to the next caller.
+#
+# THE TWO REAL BOUNDARIES ARE STATED AS A CLOSED SET, deliberately. An open-ended list of things
+# offload "cannot" do invites the reader to keep extending it, which is how six correct declines
+# became a false claim about the mechanism. Naming exactly two — fleet actions, which belong to
+# `delegate`, and first-person observation, which cannot be delegated to anything — and saying
+# outright that everything else is scoping, gives the reader a rule that resolves the next case
+# instead of a list that grows.
 #
 # WHAT IS ACTUALLY TRUE, and what the six declines were really about, is one step in from the
 # mechanism: FIRST-PERSON OBSERVATION does not survive the hand-off. The agent can run the guard; the
@@ -2240,20 +2256,28 @@ def learned_associations(*, path=None) -> dict:
 # boundary stated one level too coarse is indistinguishable from the capability being unavailable.
 HOW_TO_USE = {
     "offload": (
-        "dispatcher.offload('gemini', prompt, cwd=repo) — spends the cheap agent's context "
-        "instead of this seat's; returns the result, opens no PR. IT IS WRITE-CAPABLE BY "
-        "DEFAULT: adapters sends --sandbox workspace-write unless mode='assess', and "
-        "isolate=True copies the cwd so several code-building offloads run in parallel without "
-        "same-dir races. So the offloaded agent CAN edit files, run commands and read exit "
-        "codes — that is not the boundary, and briefs have been wrongly narrowed to reading "
-        "because this line once said it was. BOUNDARY: what does not survive the hand-off is "
-        "first-person OBSERVATION. You get the agent's report, not your own witness, so work "
-        "whose value IS the seeing — re-running a guard with a deliberate break in place and "
-        "watching it go RED, driving a browser, interleaving runtime experiments with reading — "
-        "stays in this seat, and anything the agent does write is re-verified here rather than "
-        "believed. Nor split a trace whose whole is the point: a wiring claim scoped to one "
-        "half of a grep is how a 'no caller' refutation goes wrong. Either is the decline to "
-        "make in one line rather than investigate"
+        "dispatcher.offload('gemini', prompt, cwd=repo) — hands a WHOLE TASK to another LLM "
+        "working in a real workspace, and returns its result, spending that agent's context "
+        "instead of this seat's. THE FULL RANGE OF WHAT AN LLM CAN DO IS IN SCOPE: writing and "
+        "editing code across many files, running builds/tests/linters and reading their exit "
+        "codes, iterating until something passes, debugging, refactoring, migrations, design "
+        "work, code review, research and web reading, long analysis — anything you would give a "
+        "capable engineer with a shell. It is WRITE-CAPABLE BY DEFAULT (adapters sends --sandbox "
+        "workspace-write, and can drop the sandbox entirely); mode='assess' NARROWS it to a "
+        "no-write sandbox when that is what you want, and isolate=True copies the cwd to a local "
+        "workspace so several code-building offloads run at once without same-dir races. "
+        "SCOPE THE BRIEF TO THE TASK, NOT TO A QUESTION: the usual reason a result comes back "
+        "thin is a brief that asked for a summary when it could have asked for the work. "
+        "BOUNDARY — and it is exactly two things, everything else being a scoping decision "
+        "rather than a limit. (1) FLEET ACTIONS: it takes no claim, opens no PR and applies no "
+        "label; when the deliverable IS a PR, that is dispatcher.delegate. (2) first-person "
+        "OBSERVATION: you get the agent's report, not your own witness, so work whose value IS "
+        "the seeing — re-running a guard with a deliberate break in place and watching it go "
+        "RED, driving a browser yourself, holding one whole grep trace whose halves must be "
+        "compared — stays in this seat, and whatever the agent does write is re-verified here "
+        "rather than believed. Splitting such a trace is how a 'no caller' refutation goes "
+        "wrong. Those two are the decline to make in one line rather than investigate; a task "
+        "being large, code-shaped, or multi-step is not"
     ),
     "codemod-campaign": (
         "label the issue `refactor` (or let the daily issue_readiness task-label "
@@ -2400,6 +2424,19 @@ def _selftest_how_to_use() -> None:
     assert "workspace-write" in off and "isolate=True" in off, off
     assert "read-only" not in off, (
         "offload is not read-only; see adapters sandbox selection: " + off
+    )
+    # BREADTH IS PINNED AS WELL AS THE CAVEAT, because the failure this entry keeps having is
+    # narrowing by OMISSION, not by false statement. An entry that merely dropped the read-only
+    # claim would say nothing about scope, and a capability described only in terms of reading is
+    # selected only for reading -- the same lost work, with nothing wrong on the page to notice.
+    assert "FULL RANGE OF WHAT AN LLM CAN DO" in off, (
+        "the entry must state offload's breadth outright, not only what it cannot take: " + off
+    )
+    # BOTH boundaries, and only both. Naming just one re-opens the other as a thing readers guess
+    # at; `delegate` is what a caller needs when the deliverable is a PR, so the entry has to say
+    # so rather than leave "opens no PR" reading like a shortcoming.
+    assert "FLEET ACTIONS" in off and "dispatcher.delegate" in off, (
+        "the fleet-action boundary must name delegate as its answer: " + off
     )
     adv = HOW_TO_USE["adversarial-review"]
     assert "CALLABLE AT ANY SURFACE" in adv, adv
