@@ -123,6 +123,15 @@ EVENT_FIELDS = {
     "consumer": None,
     "failure": None,
     "outcome": None,
+    # AN AMENDMENT TO AN EARLIER OUTCOME, not an outcome of its own. A DISTINCT TYPE on purpose:
+    # `capability_propensity.experiments()` dispatches on `match` / `invocation` / `outcome`, so a
+    # reader that predates this type falls through every branch and ignores the event entirely —
+    # which means an unsynced mirror or an older checkout reads the PRE-AMENDMENT truth instead of
+    # misreading it. Tagging it `outcome` and telling the two apart by metadata was the first
+    # attempt and it was unsafe in exactly one direction: an older reader computes
+    # `useful if metadata["useful"] is True else not_useful`, and an amendment carries no `useful`
+    # key, so every CORROBORATION would have been read as a REFUTATION.
+    "outcome_amendment": None,
 }
 
 KNOWN_GATES: dict[str, dict[str, Any]] = {
@@ -1499,7 +1508,7 @@ def heartbeat(
 ) -> bool:
     if event_type not in EVENT_FIELDS:
         raise ValueError(f"invalid capability event type: {event_type}")
-    if event_type in {"output", "consumer", "failure", "outcome"} and not ref:
+    if event_type in {"output", "consumer", "failure", "outcome", "outcome_amendment"} and not ref:
         raise ValueError(f"{event_type} heartbeat requires ref")
     ts = _now() if timestamp is None else timestamp
     with _locked(path):

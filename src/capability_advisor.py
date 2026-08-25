@@ -2599,8 +2599,13 @@ HOW_TO_USE = {
         "0.25 until 2026-08-25, and this very sentence warned about it in prose while two more runs "
         "walked into it. Judge on the FIRST recording: the write is IDEMPOTENT on (capability, "
         "experiment), so a second verdict on the same trial is DROPPED — `recorded: false` at exit "
-        "0 — never upgraded and never diluted. There is no partial remedy, so get the tier right "
-        "the first time. Name --judge in the same command for the same reason"
+        "0 — never upgraded and never diluted, so get the tier right the first time. Name --judge "
+        "in the same command for the same reason. WHEN THE OUTCOME ARRIVES LATER (an audit finding "
+        "whose fix merges days on), that is what `late-outcome` is for: "
+        "`late-outcome --direction corroborates|refutes --provenance outcome_corroborated|"
+        "defect_found|machine_observed --corroboration <the outcome>` attaches it to the existing "
+        "trial without rewriting the verdict. It refuses a self-assessed tier, refuses a second "
+        "attachment on the same trial, and exits non-zero when it did not attach"
     ),
     "switch-review": (
         "switch_review.py --json — the weekly re-raise for held switches: it re-reports every "
