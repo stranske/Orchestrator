@@ -4177,7 +4177,15 @@ def _selftest_detection() -> None:
     with tempfile.TemporaryDirectory(prefix="detect-selftest-") as td:
         ledger = Path(td) / "capabilities.json"
         rows = {}
-        for cid in ("deliberate-break-verifier", "adversarial-review", "bound-idle"):
+        for cid in (
+            "deliberate-break-verifier",
+            "adversarial-review",
+            "bound-idle",
+            # Signal 4's two fixtures: identical except for how many evidenced uses they carry, so
+            # the floor is the only thing that can separate them.
+            "used-here",
+            "used-once",
+        ):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "generated"
             cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
@@ -4260,6 +4268,82 @@ def _selftest_detection() -> None:
             assert [d["capability_id"] for d in dem] == ["bound-idle"], dem
             assert dem[0]["triggered"] == 0 and dem[0]["offered"] >= DEMOTION_MIN_TRIALS, dem[0]
 
+            # SIGNAL 4 (2026-08-25): TRIGGERED HERE, AND IT HELPED, while nothing binds it here.
+            # The measured case is `deliberate-break-verifier` at `repo-audit:fix` — reached only
+            # through the keyword classifier, so the one consult whose free text missed the
+            # vocabulary got a fix arc without it. `used-here` carries ZERO hand-work records, so
+            # this cannot pass on the old signal.
+            no_records: list[str] = []
+            for i in range(PROMOTION_MIN_USEFUL_UNBOUND):
+                capabilities.heartbeat(
+                    "used-here",
+                    "match",
+                    ref=f"advice:usedhere{i:05d}",
+                    path=ledger,
+                    idempotency_key=f"m:uh{i}",
+                    metadata={SURFACE_KEY: "t-surf"},
+                )
+                record_trigger("used-here", f"advice:usedhere{i:05d}", path=ledger)
+                record_usefulness(
+                    "used-here",
+                    f"advice:usedhere{i:05d}",
+                    useful=True,
+                    evidence=f"produced the red/green transcript the PR body needed ({i})",
+                    provenance=PROVENANCE_DEFAULT,
+                    path=ledger,
+                )
+            rows = {
+                r["capability_id"]: r
+                for r in missed_selection("t-surf", no_records, path=ledger)["rows"]
+            }
+            assert rows["used-here"]["hand_work"] == 0, rows["used-here"]
+            assert rows["used-here"]["useful_here"] == PROMOTION_MIN_USEFUL_UNBOUND, rows[
+                "used-here"
+            ]
+            proposals = {
+                p["capability_id"]: p for p in propose_bindings("t-surf", no_records, path=ledger)
+            }
+            assert "used-here" in proposals, sorted(proposals)
+            assert "classifier" in proposals["used-here"]["reason"], proposals["used-here"]
+            # ONE evidenced use is an anecdote and must NOT clear the floor. Asserted through a
+            # SECOND capability rather than by rewinding the first, so the two populations cannot
+            # interfere: `used-once` differs from `used-here` only in the count.
+            capabilities.heartbeat(
+                "used-once",
+                "match",
+                ref="advice:usedonce0000",
+                path=ledger,
+                idempotency_key="m:uo0",
+                metadata={SURFACE_KEY: "t-surf"},
+            )
+            record_trigger("used-once", "advice:usedonce0000", path=ledger)
+            record_usefulness(
+                "used-once",
+                "advice:usedonce0000",
+                useful=True,
+                evidence="helped once",
+                provenance=PROVENANCE_DEFAULT,
+                path=ledger,
+            )
+            assert "used-once" not in {
+                p["capability_id"] for p in propose_bindings("t-surf", no_records, path=ledger)
+            }, "one evidenced use is an anecdote, not a binding"
+            # ...and the count is REPORTED below the floor, so "no proposal" cannot read as
+            # "nothing is accumulating".
+            below = {
+                r["capability_id"]: r
+                for r in missed_selection("t-surf", no_records, path=ledger)["rows"]
+            }
+            assert below["used-once"]["useful_here"] == 1, below["used-once"]
+            # A capability already bound here is never re-proposed on this signal either.
+            capability_advisor.SURFACE_BINDINGS["t-surf"]["used-here"] = "bound now"
+            try:
+                assert "used-here" not in {
+                    p["capability_id"] for p in propose_bindings("t-surf", no_records, path=ledger)
+                }, "binding it is the drain, so the proposal must clear"
+            finally:
+                del capability_advisor.SURFACE_BINDINGS["t-surf"]["used-here"]
+
             # A promotion must record WHY.
             for bad in ("", "  "):
                 try:
@@ -4274,8 +4358,9 @@ def _selftest_detection() -> None:
             else:
                 capability_advisor.SURFACE_BINDINGS["t-surf"] = real
     print(
-        "capability_propensity detection selftest: OK (hand work promotes above a floor, the "
-        "control arm never promotes, demotion drains, promotions must state why)"
+        "capability_propensity detection selftest: OK (hand work promotes above a floor, evidenced "
+        "use at an unbound surface promotes and one use does not, the control arm never promotes, "
+        "demotion drains, promotions must state why)"
     )
 
 
@@ -4893,6 +4978,33 @@ HAND_WORK_SIGNATURES: dict[str, str] = {
     "offload": r"offload(ed)? (to|the)|hand(ed)? off the read",
 }
 PROMOTION_MIN_HAND_WORK = 3  # below this, one anecdote could widen a bound set
+# THE SIGNAL THIS LOOP COULD NOT SEE (2026-08-25): the surface USED the capability, it HELPED, and
+# the capability is not bound there. Stronger than hand-work by construction — hand-work is a regex
+# guessing from a surface's prose that it did the work manually, while this is the capability itself
+# running, at that surface, with an evidenced `useful` verdict attached. It is also NOT the control
+# arm: promotion from "named and not triggered" is the ratchet the rules forbid, because the
+# advisor's own naming would feed back into more naming. "Named, TRIGGERED, and it helped" is an
+# outcome, and outcomes are what the learning rules permit.
+#
+# WHY IT MATTERS EVEN THOUGH THE CAPABILITY WAS ALREADY REACHED. It was reached by the KEYWORD
+# CLASSIFIER, which depends on the caller already using the capability's vocabulary. Measured:
+# `deliberate-break-verifier` was triggered and scored useful six times at `repo-audit:fix` across
+# three runs, and the one consult whose free text said "verbatim console record / red / green"
+# instead of "pytest" was offered a fix arc without it — then used it successfully on that very
+# issue. Binding is the layer that does not depend on classification, so a capability repeatedly
+# useful at a surface belongs in that surface's declared set. Widening `TASK_SIGNALS` instead is
+# explicitly forbidden: it corrupts the learned associations.
+#
+# LATCHED-GATE ANSWERS (it is a threshold, so it owes all three):
+#   1. WHAT DECREMENTS IT? Binding the capability at that surface — `already_bound` drops the row
+#      outright. That is the very action the proposal asks for, not "someone notices".
+#   2. CAN THE DRAIN RUN WHILE IT IS CLOSED? Yes, unconditionally. The proposal is report-only: it
+#      never withholds the capability, never lowers its propensity and never blocks a consult, so
+#      the surface keeps triggering it — which is how the count rose in the first place.
+#   3. SAME WINDOW BOTH WAYS? Yes: `WINDOW_DAYS`, the one constant `experiments()` already uses for
+#      both the trials counted here and the declines counted opposite. And `missed_selection` reports
+#      the count even BELOW the floor, so "no proposal" can never read as "nothing is accumulating".
+PROMOTION_MIN_USEFUL_UNBOUND = 2
 DEMOTION_MIN_TRIALS = 8  # resolved experiments a binding gets before non-use counts
 # A REASONED DECLINE IS MUCH STRONGER EVIDENCE THAN SILENT NON-USE, so its floor is much lower. A
 # phase surface is consulted at most ONCE per run, so two declines are two independent runs by
@@ -5083,20 +5195,29 @@ def missed_selection(
 
     # Signal 2, reported and never promoting: candidates this surface was offered and skipped.
     control: dict[str, int] = {}
+    # Signal 4, and it MAY promote: the surface triggered it here and recorded that it HELPED. An
+    # outcome, not the advisor's own advocacy — see PROMOTION_MIN_USEFUL_UNBOUND for why this is not
+    # the ratchet, and why "already reached by the classifier" is not the same as "bound".
+    used_usefully: dict[str, int] = {}
     for trial in experiments(path=path, window_days=window_days):
         if surface not in (trial.get("skills") or []):
             continue
         for cap_id in trial.get("not_triggered") or []:
             control[cap_id] = control.get(cap_id, 0) + 1
+        for cap_id in trial.get("useful") or []:
+            used_usefully[cap_id] = used_usefully.get(cap_id, 0) + 1
 
     rows = []
-    for cap_id in sorted(set(hands) | set(control)):
+    for cap_id in sorted(set(hands) | set(control) | set(used_usefully)):
         rows.append(
             {
                 "capability_id": cap_id,
                 "surface": surface,
                 "hand_work": hands.get(cap_id, 0),
                 "named_not_triggered": control.get(cap_id, 0),
+                # REPORTED EVEN BELOW THE FLOOR, so "no proposal" cannot read as "nothing is
+                # accumulating" — the runtime rule every threshold here owes.
+                "useful_here": used_usefully.get(cap_id, 0),
                 "under_use_runs": under.get(cap_id, 0),
                 "already_bound": cap_id in bound,
             }
@@ -5105,28 +5226,40 @@ def missed_selection(
 
 
 def propose_bindings(surface: str, records: list, *, path=None) -> list[dict]:
-    """Promotions warranted for this surface. External signal only — never the control arm alone."""
+    """Promotions warranted for this surface. External signal only — never the control arm alone.
+
+    TWO RULES NOW, and they read the same population from opposite sides: hand-work says the surface
+    did the capability's job WITHOUT it, evidenced usefulness says the surface did the job WITH it
+    while nothing bound it there. Either promotes; the control arm still never does.
+    """
     out = []
     for row in missed_selection(surface, records, path=path)["rows"]:
-        if row["already_bound"] or row["hand_work"] < PROMOTION_MIN_HAND_WORK:
+        if row["already_bound"]:
             continue
-        out.append(
-            {
-                **row,
-                "action": "promote",
-                "reason": (
-                    f"{row['hand_work']} of {len(records)} records show this surface doing the "
-                    f"capability's work by hand"
-                    + (
-                        f"; the Brain shows {row['under_use_runs']} runs of matching work that "
-                        f"never invoked it"
-                        if row["under_use_runs"]
-                        else ""
-                    )
-                ),
-            }
-        )
-    return sorted(out, key=lambda r: -r["hand_work"])
+        by_hand = row["hand_work"] >= PROMOTION_MIN_HAND_WORK
+        by_use = row["useful_here"] >= PROMOTION_MIN_USEFUL_UNBOUND
+        if not (by_hand or by_use):
+            continue
+        why: list[str] = []
+        if by_use:
+            why.append(
+                f"{row['useful_here']} evidenced `useful` verdict(s) at this surface while nothing "
+                f"binds the capability here, so it reaches a caller only when the keyword "
+                f"classifier happens to match — the binding is the layer that does not"
+            )
+        if by_hand:
+            why.append(
+                f"{row['hand_work']} of {len(records)} records show this surface doing the "
+                f"capability's work by hand"
+            )
+        if row["under_use_runs"]:
+            why.append(
+                f"the Brain shows {row['under_use_runs']} runs of matching work that never "
+                f"invoked it"
+            )
+        out.append({**row, "action": "promote", "reason": "; ".join(why)})
+    # Evidenced use outranks a prose signature, which is why it sorts first.
+    return sorted(out, key=lambda r: (-r["useful_here"], -r["hand_work"]))
 
 
 def surface_decline_counts(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> dict:
