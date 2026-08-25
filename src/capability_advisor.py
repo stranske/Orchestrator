@@ -2486,9 +2486,31 @@ HOW_TO_USE = {
         "step do it) so classify() routes it to the codemod lane; the lane hands "
         "an agent the codemod_lane.py plan schema"
     ),
+    # TWO ROUTES, AND ONLY ONE WAS DOCUMENTED. Until 2026-08-25 this entry described the lane route
+    # alone — and the lane route is unavailable to a seat that is implementing rather than
+    # dispatching, because labelling the issue hands the work to a remote agent and races it against
+    # the PR being written. The declared entrypoint has always been `testgen_lane.py/testgen_gate.py`
+    # and `testgen_gate.py --help` has always shown a complete standalone CLI. One run checked the
+    # binary rather than trusting the prose and turned a decline into the capability's FIRST trigger
+    # in 44 offers; another declined it. Guidance that names one of two routes actively steers a
+    # caller away from the other.
     "testgen-lane": (
-        "label the issue `testing`; the lane adds the testgen_gate.py acceptance gate "
-        "to the prompt and requires it to pass before the PR body is accepted"
+        "TWO ROUTES, and which one applies depends on whether you are DISPATCHING or IMPLEMENTING. "
+        "(1) THE LANE: label the issue `testing`; the lane adds the testgen_gate.py acceptance gate "
+        "to the prompt and requires it to pass before the PR body is accepted. Not available when "
+        "you are writing the PR yourself — labelling hands the work to a remote agent and races it "
+        "against you. (2) THE GATE, DIRECTLY: `testgen_gate.py --repo <r> --source <importable "
+        "module> --baseline-pytest-args '<pre-existing tests>' --candidate-pytest-args '<with the "
+        "new ones>'` is a complete standalone CLI and is the half you want in-seat. It runs "
+        "collect/import -> baseline non-regression -> repeated reliability -> covered-lines delta, "
+        "so it turns a hand-measured coverage claim into an attributed delta with flake protection. "
+        "TWO INVOCATION RULES that have each cost a wasted run: `--source` takes an IMPORTABLE "
+        "module or package resolved from --repo, not a file path (`src/pkg/mod.py` normalises to "
+        "`src.pkg.mod`, which imports only if `src` is a package); and the pytest-arg strings are "
+        "split shell-style, so a `-k` expression containing spaces must be quoted INSIDE the string "
+        "or it is shredded into tokens that select nothing. BOUNDARY: the coverage-delta check "
+        "measures covered lines in a PRODUCTION source module, so a change touching only test files "
+        "has nothing for `--source` to point at and the gate cannot return a meaningful verdict"
     ),
     "adversarial-review": (
         "adversarial.review(worktree, reviewers=['vibe','gemini']) — refute-mode "
@@ -2747,6 +2769,23 @@ def _selftest_how_to_use() -> None:
     assert "closer_gate" in adv and "not a precondition for calling it" in adv, adv
     fev = HOW_TO_USE["frontend-verifier"]
     assert "repo_path" in fev and "observable surface" in fev, fev
+    # A CAPABILITY WITH TWO ROUTES MUST DOCUMENT BOTH (2026-08-25). `testgen-lane`'s declared
+    # entrypoint is `testgen_lane.py/testgen_gate.py` and this entry described only the lane half —
+    # the half unavailable to a seat that is implementing rather than dispatching. Guidance that
+    # names one of two routes does not merely omit, it STEERS AWAY: the capability was declined for
+    # "the lane route is not available here" while the gate half was a complete standalone CLI. The
+    # general rule is stated here and pinned in the specific case, in the same style as the offload
+    # and adversarial-review clauses above: each is a standing repair proposal's evidence.
+    tgl = HOW_TO_USE["testgen-lane"]
+    assert "label the issue `testing`" in tgl, "the lane route must survive: " + tgl
+    assert "testgen_gate.py --repo" in tgl, (
+        "the DIRECT route must be named — the lane route is unavailable in-seat, and an entry that "
+        "names only it converts a usable capability into a decline: " + tgl
+    )
+    # THE TWO INVOCATION RULES THAT EACH COST A WASTED RUN, pinned so a later tidy cannot drop them.
+    assert "IMPORTABLE" in tgl and "not a file path" in tgl, tgl
+    assert "shell-style" in tgl and "quoted INSIDE" in tgl, tgl
+    assert "BOUNDARY" in tgl and "PRODUCTION source module" in tgl, tgl
     for cap_id, how in sorted(HOW_TO_USE.items()):
         assert isinstance(how, str) and how.strip(), cap_id
 
