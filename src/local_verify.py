@@ -378,6 +378,79 @@ def uncopied_test_paths(result: dict) -> list[str]:
     return [str(p) for p in result.get("test_paths") or [] if str(p) not in copied]
 
 
+def _path_covered(path: str, copied: list[str]) -> bool:
+    """Did the overlay carry this changed path into the base tree? Directories cover their files."""
+    target = str(path).strip("/")
+    for entry in copied:
+        item = str(entry).strip("/")
+        if not item:
+            continue
+        if target == item or target.startswith(item + "/"):
+            return True
+    return False
+
+
+def overlay_covers_every_change(result: dict) -> bool:
+    """Did the overlay carry EVERY difference between the worktree and the base into the base?
+
+    If it did, the base tree after the overlay is identical to the worktree in every file that
+    differs -- so RED and GREEN ran the same code and the comparison is degenerate whichever way it
+    lands. This is the WHOLE test, not a heuristic about which files look like tests: it is the
+    exact condition under which the run can prove nothing.
+
+    MEASURED (Counter_Risk #964, 2026-08-25): when the fix itself lives in TEST files, the default
+    `--test-path` scope is "every changed test file", which is every changed file -- so the overlay
+    carried the fix into the base, the red step came back GREEN, and the run reported FAIL_HOLLOW.
+    That verdict is a statement about the TESTS and it was false; the truth was a misconfigured run.
+    Scoping `--test-path` to only the new module was load-bearing and had to be known in advance.
+
+    CONSERVATIVE ON PURPOSE. It fires only when NOTHING is left uncovered, so the correct usage --
+    scoping the overlay to the new test while the fix stays behind in the base -- can never trip it.
+    A deletion cannot be copied, so a worktree that removes a file is never flagged.
+    """
+    if not result.get("red"):
+        return False
+    changed = [str(p) for p in result.get("changed_paths") or []]
+    copied = [str(p) for p in result.get("copied_test_paths") or []]
+    if result.get("changed_paths") is None:
+        return False
+    return all(_path_covered(p, copied) for p in changed)
+
+
+# ONE PREDICATE, TWO CAUSES, so a consumer has a single question to ask: "is this a valid
+# demonstration?". They were separate before and only one of them reached the transcript, so a JSON
+# consumer -- which is every automated one -- could not see either.
+def invalid_demonstration(result: dict) -> list[str]:
+    """Why this run proves nothing, in words. Empty means the demonstration stands.
+
+    REPORTED, NEVER GATED. `verdict`, `ok` and the CLI exit code keep the exact meaning every
+    existing consumer already reads (`runtime_ac`, `synthesis_promotion`, `record_verdict`), and a
+    selftest pins that they do not move. The finding rides on `reason`, which `record_verdict`
+    writes to `outcomes.notes`, and leads the quotable transcript -- because a transcript that
+    travels into a PR body leaves its caveats behind if they live anywhere else.
+    """
+    reasons: list[str] = []
+    stale = uncopied_test_paths(result)
+    if stale:
+        reasons.append(
+            ", ".join(stale) + " was not copied into the base tree — `--test-path` takes files and "
+            "directories, not pytest node ids. The base therefore ran without that test at all, so "
+            "the red below means the test was ABSENT, not that it FAILED. Re-run with the "
+            "containing file as `--test-path` (the node id may stay in `--test-cmd`, which runs "
+            "verbatim)."
+        )
+    if overlay_covers_every_change(result):
+        changed = ", ".join(str(p) for p in result.get("changed_paths") or []) or "(nothing)"
+        reasons.append(
+            "the overlay carried EVERY file that differs from the base into the base tree "
+            f"({changed}), so RED and GREEN ran the same code and neither verdict means anything. "
+            "This is what happens when the fix itself lives in test files and `--test-path` "
+            "defaults to every changed test file. Re-run with `--test-path` scoped to the NEW test "
+            "only, leaving the fix behind in the base."
+        )
+    return reasons
+
+
 def break_transcript(result: dict, *, worktree_label: str = "") -> str:
     """The red/green console transcript, in the shape an issue or PR body can quote verbatim.
 
@@ -405,19 +478,12 @@ def break_transcript(result: dict, *, worktree_label: str = "") -> str:
         )
     lines.append("")
 
-    stale = uncopied_test_paths(result)
-    if stale:
-        # LOUD, and at the top, because this is the shape of a FALSE proof: RED is red because the
-        # test never arrived, and the verdict says PASS either way.
-        lines += [
-            "> **THIS IS NOT A VALID DEMONSTRATION.** "
-            + ", ".join(f"`{p}`" for p in stale)
-            + " was not copied into the base tree — `--test-path` takes files and directories, not "
-            "pytest node ids. The base therefore ran without that test at all, so the red below "
-            "means the test was ABSENT, not that it FAILED. Re-run with the containing file as "
-            "`--test-path` (the node id may stay in `--test-cmd`, which runs verbatim).",
-            "",
-        ]
+    # LOUD, and at the top, because these are the shapes of a FALSE proof: RED is red (or green) for
+    # a reason that has nothing to do with the implementation, and the verdict reads normal either
+    # way. Both causes now come from ONE predicate, so a cause added later cannot reach the JSON and
+    # miss the transcript.
+    for why in invalid_demonstration(result):
+        lines += ["> **THIS IS NOT A VALID DEMONSTRATION.** " + why, ""]
 
     red_body, green_body = _console(red), _console(green)
     fence = _fence(red_body, green_body)
@@ -503,6 +569,12 @@ def _looks_like_test(path: str) -> bool:
 
 
 def _default_test_paths(worktree: Path, base_ref: str) -> list[str]:
+    """The default overlay: every CHANGED path that looks like a test.
+
+    `verify()` no longer calls this — it reads `_changed_paths` once and filters, because the whole
+    changed list is needed to answer whether the overlay covered all of it. Kept because the default
+    IS this rule and the rule deserves a name; the two must not drift, so both filter the same way.
+    """
     return [path for path in _changed_paths(worktree, base_ref) if _looks_like_test(path)]
 
 
@@ -541,7 +613,11 @@ def verify(
     timeout: int = 120,
 ) -> dict:
     wt = Path(worktree).resolve()
-    tests = test_paths or _default_test_paths(wt, base_ref)
+    # Read ONCE and carried into the result: the default test paths are a SUBSET of this list, and
+    # `overlay_covers_every_change` needs the whole of it. Deriving the two from separate git calls
+    # would let them disagree about what changed.
+    changed = _changed_paths(wt, base_ref)
+    tests = test_paths or [path for path in changed if _looks_like_test(path)]
     if not tests:
         return {
             "verdict": "ERROR",
@@ -604,7 +680,7 @@ def verify(
         )
     elif nodes["verdict"] == "INDETERMINATE":
         reason += f"; per-node attribution unavailable: {nodes['reason']}"
-    return {
+    result = {
         "verdict": verdict,
         "ok": ok,
         "reason": reason,
@@ -612,12 +688,27 @@ def verify(
         "base_ref": base_ref,
         "test_paths": tests,
         "copied_test_paths": copied,
+        "changed_paths": changed,
         "green": green,
         "red": red,
         "node_verdict": nodes["verdict"],
         "hollow_nodes": nodes["hollow_nodes"],
         "node_analysis": nodes,
     }
+    # THE JSON CONSUMER IS THE ONE BEING MISLED, so the finding goes in the result and not only in
+    # the transcript. `verdict` and `ok` are computed ABOVE this and are deliberately untouched: a
+    # field that could move a gate would make the artifact and the gate two answers to one question,
+    # the same rule `--transcript` already follows. It rides `reason` because that is what
+    # `record_verdict` writes to `outcomes.notes`, so the evidence stream sees it too.
+    invalid = invalid_demonstration(result)
+    result["demonstration_valid"] = not invalid
+    result["invalid_demonstration_reasons"] = invalid
+    if invalid:
+        result["reason"] = (
+            "THIS IS NOT A VALID DEMONSTRATION — " + " ".join(invalid) + " (verdict as computed: "
+            f"{verdict}; {reason})"
+        )
+    return result
 
 
 def record_verdict(run_id: str, result: dict) -> dict:
@@ -844,6 +935,107 @@ class TestMixed(unittest.TestCase):
         assert uncopied_test_paths(sound_out) == [], sound_out
         assert "THIS IS NOT A VALID DEMONSTRATION" not in sound_text, sound_text
 
+        # ---- THE OVERLAY-SCOPE GUARD (2026-08-25). When the FIX ITSELF LIVES IN TEST FILES, the
+        # default `--test-path` scope is "every changed test file", which is every changed file --
+        # so the overlay carries the fix into the base, the base is not broken, and the red step
+        # comes back GREEN. The run then reports FAIL_HOLLOW: a statement about the TESTS, and a
+        # false one. Measured on Counter_Risk #964, where scoping `--test-path` to only the new
+        # module was load-bearing and had to be known in advance.
+        carried = Path(tmp) / "carried" / "repo"
+        carried.mkdir(parents=True)
+        subprocess.run(["git", "init", str(carried)], check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "-C", str(carried), "config", "user.email", "verify@example.test"], check=True
+        )
+        subprocess.run(["git", "-C", str(carried), "config", "user.name", "Verifier"], check=True)
+        (carried / "math_utils.py").write_text("def add(a, b):\n    return a + b\n")
+        (carried / "tests").mkdir()
+        # The DEFECT is in the guard: it inspects source text instead of executing anything, so it
+        # passes whatever `add` does. That is the thing the change fixes, and it lives in a test.
+        (carried / "tests" / "test_guard.py").write_text(
+            "import unittest\n\n"
+            "class TestGuard(unittest.TestCase):\n"
+            "    def test_guard(self):\n"
+            "        self.assertIn('def add', open('math_utils.py').read())\n"
+        )
+        subprocess.run(["git", "-C", str(carried), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(carried), "commit", "-m", "base with a grep-shaped guard"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        # THE FIX, entirely inside test files: the guard now executes, and a regression test is
+        # added beside it. No production file changes at all.
+        (carried / "tests" / "test_guard.py").write_text(
+            "import unittest\nfrom math_utils import add\n\n"
+            "class TestGuard(unittest.TestCase):\n"
+            "    def test_guard(self):\n"
+            "        self.assertEqual(add(2, 3), 5)\n"
+        )
+        (carried / "tests" / "test_regression.py").write_text(
+            "import unittest\nfrom math_utils import add\n\n"
+            "class TestRegression(unittest.TestCase):\n"
+            "    def test_regression(self):\n"
+            "        self.assertEqual(add(0, 0), 0)\n"
+        )
+        degenerate = verify(carried, base_ref="HEAD", test_cmd=cmd, timeout=30)
+        # The default scope picked up EVERY changed file, so base + overlay == worktree.
+        assert sorted(degenerate["changed_paths"]) == [
+            "tests/test_guard.py",
+            "tests/test_regression.py",
+        ], degenerate["changed_paths"]
+        assert sorted(degenerate["copied_test_paths"]) == sorted(
+            degenerate["changed_paths"]
+        ), degenerate
+        assert overlay_covers_every_change(degenerate), degenerate
+        assert degenerate["demonstration_valid"] is False, degenerate
+        # THE VERDICT IS UNCHANGED — reported, never gated, exactly as the copy-scope guard above.
+        # And this is the false verdict the finding is about: it accuses the tests of being hollow.
+        assert degenerate["verdict"] == "FAIL_HOLLOW", degenerate["verdict"]
+        assert degenerate["reason"].startswith("THIS IS NOT A VALID DEMONSTRATION"), degenerate[
+            "reason"
+        ]
+        assert "FAIL_HOLLOW" in degenerate["reason"], (
+            "the computed verdict must survive INSIDE the reason; a consumer that reads only "
+            "`reason` must still learn what the run concluded",
+            degenerate["reason"],
+        )
+        degenerate_text = break_transcript(degenerate)
+        assert "THIS IS NOT A VALID DEMONSTRATION" in degenerate_text, degenerate_text
+        assert "carried EVERY file that differs" in degenerate_text, degenerate_text
+        # ...AND THE CORRECT USAGE IS SILENT. Same repo, same fix, `--test-path` scoped to the new
+        # module alone: the guard's fix stays behind in the base, so the comparison is real. This is
+        # the assertion that makes the guard usable rather than a warning on every run.
+        scoped = verify(
+            carried,
+            base_ref="HEAD",
+            test_cmd=cmd,
+            test_paths=["tests/test_regression.py"],
+            timeout=30,
+        )
+        assert scoped["demonstration_valid"] is True, scoped
+        assert "THIS IS NOT A VALID DEMONSTRATION" not in break_transcript(scoped), scoped
+        # A DIRECTORY OVERLAY COVERS THE FILES UNDER IT, and an absent `changed_paths` is never
+        # read as "nothing changed" — synthetic, because both are about the predicate's inputs.
+        assert overlay_covers_every_change(
+            {
+                "red": {"ok": False},
+                "changed_paths": ["tests/a.py", "tests/b.py"],
+                "copied_test_paths": ["tests"],
+            }
+        )
+        assert not overlay_covers_every_change(
+            {
+                "red": {"ok": False},
+                "changed_paths": ["src/x.py", "tests/a.py"],
+                "copied_test_paths": ["tests"],
+            }
+        )
+        assert not overlay_covers_every_change(
+            {"red": {"ok": False}, "copied_test_paths": ["tests"]}
+        )
+
         # ---- THE FENCE MUST SURVIVE ITS CONTENT. Pytest really does print backticks (an assertion
         # repr of a string containing one), and a 3-backtick fence around them renders as two broken
         # blocks in the issue body this exists to produce. Pure function, synthetic input.
@@ -916,7 +1108,8 @@ class TestMixed(unittest.TestCase):
     print(
         "local_verify.py selftest: OK (green/red deliberate-break PASS, hollow, broken, per-node "
         "hollow attribution w/ break->revert, named-prerequisite INDETERMINATE, feedback record, "
-        "quotable transcript w/ verbatim console + copy-scope guard + fence escape)"
+        "quotable transcript w/ verbatim console + copy-scope guard + overlay-scope guard "
+        "+ fence escape)"
     )
 
 
