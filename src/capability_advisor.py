@@ -361,6 +361,29 @@ def _attach_how_to_use(entries: list[dict]) -> list[str]:
     return named
 
 
+def guidance_summary(entries: list[dict]) -> dict:
+    """How much of THIS answer carries guidance, and which entries do not.
+
+    THE DRAINABLE QUANTITY BESIDE THE BLOCKING ONE, and it exists because the alternative reading
+    was tried and was wrong. A 2026-08-24 audit saw `how_to_use: null` on every capability whose
+    precondition had failed and inferred a suppression branch — that the answer withholds guidance
+    when a precondition fails. There is no such branch: `_attach_how_to_use` stamps unconditionally
+    on both return paths. The real cause was a plain table gap (29 of 39 bound capabilities had no
+    entry), and per-entry `null` cannot tell those two apart, so the wrong fix was the reasonable
+    inference. A count states which one it is in the answer itself: `2 of 5 documented` is a gap in
+    a table, and nothing about it suggests a mechanism to go hunting for.
+
+    CONSUMES `_attach_how_to_use`'s own stamping rather than re-reading `HOW_TO_USE`; a second
+    lookup here is how the render and the answer came apart in the first place.
+    """
+    undocumented = sorted(e["capability_id"] for e in entries if not e.get("how_to_use"))
+    return {
+        "offered": len(entries),
+        "documented": len(entries) - len(undocumented),
+        "undocumented": undocumented,
+    }
+
+
 def advise(
     text: str,
     *,
@@ -480,6 +503,7 @@ def advise(
                 "bound_capabilities": sorted(c for c, _ in live),
                 "not_applicable": [],
                 "precondition": precondition,
+                "guidance": guidance_summary(entries),
                 "surface_template": unsubstituted_surface(surface or skill) or None,
                 "coverage": {
                     "ledger_count": len(caps),
@@ -698,6 +722,7 @@ def advise(
         # paid. `unevaluated` names what could not be checked AND the input that was missing, so
         # "nothing failed" and "nothing was checked" can never read alike.
         "precondition": precondition,
+        "guidance": guidance_summary(matched),
         "surface_template": unsubstituted_surface(surface or skill) or None,
         "coverage": {
             "ledger_count": len(caps),
@@ -1743,20 +1768,68 @@ SELF_REPOSITORY = "stranske/Orchestrator"
 #                  when the caller supplies `repo_path`, and reported as UNEVALUATED with the missing
 #                  input NAMED when it does not. That naming is the fix: the defect was a condition
 #                  nothing could even attempt to check.
+#   `concept`    — THE CONTENT BEHIND "the concept may transfer". Required beside
+#                  `applies_to: self` and refused as an empty string, because the note without it
+#                  is an invitation with nothing behind it: the Counter_Risk audit read
+#                  "the concept may transfer; the instrument does not" against `feature-scan`,
+#                  transferred the concept by hand, produced two findings with it — and had to
+#                  RECONSTRUCT what the capability's question even was from its name. So the
+#                  question is written down here, once, in words that do not name this repository,
+#                  and `evaluate_precondition` hands it back exactly when the scope mismatch fires.
+#                  It is NOT a second `how_to_use`: that field says how to invoke the instrument,
+#                  this one says what to ask when the instrument is pointed at the wrong system.
 CAPABILITY_PRECONDITIONS: dict[str, dict] = {
     # Workflows consult #10 (`repo-audit:dimension-8`): "switch_review.py audits ORCHESTRATOR
     # switches, and the gate under audit is config/template-drift-allowlist.txt in another repo. ...
     # Same for the two capability monitors. The concepts transferred; the instruments did not."
     # Independently reproduced by the Fine-Art-Archive round, 4 declines in one run:
     # "Orchestrator-side monitor, and the task forbids touching that repo."
-    "switch-review": {"applies_to": APPLIES_SELF},
-    "capability-activation-audit": {"applies_to": APPLIES_SELF},
-    "capability-firing-monitor": {"applies_to": APPLIES_SELF},
+    "switch-review": {
+        "applies_to": APPLIES_SELF,
+        "concept": (
+            "which of this repository's own flags, held gates and bounded trials passed their "
+            "stated window with no decision recorded — and for each, name what would clear it. A "
+            "deferral nobody re-raises is indistinguishable from a decision to revert"
+        ),
+    },
+    "capability-activation-audit": {
+        "applies_to": APPLIES_SELF,
+        "concept": (
+            "for each thing this repository claims it can do: could it fire AT ALL today — trigger "
+            "reachable, entrypoint present, consumer wired — as opposed to whether anyone used it? "
+            "'nobody needs this' and 'the trigger physically cannot fire' look identical in a usage "
+            "count and need opposite fixes"
+        ),
+    },
+    "capability-firing-monitor": {
+        "applies_to": APPLIES_SELF,
+        "concept": (
+            "which of this repository's recurring producers USED to emit output and has gone "
+            "silent, and since when? Ask it per producer against its own history: silence reads as "
+            "normal, so a report that stopped being written looks exactly like one with nothing to "
+            "say"
+        ),
+    },
     # Same rows; and it reads this instance's own ledger by construction.
-    "capability-propensity": {"applies_to": APPLIES_SELF},
+    "capability-propensity": {
+        "applies_to": APPLIES_SELF,
+        "concept": (
+            "for each thing this repository offers its callers: is there recorded evidence it "
+            "HELPED, what is that evidence's provenance, and how many INDEPENDENT judges does it "
+            "rest on? A rate computed from one judge's self-assessments is an opinion with a "
+            "denominator"
+        ),
+    },
     # Workflows consult #8 (`dimension-6`): "feature_scan.py reports reusable structures IN THE
     # ORCHESTRATOR'S OWN REGISTRY ... Wrong repository, right concept."
-    "feature-scan": {"applies_to": APPLIES_SELF},
+    "feature-scan": {
+        "applies_to": APPLIES_SELF,
+        "concept": (
+            "which reusable structures exist in this repository's code three or more times and are "
+            "registered nowhere a future author would look — so the next one rebuilds a fourth "
+            "instead of finding the third?"
+        ),
+    },
     # Gate 1 drives the AUDITED repo's application surface, never this tool's — and its condition is
     # that such a surface exists. This is the capability the whole axis is about, and the declaration
     # makes "no observable surface here" a one-line dismissal WITHOUT touching a binding that earned
@@ -1777,6 +1850,16 @@ def applies_to(capability_id: str) -> str | None:
 def required_repo_fact(capability_id: str) -> str | None:
     """The named repo fact this capability requires, or None."""
     return (CAPABILITY_PRECONDITIONS.get(capability_id) or {}).get("requires")
+
+
+def transferable_concept(capability_id: str) -> str | None:
+    """The question this capability asks, in words that do not name a repository — or None.
+
+    ONE reader for the declaration, so the answer and the render cannot consult the table twice and
+    drift, which is exactly how `HOW_TO_USE` came apart from `format_advice`.
+    """
+    declared = (CAPABILITY_PRECONDITIONS.get(capability_id) or {}).get("concept")
+    return declared or None
 
 
 def consult_target(repository: str) -> str:
@@ -1939,6 +2022,10 @@ def evaluate_precondition(
         "requirement_evidence": None,
         "precondition_met": None,
         "precondition_note": None,
+        # ALWAYS PRESENT, None until the scope mismatch below fires. Same discipline as
+        # `how_to_use`: "no concept recorded" and "this answer does not carry the field" must not
+        # look alike, or the next reader cannot tell a gap from a silence.
+        "transferable_concept": None,
         "unevaluated_because": [],
     }
 
@@ -1959,6 +2046,12 @@ def evaluate_precondition(
                     f"declared applies_to={declared!r} but this consult targets {where} — the "
                     f"concept may transfer; the instrument does not"
                 )
+                # ...AND THE CONCEPT ITSELF, because the sentence above is an invitation and an
+                # invitation with no content behind it is what the reader has to reconstruct. Only
+                # on the SCOPE mismatch: a `requires` failure (no observable surface exists at all)
+                # has no question left to ask by hand, and offering one there would rebuild the
+                # defect in the other direction.
+                out["transferable_concept"] = transferable_concept(capability_id)
 
     if needs:
         probe = REPO_FACT_PROBES.get(needs)
@@ -2320,8 +2413,13 @@ HOW_TO_USE = {
         "with barrier ordering, creates nothing"
     ),
     "deliberate-break-verifier": (
-        "local_verify.py — proves a test gate actually fails when the "
-        "behaviour is broken, so a vacuous gate cannot pass"
+        "local_verify.py --worktree . --test-cmd '<the gate>' --test-path <file> — proves a test "
+        "gate actually fails when the behaviour is broken, so a vacuous gate cannot pass. Add "
+        "`--transcript` for the QUOTABLE red/green block an issue or PR body needs; without it the "
+        "answer is a JSON verdict and the raw console output stays escaped inside it. PRECONDITION: "
+        "the fix must already be in the worktree — it grades a gate against its implementation, so "
+        "pointing it at a bare finding makes step 1 fail and that failure is not a verdict on the "
+        "finding"
     ),
     "docs-drift-fix-agent": (
         "bounded docs-drift repair BATCHES from an existing drift scan; it does "
@@ -2330,6 +2428,71 @@ HOW_TO_USE = {
     "runtime-ac-checks": (
         "runtime_ac.py — turns acceptance criteria into a structured evidence plan; "
         "execution is opt-in via --confirm-run and mutates nothing"
+    ),
+    # ---- THE SELF-SCOPED FIVE, added 2026-08-24. Every one of these came back to the
+    # Counter_Risk audit with `how_to_use: null`, and the auditor read that beside a failed
+    # precondition and concluded the answer SUPPRESSES guidance when a precondition fails. It does
+    # not — `_attach_how_to_use` stamps unconditionally on both branches. The correlation was a
+    # coincidence of populations: these five are exactly the `applies_to='self'` rows AND they were
+    # among the 29 of 39 bound capabilities this table had no entry for. Recorded because the
+    # mis-diagnosis would have sent the next fixer hunting a branch that does not exist.
+    #
+    # `how_to_use` answers "how do I invoke the instrument"; `CAPABILITY_PRECONDITIONS[...]
+    # ["concept"]` answers "what question does it ask, if I have to ask it by hand elsewhere".
+    # Different questions, so they are declared in different places and neither restates the other.
+    "feature-scan": (
+        "feature_scan.py --json — scans this tool's own tree for reusable structures that exist in "
+        "code and were never logged in features.py, so the rule-of-three ladder stops depending on "
+        "someone remembering to add an entry; --apply logs the unlogged ones at `ad-hoc`. Reports "
+        "only, and it edits no source"
+    ),
+    "capability-activation-audit": (
+        "capability_activation_audit.py --json — asks whether each capability CAN fire (matcher "
+        "reachable, entrypoint present, consumer wired), never whether it did; --snapshot records "
+        "today's state and --progress diffs against the recorded ones, which is what makes a "
+        "reachability regression visible. BOUNDARY: can-fire only — pair it with "
+        "capability-firing-monitor for does-fire, because a dispatch count cannot tell 'nobody "
+        "needs this' from 'the trigger physically cannot fire' and those demand opposite fixes"
+    ),
+    "capability-firing-monitor": (
+        "capability_firing_monitor.py --json — the does-fire counterpart: it PERSISTS per-capability "
+        "firing history, so one that fired last week and went silent this week stops looking "
+        "identical to one that has been healthy throughout. BOUNDARY: it detects the silence and "
+        "cannot say why; capability-activation-audit answers whether it still could fire"
+    ),
+    "capability-propensity": (
+        "capability_propensity.py report --json for the standing picture; `useful` / `not-useful` / "
+        "`decline` / `find` each record one verdict, and every one is refused without evidence. PASS "
+        "--provenance {defect_found | outcome_corroborated | machine_observed | self_reported}: it "
+        "DEFAULTS to self_reported at weight 0.25, so a verdict that actually found a defect and "
+        "names the artifact records as an opinion unless you say otherwise — which is how three "
+        "verdicts from one audit landed weaker than their evidence warranted"
+    ),
+    "switch-review": (
+        "switch_review.py --json — the weekly re-raise for held switches: it re-reports every "
+        "bounded trial and gated flag whose window expired with no decision recorded, so a deferral "
+        "cannot decay into a silent revert. Reports only; it never flips a switch"
+    ),
+    # ---- AND THE THREE WITH NO PRECONDITION AT ALL, which the same audit also saw as null. Their
+    # `precondition_met` was unset, so the note said nothing either: no verdict AND no guidance.
+    "partitioned-review": (
+        "partitioned_review.py prepare --corpus <json> --plan <path>, then run --plan <path> "
+        "--agent <cursor|vibe|gemini|codex> --results-dir <dir> — deterministic partitioning for a "
+        "corpus too large for one hand-off, with schema validation and fail-closed synthesis so a "
+        "timed-out partition can never pass as a result. BOUNDARY: the transport is "
+        "dispatcher.offload, so offload's own boundary applies to every partition"
+    ),
+    "role-triage": (
+        "roles.py triage --backlog-json <path> — a router-chosen LLM sorts a backlog snapshot into "
+        "work-now / defer / needs-scope / skip / monitor, with optional batches. SHADOW ONLY: "
+        "advisory, it selects no worker, writes no claim and mutates no backlog state"
+    ),
+    "role-decomposer": (
+        "roles.py decompose --goal '<the goal>' --repo owner/repo — a router-chosen LLM turns one "
+        "large or vague goal into an epic_lane plan: subtasks, dependencies, integration order, "
+        "final verification. SHADOW ONLY: it returns validated dispatch prompts and dispatches "
+        "nothing. BOUNDARY: for a PARENT goal — a well-scoped issue needs no decomposition, and "
+        "asking for one produces a plan-shaped restatement of it"
     ),
 }
 
@@ -2353,6 +2516,19 @@ def format_advice(a: dict) -> str:
         # "precondition unevaluated" per entry and has no reason to think they could change that —
         # which is exactly what happened across three audit rounds.
         lines += [f"?? PRECONDITION(S) NOT EVALUATED — {remedy}", ""]
+    guidance = a.get("guidance") or {}
+    if guidance.get("undocumented"):
+        # STATE THE CAUSE, because the alternative reading is a mechanism that does not exist. A
+        # reader who sees `how_to_use: null` on three entries and a failed precondition on the same
+        # three concludes the answer withholds guidance on a failed precondition; it does not, and
+        # naming the table is what distinguishes a gap from a suppression.
+        lines += [
+            f"-- guidance: {guidance['documented']} of {guidance['offered']} offered "
+            f"capability(ies) carry `how_to_use`. No entry in capability_advisor.HOW_TO_USE for: "
+            f"{', '.join(guidance['undocumented'])}. That is a GAP IN THE TABLE, not a rule about "
+            f"preconditions — guidance is stamped on every entry unconditionally.",
+            "",
+        ]
     if a["task_types"]:
         lines.append(f"classified as: {', '.join(a['task_types'])} (confidence: {a['confidence']})")
         for tt, hits in (a.get("classification_evidence") or {}).items():
@@ -2377,6 +2553,11 @@ def format_advice(a: dict) -> str:
                 lines.append(f"    use instead:          {cap['use_instead']}")
         if cap.get("precondition_note"):
             lines.append(f"    PRECONDITION NOT MET: {cap['precondition_note']}")
+            # READ FROM THE ENTRY, for the same reason `how_to_use` is: the entry is what an MCP
+            # caller receives, and a field only this renderer looked up is invisible to every real
+            # consult. Printed immediately under the note it completes.
+            if cap.get("transferable_concept"):
+                lines.append(f"    ASK IT BY HAND:       {cap['transferable_concept']}")
             lines.append(
                 f"    if you decline:       record kind "
                 f"{cap.get('suggested_decline_kind')!r} — it never counts against the "
@@ -2489,15 +2670,121 @@ def _selftest_how_to_use() -> None:
                 text = format_advice(got)
                 assert "how to use: call aaa_documented.run()" in text, (branch, text)
                 assert "next step:" in text, (branch, text)
+                # ...and the GAP is reported as a gap. `zzz-undocumented` has no table entry, and
+                # the count plus the named id is what stops the next reader inferring a rule about
+                # preconditions from a per-entry null. That inference was actually made.
+                assert got["guidance"]["offered"] == 2, got["guidance"]
+                assert got["guidance"]["documented"] == 1, got["guidance"]
+                assert got["guidance"]["undocumented"] == ["zzz-undocumented"], got["guidance"]
+                assert "GAP IN THE TABLE" in text and "zzz-undocumented" in text, (branch, text)
         finally:
             HOW_TO_USE.pop("aaa-documented", None)
             if real_surface is None:
                 SURFACE_BINDINGS.pop("t-howto", None)
             else:
                 SURFACE_BINDINGS["t-howto"] = real_surface
+
+    # ---- PART 3: THE CONCEPT BEHIND "the concept may transfer". Code vs code first, then the
+    # ANSWER. `precondition_note` invites a reader to transfer the concept by hand and, until
+    # 2026-08-24, said nothing about what the concept WAS -- an audit did transfer `feature-scan`'s,
+    # produced two findings with it, and had to reconstruct the question from the capability's name.
+    for cap_id, decl in sorted(CAPABILITY_PRECONDITIONS.items()):
+        if decl.get("applies_to") != APPLIES_SELF:
+            continue
+        concept = decl.get("concept")
+        assert isinstance(concept, str) and concept.strip(), (
+            f"{cap_id} declares applies_to='self', so every consult from an audit of another "
+            "repository gets 'the concept may transfer' -- an invitation with nothing behind it "
+            "unless `concept` says what to ask",
+            cap_id,
+        )
+        # Repository-neutral by construction: the point is that it transfers.
+        assert SELF_REPOSITORY not in concept, (cap_id, concept)
+        assert cap_id in HOW_TO_USE, (
+            f"{cap_id} is self-scoped, so it needs BOTH: `concept` for the audit that must ask the "
+            "question by hand, and `how_to_use` for the consult where the instrument does apply. "
+            "The two answer different questions and neither substitutes for the other",
+            cap_id,
+        )
+
+    # ---- PART 4: WHAT A CALLER RECEIVES, and the discrimination that matters -- delivered on a
+    # SCOPE mismatch, withheld on a REQUIREMENT failure, where there is no question left to ask.
+    with tempfile.TemporaryDirectory(prefix="howto-concept-") as td:
+        root = Path(td)
+        ledger = root / "capabilities.json"
+        bare = root / "bare-checkout"  # no HTML, no framework: `observable_surface` is False here
+        bare.mkdir()
+        rows = {}
+        for cid in ("aaa-selfscoped", "bbb-needs-surface", "zzz-nodeclaration"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            cap["entrypoint"] = f"{cid}.py"
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+        real_surface = SURFACE_BINDINGS.get("t-concept")
+        SURFACE_BINDINGS["t-concept"] = {cid: "bound for the concept probe" for cid in rows}
+        CAPABILITY_PRECONDITIONS["aaa-selfscoped"] = {
+            "applies_to": APPLIES_SELF,
+            "concept": "ask which of this repository's own gates expired with no decision",
+        }
+        CAPABILITY_PRECONDITIONS["bbb-needs-surface"] = {
+            "applies_to": APPLIES_BOTH,
+            "requires": "observable_surface",
+            "concept": "declared, and it must still NOT be delivered on a requirement failure",
+        }
+        try:
+            got = advise(
+                "add unit tests for the retry helper",
+                surface="t-concept",
+                repository="stranske/Counter_Risk",
+                repo_path=str(bare),
+                path=ledger,
+                record=False,
+            )
+            by_id = {c["capability_id"]: c for c in got["capabilities"]}
+            self_scoped = by_id["aaa-selfscoped"]
+            assert self_scoped["precondition_met"] is False, self_scoped
+            assert self_scoped["transferable_concept"] == (
+                CAPABILITY_PRECONDITIONS["aaa-selfscoped"]["concept"]
+            ), (
+                "the scope mismatch fired and the caller got the invitation without the content; "
+                "the MCP tool returns this dict, so a concept only `format_advice` looked up is "
+                "invisible to every real consult",
+                self_scoped,
+            )
+            # THE DISCRIMINATOR. Same failed precondition, different reason: this repository has no
+            # observable surface at all, so there is no question to transfer and offering one would
+            # rebuild the empty-invitation defect facing the other way.
+            needs_surface = by_id["bbb-needs-surface"]
+            assert needs_surface["precondition_met"] is False, needs_surface
+            assert needs_surface["scope_match"] is True, needs_surface
+            assert needs_surface["transferable_concept"] is None, (
+                "a REQUIREMENT failure has no transferable question -- the concept must ride on "
+                "the scope mismatch only",
+                needs_surface,
+            )
+            # PRESENT AND None, never absent, on an entry that declares nothing at all.
+            assert "transferable_concept" in by_id["zzz-nodeclaration"], by_id["zzz-nodeclaration"]
+            assert by_id["zzz-nodeclaration"]["transferable_concept"] is None, by_id[
+                "zzz-nodeclaration"
+            ]
+            # ...and the RENDER agrees with the ANSWER, reading the entry rather than the table.
+            text = format_advice(got)
+            assert "ASK IT BY HAND:" in text, text
+            assert CAPABILITY_PRECONDITIONS["aaa-selfscoped"]["concept"] in text, text
+            assert CAPABILITY_PRECONDITIONS["bbb-needs-surface"]["concept"] not in text, text
+        finally:
+            CAPABILITY_PRECONDITIONS.pop("aaa-selfscoped", None)
+            CAPABILITY_PRECONDITIONS.pop("bbb-needs-surface", None)
+            if real_surface is None:
+                SURFACE_BINDINGS.pop("t-concept", None)
+            else:
+                SURFACE_BINDINGS["t-concept"] = real_surface
     print(
         "capability_advisor how-to-use selftest: OK (delivered on both branches, boundary clauses "
-        "present, render reads the entry)"
+        "present, render reads the entry, self-scoped rows carry both concept and call, concept "
+        "rides the scope mismatch only, table gaps reported as gaps)"
     )
 
 
@@ -3215,11 +3502,18 @@ def _selftest_preconditions() -> None:
 
     # ---- PART 1: THE VOCABULARY AND THE TABLE, code vs code, no ledger. Runs on any machine.
     for cap_id, spec in sorted(CAPABILITY_PRECONDITIONS.items()):
-        assert set(spec) <= {"applies_to", "requires"}, (cap_id, sorted(spec))
+        # A CLOSED KEY SET, so a typo cannot become a declaration nothing reads. `concept` joined it
+        # on 2026-08-24; `_selftest_how_to_use` holds the rule that makes it obligatory on a
+        # self-scoped row, and this one only holds its shape.
+        assert set(spec) <= {"applies_to", "requires", "concept"}, (cap_id, sorted(spec))
         if "applies_to" in spec:
             assert spec["applies_to"] in APPLIES_TO_VALUES, (cap_id, spec)
         if "requires" in spec:
             assert spec["requires"] in REPO_FACT_PROBES, (cap_id, spec)
+        if "concept" in spec:
+            assert isinstance(spec["concept"], str) and spec["concept"].strip(), (cap_id, spec)
+            # ONE reader for the declaration, and it is the one `evaluate_precondition` calls.
+            assert transferable_concept(cap_id) == spec["concept"], (cap_id, spec)
     assert CAPABILITY_PRECONDITIONS, "the declared set must not be empty, or nothing is evaluated"
     # The three-way target, and the conservative default that keeps the axis from reclassifying.
     assert consult_target(SELF_REPOSITORY) == APPLIES_SELF

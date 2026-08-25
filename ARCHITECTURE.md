@@ -306,6 +306,32 @@ answers exactly that. `_attach_how_to_use` stamps it onto every entry on both an
 render and the answer came apart. The field is always present and `None` when unknown: "no guidance
 recorded" and "this answer does not carry the field" must not look alike.
 
+**And a `null` that is a table gap must not read as a rule.** The Counter_Risk audit (2026-08-24)
+saw `how_to_use: null` on every capability whose precondition had failed and concluded the answer
+*suppresses* guidance on a failed precondition. It does not — the stamping above is unconditional on
+both branches. The correlation was a coincidence of populations: the five `applies_to='self'` rows
+were among the **29 of 39 bound capabilities the table had no entry for at all**. Per-entry `null`
+cannot distinguish those two readings, and the wrong one was the reasonable inference, so `advise()`
+now returns `guidance = {offered, documented, undocumented}` and the render states the cause in
+words. *`2 of 5 documented`* is a gap in a table; nothing about it suggests a mechanism to go
+looking for.
+
+**The note and the guidance answer different questions, so they are declared in different places.**
+`precondition_note` ends *"the concept may transfer; the instrument does not"* — an invitation, and
+until 2026-08-24 an invitation with nothing behind it. The same audit accepted it for `feature-scan`,
+transferred the concept by hand, produced two dimension-6 findings with it, and had to **reconstruct
+what the capability's question even was from its name**. So `CAPABILITY_PRECONDITIONS` carries a
+third key, `concept`: the question the capability asks, in words that name no repository.
+`evaluate_precondition` returns it as `transferable_concept` and `format_advice` prints it as
+`ASK IT BY HAND:` directly under the note it completes.
+
+Two disciplines keep the pair honest, both enforced by `_selftest_how_to_use`. It rides the **scope**
+mismatch only — a `requires` failure means the repository has no observable surface at all, so there
+is no question left to transfer and offering one would rebuild the empty-invitation defect facing the
+other way. And every `applies_to: self` row must declare **both** a `concept` and a `HOW_TO_USE`
+entry: the first is for the audit that must ask the question by hand, the second for the consult
+where the instrument does apply, and neither substitutes for the other.
+
 **And the boundary belongs in that field as much as the call does.** Six `offload` declines in one
 window were one sentence repeated — the work had to be first-person (run the code and read exit codes,
 re-run a guard with the break in place, hold a whole grep trace, drive a browser). That is neither a
@@ -628,6 +654,31 @@ closer rounds while bound only to the opener, and the loop promoted it. **It mus
 while "should have been chosen" is partly derived from that capability's own advocacy, optimises the
 measured number rather than usefulness. Promotion is therefore gated on an *external* signal (1 or 3
 above), never on the advisor's own naming.
+
+### A capability can be one output FORMAT away from being the right tool
+
+The same audit reached for `deliberate-break-verifier` at `repo-audit:phase-4`, called it *"a
+genuinely close match to what I did by hand"*, and ran the break-then-revert itself anyway. The
+reason was not a capability mismatch: `AGENT_ISSUE_FORMAT` requires a named test gate with the raw
+before/after console output **quoted verbatim** into the issue body, and `local_verify.verify()`
+returns a structured verdict whose console output is JSON-escaped inside it. Every audit on record
+has re-run the same proof by hand for that reason — a **packaging** mismatch, and the cheapest kind
+of finding to act on.
+
+`local_verify.break_transcript()` renders the two halves the result already holds (`red`, `green`)
+as the quotable block, and `--transcript` prints it. It captures nothing new and changes no verdict,
+no exit code and no consumer: the exit code is computed above the rendering choice, because a
+rendering flag that could move a gate would make the artifact and the gate two different answers to
+the same question.
+
+**A quotable artifact must not overstate, because its caveats do not travel with it.** So every
+caveat is stated *inside* the block: the hollow nodes PR #114 named, an `INDETERMINATE` per-node
+pass, and one new guard. `--test-path` takes files and directories, so a pytest **node id** is
+silently not copied into the base tree; the base then runs without that test, the command fails with
+*"file or directory not found"*, and the rolled-up verdict is `PASS` — red because the test was
+**absent**, not because it **failed**. `uncopied_test_paths()` detects exactly that and the
+transcript leads with `THIS IS NOT A VALID DEMONSTRATION`. Reported, never gated: the verdict is
+deliberately unchanged, and a selftest pins that it is.
 
 ## Gate 2 — the usability review panel (`ux_review.py`, built 2026-06-22)
 
