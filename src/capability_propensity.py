@@ -470,6 +470,13 @@ DECLINE_KINDS: dict[str, dict] = {
         "demotable": True,
         "repairable": True,
         "fix": "the matcher or the binding",
+        # THE TASK SHAPE lives here, beside `fix`, because they answer two different
+        # questions about the same decline and a separate table would drift from this one.
+        "task_shape": (
+            "NONE — a task cannot fix this. The match itself was wrong, so the honest actions are the "
+            "binding and the matcher (see `fix`). Constructing a task to suit a wrong match would be "
+            "fitting the work to the tool. "
+        ),
     },
     # A CORRECT match declared too broadly. `offload` was offered at 9 of 12 surfaces in one run and
     # declined at all 9, always structurally, because a one-subsystem audit has no read big enough
@@ -482,6 +489,13 @@ DECLINE_KINDS: dict[str, dict] = {
         "demotable": True,
         "repairable": False,
         "fix": "a precondition or a narrower declaration, not a lower rank",
+        # THE TASK SHAPE lives here, beside `fix`, because they answer two different
+        # questions about the same decline and a separate table would drift from this one.
+        "task_shape": (
+            "AGGREGATE until the read pays for itself. The match was right and the target was too "
+            "small, so the task is the SAME work over a larger unit — several subsystems instead of "
+            "one, a whole repo instead of a module, a batch of PRs instead of one PR. "
+        ),
     },
     # A CORRECT match whose declared PRECONDITION does not hold here: the instrument is aimed at
     # another system (`switch-review` audits THIS repo's switches; the gate under audit was in
@@ -500,6 +514,14 @@ DECLINE_KINDS: dict[str, dict] = {
         "repairable": True,
         "fix": "declare and EVALUATE the capability's precondition (applies_to, "
         "an observable surface); the binding is right where it holds",
+        # THE TASK SHAPE lives here, beside `fix`, because they answer two different
+        # questions about the same decline and a separate table would drift from this one.
+        "task_shape": (
+            "TAKE IT WHERE THE PRECONDITION HOLDS. The match was right and the condition was not; the "
+            "task is the same work aimed at a subject that HAS the declared surface. "
+            "`frontend-verifier` declined twice on frontend-less repos and then produced the "
+            "second-strongest finding of an audit on a repo that had a display surface. "
+        ),
     },
     # A CORRECT match the deliverable shape made impossible: `testgen-lane` matched correctly three
     # times in a read-only audit with no commit target. THE FIX IS NOTHING, so this must never
@@ -512,6 +534,15 @@ DECLINE_KINDS: dict[str, dict] = {
         "repairable": False,
         "fix": "nothing — the match was correct and the deliverable had nowhere to "
         "put the result",
+        # THE TASK SHAPE lives here, beside `fix`, because they answer two different
+        # questions about the same decline and a separate table would drift from this one.
+        "task_shape": (
+            "GIVE IT A LANDING ZONE. The match was right and the run had nowhere to put the result, "
+            "so the task is the same work with a WRITE TARGET — a branch and a PR instead of a "
+            "read-only audit. This is the shape most often mistaken for a dead end: `fix` says "
+            "nothing is wrong with the CAPABILITY, which is true and is not the same as nothing being "
+            "available to do. "
+        ),
     },
     # Correct match held behind a deliberate default-OFF switch or a shadow status. The gate is the
     # subject, and it moves on its own evidence, not on this.
@@ -520,12 +551,25 @@ DECLINE_KINDS: dict[str, dict] = {
         # Not a defect: the gate is the subject and it moves on its own evidence.
         "repairable": False,
         "fix": "the capability's own gate, on its own evidence",
+        # THE TASK SHAPE lives here, beside `fix`, because they answer two different
+        # questions about the same decline and a separate table would drift from this one.
+        "task_shape": (
+            "SATISFY THE GATE'S OWN EVIDENCE TEST, or decide the flag. The task is whatever the gate "
+            "says it needs — not a task that uses the capability, a task that produces the gate's "
+            "evidence. "
+        ),
     },
     # Wanted and not affordable this run ("the one I most regret declining"). Nothing is broken.
     "deferred": {
         "demotable": False,
         "repairable": False,
         "fix": "nothing — wanted, not affordable this run",
+        # THE TASK SHAPE lives here, beside `fix`, because they answer two different
+        # questions about the same decline and a separate table would drift from this one.
+        "task_shape": (
+            "SCHEDULE IT AS THE POINT OF A RUN, not as a passenger. It was wanted and unaffordable "
+            "inside other work, so the task is a run whose PURPOSE is this capability. "
+        ),
     },
     # The caller did not classify it. Recorded, so offered-vs-never-considered still works, and NOT
     # demotable: an unclassified decline that could demote is precisely the wrong correction arriving
@@ -536,6 +580,12 @@ DECLINE_KINDS: dict[str, dict] = {
         "demotable": False,
         "repairable": False,
         "fix": "unknown — the caller did not classify it",
+        # THE TASK SHAPE lives here, beside `fix`, because they answer two different
+        # questions about the same decline and a separate table would drift from this one.
+        "task_shape": (
+            "ASK FIRST. An unclassified decline carries no task signal; the kind has to be recorded "
+            "before a shape can be derived. "
+        ),
     },
 }
 DECLINE_KIND_DEFAULT = "unspecified"
