@@ -439,6 +439,30 @@ Four disciplines make that honest rather than decorative:
    (`unstated_provenance_refusal`, derived from `VERDICT_PROVENANCE` so the tiers offered are the
    tiers accepted). The refusal writes nothing, which is what keeps the retry the trial's *first*
    observation — a gate that consumed the experiment id would be the deadlock rather than the fix.
+4. **An outcome that arrives LATE can still correct the verdict (2026-08-25).** The refusal above
+   fixed the *silent* half of the problem and left the structural half: because the write is
+   idempotent, the tier chosen at trigger time was permanent, and `outcome_corroborated` is by
+   construction knowable only *after* the outcome. So the 1.0 tier was reachable only by
+   capabilities whose outcome is immediate — `deliberate-break-verifier` earned it eight times
+   because a break→revert finishes inside the same run, while `adversarial-review`'s findings sat at
+   0.25 with their fixes merged the same morning and no way to say so. Ranking on that mixture
+   measures **how fast an outcome arrives**, not how useful the capability is: the measuring window
+   (verdict time) and the draining window (outcome time) were different windows, which is the
+   latched-gate shape §CLAUDE.md names. `record_late_outcome` gives outcomes their own append-only
+   channel onto an existing trial. Four properties make it evidence rather than a dial, and the
+   first is the one that matters most: it is **symmetric** — `refutes` lowers a capability's measured
+   usefulness on exactly the terms `corroborates` raises it, because an upgrade-only channel is a
+   monotonic inflation ratchet, the same hazard this document flags for binding promotion. It is
+   never self-assessed (`late_outcome_provenances()` excludes the self-assessed tiers, derived from
+   the table so the offer cannot drift from the acceptance), never cheaper than the direct path
+   (`corroboration` naming the outcome is required for every tier and direction), and one per trial
+   with a **named refusal** on a second attempt rather than a silent drop. The original verdict is
+   never mutated: it keeps its provenance and timestamp in the event log and the attachment sits
+   beside it, so the record always shows both what was believed at trigger time and what the outcome
+   established. `report()` prints `late_outcomes_corroborating`, `late_outcomes_refuting` and
+   `late_outcomes_orphaned` together, because a corroborating count climbing while the refuting
+   count stays at zero is the signature of a ratchet rather than a measurement.
+
    The read path is unchanged and still classifies an unlabelled pre-provenance row as
    `self_reported`, because that is what such a row honestly is: `PROVENANCE_DEFAULT` answers "how do
    I read silence", `PROVENANCE_UNSTATED` answers "may I write it", and sharing one constant is what

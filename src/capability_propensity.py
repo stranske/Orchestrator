@@ -237,6 +237,55 @@ VERDICT_JUDGE_KEY = "verdict_judge"
 VERDICT_CORROBORATION_KEY = "corroboration"
 VERDICT_KIND_KEY = "verdict_kind"
 
+# A LATE-ARRIVING OUTCOME. The verdict write is idempotent on (capability, experiment), so the tier
+# chosen at trigger time is permanent — see the block above `unstated_provenance_refusal`. That is
+# right for OPINIONS and wrong for OUTCOMES, because `outcome_corroborated` is by construction
+# knowable only AFTER the outcome. Measured on the live ledger 2026-08-25: `deliberate-break-verifier`
+# reaches 1.0 eight times because a break->revert demonstration finishes inside the same run, while
+# `adversarial-review`'s findings sat at `self_reported` 0.25 with their fixes merged that morning
+# and no way to say so. Ranking on that mixture measures HOW FAST AN OUTCOME ARRIVES, not how useful
+# the capability is — the measuring window (verdict time) and the draining window (outcome time) are
+# different windows, which is the latched-gate shape CLAUDE.md names.
+#
+# So outcomes get their own append-only channel onto an EXISTING trial. Four properties make it
+# evidence rather than a dial:
+#   * SYMMETRIC. It carries `refutes` as well as `corroborates`. An upgrade-only channel would be a
+#     monotonic inflation ratchet — the same hazard CLAUDE.md flags for binding promotion — so the
+#     direction that can LOWER a capability's measured usefulness ships in the same commit as the
+#     one that raises it, or neither ships.
+#   * NEVER SELF-ASSESSED. `late_outcome_provenances()` is derived from VERDICT_PROVENANCE by
+#     excluding the self-assessed tiers, so the tiers offered are the tiers accepted and an opinion
+#     cannot be re-asserted later to overwrite the first one. Re-stating a self-report is exactly
+#     what must stay impossible.
+#   * NO STRONGER THAN THE DIRECT PATH. `corroboration` naming the outcome is required for every
+#     direction and tier, not only the 1.0 ones. If `outcome_corroborated` with a named outcome is
+#     acceptable at trigger time, the same evidence must be equally acceptable an hour later; making
+#     the late path harder would re-introduce the latency bias by the back door.
+#   * ONE PER TRIAL, AND IT SAYS SO. Idempotent on (capability, experiment) like the verdict itself,
+#     so a caller cannot re-roll until the number is agreeable — and a second attempt is REFUSED with
+#     the existing attachment named, never silently dropped, which is the defect (#127) that this
+#     whole axis was found by.
+LATE_OUTCOME_SOURCE = "capability_late_outcome"
+# The ledger event type. Distinct from "outcome" so a reader that predates this channel IGNORES the
+# amendment rather than misreading it — see the note in `capabilities.EVENT_FIELDS`. This is the
+# forward-compatibility property that makes it safe to write amendments while the exec mirror is
+# still running pre-change code, which it always is until the owner syncs it by hand (CLAUDE.md §1).
+LATE_OUTCOME_EVENT_TYPE = "outcome_amendment"
+LATE_OUTCOME_DIRECTION_KEY = "late_outcome_direction"
+LATE_OUTCOME_SUPERSEDED_KEY = "late_outcome_superseded_provenance"
+LATE_OUTCOME_CORROBORATES = "corroborates"
+LATE_OUTCOME_REFUTES = "refutes"
+LATE_OUTCOME_DIRECTIONS = {
+    LATE_OUTCOME_CORROBORATES: {
+        "means": "the outcome CONFIRMS the verdict already recorded for this trial",
+        "keeps_verdict": True,
+    },
+    LATE_OUTCOME_REFUTES: {
+        "means": "the outcome CONTRADICTS the verdict already recorded for this trial",
+        "keeps_verdict": False,
+    },
+}
+
 VERDICT_PROVENANCE: dict[str, dict] = {
     # An OUTCOME corroborates the verdict: the finding survived adversarial review, the issue was
     # filed, the fix landed and held. The caller must NAME that outcome (`corroboration`) or the
@@ -353,6 +402,26 @@ def unstated_provenance_refusal() -> str:
         "Name --judge in the same breath; verdicts with no judge identity are all treated as ONE "
         "correlated arm, and that is not recoverable either."
     )
+
+
+def late_outcome_provenances() -> list[str]:
+    """Which provenance tiers a LATE outcome may claim: every tier that is not self-assessed.
+
+    DERIVED, not typed out, for the same reason `unstated_provenance_refusal` is: a hand-written
+    list here would be free to drift from `VERDICT_PROVENANCE` and offer a tier the write path
+    rejects. Excluding the self-assessed tiers is the whole anti-gaming property of this channel —
+    an outcome may correct a verdict, an opinion may not.
+    """
+    return sorted(p for p in VERDICT_PROVENANCE if not provenance_self_assessed(p))
+
+
+def late_outcome_refusal(reason: str, *, remedy: str) -> str:
+    """One text shape for every late-outcome refusal: what was wrong, and what to do instead.
+
+    Every branch that declines to write MUST come through here. A refusal that does not name a
+    remedy is the silence this channel exists to remove.
+    """
+    return f"{reason} {remedy}"
 
 
 def verdict_provenance(metadata: dict | None) -> str:
@@ -541,6 +610,11 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     "verdict_provenance": {},
                     "verdict_judges": {},
                     "verdict_kinds": {},
+                    # LATE OUTCOMES, collected here and applied AFTER the pass. Applying them
+                    # inline would make the result depend on whether the attachment happened to be
+                    # walked before or after the verdict it corrects, and event order is not a
+                    # contract this assembly should rest on.
+                    "late_outcome_events": {},
                     "skills": set(),
                 },
             )
@@ -570,6 +644,18 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     )
             elif etype == "invocation" and cap_id not in trial["triggered"]:
                 trial["triggered"].append(cap_id)
+            elif etype == LATE_OUTCOME_EVENT_TYPE:
+                # NOT a verdict: an outcome that arrived after one. Held aside; applied below.
+                trial["late_outcome_events"].setdefault(
+                    cap_id,
+                    {
+                        "direction": str(meta.get(LATE_OUTCOME_DIRECTION_KEY) or ""),
+                        "provenance": verdict_provenance(meta),
+                        "judge": verdict_judge(meta),
+                        "corroboration": str(meta.get(VERDICT_CORROBORATION_KEY) or ""),
+                        "evidence": str(meta.get("evidence") or ""),
+                    },
+                )
             elif etype == "outcome":
                 bucket = "useful" if meta.get(USEFUL_KEY) is True else "not_useful"
                 if cap_id not in trial[bucket]:
@@ -585,6 +671,44 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
     out = []
     for trial in trials.values():
         trial["skills"] = sorted(trial["skills"])
+        # APPLY THE LATE OUTCOMES. Order-independent by construction: every event has been walked
+        # before this runs. An attachment with no verdict to correct is an ORPHAN — reported, never
+        # promoted into a verdict, because inventing one would credit a capability with an outcome
+        # for a trial whose trigger the window can no longer see.
+        trial["late_outcomes"] = {}
+        trial["late_outcome_orphans"] = {}
+        for cap_id, late in sorted(trial.pop("late_outcome_events").items()):
+            bucket = next(
+                (b for b in ("useful", "not_useful") if cap_id in trial[b]),
+                None,
+            )
+            if bucket is None or late["direction"] not in LATE_OUTCOME_DIRECTIONS:
+                trial["late_outcome_orphans"][cap_id] = {
+                    **late,
+                    "why": (
+                        "no verdict in window to correct"
+                        if bucket is None
+                        else f"unknown direction {late['direction']!r}"
+                    ),
+                }
+                continue
+            keeps = LATE_OUTCOME_DIRECTIONS[late["direction"]]["keeps_verdict"]
+            after = bucket if keeps else ("not_useful" if bucket == "useful" else "useful")
+            if after != bucket:
+                trial[bucket].remove(cap_id)
+                if cap_id not in trial[after]:
+                    trial[after].append(cap_id)
+            # OVERWRITE, not setdefault: this is the one place a later observation is ALLOWED to
+            # replace the trigger-time tier, and it is why the channel exists. The original event
+            # keeps its own provenance in the log, so nothing is lost.
+            trial["verdict_provenance"][cap_id] = late["provenance"]
+            if late["judge"] and late["judge"] != UNATTRIBUTED_JUDGE:
+                trial["verdict_judges"][cap_id] = late["judge"]
+            trial["late_outcomes"][cap_id] = {
+                **late,
+                "superseded_bucket": bucket,
+                "verdict_after": after,
+            }
         # The CONTROL ARM is what makes this an experiment rather than a tally: candidates that were
         # named for this exact task and NOT triggered. Reporting it is not optional -- an experiment
         # with an unreported control arm is a testimonial.
@@ -995,6 +1119,26 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # only honest reading, and the first without the second is what this axis exists to stop.
         "verdict_count": verdict_total,
         "verdicts_by_provenance": dict(sorted(corpus_mix.items())),
+        # THE LATE-OUTCOME CHANNEL, both directions and its failure mode, in the same place. A
+        # channel that can only be seen by reading individual trials is a channel nobody audits —
+        # and the two numbers must be reported TOGETHER, because `corroborated` alone climbing while
+        # `refuted` stays at zero is the signature of a ratchet rather than a measurement.
+        "late_outcomes_corroborating": sum(
+            1
+            for t in trials
+            for row in t["late_outcomes"].values()
+            if row["direction"] == LATE_OUTCOME_CORROBORATES
+        ),
+        "late_outcomes_refuting": sum(
+            1
+            for t in trials
+            for row in t["late_outcomes"].values()
+            if row["direction"] == LATE_OUTCOME_REFUTES
+        ),
+        # ORPHANS: attachments whose verdict the window can no longer see. Not an error and not
+        # silence — a non-zero count here means outcomes are arriving later than the window is wide,
+        # which is a statement about the WINDOW, not about the capabilities.
+        "late_outcomes_orphaned": sum(len(t["late_outcome_orphans"]) for t in trials),
         "verdicts_self_reported": self_total,
         "verdicts_outcome_derived": verdict_total - self_total,
         "verdicts_self_reported_share": (
@@ -1152,6 +1296,209 @@ def record_usefulness(
             **(metadata or {}),
         },
     )
+
+
+def existing_late_outcome(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    now: int | None = None,
+) -> dict | None:
+    """The late outcome already attached to this trial for this capability, or None.
+
+    Read through `experiments()` rather than by re-walking the events, so "what is attached" is
+    answered by the same assembly the WEIGHTING reads. A second reader here could disagree with it,
+    and then a refusal would cite an attachment the measurement never applied.
+    """
+    for trial in experiments(path=path, window_days=window_days, now=now):
+        if trial["experiment_id"] != experiment_id:
+            continue
+        applied = (trial.get("late_outcomes") or {}).get(capability_id)
+        if applied:
+            return applied
+        return (trial.get("late_outcome_orphans") or {}).get(capability_id)
+    return None
+
+
+def verdict_in_window(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    now: int | None = None,
+) -> str | None:
+    """The bucket ("useful"/"not_useful") this capability's in-window verdict sits in, or None."""
+    for trial in experiments(path=path, window_days=window_days, now=now):
+        if trial["experiment_id"] != experiment_id:
+            continue
+        for bucket in ("useful", "not_useful"):
+            if capability_id in trial[bucket]:
+                return bucket
+    return None
+
+
+def record_late_outcome(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    direction: str,
+    evidence: str,
+    provenance: str,
+    corroboration: str,
+    judge: str = "",
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    timestamp: int | None = None,
+    now: int | None = None,
+) -> dict:
+    """Attach an outcome that arrived AFTER the verdict, in either direction. Append-only.
+
+    Returns a dict rather than a bool because every refusal here has a different remedy, and a bare
+    False is what made the idempotent verdict drop look like a success for two days (#127). The
+    caller gets `attached`, `reason` and `remedy`; the CLI turns a False into a NON-ZERO exit, which
+    the older `useful` verb deliberately does not do — it has two live automation callers whose retry
+    logic would break, so that one gained a `remedy` field instead.
+
+    THE ORIGINAL VERDICT IS NOT MUTATED. It stays in the event log with its original provenance and
+    timestamp, and this attaches beside it; `experiments()` applies the attachment when it assembles
+    the trial. So the record always shows both what was believed at trigger time and what the outcome
+    later established, which is what makes this auditable rather than a rewrite.
+
+    Refuses, each naming its remedy:
+      * an unknown direction, rather than defaulting to the flattering one;
+      * a self-assessed provenance — this channel is for OUTCOMES, and re-asserting an opinion to
+        overwrite an earlier opinion is the gaming path;
+      * no `corroboration`, for every tier, because the direct path requires it for the strong tiers
+        and a late path that required less would be the weaker door into the same weight;
+      * NO IN-WINDOW VERDICT to attach to. This is the window edge, and it is a refusal rather than
+        a write because attaching to a verdict the measurement can no longer see would store an event
+        that changes nothing — the silent no-op class again. The remedy is a NEW trial, since a
+        capability used again deserves its own experiment rather than a retro-fit onto a dead one;
+      * AN ATTACHMENT ALREADY PRESENT, with the existing one named, so one trial cannot be re-rolled.
+    """
+    if not str(evidence).strip():
+        raise ValueError("a late outcome requires evidence naming what the outcome established")
+    if not experiment_id.startswith(ADVICE_REF_PREFIX):
+        raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
+    if str(direction) not in LATE_OUTCOME_DIRECTIONS:
+        raise ValueError(
+            late_outcome_refusal(
+                f"unknown late-outcome direction {direction!r}.",
+                remedy=(
+                    "pass one of "
+                    + ", ".join(
+                        f"{name} ({row['means']})"
+                        for name, row in sorted(LATE_OUTCOME_DIRECTIONS.items())
+                    )
+                    + " — there is no default, because defaulting would silently pick the direction "
+                    "that flatters the capability"
+                ),
+            )
+        )
+    allowed = late_outcome_provenances()
+    if str(provenance) not in allowed:
+        raise ValueError(
+            late_outcome_refusal(
+                f"provenance {provenance!r} may not attach as a late outcome.",
+                remedy=(
+                    f"pass one of {allowed}. A late attachment must be an OUTCOME observation; "
+                    "re-asserting a self-assessed verdict later is how an opinion would overwrite "
+                    "the first opinion, and the first one is the honest one"
+                ),
+            )
+        )
+    if not str(corroboration).strip():
+        raise ValueError(
+            late_outcome_refusal(
+                "a late outcome requires `corroboration` naming the outcome itself.",
+                remedy=(
+                    "name the merged fix, the filed issue, the review that confirmed it or the "
+                    "re-measurement that contradicted it. Required for EVERY tier here, not only "
+                    "the 1.0 ones: the direct path requires it for outcome-strength evidence, and a "
+                    "late path that asked for less would be the weaker door into the same weight"
+                ),
+            )
+        )
+    bucket = verdict_in_window(
+        capability_id, experiment_id, path=path, window_days=window_days, now=now
+    )
+    if bucket is None:
+        return {
+            "attached": False,
+            "capability": capability_id,
+            "experiment": experiment_id,
+            "reason": (
+                f"no in-window verdict for {capability_id!r} on {experiment_id!r} to attach to "
+                f"(window {window_days}d)"
+            ),
+            "remedy": late_outcome_refusal(
+                "Nothing was written.",
+                remedy=(
+                    "record the trial itself — `trigger` then `useful` with the tier the evidence "
+                    "actually supports — because a capability used again earns its own experiment; "
+                    "a late outcome corrects an existing verdict, it "
+                    "does not create one, and attaching to a verdict the window can no longer see "
+                    "would store an event that changes no measurement"
+                ),
+            ),
+        }
+    already = existing_late_outcome(
+        capability_id, experiment_id, path=path, window_days=window_days, now=now
+    )
+    if already:
+        return {
+            "attached": False,
+            "capability": capability_id,
+            "experiment": experiment_id,
+            "reason": (
+                f"a late outcome is already attached: direction "
+                f"{already.get('direction')!r} at provenance {already.get('provenance')!r}, "
+                f"corroborated by {str(already.get('corroboration'))[:120]!r}"
+            ),
+            "remedy": late_outcome_refusal(
+                "Nothing was written, and the existing attachment stands.",
+                remedy=(
+                    "one attachment per trial is the point — it stops a trial being re-rolled until "
+                    "the number is agreeable. If the NEW outcome genuinely supersedes the old one, "
+                    "record a fresh trial for the fresh use rather than overwriting this record"
+                ),
+            ),
+            "existing": already,
+        }
+    ok = capabilities.heartbeat(
+        capability_id,
+        LATE_OUTCOME_EVENT_TYPE,
+        ref=experiment_id,
+        path=path or capabilities.REG,
+        idempotency_key=f"late:{capability_id}:{experiment_id}",
+        timestamp=timestamp,
+        metadata={
+            "source": LATE_OUTCOME_SOURCE,
+            LATE_OUTCOME_DIRECTION_KEY: str(direction),
+            VERDICT_PROVENANCE_KEY: str(provenance),
+            VERDICT_CORROBORATION_KEY: str(corroboration)[:400],
+            "evidence": str(evidence)[:400],
+            **({VERDICT_JUDGE_KEY: str(judge).strip()} if str(judge).strip() else {}),
+        },
+    )
+    return {
+        "attached": bool(ok),
+        "capability": capability_id,
+        "experiment": experiment_id,
+        "direction": str(direction),
+        "provenance": str(provenance),
+        "provenance_weight": provenance_weight(str(provenance)),
+        "superseded_bucket": bucket,
+        "verdict_after": (
+            bucket
+            if LATE_OUTCOME_DIRECTIONS[str(direction)]["keeps_verdict"]
+            else ("not_useful" if bucket == "useful" else "useful")
+        ),
+        "judge": str(judge).strip() or UNATTRIBUTED_JUDGE,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -4168,6 +4515,296 @@ def _selftest_provenance() -> None:
     )
 
 
+def _selftest_late_outcome() -> None:
+    """AN OUTCOME THAT ARRIVES AFTER THE VERDICT CAN STILL CORRECT IT — in both directions.
+
+    The gap this closes: the verdict write is idempotent on (capability, experiment), so the tier
+    chosen at trigger time was permanent, and `outcome_corroborated` is knowable only AFTER the
+    outcome. That made the 1.0 tier reachable only by capabilities whose outcome is immediate, so
+    the ranking partly measured how fast an outcome arrives.
+
+    THE TWO ASSERTIONS THAT CARRY THE DESIGN, and either one failing means the feature is worse
+    than not shipping it:
+
+      * SYMMETRY (`refutes` lowers). An upgrade-only channel is a monotonic inflation ratchet. The
+        refuting arm must move a capability DOWN on the same terms the corroborating arm moves it
+        up, or this is a dial for making numbers larger.
+      * NO SELF-ASSESSED ATTACHMENT. If an opinion could attach later, the channel becomes "record
+        weakly, upgrade once you like the answer". Only non-self-assessed tiers may attach, derived
+        from `VERDICT_PROVENANCE` so the offer cannot drift from the acceptance.
+
+    BREAK -> REVERT, each confirmed to discriminate:
+      * make the channel upgrade-only (treat `refutes` as `corroborates`) -> the symmetry assertion
+        fails: `dud` stays at 0.25 useful instead of moving to not_useful at 0.0;
+      * let a self-assessed tier attach (drop the `late_outcome_provenances()` check) -> the gaming
+        assertion fails, because the second self-report is accepted;
+      * apply with `setdefault` instead of assignment -> the corroborating assertion fails at 0.25,
+        which is the whole point of the channel;
+      * drop the already-attached guard -> the re-roll assertion fails, and that guard is what stops
+        a trial being re-rolled until its number is agreeable;
+      * promote an orphan into a verdict -> the orphan assertion fails, and this is the one that
+        would silently credit a capability for a trial whose trigger the window cannot see;
+      * set `LATE_OUTCOME_EVENT_TYPE = "outcome"` (the unsafe first draft) -> fails immediately at
+        "the trigger-time verdict must read at the self-reported weight before any amendment".
+        Worth reading carefully, because it fails for a STRUCTURAL reason rather than the
+        forward-compatibility one it was written to probe: the amendment branch precedes the verdict
+        branch, so identical types make the reader route its own verdicts aside and no verdict exists
+        at all. The two types cannot be merged even locally, which is stronger than a convention.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="late-outcome-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("auditor", "dud", "guarded"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        def _trial(cap_id: str, exp: str, *, useful: bool = True) -> None:
+            record_trigger(cap_id, exp, path=ledger)
+            record_usefulness(
+                cap_id,
+                exp,
+                useful=useful,
+                evidence="what it changed at the time",
+                provenance="self_reported",
+                path=ledger,
+            )
+
+        # ---- CORROBORATES: the outcome lands later and the verdict earns its real tier ---------
+        aud = "advice:late0000aud0"
+        _trial("auditor", aud)
+        assert (
+            propensity("auditor", path=ledger)["effective_useful"] == 0.25
+        ), "the trigger-time verdict must read at the self-reported weight before any amendment"
+        res = record_late_outcome(
+            "auditor",
+            aud,
+            direction=LATE_OUTCOME_CORROBORATES,
+            evidence="the fix merged on main",
+            provenance="outcome_corroborated",
+            corroboration="stranske/Fine-Art-Archive#599 merged",
+            judge="codex",
+            path=ledger,
+        )
+        assert res["attached"] is True, res
+        after = propensity("auditor", path=ledger)
+        assert after["effective_useful"] == 1.0, after["effective_useful"]
+        assert after["provenance_mix"] == {"outcome_corroborated": 1}, after["provenance_mix"]
+        # The named arm travels with the outcome, so a corroborated verdict escapes the
+        # `unattributed` correlated arm it was filed under.
+        assert after["judge_arms"] == ["codex"], after["judge_arms"]
+        aud_row = usefulness(path=ledger)["rows"]["auditor"]
+        assert aud_row["useful"] == 1 and aud_row["not_useful"] == 0, aud_row
+
+        # THE ORIGINAL VERDICT IS STILL IN THE LOG. This channel attaches, it does not rewrite, so
+        # the record shows both what was believed at trigger time and what the outcome established.
+        by_type: dict[str, list[str]] = {}
+        for e in _events(capabilities.load_declared(ledger)["auditor"]):
+            if _experiment_id(e) != aud:
+                continue
+            et = str(e.get("type") or e.get("event_type"))
+            if et in {"outcome", LATE_OUTCOME_EVENT_TYPE}:
+                by_type.setdefault(et, []).append(
+                    str((e.get("metadata") or {}).get(VERDICT_PROVENANCE_KEY))
+                )
+        assert by_type == {
+            "outcome": ["self_reported"],
+            LATE_OUTCOME_EVENT_TYPE: ["outcome_corroborated"],
+        }, by_type
+
+        # FORWARD COMPATIBILITY, and it is not cosmetic. The amendment is a DISTINCT event type
+        # because `experiments()` dispatches on match / invocation / outcome; a reader that predates
+        # this channel has no branch for `outcome_amendment` and ignores it, so an unsynced exec
+        # mirror reads the pre-amendment truth. The first draft tagged it `outcome` and told the two
+        # apart by a metadata `source`, which was unsafe in one direction only: an older reader
+        # computes `useful if metadata["useful"] is True else not_useful`, and an amendment carries
+        # no `useful` key — so every CORROBORATION would have been read as a REFUTATION. This
+        # asserts the property directly against a stand-in for the old three-branch dispatch, rather
+        # than against git, so it holds on a machine with no `.git` (the mirror has none).
+        def _pre_change_reader(events: list[dict]) -> list[str]:
+            seen = []
+            for e in events:
+                et = str(e.get("type") or e.get("event_type"))
+                if et == "match":
+                    seen.append("candidate")
+                elif et == "invocation":
+                    seen.append("triggered")
+                elif et == "outcome":
+                    meta = e.get("metadata") or {}
+                    seen.append("useful" if meta.get(USEFUL_KEY) is True else "not_useful")
+            return seen
+
+        aud_events = [
+            e
+            for e in _events(capabilities.load_declared(ledger)["auditor"])
+            if _experiment_id(e) == aud
+        ]
+        assert _pre_change_reader(aud_events) == ["triggered", "useful"], (
+            "a pre-change reader must see exactly the original trial — one trigger and one useful "
+            "verdict — and must not see the amendment at all"
+        )
+        assert (
+            LATE_OUTCOME_EVENT_TYPE in capabilities.EVENT_FIELDS
+        ), "the amendment type must be registered, or `heartbeat` refuses it"
+        assert LATE_OUTCOME_EVENT_TYPE != "outcome", "the whole forward-compat property is the type"
+
+        # ---- REFUTES: THE ANTI-RATCHET ARM. Same terms, opposite direction. -------------------
+        dud = "advice:late0000dud0"
+        _trial("dud", dud)
+        assert propensity("dud", path=ledger)["effective_useful"] == 0.25
+        res = record_late_outcome(
+            "dud",
+            dud,
+            direction=LATE_OUTCOME_REFUTES,
+            evidence="re-measured; the output was identical",
+            provenance="machine_observed",
+            corroboration="re-run of the same task produced no change",
+            path=ledger,
+        )
+        assert res["attached"] is True and res["verdict_after"] == "not_useful", res
+        refuted = propensity("dud", path=ledger)
+        assert refuted["effective_useful"] == 0.0, refuted["effective_useful"]
+        dud_row = usefulness(path=ledger)["rows"]["dud"]
+        assert dud_row["useful"] == 0 and dud_row["not_useful"] == 1, dud_row
+        assert dud_row["usefulness_rate"] == 0.0, dud_row["usefulness_rate"]
+
+        # ---- NO SELF-ASSESSED ATTACHMENT: the gaming path stays shut ---------------------------
+        assert "self_reported" not in late_outcome_provenances(), late_outcome_provenances()
+        gd = "advice:late0000grd0"
+        _trial("guarded", gd)
+        for bad, why in (
+            (
+                dict(provenance="self_reported"),
+                "a self-assessed tier must not attach",
+            ),
+            (dict(corroboration=""), "an unnamed outcome must not attach"),
+            (dict(direction="helps"), "an unknown direction must not attach"),
+            (dict(evidence="  "), "an unevidenced attachment must not attach"),
+        ):
+            kwargs = dict(
+                direction=LATE_OUTCOME_CORROBORATES,
+                evidence="ev",
+                provenance="outcome_corroborated",
+                corroboration="PR #1 merged",
+                path=ledger,
+            )
+            kwargs.update(bad)
+            try:
+                record_late_outcome("guarded", gd, **kwargs)
+                raise AssertionError(why)
+            except ValueError:
+                pass
+        # None of the refusals wrote: the tier is still the trigger-time one.
+        assert propensity("guarded", path=ledger)["effective_useful"] == 0.25
+
+        # ---- THE WINDOW EDGE: an orphan is reported, never promoted into a verdict -------------
+        orphan = record_late_outcome(
+            "guarded",
+            "advice:late0000none",
+            direction=LATE_OUTCOME_CORROBORATES,
+            evidence="an outcome for a trial the window cannot see",
+            provenance="outcome_corroborated",
+            corroboration="PR #2 merged",
+            path=ledger,
+        )
+        assert orphan["attached"] is False, orphan
+        assert "no in-window verdict" in orphan["reason"], orphan["reason"]
+        assert orphan["remedy"].strip(), "a refusal with no remedy is the silence this replaces"
+        # NOTHING WRITTEN, so the orphan did not invent a trial either.
+        assert not [
+            t for t in experiments(path=ledger) if t["experiment_id"] == "advice:late0000none"
+        ], "an orphan attachment must not create a trial"
+
+        # ---- THE ASSEMBLY'S ORPHAN BRANCH, reached the only way it can be ---------------------
+        # `record_late_outcome` refuses to write when no in-window verdict exists, so that guard
+        # keeps the reader's orphan branch unreachable through the front door. The branch is still
+        # REAL: a verdict can age out of the window between the attachment and a later read, which
+        # is exactly the state built here — an aged-out verdict plus a fresh attachment, written
+        # through `capabilities.heartbeat` directly because the point is to test the READER.
+        # Without this the branch would be defensive code no test ever executes.
+        aged = "advice:late0000aged"
+        day = 86400
+        old_ts = capabilities._now() - (WINDOW_DAYS + 10) * day
+        # No `trigger` here: `record_trigger` has no timestamp seam, and the backdated VERDICT is
+        # the whole point — an aged-out verdict is what makes the fresh attachment an orphan.
+        record_usefulness(
+            "guarded",
+            aged,
+            useful=True,
+            evidence="a verdict that will age out",
+            provenance="self_reported",
+            path=ledger,
+            timestamp=old_ts,
+        )
+        capabilities.heartbeat(
+            "guarded",
+            LATE_OUTCOME_EVENT_TYPE,
+            ref=aged,
+            path=ledger,
+            idempotency_key=f"late:guarded:{aged}",
+            metadata={
+                "source": LATE_OUTCOME_SOURCE,
+                LATE_OUTCOME_DIRECTION_KEY: LATE_OUTCOME_CORROBORATES,
+                VERDICT_PROVENANCE_KEY: "outcome_corroborated",
+                VERDICT_CORROBORATION_KEY: "PR #3 merged",
+                "evidence": "the outcome arrived after the window closed",
+            },
+        )
+        aged_trial = [t for t in experiments(path=ledger) if t["experiment_id"] == aged]
+        assert len(aged_trial) == 1, aged_trial
+        orphaned = aged_trial[0]
+        assert "guarded" in orphaned["late_outcome_orphans"], orphaned
+        assert orphaned["late_outcome_orphans"]["guarded"]["why"] == (
+            "no verdict in window to correct"
+        ), orphaned["late_outcome_orphans"]
+        # AND IT INVENTED NOTHING. Promoting an orphan would credit the capability with an outcome
+        # for a trial whose trigger the window can no longer see.
+        assert orphaned["useful"] == [] and orphaned["not_useful"] == [], orphaned
+        assert "guarded" not in orphaned["late_outcomes"], orphaned["late_outcomes"]
+        assert report(path=ledger)["late_outcomes_orphaned"] == 1
+
+        # ---- ONE PER TRIAL: a re-roll is refused with the standing attachment named ------------
+        reroll = record_late_outcome(
+            "auditor",
+            aud,
+            direction=LATE_OUTCOME_REFUTES,
+            evidence="on reflection I preferred the other answer",
+            provenance="machine_observed",
+            corroboration="nothing new, just a different mood",
+            path=ledger,
+        )
+        assert reroll["attached"] is False, reroll
+        # The idempotency key alone would ALSO return attached=False here — with no reason and no
+        # remedy, which is the silent-drop defect wearing this feature's clothes. So the guard's
+        # real job is the EXPLANATION, and that is what this asserts.
+        assert "reason" in reroll, (
+            "a refused re-roll must SAY it was already attached; attached=False with no reason is "
+            "the silent drop this channel exists to avoid"
+        )
+        assert "already attached" in reroll["reason"], reroll["reason"]
+        assert reroll["existing"]["direction"] == LATE_OUTCOME_CORROBORATES, reroll["existing"]
+        assert (
+            propensity("auditor", path=ledger)["effective_useful"] == 1.0
+        ), "the re-roll changed it"
+
+        # ---- BOTH COUNTS IN THE REPORT, together, so a ratchet would be visible ---------------
+        rep = report(path=ledger)
+        assert rep["late_outcomes_corroborating"] == 1, rep["late_outcomes_corroborating"]
+        assert rep["late_outcomes_refuting"] == 1, rep["late_outcomes_refuting"]
+        assert rep["late_outcomes_orphaned"] == 1, rep["late_outcomes_orphaned"]
+
+    print(
+        "capability_propensity late-outcome selftest: OK (a later outcome earns the real tier and "
+        "carries its judge, refuting lowers on the same terms so the channel is not a ratchet, a "
+        "self-assessed tier cannot attach, an orphan is reported and invents no trial, one "
+        "attachment per trial, and the report shows both directions)"
+    )
+
+
 def _selftest_second_verdict_is_dropped_not_appended() -> None:
     """THE FIRST VERDICT ON A TRIAL IS THE ONLY ONE — and the mechanism is idempotency.
 
@@ -4698,6 +5335,7 @@ def main(argv: list[str]) -> int:
             "experiments",
             "trigger",
             "useful",
+            "late-outcome",
             "decline",
             "find",
             "binding-quality",
@@ -4735,6 +5373,16 @@ def main(argv: list[str]) -> int:
         default="",
         help="useful: which arm judged (model/backend/surface). Verdicts with no judge are "
         "treated as ONE correlated arm, so naming it is how a capability escapes that discount",
+    )
+    ap.add_argument(
+        "--direction",
+        choices=sorted(LATE_OUTCOME_DIRECTIONS),
+        default="",
+        help=(
+            "late-outcome: does the outcome CONFIRM the verdict already recorded, or CONTRADICT "
+            "it? REQUIRED — no default, because defaulting would silently pick the direction that "
+            "flatters the capability, and an upgrade-only channel is an inflation ratchet"
+        ),
     )
     ap.add_argument(
         "--corroboration",
@@ -4819,6 +5467,7 @@ def main(argv: list[str]) -> int:
         _selftest()
         _selftest_provenance()
         _selftest_second_verdict_is_dropped_not_appended()
+        _selftest_late_outcome()
         _selftest_finds()
         _selftest_repair()
         _selftest_declines()
@@ -4945,10 +5594,44 @@ def main(argv: list[str]) -> int:
             if rep["applied"]:
                 print(f"  APPLIED: {rep['applied']}")
         return 0
-    if args.command in {"trigger", "useful", "decline"}:
+    if args.command in {"trigger", "useful", "late-outcome", "decline"}:
         if not args.capability or not args.experiment:
             ap.error("--capability and --experiment are required")
         ledger = pathlib.Path(args.ledger) if args.ledger else None
+        if args.command == "late-outcome":
+            if not args.direction:
+                ap.error(
+                    "--direction is required: "
+                    + ", ".join(
+                        f"{name} ({row['means']})"
+                        for name, row in sorted(LATE_OUTCOME_DIRECTIONS.items())
+                    )
+                    + ". There is no default — defaulting would pick the direction that flatters "
+                    "the capability, and a channel that only ever raises usefulness is an inflation "
+                    "ratchet, not a measurement"
+                )
+            try:
+                res = record_late_outcome(
+                    args.capability,
+                    args.experiment,
+                    direction=args.direction,
+                    evidence=args.evidence,
+                    provenance=args.provenance,
+                    corroboration=args.corroboration,
+                    judge=args.judge,
+                    path=ledger,
+                    window_days=args.window_days,
+                )
+            except ValueError as exc:
+                ap.error(str(exc))
+            res["command"] = "late-outcome"
+            res["ledger"] = str(ledger) if ledger else "live"
+            print(json.dumps(res))
+            # NON-ZERO WHEN IT DID NOT ATTACH. The older `useful` verb returns 0 on its idempotent
+            # drop and keeps doing so — it has two live automation callers whose retries would break
+            # — but this contract is new, so it gets the honest exit from the start. `recorded: false`
+            # at exit 0 is precisely how the drop stayed invisible for two days (#127).
+            return 0 if res.get("attached") else 3
         if args.command == "decline":
             if not args.reason.strip():
                 ap.error(
@@ -5028,6 +5711,18 @@ def main(argv: list[str]) -> int:
                     "correlated_with_same_arm_verdicts": not args.judge.strip(),
                 }
             )
+            if not ok:
+                # THE DROP IS NOW RECOVERABLE, so say how. Exit stays 0 for the two live automation
+                # callers, but a caller reading the JSON is no longer told only that nothing
+                # happened — before the late-outcome channel existed there was genuinely nothing to
+                # suggest here, which is why this field could not have been written earlier.
+                out["remedy"] = (
+                    "this trial already holds a verdict for this capability and the write is "
+                    "idempotent on (capability, experiment), so nothing changed. If the new "
+                    "evidence is an OUTCOME rather than another opinion, attach it: `late-outcome "
+                    "--direction corroborates|refutes --provenance "
+                    f"{'|'.join(late_outcome_provenances())} --corroboration <the outcome>`"
+                )
         print(json.dumps(out))
         return 0
     if args.command == "experiments":
