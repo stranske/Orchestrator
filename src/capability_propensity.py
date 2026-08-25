@@ -678,24 +678,26 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
         trial["late_outcomes"] = {}
         trial["late_outcome_orphans"] = {}
         for cap_id, late in sorted(trial.pop("late_outcome_events").items()):
-            bucket = next(
+            # NOT named `bucket`: that name is already bound as `str` in the verdict branch above,
+            # and reusing it here made mypy read this Optional assignment as a type error.
+            held: str | None = next(
                 (b for b in ("useful", "not_useful") if cap_id in trial[b]),
                 None,
             )
-            if bucket is None or late["direction"] not in LATE_OUTCOME_DIRECTIONS:
+            if held is None or late["direction"] not in LATE_OUTCOME_DIRECTIONS:
                 trial["late_outcome_orphans"][cap_id] = {
                     **late,
                     "why": (
                         "no verdict in window to correct"
-                        if bucket is None
+                        if held is None
                         else f"unknown direction {late['direction']!r}"
                     ),
                 }
                 continue
             keeps = LATE_OUTCOME_DIRECTIONS[late["direction"]]["keeps_verdict"]
-            after = bucket if keeps else ("not_useful" if bucket == "useful" else "useful")
-            if after != bucket:
-                trial[bucket].remove(cap_id)
+            after = held if keeps else ("not_useful" if held == "useful" else "useful")
+            if after != held:
+                trial[held].remove(cap_id)
                 if cap_id not in trial[after]:
                     trial[after].append(cap_id)
             # OVERWRITE, not setdefault: this is the one place a later observation is ALLOWED to
@@ -706,7 +708,7 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                 trial["verdict_judges"][cap_id] = late["judge"]
             trial["late_outcomes"][cap_id] = {
                 **late,
-                "superseded_bucket": bucket,
+                "superseded_bucket": held,
                 "verdict_after": after,
             }
         # The CONTROL ARM is what makes this an experiment rather than a tally: candidates that were
@@ -4676,25 +4678,48 @@ def _selftest_late_outcome() -> None:
         assert "self_reported" not in late_outcome_provenances(), late_outcome_provenances()
         gd = "advice:late0000grd0"
         _trial("guarded", gd)
-        for bad, why in (
+        # Explicit arguments rather than a kwargs splat: `**dict[str, object]` cannot satisfy the
+        # keyword-only signature and mypy is right to say so.
+        for direction, evidence, prov, corrob, why in (
             (
-                dict(provenance="self_reported"),
+                LATE_OUTCOME_CORROBORATES,
+                "ev",
+                "self_reported",
+                "PR #1 merged",
                 "a self-assessed tier must not attach",
             ),
-            (dict(corroboration=""), "an unnamed outcome must not attach"),
-            (dict(direction="helps"), "an unknown direction must not attach"),
-            (dict(evidence="  "), "an unevidenced attachment must not attach"),
+            (
+                LATE_OUTCOME_CORROBORATES,
+                "ev",
+                "outcome_corroborated",
+                "",
+                "an unnamed outcome must not attach",
+            ),
+            (
+                "helps",
+                "ev",
+                "outcome_corroborated",
+                "PR #1 merged",
+                "an unknown direction must not attach",
+            ),
+            (
+                LATE_OUTCOME_CORROBORATES,
+                "  ",
+                "outcome_corroborated",
+                "PR #1 merged",
+                "an unevidenced attachment must not attach",
+            ),
         ):
-            kwargs = dict(
-                direction=LATE_OUTCOME_CORROBORATES,
-                evidence="ev",
-                provenance="outcome_corroborated",
-                corroboration="PR #1 merged",
-                path=ledger,
-            )
-            kwargs.update(bad)
             try:
-                record_late_outcome("guarded", gd, **kwargs)
+                record_late_outcome(
+                    "guarded",
+                    gd,
+                    direction=direction,
+                    evidence=evidence,
+                    provenance=prov,
+                    corroboration=corrob,
+                    path=ledger,
+                )
                 raise AssertionError(why)
             except ValueError:
                 pass
