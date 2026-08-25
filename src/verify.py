@@ -573,20 +573,46 @@ def mypy_exempt_modules() -> list[str] | None:
     return []
 
 
-def _format_mypy_exempt_line(mods: list[str] | None, limit: int | None, total: int = 99) -> str:
+def _module_total() -> int | None:
+    """How many modules the ratchet's denominator refers to, COUNTED not typed.
+
+    It was the literal `99` until 2026-08-25, and adding one module made the printed line say "of
+    99" while 100 existed — a denominator that drifts silently every time the tree grows, which is
+    the matching-pair-of-literals failure CLAUDE.md names. Counted here and passed explicitly by the
+    selftests, so the assertions stay machine-invariant: the mirror carries a different file set, and
+    a test pinned to the live count would be right in one tree and wrong in the other.
+    """
+    try:
+        return len([p for p in MODULES.glob("*.py") if p.is_file()])
+    except Exception:  # noqa: BLE001
+        # None, NOT 0. A zero here would print "0 checked" and read as a drained ratchet, which is
+        # the same sentinel confusion `mypy_exempt_modules` above was fixed for on 2026-08-24. My
+        # own first draft of this function returned 0 and silently printed "of 0" — caught only
+        # because the value was obviously wrong, which is not a mechanism.
+        return None
+
+
+def _format_mypy_exempt_line(
+    mods: list[str] | None, limit: int | None, total: int | None = None
+) -> str:
     """One line carrying BOTH numbers, per the runtime rule in CLAUDE.md. PURE.
 
     `typecheck: on` alone reads as "typed". `66/66 max of 99 modules exempt` reads as "typed where
     it is checked, and here is exactly how much is not" — the difference between a ratchet and an
     amnesty.
     """
+    total = _module_total() if total is None else total
+    shown_total = "an uncounted number of" if total is None else total
     if mods is None:
         return "  mypy ratchet: NOT COUNTED (no readable ignore_errors override in pyproject.toml)"
     bound = f"/{limit} max" if limit is not None else " (no ceiling set)"
     tail = " — type a module, delete its line" if mods else " — fully drained"
+    # `checked` is only computable when the denominator is. An uncountable total must not become
+    # an arithmetic error, and must not become a 0 either — it becomes the word "an unknown number".
+    checked = "an unknown number of" if total is None else total - len(mods)
     return (
-        f"  mypy ratchet: {len(mods)}{bound} of {total} module(s) exempt, "
-        f"{total - len(mods)} checked{tail}"
+        f"  mypy ratchet: {len(mods)}{bound} of {shown_total} module(s) exempt, "
+        f"{checked} checked{tail}"
     )
 
 
@@ -1222,8 +1248,8 @@ def _selftest() -> None:
     # An exempt list that can only GROW is an amnesty with a deadline nobody set. Two properties
     # make it a ratchet: the count is always PRINTED with its bound, and it is CEILINGED by the
     # same generic machinery as the skips.
-    assert "64/64 max of 99" in _format_mypy_exempt_line(["m"] * 64, 64)
-    assert "35 checked" in _format_mypy_exempt_line(["m"] * 64, 64)
+    assert "64/64 max of 99" in _format_mypy_exempt_line(["m"] * 64, 64, total=99)
+    assert "35 checked" in _format_mypy_exempt_line(["m"] * 64, 64, total=99)
     assert "type a module, delete its line" in _format_mypy_exempt_line(["m"], 1)
     # A DRAINED ratchet must say so, not print a bare 0 — the drain finishing is news.
     assert "fully drained" in _format_mypy_exempt_line([], 64)
