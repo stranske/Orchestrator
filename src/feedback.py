@@ -2776,7 +2776,7 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
             "SELECT payload_json FROM completion_events "
             "WHERE event_type='role' AND producer='roles'"
         ).fetchall()
-        selector: dict[str, dict[str, int]] = {
+        selector: dict[str, dict[str, Any]] = {
             role: {
                 "matched": 0,
                 "invoked": 0,

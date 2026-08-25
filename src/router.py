@@ -35,6 +35,7 @@ import random
 import sys
 import time
 from pathlib import Path
+from typing import Any, Tuple, TypedDict, Union
 
 import capabilities
 import claims
@@ -70,6 +71,30 @@ RESERVE_AGENTS = {"claude"}
 BACKUP_AGENTS = {"aider"}
 GEMINI_GOOD_FIT_TASKS = {"implement", "testgen", "epic", "cross_repo", "runtime_ac", "review"}
 
+
+class RouteEntryRef(TypedDict):
+    """The agent identifier shared by every scored candidate."""
+
+    agent: str
+
+
+class RouteEntry(RouteEntryRef):
+    """One static route-table candidate."""
+    mode: str
+    late: bool
+
+
+class RouteSpec(TypedDict):
+    """The static routing policy for a task type."""
+
+    role: str
+    agents: list[RouteEntry]
+
+
+Score = Tuple[Union[int, float], ...]
+ScoredRow = Tuple[Score, RouteEntryRef, str, int]
+ScoredSelection = Tuple[Score, RouteEntry, str, int]
+
 # Route table: task_type -> {role, agents:[{agent, mode, late}]}. `mode` is the
 # adapter hint ('composer'/'frontier' for cursor; 'cheap'/'full' picks the model).
 # `late` entries (prepaid-frontier, paygo) are used only after non-late options.
@@ -80,7 +105,7 @@ GEMINI_GOOD_FIT_TASKS = {"implement", "testgen", "epic", "cross_repo", "runtime_
 # truly unlimited — capacity.py models that + 429-sheds when spent), but it is not the seat to avoid.
 # GEMINI: a REASONING seat (≈2nd tier), compute-metered, 5h+weekly prepaid windowed capacity.
 # Never mechanical/polish; use capacity.py's steady/reserve/drain policy for substantial good-fit work.
-ROUTE_TABLE = {
+ROUTE_TABLE: dict = {
     # TIER POLICY (2026-08-08, stage 1 of 2): task types are assigned a model LEVEL, not just an
     # agent order. cheap = mechanical/polish/codemod (low reasoning), mid = review/testgen (gated or
     # read-heavy, stage 2), full = implement/epic/cross_repo/runtime_ac (a mistake is expensive to
@@ -199,6 +224,10 @@ ROUTE_TABLE = {
     },
 }
 
+# The public route table remains a generic mapping for compatibility with its existing consumers;
+# this private view records the invariant enforced by the static table above.
+_ROUTE_TABLE_TYPED: dict[str, RouteSpec] = ROUTE_TABLE
+
 
 def _state(cap: dict, agent: str) -> str:
     return (cap.get("agents", {}).get(agent, {}) or {}).get("state", "unknown")
@@ -233,11 +262,12 @@ def _drain_urgency(agent: str, cap: dict) -> float:
     time_pressure ramps 0 (fresh window) -> 1 (refresh imminent). Seats without the fields (flat
     or unmetered) contribute 0.0 — ranking unchanged. Replaces nothing; deepens the binary drain
     flag into budget pacing (R3: BaRP/ParetoBandit)."""
-    row = cap.get("agents", {}).get(agent, {}) or {}
+    row: dict[str, Any] = cap.get("agents", {}).get(agent, {}) or {}
     try:
         soft = float(row.get("soft_units_5h") or 0)
         used = float(row.get("estimated_units_5h") or 0)
-        mins = float(row.get("minutes_to_window_refresh"))
+        minutes_to_refresh: Any = row.get("minutes_to_window_refresh")
+        mins = float(minutes_to_refresh)
     except (TypeError, ValueError):
         return 0.0
     if soft <= 0 or mins < 0:
@@ -333,7 +363,9 @@ def _prior_posterior_from_rank(idx: int, total: int) -> float:
     return max(0.45, min(0.70, 0.65 - idx * step))
 
 
-def _thompson_sample(row: tuple, learned: dict | None, rng, *, total_candidates: int) -> float:
+def _thompson_sample(
+    row: ScoredRow, learned: dict | None, rng, *, total_candidates: int
+) -> float:
     _score_tuple, entry, _st, idx = row
     fallback = _prior_posterior_from_rank(idx, total_candidates)
     posterior, score, n_obs = _learned_posterior_score(learned, entry["agent"], fallback)
@@ -345,7 +377,7 @@ def _thompson_sample(row: tuple, learned: dict | None, rng, *, total_candidates:
     return rng.betavariate(alpha, beta) * effort_multiplier
 
 
-def entry_agent(picked: tuple) -> str:
+def entry_agent(picked: ScoredRow) -> str:
     """Agent name out of a scored-selection tuple, for heartbeat refs."""
     try:
         return str(picked[1].get("agent") or "?")
@@ -364,7 +396,9 @@ def _capability_heartbeat(capability_id: str, event_type: str, *, ref: str = "")
         pass
 
 
-def _thompson_exploration_choice(scored: list, learned: dict | None, rng) -> tuple | None:
+def _thompson_exploration_choice(
+    scored: list[ScoredSelection], learned: dict | None, rng
+) -> ScoredSelection | None:
     """Choose a same-policy-tier challenger with a Thompson-style posterior sample.
 
     This is intentionally hybrid: the router still enters exploration only under ε, and this helper can
@@ -384,7 +418,9 @@ def _thompson_exploration_choice(scored: list, learned: dict | None, rng) -> tup
     return best
 
 
-def _exploration_choice(scored: list, learned: dict | None, rng) -> tuple | None:
+def _exploration_choice(
+    scored: list[ScoredSelection], learned: dict | None, rng
+) -> ScoredSelection | None:
     """Choose a same-policy-tier challenger, preferring the least-observed agent.
 
     Exploration should refresh posteriors without violating the router's hard economics:
@@ -433,11 +469,11 @@ def select_agent(
     epsilon-greedy mode refreshes least-observed eligible agents inside the same ε cap; Thompson-hybrid
     remains available as an override for posterior-sampling challenger reviews.
     """
-    spec = ROUTE_TABLE.get(task_type)
+    spec = _ROUTE_TABLE_TYPED.get(task_type)
     if not spec:
         return None
     load = load or {}
-    scored = []
+    scored: list[ScoredSelection] = []
     for idx, entry in enumerate(spec["agents"]):
         if only is not None and entry["agent"] not in only:
             continue
@@ -466,7 +502,7 @@ def select_agent(
             # next agent instead of selecting profile=None and crashing.
             continue
         over_cap = 1 if load.get(entry["agent"], 0) >= per_agent_cap else 0
-        score = (
+        score: Score = (
             over_cap,
             0 if not entry["late"] else 1,
             0 if st == "ok" else 1,
@@ -640,7 +676,7 @@ def _lane_cap(cap: dict, max_concurrent: int) -> int:
     """How many concurrent lanes capacity allows: non-shed code agents, capped."""
     code_agents = {
         e["agent"]
-        for spec in ROUTE_TABLE.values()
+        for spec in _ROUTE_TABLE_TYPED.values()
         if spec.get("role") != "review"
         for e in spec["agents"]
     }
@@ -899,7 +935,16 @@ def load_backlog() -> list[dict]:
     """
     try:
         data = json.loads(BACKLOG_JSON.read_text())
-        return data.get("items", data) if isinstance(data, (list, dict)) else []
+        # THE BARE-LIST FORM IS THE ONE THE DOCSTRING PROMISES, and it was the one that could
+        # never work: `.get` on a list raises AttributeError, the broad `except` below swallows
+        # it, and the function returns [] -- "no work" -- for a perfectly valid backlog. Latent
+        # today (the live file is the {"items": [...]} dict form), which is exactly why it is
+        # worth closing now: the day discovery starts writing the documented shape, the symptom
+        # is SILENCE, and an empty backlog reads as nothing to do rather than as a parse failure.
+        # The dict branch is unchanged, fallback included.
+        if isinstance(data, list):
+            return data
+        return data.get("items", data) if isinstance(data, dict) else []
     except Exception:
         return []
 
@@ -1009,7 +1054,12 @@ def _selftest() -> None:
             )[0]
             == 0.999
         )
-        edge_row = ((0, 0, 0, 0, 0), {"agent": "edge"}, "ok", 0)
+        edge_row: ScoredRow = (
+            (0, 0, 0, 0, 0),
+            {"agent": "edge"},
+            "ok",
+            0,
+        )
         edge_sample = _thompson_sample(
             edge_row,
             {"edge": {"posterior": 1.0, "score": 1.0, "n_obs": 2}},
@@ -1344,6 +1394,33 @@ def _selftest() -> None:
         )
         assert _drain_urgency("gemini", spent) == 0.0
         assert _drain_urgency("cursor", urgent) == 0.0, "field-less seats unaffected"
+
+        # ---- BACKLOG PAYLOAD SHAPES. The bare list is the shape load_backlog's own docstring
+        # promises ("[{target, task_type, lane}]"), and it returned [] for its whole life: `.get`
+        # on a list raises AttributeError and the broad `except` turns that into "no work". This
+        # asserts the DISTINCTION that matters -- a populated backlog must never read as empty --
+        # because an empty list is also what a genuine parse failure returns, so only a non-empty
+        # payload can tell the two apart. Written by breaking it: restoring the old one-liner
+        # fails the first assertion below.
+        backlog_path = Path(tmp) / "backlog.json"
+        old_backlog = BACKLOG_JSON
+        try:
+            globals()["BACKLOG_JSON"] = backlog_path
+            listed = [{"target": "o/r#1", "task_type": "implement", "lane": "opener"}]
+            backlog_path.write_text(json.dumps(listed))
+            assert load_backlog() == listed, ("bare list payload must survive", load_backlog())
+
+            backlog_path.write_text(json.dumps({"items": listed}))
+            assert load_backlog() == listed, "dict-with-items is unchanged"
+
+            wrapped = {"generated_at": 1, "scope": "x"}
+            backlog_path.write_text(json.dumps(wrapped))
+            assert load_backlog() == wrapped, "dict without items keeps its existing fallback"
+
+            backlog_path.write_text("{not json")
+            assert load_backlog() == [], "unparseable payload still degrades to empty"
+        finally:
+            globals()["BACKLOG_JSON"] = old_backlog
 
         print(
             "router.py selftest: OK (route-table prior, capacity sequencing, code>review "

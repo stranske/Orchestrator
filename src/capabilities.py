@@ -125,7 +125,7 @@ EVENT_FIELDS = {
     "outcome": None,
 }
 
-KNOWN_GATES = {
+KNOWN_GATES: dict[str, dict[str, Any]] = {
     "local-model-profile-trial": {
         "status": "shadow",
         "entrypoint": "model_profile_trial.py",

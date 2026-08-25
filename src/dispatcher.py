@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import adapters
 import claims
@@ -922,9 +923,14 @@ def _spawn(d: dict) -> int:
             source="orchestrator-profile-decision",
             started_ts=started_ts,
         )
-        if d.get("profile_decision"):
+        profile_decision = d.get("profile_decision")
+        if profile_decision:
+            assert profile_attempt_id is not None, "selected profiles create an attempt id"
+            assert isinstance(profile_decision, dict), "profile_decision is a decision record"
+            decision_id = profile_decision["decision_id"]
+            assert isinstance(decision_id, str), "profile_decision decision_id is persisted as text"
             feedback.attach_profile_attempt_to_decision(
-                d["profile_decision"]["decision_id"], profile_attempt_id
+                decision_id, profile_attempt_id
             )
     adapters.record_ledger(
         d["agent"],
@@ -1088,7 +1094,7 @@ def delegate(
     if not claims.claim(target, agent):
         h = claims.holder(target)
         return {"error": f"target already claimed by {h.get('agent') if h else 'another agent'}"}
-    a = {
+    a: dict[str, object] = {
         "agent": agent,
         "target": target,
         "lane": lane,
@@ -1589,19 +1595,20 @@ def offload(
             # served closes unresolved with the reason, exactly as before.
             # The run's own report wins: it is exact for THIS run, where a store probe has to
             # match a workspace and a window and can pick a neighbour's session.
-            probe = (
+            probe: dict[str, str | None] = (
                 {"model": observed_model, "reason": None}
                 if observed_model
                 else adapters.cli_reported_model(
                     agent, run_cwd, started_ts=started_ts, log_file=str(logf)
                 )
             )
-            if probe.get("model"):
+            resolved_model = probe.get("model")
+            if resolved_model:
                 feedback.complete_profile_attempt(
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     resolved_provider=profile["provider"],
-                    resolved_model=probe["model"],
+                    resolved_model=resolved_model,
                     completed_ts=int(time.time()),
                 )
             else:
@@ -1637,6 +1644,7 @@ def offload(
         # the most deceptive possible failure -- the reader worked and the row said it had not.
         nonlocal observed_model
         nonlocal attempt_stderr
+        error: str | None
         attempt_stderr = ""
         try:
             # stdin=DEVNULL (matches _spawn): never let an agent CLI block reading an inherited pipe/TTY.
@@ -2056,6 +2064,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert testgen is not None, "known testgen agent is dispatchable"
         assert any("test-generation acceptance gate" in tok for tok in testgen["argv"]), testgen[
             "argv"
         ]
@@ -2070,6 +2079,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert epic is not None, "known epic agent is dispatchable"
         assert any("epic decomposition plan" in tok for tok in epic["argv"]), epic["argv"]
         assert any("Do not implement the subtasks" in tok for tok in epic["argv"]), epic["argv"]
         epic_prompt = " ".join(epic["argv"])
@@ -2085,6 +2095,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert codemod is not None, "known codemod agent is dispatchable"
         assert any("codemod/refactor campaign" in tok for tok in codemod["argv"]), codemod["argv"]
         assert any("codemod_lane.py" in tok for tok in codemod["argv"]), codemod["argv"]
         cross_repo = plan_dispatch(
@@ -2097,6 +2108,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert cross_repo is not None, "known cross_repo agent is dispatchable"
         assert any(
             "cross-repo coordinated-change plan" in tok for tok in cross_repo["argv"]
         ), cross_repo["argv"]
@@ -2111,6 +2123,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert runtime_ac is not None, "known runtime_ac agent is dispatchable"
         assert any("runtime acceptance-criteria" in tok for tok in runtime_ac["argv"]), runtime_ac[
             "argv"
         ]
@@ -2125,6 +2138,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert trend is not None, "known trend dispatch agent is dispatchable"
         trend_prompt = " ".join(trend["argv"])
         assert "REPO PLAYBOOK (stranske/Trend_Model_Project)" in trend_prompt, trend["argv"]
         assert "phase-3" in trend_prompt and "ruff check" in trend_prompt, trend["argv"]
@@ -2189,6 +2203,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert gemini_dispatch is not None, "known gemini agent is dispatchable"
         assert "--model" in gemini_dispatch["argv"], gemini_dispatch["argv"]
         assert "--log-file" in gemini_dispatch["argv"], gemini_dispatch["argv"]
         assert "--gemini_dir" in gemini_dispatch["argv"], gemini_dispatch["argv"]
@@ -2229,8 +2244,13 @@ def _selftest() -> None:
 
         _real_hb = _caps.production_heartbeat
         _saved_flag = os.environ.get("ORCH_CAPABILITY_HEARTBEATS")
+
+        def _fake_heartbeat(*args: Any, **kwargs: Any) -> bool:
+            _hb_calls.append((args, kwargs))
+            return True
+
         try:
-            _caps.production_heartbeat = lambda *a, **k: _hb_calls.append((a, k)) or True
+            _caps.production_heartbeat = _fake_heartbeat
             os.environ["ORCH_CAPABILITY_HEARTBEATS"] = "1"
             try:
                 offload("definitely-not-an-agent", "probe", cwd=tmp, timeout=1)
@@ -2307,6 +2327,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert custom is not None, "known delegated agent is dispatchable"
         assert any("ORCHESTRATOR-CRAFTED PROMPT" in tok for tok in custom["argv"]), custom["argv"]
         custom_known = plan_dispatch(
             {
@@ -2319,6 +2340,7 @@ def _selftest() -> None:
             },
             dry_run=True,
         )
+        assert custom_known is not None, "known delegated agent is dispatchable"
         custom_known_prompt = " ".join(custom_known["argv"])
         assert "ORCHESTRATOR-CRAFTED PROMPT" in custom_known_prompt, custom_known["argv"]
         assert (
@@ -2338,6 +2360,7 @@ def _selftest() -> None:
                 },
                 dry_run=True,
             )
+            assert delegated is not None, f"{agent} is a known dispatchable agent"
             delegated_prompt = " ".join(delegated["argv"])
             assert AGENT_PERSONAS[agent] in delegated_prompt, delegated["argv"]
             assert CRITICAL_EVALUATOR_DIRECTIVE in delegated_prompt, delegated["argv"]
@@ -2384,8 +2407,12 @@ def _selftest() -> None:
             "", "neither PlanModel nor RequestedModel specified", ""
         )
         captured = {}
-        old_build_command = adapters.build_command
-        old_subprocess_run = subprocess.run
+        # The selftest intentionally monkeypatches these module attributes with lightweight
+        # runtime doubles; their signatures are deliberately narrower than production callables.
+        adapter_module: Any = adapters
+        subprocess_module: Any = subprocess
+        old_build_command = adapter_module.build_command
+        old_subprocess_run = subprocess_module.run
 
         class Completed:
             returncode = 0
@@ -2430,8 +2457,8 @@ def _selftest() -> None:
             return Completed()
 
         try:
-            adapters.build_command = fake_build_command
-            subprocess.run = fake_run
+            adapter_module.build_command = fake_build_command
+            subprocess_module.run = fake_run
             off = offload(
                 "cursor",
                 "Make a parallel-safe code proposal.",
@@ -2440,8 +2467,8 @@ def _selftest() -> None:
                 timeout=1,
             )
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         assert (
             off["exit"] == 0 and off["isolated_cwd"] and off["output"].endswith("OFFLOAD RESULT")
         ), off
@@ -2476,12 +2503,12 @@ def _selftest() -> None:
         # agent must leave a worker execution attempt behind, because that row is the only thing
         # that can ever resolve model provenance, and without it no episode can complete.
         try:
-            adapters.build_command = fake_build_command
-            subprocess.run = fake_run
+            adapter_module.build_command = fake_build_command
+            subprocess_module.run = fake_run
             codex_off = offload("codex", "Summarize this file.", cwd=str(nongit), timeout=1)
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         with feedback._conn() as c:
             worker = c.execute(
                 "SELECT profile_id, operation_role FROM execution_attempts "
@@ -2554,12 +2581,12 @@ def _selftest() -> None:
             mute_seat
         ), "no seat lacks a reader any more -- delete this case rather than faking one"
         try:
-            adapters.build_command = fake_build_command
-            subprocess.run = fake_run
+            adapter_module.build_command = fake_build_command
+            subprocess_module.run = fake_run
             gem_off = offload(mute_seat, "Summarize this file.", cwd=str(nongit), timeout=1)
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         with feedback._conn() as c:
             gem_rows = c.execute(
                 "SELECT resolved_model FROM execution_attempts "
@@ -2599,14 +2626,14 @@ def _selftest() -> None:
         # seat can RESOLVE (any run). Only unbound-and-unreportable writes nothing.
         def _attempts_for(seat: str, *, round_id: str | None) -> list:
             try:
-                adapters.build_command = fake_build_command
-                subprocess.run = fake_run
+                adapter_module.build_command = fake_build_command
+                subprocess_module.run = fake_run
                 res = offload(
                     seat, "Summarize.", cwd=str(nongit), timeout=1, research_round=round_id
                 )
             finally:
-                adapters.build_command = old_build_command
-                subprocess.run = old_subprocess_run
+                adapter_module.build_command = old_build_command
+                subprocess_module.run = old_subprocess_run
             with feedback._conn() as c:
                 return c.execute(
                     "SELECT profile_id FROM execution_attempts WHERE run_id=? "
@@ -2657,12 +2684,12 @@ def _selftest() -> None:
             return _StreamCompleted()
 
         try:
-            adapters.build_command = fake_build_command
-            subprocess.run = fake_stream_run
+            adapter_module.build_command = fake_build_command
+            subprocess_module.run = fake_stream_run
             streamed = offload("cursor", "Summarize.", cwd=str(nongit), timeout=1)
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         # The caller keeps its plain-text contract: the stream is reduced to the final result.
         assert streamed["output"].strip() == "THE ANSWER", streamed["output"]
         with feedback._conn() as c:
@@ -2750,14 +2777,14 @@ def _selftest() -> None:
             ]
 
         try:
-            adapters.build_command = fake_gemini_build_command
-            subprocess.run = fake_run
+            adapter_module.build_command = fake_gemini_build_command
+            subprocess_module.run = fake_run
             gem = offload(
                 "gemini", "Inspect the isolated copy.", cwd=str(nongit), isolate=True, timeout=1
             )
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         assert (
             gem["exit"] == 0 and gem["isolated_cwd"] and gem["process_cwd"] == str(nongit.resolve())
         ), gem
@@ -2783,14 +2810,14 @@ def _selftest() -> None:
             return WaitingCompleted()
 
         try:
-            adapters.build_command = fake_gemini_build_command
-            subprocess.run = fake_waiting_run
+            adapter_module.build_command = fake_gemini_build_command
+            subprocess_module.run = fake_waiting_run
             bad_gem = offload(
                 "gemini", "Run tests and report JSON.", cwd=str(nongit), isolate=True, timeout=1
             )
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         assert bad_gem["exit"] != 0 and bad_gem["raw_exit"] == 0, bad_gem
         assert "progress-only" in bad_gem["error"], bad_gem
         assert "offload marked failed" in Path(bad_gem["log"]).read_text(), bad_gem
@@ -2813,12 +2840,12 @@ def _selftest() -> None:
             return EmptyCompleted()
 
         try:
-            adapters.build_command = fake_gemini_build_command
-            subprocess.run = fake_empty_run
+            adapter_module.build_command = fake_gemini_build_command
+            subprocess_module.run = fake_empty_run
             empty_gem = offload("gemini", "Say READY.", cwd=str(nongit), isolate=True, timeout=1)
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         assert empty_gem["exit"] == 70 and empty_gem["raw_exit"] == 0, empty_gem
         assert "agy log tail" in empty_gem["error"], empty_gem
         assert "neither PlanModel" in empty_gem["agent_log_tail"], empty_gem
@@ -2844,8 +2871,8 @@ def _selftest() -> None:
         try:
             os.environ["ORCH_OFFLOAD_RETRY_BACKOFF_S"] = "0"
             os.environ["ORCH_OFFLOAD_NETWORK_RETRIES"] = "1"
-            adapters.build_command = fake_gemini_build_command
-            subprocess.run = fake_reset_then_success_run
+            adapter_module.build_command = fake_gemini_build_command
+            subprocess_module.run = fake_reset_then_success_run
             retry_gem = offload(
                 "gemini",
                 "Say READY after a transient reset.",
@@ -2854,8 +2881,8 @@ def _selftest() -> None:
                 timeout=1,
             )
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
             if old_retry_backoff is None:
                 os.environ.pop("ORCH_OFFLOAD_RETRY_BACKOFF_S", None)
             else:
@@ -2880,12 +2907,12 @@ def _selftest() -> None:
             return Completed()
 
         try:
-            adapters.build_command = fake_build_command
-            subprocess.run = fake_timeout_run
+            adapter_module.build_command = fake_build_command
+            subprocess_module.run = fake_timeout_run
             timed_out = offload("cursor", "Timeout this offload.", cwd=str(nongit), timeout=1)
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         assert timed_out["exit"] == 124 and "timed out after 1s" in timed_out["error"], timed_out
         assert (
             "offload marked failed: timed out after 1s" in Path(timed_out["log"]).read_text()
@@ -2900,16 +2927,16 @@ def _selftest() -> None:
             return Completed()
 
         try:
-            adapters.build_command = fake_build_command
-            subprocess.run = fake_interrupt_run
+            adapter_module.build_command = fake_build_command
+            subprocess_module.run = fake_interrupt_run
             try:
                 offload("cursor", "Interrupt this offload.", cwd=str(nongit), timeout=1)
                 assert False, "KeyboardInterrupt should propagate after recording completion"
             except KeyboardInterrupt:
                 pass
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         ledger_rows = [json.loads(line) for line in adapters.LEDGER.read_text().splitlines()]
         interrupted = [
             row for row in ledger_rows if row.get("error") == "interrupted by orchestrator"
@@ -2940,7 +2967,9 @@ def _selftest() -> None:
             "cursor", "o/r", dry_run=True
         ), "remote delegation needs a PR number"
         # gate #4 rails: skip a paused PR, or one ALREADY in the agent pipeline (any agent:* label)
-        assert "paused" in _remote_skip_reason({"agents:paused"}, "cursor")
+        paused_reason = _remote_skip_reason({"agents:paused"}, "cursor")
+        assert paused_reason is not None, "agents:paused must be skipped"
+        assert "paused" in paused_reason
         assert _remote_skip_reason({"agent:cursor"}, "cursor") is not None  # same agent -> skip
         assert (
             _remote_skip_reason({"agent:claude"}, "cursor") is not None
@@ -2993,7 +3022,9 @@ def _selftest() -> None:
         }, codex_profile
         # Deterministic: the same agent must resolve to the SAME profile every time, or worker
         # attempts smear across three identities instead of accumulating against one.
-        assert _select_offload_profile("codex", "mid")["profile_id"] == codex_profile["profile_id"]
+        repeated_codex_profile = _select_offload_profile("codex", "mid")
+        assert repeated_codex_profile is not None, "codex has a deterministic offload profile"
+        assert repeated_codex_profile["profile_id"] == codex_profile["profile_id"]
         # Every real seat now has a registered profile, so every seat can record a worker attempt.
         # (Before this, only codex could, which is why provenance covered one agent of six.)
         for seat in ("claude", "gemini", "cursor", "vibe", "aider"):
@@ -3048,12 +3079,12 @@ def _selftest() -> None:
             return Completed()
 
         try:
-            adapters.build_command = fake_gemini_build_command
-            subprocess.run = fake_agy_run
+            adapter_module.build_command = fake_gemini_build_command
+            subprocess_module.run = fake_agy_run
             agy_off = offload("gemini", "Summarize.", cwd=str(nongit), timeout=1)
         finally:
-            adapters.build_command = old_build_command
-            subprocess.run = old_subprocess_run
+            adapter_module.build_command = old_build_command
+            subprocess_module.run = old_subprocess_run
         with feedback._conn() as c:
             agy_row = c.execute(
                 "SELECT resolved_provider, resolved_model, status, fallback_reason "

@@ -126,17 +126,6 @@ mypy_path = ["src", "tests"]
 # module is now a red, and a module can never quietly rejoin the exempt set.
 [[tool.mypy.overrides]]
 module = [
-    "capabilities",
     "capability_advisor",
-    "capability_compiler",
-    "capability_outcome_bridge",
-    "capability_propensity",
-    "dispatcher",
-    "feedback",
-    "keepalive_outcomes",
-    "redirect_sweep",
-    "router",
-    "runtime_ac",
-    "runtime_ac_gate",
 ]
 ignore_errors = true

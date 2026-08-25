@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ DEFAULT_MAX_SHADOW_RECORDS = 3
 DEFAULT_SHADOW_DEDUPE_HOURS = 24
 
 
-def _env_flag(env: dict, name: str) -> bool:
+def _env_flag(env: Mapping[str, str], name: str) -> bool:
     return str(env.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -175,7 +176,8 @@ def _existing_sweep_fingerprints(corpus_path: Path, *, since_ts: int | None) -> 
             continue
         if since_ts is not None and int(entry.get("ts") or 0) < since_ts:
             continue
-        report_summary = entry.get("report") if isinstance(entry.get("report"), dict) else {}
+        report_raw = entry.get("report")
+        report_summary: dict[str, Any] = report_raw if isinstance(report_raw, dict) else {}
         fp = entry.get("sweep_fingerprint") or report_summary.get("sweep_fingerprint")
         if fp:
             out.add(str(fp))
@@ -265,7 +267,9 @@ def record_experiment_candidates(
         marker_path = exp_dir / "done" / f"{exp_id}:{agent}.json"
         rc = None
         try:
-            rc = int((json.loads(marker_path.read_text()) or {}).get("rc"))
+            marker_data = json.loads(marker_path.read_text()) or {}
+            rc_raw = marker_data.get("rc")
+            rc = int(rc_raw) if rc_raw is not None else None
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             rc = None
         patch = exp_dir / f"diff-{agent}.patch"
@@ -335,7 +339,7 @@ def record_shadow_candidates(
     if dedupe_hours > 0:
         since_ts = int(time.time()) - int(dedupe_hours * 3600)
     seen = _existing_sweep_fingerprints(corpus_path, since_ts=since_ts)
-    result = {
+    result: dict[str, Any] = {
         "enabled": True,
         "dispatch": bool(dispatch),
         "proposal_replay": proposal_json is not None and not dispatch,
@@ -548,7 +552,7 @@ def _read_report_status(path: Path, *, now: float | None = None) -> dict:
 
 def doctor(
     *,
-    env: dict | None = None,
+    env: Mapping[str, str] | None = None,
     state_dir: Path | None = None,
     corpus_path: Path | None = None,
     orchestrate_path: Path | None = None,
@@ -556,8 +560,8 @@ def doctor(
     now: float | None = None,
 ) -> dict:
     """Read-only preflight for the redirect sweep and shadow-corpus bridge."""
-    env = os.environ if env is None else env
-    state_dir = state_dir or Path(env.get("ORCH_STATE_DIR", STATE_DIR))
+    effective_env: Mapping[str, str] = os.environ if env is None else env
+    state_dir = state_dir or Path(effective_env.get("ORCH_STATE_DIR", STATE_DIR))
     report_path = state_dir / "redirect-sweep.json"
     orchestrate_path = orchestrate_path or Path(__file__).with_name("orchestrate.sh")
     try:
@@ -573,11 +577,11 @@ def doctor(
     import redirect_shadow
 
     corpus_path = corpus_path or Path(
-        env.get("ORCH_REDIRECT_SHADOW_CORPUS", redirect_shadow.CORPUS_PATH)
+        effective_env.get("ORCH_REDIRECT_SHADOW_CORPUS", redirect_shadow.CORPUS_PATH)
     )
     corpus_summary = redirect_shadow.summarize(corpus_path)
     live_sweep = sweep(now=now) if run_sweep else None
-    recording_enabled = _env_flag(env, "ORCH_REDIRECT_SWEEP_RECORD_CORPUS")
+    recording_enabled = _env_flag(effective_env, "ORCH_REDIRECT_SWEEP_RECORD_CORPUS")
 
     if not cadence_step_present:
         recommendation = "Redirect sweep cadence is not wired in orchestrate.sh."
@@ -608,10 +612,10 @@ def doctor(
             "redirect_sweep_step_present": cadence_step_present,
             "record_corpus_env_gate_present": corpus_gate_present,
             "record_corpus_env_enabled": recording_enabled,
-            "backend": env.get("ORCH_REDIRECT_SWEEP_BACKEND", ""),
-            "actions": env.get("ORCH_REDIRECT_SWEEP_ACTIONS", ",".join(DEFAULT_SHADOW_ACTIONS)),
-            "max_records": env.get("ORCH_REDIRECT_SWEEP_MAX_RECORDS", DEFAULT_MAX_SHADOW_RECORDS),
-            "dedupe_hours": env.get(
+            "backend": effective_env.get("ORCH_REDIRECT_SWEEP_BACKEND", ""),
+            "actions": effective_env.get("ORCH_REDIRECT_SWEEP_ACTIONS", ",".join(DEFAULT_SHADOW_ACTIONS)),
+            "max_records": effective_env.get("ORCH_REDIRECT_SWEEP_MAX_RECORDS", DEFAULT_MAX_SHADOW_RECORDS),
+            "dedupe_hours": effective_env.get(
                 "ORCH_REDIRECT_SWEEP_DEDUPE_HOURS", DEFAULT_SHADOW_DEDUPE_HOURS
             ),
         },

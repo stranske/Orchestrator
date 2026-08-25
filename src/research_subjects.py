@@ -16,6 +16,8 @@ import sqlite3
 import sys
 import time
 from collections import Counter, defaultdict
+from collections.abc import Collection, Mapping
+from typing import Any, TypeVar
 
 import feedback
 
@@ -1102,7 +1104,19 @@ def mark_lifecycle(
     return changed
 
 
-def reciprocal_evidence_weights(groups: dict) -> dict[str, float]:
+# GENERIC OVER THE MEMBER TYPE, and that is not incidental. The two callers key on different
+# things -- `effective_evidence_weights` below groups run-id STRINGS, while
+# `capability_propensity.usefulness` groups verdict INDICES (ints) -- so a `dict[str, float]`
+# return was simply too narrow, not a description of one caller being wrong. It was narrow
+# enough to make the int-keyed lookup look like a defect: draining capability_propensity's
+# mypy findings first produced two `type: ignore`s at that call site, which would have
+# suppressed a false positive AND blinded the real check. The runtime was always correct.
+_Member = TypeVar("_Member")
+
+
+def reciprocal_evidence_weights(
+    groups: Mapping[Any, Collection[_Member]],
+) -> dict[_Member, float]:
     """THE correlated-arm discount, in one place: n observations in a group are worth ONE.
 
     `groups` maps a correlation key -> the observation ids that share it. Each member gets
