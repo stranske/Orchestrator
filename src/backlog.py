@@ -191,6 +191,47 @@ def scoped_blocker_entries() -> dict:
         return {}
 
 
+def scoped_blocker_source() -> str:
+    """WHY `scoped_blockers_live` is the number it is: `ok` / `absent` / `unreadable` /
+    `unparseable` / `wrong_shape`.
+
+    THE COUNT ALONE CANNOT SAY, and that is the whole reason this exists.
+    `scoped_blocker_entries()` returns `{}` for five different situations and only ONE of them
+    means "there are no blockers". The other four are failures to measure, and they render
+    identically: `scoped_blockers_live: 0`. That collapse — one value meaning both "measured
+    zero" and "could not measure" — is the ninth latched-gate instance in this workspace, and
+    scoped blockers are instance #2, where stale blockers emptied the fleet backlog for 78 days.
+    A field whose history is a 78-day silent outage should not report its healthy state and its
+    blind state with the same integer.
+
+    Deliberately NOT a behaviour change: `scoped_blocker_entries()` still returns `{}` on every
+    failure, so an unreadable sentinel still lets work proceed (fail toward motion, per
+    CLAUDE.md). This only makes the silence SPEAK. `wrong_shape` is the specific hole the
+    2026-08-24 triage found: `handoff.sh` validates the sentinel with `jq -e .`, which accepts
+    any valid JSON including a bare array, so a structurally wrong sentinel is neither
+    reinitialised by the writer nor reported by the reader.
+    """
+    try:
+        raw = SENTINEL.read_text()
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unreadable"
+    try:
+        data = json.loads(raw)
+    except Exception:  # noqa: BLE001 — any decode failure is the same verdict
+        return "unparseable"
+    if not isinstance(data, dict):
+        return "wrong_shape"
+    stop = data.get("stop")
+    if stop is not None and not isinstance(stop, dict):
+        return "wrong_shape"
+    blockers = (stop or {}).get("scoped_blockers")
+    if blockers is not None and not isinstance(blockers, dict):
+        return "wrong_shape"
+    return "ok"
+
+
 def expired_scoped_blockers(now: int | None = None) -> dict:
     """Blockers past their own `expires_at` — i.e. ones that should no longer block."""
     current = int(now if now is not None else time.time())
@@ -445,6 +486,10 @@ def build_payload(items: list, live_blockers, expired, raised) -> dict:
         # precisely because this was invisible).
         "scoped_blockers_live": len(live_blockers),
         "scoped_blockers_expired": len(expired),
+        # The two counts above cannot distinguish "no blockers" from "could not read the
+        # sentinel" — both render as 0. This names which one it is, so a reader never has to
+        # guess whether a zero is health or blindness. See scoped_blocker_source().
+        "scoped_blockers_source": scoped_blocker_source(),
         "owner_questions_raised": len(raised),
     }
 
@@ -688,12 +733,42 @@ def _selftest() -> None:
         )
         assert load_scoped_blockers(now=now) == {"o/r#9"}, "unparseable expiry must still block"
         assert expired_scoped_blockers(now=now) == {}, "unparseable expiry is not 'expired'"
+
+        # ---- THE COUNT AND THE REASON ARE SEPARATE FACTS. `scoped_blocker_entries()` returns
+        # {} for five situations and only ONE means "there are no blockers"; the other four are
+        # failures to measure and used to render identically as `scoped_blockers_live: 0`.
+        # Scoped blockers are latched-gate instance #2 — stale ones emptied the fleet backlog for
+        # 78 days — so a zero here must never be ambiguous between health and blindness.
+        # Behaviour is deliberately UNCHANGED: every case still yields {} so work proceeds (fail
+        # toward motion); only the reported REASON is new.
+        SENTINEL = Path(td) / "gone.json"
+        assert scoped_blocker_source() == "absent", scoped_blocker_source()
+        assert scoped_blocker_entries() == {}, "absent still yields no blockers"
+
+        SENTINEL = Path(td) / "shape.json"
+        SENTINEL.write_text("[]")
+        assert scoped_blocker_source() == "wrong_shape", scoped_blocker_source()
+        assert scoped_blocker_entries() == {}, "a bare array still yields no blockers"
+
+        SENTINEL.write_text("{ not json")
+        assert scoped_blocker_source() == "unparseable", scoped_blocker_source()
+
+        SENTINEL.write_text(json.dumps({"stop": []}))
+        assert scoped_blocker_source() == "wrong_shape", "a non-dict `stop` is wrong shape"
+
+        SENTINEL.write_text(json.dumps({"stop": {"scoped_blockers": []}}))
+        assert scoped_blocker_source() == "wrong_shape", "non-dict blockers are wrong shape"
+
+        # and the healthy zero is DISTINGUISHABLE from all four above
+        SENTINEL.write_text(json.dumps({"stop": {"scoped_blockers": {}}}))
+        assert scoped_blocker_source() == "ok", scoped_blocker_source()
+        assert scoped_blocker_entries() == {}, "no blockers is also {} — hence the source field"
     SENTINEL = _saved_sentinel
 
     print(
         "backlog.py selftest: OK (ready-issue + in-flight-agent-PR discovery, "
         "body retention, label classification, open-PR-referenced-issue exclusion, "
-        "scoped-blocker filter + expiry honoured/fail-safe)"
+        "scoped-blocker filter + expiry honoured/fail-safe, sentinel source distinguishes unreadable from empty)"
     )
 
 

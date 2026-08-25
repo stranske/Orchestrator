@@ -55,6 +55,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 # TWO ROOTS, and verify.py is the module that most needs them separated: it DISCOVERS modules
 # (beside itself) and it READS repo files — the floor, the coverage artifacts — and RUNS pytest,
@@ -383,12 +384,24 @@ def _format_absent_line(rep: dict) -> str | None:
     )
 
 
+FLOOR_UNREADABLE = "__unreadable__"
+
+
 def load_floor() -> dict:
+    """The recorded floor, or `{}` when there is none.
+
+    A PRESENT-BUT-UNREADABLE floor is NOT the same as an absent one, and returning `{}` for both
+    made them indistinguishable: `floor_state` rendered each as `unset`, so a corrupted
+    .verify-floor.json read as "no floor agreed yet" and every count-based check silently stopped
+    applying. Same shape as the two other instances found on 2026-08-24 — one sentinel standing
+    for "measured nothing" and "could not measure". The unreadable case now carries a marker key
+    so callers can say which it is; it stays a dict so no caller breaks.
+    """
     if FLOOR.exists():
         try:
             return json.loads(FLOOR.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
-            return {}
+            return {FLOOR_UNREADABLE: True}
     return {}
 
 
@@ -640,23 +653,51 @@ def _floor_problems(floor: dict, py: dict) -> list[str]:
     return problems
 
 
+def _exempt_ceiling_input(exempt: list[str] | None) -> int | None:
+    """The ratchet's ceiling input: the COUNT, or None when it could not be counted. PURE.
+
+    A ONE-LINE FUNCTION ON PURPOSE. This rule previously lived inline in `verify()` as
+    `len(exempt) if exempt is not None else 0` under a comment saying uncountable "must not read
+    as 0" — the comment was right and the code was not. Extracting it makes the rule TESTABLE at
+    the call site: a selftest asserting `_ceiling_problems` handles None proves the checker is
+    right while saying nothing about what the checker is fed, and it was the feeding that was
+    broken. Demonstrated: restoring the `else 0` coercion inline left every assertion green.
+    """
+    return len(exempt) if exempt is not None else None
+
+
 def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
     """Is anything skipping MORE than the agreed maximum? Pure, for the same reason.
 
     An UNSET ceiling means "nothing agreed yet", not "zero" — reading a missing key as 0 would
     condemn every machine that legitimately lacks a prerequisite.
+
+    AN UNCOUNTABLE QUANTITY UNDER A SET CEILING IS A FAILURE, not a pass. `actual[key] is None`
+    means the run could not measure that population at all; treating it as 0 lets the ceiling
+    clear by being BLIND, which is the same defect as a gate that cannot announce its own
+    success — one value standing for both "measured zero" and "could not measure". The ceiling is
+    an agreement about a number; if the number is unknown the agreement cannot be checked, and
+    silence is the wrong answer.
     """
     problems = []
     for key, label in CEILINGS:
         limit = floor.get(key)
         if limit is None:
             continue
-        if actual.get(key, 0) > int(limit):
+        observed = actual.get(key, 0)
+        if observed is None:
+            problems.append(
+                f"CEILING UNCHECKABLE: {label} could not be counted, but `{key}` is set to "
+                f"{limit}. A bounded quantity that cannot be measured is a failure, not a pass — "
+                f"fix whatever made it uncountable, or remove the ceiling deliberately."
+            )
+            continue
+        if observed > int(limit):
             problems.append(
                 # `CEILING`, not `SKIP CEILING`: the mypy exempt list is bounded by this same
                 # machinery and is not a skip, so the old wording sent a reader hunting for a skip
                 # that does not exist. The label already names WHICH population overflowed.
-                f"CEILING exceeded: {actual[key]} {label} > agreed maximum {limit}. "
+                f"CEILING exceeded: {observed} {label} > agreed maximum {limit}. "
                 f"This is bounded on purpose — either the new one is wrong, or raise "
                 f"`{key}` in .verify-floor.json deliberately and say why."
             )
@@ -701,9 +742,17 @@ def verify(
         "skipped_max": py["skipped"],
         "selftest_skipped_max": len(st["skipped"]),
         "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
-        # None (uncountable) must not read as 0 — that would let the ceiling pass by being blind.
-        "mypy_exempt_max": len(exempt) if exempt is not None else 0,
+        # None (uncountable) must not read as 0 — that would let the ceiling pass by being
+        # blind. The rule lives in `_exempt_ceiling_input` rather than inline here, because
+        # inline it was untestable and therefore wrong for as long as it existed.
+        "mypy_exempt_max": _exempt_ceiling_input(exempt),
     }
+    if floor.get(FLOOR_UNREADABLE):
+        problems.append(
+            "FLOOR UNREADABLE: .verify-floor.json exists but does not parse, so neither the "
+            "collection floor nor any ceiling can be checked. That is a failure, not an unset "
+            "floor — fix the file rather than letting a run pass unmeasured."
+        )
     problems += _ceiling_problems(floor, actual)
 
     def _cap(key: str) -> str:
@@ -715,15 +764,22 @@ def verify(
     # fine at a glance; "floor 386 — 1 BEHIND" cannot be misread, which is the same house rule
     # that makes each ceiling print its count against its limit.
     floor_state = (
-        "unset"
-        if not fc
+        # UNREADABLE IS NOT UNSET. A corrupted .verify-floor.json used to render as "unset",
+        # i.e. "no floor agreed yet" — so a run whose floor could not be parsed looked like a
+        # run that never had one, and the count checks stopped applying without saying so.
+        "UNREADABLE (.verify-floor.json exists but does not parse)"
+        if floor.get(FLOOR_UNREADABLE)
         else (
-            f"{fc}"
-            if py["collected"] == fc
+            "unset"
+            if not fc
             else (
-                f"{fc} — {py['collected'] - fc} BEHIND"
-                if py["collected"] > fc
-                else f"{fc} — NOT MET"
+                f"{fc}"
+                if py["collected"] == fc
+                else (
+                    f"{fc} — {py['collected'] - fc} BEHIND"
+                    if py["collected"] > fc
+                    else f"{fc} — NOT MET"
+                )
             )
         )
     )
@@ -868,7 +924,6 @@ def _selftest() -> None:
     # A SILENT ZERO-EXIT MUST BE A FAILURE. This is the exact hole that let 25 pytest-only files
     # read as passing: they exited 0 having executed nothing. Point run_selftests at a module that
     # does precisely that and confirm it is classified as failed, not ok.
-    import tempfile
 
     saved, saved_mods = globals()["HERE"], globals()["MODULES"]
     with tempfile.TemporaryDirectory(prefix="verify-") as td:
@@ -1195,6 +1250,40 @@ def _selftest() -> None:
     assert (
         mypy_exempt_modules() is not None
     ), "pyproject.toml does not parse; the ratchet cannot be counted"
+
+    # ---- A CEILING MUST NOT PASS BY BEING BLIND. The renderer was fixed first and that was
+    # only half of it: `actual["mypy_exempt_max"]` coerced an uncountable None to 0, so the
+    # ENFORCEMENT cleared while the LINE said NOT COUNTED. Two readers of one quantity
+    # disagreeing, with the permissive one deciding the exit code.
+    # The FEED, asserted separately from the CHECKER — the checker was never the broken half.
+    assert _exempt_ceiling_input(None) is None, "uncountable must stay uncountable, not become 0"
+    assert _exempt_ceiling_input([]) == 0, "a drained ratchet counts as zero, not as unknown"
+    assert _exempt_ceiling_input(["a", "b"]) == 2
+    _z = {k: 0 for k, _ in CEILINGS}
+    _blind = _ceiling_problems({"mypy_exempt_max": 0}, {**_z, "mypy_exempt_max": None})
+    assert len(_blind) == 1 and "UNCHECKABLE" in _blind[0], _blind
+    # an UNSET ceiling over an uncountable quantity is still fine — nothing was agreed
+    assert _ceiling_problems({}, {**_z, "mypy_exempt_max": None}) == []
+    # and the ordinary paths are untouched
+    assert _ceiling_problems({"mypy_exempt_max": 2}, {**_z, "mypy_exempt_max": 2}) == []
+    assert len(_ceiling_problems({"mypy_exempt_max": 2}, {**_z, "mypy_exempt_max": 3})) == 1
+
+    # ---- AN UNREADABLE FLOOR IS NOT AN UNSET ONE. Both used to return {} and render "unset",
+    # so a corrupt .verify-floor.json looked like a repo that had never agreed a floor, and every
+    # count check quietly stopped applying.
+    _saved_floor = FLOOR
+    try:
+        with tempfile.TemporaryDirectory(prefix="verify-floor-") as _td:
+            _bad = pathlib.Path(_td) / ".verify-floor.json"
+            _bad.write_text("{ not json", encoding="utf-8")
+            globals()["FLOOR"] = _bad
+            _got = load_floor()
+            assert _got.get(FLOOR_UNREADABLE) is True, _got
+            assert _got != {}, "unreadable must be distinguishable from absent"
+            globals()["FLOOR"] = pathlib.Path(_td) / "does-not-exist.json"
+            assert load_floor() == {}, "an absent floor is still simply absent"
+    finally:
+        globals()["FLOOR"] = _saved_floor
 
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "

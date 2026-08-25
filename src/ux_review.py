@@ -932,6 +932,9 @@ def _selftest_panel_backfill() -> None:
         # Blocking AND drainable quantity: a registered subject with no base commit is still
         # not minable, so both counts are reported or neither is meaningful.
         assert "with_base_sha" in result and "without_base_sha" in result, result
+        # The pair says WHAT; this says whether zero is reachable. Without it a reader
+        # sees a drainable-looking number whose only obvious drain corrupts provenance.
+        assert result["without_base_sha_is_permanent_for_discovered_panels"] is True, result
 
     # A historical bundle must not inherit the current checkout's commit.
     assert (
@@ -1354,6 +1357,18 @@ def backfill_panel_subjects(root: Path | None = None, *, apply: bool = False, co
         # cannot produce an acceptable completion event. Say both numbers or say neither.
         "with_base_sha": len(minable),
         "without_base_sha": len(registered) - len(minable),
+        # AND WHETHER THAT SECOND NUMBER CAN EVER REACH ZERO, which the pair alone does not say.
+        # For panels discovered on disk it CANNOT: `discover_historical_panels` sets
+        # `base_sha_unrecoverable` on every one, because none recorded the commit under review and
+        # inferring one from today's checkout would fuse two states of one app into a single
+        # subject (see that function's docstring, and the `must never borrow today's HEAD`
+        # assertion in the selftest). So `without_base_sha` here is a PERMANENT floor, not a
+        # backlog, and the only honest way to lower it is `--base-sha` on evidence that actually
+        # names a commit. Stated because a drainable-looking number invites someone to drain it,
+        # and the obvious way to drain this one corrupts provenance — CLAUDE.md §2. A gate that
+        # cannot reach its own success state is usually a defect; this one cannot ON PURPOSE, and
+        # the difference belongs in the output rather than only in a docstring two functions away.
+        "without_base_sha_is_permanent_for_discovered_panels": True,
         "detail": registered,
     }
 
