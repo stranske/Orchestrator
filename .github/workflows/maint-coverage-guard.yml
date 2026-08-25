@@ -181,11 +181,10 @@ jobs:
               ['success', 'neutral'].includes(run.conclusion || ''),
             );
             const runsToProbe = successfulRuns.slice(0, 10);
-            const requiredCoverageArtifactNames = new Set([
-              'gate-coverage-trend',
-              'gate-coverage-trend-history',
-              'gate-coverage',
-            ]);
+            // The payload is the only input every successful Gate run produces. Trend artifacts
+            // are best-effort enrichment: their download steps continue on error and the guard
+            // already omits their CLI arguments when they are absent.
+            const requiredCoverageArtifactNames = new Set(['gate-coverage']);
             let candidate = null;
             for (const run of runsToProbe) {
               let artifacts = [];
@@ -240,8 +239,7 @@ jobs:
               core.warning(
                 [
                   'Unable to locate a recent successful Gate workflow run with required',
-                  'coverage artifacts: gate-coverage-trend, gate-coverage-trend-history,',
-                  'gate-coverage.',
+                  'coverage payload artifact: gate-coverage.',
               ].join(' '),
               );
               core.setOutput('run_id', '');
