@@ -6,7 +6,6 @@ import re
 
 import paths
 
-
 WORKFLOW = paths.REPO_ROOT / ".github" / "workflows" / "maint-coverage-guard.yml"
 
 
