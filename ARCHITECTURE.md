@@ -405,8 +405,21 @@ Four disciplines make that honest rather than decorative:
    `research_subjects.reciprocal_evidence_weights` by both, so there is one scheme and not two. Three
    same-model self-reports are worth 0.25 effective observations, not three; a verdict with **no**
    judge identity joins the one `unattributed` arm rather than being assumed independent.
-3. **Down-weighted, never banned.** Self-assessment is the only signal most capabilities have, so
-   excluding it would empty the dataset — the gate would starve its own drain.
+3. **Down-weighted, never banned — but never DEFAULTED to either (2026-08-25).** Self-assessment is
+   the only signal most capabilities have, so excluding it would empty the dataset; the gate would
+   starve its own drain. It must still be *chosen*. `provenance` was optional and defaulted to
+   `self_reported`, so an omitted flag filed outcome-backed evidence at 0.25 — and because recording
+   APPENDS, that choice was **irreversible**: a second, better-labelled record does not upgrade the
+   first, it double-counts the trial. Two of three independent implementation runs on 2026-08-25 hit
+   it, with this capability's own `HOW_TO_USE` entry warning about the default in prose the whole
+   time. `record_usefulness` and the `useful` CLI now REFUSE an unstated provenance
+   (`unstated_provenance_refusal`, derived from `VERDICT_PROVENANCE` so the tiers offered are the
+   tiers accepted). The refusal writes nothing, which is what keeps the retry the trial's *first*
+   observation — a gate that consumed the experiment id would be the deadlock rather than the fix.
+   The read path is unchanged and still classifies an unlabelled pre-provenance row as
+   `self_reported`, because that is what such a row honestly is: `PROVENANCE_DEFAULT` answers "how do
+   I read silence", `PROVENANCE_UNSTATED` answers "may I write it", and sharing one constant is what
+   made them look like one question.
 4. **The reporting requirement is as load-bearing as the arithmetic.** `propensity()` returns the
    provenance mix, the independent-arm count, the self-reported share and the raw count beside the
    weighted one; `rank()` hands all of it to the **caller**; `report()` states the corpus mix in the

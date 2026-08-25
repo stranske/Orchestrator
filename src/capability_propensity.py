@@ -171,7 +171,9 @@ still one observation and only an independent arm moves the number.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -277,6 +279,35 @@ VERDICT_PROVENANCE: dict[str, dict] = {
     },
 }
 PROVENANCE_DEFAULT = "self_reported"
+# THE READ DEFAULT AND THE WRITE DEFAULT ARE DIFFERENT QUESTIONS, AND SHARING ONE CONSTANT MADE THEM
+# LOOK LIKE ONE (2026-08-25).
+#
+# READING a pre-provenance row with no recorded provenance, `PROVENANCE_DEFAULT` is the honest
+# answer: that row IS a self-report, nobody said otherwise, and assuming the strongest would recreate
+# the 11/12 reading this axis exists to correct. That use stays exactly as it is.
+#
+# WRITING a new verdict, silence is not an answer — it is an unasked question, and answering it with
+# the weakest tier is IRREVERSIBLE. `record_usefulness` appends; re-recording the same trial with
+# better provenance does not upgrade the first row, it adds a SECOND observation and double-counts
+# the trial. So a verdict recorded weakly can only ever be diluted, never corrected, and every
+# minute the silent default stands costs provenance that cannot be recovered.
+#
+# MEASURED, NOT THEORISED: two of three independent implementation runs on 2026-08-25 recorded real
+# `outcome_corroborated` evidence as `self_reported` at weight 0.25 by omitting the flag — and this
+# capability's OWN `how_to_use` entry had warned about the default in prose since 2026-08-24. A rule
+# that lives only in prose does not survive the next session, so the countermeasure is a refusal.
+# `self_reported` is still recordable and still the only signal most capabilities have; it just has
+# to be CHOSEN (`--provenance self_reported`) rather than fallen into.
+#
+# LATCHED-GATE ANSWERS (it is a refusal, so it owes all three):
+#   1. WHAT DECREMENTS IT? The caller naming a provenance. A concrete mechanism, available on the
+#      very next invocation, and named in the refusal text itself.
+#   2. CAN THE DRAIN RUN WHILE IT IS CLOSED? Yes, and this is the whole point: the refusal writes
+#      NOTHING, so the retry still records the FIRST observation of that trial. A gate that consumed
+#      the experiment id would be the deadlock — refusing the write is what keeps the drain open.
+#   3. SAME WINDOW BOTH WAYS? One constant: `VERDICT_PROVENANCE`'s keys are the set the refusal
+#      demands and the set `record_usefulness` accepts, so the remedy cannot drift from the check.
+PROVENANCE_UNSTATED = "__unstated__"
 # THE UNATTRIBUTED ARM. A verdict with no judge identity is not "some unknown independent judge" —
 # treating it that way is exactly the assumption that turned three runs of one model into 11
 # independent successes. All unattributed verdicts of one provenance about one capability are ONE
@@ -294,6 +325,28 @@ def provenance_self_assessed(provenance: str) -> bool:
     """Whether this provenance is the capability's user grading their own choice."""
     row = VERDICT_PROVENANCE.get(str(provenance)) or VERDICT_PROVENANCE[PROVENANCE_DEFAULT]
     return bool(row["self_assessed"])
+
+
+def unstated_provenance_refusal() -> str:
+    """Why an unstated provenance is refused, and what to pass instead. ONE text, two callers.
+
+    Derived from `VERDICT_PROVENANCE` rather than typed out, so the tiers a caller is told about are
+    by construction the tiers the write path accepts — a hand-written list here would be free to name
+    a value `record_usefulness` rejects, or omit one it takes.
+    """
+    tiers = ", ".join(
+        f"{name} ({row['weight']})" for name, row in sorted(VERDICT_PROVENANCE.items())
+    )
+    return (
+        "a usefulness verdict must STATE its provenance: pass one of "
+        f"{tiers}. "
+        "Nothing was recorded, so the retry still lands as this trial's FIRST observation — which "
+        "is the point: recording appends, so a verdict filed at the wrong tier cannot be upgraded "
+        "later, only diluted by a second observation that double-counts the same trial. "
+        f"To record an opinion deliberately, say so: --provenance {PROVENANCE_DEFAULT}. "
+        "Name --judge in the same breath; verdicts with no judge identity are all treated as ONE "
+        "correlated arm, and that is not recoverable either."
+    )
 
 
 def verdict_provenance(metadata: dict | None) -> str:
@@ -1011,7 +1064,7 @@ def record_usefulness(
     *,
     useful: bool,
     evidence: str,
-    provenance: str = PROVENANCE_DEFAULT,
+    provenance: str = PROVENANCE_UNSTATED,
     judge: str = "",
     corroboration: str = "",
     path=None,
@@ -1029,13 +1082,16 @@ def record_usefulness(
     across the two kinds. Without a durable `verdict_kind` on the row, a later reader could only
     average them.
 
-    `provenance` is the ORTHOGONAL axis: where the verdict CAME FROM. Default `self_reported`,
-    because that is what an unlabelled verdict is, and it weighs 0.25 rather than 1.0. Claiming
-    `outcome_corroborated` or `defect_found` REQUIRES `corroboration` naming the outcome — an
-    unnamed corroboration would make the strongest weight in the table self-certifying, which is
-    green-CI-alone under a new name. An unknown provenance is refused rather than coerced, for the
-    same reason an unknown decline kind is: a typo silently becoming the default would discard the
-    classification the caller believed it had made.
+    `provenance` is the ORTHOGONAL axis: where the verdict CAME FROM, and it is REQUIRED. It used to
+    default to `self_reported` — the weakest tier at weight 0.25 — so an omitted argument silently
+    filed outcome-backed evidence as an opinion, and since recording APPENDS, that choice could never
+    be corrected afterwards, only diluted. Silence is now refused with the tiers named
+    (`unstated_provenance_refusal`), which writes nothing and leaves the trial's first observation
+    still available. Claiming `outcome_corroborated` or `defect_found` REQUIRES `corroboration`
+    naming the outcome — an unnamed corroboration would make the strongest weight in the table
+    self-certifying, which is green-CI-alone under a new name. An unknown provenance is refused
+    rather than coerced, for the same reason an unknown decline kind is: a typo silently becoming the
+    default would discard the classification the caller believed it had made.
 
     `judge` is the ARM that judged. Optional, and load-bearing: verdicts with no judge identity are
     ALL treated as one correlated arm, so recording it is how a capability escapes the correlated-arm
@@ -1046,6 +1102,8 @@ def record_usefulness(
         raise ValueError("a usefulness verdict requires evidence naming what changed")
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
+    if str(provenance) == PROVENANCE_UNSTATED:
+        raise ValueError(unstated_provenance_refusal())
     if str(provenance) not in VERDICT_PROVENANCE:
         raise ValueError(
             f"unknown verdict provenance {provenance!r}; expected one of "
@@ -2862,6 +2920,7 @@ def _selftest_repair() -> None:
             "advice:wf00000001",
             useful=True,
             evidence="returned the repo-specific rule that changed the scope boundary",
+            provenance=PROVENANCE_DEFAULT,
             path=ledger,
         )
         capabilities.heartbeat(
@@ -2879,6 +2938,7 @@ def _selftest_repair() -> None:
             useful=False,
             evidence="308 chars that changed no finding, and one clause is factually wrong: it "
             "names a default branch this repo does not have",
+            provenance=PROVENANCE_DEFAULT,
             path=ledger,
         )
         record_decline(
@@ -2920,7 +2980,12 @@ def _selftest_repair() -> None:
         )
         record_trigger("healthy", "advice:hh00000001", path=ledger)
         record_usefulness(
-            "healthy", "advice:hh00000001", useful=True, evidence="found two defects", path=ledger
+            "healthy",
+            "advice:hh00000001",
+            useful=True,
+            evidence="found two defects",
+            provenance=PROVENANCE_DEFAULT,
+            path=ledger,
         )
 
         props = {p["capability_id"]: p for p in propose_repair(path=ledger)}
@@ -3003,6 +3068,7 @@ def _selftest_repair() -> None:
             "advice:wf00000009",
             useful=False,
             evidence="still gated for review consults after the fix",
+            provenance=PROVENANCE_DEFAULT,
             path=ledger,
             timestamp=base + 7200,
         )
@@ -3034,6 +3100,7 @@ def _selftest_repair() -> None:
             "advice:tb00000001",
             useful=False,
             evidence="the matcher does not fit this work",
+            provenance=PROVENANCE_DEFAULT,
             path=ledger,
             timestamp=base + 100,
         )
@@ -3051,6 +3118,7 @@ def _selftest_repair() -> None:
             "advice:tb00000002",
             useful=False,
             evidence="still does not fit",
+            provenance=PROVENANCE_DEFAULT,
             path=ledger,
             timestamp=base + 200,  # EXACTLY the repair's second
         )
@@ -3330,7 +3398,14 @@ def _selftest_declines() -> None:
                 metadata={"skill": "t-dec"},
             )
         record_trigger("helper", exp, path=ledger)
-        record_usefulness("helper", exp, useful=True, evidence="found a real defect", path=ledger)
+        record_usefulness(
+            "helper",
+            exp,
+            useful=True,
+            evidence="found a real defect",
+            provenance=PROVENANCE_DEFAULT,
+            path=ledger,
+        )
 
         # ---- 1. THE POSTERIOR MUST NOT MOVE. Measured on a capability that HAS evidence, so a
         # decline leaking in as `not_useful` would visibly drag a real number down rather than
@@ -3769,13 +3844,26 @@ def _selftest_provenance() -> None:
         for i in range(3):
             exp = f"advice:solo{i:08d}"
             _offer("solo", exp)
-            record_usefulness("solo", exp, useful=True, evidence=f"found defect {i}", path=ledger)
+            record_usefulness(
+                "solo",
+                exp,
+                useful=True,
+                evidence=f"found defect {i}",
+                provenance=PROVENANCE_DEFAULT,
+                path=ledger,
+            )
         # ...the same three verdicts from three DIFFERENT arms.
         for i, judge in enumerate(("codex", "cursor", "gemini")):
             exp = f"advice:arms{i:08d}"
             _offer("many-arms", exp)
             record_usefulness(
-                "many-arms", exp, useful=True, evidence="found a defect", judge=judge, path=ledger
+                "many-arms",
+                exp,
+                useful=True,
+                evidence="found a defect",
+                judge=judge,
+                provenance=PROVENANCE_DEFAULT,
+                path=ledger,
             )
         # ...and ONE verdict corroborated by a named outcome.
         _offer("corroborated", "advice:corrob00000")
@@ -3818,7 +3906,14 @@ def _selftest_provenance() -> None:
         for i in range(3):
             exp = f"advice:mixed{i:07d}"
             _offer("mixed-arm", exp)
-            record_usefulness("mixed-arm", exp, useful=True, evidence=f"helped {i}", path=ledger)
+            record_usefulness(
+                "mixed-arm",
+                exp,
+                useful=True,
+                evidence=f"helped {i}",
+                provenance=PROVENANCE_DEFAULT,
+                path=ledger,
+            )
         _offer("mixed-arm", "advice:mixedcorrob")
         record_usefulness(
             "mixed-arm",
@@ -3982,11 +4077,87 @@ def _selftest_provenance() -> None:
         assert post["provenance_mix"] == before["provenance_mix"], (before, post)
         assert post["declines"] == 1, post
 
+        # ---- SILENCE IS REFUSED, AND THE REFUSAL WRITES NOTHING (2026-08-25).
+        #
+        # Asserted on BEHAVIOUR rather than on the default's value, because a test that reads back
+        # the constant it guards passes with the constant restored. Break the fix by putting
+        # `provenance: str = PROVENANCE_DEFAULT` back on `record_usefulness` and this whole block
+        # goes red: the call returns True instead of raising, and the verdict count moves.
+        quiet = propensity("solo", path=ledger)
+        try:
+            record_usefulness(
+                "solo",
+                "advice:noprovenance",
+                useful=True,
+                evidence="found the defect the PR fixes",
+                path=ledger,
+            )
+        except ValueError as exc:
+            refusal = str(exc)
+        else:
+            raise AssertionError(
+                "a usefulness verdict with no stated provenance must be REFUSED, not filed at the "
+                "weakest tier — recording appends, so that choice cannot be corrected afterwards"
+            )
+        # THE REFUSAL IS A REMEDY, not a complaint: every tier it accepts is named, so the caller
+        # can retry without reading the source.
+        for tier in VERDICT_PROVENANCE:
+            assert tier in refusal, (tier, refusal)
+        assert "--provenance" in refusal and "--judge" in refusal, refusal
+        # NOTHING WAS WRITTEN, which is what keeps the retry the trial's FIRST observation. A
+        # refusal that consumed the experiment id would be the deadlock, not the fix.
+        assert propensity("solo", path=ledger) == quiet, (quiet, propensity("solo", path=ledger))
+        # ...AND THE WEAKEST TIER IS STILL RECORDABLE. Self-assessment is the only signal most
+        # capabilities have; the fix makes it a CHOICE, it does not ban it.
+        assert record_usefulness(
+            "solo",
+            "advice:noprovenance",
+            useful=True,
+            evidence="found the defect the PR fixes",
+            provenance=PROVENANCE_DEFAULT,
+            path=ledger,
+        ), "an explicit self_reported verdict must still record"
+        assert (
+            propensity("solo", path=ledger)["evidence_count"] == quiet["evidence_count"] + 1
+        ), quiet
+
+        # AND THE SAME REFUSAL REACHES THE SHELL, which is the surface that actually hit this.
+        argv = [
+            "useful",
+            "--capability",
+            "solo",
+            "--experiment",
+            "advice:clinoprov00",
+            "--evidence",
+            "it found the defect",
+            "--ledger",
+            str(ledger),
+        ]
+        before_cli = propensity("solo", path=ledger)
+        # The refusal and the success both print; captured so a passing selftest stays readable and
+        # an argparse usage block cannot be mistaken for a failure in `verify.py`'s output.
+        noise, quiet_out = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stderr(noise), contextlib.redirect_stdout(quiet_out):
+                main(argv)
+        except SystemExit as exc:
+            assert exc.code != 0, exc.code
+        else:
+            raise AssertionError("the `useful` CLI must refuse a verdict with no --provenance")
+        assert "--provenance" in noise.getvalue(), noise.getvalue()
+        assert propensity("solo", path=ledger) == before_cli, before_cli
+        with contextlib.redirect_stdout(quiet_out):
+            assert main(argv + ["--provenance", PROVENANCE_DEFAULT]) == 0
+        assert (
+            propensity("solo", path=ledger)["evidence_count"] == before_cli["evidence_count"] + 1
+        ), before_cli
+
     print(
         "capability_propensity provenance selftest: OK (self-reports weigh a quarter, one judge "
         "arm totals one observation, a corroborated outcome outweighs three correlated opinions, "
         "unlabelled rows classify as self-reported, the strongest classes are not self-certifying, "
-        "declines stay inert, and the caller receives the mix)"
+        "an unstated provenance is refused without writing anything, declines stay inert, and the "
+        "caller receives the mix)"
     )
 
 
@@ -4137,9 +4308,21 @@ def _selftest() -> None:
             )
         record_trigger("helper", exp, path=ledger)
         record_trigger("dud", exp, path=ledger)
-        record_usefulness("helper", exp, useful=True, evidence="found 3 real defects", path=ledger)
         record_usefulness(
-            "dud", exp, useful=False, evidence="no findings, cost a round", path=ledger
+            "helper",
+            exp,
+            useful=True,
+            evidence="found 3 real defects",
+            provenance=PROVENANCE_DEFAULT,
+            path=ledger,
+        )
+        record_usefulness(
+            "dud",
+            exp,
+            useful=False,
+            evidence="no findings, cost a round",
+            provenance=PROVENANCE_DEFAULT,
+            path=ledger,
         )
 
         trials = experiments(path=ledger)
@@ -4177,7 +4360,14 @@ def _selftest() -> None:
         # Evidence is mandatory for a verdict.
         for bad in ("", "   "):
             try:
-                record_usefulness("helper", exp, useful=True, evidence=bad, path=ledger)
+                record_usefulness(
+                    "helper",
+                    exp,
+                    useful=True,
+                    evidence=bad,
+                    provenance=PROVENANCE_DEFAULT,
+                    path=ledger,
+                )
             except ValueError:
                 pass
             else:
@@ -4324,16 +4514,18 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--not-useful", action="store_true", help="record that triggering it did NOT help"
     )
-    # PROVENANCE FROM BASH, because the surfaces that judge are shells. A verdict recorded without
-    # these lands as `self_reported` from an unattributed arm, which is the honest default and the
-    # weakest weight -- so the flags are how a caller EARNS a stronger one.
+    # PROVENANCE FROM BASH, because the surfaces that judge are shells. It has NO DEFAULT: an
+    # omitted flag used to file the verdict at the weakest tier (0.25) and, because recording
+    # appends, that could never be corrected afterwards. `useful` now refuses without it.
     ap.add_argument(
         "--provenance",
-        default=PROVENANCE_DEFAULT,
+        default=PROVENANCE_UNSTATED,
         choices=sorted(VERDICT_PROVENANCE),
-        help="useful: WHERE the verdict came from. The default self_reported weighs "
-        f"{VERDICT_PROVENANCE[PROVENANCE_DEFAULT]['weight']}; outcome_corroborated weighs 1.0 "
-        "and requires --corroboration",
+        help="useful: WHERE the verdict came from. REQUIRED — there is no default, because the "
+        f"old one ({PROVENANCE_DEFAULT}, weight "
+        f"{VERDICT_PROVENANCE[PROVENANCE_DEFAULT]['weight']}) silently filed outcome-backed "
+        "evidence as an opinion. outcome_corroborated/defect_found weigh 1.0 and require "
+        "--corroboration",
     )
     ap.add_argument(
         "--judge",
@@ -4595,16 +4787,22 @@ def main(argv: list[str]) -> int:
                     "--evidence is required: an unevidenced verdict is an opinion, and "
                     "'it ran' is not usefulness"
                 )
-            ok = record_usefulness(
-                args.capability,
-                args.experiment,
-                useful=not args.not_useful,
-                evidence=args.evidence,
-                provenance=args.provenance,
-                judge=args.judge,
-                corroboration=args.corroboration,
-                path=ledger,
-            )
+            # REFUSE, DON'T ASSUME. Same text `record_usefulness` raises, rendered as an argparse
+            # error so the shell caller that hit this gets the tiers, the remedy and the reason it
+            # cannot be fixed after the fact — instead of a traceback or, as before, a silent 0.25.
+            try:
+                ok = record_usefulness(
+                    args.capability,
+                    args.experiment,
+                    useful=not args.not_useful,
+                    evidence=args.evidence,
+                    provenance=args.provenance,
+                    judge=args.judge,
+                    corroboration=args.corroboration,
+                    path=ledger,
+                )
+            except ValueError as exc:
+                ap.error(str(exc))
         out = {
             "recorded": bool(ok),
             "command": args.command,

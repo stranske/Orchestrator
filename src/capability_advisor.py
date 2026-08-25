@@ -2461,11 +2461,13 @@ HOW_TO_USE = {
     ),
     "capability-propensity": (
         "capability_propensity.py report --json for the standing picture; `useful` / `not-useful` / "
-        "`decline` / `find` each record one verdict, and every one is refused without evidence. PASS "
-        "--provenance {defect_found | outcome_corroborated | machine_observed | self_reported}: it "
-        "DEFAULTS to self_reported at weight 0.25, so a verdict that actually found a defect and "
-        "names the artifact records as an opinion unless you say otherwise — which is how three "
-        "verdicts from one audit landed weaker than their evidence warranted"
+        "`decline` / `find` each record one verdict, and every one is refused without evidence. "
+        "`useful` also REFUSES without --provenance {defect_found | outcome_corroborated | "
+        "machine_observed | self_reported} — it had a silent default of self_reported at weight "
+        "0.25 until 2026-08-25, and this very sentence warned about it in prose while two more runs "
+        "walked into it. Judge on the FIRST recording: recording APPENDS, so a verdict filed at the "
+        "wrong tier can only be diluted by a second observation that double-counts the trial, never "
+        "upgraded. Name --judge in the same command for the same reason"
     ),
     "switch-review": (
         "switch_review.py --json — the weekly re-raise for held switches: it re-reports every "
