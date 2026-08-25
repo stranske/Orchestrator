@@ -2597,9 +2597,10 @@ HOW_TO_USE = {
         "`useful` also REFUSES without --provenance {defect_found | outcome_corroborated | "
         "machine_observed | self_reported} — it had a silent default of self_reported at weight "
         "0.25 until 2026-08-25, and this very sentence warned about it in prose while two more runs "
-        "walked into it. Judge on the FIRST recording: recording APPENDS, so a verdict filed at the "
-        "wrong tier can only be diluted by a second observation that double-counts the trial, never "
-        "upgraded. Name --judge in the same command for the same reason"
+        "walked into it. Judge on the FIRST recording: the write is IDEMPOTENT on (capability, "
+        "experiment), so a second verdict on the same trial is DROPPED — `recorded: false` at exit "
+        "0 — never upgraded and never diluted. There is no partial remedy, so get the tier right "
+        "the first time. Name --judge in the same command for the same reason"
     ),
     "switch-review": (
         "switch_review.py --json — the weekly re-raise for held switches: it re-reports every "

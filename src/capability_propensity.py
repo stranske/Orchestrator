@@ -287,10 +287,14 @@ PROVENANCE_DEFAULT = "self_reported"
 # the 11/12 reading this axis exists to correct. That use stays exactly as it is.
 #
 # WRITING a new verdict, silence is not an answer — it is an unasked question, and answering it with
-# the weakest tier is IRREVERSIBLE. `record_usefulness` appends; re-recording the same trial with
-# better provenance does not upgrade the first row, it adds a SECOND observation and double-counts
-# the trial. So a verdict recorded weakly can only ever be diluted, never corrected, and every
-# minute the silent default stands costs provenance that cannot be recovered.
+# the weakest tier is IRREVERSIBLE. The mechanism is IDEMPOTENCY, not appending, and the difference
+# decides what a fixer should build: `record_usefulness` writes through `capabilities.heartbeat`
+# under `idempotency_key="useful:<capability>:<experiment>"`, so re-recording the same trial with
+# better provenance does not add a second observation and does not double-count — it is DROPPED.
+# The call returns False and the CLI prints `recorded: false`, but at exit 0, so a shell caller that
+# only tests the exit status sees success. A weak verdict therefore cannot be upgraded AND cannot be
+# diluted; there is no partial remedy, and every minute the silent default stands costs provenance
+# that cannot be recovered. Pinned by `_selftest_second_verdict_is_dropped_not_appended`.
 #
 # MEASURED, NOT THEORISED: two of three independent implementation runs on 2026-08-25 recorded real
 # `outcome_corroborated` evidence as `self_reported` at weight 0.25 by omitting the flag — and this
@@ -341,8 +345,10 @@ def unstated_provenance_refusal() -> str:
         "a usefulness verdict must STATE its provenance: pass one of "
         f"{tiers}. "
         "Nothing was recorded, so the retry still lands as this trial's FIRST observation — which "
-        "is the point: recording appends, so a verdict filed at the wrong tier cannot be upgraded "
-        "later, only diluted by a second observation that double-counts the same trial. "
+        "is the point: the write is IDEMPOTENT on (capability, experiment), so a verdict filed at "
+        "the wrong tier cannot be upgraded later and cannot be diluted either — a second record is "
+        "DROPPED, returning False and printing `recorded: false` at exit 0. The first verdict on a "
+        "trial is the only one. "
         f"To record an opinion deliberately, say so: --provenance {PROVENANCE_DEFAULT}. "
         "Name --judge in the same breath; verdicts with no judge identity are all treated as ONE "
         "correlated arm, and that is not recoverable either."
@@ -1084,8 +1090,9 @@ def record_usefulness(
 
     `provenance` is the ORTHOGONAL axis: where the verdict CAME FROM, and it is REQUIRED. It used to
     default to `self_reported` — the weakest tier at weight 0.25 — so an omitted argument silently
-    filed outcome-backed evidence as an opinion, and since recording APPENDS, that choice could never
-    be corrected afterwards, only diluted. Silence is now refused with the tiers named
+    filed outcome-backed evidence as an opinion, and because the write is IDEMPOTENT on
+    (capability, experiment), that choice could never be corrected afterwards — nor even diluted: a
+    second record is dropped, returning False. Silence is now refused with the tiers named
     (`unstated_provenance_refusal`), which writes nothing and leaves the trial's first observation
     still available. Claiming `outcome_corroborated` or `defect_found` REQUIRES `corroboration`
     naming the outcome — an unnamed corroboration would make the strongest weight in the table
@@ -4161,6 +4168,117 @@ def _selftest_provenance() -> None:
     )
 
 
+def _selftest_second_verdict_is_dropped_not_appended() -> None:
+    """THE FIRST VERDICT ON A TRIAL IS THE ONLY ONE — and the mechanism is idempotency.
+
+    Written because the prose shipped with #123 said the opposite mechanism in five places: that
+    `record_usefulness` APPENDS, so a weak verdict "can only be diluted, never upgraded". The
+    conclusion was right and the mechanism was wrong, which matters twice over. It implies a partial
+    remedy that does not exist — someone holding a `self_reported` verdict and a fresh merged fix
+    would record again, get `recorded: false` at exit 0, and reasonably believe the corroboration
+    landed. And it points a future fixer at the wrong design problem: guarding against
+    double-counting, when the real one is an idempotency key of `(capability, experiment)` with no
+    supersede path, so a late-arriving outcome can never strengthen a verdict already filed.
+
+    The control arm is the load-bearing part. Asserting only "the second record changed nothing"
+    passes trivially if the write path is broken and NOTHING ever records, so a fresh trial must be
+    shown to record normally in the same ledger.
+
+    BREAK -> REVERT, each confirmed to discriminate:
+      * drop `idempotency_key` from `record_usefulness`'s heartbeat call -> the second record lands,
+        `returned_second is False`, the byte-identical-ledger and the unchanged-provenance
+        assertions all fail together;
+      * scope the key to the capability alone (`f"useful:{capability_id}"`) -> the CONTROL fails
+        with "a verdict on a DIFFERENT trial must still record": the fresh trial's verdict is
+        swallowed too, which is the failure the control exists to catch and which every other
+        assertion here would have called success. Run this break against THIS function alone —
+        in a whole-module run `_selftest_provenance` reaches the same broken key first and fails
+        earlier, which masks what the control is demonstrating.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="idempotent-verdict-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        cap = capabilities._blank_capability("dropper")
+        cap["status"] = "generated"
+        capabilities.save({"dropper": cap}, ledger)
+
+        first, second = "advice:11110000aaaa", "advice:22220000bbbb"
+        record_trigger("dropper", first, path=ledger)
+        returned_first = record_usefulness(
+            "dropper",
+            first,
+            useful=True,
+            evidence="the weak verdict filed at trigger time",
+            provenance="self_reported",
+            path=ledger,
+        )
+        assert returned_first is True, "the trial's first verdict must record"
+        before = ledger.read_bytes()
+        weak = propensity("dropper", path=ledger)
+        assert weak["effective_useful"] == 0.25, weak["effective_useful"]
+
+        # The outcome lands later and is STRONGER. This is the case the five prose sites described
+        # as dilution; it is a drop.
+        returned_second = record_usefulness(
+            "dropper",
+            first,
+            useful=True,
+            evidence="the fix merged, corroborating the finding",
+            provenance="outcome_corroborated",
+            corroboration="PR #999 merged",
+            judge="codex",
+            path=ledger,
+        )
+        assert returned_second is False, "a second verdict on the same trial must report the drop"
+        assert ledger.read_bytes() == before, "a dropped verdict must not touch the ledger at all"
+
+        # The strongest form: a CONTRADICTING machine-observed verdict is dropped just the same, so
+        # a later refutation cannot correct an earlier self-reported success.
+        returned_flip = record_usefulness(
+            "dropper",
+            first,
+            useful=False,
+            evidence="re-measured; it changed nothing after all",
+            provenance="machine_observed",
+            path=ledger,
+        )
+        assert returned_flip is False, "a contradicting verdict on the same trial is dropped too"
+        assert ledger.read_bytes() == before, "a dropped refutation must not touch the ledger"
+
+        after = propensity("dropper", path=ledger)
+        assert after["provenance_mix"] == {"self_reported": 1}, after["provenance_mix"]
+        assert after["effective_useful"] == 0.25, after["effective_useful"]
+        assert after["judge_arms"] == ["unattributed"], after["judge_arms"]
+
+        # THE CONTROL: idempotency is scoped to the TRIAL, not the capability. Without this, a
+        # write path that recorded nothing at all would pass every assertion above.
+        record_trigger("dropper", second, path=ledger)
+        returned_fresh = record_usefulness(
+            "dropper",
+            second,
+            useful=True,
+            evidence="a different trial, corroborated by its own outcome",
+            provenance="outcome_corroborated",
+            corroboration="PR #1000 merged",
+            judge="codex",
+            path=ledger,
+        )
+        assert returned_fresh is True, "a verdict on a DIFFERENT trial must still record"
+        fresh = propensity("dropper", path=ledger)
+        assert fresh["provenance_mix"] == {
+            "self_reported": 1,
+            "outcome_corroborated": 1,
+        }, fresh["provenance_mix"]
+
+    print(
+        "capability_propensity idempotent-verdict selftest: OK (the first verdict on a trial is "
+        "the only one, a stronger or contradicting second is dropped without touching the ledger "
+        "and says so, and a different trial still records)"
+    )
+
+
 def _selftest_detection() -> None:
     """The recursive loop: detect a pass-over, propose, promote — and never ratchet.
 
@@ -4700,6 +4818,7 @@ def main(argv: list[str]) -> int:
     if args.selftest:
         _selftest()
         _selftest_provenance()
+        _selftest_second_verdict_is_dropped_not_appended()
         _selftest_finds()
         _selftest_repair()
         _selftest_declines()
