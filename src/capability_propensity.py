@@ -2098,12 +2098,16 @@ def _selftest_tick_evidence() -> None:
             ]["changed_keys"]
             # ...and a finding that RESOLVED is also a change worth reporting.
             write("obs-daily.json", daily([], [], 7), now + 3000)
-            r4b = tick_evidence(now=now + 3 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
+            r4b = tick_evidence(
+                now=now + 3 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             got = {e["capability_id"]: e for e in r4b["evaluated"]}
             assert got["obs-daily"]["useful"] is True, got["obs-daily"]
             # SILENCE IS NOT USEFULNESS: an empty finding set that STAYS empty is not useful.
             write("obs-daily.json", daily([], [], 8), now + 4000)
-            r4c = tick_evidence(now=now + 4 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
+            r4c = tick_evidence(
+                now=now + 4 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             got = {e["capability_id"]: e for e in r4c["evaluated"]}
             assert got["obs-daily"]["useful"] is False, got["obs-daily"]
 
@@ -2117,7 +2121,9 @@ def _selftest_tick_evidence() -> None:
             assert "deliverer" not in r5["gradable"], r5["gradable"]
             # ...and a bound observer with NO declared projection is a stated verdict, not silence.
             write("np.json", {"anything": 2}, now + 5000)
-            r5b = tick_evidence(now=now + 5 * 86400 + 1, state_dir=state_dir, path=ledger, steps=t_steps)
+            r5b = tick_evidence(
+                now=now + 5 * 86400 + 1, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             got = {e["capability_id"]: e for e in r5b["evaluated"]}
             assert got["no-projection"].get("reason") == "no_finding_projection", got[
                 "no-projection"
@@ -2155,7 +2161,9 @@ def _selftest_tick_evidence() -> None:
             # 8. THE DAY CEILING IS STRUCTURAL. Force a second same-day evaluation and prove the
             #    idempotency key refuses it, so a bug in the freshness gate still cannot inflate.
             write("obs-daily.json", daily(["seed"], [], 0), now + 7000)
-            tick_evidence(now=now + 6 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)  # consumes day 6's single allowance
+            tick_evidence(
+                now=now + 6 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )  # consumes day 6's single allowance
             before = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
             assert (
                 before >= 1
@@ -2165,7 +2173,9 @@ def _selftest_tick_evidence() -> None:
                 # and the change test both say "record a verdict". Only the day-scoped idempotency
                 # key stands between that and five more rows.
                 write("obs-daily.json", daily([f"x{bump}"], [], bump), now + 7000 + bump)
-                tick_evidence(now=now + 6 * 86400 + bump, state_dir=state_dir, path=ledger, steps=t_steps)
+                tick_evidence(
+                    now=now + 6 * 86400 + bump, state_dir=state_dir, path=ledger, steps=t_steps
+                )
             after = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
             assert after == before, (
                 f"five more same-day evaluations added {after - before} verdict(s); the day-scoped "
@@ -2179,7 +2189,9 @@ def _selftest_tick_evidence() -> None:
             resolved_before = usefulness(path=ledger)["rows"]
             os.environ["ORCH_TICK_EVIDENCE_DISABLED"] = "1"
             try:
-                off = tick_evidence(now=now + 9 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
+                off = tick_evidence(
+                    now=now + 9 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+                )
                 assert off.get("disabled") is True, f"a disabled run still did work: {off}"
                 assert off["verdicts_recorded"] == 0, off
                 assert off["evaluated"] == [] and off["bound"] == [], off
@@ -2200,7 +2212,9 @@ def _selftest_tick_evidence() -> None:
             #     registry must still return a report.
             (state_dir / "obs-daily.json").write_text("{not json", encoding="utf-8")
             os.utime(state_dir / "obs-daily.json", (now + 10_000, now + 10_000))
-            r10 = tick_evidence_guarded(now=now + 10 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
+            r10 = tick_evidence_guarded(
+                now=now + 10 * 86400, state_dir=state_dir, path=ledger, steps=t_steps
+            )
             assert "unreadable_artifact" in {s["reason"] for s in r10["skipped"]}, r10["skipped"]
             broken = tick_evidence_guarded(
                 now=now + 11 * 86400,
@@ -4815,10 +4829,15 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
                 prom["skipped"] = "surface already at the safe-zone ceiling"
                 continue
             if record_promotion(prom["capability_id"], prom["surface"], prom["reason"], path=path):
-                applied.append(
-                    {"capability_id": prom["capability_id"], "surface": prom["surface"]}
-                )
-    return {"surfaces": surfaces, "promotions": promotions, "demotions": demotions, "applied": applied, "finds": finds_count, "finds_by_finder_kind": finds_by_finder_kind}
+                applied.append({"capability_id": prom["capability_id"], "surface": prom["surface"]})
+    return {
+        "surfaces": surfaces,
+        "promotions": promotions,
+        "demotions": demotions,
+        "applied": applied,
+        "finds": finds_count,
+        "finds_by_finder_kind": finds_by_finder_kind,
+    }
 
 
 def _under_use() -> dict[str, int]:

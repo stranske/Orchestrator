@@ -929,9 +929,7 @@ def _spawn(d: dict) -> int:
             assert isinstance(profile_decision, dict), "profile_decision is a decision record"
             decision_id = profile_decision["decision_id"]
             assert isinstance(decision_id, str), "profile_decision decision_id is persisted as text"
-            feedback.attach_profile_attempt_to_decision(
-                decision_id, profile_attempt_id
-            )
+            feedback.attach_profile_attempt_to_decision(decision_id, profile_attempt_id)
     adapters.record_ledger(
         d["agent"],
         count=1,

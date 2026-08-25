@@ -80,6 +80,7 @@ class RouteEntryRef(TypedDict):
 
 class RouteEntry(RouteEntryRef):
     """One static route-table candidate."""
+
     mode: str
     late: bool
 
@@ -363,9 +364,7 @@ def _prior_posterior_from_rank(idx: int, total: int) -> float:
     return max(0.45, min(0.70, 0.65 - idx * step))
 
 
-def _thompson_sample(
-    row: ScoredRow, learned: dict | None, rng, *, total_candidates: int
-) -> float:
+def _thompson_sample(row: ScoredRow, learned: dict | None, rng, *, total_candidates: int) -> float:
     _score_tuple, entry, _st, idx = row
     fallback = _prior_posterior_from_rank(idx, total_candidates)
     posterior, score, n_obs = _learned_posterior_score(learned, entry["agent"], fallback)

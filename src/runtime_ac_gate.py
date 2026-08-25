@@ -592,7 +592,9 @@ def scan_items(
         "active_blocker_count": active_blockers,
         "env": {
             "ORCH_RUN_RUNTIME_AC": env_flag(resolved_env, "ORCH_RUN_RUNTIME_AC"),
-            "ORCH_RUNTIME_AC_ALLOW_COMMANDS": env_flag(resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+            "ORCH_RUNTIME_AC_ALLOW_COMMANDS": env_flag(
+                resolved_env, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"
+            ),
             "ORCH_RUNTIME_AC_TIMEOUT": env_int(resolved_env, "ORCH_RUNTIME_AC_TIMEOUT", 120),
         },
         "spec_dir": str(

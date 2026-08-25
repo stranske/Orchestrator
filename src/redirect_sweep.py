@@ -613,8 +613,12 @@ def doctor(
             "record_corpus_env_gate_present": corpus_gate_present,
             "record_corpus_env_enabled": recording_enabled,
             "backend": effective_env.get("ORCH_REDIRECT_SWEEP_BACKEND", ""),
-            "actions": effective_env.get("ORCH_REDIRECT_SWEEP_ACTIONS", ",".join(DEFAULT_SHADOW_ACTIONS)),
-            "max_records": effective_env.get("ORCH_REDIRECT_SWEEP_MAX_RECORDS", DEFAULT_MAX_SHADOW_RECORDS),
+            "actions": effective_env.get(
+                "ORCH_REDIRECT_SWEEP_ACTIONS", ",".join(DEFAULT_SHADOW_ACTIONS)
+            ),
+            "max_records": effective_env.get(
+                "ORCH_REDIRECT_SWEEP_MAX_RECORDS", DEFAULT_MAX_SHADOW_RECORDS
+            ),
             "dedupe_hours": effective_env.get(
                 "ORCH_REDIRECT_SWEEP_DEDUPE_HOURS", DEFAULT_SHADOW_DEDUPE_HOURS
             ),
