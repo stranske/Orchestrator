@@ -124,8 +124,3 @@ mypy_path = ["src", "tests"]
 # It fails toward motion, not silence: verify.py prints the remaining count every run, and
 # `.verify-floor.json`'s `mypy_exempt_max` FAILS if the list grows — so new untyped code in a clean
 # module is now a red, and a module can never quietly rejoin the exempt set.
-[[tool.mypy.overrides]]
-module = [
-    "capability_advisor",
-]
-ignore_errors = true

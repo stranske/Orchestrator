@@ -644,17 +644,17 @@ def advise(
     if bound:
         present = {m["capability_id"] for m in matched}
         for cap_id, reason in bound.items():
-            cap = caps.get(cap_id)
-            if cap is None or cap.get("status") in {"retired", "superseded"}:
+            bound_cap: dict[str, Any] | None = caps.get(cap_id)
+            if bound_cap is None or bound_cap.get("status") in {"retired", "superseded"}:
                 continue
             if cap_id not in present:
                 matched.append(
                     {
                         "capability_id": cap_id,
                         "matched_task_type": None,
-                        "entrypoint": cap.get("entrypoint"),
+                        "entrypoint": bound_cap.get("entrypoint"),
                         "bound_only": True,
-                        **_usability(cap),
+                        **_usability(bound_cap),
                     }
                 )
                 unmatched.pop(cap_id, None)
@@ -771,10 +771,9 @@ def should_reask(previous: dict | None, current_context: dict) -> dict:
 
     # The work reclassified — e.g. an "implement" task that has moved on to writing tests. This is
     # the highest-value trigger: it is exactly when a different capability becomes relevant.
-    now_types = set(
-        classify_task(str(current_context.get("task") or ""))
-        and [c["task_type"] for c in classify_task(str(current_context.get("task") or ""))]
-    )
+    now_types: set[str] = {
+        c["task_type"] for c in classify_task(str(current_context.get("task") or ""))
+    }
     was_types = set(previous.get("task_types") or [])
     if now_types and now_types != was_types:
         reasons.append(f"task_reclassified:{','.join(sorted(now_types - was_types)) or 'narrowed'}")
@@ -1549,7 +1548,7 @@ def consult_text(surface: str, day: str) -> str:
 def consult_phases(
     *,
     day: str | None = None,
-    surfaces: list[str] | None = None,
+    surfaces: list[Any] | None = None,
     record: bool = True,
     path=None,
 ) -> dict:
@@ -1862,7 +1861,7 @@ def transferable_concept(capability_id: str) -> str | None:
     return declared or None
 
 
-def consult_target(repository: str) -> str:
+def consult_target(repository: str | None) -> str:
     """What this consult is about: `self`, `audited_repo`, or `unknown` when no repo was named."""
     repo = str(repository or "").strip()
     if not repo:
@@ -2013,7 +2012,7 @@ def evaluate_precondition(
     declared = applies_to(capability_id)
     needs = required_repo_fact(capability_id)
     target = consult_target(repository)
-    out: list[Any] = {
+    out: dict[str, Any] = {
         "applies_to": declared,
         "scope_target": target,
         "scope_match": None,
@@ -3854,9 +3853,9 @@ def _selftest_findability() -> None:
         with tempfile.TemporaryDirectory(prefix="adv-find-") as td:
             ledger = Path(td) / "capabilities.json"
             capabilities.save({}, ledger)
-            site = Path(td) / "fake-skill.md"
-            site.write_text('consult with surface: "t-find:asked"\n')
-            CONSULT_SITES["t-find:asked"] = {"caller": str(site), "how": "synthetic"}
+            site_path = Path(td) / "fake-skill.md"
+            site_path.write_text('consult with surface: "t-find:asked"\n')
+            CONSULT_SITES["t-find:asked"] = {"caller": str(site_path), "how": "synthetic"}
 
             inv = surfaces_binding(
                 ["wide-cap", "asked-cap", "silent-cap", "absent-cap"], path=ledger
@@ -3879,7 +3878,7 @@ def _selftest_findability() -> None:
             # PRESENT BUT NO LONGER NAMING ITS SURFACE IS DRIFT, and drift must LEAVE `reached`.
             # Broken first by treating any readable file as verification, which let a renamed
             # surface keep counting as consulted forever.
-            site.write_text("this file no longer mentions the surface at all\n")
+            site_path.write_text("this file no longer mentions the surface at all\n")
             drifted = consulting_surfaces()
             assert "t-find:asked" not in drifted["reached"], drifted["reached"][:8]
             assert any(d["surface"] == "t-find:asked" for d in drifted["drifted"]), drifted
