@@ -1825,6 +1825,37 @@ def offload(
     if attempts > 1:
         out["retried"] = True
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
+    try:
+        try:
+            from src import rate_incidents
+        except ImportError:
+            import rate_incidents
+        failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
+        stdout = str(out.get("output") or "")
+        if out.get("exit") != 0 or re.search(
+            r"\bresource_exhausted\b|ActionRequiredError.*(?:out of usage|quota exhausted)",
+            stdout,
+            re.I | re.S,
+        ):
+            failure_parts.insert(0, stdout)
+        combined_output = "\n".join(str(part or "") for part in failure_parts)
+        evidence_result = rate_incidents.get_structured_evidence(
+            error_text=combined_output,
+            agent=agent,
+            surface="dispatcher.offload",
+            run_id=run_id,
+            target=target,
+        )
+        if evidence_result.get("is_authoritative"):
+            rate_incidents.record_incident(
+                agent=agent, surface="dispatcher.offload", category=evidence_result["category"],
+                status="recorded", target=target, run_id=run_id, evidence=combined_output,
+                extra={"subcategory": evidence_result["subcategory"], "exit_code": out.get("exit"), "attempts": attempts},
+            )
+        out["rate_incident_evidence"] = evidence_result
+    except Exception:
+        pass
     return out
 
 

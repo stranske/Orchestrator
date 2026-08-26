@@ -118,13 +118,42 @@ def _log_segment(path: Path, run_id: str) -> list[str]:
         if line.startswith("===") and marker in line:
             start = idx + 1
     if start is None:
-        return lines
+        return []
     end = len(lines)
     for idx in range(start, len(lines)):
         if lines[idx].startswith("==="):
             end = idx
             break
     return lines[start:end]
+
+
+def _classify_run_log_segment(
+    lines: list[str], agent: str, run_id: str, target: str | None = None, log_file: Path | None = None
+) -> dict | None:
+    """Classify only this detached run's bounded log segment (fail-open)."""
+    try:
+        try:
+            from src import rate_incidents
+        except ImportError:
+            import rate_incidents
+        combined_text = "\n".join(lines)
+        evidence_result = rate_incidents.get_structured_evidence(
+            error_text=combined_text,
+            agent=agent,
+            surface="ledger_reconcile.completion",
+            run_id=run_id,
+            target=target,
+        )
+        if evidence_result.get("is_authoritative"):
+            rate_incidents.record_incident(
+                agent=agent, surface="ledger_reconcile.completion", category=evidence_result["category"],
+                status="recorded", target=target, run_id=run_id, evidence=combined_text,
+                extra={"subcategory": evidence_result["subcategory"], "source": "log_segment", "log_file": str(log_file) if log_file else None},
+            )
+            return evidence_result
+        return None
+    except Exception:
+        return None
 
 
 def _log_usage(path: Path | None, run_id: str) -> tuple[int, int]:
@@ -508,6 +537,15 @@ def record_completion(
                 )[:200],
                 completed_ts=int(time.time()),
             )
+    # Hook: Classify log file for rate-limit/capacity incidents on completion
+    if log_file:
+        try:
+            log_path = Path(log_file)
+            if log_path.exists():
+                seg = _log_segment(log_path, run_id)
+                _classify_run_log_segment(seg, agent, run_id, target, log_path)
+        except Exception:
+            pass  # Don't fail completion on classification error
     adapters.record_ledger(
         agent,
         count=0,
@@ -577,6 +615,7 @@ def reconcile(
     owner_questions_recorded = 0
     log_costs_harvested = 0
     telemetry_runs_backfilled = 0
+    rate_incident_classified = 0
     prepared: list[dict[str, Any]] = []
 
     for run_id, run_rows in sorted(grouped.items()):
@@ -616,6 +655,12 @@ def reconcile(
             seg = _log_segment(log_file, run_id)
             agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
             target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
+            # Hook: Classify log segment for rate-limit/capacity incidents
+            rate_evidence = _classify_run_log_segment(
+                seg, agent, run_id, target, log_file
+            )
+            if rate_evidence:
+                rate_incident_classified += 1
             tok = _resume_token_from_segment(seg)
             if tok is not None:
                 kind, token = tok
@@ -759,6 +804,7 @@ def reconcile(
         "owner_questions_recorded": owner_questions_recorded,
         "log_costs_harvested": log_costs_harvested,
         "telemetry_runs_backfilled": telemetry_runs_backfilled,
+        "rate_incident_classified": rate_incident_classified,
         "owner_questions_expired": (0 if dry_run else feedback.expire_owner_questions()),
         "costs": prepared,
         "skipped": dict(sorted(skipped.items())),

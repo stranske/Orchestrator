@@ -1555,6 +1555,35 @@ def dispatch(
         ["git", "-C", cwd, "status", "--porcelain"], capture_output=True, text=True
     ).stdout.strip()
     selected = execution_profiles.get_profile(profile) if profile is not None else None
+    # Telemetry is fail-open, but return its structured classification to callers.
+    combined_output = f"{proc.stderr or ''}"
+    if proc.returncode != 0 or re.search(
+        r"\bresource_exhausted\b|ActionRequiredError.*(?:out of usage|quota exhausted)",
+        proc.stdout or "",
+        re.I | re.S,
+    ):
+        combined_output = f"{proc.stdout or ''}\n{combined_output}"
+    try:
+        try:
+            from src import rate_incidents
+        except ImportError:
+            import rate_incidents
+
+        evidence_result = rate_incidents.get_structured_evidence(
+            error_text=combined_output,
+            agent=agent,
+            surface="adapters.dispatch",
+            target=str(Path(cwd).expanduser().resolve()),
+        )
+        if evidence_result.get("is_authoritative"):
+            rate_incidents.record_incident(
+                agent=agent, surface="adapters.dispatch", category=evidence_result["category"],
+                status="recorded", target=str(Path(cwd).expanduser().resolve()),
+                evidence=combined_output,
+                extra={"subcategory": evidence_result["subcategory"], "exit_code": proc.returncode},
+            )
+    except Exception:
+        evidence_result = None
     record_ledger(
         agent,
         count=1,
@@ -1562,7 +1591,8 @@ def dispatch(
         selected_profile_id=selected.get("profile_id") if selected else None,
         requested_model=selected.get("requested_model") if selected else requested_model,
     )
-    return {
+    # Add rate_incident_evidence to result for caller use
+    result = {
         "agent": agent,
         "mode": mode,
         "exit": proc.returncode,
@@ -1571,6 +1601,10 @@ def dispatch(
         "stdout_tail": (proc.stdout or "")[-2000:],
         "stderr_tail": (proc.stderr or "")[-1000:],
     }
+    # Include rate-incident classification in result for router
+    if evidence_result is not None:
+        result["rate_incident_evidence"] = evidence_result
+    return result
 
 
 def _selftest():
