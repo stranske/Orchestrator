@@ -346,7 +346,16 @@ def test_capacity_sheds_seat_when_model_unresolvable(monkeypatch):
 
 
 def test_capacity_gate_is_seat_level_not_gemini_special(monkeypatch):
-    """The same gate must protect codex's three pins — that was the point of generalizing it."""
+    """The same gate must protect codex's three pins — that was the point of generalizing it.
+
+    `_shed` is neutralised because it is MACHINE STATE, not the subject. `compute` checks the
+    429-shed flag FIRST and returns two values from that path, so on a machine where codex happens
+    to be rate-limit shed this test unpacked three from two and died — while passing on CI, where
+    nothing is shed. It was silently exercising the shed path rather than the seat-level gate it is
+    named for. Isolating the stub makes the check RUN everywhere instead of skipping (CLAUDE.md §1:
+    when a check fails only because real state leaked in, the fix is isolation, never a skip).
+    """
+    monkeypatch.setattr(capacity, "_shed", lambda agent: False)
     monkeypatch.setattr(
         capacity,
         "_model_health",
@@ -366,7 +375,12 @@ def test_capacity_gate_is_seat_level_not_gemini_special(monkeypatch):
 
 
 def test_capacity_stays_ok_when_model_resolves(monkeypatch):
-    """Control arm: same ledger, resolvable model => the seat is usable and names its model."""
+    """Control arm: same ledger, resolvable model => the seat is usable and names its model.
+
+    Same `_shed` neutralisation, and it matters MORE here: this is the control arm, so a machine
+    with a shed flag would make it agree with the positive case for the wrong reason.
+    """
+    monkeypatch.setattr(capacity, "_shed", lambda agent: False)
     monkeypatch.setattr(
         capacity,
         "_model_health",

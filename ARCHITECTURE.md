@@ -463,6 +463,36 @@ Four disciplines make that honest rather than decorative:
    `late_outcomes_orphaned` together, because a corroborating count climbing while the refuting
    count stays at zero is the signature of a ratchet rather than a measurement.
 
+5. **A decline has THREE possible subjects, not two (2026-08-25).** `DECLINE_KINDS` carried
+   `demotable` (the binding is wrong) and `repairable` (the capability is wrong). There was no way
+   to say *the binding is right, the capability is right, and the offer was too thin to judge* — so
+   that case landed in `wrong_match`, which is **demotable**, making a bad offer into evidence
+   against a good binding. The measured scale: **21 of 39 bound capabilities declare nothing at
+   all** — no `HOW_TO_USE` entry and no precondition — so their offer is only their own name.
+   `offer_too_thin` is the new kind and `offer_improvable` the new axis, declared on every row so it
+   can never be merely absent. `propose_offer_improvements()` reports both populations: the
+   structural one (declares nothing) and the observed one (a caller said so).
+
+6. **One re-offer, and it may echo only DECLARED FACTS.** A decline can be caused by an offer that
+   omitted something the tables already hold. `record_reoffer` supplies exactly those facts and
+   nothing else — it cannot compose, re-rank or re-argue, because "offer it again, harder" is a
+   persuasion loop and this document forbids that shape for binding promotion for the same reason.
+   With no undelivered fact it **refuses**, and that refusal is the productive one: it means the
+   offer is as good as the tables allow, so the fix is the tables. Only `offer_too_thin`,
+   `wrong_match` and `precondition_unmet` are re-offerable; the rest state a structural reason the
+   caller was entitled to give, and their answer is a different **task**, which
+   `capability_task_proposals` derives from the same table. **Conversion is DERIVED** from the
+   ledger (an invocation at or after the re-offer converted it) rather than reported, so a caller
+   cannot flatter the mechanism by omitting its failures, and `report()` prints
+   `reoffers_converted` beside `reoffers_declined_again` — a conversion count rising alone is a
+   ratchet, not a measurement.
+
+7. **The two-round rule must not latch.** A demotable decline of a re-offerable kind does not count
+   toward demotion until its round has happened and the caller declined again. Nobody is *obliged*
+   to re-offer, so waiting forever would hold every `wrong_match` decline shut: `REOFFER_GRACE_DAYS`
+   is the drain, and `surface_decline_counts` reports `held_for_reoffer` so the hold is a number on
+   a page rather than a silence. Measured on arrival: 19 declines held at `repo-audit:fix` alone.
+
    The read path is unchanged and still classifies an unlabelled pre-provenance row as
    `self_reported`, because that is what such a row honestly is: `PROVENANCE_DEFAULT` answers "how do
    I read silence", `PROVENANCE_UNSTATED` answers "may I write it", and sharing one constant is what
