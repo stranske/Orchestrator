@@ -21,7 +21,8 @@ def test_append_preserves_history_and_dedupes(incident_paths):
     rate_incidents.INCIDENT_FILE.write_text('{"existing":true}\n')
     first = rate_incidents.record_incident(
         agent="codex", surface="dispatch", category="quota", run_id="run-1",
-        evidence="quota exhausted",
+        evidence="quota exhausted", credential_pool="codex-subscription",
+        resource="5h-window", reroute="claude",
     )
     duplicate = rate_incidents.record_incident(
         agent="codex", surface="dispatch", category="quota", run_id="run-1",
@@ -33,6 +34,9 @@ def test_append_preserves_history_and_dedupes(incident_paths):
     assert row["schema"] == "rate-limit-incident/v1"
     assert row["incident_id"] == first["incident_id"]
     assert row["idempotency_key"] == "run-1|codex|quota"
+    assert row["credential_pool"] == "codex-subscription"
+    assert row["resource"] == "5h-window"
+    assert row["reroute"] == "claude"
     assert duplicate["deduped"] is True
 
 

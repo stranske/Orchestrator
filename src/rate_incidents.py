@@ -166,7 +166,7 @@ def ensure_shed(agent: str, *, category: str, incident_id: str, expires_at: int 
     return True
 
 
-def record_incident(*, agent: str, surface: str, category: str, status: str = "observed", provider: str | None = None, target: str | None = None, run_id: str | None = None, evidence: str = "", timestamp: int | None = None, shed: bool = True, extra: dict[str, Any] | None = None, **unused: Any) -> dict[str, Any]:
+def record_incident(*, agent: str, surface: str, category: str, status: str = "observed", provider: str | None = None, target: str | None = None, run_id: str | None = None, evidence: str = "", timestamp: int | None = None, shed: bool = True, credential_pool: str | None = None, resource: str | None = None, reset_at: int | None = None, reroute: str | None = None, next_success_at: int | None = None, extra: dict[str, Any] | None = None, **unused: Any) -> dict[str, Any]:
     """Append exactly one incident line while holding an exclusive fcntl lock."""
     if not agent or not surface or not category:
         raise ValueError("agent, surface, and category are required")
@@ -181,6 +181,17 @@ def record_incident(*, agent: str, surface: str, category: str, status: str = "o
         "status": status, "target": target, "evidence_hash": _hash_evidence(evidence),
         "evidence_excerpt": _redact_bounded(evidence),
     }
+    record.update({
+        key: value
+        for key, value in {
+            "credential_pool": credential_pool,
+            "resource": resource,
+            "reset_at": reset_at,
+            "reroute": reroute,
+            "next_success_at": next_success_at,
+        }.items()
+        if value is not None
+    })
     if extra:
         record["extra"] = {key: value for key, value in extra.items() if value is not None}
     lock_fd = _acquire_lock()
@@ -262,6 +273,11 @@ def main(argv: list[str]) -> int:
     record_parser.add_argument("--surface", required=True)
     record_parser.add_argument("--target")
     record_parser.add_argument("--run-id")
+    record_parser.add_argument("--credential-pool")
+    record_parser.add_argument("--resource")
+    record_parser.add_argument("--reset-at", type=int)
+    record_parser.add_argument("--reroute")
+    record_parser.add_argument("--next-success-at", type=int)
     record_parser.add_argument("--category", choices=("auto", "rate_limit", "quota", "capacity"), default="auto")
     record_parser.add_argument("--status", default="observed")
     record_parser.add_argument("--evidence")
@@ -292,6 +308,11 @@ def main(argv: list[str]) -> int:
             status=args.status,
             evidence=evidence,
             shed=not args.no_shed,
+            credential_pool=args.credential_pool,
+            resource=args.resource,
+            reset_at=args.reset_at,
+            reroute=args.reroute,
+            next_success_at=args.next_success_at,
             extra={"subcategory": subcategory},
         )
         print(json.dumps(result, sort_keys=True))
