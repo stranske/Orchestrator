@@ -1561,7 +1561,9 @@ def dispatch(
     try:
         import rate_incidents
 
-        if proc.returncode != 0 or rate_incidents.stdout_carries_capacity_evidence(proc.stdout or ""):
+        if proc.returncode != 0 or rate_incidents.stdout_carries_capacity_evidence(
+            proc.stdout or ""
+        ):
             combined_output = f"{proc.stdout or ''}\n{combined_output}"
         evidence_result = rate_incidents.get_structured_evidence(
             error_text=combined_output,

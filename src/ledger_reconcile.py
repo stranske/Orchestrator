@@ -154,7 +154,10 @@ def _classify_run_log_segment(
             target=target,
         )
     except Exception as exc:
-        print(f"warn: rate-incident classification failed for {agent}/{run_id}: {exc}", file=sys.stderr)
+        print(
+            f"warn: rate-incident classification failed for {agent}/{run_id}: {exc}",
+            file=sys.stderr,
+        )
         return None
     if not evidence_result.get("is_authoritative"):
         return None

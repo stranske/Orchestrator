@@ -222,9 +222,7 @@ def test_offload_hook_reads_output_stderr_and_agent_log(
     monkeypatch.setattr(
         dispatcher,
         "_agent_log_tail_from_argv",
-        lambda *args, **kwargs: "resource_exhausted"
-        if evidence_source == "agent_log"
-        else "",
+        lambda *args, **kwargs: "resource_exhausted" if evidence_source == "agent_log" else "",
     )
     monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "0")
     result = dispatcher.offload(agent, "test", cwd=str(incident_paths))
@@ -233,9 +231,7 @@ def test_offload_hook_reads_output_stderr_and_agent_log(
     assert row["surface"] == "dispatcher.offload" and row["run_id"] == result["run_id"]
 
 
-def test_offload_preserves_classification_when_recording_fails(
-    incident_paths, monkeypatch, capsys
-):
+def test_offload_preserves_classification_when_recording_fails(incident_paths, monkeypatch, capsys):
     monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", incident_paths / "logs")
     monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
