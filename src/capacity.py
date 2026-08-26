@@ -482,8 +482,42 @@ def _tier_ceiling(agent: str):
         return None
 
 
-def compute(agent: str, cfg: dict, ccusage_block):
-    """Return (state, reason[, meta]) for one agent. 429-shed is authoritative."""
+def compute(agent: str, cfg: dict, ccusage_block) -> tuple[str, str, dict]:
+    """Return (state, reason, meta) for one agent — ALWAYS three values.
+
+    THE ARITY IS THE CONTRACT, AND IT USED TO BE A COINCIDENCE. `_classify` below has 21 return
+    statements; three carry a meta dict and eighteen do not, so how many values a caller could
+    unpack depended on WHICH BRANCH RAN. The first branch is the 429-shed check, and `_shed` reads
+    a file on the HOST — outside `$ORCH_STATE_DIR`, so pointing that variable at an empty directory
+    does not neutralise it. The arity was therefore a property of the MACHINE, not of the code, and
+    it bit in BOTH directions:
+
+      * `test_capacity_gate_is_seat_level_not_gemini_special` unpacked three, got two from the shed
+        path, and died with `ValueError: not enough values to unpack (expected 3, got 2)` on the
+        owner's box while CI — where nothing is shed — stayed green. #141 fixed that one test.
+      * `_selftest`'s cursor case unpacked TWO, and would have died the same way the first time a
+        metered seat learned to report meta. Nobody had hit it yet; it was the same defect waiting.
+
+    Normalising HERE rather than at the 21 returns is deliberate. A wrapper makes the invariant
+    STRUCTURAL: the 22nd return statement somebody adds later cannot reintroduce the defect by
+    forgetting, which editing eighteen returns would leave wide open. `_classify` stays free to
+    return the short form, which is why those branches are still one line each.
+    """
+    result = _classify(agent, cfg, ccusage_block)
+    if len(result) == 3:
+        state, reason, meta = result
+        return state, reason, dict(meta or {})
+    state, reason = result
+    return state, reason, {}
+
+
+def _classify(agent: str, cfg: dict, ccusage_block):
+    """The capacity decision itself. Returns 2 OR 3 values; 429-shed is authoritative.
+
+    Private on purpose: every caller goes through `compute`, which fixes the arity at three. Adding
+    a return here needs no ceremony — the short form stays legal precisely because the wrapper, not
+    this function, owns the contract.
+    """
     if _shed(agent):
         return SHED, "observed 429 / rate-limit shed flag set"
     # Dispatchability gate BEFORE any budget math: a seat whose configured model its own CLI does
@@ -763,12 +797,7 @@ def build(ccusage_block=None) -> dict:
         ccusage_block = _ccusage_active_block()
     agents = {}
     for agent, cfg in AGENTS.items():
-        res = compute(agent, cfg, ccusage_block)
-        meta = {}
-        if len(res) == 3:
-            state, reason, meta = res
-        else:
-            state, reason = res
+        state, reason, meta = compute(agent, cfg, ccusage_block)
         agents[agent] = {
             "state": state,
             "reason": reason,
@@ -830,7 +859,7 @@ def _selftest_body(blk):
     assert compute("codex", capped, blk(85_000_000))[0] == WARN
     assert compute("codex", capped, blk(120_000_000))[0] == SHED
     # cursor is METERED now: OK unless 429-shed (no reliable quota API); route table deprioritizes it
-    cur_state, cur_reason = compute("cursor", AGENTS["cursor"], None)
+    cur_state, cur_reason, _cur_meta = compute("cursor", AGENTS["cursor"], None)
     assert cur_state == OK and "METERED" in cur_reason, (
         cur_state,
         cur_reason,
