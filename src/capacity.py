@@ -32,10 +32,12 @@ module only answers "does agent X have headroom right now?".
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -366,7 +368,35 @@ def _estimate_gemini_units(row: dict) -> float:
 
 
 def _shed(agent: str) -> bool:
-    return (SHED_DIR / agent).exists()
+    """Honor legacy empty flags; expire only well-formed JSON cooldown flags."""
+    marker = SHED_DIR / agent
+    if not marker.exists():
+        return False
+    try:
+        raw = marker.read_text(encoding="utf-8")
+    except OSError:
+        return True
+    if not raw.strip():  # Legacy touch markers require deliberate manual clearing.
+        return True
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return True
+    if not isinstance(payload, dict):
+        return True
+    expires_at = payload.get("expires_at")
+    if (
+        isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+        or not math.isfinite(expires_at)
+        or expires_at > time.time()
+    ):
+        return True
+    try:
+        marker.unlink()
+    except OSError:
+        return True
+    return False
 
 
 # NB: `cursor-agent models` lists MODEL AVAILABILITY, not remaining QUOTA — it is NOT a reliable
@@ -771,32 +801,22 @@ def build(ccusage_block=None) -> dict:
 
 
 def _selftest():
+    global SHED_DIR
+    original_shed_dir = SHED_DIR
+    selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
+    SHED_DIR = selftest_shed_dir
+
     def blk(toks):
         return {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
 
-    # NEUTRALISE THE MACHINE'S OWN SHED STATE, by STASHING THE REAL FLAG rather than stubbing the
-    # predicate. `compute` checks the 429-shed flag FIRST, so every assertion below silently inverts
-    # on a machine where that seat happens to be shed right now — which is not a property of the
-    # code under test. Found 2026-08-25: `_shed("codex")` was True locally, so this selftest failed
-    # on an UNMODIFIED checkout while CI, where nothing is shed, stayed green.
-    #
-    # STASHING, NOT STUBBING, and the difference is load-bearing: the last assertion in the body
-    # DELIBERATELY creates a shed flag and asserts SHED wins. A stubbed `_shed` would have made that
-    # case pass for the wrong reason — it was the first thing I tried, and it failed loudly, which
-    # is the only reason this note exists. Stashing keeps the real predicate on the real path
-    # throughout and restores the operator's flag afterwards.
-    flag = SHED_DIR / "codex"
-    stashed = None
-    if flag.exists():
-        stashed = flag.with_name("codex.selftest-stashed")
-        flag.rename(stashed)
+    # Redirect the full shed-marker directory rather than stubbing `_shed`: the self-test remains
+    # isolated from every live provider marker while its final cases still exercise the real marker
+    # predicate and expiry behavior.
     try:
         _selftest_body(blk)
     finally:
-        if stashed is not None and stashed.exists():
-            if flag.exists():
-                flag.unlink()
-            stashed.rename(flag)
+        SHED_DIR = original_shed_dir
+        shutil.rmtree(selftest_shed_dir, ignore_errors=True)
 
 
 def _selftest_body(blk):
@@ -826,8 +846,6 @@ def _selftest_body(blk):
     assert _estimate_gemini_units({}) == 1.0
 
     # Gemini prepaid compute tests using temporary ledger and pinned time.
-    import tempfile
-
     global LEDGER
     old_ledger = LEDGER
     tmp = Path(tempfile.mkdtemp(prefix="capacity-gemini-selftest-"))
@@ -993,16 +1011,15 @@ def _selftest_body(blk):
     # is integration-tested; here assert the all-spent branch with a zero credit budget)
     broke = dict(AGENTS["aider"], plan_limit=0, credit_usd=0.0)
     assert compute("aider", broke, None)[0] == SHED, compute("aider", broke, None)
-    # shed override wins
-    SHED_DIR.mkdir(parents=True, exist_ok=True)
+    # A legacy empty marker remains authoritative, while an expired JSON cooldown does not.
     flag = SHED_DIR / "codex"
-    created = not flag.exists()
     flag.touch()
     try:
         assert compute("codex", AGENTS["codex"], None)[0] == SHED  # 429-shed wins even with no data
+        flag.write_text(json.dumps({"expires_at": time.time() - 1}))
+        assert not _shed("codex") and not flag.exists()
     finally:
-        if created:
-            flag.unlink()
+        pass
     print(
         "capacity.py selftest: OK (4-state enum, shed override, METERED cursor pool, count/dollar/windowed-prepaid capacity)"
     )

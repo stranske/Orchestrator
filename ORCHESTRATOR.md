@@ -47,6 +47,13 @@ cursor-agent live outside the default PATH):
 
 - **Assess capacity** — `python3 src/capacity.py` → per-agent `{ok|warn|shed}`. Who has headroom right
   now? (codex/claude default OK + 429-shed; cursor=free/unlimited; vibe=subscription; aider=paygo (LOCAL_POLICY.md).)
+- **Rate-limit incidents** — `python3 src/rate_incidents.py [record|summary|classify] [--selftest]` → NDJSON
+  authority for rate-limit/quota/capacity incidents. Classifies provider failure text, records incidents,
+  creates `~/.codex/handoff/capacity-shed/<agent>` markers for authoritative errors (quota exhausted,
+  resource_exhausted, and ActionRequiredError with explicit quota evidence), and provides structured evidence
+  for router decisions. `429` is authoritative only as `429 Too Many Requests` or when anchored to HTTP,
+  status, error, or response-code context; incidental numeric prose is not a shedding signal. Generic network
+  errors and ambiguous prose are NOT recorded to avoid false shedding.
 - **Observe fleet health** — `python3 src/observability_dashboard.py [--json] [--write-markdown path]`
   builds a read-only productivity/quality dashboard from the feedback DB plus a live capacity snapshot:
   outcome coverage, merged/durable-success rates, durability failures, capacity warnings, learned

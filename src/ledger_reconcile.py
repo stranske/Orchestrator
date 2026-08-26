@@ -118,13 +118,76 @@ def _log_segment(path: Path, run_id: str) -> list[str]:
         if line.startswith("===") and marker in line:
             start = idx + 1
     if start is None:
-        return lines
+        # A dedicated legacy/external log may have no run delimiter at all. It is safe to use the
+        # whole file only when no other run markers exist; mixed logs remain fail-closed.
+        return lines if not any(line.startswith("===") for line in lines) else []
     end = len(lines)
     for idx in range(start, len(lines)):
         if lines[idx].startswith("==="):
             end = idx
             break
     return lines[start:end]
+
+
+def _classify_run_log_segment(
+    lines: list[str],
+    agent: str,
+    run_id: str,
+    target: str | None = None,
+    log_file: Path | None = None,
+    *,
+    shed: bool = True,
+    successful: bool | None = None,
+) -> dict | None:
+    """Classify only this detached run's bounded log segment (fail-open)."""
+    try:
+        import rate_incidents
+    except Exception as exc:
+        print(f"warn: rate-incident import failed for {agent}/{run_id}: {exc}", file=sys.stderr)
+        return None
+    try:
+        combined_text = "\n".join(lines)
+        # Successful or provenance-unknown task logs are ordinary model output. Only the strict
+        # successful-stdout envelope may promote their text to provider evidence; otherwise test
+        # fixtures and reviews that discuss HTTP 429/resource exhaustion become incidents.
+        if successful is not False and not rate_incidents.stdout_carries_capacity_evidence(
+            combined_text
+        ):
+            return None
+        evidence_result = rate_incidents.get_structured_evidence(
+            error_text=combined_text,
+            agent=agent,
+            surface="ledger_reconcile.completion",
+            run_id=run_id,
+            target=target,
+        )
+    except Exception as exc:
+        print(
+            f"warn: rate-incident classification failed for {agent}/{run_id}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+    if not evidence_result.get("is_authoritative"):
+        return None
+    try:
+        rate_incidents.record_incident(
+            agent=agent,
+            surface="ledger_reconcile.completion",
+            category=evidence_result["category"],
+            status="recorded",
+            target=target,
+            run_id=run_id,
+            shed=shed,
+            evidence=combined_text,
+            extra={
+                "subcategory": evidence_result["subcategory"],
+                "source": "log_segment",
+                "log_file": str(log_file) if log_file else None,
+            },
+        )
+    except Exception as exc:
+        print(f"warn: rate-incident recording failed for {agent}/{run_id}: {exc}", file=sys.stderr)
+    return evidence_result
 
 
 def _log_usage(path: Path | None, run_id: str) -> tuple[int, int]:
@@ -469,6 +532,7 @@ def record_completion(
     propensity: float | None = None,
     subject_id: str | None = None,
     arm_id: str | None = None,
+    exit_code: int | None = None,
 ) -> None:
     if selected_profile_id:
         probe_reason = None
@@ -507,6 +571,19 @@ def record_completion(
                     else "resolved_model_not_reported_by_completion"
                 )[:200],
                 completed_ts=int(time.time()),
+            )
+    # Hook: Classify log file for rate-limit/capacity incidents on completion
+    if log_file:
+        log_path = Path(log_file)
+        if log_path.exists():
+            seg = _log_segment(log_path, run_id)
+            _classify_run_log_segment(
+                seg,
+                agent,
+                run_id,
+                target,
+                log_path,
+                successful=(exit_code == 0 if exit_code is not None else None),
             )
     adapters.record_ledger(
         agent,
@@ -577,6 +654,7 @@ def reconcile(
     owner_questions_recorded = 0
     log_costs_harvested = 0
     telemetry_runs_backfilled = 0
+    rate_incident_classified = 0
     prepared: list[dict[str, Any]] = []
 
     for run_id, run_rows in sorted(grouped.items()):
@@ -616,6 +694,19 @@ def reconcile(
             seg = _log_segment(log_file, run_id)
             agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
             target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
+            completion_exit = next(
+                (r.get("exit") for r in reversed(run_rows) if r.get("event") == "complete"), None
+            )
+            try:
+                successful = int(completion_exit) == 0 if completion_exit is not None else None
+            except (TypeError, ValueError):
+                successful = None
+            # Hook: Classify log segment for rate-limit/capacity incidents
+            rate_evidence = _classify_run_log_segment(
+                seg, agent, run_id, target, log_file, shed=False, successful=successful
+            )
+            if rate_evidence:
+                rate_incident_classified += 1
             tok = _resume_token_from_segment(seg)
             if tok is not None:
                 kind, token = tok
@@ -759,6 +850,7 @@ def reconcile(
         "owner_questions_recorded": owner_questions_recorded,
         "log_costs_harvested": log_costs_harvested,
         "telemetry_runs_backfilled": telemetry_runs_backfilled,
+        "rate_incident_classified": rate_incident_classified,
         "owner_questions_expired": (0 if dry_run else feedback.expire_owner_questions()),
         "costs": prepared,
         "skipped": dict(sorted(skipped.items())),
@@ -1006,6 +1098,7 @@ def main(argv: list[str]) -> int:
     complete.add_argument("--propensity", type=float)
     complete.add_argument("--subject-id")
     complete.add_argument("--arm-id")
+    complete.add_argument("--exit-code", type=int)
 
     rec = sub.add_parser(
         "reconcile", help="write feedback.costs rows from local ledger/log evidence"
@@ -1048,6 +1141,7 @@ def main(argv: list[str]) -> int:
             propensity=args.propensity,
             subject_id=args.subject_id,
             arm_id=args.arm_id,
+            exit_code=args.exit_code,
         )
         return 0
     if args.cmd == "reconcile":

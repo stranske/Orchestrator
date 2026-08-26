@@ -980,7 +980,8 @@ def _spawn(d: dict) -> int:
     # the microsecond printf survives and ledger_reconcile backfills latency/exit from it.
     marker_cmd = adapters.done_marker_cmd(run_id, logf, "orch_dispatch_rc")
     wrapped = (
-        f"{d['wrapped']}; orch_dispatch_rc=$?; {marker_cmd}; {complete_cmd}; exit $orch_dispatch_rc"
+        f'{d["wrapped"]}; orch_dispatch_rc=$?; {marker_cmd}; '
+        f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'
     )
     with logf.open("a") as fh:
         fh.write(
@@ -1825,6 +1826,44 @@ def offload(
     if attempts > 1:
         out["retried"] = True
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
+    evidence_result = None
+    try:
+        import rate_incidents
+
+        failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
+        stdout = str(out.get("output") or "")
+        if out.get("exit") != 0 or rate_incidents.stdout_carries_capacity_evidence(stdout):
+            failure_parts.insert(0, stdout)
+        combined_output = "\n".join(str(part or "") for part in failure_parts)
+        evidence_result = rate_incidents.get_structured_evidence(
+            error_text=combined_output,
+            agent=agent,
+            surface="dispatcher.offload",
+            run_id=run_id,
+            target=target,
+        )
+        out["rate_incident_evidence"] = evidence_result
+    except Exception as exc:
+        print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
+    if evidence_result and evidence_result.get("is_authoritative"):
+        try:
+            rate_incidents.record_incident(
+                agent=agent,
+                surface="dispatcher.offload",
+                category=evidence_result["category"],
+                status="recorded",
+                target=target,
+                run_id=run_id,
+                evidence=combined_output,
+                extra={
+                    "subcategory": evidence_result["subcategory"],
+                    "exit_code": out.get("exit"),
+                    "attempts": attempts,
+                },
+            )
+        except Exception as exc:
+            print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
     return out
 
 
