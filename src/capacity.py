@@ -799,6 +799,7 @@ def _selftest():
     original_shed_dir = SHED_DIR
     selftest_shed_dir = Path(tempfile.mkdtemp(prefix="capacity-shed-selftest-"))
     SHED_DIR = selftest_shed_dir
+
     def blk(toks):
         return {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
 
@@ -1030,6 +1031,7 @@ def _selftest_body(blk):
         pass
     SHED_DIR = original_shed_dir
     import shutil
+
     shutil.rmtree(selftest_shed_dir, ignore_errors=True)
     print(
         "capacity.py selftest: OK (4-state enum, shed override, METERED cursor pool, count/dollar/windowed-prepaid capacity)"

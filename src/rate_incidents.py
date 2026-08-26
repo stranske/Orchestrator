@@ -27,8 +27,10 @@ DEFAULT_COOLDOWN_S = 6 * 60 * 60
 def _redact_bounded(text: str, max_len: int = MAX_EVIDENCE_EXCERPT) -> str:
     text = str(text or "")
     patterns = (
-        r"sk-[A-Za-z0-9]{12,}", r"github_pat_[A-Za-z0-9_]{12,}",
-        r"xox[baprs]-[A-Za-z0-9-]{10,}", r"Bearer\s+[^\s]+",
+        r"sk-[A-Za-z0-9]{12,}",
+        r"github_pat_[A-Za-z0-9_]{12,}",
+        r"xox[baprs]-[A-Za-z0-9-]{10,}",
+        r"Bearer\s+[^\s]+",
         r"(?:api[_-]?key|token|secret|password)\s*[=:]\s*[^\s,;]+",
         r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
     )
@@ -47,7 +49,9 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
         return "unknown", "non_authoritative", "none"
     if re.search(r"\bresource_exhausted\b|resource[ -]exhausted", text, re.I):
         return "capacity", "resource_exhausted", "high"
-    if re.search(r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)", text, re.I):
+    if re.search(
+        r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)", text, re.I
+    ):
         return "quota", "quota_exhausted", "high"
     if re.search(r"(?:\bHTTP\s*)?\b429\b|too many requests", text, re.I):
         return "rate_limit", "http_429", "high"
@@ -68,13 +72,22 @@ def is_authoritative_error(text: str) -> bool:
     return classify_provider_failure(text)[2] == "high"
 
 
-def get_structured_evidence(error_text: str, agent: str, surface: str, run_id: str | None = None, target: str | None = None) -> dict[str, Any]:
+def get_structured_evidence(
+    error_text: str, agent: str, surface: str, run_id: str | None = None, target: str | None = None
+) -> dict[str, Any]:
     category, subcategory, confidence = classify_provider_failure(error_text)
     return {
-        "agent": agent, "surface": surface, "run_id": run_id, "target": target,
-        "category": category, "subcategory": subcategory, "confidence": confidence,
-        "is_authoritative": confidence == "high", "should_shed": confidence == "high",
-        "evidence_excerpt": _redact_bounded(error_text), "evidence_hash": _hash_evidence(error_text),
+        "agent": agent,
+        "surface": surface,
+        "run_id": run_id,
+        "target": target,
+        "category": category,
+        "subcategory": subcategory,
+        "confidence": confidence,
+        "is_authoritative": confidence == "high",
+        "should_shed": confidence == "high",
+        "evidence_excerpt": _redact_bounded(error_text),
+        "evidence_hash": _hash_evidence(error_text),
     }
 
 
@@ -85,6 +98,7 @@ def _ensure_paths() -> None:
 
 def _acquire_lock() -> int:
     import fcntl
+
     _ensure_paths()
     fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX)
@@ -93,6 +107,7 @@ def _acquire_lock() -> int:
 
 def _release_lock(fd: int) -> None:
     import fcntl
+
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
@@ -131,7 +146,9 @@ def _cooldown_seconds(category: str) -> int | None:
         return DEFAULT_COOLDOWN_S
 
 
-def ensure_shed(agent: str, *, category: str, incident_id: str, expires_at: int | None = None) -> bool:
+def ensure_shed(
+    agent: str, *, category: str, incident_id: str, expires_at: int | None = None
+) -> bool:
     """Write one JSON marker; it intentionally never records another incident."""
     _ensure_paths()
     marker = SHED_DIR / agent
@@ -166,7 +183,26 @@ def ensure_shed(agent: str, *, category: str, incident_id: str, expires_at: int 
     return True
 
 
-def record_incident(*, agent: str, surface: str, category: str, status: str = "observed", provider: str | None = None, target: str | None = None, run_id: str | None = None, evidence: str = "", timestamp: int | None = None, shed: bool = True, credential_pool: str | None = None, resource: str | None = None, reset_at: int | None = None, reroute: str | None = None, next_success_at: int | None = None, extra: dict[str, Any] | None = None, **unused: Any) -> dict[str, Any]:
+def record_incident(
+    *,
+    agent: str,
+    surface: str,
+    category: str,
+    status: str = "observed",
+    provider: str | None = None,
+    target: str | None = None,
+    run_id: str | None = None,
+    evidence: str = "",
+    timestamp: int | None = None,
+    shed: bool = True,
+    credential_pool: str | None = None,
+    resource: str | None = None,
+    reset_at: int | None = None,
+    reroute: str | None = None,
+    next_success_at: int | None = None,
+    extra: dict[str, Any] | None = None,
+    **unused: Any,
+) -> dict[str, Any]:
     """Append exactly one incident line while holding an exclusive fcntl lock."""
     if not agent or not surface or not category:
         raise ValueError("agent, surface, and category are required")
@@ -175,23 +211,33 @@ def record_incident(*, agent: str, surface: str, category: str, status: str = "o
     key = _idempotency_key(stable_run_id, agent, category, surface)
     incident_id = _hash_evidence(key)
     record: dict[str, Any] = {
-        "schema": SCHEMA, "incident_id": incident_id, "idempotency_key": key,
-        "ts": timestamp, "run_id": stable_run_id, "agent": agent,
-        "provider": provider or agent, "surface": surface, "category": category,
-        "status": status, "target": target, "evidence_hash": _hash_evidence(evidence),
+        "schema": SCHEMA,
+        "incident_id": incident_id,
+        "idempotency_key": key,
+        "ts": timestamp,
+        "run_id": stable_run_id,
+        "agent": agent,
+        "provider": provider or agent,
+        "surface": surface,
+        "category": category,
+        "status": status,
+        "target": target,
+        "evidence_hash": _hash_evidence(evidence),
         "evidence_excerpt": _redact_bounded(evidence),
     }
-    record.update({
-        key: value
-        for key, value in {
-            "credential_pool": credential_pool,
-            "resource": resource,
-            "reset_at": reset_at,
-            "reroute": reroute,
-            "next_success_at": next_success_at,
-        }.items()
-        if value is not None
-    })
+    record.update(
+        {
+            key: value
+            for key, value in {
+                "credential_pool": credential_pool,
+                "resource": resource,
+                "reset_at": reset_at,
+                "reroute": reroute,
+                "next_success_at": next_success_at,
+            }.items()
+            if value is not None
+        }
+    )
     if extra:
         record["extra"] = {key: value for key, value in extra.items() if value is not None}
     lock_fd = _acquire_lock()
@@ -208,7 +254,16 @@ def record_incident(*, agent: str, surface: str, category: str, status: str = "o
     finally:
         _release_lock(lock_fd)
     cooldown = _cooldown_seconds(category)
-    shed_created = ensure_shed(agent, category=category, incident_id=incident_id, expires_at=(timestamp + cooldown if cooldown is not None else None)) if shed else False
+    shed_created = (
+        ensure_shed(
+            agent,
+            category=category,
+            incident_id=incident_id,
+            expires_at=(timestamp + cooldown if cooldown is not None else None),
+        )
+        if shed
+        else False
+    )
     return {"status": "ok", "deduped": False, "incident_id": incident_id, "shed": shed_created}
 
 
@@ -236,9 +291,21 @@ def _selftest() -> int:
         assert is_authoritative_error("ActionRequiredError: out of usage")
         assert is_authoritative_error("resource_exhausted") and is_authoritative_error("HTTP 429")
         INCIDENT_FILE.write_text('{"prior":true}\n')
-        first = record_incident(agent="codex", surface="selftest", category="quota", run_id="r1", evidence="quota exhausted")
+        first = record_incident(
+            agent="codex",
+            surface="selftest",
+            category="quota",
+            run_id="r1",
+            evidence="quota exhausted",
+        )
         assert len(INCIDENT_FILE.read_text().splitlines()) == 2
-        assert record_incident(agent="codex", surface="selftest", category="quota", run_id="r1", evidence="quota exhausted")["deduped"]
+        assert record_incident(
+            agent="codex",
+            surface="selftest",
+            category="quota",
+            run_id="r1",
+            evidence="quota exhausted",
+        )["deduped"]
         assert first["incident_id"]
         print("rate_incidents.py selftest: OK")
         return 0
@@ -265,7 +332,9 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
     subparsers = parser.add_subparsers(dest="command")
-    classify_parser = subparsers.add_parser("classify", help="classify evidence from --evidence or stdin")
+    classify_parser = subparsers.add_parser(
+        "classify", help="classify evidence from --evidence or stdin"
+    )
     classify_parser.add_argument("--evidence")
     record_parser = subparsers.add_parser("record", help="append one authoritative incident")
     record_parser.add_argument("--agent", required=True)
@@ -278,7 +347,9 @@ def main(argv: list[str]) -> int:
     record_parser.add_argument("--reset-at", type=int)
     record_parser.add_argument("--reroute")
     record_parser.add_argument("--next-success-at", type=int)
-    record_parser.add_argument("--category", choices=("auto", "rate_limit", "quota", "capacity"), default="auto")
+    record_parser.add_argument(
+        "--category", choices=("auto", "rate_limit", "quota", "capacity"), default="auto"
+    )
     record_parser.add_argument("--status", default="observed")
     record_parser.add_argument("--evidence")
     record_parser.add_argument("--no-shed", action="store_true")
@@ -326,7 +397,12 @@ def main(argv: list[str]) -> int:
             category = str(row.get("category") or "unknown")
             by_agent[agent] = by_agent.get(agent, 0) + 1
             by_category[category] = by_category.get(category, 0) + 1
-        print(json.dumps({"total": len(rows), "by_agent": by_agent, "by_category": by_category}, sort_keys=True))
+        print(
+            json.dumps(
+                {"total": len(rows), "by_agent": by_agent, "by_category": by_category},
+                sort_keys=True,
+            )
+        )
         return 0
     parser.print_help()
     return 0

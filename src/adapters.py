@@ -1564,10 +1564,7 @@ def dispatch(
     ):
         combined_output = f"{proc.stdout or ''}\n{combined_output}"
     try:
-        try:
-            from src import rate_incidents
-        except ImportError:
-            import rate_incidents
+        import rate_incidents
 
         evidence_result = rate_incidents.get_structured_evidence(
             error_text=combined_output,
@@ -1577,8 +1574,11 @@ def dispatch(
         )
         if evidence_result.get("is_authoritative"):
             rate_incidents.record_incident(
-                agent=agent, surface="adapters.dispatch", category=evidence_result["category"],
-                status="recorded", target=str(Path(cwd).expanduser().resolve()),
+                agent=agent,
+                surface="adapters.dispatch",
+                category=evidence_result["category"],
+                status="recorded",
+                target=str(Path(cwd).expanduser().resolve()),
                 evidence=combined_output,
                 extra={"subcategory": evidence_result["subcategory"], "exit_code": proc.returncode},
             )

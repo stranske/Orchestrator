@@ -1827,10 +1827,8 @@ def offload(
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     try:
-        try:
-            from src import rate_incidents
-        except ImportError:
-            import rate_incidents
+        import rate_incidents
+
         failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
         stdout = str(out.get("output") or "")
         if out.get("exit") != 0 or re.search(
@@ -1849,9 +1847,18 @@ def offload(
         )
         if evidence_result.get("is_authoritative"):
             rate_incidents.record_incident(
-                agent=agent, surface="dispatcher.offload", category=evidence_result["category"],
-                status="recorded", target=target, run_id=run_id, evidence=combined_output,
-                extra={"subcategory": evidence_result["subcategory"], "exit_code": out.get("exit"), "attempts": attempts},
+                agent=agent,
+                surface="dispatcher.offload",
+                category=evidence_result["category"],
+                status="recorded",
+                target=target,
+                run_id=run_id,
+                evidence=combined_output,
+                extra={
+                    "subcategory": evidence_result["subcategory"],
+                    "exit_code": out.get("exit"),
+                    "attempts": attempts,
+                },
             )
         out["rate_incident_evidence"] = evidence_result
     except Exception:

@@ -6,14 +6,11 @@ import time
 
 import pytest
 
-try:
-    from src import adapters, capacity, dispatcher, ledger_reconcile, rate_incidents
-except ImportError:  # The launchd execution mirror is intentionally flat.
-    import adapters
-    import capacity
-    import dispatcher
-    import ledger_reconcile
-    import rate_incidents
+import adapters
+import capacity
+import dispatcher
+import ledger_reconcile
+import rate_incidents
 
 
 @pytest.fixture
@@ -28,12 +25,20 @@ def incident_paths(tmp_path, monkeypatch):
 def test_append_preserves_history_and_dedupes(incident_paths):
     rate_incidents.INCIDENT_FILE.write_text('{"existing":true}\n')
     first = rate_incidents.record_incident(
-        agent="codex", surface="dispatch", category="quota", run_id="run-1",
-        evidence="quota exhausted", credential_pool="codex-subscription",
-        resource="5h-window", reroute="claude",
+        agent="codex",
+        surface="dispatch",
+        category="quota",
+        run_id="run-1",
+        evidence="quota exhausted",
+        credential_pool="codex-subscription",
+        resource="5h-window",
+        reroute="claude",
     )
     duplicate = rate_incidents.record_incident(
-        agent="codex", surface="dispatch", category="quota", run_id="run-1",
+        agent="codex",
+        surface="dispatch",
+        category="quota",
+        run_id="run-1",
         evidence="quota exhausted",
     )
     lines = rate_incidents.INCIDENT_FILE.read_text().splitlines()
@@ -50,14 +55,19 @@ def test_append_preserves_history_and_dedupes(incident_paths):
 
 def test_evidence_is_bounded_and_redacted(incident_paths):
     rate_incidents.record_incident(
-        agent="codex", surface="dispatch", category="rate_limit", run_id="run-2",
+        agent="codex",
+        surface="dispatch",
+        category="rate_limit",
+        run_id="run-2",
         evidence="429 token=super-secret-value sk-abcdefghijklmnopqrstuvwxyz " + "x" * 600,
         shed=False,
     )
     row = json.loads(rate_incidents.INCIDENT_FILE.read_text())
     assert "super-secret-value" not in row["evidence_excerpt"]
     assert "sk-" not in row["evidence_excerpt"]
-    assert len(row["evidence_excerpt"]) <= rate_incidents.MAX_EVIDENCE_EXCERPT + len("...[TRUNCATED]")
+    assert len(row["evidence_excerpt"]) <= rate_incidents.MAX_EVIDENCE_EXCERPT + len(
+        "...[TRUNCATED]"
+    )
 
 
 @pytest.mark.parametrize(
@@ -98,17 +108,22 @@ def test_expired_marker_is_refreshed_by_new_incident(incident_paths):
     marker = rate_incidents.SHED_DIR / "cursor"
     marker.write_text(json.dumps({"expires_at": time.time() - 1}))
     rate_incidents.record_incident(
-        agent="cursor", surface="direct", category="capacity", run_id="run-new",
+        agent="cursor",
+        surface="direct",
+        category="capacity",
+        run_id="run-new",
         evidence="resource_exhausted",
     )
     assert json.loads(marker.read_text())["expires_at"] > time.time()
 
 
 def test_synchronous_adapter_hook_records_structured_evidence(incident_paths, monkeypatch):
-    calls = iter((
-        subprocess.CompletedProcess(["agent"], 1, "", "HTTP 429 Too Many Requests"),
-        subprocess.CompletedProcess(["git"], 0, "", ""),
-    ))
+    calls = iter(
+        (
+            subprocess.CompletedProcess(["agent"], 1, "", "HTTP 429 Too Many Requests"),
+            subprocess.CompletedProcess(["git"], 0, "", ""),
+        )
+    )
     monkeypatch.setattr(adapters, "build_command", lambda *args, **kwargs: ["agent"])
     monkeypatch.setattr(adapters.subprocess, "run", lambda *args, **kwargs: next(calls))
     monkeypatch.setattr(adapters, "record_ledger", lambda *args, **kwargs: None)
@@ -124,15 +139,21 @@ def test_offload_hook_reads_output_stderr_and_agent_log(incident_paths, monkeypa
     monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
     monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args: prompt)
     monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
-    monkeypatch.setattr(dispatcher.adapters, "can_report_cli_identity", lambda *args: (False, "test"))
+    monkeypatch.setattr(
+        dispatcher.adapters, "can_report_cli_identity", lambda *args: (False, "test")
+    )
     monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *args, **kwargs: ["agent"])
     monkeypatch.setattr(dispatcher.adapters, "model_identity", lambda *args, **kwargs: "test-model")
     monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher.feedback, "record_run", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher.feedback, "record_cost", lambda *args, **kwargs: None)
-    monkeypatch.setattr(dispatcher.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(
-        ["agent"], 1, "resource_exhausted", "agent stderr"
-    ))
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            ["agent"], 1, "resource_exhausted", "agent stderr"
+        ),
+    )
     monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "0")
     result = dispatcher.offload("codex", "test", cwd=str(incident_paths))
     row = json.loads(rate_incidents.INCIDENT_FILE.read_text())
@@ -142,7 +163,9 @@ def test_offload_hook_reads_output_stderr_and_agent_log(incident_paths, monkeypa
 
 def test_ledger_completion_hook_uses_only_run_segment(incident_paths, monkeypatch):
     monkeypatch.setattr(ledger_reconcile.adapters, "record_ledger", lambda *args, **kwargs: None)
-    monkeypatch.setattr(ledger_reconcile.feedback, "record_completion_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        ledger_reconcile.feedback, "record_completion_event", lambda *args, **kwargs: None
+    )
     log = incident_paths / "run.log"
     log.write_text(
         "=== earlier run_id=other ===\nHTTP 429 Too Many Requests\n"
