@@ -803,29 +803,14 @@ def _selftest():
     def blk(toks):
         return {"isActive": True, "projection": {"totalTokens": toks, "totalCost": 100.0}}
 
-    # NEUTRALISE THE MACHINE'S OWN SHED STATE, by STASHING THE REAL FLAG rather than stubbing the
-    # predicate. `compute` checks the 429-shed flag FIRST, so every assertion below silently inverts
-    # on a machine where that seat happens to be shed right now — which is not a property of the
-    # code under test. Found 2026-08-25: `_shed("codex")` was True locally, so this selftest failed
-    # on an UNMODIFIED checkout while CI, where nothing is shed, stayed green.
-    #
-    # STASHING, NOT STUBBING, and the difference is load-bearing: the last assertion in the body
-    # DELIBERATELY creates a shed flag and asserts SHED wins. A stubbed `_shed` would have made that
-    # case pass for the wrong reason — it was the first thing I tried, and it failed loudly, which
-    # is the only reason this note exists. Stashing keeps the real predicate on the real path
-    # throughout and restores the operator's flag afterwards.
-    flag = SHED_DIR / "codex"
-    stashed = None
-    if flag.exists():
-        stashed = flag.with_name("codex.selftest-stashed")
-        flag.rename(stashed)
+    # Redirect the full shed-marker directory rather than stubbing `_shed`: the self-test remains
+    # isolated from every live provider marker while its final cases still exercise the real marker
+    # predicate and expiry behavior.
     try:
         _selftest_body(blk)
     finally:
-        if stashed is not None and stashed.exists():
-            if flag.exists():
-                flag.unlink()
-            stashed.rename(flag)
+        SHED_DIR = original_shed_dir
+        shutil.rmtree(selftest_shed_dir, ignore_errors=True)
 
 
 def _selftest_body(blk):
@@ -1029,10 +1014,6 @@ def _selftest_body(blk):
         assert not _shed("codex") and not flag.exists()
     finally:
         pass
-    SHED_DIR = original_shed_dir
-    import shutil
-
-    shutil.rmtree(selftest_shed_dir, ignore_errors=True)
     print(
         "capacity.py selftest: OK (4-state enum, shed override, METERED cursor pool, count/dollar/windowed-prepaid capacity)"
     )
