@@ -57,8 +57,9 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
     # Require either the provider's standard phrase or an error/status/code
     # anchor immediately before the numeric status.
     if re.search(r"\btoo many requests\b", text, re.I) or re.search(
-        r"\b(?:http(?:\s+status)?|status(?:\s+code)?|error(?:\s+code)?|response\s+code)"
-        r"\s*[:=]?\s*429\b",
+        r"\b(?:http(?:\s+(?:status|error)|error)?|status[ _-]?code|error(?:[ _-]?code)?|"
+        r"response[ _-]?code)\b[\"']?\s*[:=]?\s*\[?\s*429\b"
+        r"|\bresponse\b\s*\[\s*429\s*\]",
         text,
         re.I,
     ):
@@ -66,8 +67,11 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
     # A generic mention of rate limits is common in successful task summaries and
     # implementation prompts. Require failure-shaped language before shedding.
     if re.search(
-        r"(?:rate[ -]?limit(?:ed)?(?:\s+(?:was\s+))?(?:exceeded|exhausted|reached|hit))"
-        r"|(?:(?:exceeded|exhausted|reached|hit)\s+(?:an?\s+)?(?:primary\s+|secondary\s+)?rate[ -]?limit)",
+        r"\brate[ -]?limit\s+(?:(?:was|has\s+been)\s+)?(?:exceeded|exhausted|reached|hit)\b"
+        r"|\b(?:exceeded|exhausted|reached|hit)\s+(?:(?:a|an|the)\s+)?"
+        r"(?:primary\s+|secondary\s+)?rate[ -]?limit\b"
+        r"|\b(?:you|request|provider|client)\s+(?:(?:have|has)\s+been\s+|(?:was|were|are)\s+)"
+        r"rate[ -]?limited\b",
         text,
         re.I,
     ):
