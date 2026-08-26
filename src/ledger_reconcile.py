@@ -137,6 +137,7 @@ def _classify_run_log_segment(
     log_file: Path | None = None,
     *,
     shed: bool = True,
+    successful: bool | None = None,
 ) -> dict | None:
     """Classify only this detached run's bounded log segment (fail-open)."""
     try:
@@ -146,6 +147,13 @@ def _classify_run_log_segment(
         return None
     try:
         combined_text = "\n".join(lines)
+        # Successful or provenance-unknown task logs are ordinary model output. Only the strict
+        # successful-stdout envelope may promote their text to provider evidence; otherwise test
+        # fixtures and reviews that discuss HTTP 429/resource exhaustion become incidents.
+        if successful is not False and not rate_incidents.stdout_carries_capacity_evidence(
+            combined_text
+        ):
+            return None
         evidence_result = rate_incidents.get_structured_evidence(
             error_text=combined_text,
             agent=agent,
@@ -524,6 +532,7 @@ def record_completion(
     propensity: float | None = None,
     subject_id: str | None = None,
     arm_id: str | None = None,
+    exit_code: int | None = None,
 ) -> None:
     if selected_profile_id:
         probe_reason = None
@@ -568,7 +577,14 @@ def record_completion(
         log_path = Path(log_file)
         if log_path.exists():
             seg = _log_segment(log_path, run_id)
-            _classify_run_log_segment(seg, agent, run_id, target, log_path)
+            _classify_run_log_segment(
+                seg,
+                agent,
+                run_id,
+                target,
+                log_path,
+                successful=(exit_code == 0 if exit_code is not None else None),
+            )
     adapters.record_ledger(
         agent,
         count=0,
@@ -678,9 +694,16 @@ def reconcile(
             seg = _log_segment(log_file, run_id)
             agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
             target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
+            completion_exit = next(
+                (r.get("exit") for r in reversed(run_rows) if r.get("event") == "complete"), None
+            )
+            try:
+                successful = int(completion_exit) == 0 if completion_exit is not None else None
+            except (TypeError, ValueError):
+                successful = None
             # Hook: Classify log segment for rate-limit/capacity incidents
             rate_evidence = _classify_run_log_segment(
-                seg, agent, run_id, target, log_file, shed=False
+                seg, agent, run_id, target, log_file, shed=False, successful=successful
             )
             if rate_evidence:
                 rate_incident_classified += 1
@@ -1075,6 +1098,7 @@ def main(argv: list[str]) -> int:
     complete.add_argument("--propensity", type=float)
     complete.add_argument("--subject-id")
     complete.add_argument("--arm-id")
+    complete.add_argument("--exit-code", type=int)
 
     rec = sub.add_parser(
         "reconcile", help="write feedback.costs rows from local ledger/log evidence"
@@ -1117,6 +1141,7 @@ def main(argv: list[str]) -> int:
             propensity=args.propensity,
             subject_id=args.subject_id,
             arm_id=args.arm_id,
+            exit_code=args.exit_code,
         )
         return 0
     if args.cmd == "reconcile":

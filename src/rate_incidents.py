@@ -52,7 +52,7 @@ def _contains_explicit_resource_exhausted(text: str) -> bool:
             r"(?im)^\s*(?:\[resource_exhausted\]|resource_exhausted)\s*$"
             r"|^\s*(?:error|status|code|response|provider\s+error)\b[^\n]{0,120}"
             r"\bresource_exhausted\b"
-            r'|"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"',
+            r'|\{[^\n]{0,120}"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"',
             text,
         )
     )

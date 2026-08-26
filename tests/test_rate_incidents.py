@@ -112,9 +112,18 @@ def test_only_explicit_provider_capacity_evidence_sheds(text, authoritative):
 
 def test_success_stdout_capacity_gate_rejects_review_prose():
     assert rate_incidents.stdout_carries_capacity_evidence("[resource_exhausted]") is True
+    assert rate_incidents.stdout_carries_capacity_evidence("HTTP 429 Too Many Requests") is False
+    assert rate_incidents.stdout_carries_capacity_evidence("quota exhausted") is False
+    assert (
+        rate_incidents.stdout_carries_capacity_evidence(
+            "ActionRequiredError: quota exhausted for this provider"
+        )
+        is True
+    )
     review = (
         "Verdict: approved. The resource_exhausted classifier and tests are correct; "
-        "the provider returned resource_exhausted in the synthetic fixture."
+        "the provider returned resource_exhausted in the synthetic fixture. The supported JSON "
+        'forms include `"status": "RESOURCE_EXHAUSTED"` and `"code": "RESOURCE_EXHAUSTED"`.'
     )
     assert rate_incidents.stdout_carries_capacity_evidence(review) is False
     assert rate_incidents.is_authoritative_error(review) is False
@@ -286,7 +295,7 @@ def test_ledger_completion_hook_uses_only_run_segment(incident_paths, monkeypatc
         "=== current run_id=run-current ===\nresource_exhausted\n"
         "=== later run_id=later ===\nauthentication failed\n"
     )
-    ledger_reconcile.record_completion("run-current", "codex", log_file=str(log))
+    ledger_reconcile.record_completion("run-current", "codex", log_file=str(log), exit_code=1)
     rows = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
     assert len(rows) == 1
     assert rows[0]["run_id"] == "run-current"
@@ -296,7 +305,11 @@ def test_ledger_completion_hook_uses_only_run_segment(incident_paths, monkeypatc
 
 def test_historical_reconcile_records_without_shedding(incident_paths):
     evidence = ledger_reconcile._classify_run_log_segment(
-        ["HTTP 429 Too Many Requests"], "codex", "historical-run", shed=False
+        ["HTTP 429 Too Many Requests"],
+        "codex",
+        "historical-run",
+        shed=False,
+        successful=False,
     )
     assert evidence and evidence["is_authoritative"] is True
     assert rate_incidents.INCIDENT_FILE.exists()
@@ -331,12 +344,13 @@ def test_successful_completion_log_with_bare_429_does_not_shed(incident_paths, m
     log.write_text(
         "=== current run_id=run-benign ===\n"
         "Reading src/capacity.py to understand the 429-shed flag design.\n"
+        "HTTP 429 Too Many Requests\n"
         "Modified 429 lines in this refactor.\n"
         "All tests passed. Task complete.\n"
         "=== later run_id=later ===\n"
     )
 
-    ledger_reconcile.record_completion("run-benign", "codex", log_file=str(log))
+    ledger_reconcile.record_completion("run-benign", "codex", log_file=str(log), exit_code=0)
 
     assert not rate_incidents.INCIDENT_FILE.exists()
     assert not (rate_incidents.SHED_DIR / "codex").exists()
