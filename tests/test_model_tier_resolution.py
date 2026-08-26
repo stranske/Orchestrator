@@ -26,6 +26,48 @@ import adapters
 import capacity
 import env_prereq
 
+# Captured at import, BEFORE the autouse fixture below replaces it, so a future test that genuinely
+# wants the host predicate has something to restore:
+#     monkeypatch.setattr(capacity, "_shed", _REAL_SHED)
+_REAL_SHED = capacity._shed
+
+
+@pytest.fixture(autouse=True)
+def _neutralise_host_shed_state(monkeypatch):
+    """The machine's 429-shed flags are MACHINE STATE, and nothing in this file is about them.
+
+    `capacity.compute` checks the shed flag FIRST and returns from that branch before reaching any
+    subject this file tests. `capacity._shed` reads `SHED_DIR / agent` — a real file on the host,
+    OUTSIDE `$ORCH_STATE_DIR` — so the usual "point the state dir at an empty directory" isolation
+    does not touch it. A seat that happens to be rate-limited right now therefore silently rewrites
+    what these tests measure, and it did: on 2026-08-25 `verify.py` was RED on the owner's box on
+    unmodified `origin/main` while CI stayed green, because `_shed("codex")` was True there.
+
+    #141 fixed the two tests that had already tripped, one at a time. This fixture is the
+    generalisation, and autouse rather than four more copied lines is the point: the exposure
+    belongs to READING CAPACITY AT ALL, so the guard has to attach to the file rather than to
+    whichever tests happened to fail first. FOUR siblings were still exposed after #141, and the
+    fourth is why the rule is phrased that way:
+
+      * `test_capacity_sheds_seat_when_model_unresolvable` (gemini) and
+        `test_capacity_sheds_on_auth_failure` (cursor) unpack three, so a shed seat crashed them.
+      * `test_capacity_ignores_unknown_auth` asserts OK, so a shed cursor failed it outright — its
+        unpack reads `[0]` and was never at risk.
+      * `test_aider_is_backup_only_and_vibe_is_a_real_lane` calls `capacity.build()` and routes off
+        the result, never touching `compute` by name; a shed aider makes `select_agent(..., only=
+        {"aider"})` return None and the escape-hatch assertion fails. A guard scoped to "tests that
+        call compute" would have missed it. Found by the break demo, not by reading the file.
+
+    A test added later gets the guard without having to know it exists, which is the only version
+    that stays true.
+
+    NOT A SUBSTITUTE FOR THE ARITY FIX, AND VICE VERSA. Fixed arity stops a host flag from changing
+    a Python signature; this stops it from changing the SUBJECT. `test_capacity_ignores_unknown_auth`
+    is the proof they are different — it reads `[0]`, so its unpack was always safe, and it was
+    exposed anyway.
+    """
+    monkeypatch.setattr(capacity, "_shed", lambda agent: False)
+
 
 def _live_advertised_models() -> list[str]:
     """Ask the installed agy CLI directly — deliberately bypasses the adapter's TTL cache so a
@@ -348,14 +390,14 @@ def test_capacity_sheds_seat_when_model_unresolvable(monkeypatch):
 def test_capacity_gate_is_seat_level_not_gemini_special(monkeypatch):
     """The same gate must protect codex's three pins — that was the point of generalizing it.
 
-    `_shed` is neutralised because it is MACHINE STATE, not the subject. `compute` checks the
-    429-shed flag FIRST and returns two values from that path, so on a machine where codex happens
-    to be rate-limit shed this test unpacked three from two and died — while passing on CI, where
-    nothing is shed. It was silently exercising the shed path rather than the seat-level gate it is
-    named for. Isolating the stub makes the check RUN everywhere instead of skipping (CLAUDE.md §1:
-    when a check fails only because real state leaked in, the fix is isolation, never a skip).
+    Host shed state is neutralised by this module's autouse `_neutralise_host_shed_state`, which
+    replaced the per-test stub #141 added right here: this test is where the exposure was FOUND,
+    not where it lived. `compute` now also fixes its arity at three, so the original symptom —
+    unpacking three values from a two-value shed return — can no longer occur at all. The fixture
+    is still what keeps this exercising the seat-level gate it is named for rather than the shed
+    path (CLAUDE.md §1: when a check fails only because real state leaked in, the fix is isolation,
+    never a skip).
     """
-    monkeypatch.setattr(capacity, "_shed", lambda agent: False)
     monkeypatch.setattr(
         capacity,
         "_model_health",
@@ -377,10 +419,10 @@ def test_capacity_gate_is_seat_level_not_gemini_special(monkeypatch):
 def test_capacity_stays_ok_when_model_resolves(monkeypatch):
     """Control arm: same ledger, resolvable model => the seat is usable and names its model.
 
-    Same `_shed` neutralisation, and it matters MORE here: this is the control arm, so a machine
-    with a shed flag would make it agree with the positive case for the wrong reason.
+    Host shed state matters MORE here than in the positive case, and fixed arity does not help:
+    this is the control arm, so a shed machine would make it agree with the positive case for the
+    wrong reason and say nothing. `_neutralise_host_shed_state` is what prevents that.
     """
-    monkeypatch.setattr(capacity, "_shed", lambda agent: False)
     monkeypatch.setattr(
         capacity,
         "_model_health",
@@ -397,6 +439,61 @@ def test_capacity_stays_ok_when_model_resolves(monkeypatch):
     state, _reason, meta = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
     assert state != capacity.SHED, state
     assert meta["configured_model"] == "gemini-3.1-pro-high", meta
+
+
+def test_compute_returns_three_values_on_the_shed_path(monkeypatch):
+    """Pin the arity on the branch that used to return two, by name.
+
+    `_shed` reads a file on the HOST, outside `$ORCH_STATE_DIR`, and it is the FIRST thing
+    `compute` checks — so before the arity was fixed, how many values `compute` returned depended
+    on whether the operator's box happened to be rate-limited. The seat-level gate test died here
+    with `ValueError: not enough values to unpack (expected 3, got 2)` while CI, where nothing is
+    shed, stayed green. Asserting `len(...) == 3` on this exact branch asserts that a file on a
+    laptop can no longer change a Python signature.
+
+    This test deliberately turns the shed flag ON — the one place in this file that wants it — so
+    it overrides the autouse `_neutralise_host_shed_state` rather than relying on it.
+    """
+    monkeypatch.setattr(capacity, "_shed", lambda agent: True)
+    result = capacity.compute("codex", capacity.AGENTS["codex"], None)
+    assert len(result) == 3, f"the shed path must not return a short tuple: {result!r}"
+    state, reason, meta = result
+    assert state == capacity.SHED, result
+    assert "shed" in reason, reason
+    # `{}`, never `None`: `build()` survives None via `**(meta or {})`, so only a test can hold the
+    # contract to a value every caller can index without a guard.
+    assert meta == {}, meta
+
+
+def test_compute_arity_holds_for_every_seat(monkeypatch):
+    """Six seats spanning all five capacity models, shed and un-shed. None may return two.
+
+    The eighteen short returns in `_classify` are reached through `cfg["model"]`, so iterating the
+    real `AGENTS` table is what actually exercises them — a single-agent check would never enter
+    `plan_then_credit` (aider), `metered` (cursor) or `flat` (vibe) at all. Health probes are
+    pinned so this stays offline and deterministic; the subject is the tuple's SHAPE, so nothing
+    here depends on what the probes would have said.
+    """
+    monkeypatch.setattr(capacity, "_auth_health", lambda agent: None)
+    monkeypatch.setattr(
+        capacity,
+        "_model_health",
+        lambda agent, tier="full": {
+            "agent": agent,
+            "tier": tier,
+            "model": "pinned-for-this-test",
+            "resolvable": True,
+            "advertised": ["pinned-for-this-test"],
+            "reason": "arity test",
+            "source": "pinned_default",
+        },
+    )
+    for shed in (False, True):
+        monkeypatch.setattr(capacity, "_shed", lambda agent, _s=shed: _s)
+        for agent, cfg in sorted(capacity.AGENTS.items()):
+            result = capacity.compute(agent, cfg, None)
+            assert len(result) == 3, (agent, f"shed={shed}", result)
+            assert isinstance(result[2], dict), (agent, f"shed={shed}", result)
 
 
 # ---------------------------------------------------------------------------
