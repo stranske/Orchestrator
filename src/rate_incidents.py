@@ -53,7 +53,15 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
         r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)", text, re.I
     ):
         return "quota", "quota_exhausted", "high"
-    if re.search(r"(?:\bHTTP\s*)?\b429\b|too many requests", text, re.I):
+    # A bare number is ordinary task prose (issue 429, 429 lines, 429 tests).
+    # Require either the provider's standard phrase or an error/status/code
+    # anchor immediately before the numeric status.
+    if re.search(r"\btoo many requests\b", text, re.I) or re.search(
+        r"\b(?:http(?:\s+status)?|status(?:\s+code)?|error(?:\s+code)?|response\s+code)"
+        r"\s*[:=]?\s*429\b",
+        text,
+        re.I,
+    ):
         return "rate_limit", "http_429", "high"
     # A generic mention of rate limits is common in successful task summaries and
     # implementation prompts. Require failure-shaped language before shedding.

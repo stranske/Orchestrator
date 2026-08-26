@@ -79,6 +79,12 @@ def test_evidence_is_bounded_and_redacted(incident_paths):
         ("ActionRequiredError: out of usage", True),
         ("provider returned resource_exhausted", True),
         ("HTTP 429 Too Many Requests", True),
+        ("status code: 429", True),
+        ("Error 429 from provider", True),
+        ("429 Too Many Requests", True),
+        ("Modified 429 lines in this refactor", False),
+        ("collected 429 items", False),
+        ("issue #429 documents rate limit handling", False),
         ("network connection reset", False),
         ("authentication failed", False),
         ("permission denied", False),
@@ -178,3 +184,23 @@ def test_ledger_completion_hook_uses_only_run_segment(incident_paths, monkeypatc
     assert rows[0]["run_id"] == "run-current"
     assert rows[0]["surface"] == "ledger_reconcile.completion"
     assert rows[0]["category"] == "capacity"
+
+
+def test_successful_completion_log_with_bare_429_does_not_shed(incident_paths, monkeypatch):
+    monkeypatch.setattr(ledger_reconcile.adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        ledger_reconcile.feedback, "record_completion_event", lambda *args, **kwargs: None
+    )
+    log = incident_paths / "successful-run.log"
+    log.write_text(
+        "=== current run_id=run-benign ===\n"
+        "Reading src/capacity.py to understand the 429-shed flag design.\n"
+        "Modified 429 lines in this refactor.\n"
+        "All tests passed. Task complete.\n"
+        "=== later run_id=later ===\n"
+    )
+
+    ledger_reconcile.record_completion("run-benign", "codex", log_file=str(log))
+
+    assert not rate_incidents.INCIDENT_FILE.exists()
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
