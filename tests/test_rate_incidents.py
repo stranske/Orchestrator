@@ -86,7 +86,11 @@ def test_evidence_is_bounded_and_redacted(incident_paths):
         ("implemented rate limit handling and tests", False),
         ("rate-limit resilience work completed", False),
         ("ActionRequiredError: out of usage", True),
-        ("provider returned resource_exhausted", True),
+        ("Error: provider returned resource_exhausted", True),
+        ("[resource_exhausted]", True),
+        ('{"error":{"status":"RESOURCE_EXHAUSTED"}}', True),
+        ("review confirms resource_exhausted handling is covered", False),
+        ("the provider returned resource_exhausted in the test fixture", False),
         ("HTTP 429 Too Many Requests", True),
         ("status code: 429", True),
         ("Error 429 from provider", True),
@@ -104,6 +108,16 @@ def test_evidence_is_bounded_and_redacted(incident_paths):
 )
 def test_only_explicit_provider_capacity_evidence_sheds(text, authoritative):
     assert rate_incidents.is_authoritative_error(text) is authoritative
+
+
+def test_success_stdout_capacity_gate_rejects_review_prose():
+    assert rate_incidents.stdout_carries_capacity_evidence("[resource_exhausted]") is True
+    review = (
+        "Verdict: approved. The resource_exhausted classifier and tests are correct; "
+        "the provider returned resource_exhausted in the synthetic fixture."
+    )
+    assert rate_incidents.stdout_carries_capacity_evidence(review) is False
+    assert rate_incidents.is_authoritative_error(review) is False
 
 
 def test_json_shed_marker_expiry_and_legacy_marker(incident_paths, monkeypatch):

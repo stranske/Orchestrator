@@ -45,11 +45,24 @@ def _hash_evidence(text: str) -> str:
     return hashlib.sha256(str(text).encode("utf-8")).hexdigest()[:16]
 
 
+def _contains_explicit_resource_exhausted(text: str) -> bool:
+    """Recognize provider-shaped exhaustion, not implementation/review prose."""
+    return bool(
+        re.search(
+            r"(?im)^\s*(?:\[resource_exhausted\]|resource_exhausted)\s*$"
+            r"|^\s*(?:error|status|code|response|provider\s+error)\b[^\n]{0,120}"
+            r"\bresource_exhausted\b"
+            r'|"(?:status|code)"\s*:\s*"RESOURCE_EXHAUSTED"',
+            text,
+        )
+    )
+
+
 def classify_provider_failure(text: str) -> tuple[str, str, str]:
     """Return an authoritative category only for explicit capacity evidence."""
     if not isinstance(text, str) or not text:
         return "unknown", "non_authoritative", "none"
-    if re.search(r"\bresource_exhausted\b|resource[ -]exhausted", text, re.I):
+    if _contains_explicit_resource_exhausted(text):
         return "capacity", "resource_exhausted", "high"
     if re.search(
         r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)", text, re.I
@@ -86,12 +99,8 @@ def stdout_carries_capacity_evidence(text: str) -> bool:
     """Whether successful stdout is explicit enough to include in failure classification."""
     if not isinstance(text, str) or not text:
         return False
-    return bool(
-        re.search(
-            r"\bresource_exhausted\b|ActionRequiredError.*(?:out of usage|quota exhausted)",
-            text,
-            re.I | re.S,
-        )
+    return _contains_explicit_resource_exhausted(text) or bool(
+        re.search(r"(?im)^\s*ActionRequiredError\b[^\n]*(?:out of usage|quota exhausted)", text)
     )
 
 
