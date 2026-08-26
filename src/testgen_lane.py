@@ -39,6 +39,8 @@ def gate_command(
     runs: int = 5,
     min_covered_lines_delta: int = 1,
     timeout: int = 120,
+    base_ref: str | None = None,
+    test_path: str | None = None,
 ) -> str:
     """Return the exact shell command an agent should pass before commit/PR."""
     if not sources:
@@ -73,6 +75,14 @@ def gate_command(
             str(timeout),
         ]
     )
+    # WITHOUT --base-ref THE GATE'S STRONGEST CHECK CANNOT RUN. no_hollow_nodes needs a ref
+    # holding the code before the change, so local_verify.py can revert to it and see which
+    # candidate nodes still pass -- those are hollow. The gate reports COULD NOT MEASURE and
+    # FAILS when it is absent, deliberately, so omitting it cannot quietly buy a green run.
+    if base_ref:
+        parts.extend(["--base-ref", _quote(base_ref)])
+    if test_path:
+        parts.extend(["--test-path", _quote(test_path)])
     return " ".join(parts)
 
 
@@ -176,6 +186,14 @@ def _selftest() -> None:
         timeout=45,
     )
     assert "testgen_gate.py" in cmd, cmd
+    # The lane never GUESSES a base ref: the gate fails closed without one, so an omitted ref
+    # surfaces as a failed check rather than as a silently weaker gate.
+    assert "--base-ref" not in cmd, cmd
+    with_ref = gate_command(
+        ".", ["pkg"], "tests", "tests", base_ref="abc123", test_path="tests/test_new.py"
+    )
+    assert "--base-ref abc123" in with_ref, with_ref
+    assert "--test-path tests/test_new.py" in with_ref, with_ref
     assert "--source pkg --source lib/core.py" in cmd, cmd
     assert shlex.quote("/tmp/repo with space") in cmd, cmd
     assert "--reliability-pytest-args tests/generated/test_core.py" in cmd, cmd

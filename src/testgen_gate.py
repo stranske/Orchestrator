@@ -473,6 +473,127 @@ def coverage_measurement(
     }
 
 
+LOCAL_VERIFY = Path(__file__).resolve().parent / "local_verify.py"
+
+
+def hollow_check(
+    repo: Path,
+    base_ref: str | None,
+    candidate_pytest_args: Sequence[str],
+    test_path: str | None,
+    timeout: int,
+) -> dict[str, Any]:
+    """Ask local_verify.py which candidate test NODES survive a deliberate break.
+
+    `coverage_delta` cannot answer this and never could: a test that calls the function and
+    asserts nothing raises covered lines exactly as much as one that pins the result. Measured
+    2026-08-26 on a fixture of one real and two hollow tests, all three passing normally --
+    coverage_delta green at +4 lines, hollow grading discriminates=1 hollow=2.
+
+    Reads `node_verdict`/`node_analysis`, NOT the exit code: per-node grading is advisory by
+    construction in local_verify and deliberately leaves the process result alone, so a gate
+    reading the exit code would accept hollow tests while believing it had checked.
+
+    Follows the rule #124 drained the rest of this module to: a probe that could not run
+    reports `measured: False`, names the remedy, and is never a pass.
+    """
+
+    def _blind(reason: str, remedy: str) -> dict[str, Any]:
+        return {"measured": False, "reason": reason, "remedy": remedy, "hollow_nodes": []}
+
+    if not base_ref:
+        return _blind(
+            "no --base-ref was given, so there is no broken base to grade against",
+            "Pass --base-ref <ref-before-the-change>, and --test-path for the new tests.",
+        )
+    if not LOCAL_VERIFY.exists():
+        return _blind(
+            f"local_verify.py is not beside this gate ({LOCAL_VERIFY})",
+            "Run the gate from a complete Orchestrator checkout.",
+        )
+    argv = [
+        sys.executable,
+        str(LOCAL_VERIFY),
+        "--worktree",
+        str(repo),
+        "--base-ref",
+        base_ref,
+        "--test-cmd",
+        " ".join([sys.executable, "-m", "pytest", *candidate_pytest_args]),
+    ]
+    if test_path:
+        argv.extend(["--test-path", test_path])
+    try:
+        proc = subprocess.run(
+            argv, cwd=repo, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return _blind(
+            f"local_verify.py exceeded {timeout}s",
+            "Raise --timeout, or narrow --test-path to the new tests.",
+        )
+    out = as_text(proc.stdout)
+    start = out.find("{")
+    if start < 0:
+        return _blind(
+            "local_verify.py emitted no JSON verdict",
+            "Run local_verify.py directly to see what it reported.",
+        )
+    try:
+        payload = json.loads(out[start:])
+    except json.JSONDecodeError as exc:
+        return _blind(
+            f"local_verify.py emitted unparseable JSON: {exc}",
+            "Run local_verify.py directly to see what it reported.",
+        )
+    counts = (payload.get("node_analysis") or {}).get("counts") or {}
+    if not counts:
+        return _blind(
+            payload.get("node_verdict") or "local_verify.py attributed no test nodes",
+            "Check --test-path names the candidate tests and that they collect.",
+        )
+    return {
+        "measured": True,
+        "reason": None,
+        "remedy": None,
+        "hollow_nodes": list(payload.get("hollow_nodes") or []),
+        "counts": counts,
+        "node_verdict": payload.get("node_verdict"),
+    }
+
+
+def _hollow_check_row(hollow: dict[str, Any]) -> dict[str, Any]:
+    """The check `coverage_delta` cannot stand in for.
+
+    A hollow test raises covered lines exactly as much as a real one, so a gate resting on
+    coverage_delta accepts tests that can never fail. This asks the only question that
+    separates them: when the code under test is deliberately broken, does the test notice?
+    """
+    nodes = list(hollow.get("hollow_nodes") or [])
+    measured = bool(hollow.get("measured"))
+    if not measured:
+        remedy = hollow.get("remedy") or ""
+        detail = (
+            f"COULD NOT MEASURE HOLLOWNESS — {hollow.get('reason')}. "
+            "This is a misuse of the gate, NOT a verdict on the tests"
+            + (f". {remedy}" if remedy else "")
+        )
+    elif nodes:
+        detail = f"{len(nodes)} test(s) pass against a broken base: " + ", ".join(nodes[:5])
+    else:
+        graded = hollow.get("counts", {}).get("nodes", 0)
+        detail = f"every candidate node discriminates ({graded} graded)"
+    return {
+        # A BLIND PROBE NEVER PASSES, for the same reason coverage_delta never passes blind:
+        # this is the strongest check here, so letting "could not run" read as ok would make
+        # it the easiest one to switch off silently.
+        "name": "no_hollow_nodes",
+        "ok": bool(measured and not nodes),
+        "detail": detail,
+        "could_not_measure": not measured,
+    }
+
+
 def verdict_checks(
     collect: dict[str, Any],
     baseline: dict[str, Any],
@@ -481,6 +602,7 @@ def verdict_checks(
     covered_delta: int,
     min_covered_lines_delta: int,
     measurement: dict[str, Any] | None = None,
+    hollow: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Pure final verdict checks.
 
@@ -490,6 +612,7 @@ def verdict_checks(
     `detail`, instead of asserting a defect in the tests that nobody has evidence for.
     """
     measurement = measurement or {}
+    hollow = hollow or {"measured": False, "reason": "the hollowness probe did not run"}
 
     def _run_check(name: str, side: dict[str, Any], detail: str) -> dict[str, Any]:
         ok = bool(side.get("ok"))
@@ -542,6 +665,7 @@ def verdict_checks(
             "detail": delta_detail,
             "could_not_measure": bool(delta_blind),
         },
+        _hollow_check_row(hollow),
     ]
 
 
@@ -555,6 +679,8 @@ def run_gate(
     runs: int = 5,
     min_covered_lines_delta: int = 1,
     timeout: int = 120,
+    base_ref: str | None = None,
+    test_path: str | None = None,
 ) -> dict[str, Any]:
     """Run the assured-acceptance gate and return a JSON-safe result."""
     repo_path = Path(repo).expanduser().resolve()
@@ -587,6 +713,7 @@ def run_gate(
             "candidate", repo_path, sources, candidate_pytest_args, temp_dir, timeout
         )
         reliability = reliability_check(repo_path, reliability_args, runs, timeout, temp_dir)
+        hollow = hollow_check(repo_path, base_ref, candidate_pytest_args, test_path, timeout)
 
     baseline_covered = int(baseline["coverage"]["covered_lines"])
     candidate_covered = int(candidate["coverage"]["covered_lines"])
@@ -600,6 +727,7 @@ def run_gate(
         covered_delta,
         min_covered_lines_delta,
         measurement,
+        hollow,
     )
     ok = all(c["ok"] for c in checks)
     failed = [c["name"] for c in checks if not c["ok"]]
@@ -633,6 +761,7 @@ def run_gate(
             "candidate_covered_lines": candidate_covered,
         },
         "reliability": reliability,
+        "hollow": hollow,
         "error": (
             None
             if ok
@@ -653,6 +782,7 @@ def run_gate(
 
 
 def _selftest() -> None:
+    _GRADED_CLEAN = {"measured": True, "hollow_nodes": [], "counts": {"nodes": 1}}
     assert split_args('tests -k "not slow"') == ["tests", "-k", "not slow"]
     assert pytest_cmd(["tests/a.py"], collect_only=True) == [
         sys.executable,
@@ -694,11 +824,13 @@ def _selftest() -> None:
     baseline = {"ok": True}
     candidate = {"ok": True}
     reliable = {"all_passed": True, "runs_requested": 5}
-    checks = verdict_checks(collect, baseline, candidate, reliable, 2, 1)
+    checks = verdict_checks(collect, baseline, candidate, reliable, 2, 1, hollow=_GRADED_CLEAN)
     assert all(c["ok"] for c in checks), checks
-    checks = verdict_checks(collect, baseline, candidate, reliable, 0, 1)
+    checks = verdict_checks(collect, baseline, candidate, reliable, 0, 1, hollow=_GRADED_CLEAN)
     assert not [c for c in checks if c["name"] == "coverage_delta"][0]["ok"], checks
-    checks = verdict_checks({"ok": False}, baseline, candidate, reliable, 2, 1)
+    checks = verdict_checks(
+        {"ok": False}, baseline, candidate, reliable, 2, 1, hollow=_GRADED_CLEAN
+    )
     assert not checks[0]["ok"], checks
 
     missing = run_gate("/path/that/does/not/exist", ["pkg"], [], [], runs=1)
@@ -773,6 +905,7 @@ def _selftest() -> None:
         0,
         0,
         blind_measurement,
+        hollow=_GRADED_CLEAN,
     )
     delta_check = next(c for c in blind_checks if c["name"] == "coverage_delta")
     # A BLIND MEASUREMENT NEVER PASSES, and `0 >= 0` is exactly the case that would have let it.
@@ -786,6 +919,56 @@ def _selftest() -> None:
         _side(0, files=["pkg/a.py"], statements=10, covered=5),
     )
     assert measured_zero["measured"] is True, measured_zero
+    # THE CHECK coverage_delta CANNOT STAND IN FOR. A hollow test raises covered lines exactly as
+    # much as a real one, so the criterion that used to carry this gate is GREEN on a test set that
+    # is two-thirds hollow. Both facts are asserted in ONE case so the reason this check exists
+    # cannot be lost to a later tidy-up.
+    hollow_seen = verdict_checks(
+        {"ok": True, "exit_code": 0},
+        _side(0, files=["pkg/a.py"]),
+        _side(0, files=["pkg/a.py"]),
+        reliable,
+        4,
+        1,
+        hollow={
+            "measured": True,
+            "hollow_nodes": ["tests/t.py::test_smoke", "tests/t.py::test_type_only"],
+            "counts": {"nodes": 3, "discriminates": 1, "hollow": 2},
+        },
+    )
+    hollow_row = next(c for c in hollow_seen if c["name"] == "no_hollow_nodes")
+    assert hollow_row["ok"] is False, hollow_row
+    assert "tests/t.py::test_smoke" in hollow_row["detail"], hollow_row
+    assert next(c for c in hollow_seen if c["name"] == "coverage_delta")["ok"] is True, hollow_seen
+
+    # A BLIND PROBE NEVER PASSES -- the rule #124 applied to the pytest-shaped failures, and it
+    # matters most here: this is the strongest check, so "could not run" reading as ok would make
+    # it the easiest one to switch off silently. Break -> revert 2026-08-26: widening `ok` to
+    # `not nodes` (blind passes) fails the first two asserts below.
+    blind_hollow = verdict_checks(
+        {"ok": True, "exit_code": 0},
+        _side(0, files=["pkg/a.py"]),
+        _side(0, files=["pkg/a.py"]),
+        reliable,
+        4,
+        1,
+        hollow={
+            "measured": False,
+            "reason": "no --base-ref was given",
+            "remedy": "Pass --base-ref <ref-before-the-change>.",
+        },
+    )
+    blind_row = next(c for c in blind_hollow if c["name"] == "no_hollow_nodes")
+    assert blind_row["ok"] is False, blind_row
+    assert blind_row["could_not_measure"] is True, blind_row
+    assert "COULD NOT MEASURE" in blind_row["detail"], blind_row
+    assert "not a verdict on the tests" in blind_row["detail"].lower(), blind_row
+    assert "--base-ref" in blind_row["detail"], blind_row
+
+    # The probe says WHY it could not run, rather than guessing.
+    no_ref = hollow_check(Path("."), None, [], None, 5)
+    assert no_ref["measured"] is False and "base-ref" in no_ref["reason"], no_ref
+
     zero_checks = verdict_checks(
         {"ok": True, "exit_code": 0},
         _side(0, files=["pkg/a.py"]),
@@ -849,6 +1032,21 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--runs", type=int, default=5, help="candidate reliability runs")
     parser.add_argument("--min-covered-lines-delta", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=120, help="per-command timeout in seconds")
+    parser.add_argument(
+        "--base-ref",
+        default=None,
+        help=(
+            "git ref holding the code BEFORE the change these tests pin. local_verify.py reverts "
+            "to it and re-runs the candidates; a node that still passes is hollow. Without it "
+            "no_hollow_nodes reports COULD NOT MEASURE and the gate fails -- a hollowness claim "
+            "nobody checked must not read as a pass."
+        ),
+    )
+    parser.add_argument(
+        "--test-path",
+        default=None,
+        help="candidate test file(s) to grade per node; narrows the probe to the new tests",
+    )
     ns = parser.parse_args(list(argv))
 
     if ns.selftest:
@@ -874,6 +1072,8 @@ def main(argv: Sequence[str]) -> int:
         runs=ns.runs,
         min_covered_lines_delta=ns.min_covered_lines_delta,
         timeout=ns.timeout,
+        base_ref=ns.base_ref,
+        test_path=ns.test_path,
     )
     print(json.dumps(result, indent=2))
     return 0 if result.get("ok") else 1
