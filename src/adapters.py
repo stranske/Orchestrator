@@ -1557,33 +1557,34 @@ def dispatch(
     selected = execution_profiles.get_profile(profile) if profile is not None else None
     # Telemetry is fail-open, but return its structured classification to callers.
     combined_output = f"{proc.stderr or ''}"
-    if proc.returncode != 0 or re.search(
-        r"\bresource_exhausted\b|ActionRequiredError.*(?:out of usage|quota exhausted)",
-        proc.stdout or "",
-        re.I | re.S,
-    ):
-        combined_output = f"{proc.stdout or ''}\n{combined_output}"
+    evidence_result = None
     try:
         import rate_incidents
 
+        if proc.returncode != 0 or rate_incidents.stdout_carries_capacity_evidence(proc.stdout or ""):
+            combined_output = f"{proc.stdout or ''}\n{combined_output}"
         evidence_result = rate_incidents.get_structured_evidence(
             error_text=combined_output,
             agent=agent,
             surface="adapters.dispatch",
             target=str(Path(cwd).expanduser().resolve()),
         )
-        if evidence_result.get("is_authoritative"):
+    except Exception as exc:
+        print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
+    if evidence_result and evidence_result.get("is_authoritative"):
+        try:
             rate_incidents.record_incident(
                 agent=agent,
                 surface="adapters.dispatch",
                 category=evidence_result["category"],
                 status="recorded",
                 target=str(Path(cwd).expanduser().resolve()),
+                run_id=f"sync-dispatch:{agent}:{time.time_ns()}",
                 evidence=combined_output,
                 extra={"subcategory": evidence_result["subcategory"], "exit_code": proc.returncode},
             )
-    except Exception:
-        evidence_result = None
+        except Exception as exc:
+            print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
     record_ledger(
         agent,
         count=1,

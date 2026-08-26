@@ -53,6 +53,15 @@ def test_append_preserves_history_and_dedupes(incident_paths):
     assert duplicate["deduped"] is True
 
 
+def test_bounded_dedup_scan_finds_recent_key_after_large_history(incident_paths):
+    key = "recent-run|codex|quota"
+    recent = json.dumps({"idempotency_key": key, "incident_id": "recent-incident"})
+    rate_incidents.INCIDENT_FILE.write_bytes(
+        b"x" * (rate_incidents.MAX_DEDUP_SCAN_BYTES + 200) + b"\n" + recent.encode() + b"\n"
+    )
+    assert rate_incidents._existing_idempotency_key(key) == "recent-incident"
+
+
 def test_evidence_is_bounded_and_redacted(incident_paths):
     rate_incidents.record_incident(
         agent="codex",
@@ -109,6 +118,16 @@ def test_json_shed_marker_expiry_and_legacy_marker(incident_paths, monkeypatch):
     assert capacity._shed("codex") is True
 
 
+@pytest.mark.parametrize("expires_at", [True, float("nan")], ids=["boolean", "nan"])
+def test_invalid_json_shed_marker_remains_active(incident_paths, monkeypatch, expires_at):
+    monkeypatch.setattr(capacity, "SHED_DIR", rate_incidents.SHED_DIR)
+    rate_incidents.SHED_DIR.mkdir(parents=True)
+    marker = rate_incidents.SHED_DIR / "codex"
+    marker.write_text(json.dumps({"expires_at": expires_at}))
+    assert capacity._shed("codex") is True
+    assert marker.exists()
+
+
 def test_expired_marker_is_refreshed_by_new_incident(incident_paths):
     rate_incidents.SHED_DIR.mkdir(parents=True)
     marker = rate_incidents.SHED_DIR / "cursor"
@@ -139,7 +158,84 @@ def test_synchronous_adapter_hook_records_structured_evidence(incident_paths, mo
     assert row["surface"] == "adapters.dispatch" and row["target"] == str(incident_paths.resolve())
 
 
-def test_offload_hook_reads_output_stderr_and_agent_log(incident_paths, monkeypatch):
+def test_synchronous_adapter_repeated_failures_get_distinct_run_ids(incident_paths, monkeypatch):
+    def fake_run(command, *args, **kwargs):
+        if command[0] == "git":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 1, "", "HTTP 429 Too Many Requests")
+
+    monkeypatch.setattr(adapters, "build_command", lambda *args, **kwargs: ["agent"])
+    monkeypatch.setattr(adapters.subprocess, "run", fake_run)
+    monkeypatch.setattr(adapters, "record_ledger", lambda *args, **kwargs: None)
+    adapters.dispatch("codex", "test", cwd=str(incident_paths))
+    adapters.dispatch("codex", "test", cwd=str(incident_paths))
+    rows = [json.loads(line) for line in rate_incidents.INCIDENT_FILE.read_text().splitlines()]
+    assert len(rows) == 2
+    assert rows[0]["run_id"] != rows[1]["run_id"]
+
+
+def test_synchronous_adapter_preserves_classification_when_recording_fails(
+    incident_paths, monkeypatch, capsys
+):
+    calls = iter(
+        (
+            subprocess.CompletedProcess(["agent"], 1, "", "HTTP 429 Too Many Requests"),
+            subprocess.CompletedProcess(["git"], 0, "", ""),
+        )
+    )
+    monkeypatch.setattr(adapters, "build_command", lambda *args, **kwargs: ["agent"])
+    monkeypatch.setattr(adapters.subprocess, "run", lambda *args, **kwargs: next(calls))
+    monkeypatch.setattr(adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rate_incidents, "record_incident", lambda **kwargs: (_ for _ in ()).throw(OSError("disk"))
+    )
+    result = adapters.dispatch("codex", "test", cwd=str(incident_paths))
+    assert result["rate_incident_evidence"]["is_authoritative"] is True
+    assert "rate-incident recording failed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("evidence_source", ["stdout", "stderr", "agent_log"])
+def test_offload_hook_reads_output_stderr_and_agent_log(
+    incident_paths, monkeypatch, evidence_source
+):
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", incident_paths / "logs")
+    monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args: prompt)
+    monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *args: None)
+    monkeypatch.setattr(
+        dispatcher.adapters, "can_report_cli_identity", lambda *args: (False, "test")
+    )
+    monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *args, **kwargs: ["agent"])
+    monkeypatch.setattr(dispatcher.adapters, "model_identity", lambda *args, **kwargs: "test-model")
+    monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher.feedback, "record_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dispatcher.feedback, "record_cost", lambda *args, **kwargs: None)
+    stdout = "resource_exhausted" if evidence_source == "stdout" else "ordinary output"
+    stderr = "resource_exhausted" if evidence_source == "stderr" else "ordinary stderr"
+    agent = "gemini" if evidence_source == "agent_log" else "codex"
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(["agent"], 1, stdout, stderr),
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "_agent_log_tail_from_argv",
+        lambda *args, **kwargs: "resource_exhausted"
+        if evidence_source == "agent_log"
+        else "",
+    )
+    monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "0")
+    result = dispatcher.offload(agent, "test", cwd=str(incident_paths))
+    row = json.loads(rate_incidents.INCIDENT_FILE.read_text())
+    assert result["rate_incident_evidence"]["is_authoritative"] is True
+    assert row["surface"] == "dispatcher.offload" and row["run_id"] == result["run_id"]
+
+
+def test_offload_preserves_classification_when_recording_fails(
+    incident_paths, monkeypatch, capsys
+):
     monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", incident_paths / "logs")
     monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
@@ -157,14 +253,16 @@ def test_offload_hook_reads_output_stderr_and_agent_log(incident_paths, monkeypa
         dispatcher.subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
-            ["agent"], 1, "resource_exhausted", "agent stderr"
+            ["agent"], 1, "", "HTTP 429 Too Many Requests"
         ),
+    )
+    monkeypatch.setattr(
+        rate_incidents, "record_incident", lambda **kwargs: (_ for _ in ()).throw(OSError("disk"))
     )
     monkeypatch.setenv("ORCH_OFFLOAD_NETWORK_RETRIES", "0")
     result = dispatcher.offload("codex", "test", cwd=str(incident_paths))
-    row = json.loads(rate_incidents.INCIDENT_FILE.read_text())
     assert result["rate_incident_evidence"]["is_authoritative"] is True
-    assert row["surface"] == "dispatcher.offload" and row["run_id"] == result["run_id"]
+    assert "rate-incident recording failed" in capsys.readouterr().err
 
 
 def test_ledger_completion_hook_uses_only_run_segment(incident_paths, monkeypatch):
@@ -184,6 +282,34 @@ def test_ledger_completion_hook_uses_only_run_segment(incident_paths, monkeypatc
     assert rows[0]["run_id"] == "run-current"
     assert rows[0]["surface"] == "ledger_reconcile.completion"
     assert rows[0]["category"] == "capacity"
+
+
+def test_historical_reconcile_records_without_shedding(incident_paths):
+    evidence = ledger_reconcile._classify_run_log_segment(
+        ["HTTP 429 Too Many Requests"], "codex", "historical-run", shed=False
+    )
+    assert evidence and evidence["is_authoritative"] is True
+    assert rate_incidents.INCIDENT_FILE.exists()
+    assert not (rate_incidents.SHED_DIR / "codex").exists()
+
+
+def test_unmarked_dedicated_log_is_available_but_mixed_log_remains_bounded(incident_paths):
+    dedicated = incident_paths / "dedicated.log"
+    dedicated.write_text("usage event\nresource_exhausted\n")
+    assert ledger_reconcile._log_segment(dedicated, "run") == [
+        "usage event",
+        "resource_exhausted",
+    ]
+    mixed = incident_paths / "mixed.log"
+    mixed.write_text("=== run_id=other ===\nresource_exhausted\n")
+    assert ledger_reconcile._log_segment(mixed, "run") == []
+
+
+def test_record_incident_rejects_unknown_keywords(incident_paths):
+    with pytest.raises(TypeError):
+        getattr(rate_incidents, "record_incident")(
+            agent="codex", surface="test", category="quota", bogus=True
+        )
 
 
 def test_successful_completion_log_with_bare_429_does_not_shed(incident_paths, monkeypatch):

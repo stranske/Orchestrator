@@ -118,7 +118,9 @@ def _log_segment(path: Path, run_id: str) -> list[str]:
         if line.startswith("===") and marker in line:
             start = idx + 1
     if start is None:
-        return []
+        # A dedicated legacy/external log may have no run delimiter at all. It is safe to use the
+        # whole file only when no other run markers exist; mixed logs remain fail-closed.
+        return lines if not any(line.startswith("===") for line in lines) else []
     end = len(lines)
     for idx in range(start, len(lines)):
         if lines[idx].startswith("==="):
@@ -133,11 +135,16 @@ def _classify_run_log_segment(
     run_id: str,
     target: str | None = None,
     log_file: Path | None = None,
+    *,
+    shed: bool = True,
 ) -> dict | None:
     """Classify only this detached run's bounded log segment (fail-open)."""
     try:
         import rate_incidents
-
+    except Exception as exc:
+        print(f"warn: rate-incident import failed for {agent}/{run_id}: {exc}", file=sys.stderr)
+        return None
+    try:
         combined_text = "\n".join(lines)
         evidence_result = rate_incidents.get_structured_evidence(
             error_text=combined_text,
@@ -146,25 +153,30 @@ def _classify_run_log_segment(
             run_id=run_id,
             target=target,
         )
-        if evidence_result.get("is_authoritative"):
-            rate_incidents.record_incident(
-                agent=agent,
-                surface="ledger_reconcile.completion",
-                category=evidence_result["category"],
-                status="recorded",
-                target=target,
-                run_id=run_id,
-                evidence=combined_text,
-                extra={
-                    "subcategory": evidence_result["subcategory"],
-                    "source": "log_segment",
-                    "log_file": str(log_file) if log_file else None,
-                },
-            )
-            return evidence_result
+    except Exception as exc:
+        print(f"warn: rate-incident classification failed for {agent}/{run_id}: {exc}", file=sys.stderr)
         return None
-    except Exception:
+    if not evidence_result.get("is_authoritative"):
         return None
+    try:
+        rate_incidents.record_incident(
+            agent=agent,
+            surface="ledger_reconcile.completion",
+            category=evidence_result["category"],
+            status="recorded",
+            target=target,
+            run_id=run_id,
+            shed=shed,
+            evidence=combined_text,
+            extra={
+                "subcategory": evidence_result["subcategory"],
+                "source": "log_segment",
+                "log_file": str(log_file) if log_file else None,
+            },
+        )
+    except Exception as exc:
+        print(f"warn: rate-incident recording failed for {agent}/{run_id}: {exc}", file=sys.stderr)
+    return evidence_result
 
 
 def _log_usage(path: Path | None, run_id: str) -> tuple[int, int]:
@@ -550,13 +562,10 @@ def record_completion(
             )
     # Hook: Classify log file for rate-limit/capacity incidents on completion
     if log_file:
-        try:
-            log_path = Path(log_file)
-            if log_path.exists():
-                seg = _log_segment(log_path, run_id)
-                _classify_run_log_segment(seg, agent, run_id, target, log_path)
-        except Exception:
-            pass  # Don't fail completion on classification error
+        log_path = Path(log_file)
+        if log_path.exists():
+            seg = _log_segment(log_path, run_id)
+            _classify_run_log_segment(seg, agent, run_id, target, log_path)
     adapters.record_ledger(
         agent,
         count=0,
@@ -667,7 +676,9 @@ def reconcile(
             agent = next((str(r.get("agent")) for r in run_rows if r.get("agent")), "")
             target = next((str(r.get("target")) for r in run_rows if r.get("target")), "")
             # Hook: Classify log segment for rate-limit/capacity incidents
-            rate_evidence = _classify_run_log_segment(seg, agent, run_id, target, log_file)
+            rate_evidence = _classify_run_log_segment(
+                seg, agent, run_id, target, log_file, shed=False
+            )
             if rate_evidence:
                 rate_incident_classified += 1
             tok = _resume_token_from_segment(seg)

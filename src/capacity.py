@@ -32,6 +32,7 @@ module only answers "does agent X have headroom right now?".
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -384,7 +385,12 @@ def _shed(agent: str) -> bool:
     if not isinstance(payload, dict):
         return True
     expires_at = payload.get("expires_at")
-    if not isinstance(expires_at, (int, float)) or expires_at > time.time():
+    if (
+        isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+        or not math.isfinite(expires_at)
+        or expires_at > time.time()
+    ):
         return True
     try:
         marker.unlink()

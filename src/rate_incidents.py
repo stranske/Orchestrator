@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ SHED_DIR = HANDOFF / "capacity-shed"
 SCHEMA = "rate-limit-incident/v1"
 MAX_EVIDENCE_EXCERPT = 500
 DEFAULT_COOLDOWN_S = 6 * 60 * 60
+MAX_DEDUP_SCAN_BYTES = 1024 * 1024
 
 
 def _redact_bounded(text: str, max_len: int = MAX_EVIDENCE_EXCERPT) -> str:
@@ -80,6 +82,19 @@ def is_authoritative_error(text: str) -> bool:
     return classify_provider_failure(text)[2] == "high"
 
 
+def stdout_carries_capacity_evidence(text: str) -> bool:
+    """Whether successful stdout is explicit enough to include in failure classification."""
+    if not isinstance(text, str) or not text:
+        return False
+    return bool(
+        re.search(
+            r"\bresource_exhausted\b|ActionRequiredError.*(?:out of usage|quota exhausted)",
+            text,
+            re.I | re.S,
+        )
+    )
+
+
 def get_structured_evidence(
     error_text: str, agent: str, surface: str, run_id: str | None = None, target: str | None = None
 ) -> dict[str, Any]:
@@ -133,7 +148,14 @@ def _existing_idempotency_key(key: str) -> str | None:
     if not INCIDENT_FILE.exists():
         return None
     try:
-        for line in INCIDENT_FILE.read_text(errors="replace").splitlines():
+        with INCIDENT_FILE.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            start = max(0, size - MAX_DEDUP_SCAN_BYTES)
+            handle.seek(start)
+            if start:
+                handle.readline()  # Drop the first partial row from the bounded suffix.
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+        for line in reversed(lines):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
@@ -164,7 +186,12 @@ def ensure_shed(
         try:
             existing = json.loads(marker.read_text(encoding="utf-8"))
             existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
-            if not isinstance(existing_expiry, (int, float)) or existing_expiry > time.time():
+            if (
+                isinstance(existing_expiry, bool)
+                or not isinstance(existing_expiry, (int, float))
+                or not math.isfinite(existing_expiry)
+                or existing_expiry > time.time()
+            ):
                 return True
             marker.unlink()
         except (OSError, json.JSONDecodeError):
@@ -209,7 +236,6 @@ def record_incident(
     reroute: str | None = None,
     next_success_at: int | None = None,
     extra: dict[str, Any] | None = None,
-    **unused: Any,
 ) -> dict[str, Any]:
     """Append exactly one incident line while holding an exclusive fcntl lock."""
     if not agent or not surface or not category:

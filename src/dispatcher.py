@@ -1826,16 +1826,13 @@ def offload(
         out["retried"] = True
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
+    evidence_result = None
     try:
         import rate_incidents
 
         failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
         stdout = str(out.get("output") or "")
-        if out.get("exit") != 0 or re.search(
-            r"\bresource_exhausted\b|ActionRequiredError.*(?:out of usage|quota exhausted)",
-            stdout,
-            re.I | re.S,
-        ):
+        if out.get("exit") != 0 or rate_incidents.stdout_carries_capacity_evidence(stdout):
             failure_parts.insert(0, stdout)
         combined_output = "\n".join(str(part or "") for part in failure_parts)
         evidence_result = rate_incidents.get_structured_evidence(
@@ -1845,7 +1842,11 @@ def offload(
             run_id=run_id,
             target=target,
         )
-        if evidence_result.get("is_authoritative"):
+        out["rate_incident_evidence"] = evidence_result
+    except Exception as exc:
+        print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
+    if evidence_result and evidence_result.get("is_authoritative"):
+        try:
             rate_incidents.record_incident(
                 agent=agent,
                 surface="dispatcher.offload",
@@ -1860,9 +1861,8 @@ def offload(
                     "attempts": attempts,
                 },
             )
-        out["rate_incident_evidence"] = evidence_result
-    except Exception:
-        pass
+        except Exception as exc:
+            print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
     return out
 
 
