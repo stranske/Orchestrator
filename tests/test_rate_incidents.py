@@ -5,7 +5,15 @@ import subprocess
 import time
 
 import pytest
-from src import adapters, capacity, dispatcher, ledger_reconcile, rate_incidents
+
+try:
+    from src import adapters, capacity, dispatcher, ledger_reconcile, rate_incidents
+except ImportError:  # The launchd execution mirror is intentionally flat.
+    import adapters
+    import capacity
+    import dispatcher
+    import ledger_reconcile
+    import rate_incidents
 
 
 @pytest.fixture
