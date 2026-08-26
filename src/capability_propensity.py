@@ -265,6 +265,44 @@ VERDICT_KIND_KEY = "verdict_kind"
 #     so a caller cannot re-roll until the number is agreeable — and a second attempt is REFUSED with
 #     the existing attachment named, never silently dropped, which is the defect (#127) that this
 #     whole axis was found by.
+# THE RE-OFFER. One round, and it may supply ONLY a fact that is already DECLARED somewhere and was
+# absent from the first offer. Never a re-argument, never a re-rank, never a fresh pitch.
+#
+# WHY THE CONSTRAINT IS THE WHOLE DESIGN. "Offer it again, harder" is a persuasion loop, and
+# CLAUDE.md forbids exactly that shape: promotion must gate on an EXTERNAL signal, never on the
+# advisor's own naming, "otherwise the loop ratchets toward invocation regardless of usefulness".
+# The objective is not to maximise invocations. So a re-offer that could compose new prose would be
+# a dispatch path arguing with the agent it dispatches. Restricting it to ECHOING DECLARED FACTS
+# makes it mechanical: everything it can say is already in `HOW_TO_USE`, `CAPABILITY_PRECONDITIONS`
+# or the ledger, and if none of those holds an undelivered fact then there is NOTHING to re-offer.
+#
+# THAT REFUSAL IS THE POINT, not a failure mode. "No undelivered fact exists" means the offer was as
+# good as the tables can make it, so the answer is to improve the TABLES — which is the third axis
+# (`offer_improvable`) and `propose_offer_improvements` below, not another round of asking.
+#
+# CONVERSION IS DERIVED, NEVER RECORDED. Whether a re-offer worked is visible in the ledger already:
+# an invocation after the re-offer converted it, a second decline did not. Deriving it means a
+# caller cannot inflate the mechanism by declining to report its failures, and it means no extra
+# step for the surface. `report()` prints converted AND declined-again together, for the same reason
+# the late-outcome channel prints corroborating and refuting together: a conversion count climbing
+# alone is the signature of a ratchet rather than a measurement.
+#
+# LATCHED-GATE ANSWERS:
+#   1. WHAT DECREMENTS IT — the caller answering: an invocation converts it, a second decline closes
+#      it. Both are existing events; the re-offer adds no new obligation.
+#   2. CAN THE DRAIN RUN WHILE CLOSED — yes. A re-offer needs only a decline, which needs only an
+#      offer, and neither is gated on the re-offer's own success.
+#   3. SAME WINDOW BOTH WAYS — `WINDOW_DAYS`, consumed not re-declared.
+#   4. WHEN FULLY DRAINED — "no re-offer is pending an answer", distinct from "could not measure".
+REOFFER_EVENT_TYPE = "offer_amendment"
+REOFFER_SOURCE = "capability_reoffer"
+REOFFER_FACTS_KEY = "reoffer_facts"
+# Only these kinds can be caused by a MISSING FACT. The others state a structural reason the caller
+# was entitled to give -- `no_landing_zone`, `scope_too_small`, `deferred`, `gated_off` -- and
+# re-offering against them is nagging, not information. Their answer is a different TASK, which
+# `capability_task_proposals` derives from the same table.
+REOFFERABLE_KINDS = ("offer_too_thin", "wrong_match", "precondition_unmet")
+
 LATE_OUTCOME_SOURCE = "capability_late_outcome"
 # The ledger event type. Distinct from "outcome" so a reader that predates this channel IGNORES the
 # amendment rather than misreading it — see the note in `capabilities.EVENT_FIELDS`. This is the
@@ -469,6 +507,10 @@ DECLINE_KINDS: dict[str, dict] = {
     "wrong_match": {
         "demotable": True,
         "repairable": True,
+        # ALSO an offer axis, and it is the reason this kind was overloaded: when the
+        # classifier returns nothing the offer is BLIND, and a caller can only call
+        # that a mismatch. `record_reoffer` uses exactly this case.
+        "offer_improvable": True,
         "fix": "the matcher or the binding",
         # THE TASK SHAPE lives here, beside `fix`, because they answer two different
         # questions about the same decline and a separate table would drift from this one.
@@ -488,6 +530,7 @@ DECLINE_KINDS: dict[str, dict] = {
     "scope_too_small": {
         "demotable": True,
         "repairable": False,
+        "offer_improvable": False,
         "fix": "a precondition or a narrower declaration, not a lower rank",
         # THE TASK SHAPE lives here, beside `fix`, because they answer two different
         # questions about the same decline and a separate table would drift from this one.
@@ -512,6 +555,7 @@ DECLINE_KINDS: dict[str, dict] = {
     "precondition_unmet": {
         "demotable": False,
         "repairable": True,
+        "offer_improvable": False,
         "fix": "declare and EVALUATE the capability's precondition (applies_to, "
         "an observable surface); the binding is right where it holds",
         # THE TASK SHAPE lives here, beside `fix`, because they answer two different
@@ -532,6 +576,7 @@ DECLINE_KINDS: dict[str, dict] = {
     "no_landing_zone": {
         "demotable": False,
         "repairable": False,
+        "offer_improvable": False,
         "fix": "nothing — the match was correct and the deliverable had nowhere to "
         "put the result",
         # THE TASK SHAPE lives here, beside `fix`, because they answer two different
@@ -550,6 +595,7 @@ DECLINE_KINDS: dict[str, dict] = {
         "demotable": False,
         # Not a defect: the gate is the subject and it moves on its own evidence.
         "repairable": False,
+        "offer_improvable": False,
         "fix": "the capability's own gate, on its own evidence",
         # THE TASK SHAPE lives here, beside `fix`, because they answer two different
         # questions about the same decline and a separate table would drift from this one.
@@ -563,6 +609,7 @@ DECLINE_KINDS: dict[str, dict] = {
     "deferred": {
         "demotable": False,
         "repairable": False,
+        "offer_improvable": False,
         "fix": "nothing — wanted, not affordable this run",
         # THE TASK SHAPE lives here, beside `fix`, because they answer two different
         # questions about the same decline and a separate table would drift from this one.
@@ -576,9 +623,34 @@ DECLINE_KINDS: dict[str, dict] = {
     # by default, which is the failure this vocabulary exists to prevent.
     # ...and NOT repairable either, for the identical reason: a repair proposed by DEFAULT, from a
     # decline nobody classified, is the wrong correction arriving unasked.
+    # THE THIRD AXIS. Every kind above describes a judgement the caller COULD make; this one
+    # describes a caller who could NOT. "I cannot tell from what I was shown whether this applies"
+    # is a statement about the OFFER, not about the capability and not about the binding — and
+    # until 2026-08-25 there was nowhere to put it, so it landed in `wrong_match`, which is
+    # DEMOTABLE. A thin offer was therefore evidence against the binding, and the two became
+    # unrecoverable from each other.
+    # MEASURED: 22 of 40 bound capabilities carry no `how_to_use` entry at all, and `testgen-lane`'s
+    # entry documented one route when the capability has two — a decline that "checking the binary
+    # rather than trusting the prose turned into a use". Offers demonstrably fail for want of
+    # information, and that failure has a different fix from either of the other two.
+    # NEITHER demotable NOR repairable: the binding may be perfect and the capability may be
+    # perfect. The OFFER is what is broken, which is why this row carries the new axis alone.
+    "offer_too_thin": {
+        "demotable": False,
+        "repairable": False,
+        "offer_improvable": True,
+        "fix": "the OFFER — a how_to_use entry, a declared precondition, or a statement of what "
+        "the capability does; the binding and the capability are both untouched",
+        "task_shape": (
+            "NONE YET — fix the offer first. There is no task signal here at all: the caller "
+            "could not tell what was on offer, so nothing they said describes the work that "
+            "would have fitted. Deriving a task from this decline would be inventing one."
+        ),
+    },
     "unspecified": {
         "demotable": False,
         "repairable": False,
+        "offer_improvable": False,
         "fix": "unknown — the caller did not classify it",
         # THE TASK SHAPE lives here, beside `fix`, because they answer two different
         # questions about the same decline and a separate table would drift from this one.
@@ -654,6 +726,10 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     "declined": [],
                     "decline_reasons": {},
                     "decline_kinds": {},
+                    # WHEN it was declined, so the re-offer grace window can be measured. Without
+                    # this the grace check reads a missing key, falls through, and counts every
+                    # decline immediately — a guard that silently does nothing.
+                    "declined_at": {},
                     # PER-VERDICT PROVENANCE, carried the same way the decline metadata already is.
                     # Without it a reader can only count verdicts, and counting 3 correlated
                     # self-reports as 3 independent observations is the defect this fixes.
@@ -665,6 +741,11 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     # walked before or after the verdict it corrects, and event order is not a
                     # contract this assembly should rest on.
                     "late_outcome_events": {},
+                    "reoffer_events": {},
+                    # Invocation TIMESTAMPS, so a re-offer's conversion can be derived by ordering
+                    # rather than recorded by the caller — a caller who simply never reports a
+                    # failed re-offer could otherwise make the mechanism look perfect.
+                    "trigger_timestamps": {},
                     "skills": set(),
                 },
             )
@@ -692,8 +773,24 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     trial["decline_kinds"].setdefault(
                         cap_id, str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT)
                     )
-            elif etype == "invocation" and cap_id not in trial["triggered"]:
-                trial["triggered"].append(cap_id)
+                    ts = event.get("timestamp") or 0
+                    if ts and ts > trial["declined_at"].get(cap_id, 0):
+                        trial["declined_at"][cap_id] = ts
+            elif etype == REOFFER_EVENT_TYPE:
+                trial["reoffer_events"].setdefault(
+                    cap_id,
+                    {
+                        "answering_decline_kind": str(meta.get(DECLINE_KIND_KEY) or ""),
+                        "facts_supplied": list(meta.get(REOFFER_FACTS_KEY) or []),
+                        "timestamp": event.get("timestamp") or 0,
+                    },
+                )
+            elif etype == "invocation":
+                if cap_id not in trial["triggered"]:
+                    trial["triggered"].append(cap_id)
+                ts = event.get("timestamp") or 0
+                if ts > trial["trigger_timestamps"].get(cap_id, 0):
+                    trial["trigger_timestamps"][cap_id] = ts
             elif etype == LATE_OUTCOME_EVENT_TYPE:
                 # NOT a verdict: an outcome that arrived after one. Held aside; applied below.
                 trial["late_outcome_events"].setdefault(
@@ -725,6 +822,21 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
         # before this runs. An attachment with no verdict to correct is an ORPHAN — reported, never
         # promoted into a verdict, because inventing one would credit a capability with an outcome
         # for a trial whose trigger the window can no longer see.
+        # RE-OFFERS and their DERIVED conversion. A trigger recorded at or after the re-offer
+        # converted it; a decline that still stands did not. Derived, never reported by the caller,
+        # so the mechanism cannot be made to look good by not mentioning its failures.
+        trial["reoffers"] = {}
+        for cap_id, ro in sorted(trial.pop("reoffer_events").items()):
+            fired = trial["trigger_timestamps"].get(cap_id, 0)
+            # `>=` not `>`: the ledger's timestamps are second-granular, and a caller that reads the
+            # re-offer and acts immediately lands in the same second. Ties resolve toward MOTION —
+            # the same direction the repair channel's freshness tie-break already chose.
+            converted = bool(fired) and fired >= ro["timestamp"]
+            trial["reoffers"][cap_id] = {
+                **ro,
+                "converted": converted,
+                "still_declined": cap_id in trial["declined"] and not converted,
+            }
         trial["late_outcomes"] = {}
         trial["late_outcome_orphans"] = {}
         for cap_id, late in sorted(trial.pop("late_outcome_events").items()):
@@ -773,6 +885,9 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
         }
         trial["decline_kinds"] = {
             c: k for c, k in sorted(trial["decline_kinds"].items()) if c in trial["declined"]
+        }
+        trial["declined_at"] = {
+            c: ts for c, ts in sorted(trial["declined_at"].items()) if c in trial["declined"]
         }
         # THE DEMOTABLE SUBSET, separated here so no downstream reader has to remember which kinds
         # are the binding's fault. `no_landing_zone` was a CORRECT match; it belongs in `declined`
@@ -1191,6 +1306,17 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # silence — a non-zero count here means outcomes are arriving later than the window is wide,
         # which is a statement about the WINDOW, not about the capabilities.
         "late_outcomes_orphaned": sum(len(t["late_outcome_orphans"]) for t in trials),
+        # THE RE-OFFER PAIR, printed together for the reason the late-outcome pair is: a conversion
+        # count rising while `declined_again` stays at zero is a ratchet, not a measurement. A
+        # conversion rate near zero over a real sample means the mechanism is pure cost and should
+        # be switched off — which is a decision this report has to make VISIBLE to be makeable.
+        "reoffers_made": sum(len(t["reoffers"]) for t in trials),
+        "reoffers_converted": sum(
+            1 for t in trials for r in t["reoffers"].values() if r["converted"]
+        ),
+        "reoffers_declined_again": sum(
+            1 for t in trials for r in t["reoffers"].values() if r["still_declined"]
+        ),
         "verdicts_self_reported": self_total,
         "verdicts_outcome_derived": verdict_total - self_total,
         "verdicts_self_reported_share": (
@@ -1389,6 +1515,257 @@ def verdict_in_window(
         for bucket in ("useful", "not_useful"):
             if capability_id in trial[bucket]:
                 return bucket
+    return None
+
+
+# How long a demotable decline of a RE-OFFERABLE kind waits for its round before it counts anyway.
+# WITHOUT THIS THE TWO-ROUND RULE IS A LATCHED GATE: `wrong_match` is both demotable and
+# re-offerable, so "no demotion until the re-offer round completes" would hold every wrong_match
+# decline forever if nobody ever re-offers -- a gate whose drain nobody is obliged to run. The grace
+# window is the drain, and `propose_offer_improvements` reports how many declines are currently held
+# by it, so the hold is a number on a page rather than a silence.
+REOFFER_GRACE_DAYS = 14
+
+
+def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> dict:
+    """The THIRD axis: offers that cannot be judged, and the tables that would fix them.
+
+    Two populations, and they need opposite work:
+
+      * DECLARED-NOTHING — a BOUND capability with no `how_to_use` entry and no declared
+        precondition. Its offer can only ever be its own name, so a caller has nothing to judge and
+        `record_reoffer` has nothing to echo. 22 of 40 bound capabilities were in this state on
+        2026-08-25. This is the structural half and it is measurable without waiting for anyone to
+        decline.
+      * SAID-SO — declines of kind `offer_too_thin`, where a caller stated outright that the offer
+        was not judgeable. The observed half.
+
+    Report-only. It proposes edits to declared tables; it writes none of them, and the tables stay
+    hand-authored on purpose — CLAUDE.md forbids a loop that edits an offer to increase selection,
+    and an auto-writer here would be exactly that with an extra step.
+    """
+    try:
+        import capability_advisor
+    except Exception:  # noqa: BLE001
+        return {"measured": False, "why_not_measured": "capability_advisor is not importable"}
+    bound: set[str] = set()
+    for entries in (getattr(capability_advisor, "SURFACE_BINDINGS", {}) or {}).values():
+        try:
+            for e in entries:
+                bound.add(e[0] if isinstance(e, (list, tuple)) else e)
+        except TypeError:
+            continue
+    bound.discard("__none__")
+    declared_nothing = sorted(c for c in bound if not declared_facts(c))
+    said_so: dict[str, int] = {}
+    held: dict[str, int] = {}
+    now = capabilities._now()
+    for trial in experiments(path=path, window_days=window_days):
+        for cap_id, kind in (trial["decline_kinds"] or {}).items():
+            if kind == "offer_too_thin":
+                said_so[cap_id] = said_so.get(cap_id, 0) + 1
+            if kind in REOFFERABLE_KINDS and DECLINE_KINDS[kind]["demotable"]:
+                if cap_id not in (trial.get("reoffers") or {}):
+                    held[cap_id] = held.get(cap_id, 0) + 1
+    return {
+        "measured": True,
+        "window_days": window_days,
+        "bound_capabilities": len(bound),
+        # THE BLOCKING QUANTITY AND ITS DRAIN, in one place, per the runtime rule in CLAUDE.md.
+        "offers_that_declare_nothing": len(declared_nothing),
+        "declared_nothing": declared_nothing,
+        "declines_saying_the_offer_was_thin": sum(said_so.values()),
+        "said_so_by_capability": dict(sorted(said_so.items())),
+        "demotable_declines_awaiting_their_reoffer_round": sum(held.values()),
+        "reoffer_grace_days": REOFFER_GRACE_DAYS,
+        "generated_at": now,
+    }
+
+
+def declared_facts(capability_id: str) -> dict:
+    """Every fact about this capability that is DECLARED somewhere and could be shown to a caller.
+
+    The re-offer's entire vocabulary. Nothing may be composed: if it is not in one of these tables
+    it cannot be said, which is what keeps a second offer from becoming a second argument.
+    """
+    facts: dict = {}
+    try:
+        import capability_advisor
+    except Exception:  # noqa: BLE001
+        return facts
+    how = getattr(capability_advisor, "HOW_TO_USE", {}).get(capability_id)
+    if how:
+        facts["how_to_use"] = str(how)
+    pre = getattr(capability_advisor, "CAPABILITY_PRECONDITIONS", {}).get(capability_id)
+    if pre:
+        if pre.get("applies_to"):
+            facts["applies_to"] = str(pre["applies_to"])
+        if pre.get("concept"):
+            facts["precondition_concept"] = str(pre["concept"])
+        if pre.get("requires"):
+            facts["requires"] = str(pre["requires"])
+    return facts
+
+
+def undelivered_facts(capability_id: str, delivered: dict | None = None) -> dict:
+    """Declared facts the FIRST offer did not carry. The re-offer's permitted content, exactly.
+
+    `delivered` is what the original offer is known to have included (from the match event's own
+    metadata). Absent, nothing is assumed delivered — the conservative direction, because re-stating
+    a fact the caller already had is merely redundant, while withholding one is the defect this
+    exists to fix.
+    """
+    have = declared_facts(capability_id)
+    seen = set((delivered or {}).keys())
+    return {k: v for k, v in have.items() if k not in seen}
+
+
+def record_reoffer(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    decline_kind: str,
+    delivered: dict | None = None,
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    timestamp: int | None = None,
+    now: int | None = None,
+) -> dict:
+    """One re-offer against a decline, carrying only declared facts the first offer omitted.
+
+    Refuses, each naming why, because every refusal here is a different signal:
+      * NO DECLINE TO ANSWER — a re-offer is a reply; without a decline there is nothing to reply to.
+      * A KIND THAT STATES A STRUCTURAL REASON (`no_landing_zone`, `scope_too_small`, `deferred`,
+        `gated_off`). The caller was entitled to that answer and no fact changes it; re-offering
+        would be nagging. Their answer is a different TASK, which `capability_task_proposals`
+        derives from the same table.
+      * ALREADY RE-OFFERED. One round, so a surface cannot be asked repeatedly until it yields.
+      * NO UNDELIVERED FACT EXISTS — and this is the productive refusal. It means the offer was
+        already as complete as the tables can make it, so the fix is the TABLES. The result carries
+        `offer_improvement_needed`, which `propose_offer_improvements` reads.
+    """
+    if str(decline_kind) not in DECLINE_KINDS:
+        raise ValueError(
+            f"unknown decline kind {decline_kind!r}; expected one of {sorted(DECLINE_KINDS)}"
+        )
+    if str(decline_kind) not in REOFFERABLE_KINDS:
+        row = DECLINE_KINDS[str(decline_kind)]
+        return {
+            "reoffered": False,
+            "capability": capability_id,
+            "experiment": experiment_id,
+            "reason": (
+                f"{decline_kind!r} states a structural reason the caller was entitled to give, so "
+                "no fact would change it"
+            ),
+            "remedy": (
+                f"the answer is a different TASK, not another offer: {row['task_shape'][:200]}"
+            ),
+            "kind_fix": row["fix"],
+        }
+    declined_kind = decline_kind_recorded(
+        capability_id, experiment_id, path=path, window_days=window_days, now=now
+    )
+    if declined_kind is None:
+        return {
+            "reoffered": False,
+            "capability": capability_id,
+            "experiment": experiment_id,
+            "reason": (
+                f"no in-window decline by {capability_id!r} on {experiment_id!r} to answer "
+                f"(window {window_days}d)"
+            ),
+            "remedy": (
+                "a re-offer is a REPLY. Record the decline first — with its kind — or there is "
+                "nothing to reply to and no way to tell a re-offer from a fresh offer"
+            ),
+        }
+    if existing_reoffer(capability_id, experiment_id, path=path, window_days=window_days, now=now):
+        return {
+            "reoffered": False,
+            "capability": capability_id,
+            "experiment": experiment_id,
+            "reason": "this decline has already been answered once",
+            "remedy": (
+                "ONE round is the design. A surface that can be asked repeatedly until it yields "
+                "is being persuaded, not informed; the second decline is the answer"
+            ),
+        }
+    facts = undelivered_facts(capability_id, delivered)
+    if not facts:
+        return {
+            "reoffered": False,
+            "capability": capability_id,
+            "experiment": experiment_id,
+            "reason": "no DECLARED fact exists that the first offer did not already carry",
+            # THE PRODUCTIVE REFUSAL. Not a failure: the offer was as good as the tables allow.
+            "offer_improvement_needed": True,
+            "remedy": (
+                "nothing may be composed for a re-offer, so an empty set means the OFFER ITSELF is "
+                f"the gap — {capability_id!r} has no undelivered how_to_use entry, declared "
+                "precondition or applies_to. Improving those tables is the action; asking again is "
+                "not. `propose_offer_improvements` collects exactly this case"
+            ),
+        }
+    ok = capabilities.heartbeat(
+        capability_id,
+        REOFFER_EVENT_TYPE,
+        ref=experiment_id,
+        path=path or capabilities.REG,
+        idempotency_key=f"reoffer:{capability_id}:{experiment_id}",
+        timestamp=timestamp,
+        metadata={
+            "source": REOFFER_SOURCE,
+            DECLINE_KIND_KEY: str(decline_kind),
+            REOFFER_FACTS_KEY: sorted(facts),
+            "facts": {k: str(v)[:400] for k, v in facts.items()},
+        },
+    )
+    return {
+        "reoffered": bool(ok),
+        "capability": capability_id,
+        "experiment": experiment_id,
+        "answering_decline_kind": str(decline_kind),
+        "facts_supplied": sorted(facts),
+        "facts": facts,
+        "rule": (
+            "these are DECLARED facts echoed verbatim; a re-offer may not compose new argument, "
+            "re-rank, or ask twice"
+        ),
+    }
+
+
+def decline_kind_recorded(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    now: int | None = None,
+) -> str | None:
+    """The kind of this capability's in-window decline on this trial, or None if it did not decline."""
+    for trial in experiments(path=path, window_days=window_days, now=now):
+        if trial["experiment_id"] != experiment_id:
+            continue
+        if capability_id in trial["declined"]:
+            return trial["decline_kinds"].get(capability_id, DECLINE_KIND_DEFAULT)
+        return None
+    return None
+
+
+def existing_reoffer(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    now: int | None = None,
+) -> dict | None:
+    """The re-offer already made against this decline, or None. Read through `experiments()`."""
+    for trial in experiments(path=path, window_days=window_days, now=now):
+        if trial["experiment_id"] != experiment_id:
+            continue
+        return (trial.get("reoffers") or {}).get(capability_id)
     return None
 
 
@@ -3981,7 +4358,27 @@ def _selftest_declines() -> None:
                 kind="wrong_match",
                 path=ledger,
             )
-            dem = propose_demotions("t-dec", path=ledger)
+            # THE TWO-ROUND RULE (2026-08-25). `wrong_match` is demotable AND re-offerable, so two
+            # fresh declines no longer demote on their own: a thin offer must not be evidence
+            # against the binding. They are HELD, and the hold is reported rather than silent.
+            held_yet = propose_demotions("t-dec", path=ledger)
+            assert (
+                held_yet == []
+            ), "two fresh wrong_match declines must be HELD for their re-offer round, not demoted"
+            held_counts = surface_decline_counts("t-dec", path=ledger)
+            assert held_counts["held_for_reoffer"]["wrong-tool"] == 2, held_counts
+            # Completing the round is what releases them: the missing fact is supplied and the
+            # caller STILL declines. That is round two, and now the evidence is about the binding.
+            import capability_advisor as _adv
+
+            _adv.HOW_TO_USE["wrong-tool"] = "run wrong_tool.py --json"
+            try:
+                for exp in (d_exp, "advice:decline000005"):
+                    ro = record_reoffer("wrong-tool", exp, decline_kind="wrong_match", path=ledger)
+                    assert ro["reoffered"] is True, ro
+                dem = propose_demotions("t-dec", path=ledger)
+            finally:
+                _adv.HOW_TO_USE.pop("wrong-tool", None)
             assert [d["capability_id"] for d in dem] == ["wrong-tool"], dem
             assert dem[0]["basis"] == "declined_with_reason", dem[0]
             assert dem[0]["declined"] == 2 and dem[0]["triggered"] == 0, dem[0]
@@ -4564,6 +4961,206 @@ def _selftest_provenance() -> None:
         "unlabelled rows classify as self-reported, the strongest classes are not self-certifying, "
         "an unstated provenance is refused without writing anything, declines stay inert, and the "
         "caller receives the mix)"
+    )
+
+
+def _selftest_reoffer_and_offer_axis() -> None:
+    """A SECOND OFFER MAY ONLY ECHO DECLARED FACTS — and the two-round rule must not latch shut.
+
+    THE THREE ASSERTIONS THAT CARRY THE DESIGN:
+
+      * NOTHING MAY BE COMPOSED. A re-offer's content is exactly the declared facts the first offer
+        omitted. With no undelivered fact it REFUSES, and that refusal carries
+        `offer_improvement_needed` — "offer it again, harder" is a persuasion loop and CLAUDE.md
+        forbids that shape outright, so the only defence is that new prose is impossible to produce.
+      * STRUCTURAL KINDS ARE NOT RE-OFFERABLE. `no_landing_zone` / `scope_too_small` / `deferred` /
+        `gated_off` state a reason the caller was entitled to give; asking again is nagging. Their
+        answer is a different TASK, and the refusal says so by quoting the kind's own task_shape.
+      * THE GRACE WINDOW IS THE DRAIN. `wrong_match` is BOTH demotable and re-offerable, so "no
+        demotion until the round completes" would hold every such decline forever if nobody
+        re-offers — nobody is obliged to. A decline older than REOFFER_GRACE_DAYS counts anyway, and
+        `held_for_reoffer` reports the ones still waiting so the hold is a number, not a silence.
+
+    BREAK -> REVERT, each confirmed to discriminate:
+      * let a re-offer compose when no fact is undelivered -> the nothing-composed assertion fails;
+      * drop the REOFFERABLE_KINDS filter -> a `no_landing_zone` decline is re-offered and the
+        nagging assertion fails;
+      * remove the grace window -> the held decline never counts and the drain assertion fails,
+        which is the latched gate this window exists to prevent;
+      * count a CONVERTED re-offer toward demotion -> the conversion assertion fails: a capability
+        that was re-offered and then USED is not a demotion signal.
+    """
+    import tempfile
+    from pathlib import Path
+
+    day = 86400
+    with tempfile.TemporaryDirectory(prefix="reoffer-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {c: capabilities._blank_capability(c) for c in ("rich", "bare", "structural")}
+        capabilities.save(rows, ledger)
+        import capability_advisor
+
+        capability_advisor.HOW_TO_USE["rich"] = "run rich.py --json; it reports X"
+        try:
+            # ---- 1. A FACT EXISTS AND WAS NOT DELIVERED -> one re-offer, echoing exactly it ----
+            x = "advice:reoffer00001"
+            record_decline(
+                "rich",
+                x,
+                reason="could not tell what it does",
+                surface="s",
+                kind="offer_too_thin",
+                path=ledger,
+            )
+            res = record_reoffer("rich", x, decline_kind="offer_too_thin", path=ledger)
+            assert res["reoffered"] is True, res
+            assert res["facts_supplied"] == ["how_to_use"], res["facts_supplied"]
+            assert (
+                res["facts"]["how_to_use"] == capability_advisor.HOW_TO_USE["rich"]
+            ), "a re-offer must ECHO the declared fact verbatim, never paraphrase it"
+            # ONE ROUND ONLY.
+            again = record_reoffer("rich", x, decline_kind="offer_too_thin", path=ledger)
+            assert again["reoffered"] is False, again
+            assert "reason" in again, (
+                "a refused second round must SAY it was already answered; a bare False is the "
+                "silent no-op this project keeps paying for"
+            )
+            assert "already been answered" in again["reason"], again["reason"]
+
+            # ---- 2. NOTHING TO ECHO -> refuse, and say the OFFER is the gap -------------------
+            y = "advice:reoffer00002"
+            record_decline(
+                "bare",
+                y,
+                reason="no idea what this is",
+                surface="s",
+                kind="offer_too_thin",
+                path=ledger,
+            )
+            bare = record_reoffer("bare", y, decline_kind="offer_too_thin", path=ledger)
+            assert bare["reoffered"] is False, bare
+            assert bare.get("offer_improvement_needed") is True, (
+                "with no declared fact to echo, the refusal must route to the OFFER axis — a "
+                "re-offer that could invent content here would be a persuasion loop"
+            )
+
+            # ---- 3. A STRUCTURAL KIND IS NOT RE-OFFERABLE -------------------------------------
+            z = "advice:reoffer00003"
+            record_decline(
+                "structural",
+                z,
+                reason="read-only run, no commit target",
+                surface="s",
+                kind="no_landing_zone",
+                path=ledger,
+            )
+            st = record_reoffer("structural", z, decline_kind="no_landing_zone", path=ledger)
+            assert st["reoffered"] is False, st
+            assert "structural reason" in st["reason"], st["reason"]
+            assert "different TASK" in st["remedy"], st["remedy"]
+
+            # ---- 4. A RE-OFFER WITH NO DECLINE IS NOT A RE-OFFER ------------------------------
+            none = record_reoffer(
+                "rich", "advice:reoffer99999", decline_kind="offer_too_thin", path=ledger
+            )
+            assert none["reoffered"] is False and "no in-window decline" in none["reason"], none
+
+            # ---- 5. CONVERSION IS DERIVED FROM THE LEDGER, not reported -----------------------
+            conv = [t for t in experiments(path=ledger) if t["experiment_id"] == x][0]
+            assert conv["reoffers"]["rich"]["converted"] is False, conv["reoffers"]
+            record_trigger("rich", x, path=ledger)
+            conv = [t for t in experiments(path=ledger) if t["experiment_id"] == x][0]
+            assert conv["reoffers"]["rich"]["converted"] is True, (
+                "an invocation at or after the re-offer converts it; conversion is DERIVED so a "
+                "caller cannot flatter the mechanism by not reporting its failures"
+            )
+            rep = report(path=ledger)
+            assert rep["reoffers_made"] == 1 and rep["reoffers_converted"] == 1, rep
+
+            # ---- 6. THE GRACE WINDOW IS THE DRAIN --------------------------------------------
+            # A demotable+re-offerable decline is HELD while fresh...
+            fresh = "advice:reoffer00004"
+            record_decline(
+                "bare",
+                fresh,
+                reason="matched the noun not the intent",
+                surface="held-surface",
+                kind="wrong_match",
+                path=ledger,
+            )
+            counts = surface_decline_counts("held-surface", path=ledger)
+            assert counts["held_for_reoffer"].get("bare") == 1, counts["held_for_reoffer"]
+            assert (
+                counts["declined_demotable"].get("bare", 0) == 0
+            ), "a fresh demotable decline of a re-offerable kind must not count until its round"
+            # ...and counts once it ages past the window, or the rule is a latched gate.
+            old_ts = capabilities._now() - (REOFFER_GRACE_DAYS + 2) * day
+            aged = "advice:reoffer00005"
+            # Written through `heartbeat` rather than `record_decline`, which has NO timestamp seam
+            # on purpose: `mcp_server`'s contract selftest advertises every keyword-only parameter
+            # of that function, and an MCP caller must never be able to backdate a decline. The
+            # subject here is the READER's grace window, so the event is constructed directly.
+            capabilities.heartbeat(
+                "bare",
+                "match",
+                ref=aged,
+                path=ledger,
+                idempotency_key=f"decline:bare:{aged}",
+                timestamp=old_ts,
+                metadata={
+                    "source": DECLINE_SOURCE,
+                    DECLINE_REASON_KEY: "matched the noun not the intent",
+                    DECLINE_KIND_KEY: "wrong_match",
+                    SURFACE_KEY: "aged-surface",
+                },
+            )
+            aged_counts = surface_decline_counts("aged-surface", path=ledger)
+            assert aged_counts["declined_demotable"].get("bare") == 1, (
+                "a decline older than the grace window must count even with no re-offer, or the "
+                "two-round rule holds it shut forever — nobody is obliged to re-offer"
+            )
+            assert aged_counts["held_for_reoffer"].get("bare", 0) == 0, aged_counts
+
+            # ---- 6b. A CONVERTED RE-OFFER IS NOT A DEMOTION SIGNAL ---------------------------
+            # The point of the whole round: it was declined, the missing fact was supplied, and
+            # then it was USED. Counting that against the binding would demote a capability for
+            # having been under-described — the exact misattribution this axis exists to end.
+            conv_exp = "advice:reoffer00006"
+            record_decline(
+                "rich",
+                conv_exp,
+                reason="matched the noun not the intent",
+                surface="conv-surface",
+                kind="wrong_match",
+                path=ledger,
+            )
+            ro = record_reoffer("rich", conv_exp, decline_kind="wrong_match", path=ledger)
+            assert ro["reoffered"] is True, ro
+            record_trigger("rich", conv_exp, path=ledger)
+            conv_counts = surface_decline_counts("conv-surface", path=ledger)
+            assert conv_counts["declined_demotable"].get("rich", 0) == 0, (
+                "a decline that was re-offered and then CONVERTED must not count toward demotion: "
+                f"got {conv_counts['declined_demotable']}"
+            )
+            assert conv_counts["held_for_reoffer"].get("rich", 0) == 0, conv_counts
+
+            # ---- 7. EVERY KIND DECLARES THE THIRD AXIS ---------------------------------------
+            for kind, row in DECLINE_KINDS.items():
+                assert "offer_improvable" in row, f"{kind} does not declare offer_improvable"
+            assert DECLINE_KINDS["offer_too_thin"]["offer_improvable"] is True
+            assert DECLINE_KINDS["offer_too_thin"]["demotable"] is False, (
+                "a thin offer must never be evidence against the BINDING — that misattribution is "
+                "the whole reason this kind exists"
+            )
+            assert DECLINE_KINDS["offer_too_thin"]["repairable"] is False
+        finally:
+            capability_advisor.HOW_TO_USE.pop("rich", None)
+
+    print(
+        "capability_propensity reoffer selftest: OK (a re-offer echoes declared facts and can "
+        "compose nothing, an empty fact set routes to the offer axis instead of asking again, "
+        "structural kinds are never re-offered, one round only, conversion is derived, and the "
+        "grace window drains the two-round hold)"
     )
 
 
@@ -5411,6 +6008,8 @@ def main(argv: list[str]) -> int:
             "trigger",
             "useful",
             "late-outcome",
+            "reoffer",
+            "offer-improvements",
             "decline",
             "find",
             "binding-quality",
@@ -5543,6 +6142,7 @@ def main(argv: list[str]) -> int:
         _selftest_provenance()
         _selftest_second_verdict_is_dropped_not_appended()
         _selftest_late_outcome()
+        _selftest_reoffer_and_offer_axis()
         _selftest_finds()
         _selftest_repair()
         _selftest_declines()
@@ -5669,6 +6269,31 @@ def main(argv: list[str]) -> int:
             if rep["applied"]:
                 print(f"  APPLIED: {rep['applied']}")
         return 0
+    if args.command == "offer-improvements":
+        rep = propose_offer_improvements(window_days=args.window_days or WINDOW_DAYS)
+        print(json.dumps(rep, indent=2))
+        return 0
+    if args.command in {"trigger", "useful", "late-outcome", "reoffer", "decline"}:
+        if args.command == "reoffer":
+            if not args.capability or not args.experiment:
+                ap.error("--capability and --experiment are required")
+            if not args.kind:
+                ap.error("--kind is required: a re-offer answers a decline OF A STATED KIND")
+            try:
+                res = record_reoffer(
+                    args.capability,
+                    args.experiment,
+                    decline_kind=args.kind,
+                    path=pathlib.Path(args.ledger) if args.ledger else None,
+                    window_days=args.window_days or WINDOW_DAYS,
+                )
+            except ValueError as exc:
+                ap.error(str(exc))
+            res["command"] = "reoffer"
+            print(json.dumps(res, indent=2))
+            # Non-zero when nothing was offered again — same contract as `late-outcome`, and for the
+            # same reason: a no-op reported at exit 0 is how the idempotent verdict drop hid.
+            return 0 if res.get("reoffered") else 3
     if args.command in {"trigger", "useful", "late-outcome", "decline"}:
         if not args.capability or not args.experiment:
             ap.error("--capability and --experiment are required")
@@ -6162,6 +6787,7 @@ def surface_decline_counts(surface: str, *, path=None, window_days: int = WINDOW
     silent: dict[str, int] = {}
     declined: dict[str, int] = {}
     demotable: dict[str, int] = {}
+    held: dict[str, int] = {}
     kinds: dict[str, dict[str, int]] = {}
     reasons: dict[str, list[str]] = {}
     for trial in experiments(path=path, window_days=window_days):
@@ -6186,9 +6812,37 @@ def surface_decline_counts(surface: str, *, path=None, window_days: int = WINDOW
             if why and why not in reasons.setdefault(cap_id, []):
                 reasons[cap_id].append(why)
         for cap_id in trial.get("declined_demotable") or []:
+            # THE TWO-ROUND ORDERING. A demotable decline whose kind could have been caused by a
+            # THIN OFFER does not count toward demotion until its one re-offer round has happened
+            # and the caller declined AGAIN. Otherwise a bad offer demotes a good binding, which is
+            # precisely the misattribution the `offer_improvable` axis exists to end.
+            #
+            # AND THE DRAIN, because the rule above is a gate: nobody is OBLIGED to re-offer, so
+            # waiting forever would latch it shut. A decline older than `REOFFER_GRACE_DAYS` with no
+            # re-offer counts anyway. `held_for_reoffer` reports how many are waiting right now, so
+            # the hold is a number rather than a silence.
+            # NO BRANCH FOR A CONVERTED RE-OFFER, deliberately. One was written here and it was
+            # DEAD: the assembly already does `declined -= triggered` ("a capability declined and
+            # LATER triggered in the same trial ran; the trigger wins"), so a converted re-offer is
+            # not in `declined` and cannot reach this loop. The break test proved it — removing the
+            # branch changed no assertion. `_selftest_reoffer_and_offer_axis` still asserts the
+            # PROPERTY, which is where it belongs: it now documents the assembly's guarantee rather
+            # than a redundant guard that could rot unnoticed.
+            kind = (trial.get("decline_kinds") or {}).get(cap_id, DECLINE_KIND_DEFAULT)
+            if kind in REOFFERABLE_KINDS:
+                ro = (trial.get("reoffers") or {}).get(cap_id)
+                if ro is None:
+                    age_days = (
+                        capabilities._now() - trial.get("declined_at", {}).get(cap_id, 0)
+                    ) / 86400.0
+                    if trial.get("declined_at", {}).get(cap_id) and age_days < REOFFER_GRACE_DAYS:
+                        held[cap_id] = held.get(cap_id, 0) + 1
+                        continue
             demotable[cap_id] = demotable.get(cap_id, 0) + 1
     return {
         "surface": surface,
+        "held_for_reoffer": held,
+        "reoffer_grace_days": REOFFER_GRACE_DAYS,
         "offered": seen,
         "triggered": used,
         "silent": silent,

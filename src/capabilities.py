@@ -132,6 +132,12 @@ EVENT_FIELDS = {
     # `useful if metadata["useful"] is True else not_useful`, and an amendment carries no `useful`
     # key, so every CORROBORATION would have been read as a REFUTATION.
     "outcome_amendment": None,
+    # A SECOND OFFER answering a recorded decline, carrying only declared facts the first offer
+    # omitted. Distinct from `match` for the same forward-compatibility reason as
+    # `outcome_amendment`: a reader that predates it has no branch for the type and ignores it, so
+    # an unsynced mirror neither miscounts it as a fresh candidate (which would inflate the
+    # denominator `DEMOTION_MIN_TRIALS` reads) nor mistakes it for a decline.
+    "offer_amendment": None,
 }
 
 KNOWN_GATES: dict[str, dict[str, Any]] = {
@@ -1508,7 +1514,11 @@ def heartbeat(
 ) -> bool:
     if event_type not in EVENT_FIELDS:
         raise ValueError(f"invalid capability event type: {event_type}")
-    if event_type in {"output", "consumer", "failure", "outcome", "outcome_amendment"} and not ref:
+    if (
+        event_type
+        in {"output", "consumer", "failure", "outcome", "outcome_amendment", "offer_amendment"}
+        and not ref
+    ):
         raise ValueError(f"{event_type} heartbeat requires ref")
     ts = _now() if timestamp is None else timestamp
     with _locked(path):
