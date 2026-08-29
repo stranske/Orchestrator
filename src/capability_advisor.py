@@ -2558,7 +2558,15 @@ HOW_TO_USE = {
     ),
     "runtime-ac-checks": (
         "runtime_ac.py — turns acceptance criteria into a structured evidence plan; "
-        "execution is opt-in via --confirm-run and mutates nothing"
+        "execution is opt-in via --confirm-run and mutates nothing. WHICH GATE HOLDS WHAT, "
+        "because callers have guessed and guessed wrong: ORCH_RUNTIME_AC_ALLOW_COMMANDS gates "
+        "ONLY the `command` and `non_regression` check types (COMMAND_EXEC_GATED_TYPES), whose "
+        "argv is agent-authored. `deliberate_break` is NOT gated and never was — it runs "
+        "unflagged and it is the check that produces FAIL_HOLLOW, so a deliberate_break plan "
+        "needs no flag at all. On 2026-08-26 four declines cited THREE different flag names for "
+        "this capability, and one of them (ORCH_RUNTIME_AC_CHECKS) does not exist. "
+        "PRECONDITION: it executes acceptance criteria attached to an ISSUE, so it has nothing "
+        "to run against a PR that carries no acceptance contract"
     ),
     # ---- THE SELF-SCOPED FIVE, added 2026-08-24. Every one of these came back to the
     # Counter_Risk audit with `how_to_use: null`, and the auditor read that beside a failed
