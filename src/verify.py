@@ -760,22 +760,40 @@ def _exempt_ceiling_input(exempt: list[str] | None) -> int | None:
     return len(exempt) if exempt is not None else None
 
 
-def _preserved_ceilings(floor: dict) -> dict:
-    """Every agreed ceiling `--update-floor` must carry forward — BOTH shapes'. Pure, so the
-    preservation is asserted rather than trusted.
+# The ONLY keys `--update-floor` rewrites. Everything else in `.verify-floor.json` is carried
+# forward verbatim by `_carried_forward`, so the two are complements of one another and neither
+# needs a list of what the other owns.
+REMEASURED_FLOOR_KEYS = ("collected", "passed", "note")
 
-    THE RECONCILE JOB REWRITES THIS FILE ON EVERY PUSH TO MAIN, from a checkout, where the mirror
-    ceilings are never consulted. A writer that kept only the keys the run happened to READ would
-    therefore delete them — silently re-latching the mirror shut, with the deletion arriving as a
-    bot commit nobody reads. It derives the key from `mirror_key`, the same rule the check uses; a
-    second list of key names would be a matching pair, and a drifted pair here is the deletion.
+
+def _carried_forward(floor: dict) -> dict:
+    """Every recorded key `--update-floor` must NOT touch, verbatim. Pure, so it is asserted.
+
+    A WHITELIST WAS THE WRONG SHAPE HERE, and this is the second half of a defect whose first half
+    shipped in the same change. `--update-floor` used to write only the keys it recognised — the
+    ceilings named in `CEILINGS`. Anything else in the file was silently discarded, and the
+    reconcile job runs it on EVERY push to main, so the discard would arrive as a bot commit
+    nobody reads. `mirror_skipped_max` was one registration step away from exactly that: added to
+    the floor file, unknown to the writer, deleted on the next push, and the exec mirror re-latched
+    shut with no trace of why.
+
+    Registering each new key was never the fix — the registration step IS the trap, and forgetting
+    it is silent. So the rule is inverted: the writer names the three keys it RE-MEASURES and
+    carries everything else through untouched. A key it has never heard of now survives by default,
+    which is the direction that fails toward keeping evidence rather than losing it.
+
+    Values are copied verbatim rather than coerced. The old writer forced `int()`, which is an
+    assumption about a key's TYPE that a general carry-forward has no business making.
     """
-    out: dict = {}
-    for key, _label in CEILINGS:
-        for k in (key, mirror_key(key)):
-            if floor.get(k) is not None:
-                out[k] = int(floor[k])
-    return out
+    return {
+        k: v
+        for k, v in floor.items()
+        # The unreadable marker is an in-memory signal from `load_floor`, never a file key.
+        # Unreachable today (an unreadable floor is a problem, and `_blocks_floor_update` refuses
+        # the write) but excluded here so the guarantee is local rather than borrowed from a
+        # distant guard that could move.
+        if k not in REMEASURED_FLOOR_KEYS and k != FLOOR_UNREADABLE
+    }
 
 
 def _ceiling_report(floor: dict, actual: dict, *, mirror: bool) -> tuple[list[str], dict[str, str]]:
@@ -1025,7 +1043,7 @@ def verify(
         # Recording bare `passed` from a skipping machine would RATCHET THE FLOOR DOWN by exactly
         # the amount that was skipped — the floor following the leak instead of catching it.
         blob = {"collected": py["collected"], "passed": py["passed"] + py["skipped"]}
-        blob.update(_preserved_ceilings(floor))
+        blob.update(_carried_forward(floor))
         blob["note"] = _appended_note(
             str(floor.get("note", "")),
             py["collected"],
@@ -1205,13 +1223,32 @@ def _selftest() -> None:
     # And `--update-floor` must PRESERVE it. The reconcile job rewrites this file on every push to
     # main, from a checkout, where the mirror keys are never consulted — a writer that kept only
     # the keys it used would delete the ceiling and silently re-latch the mirror shut.
-    assert _preserved_ceilings({"skipped_max": 26, "mirror_skipped_max": 31, "note": "n"}) == {
+    assert _carried_forward({"skipped_max": 26, "mirror_skipped_max": 31, "note": "n"}) == {
         "skipped_max": 26,
         "mirror_skipped_max": 31,
-    }, "--update-floor must carry BOTH shapes' agreements forward, and nothing else"
-    assert "mirror_skipped_max" in _preserved_ceilings(
+    }, "--update-floor must carry BOTH shapes' agreements forward"
+    assert "mirror_skipped_max" in _carried_forward(
         _real_floor
     ), "--update-floor would drop the real mirror ceiling on the next push to main"
+    # AND ANY KEY IT HAS NEVER HEARD OF, which is the half a whitelist could not do. The writer
+    # used to keep only the keys named in CEILINGS, so a newly added floor key was deleted on the
+    # next push to main by the reconcile job — silently, in a bot commit. `mirror_skipped_max` was
+    # one forgotten registration away from exactly that. DELIBERATE-BREAK DEMO: restore the
+    # CEILINGS-driven whitelist and this assert is the only one that fails.
+    _future = {"collected": 1, "passed": 1, "skipped_max": 26, "a_key_from_the_future": 7}
+    assert _carried_forward(_future) == {"skipped_max": 26, "a_key_from_the_future": 7}, (
+        "a floor key the writer does not recognise must survive --update-floor; registering each "
+        "new key was the trap, because forgetting to is silent"
+    )
+    # The three re-measured keys are the complement, and they must be EXACTLY those three: a
+    # fourth in this tuple would start silently dropping a real agreement.
+    assert set(REMEASURED_FLOOR_KEYS) == {"collected", "passed", "note"}, REMEASURED_FLOOR_KEYS
+    assert not (set(REMEASURED_FLOOR_KEYS) & {k for k, _ in CEILINGS}), (
+        "a ceiling is never re-measured — a ceiling re-recorded from whatever the last run "
+        "happened to skip is a ratchet that follows the leak"
+    )
+    # The in-memory unreadable marker is never written into the file.
+    assert _carried_forward({FLOOR_UNREADABLE: True, "skipped_max": 26}) == {"skipped_max": 26}
     # THE VERDICT AND THE SUMMARY MUST AGREE, which is why they come from one call. Held against
     # each other here, in both shapes: a run that renders `31/31 max` above a verdict computed
     # against 26 reads as a broken tool, and the reader stops believing either number.
@@ -1228,12 +1265,18 @@ def _selftest() -> None:
     # smallest thing that would be ABSENT if the wiring were removed: no newline, no indentation,
     # no argument list a formatter owns.
     _src = pathlib.Path(__file__).read_text(encoding="utf-8")
-    assert ("mirror=bool(" + "mirror_reason)") in _src, (
-        "verify() no longer feeds the DETECTED shape into the ceilings, so the exec mirror is "
-        "bounded by the runner's `skipped_max` again and is red on every input. This is the one "
-        "pin here: everything else about the shape rule is pure and asserted above, but verify() "
-        "itself is too expensive to call from a selftest, and a hardcoded False would revert the "
-        "defect exactly while every assertion above stayed green."
+    # COUNT, not `in`, and this pin is why the rule exists. Written as `in`, it did NOT FIRE
+    # against a deliberate break: the shape was reaching the ceilings AND the renderer through
+    # two separate call sites, so removing one left the needle matching the other and the demo
+    # passed while the defect was fully restored. The two sites are now one (`_ceiling_report`),
+    # and the count assertion is what will say so if they ever split again.
+    _shape_pin = "mirror=bool(" + "mirror_reason)"
+    assert _src.count(_shape_pin) == 1, (
+        f"the exec-mirror shape needle matches {_src.count(_shape_pin)} site(s), not 1. At 0, "
+        "verify() no longer feeds the DETECTED shape into the ceilings and the mirror is bounded "
+        "by the runner's `skipped_max` again — red on every input. Above 1, the shape has more "
+        "than one consumer again and the pin can no longer discriminate: route them through one "
+        "call, as `_ceiling_report` already does for the verdict and the summary."
     )
 
     # ---- the floor counts what RAN OR WAS NAMED, and the ceiling stops that being a loophole --
@@ -1305,9 +1348,17 @@ def _selftest() -> None:
     # look like a coverage regression in test_verify_coverage_mode.py. The conjunct is the part
     # that carries the meaning: pin that, not the formatting around it.
     _guard = "and not " + "_blocks_floor_update(problems)"
-    assert _guard in _src, (
-        "the --update-floor guard no longer calls _blocks_floor_update — a floor behind reality "
-        "would once again block the one command that fixes it"
+    # COUNT, not `in`. A pin proves the wiring only while the needle matches ONE site: the day a
+    # second call site appears, deleting the site the pin MEANS leaves it green, and a pin that
+    # cannot fail is this repo's founding defect wearing the costume of a guard against it. That
+    # is not hypothetical — it happened on 2026-08-29, when the exec-mirror pin below silently
+    # stopped discriminating because the shape reached a second consumer. Uniqueness decays
+    # QUIETLY; asserting it makes the decay a red that names the choice to make.
+    assert _src.count(_guard) == 1, (
+        f"the --update-floor guard needle matches {_src.count(_guard)} site(s), not 1. At 0 the "
+        "guard no longer calls _blocks_floor_update, and a floor behind reality would once again "
+        "block the one command that fixes it. Above 1 the pin has stopped discriminating — "
+        "re-narrow it to the single site that carries the meaning."
     )
 
     # ---- --reconcile-floor forgives a drift it HEALED, and nothing else ------------------------
