@@ -2556,6 +2556,38 @@ HOW_TO_USE = {
         "bounded docs-drift repair BATCHES from an existing drift scan; it does "
         "not do a semantic docs review and edits nothing itself"
     ),
+    # THE THREE ROLE ENTRIES ADDED 2026-08-29, and the reason is measured. All three were among the
+    # 21 bound capabilities that declare NOTHING — their offer was their own name, so a caller had
+    # nothing to judge and `record_reoffer` had nothing to echo. Each states the DECISION IT
+    # RETURNS, because a role is chosen for the shape of its answer, not for a description of it.
+    # THE SHARED BOUNDARY IS THE IMPORTANT PART: every decline these five collected on record says
+    # some version of "the work was already small enough to do by hand" — "four findings do not
+    # need a triage agent", "the decomposition was already fixed", "five items I had just proven by
+    # hand". So each entry names the load below which it is NOT worth invoking, in the caller's own
+    # terms. Note those declines were filed as `gated_off` citing `status: shadow`; a lifecycle
+    # status is a PERMISSION, not a reason, and the substance was scope every time.
+    "role-adjudicator": (
+        "roles.py:run_adjudicator_agent — decides a CONTESTED blocker and returns exactly one of "
+        "uphold_blocker | reject_blocker | needs_more_evidence, over case types runtime_ac | "
+        "adversarial | review, with per-claim evidence rows (claim, status, evidence_ref, reason). "
+        "BOUNDARY: it adjudicates a DISPUTE — two readings of the same evidence — so it is worth "
+        "nothing where the blocker is uncontested or where you already know the answer. Status is "
+        "shadow: it decides, and nothing downstream acts on the decision yet"
+    ),
+    "role-prompt": (
+        "roles.py:run_prompt_agent — authors the dispatch prompt for a task whose type is in "
+        "router.ROUTE_TABLE, so the prompt is written for the backend that will actually receive "
+        "it. BOUNDARY: worth invoking for a BATCH whose prompts you would otherwise write one by "
+        "one; a single issue body you are already drafting is cheaper by hand, which is what its "
+        "declines on record say"
+    ),
+    "role-redirect": (
+        "roles.py:run_redirect_agent — proposes ONE action for a stalled target from the closed set "
+        "wait | collect | inspect | redirect | decompose, with a confidence of low | medium | high. "
+        "BOUNDARY: it reads a stall and names the next move; it never performs it, and "
+        "redirect_sweep applies nothing in shadow. Worth invoking when the right move is genuinely "
+        "unclear — not to ratify a decision you have already made"
+    ),
     "runtime-ac-checks": (
         "runtime_ac.py — turns acceptance criteria into a structured evidence plan; "
         "execution is opt-in via --confirm-run and mutates nothing. WHICH GATE HOLDS WHAT, "
