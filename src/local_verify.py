@@ -604,6 +604,22 @@ def _copy_candidate_paths(worktree: Path, dest: Path, paths: list[str]) -> list[
     return copied
 
 
+def _pytest_failure_cause(run: dict) -> dict:
+    """Was this non-zero run a failing TEST, or the runner failing for another reason?
+
+    Delegates to `testgen_gate.pytest_failure_cause`, which owns this vocabulary already — the exit
+    table lives there and a second copy here would drift. Fails toward "a test failed" if that
+    module cannot be imported: excusing a real red is far worse than reporting one.
+    """
+    text = f"{run.get('stdout_tail') or ''}\n{run.get('stderr_tail') or ''}"
+    try:
+        import testgen_gate
+
+        return testgen_gate.pytest_failure_cause(run.get("returncode"), text)
+    except Exception:  # noqa: BLE001
+        return {"test_failure": True, "cause": "a test failed", "remedy": ""}
+
+
 def verify(
     worktree: str | Path,
     *,
@@ -629,6 +645,31 @@ def verify(
 
     green = _run(test_cmd, wt, timeout)
     if not green["ok"]:
+        # A NON-ZERO EXIT IS NOT PROOF THE TESTS FAILED. `pytest-cov --cov-fail-under` exits 1 — the
+        # same code as a real red — while every selected test passed, and narrowing with `-k` is
+        # what collapses the coverage total in the first place. Returning FAIL_BROKEN there tells
+        # the caller to fix tests that are fine, and the two readings demand opposite actions.
+        # Found 2026-08-26 by running this against stranske/Fine-Art-Archive: verdict FAIL_BROKEN on
+        # a test measured PASSING (exit 0 with --no-cov, exit 1 with the gate, "1 passed, 92
+        # deselected" both times).
+        cause = _pytest_failure_cause(green)
+        if not cause["test_failure"]:
+            # ERROR, not FAIL_*: this is "could not perform the comparison", which is what ERROR
+            # already means in this module (no test paths, base extraction failed). Claiming a
+            # verdict about the tests here would be the one-sentinel-two-meanings defect.
+            return {
+                "verdict": "ERROR",
+                "ok": False,
+                "error": f"the test command failed for a reason other than a failing test: {cause['cause']}",
+                "reason": cause["cause"],
+                "remedy": cause["remedy"],
+                "non_test_failure": cause,
+                "worktree": str(wt),
+                "base_ref": base_ref,
+                "test_paths": tests,
+                "green": green,
+                "red": None,
+            }
         return {
             "verdict": "FAIL_BROKEN",
             "ok": False,
