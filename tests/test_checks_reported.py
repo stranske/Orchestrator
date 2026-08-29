@@ -91,7 +91,14 @@ def test_the_ratchet_is_wired_into_the_expected_set():
     # Split so the needle cannot match this line, and pinned to the FRAGMENT that carries the
     # meaning rather than the whole statement — CLAUDE.md's wiring-pin rule.
     needle = "observed | " + "ratchet_names()"
-    assert needle in src, (
-        "reference_set no longer unions the ratchet — the expected set can erode to nothing "
-        "during a sustained outage, which is exactly when this check matters"
+    # COUNT, not `in`: a pin proves the wiring only while its needle matches ONE site. Add a
+    # second call site and deleting the one the pin MEANS leaves it green — a guard against
+    # built-but-not-wired that is itself no longer wired. Measured 2026-08-29 across all six pins
+    # in this repo: every one matched exactly once, so this asserts a property that HOLDS rather
+    # than fixing a break, and it is the decay that it makes loud.
+    assert src.count(needle) == 1, (
+        f"the ratchet-union needle matches {src.count(needle)} site(s), not 1. At 0, "
+        "reference_set no longer unions the ratchet and the expected set can erode to nothing "
+        "during a sustained outage — exactly when this check matters. Above 1, the pin has "
+        "stopped discriminating: narrow it to the site that carries the meaning."
     )

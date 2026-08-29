@@ -237,6 +237,25 @@ Do not create a second event log, model registry, or capability inventory.
   the pin: `test_coverage_never_changes_the_exit_code` now asserts "coverage is not among the
   kwargs" rather than "the call reads exactly thus", which is strictly stronger — it catches a
   coverage input in any formatting.
+  **AND THE PIN MUST ASSERT ITS NEEDLE MATCHES EXACTLY ONE SITE — `count(...) == 1`, never `in`.**
+  Everything above is about the false POSITIVE, a pin firing on a correct change. The opposite
+  mode is worse and was undocumented until 2026-08-29: a pin that silently STOPS FIRING. A pin
+  proves the wiring only while its needle is unique; the day a second call site appears, deleting
+  the site the pin MEANS leaves it matching the other one, and the guard passes over the restored
+  defect. That is not hypothetical — `verify.py`'s exec-mirror pin failed to fire against a
+  deliberate break for exactly this reason, because the detected shape was reaching the ceiling
+  check and the summary renderer through two separate calls. The break demo is what caught it; an
+  `in` pin would never have. Uniqueness DECAYS QUIETLY, so assert it. All six pins in this repo
+  were audited that day and every needle matched exactly once, so the assertion pins a property
+  that already holds and makes its loss loud.
+  Two corollaries worth stating. A count above 1 is usually a design smell, not a pin problem:
+  when two consumers reach the same decision separately they can disagree, so route them through
+  one call (`_ceiling_report` returns the ceiling verdict AND its rendering from one shape
+  decision) and the pin becomes unique again for free. And prefer a REGISTRATION-FREE design over
+  a pin wherever one exists: `--update-floor` used to write a whitelist of the floor keys it
+  recognised, so every new key needed remembering and forgetting was silent; it now names the
+  three keys it re-measures and carries everything else through, which removes the failure instead
+  of pinning it.
 - Register or update lifecycle state in `capabilities.py` for any new/wired capability. Run
   `python3 src/capabilities.py --selftest` and `python3 src/capabilities.py --json validate`. Never mark a
   capability active from code existence, a passing selftest, or a feature-registry maturity alone;

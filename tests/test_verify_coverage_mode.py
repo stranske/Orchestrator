@@ -117,10 +117,18 @@ SRC_SQUASHED = re.sub(r"\s+", "", VERIFY_SRC)
     ],
 )
 def test_all_three_runners_are_instrumented(runner, needle):
-    assert needle.replace(" ", "") in SRC_SQUASHED, (
-        f"the {runner} runner no longer goes through child_argv. Wrapping pytest alone reproduces "
-        "the original defect exactly: the selftests and gates are where most of the execution is — "
-        "78 modules have no test_*.py at all."
+    # COUNT, not `in`. A wiring pin proves anything only while its needle matches ONE site: once a
+    # second appears, removing the site the pin MEANS leaves it green, and the guard silently stops
+    # guarding. That false-NEGATIVE is the mode CLAUDE.md's pin rule did not cover until 2026-08-29,
+    # when a pin in verify.py failed to fire against a deliberate break for exactly this reason.
+    # All three needles here matched exactly once when measured, so this pins a property that holds.
+    found = SRC_SQUASHED.count(needle.replace(" ", ""))
+    assert found == 1, (
+        f"the {runner} needle matches {found} site(s) in verify.py, not 1. At 0 the {runner} "
+        "runner no longer goes through child_argv, and wrapping pytest alone reproduces the "
+        "original defect exactly: the selftests and gates are where most of the execution is — "
+        "78 modules have no test_*.py at all. Above 1 the pin can no longer discriminate, since "
+        "deleting the call it means would leave it matching the other."
     )
 
 
