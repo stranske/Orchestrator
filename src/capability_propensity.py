@@ -301,7 +301,15 @@ REOFFER_FACTS_KEY = "reoffer_facts"
 # was entitled to give -- `no_landing_zone`, `scope_too_small`, `deferred`, `gated_off` -- and
 # re-offering against them is nagging, not information. Their answer is a different TASK, which
 # `capability_task_proposals` derives from the same table.
-REOFFERABLE_KINDS = ("offer_too_thin", "wrong_match", "precondition_unmet")
+# `gated_off` JOINED THIS LIST ON 2026-08-29, on measured evidence. It was excluded as "a
+# structural reason the caller was entitled to give" — true only if the caller knows WHICH gate.
+# They did not: four `runtime-ac-checks` declines cited THREE different flag names
+# (ORCH_RUNTIME_AC_ALLOW_COMMANDS, ORCH_RUN_RUNTIME_AC, ORCH_RUNTIME_AC_CHECKS) and the third DOES
+# NOT EXIST, while that capability's `how_to_use` named no flag at all. A decline against an
+# invented gate is an information defect, not a structural one, and `switch_review.review()` holds
+# the real flag/state/criterion — a declared fact, exactly what a re-offer may echo. Where no gate
+# is declared the re-offer still refuses, and correctly: that routes to the offer axis.
+REOFFERABLE_KINDS = ("offer_too_thin", "wrong_match", "precondition_unmet", "gated_off")
 
 LATE_OUTCOME_SOURCE = "capability_late_outcome"
 # The ledger event type. Distinct from "outcome" so a reader that predates this channel IGNORES the
@@ -1596,6 +1604,23 @@ def declared_facts(capability_id: str) -> dict:
     how = getattr(capability_advisor, "HOW_TO_USE", {}).get(capability_id)
     if how:
         facts["how_to_use"] = str(how)
+    # THE GATE IS A DECLARED FACT and it was missing from this vocabulary, which is why a re-offer
+    # had nothing to answer a `gated_off` decline with. Read from `switch_review`, which already
+    # owns the flag -> capability mapping; a second copy here would drift from the switch report.
+    try:
+        import switch_review
+
+        for row in (switch_review.review().get("held_off") or []) + (
+            switch_review.review().get("on_but_idle") or []
+        ):
+            if row.get("capability") == capability_id and row.get("flag"):
+                facts["gate_flag"] = str(row["flag"])
+                facts["gate_state"] = str(row.get("state") or "unknown")
+                if row.get("criterion"):
+                    facts["gate_criterion"] = str(row["criterion"])
+                break
+    except Exception:  # noqa: BLE001
+        pass
     pre = getattr(capability_advisor, "CAPABILITY_PRECONDITIONS", {}).get(capability_id)
     if pre:
         if pre.get("applies_to"):
@@ -1607,17 +1632,45 @@ def declared_facts(capability_id: str) -> dict:
     return facts
 
 
-def undelivered_facts(capability_id: str, delivered: dict | None = None) -> dict:
-    """Declared facts the FIRST offer did not carry. The re-offer's permitted content, exactly.
+def _quoted(fact: str, reason: str) -> bool:
+    """Did the caller QUOTE this fact back? Then they had it, whatever the offer carried.
 
-    `delivered` is what the original offer is known to have included (from the match event's own
-    metadata). Absent, nothing is assumed delivered — the conservative direction, because re-stating
-    a fact the caller already had is merely redundant, while withholding one is the defect this
-    exists to fix.
+    Deliberately narrow: a normalised 8-word window from the fact appearing in the caller's own
+    words. That catches a direct quote reliably and claims nothing beyond it. It does NOT detect a
+    caller who knew more than the offer by other means — `partitioned-review`'s `wrong_match`
+    decline reasoned about `CATEGORY_KEYS`/`DISPOSITIONS`, internals absent from `how_to_use`, and
+    no substring test can see that. Reporting the limit beats pretending to cover it.
+    """
+    import re as _re
+
+    def norm(t: str) -> str:
+        return " ".join(_re.sub(r"[^a-z0-9 ]+", " ", t.lower()).split())
+
+    f, r = norm(fact), norm(reason)
+    words = f.split()
+    # `not r` short-circuits an empty reason. The word-count is NOT a guard — `range(len - 7)` is
+    # already empty below 8 words, so the loop returns False on its own; a break test that removed
+    # the count changed no answer, which is how that was established. Kept for the reader, and
+    # documented as redundant so nobody trusts it to be doing work.
+    if not r or len(words) < 8:
+        return False
+    return any(" ".join(words[i : i + 8]) in r for i in range(len(words) - 7))
+
+
+def undelivered_facts(
+    capability_id: str, delivered: dict | None = None, decline_reason: str = ""
+) -> dict:
+    """Declared facts the caller did NOT already have. The re-offer's permitted content, exactly.
+
+    Two ways a fact counts as delivered: the original offer carried it (`delivered`, from the match
+    event's metadata), or the caller QUOTED it in their decline. The second was added 2026-08-29
+    after a measured miss — a re-offer supplied `how_to_use` to a caller whose decline had already
+    quoted `how_to_use` back, adding nothing and consuming the trial's one round. A round spent
+    restating what the caller said is a round a useful answer cannot have.
     """
     have = declared_facts(capability_id)
     seen = set((delivered or {}).keys())
-    return {k: v for k, v in have.items() if k not in seen}
+    return {k: v for k, v in have.items() if k not in seen and not _quoted(str(v), decline_reason)}
 
 
 def record_reoffer(
@@ -1691,7 +1744,30 @@ def record_reoffer(
                 "is being persuaded, not informed; the second decline is the answer"
             ),
         }
-    facts = undelivered_facts(capability_id, delivered)
+    reason_text = decline_reason_recorded(
+        capability_id, experiment_id, path=path, window_days=window_days, now=now
+    )
+    facts = undelivered_facts(capability_id, delivered, reason_text)
+    if not facts and declared_facts(capability_id):
+        # THE CALLER ALREADY HAD IT. Distinct from "nothing is declared", and it must NOT consume
+        # the trial's one round: a round spent restating the caller's own words is a round the
+        # useful answer cannot have. Nothing is written, so a later re-offer with a real fact still
+        # lands as the first.
+        return {
+            "reoffered": False,
+            "capability": capability_id,
+            "experiment": experiment_id,
+            "caller_already_had_the_facts": True,
+            "reason": (
+                "every declared fact was already quoted in the caller's own decline, so a re-offer "
+                "would restate what they told us"
+            ),
+            "remedy": (
+                "nothing was written and the round is NOT consumed. If the offer is genuinely "
+                "thinner than what this caller knew, that is an OFFER defect — record it as "
+                "`offer_too_thin` so `propose_offer_improvements` can see it"
+            ),
+        }
     if not facts:
         return {
             "reoffered": False,
@@ -1733,6 +1809,22 @@ def record_reoffer(
             "re-rank, or ask twice"
         ),
     }
+
+
+def decline_reason_recorded(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    now: int | None = None,
+) -> str:
+    """The caller's own words on this decline, or "". Read through `experiments()` like the kind."""
+    for trial in experiments(path=path, window_days=window_days, now=now):
+        if trial["experiment_id"] != experiment_id:
+            continue
+        return str((trial.get("decline_reasons") or {}).get(capability_id) or "")
+    return ""
 
 
 def decline_kind_recorded(
@@ -5000,7 +5092,9 @@ def _selftest_reoffer_and_offer_axis() -> None:
         capabilities.save(rows, ledger)
         import capability_advisor
 
-        capability_advisor.HOW_TO_USE["rich"] = "run rich.py --json; it reports X"
+        capability_advisor.HOW_TO_USE["rich"] = (
+            "run rich.py --json and it reports the X surface, its Y counters and nothing else"
+        )
         try:
             # ---- 1. A FACT EXISTS AND WAS NOT DELIVERED -> one re-offer, echoing exactly it ----
             x = "advice:reoffer00001"
@@ -5153,6 +5247,60 @@ def _selftest_reoffer_and_offer_axis() -> None:
                 "the whole reason this kind exists"
             )
             assert DECLINE_KINDS["offer_too_thin"]["repairable"] is False
+            # ---- 8. THE GATE IS A FACT, so a gated_off decline is answerable -------------------
+            # Added 2026-08-29. `gated_off` was excluded from REOFFERABLE_KINDS as structural, which
+            # holds only if the caller knows WHICH gate. Four runtime-ac-checks declines cited THREE
+            # flag names and one did not exist, so the "structural" reading was wrong for exactly the
+            # population it was meant to protect.
+            assert "gated_off" in REOFFERABLE_KINDS, REOFFERABLE_KINDS
+            gated = "advice:reoffer00007"
+            record_decline(
+                "rich",
+                gated,
+                reason="env-gated off behind some flag I could not name",
+                surface="gate-surface",
+                kind="gated_off",
+                path=ledger,
+            )
+            gres = record_reoffer("rich", gated, decline_kind="gated_off", path=ledger)
+            assert gres["reoffered"] is True, gres
+            assert "how_to_use" in gres["facts_supplied"], gres["facts_supplied"]
+
+            # ---- 9. A QUOTED FACT IS ALREADY DELIVERED, and must not consume the round ----------
+            # A re-offer that restates the caller's own words spends the trial's ONE round on nothing.
+            quoted_exp = "advice:reoffer00008"
+            record_decline(
+                "rich",
+                quoted_exp,
+                reason=(
+                    "I read the guidance: "
+                    + capability_advisor.HOW_TO_USE["rich"]
+                    + " — and it still does not fit this target."
+                ),
+                surface="quote-surface",
+                kind="wrong_match",
+                path=ledger,
+            )
+            qres = record_reoffer("rich", quoted_exp, decline_kind="wrong_match", path=ledger)
+            assert qres["reoffered"] is False, qres
+            assert qres.get("caller_already_had_the_facts") is True, qres
+            # AND THE ROUND SURVIVES: nothing was written, so a later re-offer still lands as the first.
+            assert (
+                existing_reoffer("rich", quoted_exp, path=ledger) is None
+            ), "a no-value re-offer must not consume the round"
+
+            # The narrow test only claims a verbatim quote; it must not fire on unrelated words.
+            assert (
+                _quoted(
+                    "run rich.py --json it reports X and nothing else at all",
+                    "totally different text",
+                )
+                is False
+            )
+            # The PROPERTY, not the guard: too little text can never be a distinctive quote,
+            # however that is enforced internally.
+            assert _quoted("short", "short") is False, "too short to be a distinctive quote"
+
         finally:
             capability_advisor.HOW_TO_USE.pop("rich", None)
 
