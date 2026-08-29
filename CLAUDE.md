@@ -275,6 +275,20 @@ Do not create a second event log, model registry, or capability inventory.
   that makes CI run MORE. **Never turn a real failure into a skip**, and never add a skip without
   a reason string — a reason-less skip is indistinguishable from a pass, which is this repo's
   founding defect wearing a different hat.
+- **A CEILING BOUNDS ONE DEPRIVED SHAPE, AND THERE ARE TWO.** `skipped_max` was measured on a bare
+  GitHub runner — no agent CLIs, no `~/.codex/skills`, no app bundle, no populated ledger — and was
+  then also applied to the EXEC MIRROR, which is the opposite deprivation: every local prerequisite
+  present, but a flat file copy with no `.github/` and no `.git`, so it skips 31 tests a runner
+  skips none of. One number over two populations is the latched-gate defect in its purest form, and
+  the symptom was total: `python3 verify.py` from `~/.codex/orchestrator-mirror` was RED on every
+  input including a correct tree, for as long as it existed — while §1 above makes that run the
+  verdict. Raising the number would have been the wrong repair; it would have handed the RUNNER
+  five units of slack, where 26 is the measured bound. **Each shape carries its own agreed number,
+  measured where it is enforced**: `env_prereq.exec_mirror_shape()` detects the tree (both marks
+  required, `$CI` never consulted) and `verify.mirror_key` derives the floor key, so any ceiling may
+  carry a `mirror_` variant and an unset one falls back to the base — the strict direction. The
+  summary always prints which tree it decided it was in. When you add a ceiling, ask which shape you
+  measured it in before writing the number down.
 - **State lives behind TWO variables and they are not the same.** `ORCH_STATE_DIR` holds the audit
   cache, firing-monitor and redirect-sweep state; `ORCH_LOCAL_RUNTIME` holds the capability LEDGER
   and the Brain. Pointing only the first at an empty directory and concluding "the suite is
