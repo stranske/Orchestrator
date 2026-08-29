@@ -84,6 +84,88 @@ PYTEST_EXIT_REMEDY: dict[int, str] = {
 }
 
 
+# A NON-ZERO PYTEST EXIT DOES NOT ALWAYS MEAN A TEST FAILED, and exit code alone cannot tell you.
+# `pytest-cov --cov-fail-under` exits 1 — the same code as a failing test — while every selected test
+# passed. So the exit table above is necessary and NOT sufficient: the discriminator is the summary
+# line pytest prints regardless.
+#
+# MEASURED 2026-08-26 against stranske/Fine-Art-Archive at e2c0a15, which is how this was found:
+#   python -m pytest tests/test_eink_pipeline.py -k ui_shaped_... --no-cov  -> exit 0
+#   python -m pytest tests/test_eink_pipeline.py -k ui_shaped_...          -> exit 1
+# Both printed "1 passed, 92 deselected". The second added
+# "FAIL Required test coverage of 25.0% not reached. Total coverage: 8.23%" — the repo's coverage
+# gate fired because the `-k` narrowing deselected 92 tests, not because anything was broken.
+# `local_verify.verify()` read the non-zero exit as "candidate tests fail in the live worktree" and
+# returned FAIL_BROKEN on a PASSING test.
+#
+# THE TWO READINGS DEMAND OPPOSITE ACTIONS — fix your tests, versus widen the selection or disable
+# the coverage gate for this run — so collapsing them into one verdict is the same defect class this
+# file already carries a table for.
+NON_TEST_FAILURE_MARKERS: tuple[tuple[str, str, str], ...] = (
+    (
+        "Required test coverage of",
+        "the repository's coverage threshold, not a failing test",
+        "re-run without the coverage gate (--no-cov) or widen the selection; narrowing tests with "
+        "-k collapses total coverage and fires --cov-fail-under while every selected test passes",
+    ),
+)
+
+
+def pytest_failure_cause(code: int | None, output: str) -> dict[str, Any]:
+    """Did a non-zero pytest exit mean a TEST failed, or did the RUNNER fail for another reason?
+
+    Conservative in the direction that matters: it only claims "not a test failure" when the summary
+    line shows NO failures and NO errors AND a known non-test marker is present. Anything it cannot
+    read confidently stays a test failure, because wrongly excusing a real red is far worse than
+    wrongly reporting one.
+    """
+    text = output or ""
+    summary = _pytest_summary_counts(text)
+    marker = next(((m, why, fix) for m, why, fix in NON_TEST_FAILURE_MARKERS if m in text), None)
+    reds = (summary.get("failed") or 0) + (summary.get("error") or 0)
+    is_test_failure = True
+    cause = "a test failed"
+    remedy = ""
+    if code not in (None, 0) and marker is not None and summary["parsed"] and reds == 0:
+        is_test_failure = False
+        cause = marker[1]
+        remedy = marker[2]
+    return {
+        "exit_code": code,
+        "test_failure": is_test_failure,
+        "cause": cause,
+        "remedy": remedy,
+        "summary_parsed": summary["parsed"],
+        "summary_counts": {k: v for k, v in summary.items() if k != "parsed"},
+    }
+
+
+def _pytest_summary_counts(text: str) -> dict[str, Any]:
+    """Counts from pytest's own summary line. `parsed` says whether one was found AT ALL.
+
+    `parsed` is separate from the counts for the reason this repo keeps relearning: absent and zero
+    must never share a sentinel. No summary means pytest did not get far enough to report, which is
+    NOT the same as "it reported zero failures".
+    """
+    import re as _re
+
+    counts: dict[str, Any] = {"parsed": False, "passed": 0, "failed": 0, "error": 0, "skipped": 0}
+    # The last summary line wins: a run can print more than one, and the final one is the verdict.
+    for line in reversed(text.splitlines()):
+        if not (line.startswith("=") and line.rstrip().endswith("=")):
+            continue
+        found = _re.findall(r"(\d+)\s+(passed|failed|errors?|skipped|deselected)", line)
+        if not found:
+            continue
+        counts["parsed"] = True
+        for number, word in found:
+            key = "error" if word.startswith("error") else word
+            if key in counts:
+                counts[key] = counts[key] + int(number)
+        break
+    return counts
+
+
 def pytest_exit_meaning(code: int | None) -> dict[str, Any]:
     """What a pytest exit code MEANS, and whether anything was measured. One lookup, no drift."""
     row = PYTEST_EXIT_MEANINGS.get(code) if code is not None else None
@@ -781,7 +863,80 @@ def run_gate(
     }
 
 
+def _selftest_pytest_failure_cause() -> None:
+    """A NON-ZERO PYTEST EXIT IS NOT PROOF A TEST FAILED — and the doubt runs one way only.
+
+    MEASURED CASE (stranske/Fine-Art-Archive at e2c0a15, 2026-08-26): the same command exited 0 with
+    `--no-cov` and 1 with the repo's coverage gate, printing "1 passed, 92 deselected" BOTH times
+    plus "FAIL Required test coverage of 25.0% not reached". `local_verify.verify()` read the
+    non-zero exit as "candidate tests fail in the live worktree" and returned FAIL_BROKEN on a
+    PASSING test. The two readings demand opposite actions, so they cannot share a verdict.
+
+    CONSERVATIVE BY CONSTRUCTION: "not a test failure" is claimed ONLY when a summary was parsed, it
+    shows zero failed and zero errors, AND a known marker is present. Wrongly excusing a real red is
+    far worse than wrongly reporting one, so every unreadable case stays a test failure.
+
+    BREAK -> REVERT, each confirmed to discriminate:
+      * drop the `reds == 0` term -> a run with BOTH a coverage line and real failures is excused,
+        and the mixed-case assertion fails;
+      * drop the `summary["parsed"]` term -> output with a marker and no summary at all is excused,
+        and the no-summary assertion fails, which is the absent-vs-zero sentinel this repo keeps
+        paying for;
+      * match the marker anywhere without requiring a non-zero exit -> the exit-0 assertion fails.
+    """
+    cov_summary = "===== 1 passed, 92 deselected in 3.36s ====="
+    cov = "FAIL Required test coverage of 25.0% not reached. Total coverage: 8.23%\n" + cov_summary
+
+    verdict = pytest_failure_cause(1, cov)
+    assert verdict["test_failure"] is False, verdict
+    assert "coverage" in verdict["cause"], verdict["cause"]
+    assert verdict["remedy"].strip(), "a non-test failure must name what to do instead"
+    assert verdict["summary_counts"]["passed"] == 1, verdict["summary_counts"]
+
+    # A REAL RED stays a real red.
+    real = "===== 3 failed, 5 passed in 1.02s ====="
+    assert pytest_failure_cause(1, real)["test_failure"] is True
+
+    # THE MIXED CASE: a coverage line AND real failures. The failures win.
+    mixed = (
+        "FAIL Required test coverage of 25.0% not reached.\n===== 2 failed, 1 passed in 1s ====="
+    )
+    assert (
+        pytest_failure_cause(1, mixed)["test_failure"] is True
+    ), "a run with real failures must stay a test failure even when the coverage gate also fired"
+
+    # ERRORS count as reds too.
+    errs = "FAIL Required test coverage of 25.0% not reached.\n===== 1 error, 1 passed in 1s ====="
+    assert pytest_failure_cause(1, errs)["test_failure"] is True, errs
+
+    # NO SUMMARY AT ALL is not "zero failures": pytest never got far enough to report.
+    assert (
+        pytest_failure_cause(1, "FAIL Required test coverage of 25.0%")["test_failure"] is True
+    ), (
+        "a marker with NO parsed summary must stay a test failure: pytest never got far enough to "
+        "report, which is not the same as reporting zero failures"
+    )
+    assert _pytest_summary_counts("nothing here")["parsed"] is False
+
+    # A ZERO EXIT is never a failure to explain.
+    assert (
+        pytest_failure_cause(0, cov)["test_failure"] is True
+    ), "exit 0 has nothing to explain; only a NON-ZERO exit can be excused"
+
+    # AN UNKNOWN NON-ZERO CAUSE stays a test failure rather than being excused.
+    assert (
+        pytest_failure_cause(1, "===== 1 passed in 1s =====")["test_failure"] is True
+    ), "an unknown non-zero cause stays a test failure — only DECLARED markers are excused"
+
+    print(
+        "testgen_gate pytest-failure-cause selftest: OK (a coverage gate is not a failing test, a "
+        "real red survives the excuse, the mixed case stays red, an unparsed summary is not zero, "
+        "and exit 0 explains nothing)"
+    )
+
+
 def _selftest() -> None:
+    _selftest_pytest_failure_cause()
     _GRADED_CLEAN = {"measured": True, "hollow_nodes": [], "counts": {"nodes": 1}}
     assert split_args('tests -k "not slow"') == ["tests", "-k", "not slow"]
     assert pytest_cmd(["tests/a.py"], collect_only=True) == [
