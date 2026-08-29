@@ -77,3 +77,15 @@ bash ~/.codex/bin/orch-sync-mirror.sh && ls ~/.codex/orchestrator-mirror/*.py | 
 
 Expect ~99, and then `cd ~/.codex/orchestrator-mirror && python3 verify.py` should be green — note
 that in the FLAT mirror the command keeps its old form, with no `src/` prefix.
+
+**What "green in the mirror" means, and why it was impossible until 2026-08-29.** The mirror is a
+flat copy, so it is not a git repository and has no `.github/`; 31 tests skip there for exactly
+those two named reasons, and the run reports `31/31 max [mirror_skipped_max]`. Those skips are
+agreed, not tolerated — `.verify-floor.json` now carries a `mirror_skipped_max` alongside
+`skipped_max`, because the latter was measured on a bare GitHub runner (a different deprivation:
+missing CLIs and ledger rows, but a real checkout) and one number cannot bound both populations.
+A mirror run was therefore RED on every input, correct trees included, which made the instrument
+this doc points you at worthless. The shape is detected by `env_prereq.exec_mirror_shape()`, never
+from `$CI`, and the summary's first line says which tree it decided it was in. If you ever teach
+the sync to copy `.github/`, 12 of those skips become real checks and `mirror_skipped_max` must
+come down to 19 in the same change.

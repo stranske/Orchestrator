@@ -40,9 +40,17 @@ What makes it honest:
     The floor is now `passed + skipped >= floor.passed`, not `passed >= floor.passed`: a check
     may move between passing and consciously-skipped, but the two together may never shrink.
     Turning a failure into a pass by skipping it is what the ceiling forbids; letting a machine
-    without the prerequisite report honestly is what the floor change allows. One constant per
-    ceiling, defined once in the floor file and read once here, so the measuring and draining
-    windows cannot drift apart.
+    without the prerequisite report honestly is what the floor change allows.
+
+    ONE CONSTANT PER CEILING **PER TREE SHAPE** (2026-08-29). "One constant, so the measuring and
+    draining windows cannot drift apart" was the rule and it was being broken by this file's own
+    ceiling: `skipped_max` was measured on a GitHub runner and then applied to the EXEC MIRROR
+    too, which is a different deprived shape — every local prerequisite present, but a flat file
+    copy with no `.github/` and no `.git`, skipping 31 tests a runner does not skip at all. So a
+    mirror run was RED on every input including a correct tree, while CLAUDE.md §1 makes that run
+    the verdict. Two shapes, two agreements, each measured where it is enforced: the shape is
+    detected by `env_prereq.exec_mirror_shape()` (the prerequisite, never `$CI`) and selects the
+    key via `ceiling_limit`. The summary always prints which tree it decided it was in.
 """
 
 from __future__ import annotations
@@ -140,9 +148,20 @@ def coverage_combine_and_report() -> str:
 # Imported from env_prereq rather than duplicated: a shared literal in two files is a pair that
 # drifts, and a mark that drifts turns a skip back into a silent pass.
 try:
-    from env_prereq import PREREQ_ABSENT_MARK
+    from env_prereq import PREREQ_ABSENT_MARK, exec_mirror_shape
 except Exception:  # noqa: BLE001
     PREREQ_ABSENT_MARK = "PREREQUISITE ABSENT:"
+
+    def exec_mirror_shape() -> str | None:
+        """Fallback when env_prereq will not import: read the tree as a CHECKOUT.
+
+        The strict direction on purpose. "checkout" selects the SMALLER agreed ceiling, so a tree
+        whose shape could not be determined is bounded by the tighter agreement and goes red if it
+        skips more. Defaulting to the mirror would hand an unknown tree the extra headroom, which
+        is the one error worth engineering against here.
+        """
+        return None
+
 
 # pytest's terse summary line, e.g. "182 passed, 3 skipped in 41.20s"
 COUNT_RE = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed)")
@@ -542,6 +561,55 @@ CEILINGS = (
 )
 
 
+# ONE NUMBER MAY NOT BOUND TWO DIFFERENT DEPRIVED ENVIRONMENTS, and until 2026-08-29 `skipped_max`
+# did. The floor file's note records the shape it was measured in — a GitHub runner with none of
+# this instance's local prerequisites, 26 skips. The EXEC MIRROR is a different shape: every local
+# prerequisite is present (it exists only on the machine the system runs on) but it is a flat file
+# copy, so it is not a git repository and has no `.github/`, and it skips 31 tests that a runner
+# does not skip at all. The result was a `verify.py` that was RED FROM THE MIRROR on every input
+# including a correct tree — and CLAUDE.md §1 makes the mirror run the verdict, so the instrument
+# that exists to catch cross-tree divergence was protecting nothing. A gate that is red whatever
+# you do gets ignored, then switched off.
+#
+# Raising `skipped_max` to 31 would have been the wrong repair: CI runs where 26 is right, and the
+# extra five would have let a runner skip five more checks in silence. So each shape carries its
+# own agreed number, measured in the shape it bounds — the measuring window equal to the draining
+# window, which is the house rule this file already applies everywhere else.
+#
+# ONE RULE, NOT A SECOND TABLE. The mirror's key for any ceiling is its base key with this prefix,
+# derived here and consumed by both `_ceiling_problems` and `--update-floor`, so the check and the
+# writer cannot name different keys and a ceiling added later gets its shape variant for free. A
+# mirror key that is unset (or misspelt) simply falls back to the base agreement — the STRICT
+# direction, which fails toward a loud red rather than toward silence.
+MIRROR_CEILING_PREFIX = "mirror_"
+
+
+def mirror_key(key: str) -> str:
+    """The floor-file key holding the EXEC MIRROR's agreed maximum for `key`."""
+    return f"{MIRROR_CEILING_PREFIX}{key}"
+
+
+def ceiling_limit(floor: dict, key: str, *, mirror: bool) -> tuple[int | None, str]:
+    """The limit in force for `key` in THIS tree, and the floor key that set it.
+
+    Returns the key as well as the number because every failure message here has to name the
+    integer to raise, and on the mirror that is a DIFFERENT key. "raise `skipped_max`" read from a
+    mirror run sends the reader to edit the number CI depends on — the gate telling you to break
+    the other environment to clear this one.
+
+    The mirror value REPLACES the base rather than adding to it. On the mirror the local
+    prerequisites are all present, so the runner-shape absences the base number pays for do not
+    occur; adding the two would buy 26 units of headroom that nothing there can legitimately spend.
+    """
+    if mirror:
+        mk = mirror_key(key)
+        limit = floor.get(mk)
+        if limit is not None:
+            return int(limit), mk
+    base = floor.get(key)
+    return (None if base is None else int(base)), key
+
+
 def mypy_exempt_modules() -> list[str] | None:
     """Modules on `[[tool.mypy.overrides]] ignore_errors` — the ratchet's blocking quantity.
 
@@ -692,8 +760,57 @@ def _exempt_ceiling_input(exempt: list[str] | None) -> int | None:
     return len(exempt) if exempt is not None else None
 
 
-def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
-    """Is anything skipping MORE than the agreed maximum? Pure, for the same reason.
+def _preserved_ceilings(floor: dict) -> dict:
+    """Every agreed ceiling `--update-floor` must carry forward — BOTH shapes'. Pure, so the
+    preservation is asserted rather than trusted.
+
+    THE RECONCILE JOB REWRITES THIS FILE ON EVERY PUSH TO MAIN, from a checkout, where the mirror
+    ceilings are never consulted. A writer that kept only the keys the run happened to READ would
+    therefore delete them — silently re-latching the mirror shut, with the deletion arriving as a
+    bot commit nobody reads. It derives the key from `mirror_key`, the same rule the check uses; a
+    second list of key names would be a matching pair, and a drifted pair here is the deletion.
+    """
+    out: dict = {}
+    for key, _label in CEILINGS:
+        for k in (key, mirror_key(key)):
+            if floor.get(k) is not None:
+                out[k] = int(floor[k])
+    return out
+
+
+def _ceiling_report(floor: dict, actual: dict, *, mirror: bool) -> tuple[list[str], dict[str, str]]:
+    """The ceiling VERDICT and the `count/limit` RENDERING for every ceiling, from ONE shape
+    decision. Pure.
+
+    THEY ARE RETURNED TOGETHER ON PURPOSE. Two readers of one quantity that reach the shape
+    separately can disagree, and this file has already been bitten by exactly that: the mypy
+    ratchet's LINE said "NOT COUNTED" while its ENFORCEMENT cleared, because the renderer and the
+    checker coerced an uncountable value differently and the permissive one decided the exit code.
+    With the shape it would have been worse — a summary reading `31/31 max` above a verdict
+    computed against 26, which reads as a bug in the tool rather than in the tree. One call, one
+    decision, and the selftest can hold both halves against each other.
+    """
+    problems = _ceiling_problems(floor, actual, mirror=mirror)
+    rendered = {}
+    for key, _label in CEILINGS:
+        limit, in_force = ceiling_limit(floor, key, mirror=mirror)
+        observed = actual.get(key)
+        if limit is None:
+            rendered[key] = f"{observed} (no ceiling set)"
+            continue
+        # Name the KEY whenever it is not the base one. A bare "31/31 max" on the mirror looks
+        # like the number CI enforces and is not; the reader has to be able to see which
+        # agreement they are reading without going to look it up.
+        via = "" if in_force == key else f" [{in_force}]"
+        rendered[key] = f"{observed}/{limit} max{via}"
+    return problems, rendered
+
+
+def _ceiling_problems(floor: dict, actual: dict, *, mirror: bool = False) -> list[str]:
+    """Is anything skipping MORE than the agreed maximum FOR THIS TREE SHAPE? Pure, same reason.
+
+    `mirror` defaults to False so an unshaped call is bounded by the base (smaller) agreement —
+    the strict direction, and the one every existing caller and selftest already means.
 
     An UNSET ceiling means "nothing agreed yet", not "zero" — reading a missing key as 0 would
     condemn every machine that legitimately lacks a prerequisite.
@@ -706,14 +823,17 @@ def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
     silence is the wrong answer.
     """
     problems = []
+    where = " (exec mirror)" if mirror else ""
     for key, label in CEILINGS:
-        limit = floor.get(key)
+        # The key that SET the limit, not the base key — on the mirror they differ, and every
+        # message below has to send the reader to the number that actually governs this run.
+        limit, in_force = ceiling_limit(floor, key, mirror=mirror)
         if limit is None:
             continue
         observed = actual.get(key, 0)
         if observed is None:
             problems.append(
-                f"CEILING UNCHECKABLE: {label} could not be counted, but `{key}` is set to "
+                f"CEILING UNCHECKABLE: {label} could not be counted, but `{in_force}` is set to "
                 f"{limit}. A bounded quantity that cannot be measured is a failure, not a pass — "
                 f"fix whatever made it uncountable, or remove the ceiling deliberately."
             )
@@ -723,9 +843,9 @@ def _ceiling_problems(floor: dict, actual: dict) -> list[str]:
                 # `CEILING`, not `SKIP CEILING`: the mypy exempt list is bounded by this same
                 # machinery and is not a skip, so the old wording sent a reader hunting for a skip
                 # that does not exist. The label already names WHICH population overflowed.
-                f"CEILING exceeded: {observed} {label} > agreed maximum {limit}. "
+                f"CEILING exceeded{where}: {observed} {label} > agreed maximum {limit}. "
                 f"This is bounded on purpose — either the new one is wrong, or raise "
-                f"`{key}` in .verify-floor.json deliberately and say why."
+                f"`{in_force}` in .verify-floor.json deliberately and say why."
             )
     return problems
 
@@ -779,12 +899,17 @@ def verify(
             "collection floor nor any ceiling can be checked. That is a failure, not an unset "
             "floor — fix the file rather than letting a run pass unmeasured."
         )
-    problems += _ceiling_problems(floor, actual)
+    # WHICH TREE IS THIS? Detected from the tree itself — never from `$CI` — because the exec
+    # mirror and a bare runner are two different deprived shapes and one number cannot bound both.
+    # See `ceiling_limit`. Computed once and threaded through the check and the rendering, so the
+    # verdict and the summary cannot disagree about which agreement was in force.
+    mirror_reason = exec_mirror_shape()
+    ceiling_problems, ceiling_rendered = _ceiling_report(floor, actual, mirror=bool(mirror_reason))
+    problems += ceiling_problems
 
     def _cap(key: str) -> str:
         """Both numbers, always in the same place: the count AND what bounds it."""
-        limit = floor.get(key)
-        return f"{actual[key]}" + (f"/{limit} max" if limit is not None else " (no ceiling set)")
+        return ceiling_rendered[key]
 
     # The floor reports its RELATIONSHIP to reality, not just its value. "floor 386" reads as
     # fine at a glance; "floor 386 — 1 BEHIND" cannot be misread, which is the same house rule
@@ -810,6 +935,13 @@ def verify(
         )
     )
     lines = ["# verify.py", ""]
+    # ALWAYS printed, in both shapes. A line that only appears on the mirror tells a reader
+    # nothing on the machine where it is silent, and the whole point is that "which ceilings are
+    # in force" must never have to be inferred.
+    lines.append(
+        f"  tree:       {'EXEC MIRROR — mirror_* ceilings apply' if mirror_reason else 'checkout'}"
+        + (f"\n              {mirror_reason}" if mirror_reason else "")
+    )
     lines.append(
         f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
         f"{_cap('skipped_max')} skipped "
@@ -893,9 +1025,7 @@ def verify(
         # Recording bare `passed` from a skipping machine would RATCHET THE FLOOR DOWN by exactly
         # the amount that was skipped — the floor following the leak instead of catching it.
         blob = {"collected": py["collected"], "passed": py["passed"] + py["skipped"]}
-        for key, _label in CEILINGS:
-            if floor.get(key) is not None:
-                blob[key] = int(floor[key])
+        blob.update(_preserved_ceilings(floor))
         blob["note"] = _appended_note(
             str(floor.get("note", "")),
             py["collected"],
@@ -1017,6 +1147,93 @@ def _selftest() -> None:
     assert (
         _ceiling_problems({}, {"skipped_max": 99, "selftest_skipped_max": 9, "gate_skipped_max": 9})
         == []
+    )
+
+    # ---- TWO SHAPES, TWO AGREEMENTS (2026-08-29) ----------------------------------------------
+    # `skipped_max` bounded a GitHub runner (26, per the floor note) and was ALSO applied to the
+    # exec mirror, which skips a different 31 — so a mirror run was red on every input including a
+    # correct tree, and CLAUDE.md §1 makes that run the verdict. The whole repair is that the
+    # limit in force depends on the detected shape, so that is what is asserted, in both
+    # directions and on the permissive side especially.
+    _two = {"skipped_max": 26, "mirror_skipped_max": 31}
+    _s31 = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 31}
+    # The bug, reproduced: on a CHECKOUT 31 skips is still a breach and must stay one.
+    _as_checkout = _ceiling_problems(_two, _s31, mirror=False)
+    assert len(_as_checkout) == 1 and "CEILING exceeded" in _as_checkout[0], _as_checkout
+    assert "`skipped_max`" in _as_checkout[0], "a checkout must be sent to the base key"
+    # The fix: the same 31 on the MIRROR is exactly at its own agreed maximum, and passes. This is
+    # the assertion that would have been red for as long as the defect existed — the drained
+    # state, which the house rule says must be reachable by some real input. It is: this is the
+    # live mirror's measured count.
+    assert _ceiling_problems(_two, _s31, mirror=True) == [], "the mirror must be able to go GREEN"
+    # And the mirror ceiling is still a ceiling: one over it fails, naming the MIRROR key. Sending
+    # a mirror reader to raise `skipped_max` would tell them to loosen the number CI depends on.
+    _over_m = _ceiling_problems(_two, {**_s31, "skipped_max": 32}, mirror=True)
+    assert len(_over_m) == 1 and "`mirror_skipped_max`" in _over_m[0], _over_m
+    assert "exec mirror" in _over_m[0], "the message must say which shape it is bounding"
+    # A ceiling with NO mirror variant falls back to the base agreement — the strict direction, so
+    # a misspelt or forgotten key fails loudly instead of going unbounded.
+    _fallback = _ceiling_problems(
+        {"selftest_skipped_max": 7},
+        {**{k: 0 for k, _ in CEILINGS}, "selftest_skipped_max": 8},
+        mirror=True,
+    )
+    assert len(_fallback) == 1 and "`selftest_skipped_max`" in _fallback[0], _fallback
+    # `mirror=False` is the default, and it must be the STRICT one: an unshaped call cannot help
+    # itself to the looser number.
+    assert _ceiling_problems(_two, _s31) == _as_checkout, "the default shape is checkout"
+    # The key rule itself, since both the check and `--update-floor` derive from it. A second
+    # table would be a matching pair, and a drifted pair here deletes the mirror ceiling.
+    assert mirror_key("skipped_max") == "mirror_skipped_max"
+    assert ceiling_limit(_two, "skipped_max", mirror=True) == (31, "mirror_skipped_max")
+    assert ceiling_limit(_two, "skipped_max", mirror=False) == (26, "skipped_max")
+    assert ceiling_limit({"skipped_max": 26}, "skipped_max", mirror=True) == (26, "skipped_max")
+    assert ceiling_limit({}, "skipped_max", mirror=True) == (None, "skipped_max")
+    # THE REAL FLOOR FILE must actually carry the mirror agreement, or every assertion above is
+    # about a shape that nothing configures — the defect would still be live with a green suite.
+    _real_floor = load_floor()
+    assert _real_floor.get("mirror_skipped_max") is not None, (
+        ".verify-floor.json records no `mirror_skipped_max`; a mirror run is then bounded by the "
+        "runner's number again, which is red on every input"
+    )
+    # NOT ASSERTED: that the mirror ceiling is >= the base one. It is today (31 vs 26) and that is
+    # a coincidence, not an invariant — the two populations are DISJOINT, one runner-shape and one
+    # mirror-shape. Worse, the assertion would have latched: the drain named in the floor note is
+    # teaching orch-sync-mirror.sh to copy `.github/`, which drops 12 mirror skips and takes this
+    # number to 19, and a `>=` here would then refuse the drain it exists to encourage. A gate
+    # whose clear path is blocked by the thing it measures is the defect this whole file is about.
+    # And `--update-floor` must PRESERVE it. The reconcile job rewrites this file on every push to
+    # main, from a checkout, where the mirror keys are never consulted — a writer that kept only
+    # the keys it used would delete the ceiling and silently re-latch the mirror shut.
+    assert _preserved_ceilings({"skipped_max": 26, "mirror_skipped_max": 31, "note": "n"}) == {
+        "skipped_max": 26,
+        "mirror_skipped_max": 31,
+    }, "--update-floor must carry BOTH shapes' agreements forward, and nothing else"
+    assert "mirror_skipped_max" in _preserved_ceilings(
+        _real_floor
+    ), "--update-floor would drop the real mirror ceiling on the next push to main"
+    # THE VERDICT AND THE SUMMARY MUST AGREE, which is why they come from one call. Held against
+    # each other here, in both shapes: a run that renders `31/31 max` above a verdict computed
+    # against 26 reads as a broken tool, and the reader stops believing either number.
+    _probs_m, _rend_m = _ceiling_report(_two, _s31, mirror=True)
+    assert _probs_m == [] and _rend_m["skipped_max"] == "31/31 max [mirror_skipped_max]", _rend_m
+    _probs_c, _rend_c = _ceiling_report(_two, _s31, mirror=False)
+    assert len(_probs_c) == 1 and _rend_c["skipped_max"] == "31/26 max", _rend_c
+    # An unset ceiling still says so rather than rendering a bare count.
+    assert "no ceiling set" in _ceiling_report({}, _s31, mirror=True)[1]["skipped_max"]
+    # THE ONE WIRING PIN, because everything above is pure and `verify()` is not cheap to call:
+    # dropping the keyword reverts the defect exactly (the mirror bounded by the runner's number)
+    # while every assertion above stays green — this repo's founding failure, code that exists and
+    # is not invoked. Split so the needle cannot match its own line, and the fragment is the
+    # smallest thing that would be ABSENT if the wiring were removed: no newline, no indentation,
+    # no argument list a formatter owns.
+    _src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    assert ("mirror=bool(" + "mirror_reason)") in _src, (
+        "verify() no longer feeds the DETECTED shape into the ceilings, so the exec mirror is "
+        "bounded by the runner's `skipped_max` again and is red on every input. This is the one "
+        "pin here: everything else about the shape rule is pure and asserted above, but verify() "
+        "itself is too expensive to call from a selftest, and a hardcoded False would revert the "
+        "defect exactly while every assertion above stayed green."
     )
 
     # ---- the floor counts what RAN OR WAS NAMED, and the ceiling stops that being a loophole --
@@ -1320,7 +1537,8 @@ def _selftest() -> None:
         "--floor-may-lag forgives a lagging floor on a PR but never a collection drop, "
         "--reconcile-floor forgives ONLY a drift it "
         "healed and never an unwritten one, absent-module line is silent when clean and is "
-        "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail)"
+        "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail, "
+        "two tree shapes carry two agreed ceilings and the exec mirror can go GREEN)"
     )
 
 

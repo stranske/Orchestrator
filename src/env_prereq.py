@@ -277,6 +277,59 @@ def git_repo_absent() -> str | None:
     return None
 
 
+def exec_mirror_shape() -> str | None:
+    """Name what makes THIS tree the exec mirror rather than a checkout, or None for a checkout.
+
+    NOT a prerequisite detector, and it must never be handed to `require()`. Every other function
+    in this module answers "can this CHECK run here", and its reason SKIPS something. This one
+    answers "which TREE is this", and its reason selects which agreed skip ceiling `verify.py`
+    enforces. Nothing skips because of it.
+
+    WHY IT EXISTS. `.verify-floor.json`'s `skipped_max` was ONE number bounding TWO different
+    deprived environments, and the floor file's own note says which one it was measured in:
+    "exactly what a machine with none of this instance's local prerequisites skips (a GitHub
+    runner: no agent CLIs, no ~/.codex/skills, no /Applications/ChatGPT.app, no populated
+    capability ledger)". The exec mirror is a DIFFERENT shape with DIFFERENT absences. Every local
+    prerequisite is present there -- it exists only on the machine the system runs on -- but it is
+    a flat file copy, so it is not a git repository and has no `.github/`. Measured 2026-08-29 on
+    unmodified main: the mirror skips the two families below, 31 tests, against a ceiling of 26
+    measured on a runner that skips neither, and both control runs (live mirror and a scratch
+    mirror synced from the previous main) gave the same 31. So `python3 verify.py` from the mirror
+    was RED on every input INCLUDING a correct tree -- and CLAUDE.md 1 makes that run the verdict,
+    so the one instrument that catches cross-tree divergence had stopped protecting anything. A
+    gate red on every input is a gate that gets ignored.
+
+    Raising `skipped_max` to 31 would have been the wrong repair: CI runs on a runner where 26 is
+    the correct bound, so five more checks could have gone unchecked THERE in silence. Two shapes
+    need two agreements, each measured in the shape it bounds -- the measuring window equal to the
+    draining window, which is the latched-gate rule this file already follows everywhere else.
+
+    ONE POPULATION, CAUSED AND LICENSED BY THE SAME TWO DETECTORS. The marks below are the very
+    calls that PRODUCE the mirror-only skips: `repo_files_absent` from `test_ci_gate_config.py`
+    and `git_repo_absent` from `test_repo_artifact_hygiene.py`. The ceiling that licenses those
+    skips is therefore unlocked by exactly the facts that cause them, with no second literal to
+    drift. It selects WHICH agreed number applies -- never what the number is, which stays
+    hand-edited -- so this cannot become a gate that clears itself.
+
+    BOTH marks are required, and that AND is the conservative direction: the mirror ceiling is the
+    LOOSER of the two, so an ambiguous tree must fall back to the base agreement rather than help
+    itself to headroom. A checkout with `git` uninstalled still has `.github/`; a checkout whose
+    `.github/` was deleted is still a git repository. Neither reads as the mirror.
+    """
+    no_github = repo_files_absent(".github")
+    not_a_repo = git_repo_absent()
+    if not (no_github and not_a_repo):
+        return None
+    import paths
+
+    here = paths.checkout_root(Path(__file__).resolve().parent)
+    return (
+        f"{here} is the exec mirror, not a checkout: no .github/ directory, and git reports no "
+        f"repository here. orch-sync-mirror.sh copies files, not a checkout, so the tests that "
+        f"read repository configuration or ask git a question cannot run in this tree"
+    )
+
+
 def codex_profile_binary_absent() -> str | None:
     """Reason string when the version-capable Codex binary exact profiles require is absent.
 
@@ -505,6 +558,52 @@ def _selftest() -> None:
         "pyproject.toml", "definitely-not-a-file-here"
     ), "one missing entry is enough to skip"
 
+    # ---- exec_mirror_shape: WHICH TREE, not "can this check run" ------------------------------
+    # The composition rule is the whole function, so it is asserted directly in all four
+    # combinations. AND, never OR: the mirror ceiling is the LOOSER of the two agreements, so only
+    # an unambiguous flat copy may unlock it. Flipping the `and` to `or` turns three of these red.
+    _real_github, _real_git = repo_files_absent, git_repo_absent
+    try:
+        for _no_github, _no_git, _want_mirror in (
+            (True, True, True),
+            (True, False, False),
+            (False, True, False),
+            (False, False, False),
+        ):
+            globals()["repo_files_absent"] = lambda *a, _r=_no_github: (
+                "no .github here" if _r else None
+            )
+            globals()["git_repo_absent"] = lambda _r=_no_git: (
+                "not a git repository" if _r else None
+            )
+            got_shape = exec_mirror_shape()
+            assert bool(got_shape) is _want_mirror, (_no_github, _no_git, got_shape)
+            if _want_mirror:
+                # It must NAME the tree and both marks, or a reader cannot tell why the looser
+                # ceiling is in force -- and an unexplained looser ceiling is the thing to fear.
+                assert got_shape is not None
+                assert ".github" in got_shape and "git" in got_shape, got_shape
+    finally:
+        globals()["repo_files_absent"] = _real_github
+        globals()["git_repo_absent"] = _real_git
+
+    # THE REAL TREE, asserted in the direction that is layout-independent AND permissive-side:
+    # a genuine checkout must never be mistaken for the mirror, because that is the only error
+    # that hands a real repository the bigger skip ceiling. The mirror direction is asserted too,
+    # from the same two facts -- and this pair is what running verify FROM THE MIRROR exercises.
+    import paths
+
+    _root = paths.checkout_root(Path(__file__).resolve().parent)
+    if (_root / ".github").is_dir():
+        assert exec_mirror_shape() is None, (
+            f"{_root} has .github/ and must read as a checkout, not the exec mirror: "
+            f"{exec_mirror_shape()}"
+        )
+    elif git_repo_absent():
+        assert (
+            exec_mirror_shape()
+        ), f"{_root} is a flat non-repository copy and must read as the mirror"
+
     # A skipped selftest must SPEAK, and its line must carry the shared mark verify.py greps
     # for. A skip that prints nothing is a silent zero-exit by another name.
     import contextlib
@@ -557,7 +656,7 @@ def _selftest() -> None:
 
     print(
         "env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, "
-        "marked selftest skip speaks, vibe readers)"
+        "marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks)"
     )
 
 
@@ -566,6 +665,14 @@ def main(argv: list[str]) -> int:
         _selftest()
         return 0
     # Default: report what this machine can and cannot check. Useful on a new box.
+    # WHICH TREE first, because it changes which skip ceiling verify.py enforces below. Printed
+    # in both shapes: "checkout" is the answer as much as the mirror reason is, and a shape line
+    # that only appears in one of them tells a reader nothing on a machine where it is silent.
+    shape = exec_mirror_shape()
+    print(
+        f"tree shape: {'EXEC MIRROR' if shape else 'checkout'}"
+        + (f"\n    {shape}" if shape else "")
+    )
     checks = {
         "reference skill resource": skill_resource_absent(),
         "exact-profile Codex binary": codex_profile_binary_absent(),
