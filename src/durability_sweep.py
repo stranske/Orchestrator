@@ -31,6 +31,9 @@ REVERT_WINDOW_DAYS = (
 )
 SECONDS_PER_DAY = 86400
 MAX_REVERT_PRS = 50
+# Fix-titled PRs are far more common than reverts, so the local-match window has to be wider
+# or a busy repo's recent fixes push the relevant one off the end and the check silently misses.
+MAX_FIX_PRS = 200
 MAX_BASE_COMMITS = 100
 EXPLICIT_MERGED_PR_RE = re.compile(r"\bPR\s+#(?P<num>\d+)\s+merged\b", re.IGNORECASE)
 
@@ -224,6 +227,81 @@ def _fetch_repo_revert_prs(repo: str) -> tuple[list | None, bool]:
     return arr, len(arr) >= MAX_REVERT_PRS
 
 
+def _fetch_repo_fix_prs(repo: str) -> tuple[list | None, bool]:
+    """Repo-wide 'fix in:title' SEARCH, cached per repo and matched locally.
+
+    Same shape and same reason as the revert search above: the result is identical for every PR
+    in the repo, so a bulk sweep costs ONE search rather than N against a 30/min limit.
+    """
+    _gh_throttle("search")
+    arr = _run_json(
+        [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            repo,
+            "--state",
+            "merged",
+            "--search",
+            "fix in:title",
+            "--json",
+            "number,title,body,mergedAt",
+            "--limit",
+            str(MAX_FIX_PRS),
+        ]
+    )
+    if not isinstance(arr, list):
+        return None, False
+    return arr, len(arr) >= MAX_FIX_PRS
+
+
+def _fix_followup_status(
+    repo: str,
+    pr_number: int,
+    merged_ts: int,
+    fix_cache: dict | None = None,
+    _fix_fn=None,
+) -> tuple[bool | None, str]:
+    """Did a LATER merged fix PR explicitly NAME this one? That is `broke_later`.
+
+    A HIGH BAR, deliberately, and higher than the one escaped_defect_priority uses. That module
+    ranks work on the loose signal — a fix commit touching the same file — which is decent
+    evidence for ORDERING and poor evidence for TRAINING, because code is changed for many
+    reasons and a fix on the same file may repair something this change never touched. This
+    writes `outcomes.durability`, which the router learns from, so it demands an explicit
+    reference: a fix-titled PR that names this PR number and merged AFTER it.
+
+    ADDITIVE, AND THAT IS THE POINT. Anything other than a confident True falls through to the
+    classification this function did not exist to change. A new check that could leave rows
+    permanently pending would be a latch of its own, so an unavailable search costs the refinement
+    and never the result.
+    """
+    fetch = _fix_fn or _fetch_repo_fix_prs
+    if fix_cache is not None and repo in fix_cache:
+        arr, hit_limit = fix_cache[repo]
+    else:
+        arr, hit_limit = fetch(repo)
+        if fix_cache is not None:
+            fix_cache[repo] = (arr, hit_limit)
+    if arr is None:
+        return None, "fix-PR search unavailable"
+    for item in arr:
+        number = item.get("number")
+        if number == pr_number:
+            continue  # a change cannot be the follow-up that reports its own breakage
+        later = _parse_gh_ts(item.get("mergedAt"))
+        if later is None or later <= merged_ts:
+            continue  # a fix that landed FIRST cannot be repairing this
+        title = item.get("title") or ""
+        haystack = f"{title}\n{item.get('body') or ''}"
+        if _contains_ref(haystack, pr_number):
+            return True, f"later fix PR #{number} names this change"
+    if hit_limit:
+        return None, f"fix-PR search hit limit {MAX_FIX_PRS}"
+    return False, "no later fix PR names this change"
+
+
 def _revert_pr_status(
     repo: str, pr_number: int, revert_cache: dict | None = None
 ) -> tuple[bool | None, str]:
@@ -386,6 +464,8 @@ def classify_durability(
     now: int | None = None,
     _revert_fn=None,
     revert_cache: dict | None = None,
+    _fix_fn=None,
+    fix_cache: dict | None = None,
 ) -> dict:
     """Pure-ish classifier. Returns a pending result whenever evidence is incomplete."""
     now = int(now or time.time())
@@ -438,7 +518,29 @@ def classify_durability(
             ),
         }
 
-    return {"durability": "durable", "notes": f"durability_sweep: held {age}d; {revert_note}"}
+    # BROKE_LATER: merged, not reverted, delivered real work -- and then a later fix PR named it.
+    # Checked here rather than earlier because a reverted or abandoned change is already
+    # classified by a stronger signal, and re-labelling it would lose that.
+    broke, fix_note = _fix_followup_status(
+        pr.get("repo") or repo,
+        int(pr.get("number") or target_num or 0),
+        merged_ts,
+        fix_cache=fix_cache,
+        _fix_fn=_fix_fn,
+    )
+    if broke is True:
+        return {
+            "durability": "broke_later",
+            "notes": f"durability_sweep: {fix_note}; held {age}d before that",
+        }
+    # ADDITIVE BY CONSTRUCTION. `broke is None` means the search could not answer, and that falls
+    # through to the durable verdict this function reached before the check existed -- with the
+    # reason recorded, so an unavailable search is visible rather than mistaken for a clean bill.
+    # Anything else would let a new refinement strand rows in pending forever.
+    return {
+        "durability": "durable",
+        "notes": f"durability_sweep: held {age}d; {revert_note}; {fix_note}",
+    }
 
 
 def sweep_durability(
@@ -459,6 +561,7 @@ def sweep_durability(
         "details": [],
     }
     revert_cache: dict = {}  # repo -> cached revert search, so a bulk sweep does 1 search/repo
+    fix_cache: dict = {}  # repo -> cached fix search, same reason: 1 search/repo, matched locally
     for run in _pending_merged_runs():
         summary["checked"] += 1
         pr = _resolved_pr_state(run, _state_fn=_state_fn)
@@ -469,6 +572,7 @@ def sweep_durability(
             now=_now,
             _revert_fn=_revert_fn,
             revert_cache=revert_cache,
+            fix_cache=fix_cache,
         )
         durability = verdict.get("durability")
         if durability is None:
@@ -694,13 +798,113 @@ def _selftest_revert_search_cached_per_repo(now: int):
         finally:
             globals()["_run_json"] = real_run_json
 
+        # THE INVARIANT IS PER-REPO, NOT A MAGIC NUMBER. Three PRs in one repo cost TWO
+        # repo-wide searches — one for reverts, one for fix follow-ups — because both are cached
+        # per repo and matched locally. Were either searched per PR this would be 3 or 6, which is
+        # the regression this pins; the 30/min REST search limit is what makes it matter.
         assert (
-            search_calls["n"] == 1
-        ), f"expected 1 repo-wide revert search, got {search_calls['n']}"
+            search_calls["n"] == 2
+        ), f"expected 2 repo-wide searches (revert + fix) for 3 PRs, got {search_calls['n']}"
         assert res["checked"] == 3 and res["durable"] == 3, res
     finally:
         feedback.DB_PATH = saved_db
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _selftest_broke_later(now: int):
+    """A later fix PR that NAMES this change is broke_later; anything weaker is not.
+
+    The bar is explicit reference on purpose. escaped_defect_priority ranks on the loose signal
+    (a fix touching the same file), which is fine for ordering work and wrong for training the
+    router — so this asserts the loose case does NOT produce the label.
+    """
+    pr = {
+        "repo": "o/r",
+        "number": 10,
+        "state": "MERGED",
+        "mergedAt": _iso_days_ago(now, 30),
+        "files": [{"path": "src/real.py"}],
+    }
+    run = {"target": "o/r#10", "mode": "remote"}
+
+    def _no_revert(_pr, **_kw):
+        return False, "no revert"
+
+    # (a) a later fix PR naming this change -> broke_later
+    def _fix_names_it(_repo):
+        return [
+            {
+                "number": 11,
+                "title": "fix(core): repair regression",
+                "body": "Fixes the regression introduced in #10",
+                "mergedAt": _iso_days_ago(now, 5),
+            }
+        ], False
+
+    got = classify_durability(
+        run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_names_it, fix_cache={}
+    )
+    assert got["durability"] == "broke_later", got
+    assert "#11" in got["notes"], got
+
+    # (b) a fix that does NOT name it -> durable, not broke_later. Same file is not enough.
+    def _fix_unrelated(_repo):
+        return [
+            {
+                "number": 12,
+                "title": "fix(core): unrelated",
+                "body": "no reference at all",
+                "mergedAt": _iso_days_ago(now, 5),
+            }
+        ], False
+
+    got = classify_durability(
+        run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_unrelated, fix_cache={}
+    )
+    assert got["durability"] == "durable", got
+
+    # (c) a fix that landed BEFORE the merge cannot be repairing it
+    def _fix_earlier(_repo):
+        return [
+            {
+                "number": 13,
+                "title": "fix: earlier",
+                "body": "Refs #10",
+                "mergedAt": _iso_days_ago(now, 60),
+            }
+        ], False
+
+    got = classify_durability(
+        run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_earlier, fix_cache={}
+    )
+    assert got["durability"] == "durable", got
+
+    # (d) a change cannot be the follow-up that reports its own breakage
+    def _fix_is_self(_repo):
+        return [
+            {
+                "number": 10,
+                "title": "fix: itself",
+                "body": "Refs #10",
+                "mergedAt": _iso_days_ago(now, 5),
+            }
+        ], False
+
+    got = classify_durability(
+        run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_is_self, fix_cache={}
+    )
+    assert got["durability"] == "durable", got
+
+    # (e) ADDITIVE: an unavailable search costs the refinement, never the result. A new check
+    # that could strand rows in pending forever would be a latch of its own.
+    def _fix_unavailable(_repo):
+        return None, False
+
+    got = classify_durability(
+        run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_unavailable, fix_cache={}
+    )
+    assert got["durability"] == "durable", got
+    assert "unavailable" in got["notes"], got
 
 
 def _selftest():
@@ -830,11 +1034,13 @@ def _selftest():
 
         _selftest_live_revert_scan(now)
         _selftest_revert_search_cached_per_repo(now)
+        _selftest_broke_later(now)
 
         print(
             "durability_sweep.py selftest: OK (old clean->durable, revert->reverted, "
             "open->reopened, young/ambiguous stay pending, live revert scan covered, "
-            "revert search cached 1/repo)"
+            "searches cached per repo not per PR, and broke_later only on an explicit "
+            "later-fix reference)"
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
