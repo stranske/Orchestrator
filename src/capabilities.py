@@ -142,6 +142,12 @@ EVENT_FIELDS = {
 
 KNOWN_GATES: dict[str, dict[str, Any]] = {
     "research-usage-guard": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "Deterministic admission control for research followups, invoked by exp_abcd's "
+            "followup path. Admission control selected by the admitted is no control, so no "
+            "agent surface may offer it; its read surface is the anomaly report it emits."
+        ),
         "status": "wired",
         "entrypoint": "research_usage_guard.py:main",
         "matcher": {"kind": "tick_phase", "name": "research-usage-guard"},

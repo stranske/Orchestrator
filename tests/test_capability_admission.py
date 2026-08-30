@@ -459,6 +459,9 @@ def test_findability_exemption_is_declared_in_code_not_in_a_live_ledger():
         "local-model-profile-trial",
         "redirect-apply-bootstrap",
         "research-scheduler",
+        # 2026-08-30: exp_abcd's followup admission control — admission control selected by the
+        # admitted is no control. Declared on its gate entry.
+        "research-usage-guard",
         "synthesis-promotion",
     }, declared
     for cap_id in declared:
