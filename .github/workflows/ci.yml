@@ -34,10 +34,19 @@ concurrency:
 jobs:
   # THIS REPO'S COVERAGE NUMBER HAS BEEN WRONG BY 48 POINTS, AND NOTHING SAID SO.
   #
-  # pr-00-gate.yml measures coverage with pytest alone and reports 34.11%. Measured 2026-08-29 by
-  # running the command this job runs: 82.1%, over 44,740 statements with 8,026 missed, combined
-  # from 94 instrumented processes. (76.1% was the figure recorded on 2026-08-23; the repo has
-  # improved since, which is itself only visible once somebody measures.) The gap exists because
+  # pr-00-gate.yml measures coverage with pytest alone and reports 34.11%. This job, run here on
+  # 2026-08-30: 80.3%, over 44,741 statements with 8,828 missed, combined from 94 instrumented
+  # processes.
+  #
+  # THE AUTHORITATIVE NUMBER IS THE ONE FROM THIS RUNNER, NOT FROM A DEVELOPER MACHINE, and the
+  # difference is real rather than noise. The same command on the owner's machine reports 82.1%
+  # with 8,026 missed -- 802 statements that execute only where this instance's prerequisites
+  # exist (agent CLIs, ~/.codex, a populated ledger) and are missed on a bare runner. Those are
+  # exactly the paths env_prereq guards. CLAUDE.md already says to take coverage from CI rather
+  # than a local run; this job is why that rule has teeth, and quoting the local figure would
+  # overstate the repo by nearly two points.
+  #
+  # The gap against the Gate exists because
   # 79 of 102 modules are exercised by a `--selftest` entry point rather
   # than a pytest file -- the original design, from the initial commit -- and a selftest runs as a
   # SUBPROCESS that pytest-cov cannot see. So the Gate has been measuring the instrument's blind
