@@ -267,7 +267,7 @@ def _rank_rows(
     hollow_rates: dict[str, float] | None = None,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     limit: int = DEFAULT_LIMIT,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int, list[str]]:
     """Rank candidate files for test-writing, most informative signal first.
 
     `hollow_rates` maps path -> observed share of hollow nodes from past testgen attempts. Absent,
