@@ -512,6 +512,7 @@ if _cadence_due coverage-testgen-trigger && _attempt_ok coverage-testgen-trigger
   if python3 "$ORCH/coverage_testgen_trigger.py" --json \
        --repo "${ORCH_COVERAGE_REPO:-stranske/Orchestrator}" \
        --coverage-json "${ORCH_COVERAGE_REPORT:-$ORCH_REPO/coverage.json}" \
+       --repo-path "${ORCH_COVERAGE_REPO_PATH:-$ORCH_REPO}" \
        > "$STAMP_DIR/coverage-testgen-trigger.json" 2>> "$STAMP_DIR/coverage-testgen-trigger.log"; then
     _mark_success coverage-testgen-trigger
   else

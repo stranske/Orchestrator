@@ -140,6 +140,43 @@ def decide(repo: str, coverage: float | None, previous: float | None = None) -> 
     )
 
 
+def rank_targets(
+    repo_path: str | Path, coverage_json: dict[str, Any], limit: int
+) -> tuple[list[str], str]:
+    """Ask the ranker WHERE the writing should happen, and never answer with bare silence.
+
+    Without this the decision said `write_tests` and named nowhere, while `targets` sat declared
+    and unfilled — so an empty list could not be told from "ranked and found nothing to do". Two
+    opposite findings sharing one rendering is the defect this module's own docstring refuses one
+    level up, and it had reappeared inside it.
+
+    Returns `(paths, status)`. The status always says which of the three happened: ranked, ranked
+    and found nothing, or could not rank — and why.
+    """
+    try:
+        import escaped_defect_priority
+    except Exception as exc:  # pragma: no cover - import failure is environment-specific
+        return [], f"could not rank: escaped_defect_priority did not import ({exc})"
+
+    if not escaped_defect_priority.enabled():
+        return [], (
+            f"could not rank: {escaped_defect_priority.KILL_SWITCH} is not set to 1, so the "
+            "ranking that would choose targets is switched off"
+        )
+
+    rows, status = escaped_defect_priority.rank_status(repo_path, coverage_json, limit=limit)
+    # `rank_status` SEPARATES a measured zero from an unreadable one, and collapsing them here
+    # would throw away the distinction it exists to draw. Drafted with both mapped to "could not
+    # rank", which a test caught: `no_signal` means the ranking RAN and nothing qualified, which
+    # is a finding about the repository; `unavailable` means it could not run, which is a finding
+    # about the instrument. Only the second is a reason to go and fix something else.
+    if status["status"] == "unavailable":
+        return [], f"could not rank: {status['reason']}"
+    if status["status"] == "no_signal" or not rows:
+        return [], f"ranked and found no candidate: {status['reason']}"
+    return [str(row["path"]) for row in rows], f"ranked {len(rows)} candidate(s)"
+
+
 def coverage_from_report(path: str | Path) -> tuple[float | None, str]:
     """Read a coverage.py JSON total, and say why when it cannot be read.
 
@@ -233,6 +270,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default="", help="repository name, for the report")
     parser.add_argument("--coverage-json", help="coverage.py JSON report to read the total from")
     parser.add_argument(
+        "--repo-path",
+        help=(
+            "checkout to rank targets in. Without it the decision names no target and SAYS so, "
+            "rather than emitting an empty list that reads as 'nothing to do'"
+        ),
+    )
+    parser.add_argument("--targets", type=int, default=3, help="how many targets to name")
+    parser.add_argument(
         "--previous",
         type=float,
         default=None,
@@ -257,6 +302,25 @@ def main(argv: list[str] | None = None) -> int:
 
     coverage, status = coverage_from_report(args.coverage_json)
     decision = decide(args.repo or "<unnamed>", coverage, args.previous)
+
+    if decision.action == ACTION_WRITE:
+        if not args.repo_path:
+            decision.reason += (
+                "; no targets named — --repo-path was not given, so nothing ranked them"
+            )
+        else:
+            payload_for_rank: dict[str, Any] = {}
+            try:
+                payload_for_rank = json.loads(
+                    Path(args.coverage_json).expanduser().read_text(encoding="utf-8")
+                )
+            except Exception:
+                payload_for_rank = {}
+            decision.targets, rank_note = rank_targets(
+                args.repo_path, payload_for_rank, args.targets
+            )
+            decision.reason += f"; {rank_note}"
+
     if coverage is None:
         # Carry the READING failure into the decision, so a reader is told which report and why
         # rather than only that the answer was unknown.
