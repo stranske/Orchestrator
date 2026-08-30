@@ -1318,6 +1318,34 @@ def _promoted_bindings(surface: str, *, path=None, index: dict | None = None) ->
 # findability gate inert exactly where it has to bite.
 # ---------------------------------------------------------------------------
 CONSULT_SITES: dict[str, dict] = {
+    # THE TWO LANE SURFACES, moved here from KNOWN_UNCONSULTED on 2026-08-29. That table's own
+    # procedure says "when a consult is added, MOVE the entry into CONSULT_SITES", and its entries
+    # said "THE DEFECT IS FIXED; THE ENTRIES STAY" — the consult was fixed on 2026-08-23, documented
+    # in place, and never moved. Because that table is explicitly NOT A WAIVER, three capabilities
+    # (cross-repo-coordination, redirect-plan, redirect-policy) went on failing `req_findable` as
+    # `bound_to_unconsulted_surface` while both lanes were in fact consulting.
+    #
+    # THE STATED OBSTACLE WAS NOT ONE. The entries said the caller is "unverifiable in-tree" because
+    # the TOMLs live outside this repository — but `consult_reach()` already handles that: a caller
+    # it cannot read is recorded `unverified` AND still counts as reached (fail-open). On this
+    # machine the file IS readable, so these verify for real; on a bare runner they degrade to
+    # unverified-but-reached, which is the honest reading either way.
+    "closer-lane": {
+        "caller": "~/.codex/automations/imi-merge-verify-closer/automation.toml",
+        "how": (
+            "ACTION B's CAPABILITY CONSULT stanza passes `--surface closer-lane`; re-rendered into "
+            "~/.codex/handoff/prompts/claude-closer.md by render-claude-prompts.sh. Measured "
+            "2026-08-29: bound_count 8, and the stanza names trigger/useful/decline"
+        ),
+    },
+    "opener-lane": {
+        "caller": "~/.codex/automations/pd-workloop-resume/automation.toml",
+        "how": (
+            "the CAPABILITY CONSULT stanza passes `--surface opener-lane`; re-rendered into "
+            "~/.codex/handoff/prompts/claude-opener.md. Measured 2026-08-29: bound_count 5, and "
+            "the stanza names trigger/useful/decline"
+        ),
+    },
     "tick": {
         "caller": "capability_propensity.py",
         "literal": "TICK_SURFACE",
@@ -1405,30 +1433,10 @@ CONSULT_SITES: dict[str, dict] = {
 # the difference between an acknowledged defect and an oversight is legible. When a consult is added,
 # MOVE the entry into `CONSULT_SITES` — the selftest will tell you if you forget.
 KNOWN_UNCONSULTED: dict[str, str] = {
-    # THE DEFECT IS FIXED; THE ENTRIES STAY, AND THE REASON IS DIFFERENT NOW. #68 recorded these
-    # because the lane TOMLs consulted with `--lane` and no `--surface`, so `binding_for("")`
-    # returned {} and eleven bindings never reached the two highest-volume surfaces in the system.
-    # The TOMLs now pass `--surface`, re-rendered and verified: bound_count 0 -> 5 (opener) and
-    # 0 -> 6 (closer).
-    #
-    # They remain here because `consulting_surfaces()` verifies a caller by READING THE FILE THAT
-    # NAMES THE SURFACE, and these callers are `~/.codex/automations/*/automation.toml` — machine-
-    # local, outside this repository, unreadable from any checkout. That is not a defect the tree can
-    # ever clear, so an unqualified in-tree assertion would fail forever. Retiring the entries on the
-    # grounds that the defect was fixed was attempted on 2026-08-23 and correctly rejected by this
-    # module's own findability selftest.
-    "opener-lane": "consults with `--surface opener-lane` as of 2026-08-23 (verified: bound_count 5, "
-    "survives render-claude-prompts.sh). Unverifiable in-tree: the caller is "
-    "~/.codex/automations/pd-workloop-resume/automation.toml, outside this repository. "
-    "FIX: none needed in-tree — the TOML already carries the flag. Re-verify by hand: run "
-    "~/.codex/bin/render-claude-prompts.sh and grep the rendered prompt for "
-    "`--surface opener-lane`; a missing flag means the TOML was overwritten.",
-    "closer-lane": "consults with `--surface closer-lane` as of 2026-08-23 (verified: bound_count 6, "
-    "survives render-claude-prompts.sh). Unverifiable in-tree: the caller is "
-    "~/.codex/automations/imi-merge-verify-closer/automation.toml, outside this repository. "
-    "FIX: none needed in-tree — the TOML already carries the flag. Re-verify by hand: run "
-    "~/.codex/bin/render-claude-prompts.sh and grep the rendered prompt for "
-    "`--surface closer-lane`; a missing flag means the TOML was overwritten.",
+    # EMPTY, AND THAT IS THE DRAINED STATE, not a missing table. Both former entries (opener-lane,
+    # closer-lane) moved to CONSULT_SITES on 2026-08-29 once their consult was verified live —
+    # which is exactly the procedure the block above prescribes. An empty table here means every
+    # bound surface has a declared consult; it does NOT mean the question stopped being asked.
 }
 
 
@@ -4234,6 +4242,20 @@ def _selftest_findability() -> None:
     )
     for surface, why in KNOWN_UNCONSULTED.items():
         assert "FIX:" in why, f"{surface} records the defect without naming the fix"
+        # AN ENTRY MUST NOT DOCUMENT ITS OWN CONSULT. The `stale` check above cannot catch this
+        # case and never could: it fires when a surface STOPS being stranded, and a surface stays
+        # stranded precisely BECAUSE nobody moved it into CONSULT_SITES — the condition it tests is
+        # the one the omission prevents. Measured on 2026-08-29: both lane entries read "consults
+        # with `--surface opener-lane` as of 2026-08-23 (verified: bound_count 5)" while sitting in
+        # the table that means the opposite, and three capabilities went on failing `req_findable`
+        # for months of rounds because of it. A self-contradicting entry is now a loud failure, and
+        # the marker is the one a working consult always leaves behind: the flag itself.
+        assert f"--surface {surface}" not in why, (
+            f"KNOWN_UNCONSULTED[{surface!r}] documents a WORKING consult (it names "
+            f"`--surface {surface}`) while claiming the surface is unconsulted. Move it to "
+            "CONSULT_SITES with its caller — an entry that records its own fix is a cached reason "
+            "that has outlived the evidence"
+        )
     assert "tick" in live["verified"], (
         "the in-tree consult site must verify on every machine, CI included; "
         f"verified={live['verified']}"
