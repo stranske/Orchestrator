@@ -423,6 +423,25 @@ PROVENANCE_UNSTATED = "__unstated__"
 UNATTRIBUTED_JUDGE = "unattributed"
 
 
+TEXT_CAP = 400
+_TRUNCATION_MARK = " …[cut at 400]"
+
+
+def _capped(text) -> str:
+    """Bound a recorded text field, VISIBLY. Found by the round-7 adversarial audit: a 400-char
+    corroboration ended mid-word ("…the original verdict, beca") and nothing told the recorder or
+    a later auditor that the reasoning's tail was gone — the audit had to reconstruct it from the
+    round's artifacts. A silent cut is the absent-vs-zero sentinel bug wearing a text field's
+    clothes: "this is the whole rationale" and "this is where the knife fell" must not read
+    identically. Over-length text keeps its head and gains the mark, inside the same budget, so
+    the record itself says it is incomplete.
+    """
+    text = str(text)
+    if len(text) <= TEXT_CAP:
+        return text
+    return text[: TEXT_CAP - len(_TRUNCATION_MARK)] + _TRUNCATION_MARK
+
+
 def provenance_weight(provenance: str) -> float:
     """How much a verdict of this provenance may weigh. One lookup, so it cannot drift."""
     row = VERDICT_PROVENANCE.get(str(provenance)) or VERDICT_PROVENANCE[PROVENANCE_DEFAULT]
@@ -1493,7 +1512,7 @@ def record_usefulness(
     if str(judge).strip():
         extra[VERDICT_JUDGE_KEY] = str(judge).strip()
     if str(corroboration).strip():
-        extra[VERDICT_CORROBORATION_KEY] = str(corroboration)[:400]
+        extra[VERDICT_CORROBORATION_KEY] = _capped(corroboration)
     return capabilities.heartbeat(
         capability_id,
         "outcome",
@@ -1511,7 +1530,7 @@ def record_usefulness(
         metadata={
             "source": "capability_propensity",
             USEFUL_KEY: bool(useful),
-            "evidence": str(evidence)[:400],
+            "evidence": _capped(evidence),
             **extra,
             **(metadata or {}),
         },
@@ -1828,7 +1847,7 @@ def record_reoffer(
             "source": REOFFER_SOURCE,
             DECLINE_KIND_KEY: str(decline_kind),
             REOFFER_FACTS_KEY: sorted(facts),
-            "facts": {k: str(v)[:400] for k, v in facts.items()},
+            "facts": {k: _capped(v) for k, v in facts.items()},
         },
     )
     return {
@@ -2034,8 +2053,8 @@ def record_late_outcome(
             "source": LATE_OUTCOME_SOURCE,
             LATE_OUTCOME_DIRECTION_KEY: str(direction),
             VERDICT_PROVENANCE_KEY: str(provenance),
-            VERDICT_CORROBORATION_KEY: str(corroboration)[:400],
-            "evidence": str(evidence)[:400],
+            VERDICT_CORROBORATION_KEY: _capped(corroboration),
+            "evidence": _capped(evidence),
             **({VERDICT_JUDGE_KEY: str(judge).strip()} if str(judge).strip() else {}),
         },
     )
@@ -3269,7 +3288,7 @@ def record_decline(
         idempotency_key=f"decline:{capability_id}:{experiment_id}",
         metadata={
             "source": DECLINE_SOURCE,
-            DECLINE_REASON_KEY: str(reason)[:400],
+            DECLINE_REASON_KEY: _capped(reason),
             DECLINE_KIND_KEY: str(kind),
             SURFACE_KEY: surface or None,
             **(metadata or {}),
@@ -3403,8 +3422,8 @@ def record_find(
         idempotency_key=f"find:{finder}:{ref}",
         metadata={
             "source": FIND_SOURCE,
-            FIND_DEFECT_KEY: str(defect)[:400],
-            FIND_ARTIFACT_KEY: str(artifact)[:400],
+            FIND_DEFECT_KEY: _capped(defect),
+            FIND_ARTIFACT_KEY: _capped(artifact),
             FIND_SUBJECT_KEY: str(subject)[:200] or None,
             FIND_FINDER_KEY: finder,
             FIND_FINDER_KIND_KEY: finder_kind,
@@ -3615,8 +3634,8 @@ def record_repair(
         timestamp=timestamp,
         metadata={
             "source": REPAIR_SOURCE,
-            REPAIR_FIX_KEY: str(fix)[:400],
-            REPAIR_ARTIFACT_KEY: str(artifact)[:400],
+            REPAIR_FIX_KEY: _capped(fix),
+            REPAIR_ARTIFACT_KEY: _capped(artifact),
         },
     )
 
@@ -5371,6 +5390,27 @@ def _selftest_reoffer_and_offer_axis() -> None:
     )
 
 
+def _selftest_visible_truncation() -> None:
+    """A CUT RECORD SAYS IT WAS CUT. Found by the round-7 adversarial audit: a corroboration
+    recorded at exactly 400 chars ended mid-word and nothing marked the cut — the auditor had to
+    reconstruct the reasoning's tail from external artifacts. Every recorded text field now goes
+    through one `_capped`, so "the whole rationale" and "where the knife fell" cannot read
+    identically.
+
+    BREAK -> REVERT: restoring a silent `[:TEXT_CAP]` slice in `_capped` fails the marker
+    assertion; shortening the budget arithmetic overflows the cap assertion.
+    """
+    short = "fits comfortably"
+    assert _capped(short) == short, "under-cap text must pass through untouched"
+    long = "x" * 500
+    out = _capped(long)
+    assert len(out) <= TEXT_CAP, f"cap exceeded: {len(out)}"
+    assert out.endswith(_TRUNCATION_MARK), "an over-length record must SAY it was cut"
+    assert out.startswith("x" * 50), "the head survives; only the tail is sacrificed"
+    exact = "y" * TEXT_CAP
+    assert _capped(exact) == exact, "exactly-at-cap is whole, not cut — no false marker"
+
+
 def _selftest_late_outcome() -> None:
     """AN OUTCOME THAT ARRIVES AFTER THE VERDICT CAN STILL CORRECT IT — in both directions.
 
@@ -6348,6 +6388,7 @@ def main(argv: list[str]) -> int:
         _selftest()
         _selftest_provenance()
         _selftest_second_verdict_is_dropped_not_appended()
+        _selftest_visible_truncation()
         _selftest_late_outcome()
         _selftest_reoffer_and_offer_axis()
         _selftest_finds()
