@@ -187,6 +187,43 @@ def uncovered_by_file(coverage_json: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+def rename_map(repo: Path, lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> dict[str, str]:
+    """Map every historical path to the name it goes by now, following chains of renames.
+
+    A reorganised repository otherwise ranks the same module twice. Measured on this repo the day
+    the ranking was first used for real: `capability_advisor.py` and `src/capability_advisor.py`
+    both appeared, each holding part of one module's evidence, and `dispatcher.py` outranked
+    `src/verify.py` while not existing at that path at all. Neither is a file an agent can open.
+
+    Chains are followed to a fixed point because a file moved twice in the window would otherwise
+    resolve to an intermediate name that is just as gone as the first one.
+    """
+    raw = _git(
+        repo,
+        "log",
+        f"--since={lookback_days}.days.ago",
+        "--no-merges",
+        "--name-status",
+        "-M",
+        "--pretty=format:",
+    )
+    direct: dict[str, str] = {}
+    for line in raw.split("\n"):
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) == 3 and parts[0].startswith("R"):
+            direct[parts[1]] = parts[2]
+
+    resolved: dict[str, str] = {}
+    for start in direct:
+        seen = {start}
+        current = start
+        while current in direct and direct[current] not in seen:
+            current = direct[current]
+            seen.add(current)
+        resolved[start] = current
+    return resolved
+
+
 def rank(
     repo: str | Path,
     coverage_json: dict[str, Any] | None = None,
@@ -195,6 +232,24 @@ def rank(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     limit: int = DEFAULT_LIMIT,
 ) -> list[dict[str, Any]]:
+    rows, _ = _rank_rows(
+        repo,
+        coverage_json,
+        hollow_rates=hollow_rates,
+        lookback_days=lookback_days,
+        limit=limit,
+    )
+    return rows
+
+
+def _rank_rows(
+    repo: str | Path,
+    coverage_json: dict[str, Any] | None = None,
+    *,
+    hollow_rates: dict[str, float] | None = None,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    limit: int = DEFAULT_LIMIT,
+) -> tuple[list[dict[str, Any]], int]:
     """Rank candidate files for test-writing, most informative signal first.
 
     `hollow_rates` maps path -> observed share of hollow nodes from past testgen attempts. Absent,
@@ -226,14 +281,46 @@ def rank(
         if path in scores:
             scores[path].hollow_rate = max(0.0, min(1.0, float(rate)))
 
+    # Fold each historical path onto the name it goes by now, so a module that moved is ONE
+    # candidate holding all of its evidence rather than two holding half each.
+    renames = rename_map(repo_path, lookback_days)
+    if renames:
+        merged: dict[str, FileScore] = {}
+        for score in scores.values():
+            target = renames.get(score.path, score.path)
+            if target not in merged:
+                merged[target] = FileScore(path=target)
+            row = merged[target]
+            row.escaped += score.escaped
+            row.churn += score.churn
+            row.uncovered = max(row.uncovered, score.uncovered)
+            row.hollow_rate = max(row.hollow_rate, score.hollow_rate)
+            for item in score.evidence:
+                if len(row.evidence) < 5 and item not in row.evidence:
+                    row.evidence.append(item)
+        scores = merged
+
     # Only Python source is a testgen target. Ranking a lockfile by churn would be true and useless.
+    # A path that no longer exists is dropped for the same reason, one step further on: an agent
+    # cannot open it, so ranking it spends the queue's first slot on nothing.
     ordered = [
         s
         for s in scores.values()
-        if s.path.endswith(".py") and not Path(s.path).name.startswith("test_")
+        if s.path.endswith(".py")
+        and not Path(s.path).name.startswith("test_")
+        and (repo_path / s.path).exists()
     ]
+    # Counted, not just filtered. A window that predates a repository-wide move scores every
+    # candidate at a path nobody can open, and "nothing needed tests" is the wrong reading of it.
+    vanished = sum(
+        1
+        for s in scores.values()
+        if s.path.endswith(".py")
+        and not Path(s.path).name.startswith("test_")
+        and not (repo_path / s.path).exists()
+    )
     ordered.sort(key=lambda s: (-s.sort_key()[0], -s.sort_key()[1], -s.sort_key()[2], s.path))
-    return [s.as_dict() for s in ordered[:limit]]
+    return [s.as_dict() for s in ordered[:limit]], vanished
 
 
 def rank_status(
@@ -278,7 +365,7 @@ def rank_status(
             ),
         }
 
-    rows = rank(
+    rows, vanished = _rank_rows(
         repo_path,
         coverage_json,
         hollow_rates=hollow_rates,
@@ -294,6 +381,15 @@ def rank_status(
         if coverage_json
         else ", and no coverage report was supplied"
     )
+    if vanished:
+        return [], {
+            "status": "no_signal",
+            "reason": (
+                f"read {read}; {vanished} Python file(s) scored but NONE still exists at the path "
+                "history names them by — the window predates a move, so widen it or rank a "
+                "checkout matching the history"
+            ),
+        }
     return [], {
         "status": "no_signal",
         "reason": f"read {read}; no Python source scored on any tier",
