@@ -74,8 +74,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
     conn.executescript(SCHEMA)
     columns = {
-        str(row[1])
-        for row in conn.execute("PRAGMA table_info(research_usage_opportunities)")
+        str(row[1]) for row in conn.execute("PRAGMA table_info(research_usage_opportunities)")
     }
     for name, declaration in SCHEMA_MIGRATIONS.items():
         if name not in columns:
@@ -124,8 +123,7 @@ def estimate_prompt_bytes_and_tokens(
 
     spec_bytes = len(str(spec_text or "").encode("utf-8"))
     diff_bytes = sum(
-        len(str(diff or "")[:100_000].encode("utf-8"))
-        for diff in (candidate_diffs or {}).values()
+        len(str(diff or "")[:100_000].encode("utf-8")) for diff in (candidate_diffs or {}).values()
     )
     per_evaluator_bytes = spec_bytes + diff_bytes + 2_000
     total_bytes = per_evaluator_bytes * max(1, evaluator_count)
@@ -237,9 +235,7 @@ def observe_recent_research_usage(
         DEFAULT_MAX_UNATTENDED_PANEL_WIDTH,
     )
     missing_panels = [panel for panel in panels.values() if panel["missing_spec"]]
-    wide_panels = [
-        panel for panel in panels.values() if len(panel["agents"]) > max_panel_width
-    ]
+    wide_panels = [panel for panel in panels.values() if len(panel["agents"]) > max_panel_width]
     alerts: list[dict[str, Any]] = []
 
     if missing_panels:
@@ -268,9 +264,7 @@ def observe_recent_research_usage(
             }
         )
     for subject, subject_rows in sorted(subject_panels.items()):
-        active_rows = [
-            panel for panel in subject_rows if panel["last_ts"] >= active_since
-        ]
+        active_rows = [panel for panel in subject_rows if panel["last_ts"] >= active_since]
         if len(subject_rows) > max_subject_panels:
             alerts.append(
                 {
@@ -288,21 +282,14 @@ def observe_recent_research_usage(
         "panel_count": len(panels),
         "evaluator_calls": len(rows),
         "missing_spec_panel_count": len(missing_panels),
-        "missing_spec_evaluator_calls": sum(
-            int(panel["calls"]) for panel in missing_panels
-        ),
+        "missing_spec_evaluator_calls": sum(int(panel["calls"]) for panel in missing_panels),
         "wide_panel_count": len(wide_panels),
         "top_subjects": sorted(
-            (
-                (subject, len(subject_rows))
-                for subject, subject_rows in subject_panels.items()
-            ),
+            ((subject, len(subject_rows)) for subject, subject_rows in subject_panels.items()),
             key=lambda item: (-item[1], item[0]),
         )[:10],
         "alerts": alerts,
-        "active_alert_count": sum(
-            int(alert.get("active_panel_count", 0) > 0) for alert in alerts
-        ),
+        "active_alert_count": sum(int(alert.get("active_panel_count", 0) > 0) for alert in alerts),
     }
 
 
@@ -310,9 +297,7 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def is_guard_bypassed(
-    is_manual: bool = False, env: Mapping[str, str] | None = None
-) -> bool:
+def is_guard_bypassed(is_manual: bool = False, env: Mapping[str, str] | None = None) -> bool:
     """Return whether a supervised caller explicitly bypassed optional-research budgets."""
 
     environ = os.environ if env is None else env
@@ -363,9 +348,7 @@ def assess_and_record_opportunity(
     current_ts = int(time.time() if now is None else now)
     environ = os.environ if env is None else env
     normalized_subject = str(subject or subject_of_experiment(exp_id))
-    agents = [
-        str(agent).strip() for agent in (evaluator_agents or []) if str(agent).strip()
-    ]
+    agents = [str(agent).strip() for agent in (evaluator_agents or []) if str(agent).strip()]
     if agents:
         evaluator_count = len(agents)
     evaluator_count = max(1, int(evaluator_count))
@@ -894,15 +877,11 @@ def write_usage_report(
 
     report = generate_usage_report(conn=conn)
     if output_path is None:
-        state_dir = Path(
-            os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator")
-        )
+        state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
         output_path = state_dir / "research-usage-report.json"
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
 
@@ -911,12 +890,8 @@ def _selftest() -> None:
     ensure_schema(db)
     now = 1_700_000_000
     enabled = {"ORCH_RESEARCH_ARM": "1"}
-    sig1 = compute_followup_signature(
-        "owner/repo", "spec content", "abc123", {"a": "diff-a"}
-    )
-    sig2 = compute_followup_signature(
-        "owner/repo", "spec content", "abc123", {"a": "diff-a"}
-    )
+    sig1 = compute_followup_signature("owner/repo", "spec content", "abc123", {"a": "diff-a"})
+    sig2 = compute_followup_signature("owner/repo", "spec content", "abc123", {"a": "diff-a"})
     assert sig1 == sig2
     assert sig1 != compute_followup_signature(
         "owner/repo", "spec content v2", "abc123", {"a": "diff-a"}
@@ -937,9 +912,7 @@ def _selftest() -> None:
         now=now,
     )
     assert admitted["eligible"] and admitted["decision"] == "admitted"
-    update_opportunity_outcome(
-        admitted["opportunity_id"], "completed", conn=db, now=now + 1
-    )
+    update_opportunity_outcome(admitted["opportunity_id"], "completed", conn=db, now=now + 1)
     duplicate = assess_and_record_opportunity(
         exp_id="exp-2",
         repo="owner/repo",
@@ -1020,9 +993,7 @@ def _selftest() -> None:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument(
-        "cmd", nargs="?", default="report", choices=["report", "selftest"]
-    )
+    parser.add_argument("cmd", nargs="?", default="report", choices=["report", "selftest"])
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--write-report", help="write report JSON to this path")
@@ -1044,9 +1015,7 @@ def main(argv: list[str]) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"Usage Guard Report — Health: {report['health_status']}")
-        print(
-            f"Total Opportunities ({report['window_days']}d): {report['total_opportunities']}"
-        )
+        print(f"Total Opportunities ({report['window_days']}d): {report['total_opportunities']}")
         print(f"Decisions: {report['decision_counts']}")
         print(f"Admitted Prompt Bytes: {report['total_admitted_prompt_bytes']}")
         print(f"Admitted Evaluator Calls: {report['total_admitted_evaluator_calls']}")
