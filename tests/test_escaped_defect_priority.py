@@ -253,3 +253,95 @@ def test_a_window_that_predates_a_move_says_so_rather_than_reporting_no_work(tmp
     assert rows == []
     assert status["status"] == "no_signal"
     assert "NONE still exists" in status["reason"], status["reason"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Measurability. A candidate the supplied report cannot measure is not a candidate: no test
+# written for it can be shown to have worked, because nothing observes the file being edited.
+# ---------------------------------------------------------------------------------------------
+
+
+def test_a_file_the_report_does_not_measure_is_excluded_and_named(tmp_path):
+    """The real case: stranske/Workflows' templates/consumer-repo/ mirrors the repo root.
+
+    Those copies carry genuine fix commits and churn — sync commits touch them — and sit outside
+    every coverage scope, so they scored 0 uncovered and took HALF the top ten. An agent sent
+    there cannot raise coverage whatever it writes.
+    """
+    repo = _repo(
+        tmp_path,
+        [("fix: touch both copies", {"real.py": "x = 1\n", "templates/copy.py": "x = 1\n"})],
+    )
+    cov = {"files": {"real.py": {"summary": {"missing_lines": 3}}}}
+    rows, status = edp.rank_status(repo, cov)
+    paths = [r["path"] for r in rows]
+    assert paths == ["real.py"], paths
+    assert "templates/copy.py" in status["reason"]
+    assert "EXCLUDED as unmeasurable" in status["reason"]
+
+
+def test_a_fully_covered_file_is_still_a_candidate(tmp_path):
+    """The distinction the whole change rests on.
+
+    A file present in the report with nothing missing is MEASURED and fully covered; a file absent
+    is not measured at all. Both used to render as `uncovered = 0`. Only the second is disqualified
+    — treating the first as unmeasurable would drop a high-churn file that a new test could still
+    protect, and the escaped-defect tier is exactly about files whose EXISTING tests missed
+    something.
+    """
+    repo = _repo(tmp_path, [("fix: a bug slipped through", {"covered.py": "x = 1\n"})])
+    cov = {"files": {"covered.py": {"summary": {"missing_lines": 0}}}}
+    rows, status = edp.rank_status(repo, cov)
+    assert [r["path"] for r in rows] == ["covered.py"]
+    assert "EXCLUDED" not in status["reason"]
+
+
+def test_with_no_report_supplied_nothing_is_excluded_for_being_unmeasured(tmp_path):
+    """Tier 3 dark for everyone carries no information, so excluding on it would rank nothing."""
+    repo = _repo(tmp_path, [("fix: bug", {"a.py": "x = 1\n", "b.py": "y = 1\n"})])
+    rows, status = edp.rank_status(repo, {})
+    assert {r["path"] for r in rows} == {"a.py", "b.py"}
+    assert "EXCLUDED" not in status["reason"]
+
+
+def test_a_report_of_only_tmp_paths_measures_nothing_and_says_so(tmp_path):
+    """A contaminated report is not a measurement, and must not read as "no work to do".
+
+    NOTE ON WHAT THIS DOES AND DOES NOT PIN. It was written as
+    `test_absolute_paths_..._do_not_make_real_files_measurable`, and a break demo showed it passes
+    whether or not `measured_files` filters absolute paths — candidates come from git as RELATIVE
+    paths, so an absolute entry can never match one either way. The filter there is consistency
+    with `uncovered_by_file`, not a guard, and a test implying otherwise is the kind that looks
+    like protection and is not.
+
+    What IS worth pinning is the outcome: a report naming only tmp-workspace copies measures no
+    real file, so every candidate is excluded AND NAMED, which distinguishes a contaminated report
+    from a repository with nothing left to test.
+    """
+    repo = _repo(tmp_path, [("fix: bug", {"real.py": "x = 1\n"})])
+    cov = {"files": {"/tmp/ws/real.py": {"summary": {"missing_lines": 5}}}}
+    rows, status = edp.rank_status(repo, cov)
+    assert rows == []
+    assert "real.py" in status["reason"]
+    assert "EXCLUDED as unmeasurable" in status["reason"], (
+        "an empty ranking from a contaminated report must say why; 'no Python source scored' is "
+        "the good-news reading of 'nothing here could be measured'"
+    )
+
+
+def test_both_test_file_conventions_are_excluded(tmp_path):
+    """`test_*.py` and `*_test.py` are both test files, and neither is a testgen target."""
+    repo = _repo(
+        tmp_path,
+        [
+            (
+                "fix: bug",
+                {
+                    "mod.py": "x = 1\n",
+                    "test_mod.py": "def test_a():\n    assert True\n",
+                    "mod_test.py": "def test_b():\n    assert True\n",
+                },
+            )
+        ],
+    )
+    assert [r["path"] for r in edp.rank(repo, {})] == ["mod.py"]

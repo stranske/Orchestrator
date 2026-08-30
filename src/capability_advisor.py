@@ -1110,6 +1110,9 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "cadence step in this block",
         "feature-reflection-cli": "`{kind: tick_phase, name: reflection}`; the daily `feature-scan` "
         "step is the reflection pass over reusable structures",
+        "coverage-testgen-trigger": "the learning cadence is where a measured figure becomes work: "
+        "this step reads each repo's coverage and decides whether it buys a testgen invocation, "
+        "so it belongs beside the ingest steps that turn other measurements into evidence",
     },
     # DELIBERATELY UNBOUND, DECLARED RATHER THAN ABSENT. `local-model-profile-trial` is the one
     # ledger row no surface may offer, and silence would be indistinguishable from an oversight --

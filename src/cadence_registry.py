@@ -318,6 +318,21 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "gate": "GitHub core capacity and active tick",
         "next_transition": "retry consumer sync artifact ingestion after backoff",
     },
+    {
+        # WEEKLY, and that is a deliberate ceiling rather than a shrug. The step decides whether a
+        # repository's measured coverage buys test-writing; a coverage figure moves when a PR
+        # merges, so a daily cadence would re-decide the same number six times out of seven. The
+        # HUMAN half is rarer still by construction — it reports a crossing below the warning
+        # line, not the fact of being below it, because four of twelve repos are below it today
+        # and saying so every cycle is 208 notices a year for four facts already known.
+        "key": "coverage-testgen-trigger",
+        "success_stamp": ".last-coverage-testgen-trigger",
+        "cadence_days": 7,
+        "artifact": "coverage-testgen-trigger-report.json",
+        "log": "coverage-testgen-trigger.log",
+        "gate": "ORCH_COVERAGE_TESTGEN and a readable coverage report",
+        "next_transition": "re-read coverage next week; an unreadable report decides nothing",
+    },
 )
 
 STEP_BY_KEY = {row["key"]: row for row in CADENCE_STEPS}
