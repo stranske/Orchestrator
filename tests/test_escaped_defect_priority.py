@@ -189,3 +189,67 @@ def test_json_output_carries_both_source_declarations(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert "tier1_source" in payload and "tier3_coverage" in payload
     assert payload["tier1_source"]["source"] in {"git", "brain"}
+
+
+# ---------------------------------------------------------------------------------------------
+# A reorganised repository. These were written after the ranking was used for real on this repo
+# and returned two rows for one module plus a third for a path that no longer exists.
+# ---------------------------------------------------------------------------------------------
+
+
+def _moved_repo(tmp_path: Path) -> Path:
+    """History that names a module by two paths, exactly as the `src/` move left this repo."""
+    repo = _repo(tmp_path, [("fix: first bug", {"m.py": "x = 1\n"})])
+    subprocess.run(["git", "mv", "m.py", "src_m.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "refactor: move it"], cwd=repo, check=True)
+    (repo / "src_m.py").write_text("x = 2\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-aqm", "fix: second bug"], cwd=repo, check=True)
+    return repo
+
+
+def test_a_module_that_moved_is_one_candidate_holding_all_its_evidence(tmp_path):
+    """Two rows at half strength each is the wrong answer twice over.
+
+    It splits one module's evidence, and it spends a queue slot on a path an agent cannot open.
+    Measured on this repository the first time the ranking was used for real: `capability_advisor`
+    appeared under both its old and new names, and `dispatcher.py` outranked `src/verify.py` while
+    not existing at that path at all.
+    """
+    ranked = edp.rank(_moved_repo(tmp_path), {})
+    paths = [r["path"] for r in ranked]
+    assert paths == ["src_m.py"], paths
+    # Both fixes land on the one row: the pre-move fix is not lost with the old name.
+    assert ranked[0]["tier1_escaped_defects"] == 2.0
+
+
+def test_rename_chains_are_followed_to_the_end(tmp_path):
+    """A file moved twice must not resolve to the intermediate name, which is equally gone."""
+    repo = _repo(tmp_path, [("fix: bug", {"a.py": "x = 1\n"})])
+    subprocess.run(["git", "mv", "a.py", "b.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "refactor: a to b"], cwd=repo, check=True)
+    subprocess.run(["git", "mv", "b.py", "c.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "refactor: b to c"], cwd=repo, check=True)
+    assert edp.rename_map(repo)["a.py"] == "c.py"
+    assert [r["path"] for r in edp.rank(repo, {})] == ["c.py"]
+
+
+def test_a_deleted_file_is_not_offered_as_a_testgen_target(tmp_path):
+    repo = _repo(tmp_path, [("fix: bug", {"gone.py": "x = 1\n", "stays.py": "y = 1\n"})])
+    subprocess.run(["git", "rm", "-q", "gone.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "chore: drop it"], cwd=repo, check=True)
+    assert [r["path"] for r in edp.rank(repo, {})] == ["stays.py"]
+
+
+def test_a_window_that_predates_a_move_says_so_rather_than_reporting_no_work(tmp_path):
+    """The empty result and its cause, kept apart.
+
+    If every scored path has since vanished, the honest finding is that the history and the
+    checkout disagree — not that no file needs tests.
+    """
+    repo = _repo(tmp_path, [("fix: bug", {"gone.py": "x = 1\n"})])
+    subprocess.run(["git", "rm", "-q", "gone.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "chore: drop it"], cwd=repo, check=True)
+    rows, status = edp.rank_status(repo)
+    assert rows == []
+    assert status["status"] == "no_signal"
+    assert "NONE still exists" in status["reason"], status["reason"]
