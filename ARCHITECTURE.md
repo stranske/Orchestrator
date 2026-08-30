@@ -493,6 +493,24 @@ Four disciplines make that honest rather than decorative:
    is the drain, and `surface_decline_counts` reports `held_for_reoffer` so the hold is a number on
    a page rather than a silence. Measured on arrival: 19 declines held at `repo-audit:fix` alone.
 
+8. **Witness overlap turns adjudication on (2026-08-29).** A five-repo partitioned review carried a
+   fabricated finding and `synthesize`'s adjudication returned `not_needed` — the partitioner gave
+   every assertion exactly one witness, so the cross-partition machinery (which joins findings on
+   `assertion_key`) had nothing to compare. `prepare --overlap N --witness-agents a,b` now emits N
+   witness copies per partition: `item_id` suffixed (global uniqueness), `assertion_key` kept (the
+   join), each witness carrying its own **distinct** agent — same-agent witnesses are refused
+   because two runs of one model are one correlated arm wearing two ids. Agreeing witnesses
+   corroborate; disagreeing ones conflict, which is the only mechanism that could have caught the
+   fabrication.
+
+9. **`status_shadow` is a decline kind of its own (2026-08-29).** `gated_off` was absorbing
+   "status: shadow", a lifecycle *permission* — and no environment flag gates any `role-*`
+   capability, so the task proposer prescribed gate-satisfying work for capabilities with no gate.
+   Shadow gates *acting* on output, not producing it, so the kind's task shape is actionable: run
+   it advisorily and score the advice. Not demotable, offer-improvable, and re-offerable — the
+   echoable fact is the boundary line saying shadow permits advisory invocation, whose absence is
+   what produced the measured declines.
+
    The read path is unchanged and still classifies an unlabelled pre-provenance row as
    `self_reported`, because that is what such a row honestly is: `PROVENANCE_DEFAULT` answers "how do
    I read silence", `PROVENANCE_UNSTATED` answers "may I write it", and sharing one constant is what

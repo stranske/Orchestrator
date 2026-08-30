@@ -323,6 +323,8 @@ def partition_corpus(
     *,
     max_items: int = DEFAULT_MAX_ITEMS,
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS,
+    overlap: int = 1,
+    witness_agents: list[str] | None = None,
 ) -> dict[str, Any]:
     errors = validate_corpus(corpus)
     if errors:
@@ -331,6 +333,32 @@ def partition_corpus(
         raise ValueError("max_items must be >= 1")
     if max_prompt_chars < 2_000:
         raise ValueError("max_prompt_chars must be >= 2000")
+    # OVERLAP: each assertion reviewed by N witnesses. Added 2026-08-29 because adjudication
+    # returned status=not_needed on a five-repo review that contained a FABRICATED finding — the
+    # partitioner gave every assertion exactly one witness, so `_adjudication_queue` (which groups
+    # findings by assertion_key across partitions) had nothing to compare, and a single-source
+    # fabrication is structurally invisible to it. Overlap is what turns that machinery on.
+    if not isinstance(overlap, int) or overlap < 1:
+        raise ValueError(f"overlap must be an integer >= 1, got {overlap!r}")
+    if witness_agents is not None:
+        if overlap < 2:
+            raise ValueError(
+                "witness_agents without overlap >= 2 would name agents for no witnesses"
+            )
+        if len(witness_agents) != overlap:
+            raise ValueError(
+                f"witness_agents must name exactly one agent per witness: got "
+                f"{len(witness_agents)} for overlap={overlap}"
+            )
+        cleaned = [str(a).strip() for a in witness_agents]
+        if any(not a for a in cleaned):
+            raise ValueError("witness_agents entries must be non-empty")
+        if len(set(cleaned)) < len(cleaned):
+            # Same agent twice is allowed by the MACHINERY but defeats the point — two runs of one
+            # model are one correlated arm, which is the exact lesson the propensity weighting
+            # already encodes. Refuse rather than silently produce weak corroboration.
+            raise ValueError("witness_agents must be distinct: same-agent witnesses are one arm")
+        witness_agents = cleaned
 
     groups: dict[str, list[dict[str, Any]]] = {}
     for raw in corpus["items"]:
@@ -380,13 +408,44 @@ def partition_corpus(
             ordinal += 1
             partitions.append(candidate(group_key, current, ordinal))
 
+    if overlap > 1:
+        # WITNESS COPIES. item_id is suffixed so every finding still names a unique item;
+        # assertion_key is DELIBERATELY kept, because it is the join key `_adjudication_queue`
+        # groups on — suffixing it would disconnect the witnesses and silently restore the
+        # single-witness blindness this parameter exists to remove.
+        base = list(partitions)
+        partitions = []
+        for partition in base:
+            for witness in range(1, overlap + 1):
+                if witness == 1:
+                    first = dict(partition)
+                    if witness_agents:
+                        first.pop("partition_digest", None)
+                        first["agent"] = witness_agents[0]
+                        first = _partition_with_digest(first)
+                    partitions.append(first)
+                    continue
+                copy = {
+                    "partition_id": f"{partition['partition_id']}-w{witness}",
+                    "group_key": partition["group_key"],
+                    "items": [
+                        {**item, "item_id": f"{item['item_id']}~w{witness}"}
+                        for item in partition["items"]
+                    ],
+                }
+                if witness_agents:
+                    copy["agent"] = witness_agents[witness - 1]
+                partitions.append(_partition_with_digest(copy))
+    limits: dict[str, Any] = {"max_items": max_items, "max_prompt_chars": max_prompt_chars}
+    if overlap > 1:
+        limits["overlap"] = overlap
     plan = _plan_with_digest(
         {
             "schema_version": SCHEMA_VERSION,
             "review_id": corpus["review_id"].strip(),
             "objective": corpus["objective"].strip(),
             "shared_context": corpus.get("shared_context", []),
-            "limits": {"max_items": max_items, "max_prompt_chars": max_prompt_chars},
+            "limits": limits,
             "partitions": partitions,
         }
     )
@@ -427,9 +486,16 @@ def validate_plan(plan: Any) -> list[str]:
             errors.append(f"plan.{key} must be a non-empty string")
     errors.extend(_string_list(plan.get("shared_context"), "plan.shared_context"))
     limits = plan.get("limits")
-    if not isinstance(limits, dict) or set(limits) != {"max_items", "max_prompt_chars"}:
-        errors.append("plan.limits must contain exactly max_items and max_prompt_chars")
+    if not isinstance(limits, dict) or not (
+        set(limits) == {"max_items", "max_prompt_chars"}
+        or set(limits) == {"max_items", "max_prompt_chars", "overlap"}
+    ):
+        errors.append(
+            "plan.limits must contain exactly max_items and max_prompt_chars (plus optional overlap)"
+        )
         limits = {}
+    if "overlap" in limits and (not isinstance(limits["overlap"], int) or limits["overlap"] < 2):
+        errors.append("plan.limits.overlap must be an integer >= 2 when present")
     max_items = limits.get("max_items")
     max_chars = limits.get("max_prompt_chars")
     if not isinstance(max_items, int) or max_items < 1:
@@ -444,16 +510,17 @@ def validate_plan(plan: Any) -> list[str]:
     item_ids: set[str] = set()
     for p_index, partition in enumerate(partitions):
         path = f"plan.partitions[{p_index}]"
-        if not isinstance(partition, dict) or set(partition) != {
-            "partition_id",
-            "group_key",
-            "items",
-            "partition_digest",
-        }:
+        required_keys = {"partition_id", "group_key", "items", "partition_digest"}
+        if not isinstance(partition, dict) or not (
+            set(partition) == required_keys or set(partition) == required_keys | {"agent"}
+        ):
             errors.append(
-                f"{path} must contain exactly partition_id, group_key, items, partition_digest"
+                f"{path} must contain exactly partition_id, group_key, items, partition_digest "
+                "(plus optional agent)"
             )
             continue
+        if "agent" in partition and not _is_text(partition.get("agent")):
+            errors.append(f"{path}.agent must be a non-empty string when present")
         for key in ("partition_id", "group_key", "partition_digest"):
             if not _is_text(partition.get(key)):
                 errors.append(f"{path}.{key} must be a non-empty string")
@@ -765,8 +832,24 @@ def run_plan(
         offload_fn = dispatcher.offload
     results_root = Path(results_dir)
     # Register BEFORE the first offload: the round id has to exist to be stamped onto the attempts.
+    # EVERY WITNESS ARM IS REGISTERED, not just the --agent default: an overlap plan carries
+    # per-partition agents, and a round that registered one arm while two produced findings would
+    # mis-attribute half the evidence.
+    witness_arms = {
+        str(p.get("agent")).strip() for p in plan["partitions"] if str(p.get("agent") or "").strip()
+    }
+    # The caller's declared order is PRESERVED — register_review_round partitions declared arms
+    # into proven/unproven in that order, and a test rightly pins it. Witness arms are only
+    # APPENDED when the plan names an agent the caller did not declare.
+    declared_arms = list(round_agents or [agent])
+    for arm in sorted(witness_arms):
+        if arm not in declared_arms:
+            declared_arms.append(arm)
     round_info = register_review_round(
-        plan, round_agents or [agent], date=round_date, executing_agent=agent
+        plan,
+        declared_arms,
+        date=round_date,
+        executing_agent=agent,
     )
     research_round = round_info.get("round_id")
     statuses: list[dict[str, Any]] = []
@@ -787,9 +870,12 @@ def run_plan(
                 )
                 continue
         prompt = build_partition_prompt(plan, partition)
+        # THE PARTITION'S OWN AGENT WINS. This is the whole point of witness partitions: two
+        # witnesses run by the same backend are one correlated arm wearing two ids.
+        partition_agent = str(partition.get("agent") or "").strip() or agent
         try:
             offload = offload_fn(
-                agent,
+                partition_agent,
                 prompt,
                 cwd=str(cwd),
                 timeout=timeout,
@@ -797,7 +883,12 @@ def run_plan(
                 research_round=research_round,
             )
         except Exception as exc:  # one bad lane must not erase the remaining partition evidence
-            offload = {"agent": agent, "exit": 70, "output": "", "error": f"offload raised: {exc}"}
+            offload = {
+                "agent": partition_agent,
+                "exit": 70,
+                "output": "",
+                "error": f"offload raised: {exc}",
+            }
         validation_errors: list[str] = []
         parsed: dict[str, Any] | None = None
         status = "failed"
@@ -817,7 +908,7 @@ def run_plan(
                 validation_errors = [f"could not parse strict JSON result: {exc}"]
                 failure_reason = "partition result was not valid JSON"
         provenance = {
-            "agent": offload.get("agent", agent),
+            "agent": offload.get("agent", partition_agent),
             "model": offload.get("model"),
             "run_id": offload.get("run_id"),
             "log": offload.get("log"),
@@ -1201,8 +1292,97 @@ def _selftest() -> None:
         assert (
             incomplete["verdict"] == "INCOMPLETE" and incomplete["coverage_status"] == "incomplete"
         )
+    # ---- OVERLAP: witnesses turn adjudication from not_needed into a real cross-check ----------
+    # Measured absence, 2026-08-29: a five-repo review carried a FABRICATED finding and
+    # adjudication returned status=not_needed with zero corroborated keys, because every assertion
+    # had exactly one witness. These assertions pin the machinery that removes that blindness.
+    duo = partition_corpus(
+        corpus, max_items=2, max_prompt_chars=12_000, overlap=2, witness_agents=["alpha", "beta"]
+    )
+    assert len(duo["partitions"]) == 6, [p["partition_id"] for p in duo["partitions"]]
+    assert duo["limits"]["overlap"] == 2, duo["limits"]
+    base0, wit0 = duo["partitions"][0], duo["partitions"][1]
+    assert wit0["partition_id"] == base0["partition_id"] + "-w2", wit0["partition_id"]
+    assert base0["agent"] == "alpha" and wit0["agent"] == "beta", (base0, wit0)
+    # THE JOIN KEY SURVIVES; THE ITEM IDS DO NOT. assertion_key is what adjudication groups on,
+    # item_id is what global uniqueness is enforced on — the copy must split them exactly this way.
+    assert [i["assertion_key"] for i in wit0["items"]] == [
+        i["assertion_key"] for i in base0["items"]
+    ], "witness items must keep the base assertion_key or adjudication has nothing to join"
+    assert all(i["item_id"].endswith("~w2") for i in wit0["items"]), wit0["items"]
+    assert not validate_plan(duo), validate_plan(duo)
+
+    # Same-agent witnesses are one correlated arm wearing two ids: refused, not weakly allowed.
+    try:
+        partition_corpus(corpus, max_items=2, overlap=2, witness_agents=["alpha", "alpha"])
+        raise AssertionError("duplicate witness agents must be refused")
+    except ValueError:
+        pass
+
+    # Run the duo plan through a stub offload that RECORDS which agent got each partition and
+    # answers with a valid strict-JSON result. Base and witness agree on every assertion except
+    # ONE, where the witness files the same finding under a different category — a signature
+    # difference, which is exactly what _adjudication_queue calls a conflict.
+    dispatched: dict[str, str] = {}
+    rigged = duo["partitions"][1]["items"][0]["assertion_key"]
+
+    def _stub_offload(agent_name, prompt, *, cwd, timeout, isolate, research_round):
+        index = len(dispatched)
+        partition = duo["partitions"][index]
+        dispatched[partition["partition_id"]] = agent_name
+        categories = _empty_categories()
+        for item in partition["items"]:
+            category = "removed_product_surfaces"
+            if partition["partition_id"].endswith("-w2") and item["assertion_key"] == rigged:
+                category = "intentional_adapters"
+            categories[category].append(_sample_finding(item, category=category))
+        result = {
+            "schema_version": SCHEMA_VERSION,
+            "review_id": duo["review_id"],
+            "partition_id": partition["partition_id"],
+            "partition_digest": partition["partition_digest"],
+            "categories": categories,
+            "summary": "Stub witness result.",
+        }
+        return {
+            "agent": agent_name,
+            "exit": 0,
+            "output": json.dumps(result),
+            "run_id": f"stub:{index}",
+            "log": f"stub-log-{index}",
+            "model": "stub",
+            "attempts": 1,
+        }
+
+    saved_register = globals()["register_review_round"]
+    globals()["register_review_round"] = lambda *a, **k: {"round_id": None}
+    try:
+        with tempfile.TemporaryDirectory(prefix="partitioned-overlap-") as tmp:
+            summary = run_plan(
+                duo, agent="alpha", cwd=".", results_dir=tmp, offload_fn=_stub_offload
+            )
+            assert summary["coverage_status"] == "complete", summary
+            # EVERY witness partition reached its OWN agent — the point of the whole parameter.
+            for partition in duo["partitions"]:
+                expected = partition["agent"]
+                assert dispatched[partition["partition_id"]] == expected, (
+                    f"partition {partition['partition_id']} was dispatched to "
+                    f"{dispatched[partition['partition_id']]!r}, not its declared {expected!r}"
+                )
+            synthesis = synthesize_results(duo, results_dir=tmp)
+            adj = synthesis["adjudication"]
+            assert (
+                adj["status"] != "not_needed"
+            ), "two witnesses per assertion must give adjudication something to compare"
+            assert rigged in [c["assertion_key"] for c in adj["conflicts"]], adj["conflicts"]
+            corroborated = set(adj["corroborated_assertion_keys"])
+            assert corroborated, "agreeing witnesses must corroborate"
+            assert rigged not in corroborated, "a conflicted assertion is not corroborated"
+    finally:
+        globals()["register_review_round"] = saved_register
+
     print(
-        "partitioned_review.py selftest: OK (bounded groups, strict categories, name-scan break/revert, fail-closed missing partitions)"
+        "partitioned_review.py selftest: OK (bounded groups, strict categories, name-scan break/revert, fail-closed missing partitions, witness overlap joins on assertion_key, per-partition agents dispatch, and disagreeing witnesses conflict instead of corroborating)"
     )
 
 
@@ -1240,6 +1420,17 @@ def main(
     prepare.add_argument("--plan", required=True)
     prepare.add_argument("--max-items", type=int, default=DEFAULT_MAX_ITEMS)
     prepare.add_argument("--max-prompt-chars", type=int, default=DEFAULT_MAX_PROMPT_CHARS)
+    prepare.add_argument(
+        "--overlap",
+        type=int,
+        default=1,
+        help="witnesses per assertion; >= 2 turns cross-partition adjudication on",
+    )
+    prepare.add_argument(
+        "--witness-agents",
+        default="",
+        help="comma-separated agent per witness (distinct; length must equal --overlap)",
+    )
     run = sub.add_parser("run", help="run every partition through dispatcher.offload")
     run.add_argument("--plan", required=True)
     run.add_argument("--results-dir", required=True)
@@ -1285,6 +1476,8 @@ def main(
             _read_json(args.corpus),
             max_items=args.max_items,
             max_prompt_chars=args.max_prompt_chars,
+            overlap=args.overlap,
+            witness_agents=[a.strip() for a in args.witness_agents.split(",") if a.strip()] or None,
         )
         _atomic_json(args.plan, plan)
         print(
