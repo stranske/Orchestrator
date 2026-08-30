@@ -1491,6 +1491,14 @@ def offload(
             task_type,
             agent,
             mode="offload",
+            # THE RAIL TAGS RIDE EVERY RAIL. `_exercised_capability_ids` was wired into
+            # plan_dispatch only, while gemini's actual traffic flows through THIS path — measured
+            # 2026-08-29: 340 gemini runs in 8 days, 0 via the delegation rail, and ZERO carried
+            # the confinement tag anywhere in the store, falsifying the ledger's own
+            # "tags every gemini dispatch" claim exactly as its note predicted. The empty
+            # assignment is correct here: offload has no assignment dict, and the helper's
+            # agent-keyed half is the part that must not be lost.
+            capability_ids=_exercised_capability_ids({}, agent) or None,
             experiment_id=research_round or None,
             reasoning_level=(profile.get("reasoning_effort") if profile else mode),
             model=model,
@@ -3024,6 +3032,14 @@ def _selftest() -> None:
         # Exercised-capability tagging: each condition must mirror the capability's own heartbeat
         # condition, and must NOT fire otherwise — a tag that fires too widely credits a capability
         # for work it never touched, which is the one thing capability attribution refuses.
+        # WIRING PIN (smallest fragment, count == 1): the offload record_run must pass the
+        # rail-exercised ids. This stopped being true silently once before — the helper existed,
+        # plan_dispatch consumed it, and the rail 340 of 340 gemini runs actually used did not.
+        needle = "capability_ids=_exercised_capability_ids({}, " + "agent)"
+        import pathlib as _pathlib
+
+        src = _pathlib.Path(__file__).read_text()
+        assert src.count(needle) == 1, f"offload rail tag wiring: {src.count(needle)} matches"
         assert _exercised_capability_ids({}, "gemini") == ["agy-runtime-isolation"]
         assert _exercised_capability_ids({}, "codex") == []
         thompson = {"exploration": True, "exploration_mode": "thompson-hybrid"}
