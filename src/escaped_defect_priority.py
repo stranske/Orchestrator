@@ -187,6 +187,24 @@ def uncovered_by_file(coverage_json: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+def measured_files(coverage_json: dict[str, Any]) -> set[str]:
+    """Every file the coverage report actually MEASURED, whether or not anything is missing.
+
+    `uncovered_by_file` records only files with missing statements, so "fully covered" and "absent
+    from the report" both arrive as 0 — the same sentinel for the best possible news and for no
+    news at all. Tier 3 then ranks an unmeasurable file as if it were perfectly tested.
+
+    That is not hypothetical and it is not rare. In stranske/Workflows the whole of
+    `templates/consumer-repo/` is a synced COPY of scripts that live at the repo root: the copies
+    carry real fix commits and real churn, because sync commits touch them, and they are outside
+    every coverage scope, so they scored 0 uncovered and took half the top ten. An agent sent there
+    cannot raise coverage no matter what it writes, because nothing measures the file it edits.
+
+    The report's own file list is the only honest answer to "could this be measured at all".
+    """
+    return {path for path in (coverage_json.get("files") or {}) if not Path(path).is_absolute()}
+
+
 def rename_map(repo: Path, lookback_days: int = DEFAULT_LOOKBACK_DAYS) -> dict[str, str]:
     """Map every historical path to the name it goes by now, following chains of renames.
 
@@ -232,7 +250,7 @@ def rank(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     limit: int = DEFAULT_LIMIT,
 ) -> list[dict[str, Any]]:
-    rows, _ = _rank_rows(
+    rows, _, _ = _rank_rows(
         repo,
         coverage_json,
         hollow_rates=hollow_rates,
@@ -281,6 +299,11 @@ def _rank_rows(
         if path in scores:
             scores[path].hollow_rate = max(0.0, min(1.0, float(rate)))
 
+    # A candidate the supplied report cannot measure is dropped, because no test written for it
+    # can be shown to have worked. Only when a report was actually supplied: with tier 3 dark for
+    # everyone, "not in the report" carries no information and excluding on it would rank nothing.
+    measurable = measured_files(coverage_json or {}) if coverage_json else None
+
     # Fold each historical path onto the name it goes by now, so a module that moved is ONE
     # candidate holding all of its evidence rather than two holding half each.
     renames = rename_map(repo_path, lookback_days)
@@ -303,13 +326,32 @@ def _rank_rows(
     # Only Python source is a testgen target. Ranking a lockfile by churn would be true and useless.
     # A path that no longer exists is dropped for the same reason, one step further on: an agent
     # cannot open it, so ranking it spends the queue's first slot on nothing.
+    def _is_candidate(row: FileScore) -> bool:
+        # BOTH naming conventions. `test_*.py` is pytest's default; `*_test.py` is equally common
+        # and is what `.github/scripts/__tests__/` uses here — five of those reached the exclusion
+        # list on 2026-08-30 as "unmeasurable", which was true but for the wrong reason: a test
+        # file is never a testgen target whether or not coverage measures it.
+        name = Path(row.path).name
+        if not row.path.endswith(".py"):
+            return False
+        return not (name.startswith("test_") or name.endswith("_test.py"))
+
     ordered = [
         s
         for s in scores.values()
-        if s.path.endswith(".py")
-        and not Path(s.path).name.startswith("test_")
+        if _is_candidate(s)
         and (repo_path / s.path).exists()
+        and (measurable is None or s.path in measurable)
     ]
+    unmeasurable = (
+        sorted(
+            s.path
+            for s in scores.values()
+            if _is_candidate(s) and (repo_path / s.path).exists() and s.path not in measurable
+        )
+        if measurable is not None
+        else []
+    )
     # Counted, not just filtered. A window that predates a repository-wide move scores every
     # candidate at a path nobody can open, and "nothing needed tests" is the wrong reading of it.
     vanished = sum(
@@ -320,7 +362,7 @@ def _rank_rows(
         and not (repo_path / s.path).exists()
     )
     ordered.sort(key=lambda s: (-s.sort_key()[0], -s.sort_key()[1], -s.sort_key()[2], s.path))
-    return [s.as_dict() for s in ordered[:limit]], vanished
+    return [s.as_dict() for s in ordered[:limit]], vanished, unmeasurable
 
 
 def rank_status(
@@ -365,15 +407,34 @@ def rank_status(
             ),
         }
 
-    rows, vanished = _rank_rows(
+    rows, vanished, unmeasurable = _rank_rows(
         repo_path,
         coverage_json,
         hollow_rates=hollow_rates,
         lookback_days=lookback_days,
         limit=limit,
     )
+
+    def _excluded_note() -> str:
+        """Render the unmeasurable set once, for whichever path reports it.
+
+        Both paths need it and the EMPTY one needs it more: when every candidate is excluded the
+        ranking is empty, and "no Python source scored" is the good-news reading of "nothing here
+        can be measured at all". Drafted with this note on the `ok` path only, which put that latch
+        straight back into the module written to remove it.
+        """
+        if not unmeasurable:
+            return ""
+        shown = ", ".join(unmeasurable[:5])
+        more = f" (+{len(unmeasurable) - 5} more)" if len(unmeasurable) > 5 else ""
+        return (
+            f"; {len(unmeasurable)} candidate(s) EXCLUDED as unmeasurable by the supplied "
+            f"coverage report: {shown}{more}"
+        )
+
     if rows:
-        return rows, {"status": "ok", "reason": f"{len(rows)} file(s) scored"}
+        reason = f"{len(rows)} file(s) scored" + _excluded_note()
+        return rows, {"status": "ok", "reason": reason}
 
     read = f"git history over {lookback_days} days"
     read += (
@@ -387,12 +448,12 @@ def rank_status(
             "reason": (
                 f"read {read}; {vanished} Python file(s) scored but NONE still exists at the path "
                 "history names them by — the window predates a move, so widen it or rank a "
-                "checkout matching the history"
+                "checkout matching the history" + _excluded_note()
             ),
         }
     return [], {
         "status": "no_signal",
-        "reason": f"read {read}; no Python source scored on any tier",
+        "reason": f"read {read}; no Python source scored on any tier" + _excluded_note(),
     }
 
 
@@ -514,7 +575,18 @@ def _selftest() -> None:
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-qm", "fix(core): off-by-one"], cwd=repo, check=True)
 
-        ranked = rank(repo, {"files": {"calm.py": {"summary": {"missing_lines": 9999}}}})
+        ranked = rank(
+            repo,
+            {
+                "files": {
+                    # A REAL report lists every in-scope file, including ones with nothing
+                    # missing. The fixture named only calm.py until 2026-08-30, which made
+                    # buggy.py indistinguishable from a file outside the coverage scope.
+                    "calm.py": {"summary": {"missing_lines": 9999}},
+                    "buggy.py": {"summary": {"missing_lines": 0}},
+                }
+            },
+        )
         assert ranked, ranked
         assert ranked[0]["path"] == "buggy.py", ranked
         assert ranked[0]["tier1_escaped_defects"] == 1.0, ranked[0]
@@ -525,7 +597,15 @@ def _selftest() -> None:
         # A hollow history sinks the top candidate below the bulk file.
         sunk = rank(
             repo,
-            {"files": {"calm.py": {"summary": {"missing_lines": 9999}}}},
+            {
+                "files": {
+                    # A REAL report lists every in-scope file, including ones with nothing
+                    # missing. The fixture named only calm.py until 2026-08-30, which made
+                    # buggy.py indistinguishable from a file outside the coverage scope.
+                    "calm.py": {"summary": {"missing_lines": 9999}},
+                    "buggy.py": {"summary": {"missing_lines": 0}},
+                }
+            },
             hollow_rates={"buggy.py": 1.0},
         )
         assert sunk[0]["path"] == "calm.py", sunk
