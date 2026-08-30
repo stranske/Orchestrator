@@ -4,8 +4,16 @@ import time
 
 import pytest
 
+import adapters
 import env_prereq
 import feedback
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ledger_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(adapters, "HANDOFF", tmp_path)
+    monkeypatch.setattr(adapters, "LEDGER", tmp_path / "capacity-ledger.ndjson")
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path))
 
 
 def test_explicit_worker_role_cannot_override_evaluator_operation(tmp_path):
@@ -1115,3 +1123,23 @@ def test_gemini_provenance_reads_the_per_run_log_before_the_conversation_store(
         adapters.cli_reported_model("gemini", workspace, log_file=str(dispatch_log))["model"]
         == "gemini-3.6-flash-high"
     )
+
+
+def test_ledger_isolation_regression(tmp_path, monkeypatch):
+    """Regression test ensuring provenance tests write LEDGER into temp state and not to host disk."""
+    host_ledger = adapters.HOME / ".codex" / "handoff" / "capacity-ledger.ndjson"
+    host_existed_before = host_ledger.exists()
+    host_bytes_before = host_ledger.read_bytes() if host_existed_before else None
+
+    test_ledger = tmp_path / "isolated-capacity-ledger.ndjson"
+    monkeypatch.setattr(adapters, "HANDOFF", tmp_path)
+    monkeypatch.setattr(adapters, "LEDGER", test_ledger)
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path))
+
+    adapters.record_ledger("codex", count=1, cost_usd=0.0)
+
+    assert test_ledger.exists()
+    assert test_ledger.stat().st_size > 0
+    assert host_ledger.exists() is host_existed_before
+    if host_existed_before:
+        assert host_ledger.read_bytes() == host_bytes_before

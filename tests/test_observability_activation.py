@@ -22,6 +22,7 @@ ACCEPTANCE_CADENCE_KEYS = {
     "ccusage-reconcile",
     "range-rollout",
     "runtime-ac-flow",
+    "research-usage-guard",
     "relearn",
     "periodic-report",
     "keepalive-shadow",

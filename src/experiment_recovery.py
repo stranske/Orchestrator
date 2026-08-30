@@ -61,6 +61,7 @@ from pathlib import Path
 import exp_abcd
 import feedback
 import provision
+from spec_provenance import MISSING_SPEC_STUB_HEADER, is_missing_spec
 
 DEFAULT_BASE = os.environ.get("ORCH_EXPERIMENT_RECOVERY_BASE", "main")
 GH_TIMEOUT_S = int(os.environ.get("ORCH_EXPERIMENT_RECOVERY_GH_TIMEOUT", "60"))
@@ -181,10 +182,9 @@ def _spec_for(target: str, *, cache: dict[str, str], gh_fn=None) -> str:
             except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
                 body = ""
     if not body:
-        # HONEST STUB, and it says so. Judges must not be handed a fabricated specification; a stub
-        # that names its own provenance lets the reader discount that experiment's judge scores while
-        # its OBJECTIVE anchor (which needs no spec) stays fully trustworthy.
+        # HONEST STUB, and it says so with structured provenance header.
         body = (
+            f"{MISSING_SPEC_STUB_HEADER}\n"
             f"[spec unavailable at recovery time for {ck or target}]\n\n"
             "This experiment's original spec.md was reclaimed with its worktree and the issue body "
             "could not be re-fetched. Objective anchors for this experiment remain valid (they are "
@@ -230,6 +230,8 @@ def restore_experiment(
     if not apply or not arms:
         return result
     root.mkdir(parents=True, exist_ok=True)
+    spec_content = _spec_for(row["target"], cache=spec_cache, gh_fn=gh_fn)
+    is_stub_spec = is_missing_spec(None, spec_content)
     meta = {
         "schema_version": 2,
         "repo": repo,
@@ -244,9 +246,11 @@ def restore_experiment(
         # it should know the logs are synthetic and the spec may be a stub.
         "recovered_from_branches": True,
         "recovery_missing_arms": sorted(missing),
+        "missing_spec": is_stub_spec,
+        "spec_provenance": "missing_spec_stub" if is_stub_spec else "issue_body",
     }
     (root / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
-    (root / "spec.md").write_text(_spec_for(row["target"], cache=spec_cache, gh_fn=gh_fn))
+    (root / "spec.md").write_text(spec_content)
     for agent, diff in arms.items():
         (root / exp_abcd.exp_diff_path(agent)).write_text(diff)
         # followup requires a log per agent and reads only its MTIME (idle check). A recovered arm

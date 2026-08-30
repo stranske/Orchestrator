@@ -43,10 +43,10 @@ if [[ -z "${LANGSMITH_API_KEY:-}" && -r "$HOME/.codex/credentials/langsmith_api_
   export LANGSMITH_API_KEY="$(<"$HOME/.codex/credentials/langsmith_api_key")"
   export LANGCHAIN_API_KEY="${LANGCHAIN_API_KEY:-$LANGSMITH_API_KEY}"
 fi
-# Research arm (turned ON 2026-06-19 per owner): opportunistic, data-acquisition-biased A/B experiments
-# fire on SPARE capacity during the --active tick — capacity-gated, per-tick cap 1, isolated branches,
-# nothing merged. Export ORCH_RESEARCH_ARM=0 before a run to pause. See research_scheduler.py + tick.research_tick.
-export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-1}"
+# Optional research is opt-in after the 2026-08-29 usage audit found repeated four-judge panels on
+# recovered missing-spec inputs. ORCH_RESEARCH_ARM=1 enables new launches and guarded followups;
+# missing-spec recovery remains objective-only under every setting. See research_usage_guard.py.
+export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"
 # GitHub API rate-budget awareness (IMPROVEMENT_BACKLOG.md #8 P2). The local lanes share ONE gh token,
 # so gh-heavy cadence steps can hit the REST search (30/min) / core (5000/hr) budget. ORCH_GH_THROTTLE=1
 # turns ON the in-loop pace/defer in durability_sweep/keepalive/langsmith (each a no-op when unset).
@@ -762,6 +762,16 @@ if _cadence_due runtime-ac-flow && _attempt_ok runtime-ac-flow; then
     _mark_success runtime-ac-flow
   else
     _mark_fail runtime-ac-flow "see $STAMP_DIR/runtime-ac-flow-monitor.log"
+  fi
+fi
+if _cadence_due research-usage-guard && _attempt_ok research-usage-guard; then
+  echo "  [cadence] research usage guard report (daily; local/no-LLM)"
+  if python3 "$ORCH/research_usage_guard.py" report --fail-on-alert \
+      --write-report "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}/research-usage-report.json" \
+      > "$STAMP_DIR/research-usage-report.log" 2>&1; then
+    _mark_success research-usage-guard
+  else
+    _mark_fail research-usage-guard "see $STAMP_DIR/research-usage-report.log"
   fi
 fi
 if _cadence_due relearn && _attempt_ok relearn; then

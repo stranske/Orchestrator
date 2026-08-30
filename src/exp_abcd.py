@@ -46,6 +46,8 @@ import feedback
 import judge_reliability
 import provision
 import research_subjects
+import research_usage_guard
+import spec_provenance
 import synthesis_promotion
 import watch
 
@@ -1097,8 +1099,11 @@ def _normalize_evaluator_specs(
     *,
     default_agents: list[str],
     implementer_agents: list[str],
+    min_evaluators: int | None = None,
 ) -> list[dict[str, Any]]:
-    raw = list(requested or default_agents)
+    raw = list(requested if requested is not None else default_agents)
+    if requested is not None and not raw:
+        raise ValueError("explicit evaluator list must not be empty")
     explicit: list[dict[str, Any]] = []
     for item in raw:
         if isinstance(item, str):
@@ -1115,9 +1120,17 @@ def _normalize_evaluator_specs(
         ).strip()
         spec.update({"agent": agent, "evaluator_id": evaluator_id})
         explicit.append(spec)
+    minimum = (
+        min_evaluators
+        if min_evaluators is not None
+        else (MIN_EVALUATORS if requested is None else len(explicit))
+    )
     topped_agents = _ensure_min_evaluators(
         [spec["agent"] for spec in explicit],
-        implementers=implementer_agents,
+        minimum=minimum,
+        # An explicit panel is an exact dispatch contract (including the unattended one-judge
+        # panel). Neutral-judge top-up belongs only to the default direct/manual panel.
+        implementers=implementer_agents if requested is None else [],
         capacity=_capacity_map(),
     )
     represented = {spec["agent"] for spec in explicit}
@@ -1130,6 +1143,10 @@ def _normalize_evaluator_specs(
     if len(ids) != len(set(ids)):
         raise ValueError("evaluator identities must be unique")
     return explicit
+
+
+class MissingSpecNotEvaluableError(ValueError):
+    """Raised before dispatch when a recovered experiment has no authoritative specification."""
 
 
 def _eval_artifact_token(evaluator_id: str) -> str:
@@ -1150,6 +1167,10 @@ def evaluate(
     edir = exp_paths(exp_id)
     meta = json.loads((edir / "meta.json").read_text())
     spec = Path(spec_file).read_text()
+    if spec_provenance.is_missing_spec(meta, spec):
+        raise MissingSpecNotEvaluableError(
+            "missing-spec recovered experiments are objective-only and not evaluable"
+        )
     members = experiment_members(meta)
     member_by_id = {member["member_id"]: member for member in members}
     implementers = []
@@ -1368,6 +1389,25 @@ def _bind_synthesis(fn, repo: str, exp_id: str):
     return launch
 
 
+def _collected_candidate_diffs(collected: dict) -> dict[str, str]:
+    """Load collected diff content from either injected rows or production path rows."""
+
+    out: dict[str, str] = {}
+    for member_id, row in (collected.get("diffs") or {}).items():
+        inline = row.get("diff")
+        if inline is not None:
+            out[str(member_id)] = str(inline)
+            continue
+        path = row.get("path")
+        if path:
+            # An unreadable diff is not an empty diff. Let the caller defer admission instead of
+            # signing ambiguous content that could deduplicate another experiment forever.
+            out[str(member_id)] = Path(path).read_text(errors="replace")
+            continue
+        out[str(member_id)] = ""
+    return out
+
+
 def followup(
     *,
     max_experiments: int = 1,
@@ -1407,6 +1447,17 @@ def followup(
     evaluate_fn = evaluate_fn or evaluate
     subject_lifecycle_fn = subject_lifecycle_fn or research_subjects.mark_lifecycle
     out: dict = {"processed": [], "skipped": [], "promotions": [], "eligible": 0}
+    followup_eval_env = os.environ.get("ORCH_FOLLOWUP_EVALUATORS", "").strip()
+    followup_evaluators = (
+        [e.strip() for e in followup_eval_env.split(",") if e.strip()]
+        if followup_eval_env
+        else ["vibe"]
+    )
+    followup_evaluator_error = (
+        "ORCH_FOLLOWUP_EVALUATORS must contain at least one evaluator"
+        if followup_eval_env and not followup_evaluators
+        else None
+    )
     if not EXP_DIR.exists():
         return out
     dirs = sorted(
@@ -1419,6 +1470,9 @@ def followup(
     stamp_fresh = gate_stamp.exists() and (now - gate_stamp.stat().st_mtime) < 86400
     launch_available = not stamp_fresh
     promotion_inflight = False
+    evaluator_dispatches = 0
+    missing_spec_skips = 0
+    max_missing_spec_skips = max(1, max_experiments * 10)
 
     def persist_terminal_checkpoint(edir: Path, state: dict) -> None:
         phase = state.get("delivery_phase")
@@ -1492,7 +1546,11 @@ def followup(
         meta_p, spec_p = edir / "meta.json", edir / "spec.md"
         if not meta_p.exists() or not spec_p.exists():
             continue
-        if (edir / "eval-maps.json").exists() or (edir / "followup-skip.json").exists():
+        if (
+            (edir / "eval-maps.json").exists()
+            or (edir / "followup-skip.json").exists()
+            or (edir / "followup-decision.json").exists()
+        ):
             continue
         if (now - meta_p.stat().st_mtime) / 86400.0 > max_age_days:
             continue
@@ -1500,6 +1558,68 @@ def followup(
             meta = json.loads(meta_p.read_text())
         except (OSError, json.JSONDecodeError):
             continue
+        spec_text = spec_p.read_text(errors="replace")
+
+        # Missing-spec recovered experiments: zero LLM judge dispatch, preserve objective anchors
+        if spec_provenance.is_missing_spec(meta, spec_text):
+            if missing_spec_skips >= max_missing_spec_skips:
+                out["skipped"].append({"exp_id": edir.name, "reason": "missing-spec-skip-cap"})
+                continue
+            obj_anchor = None
+            if os.environ.get("ORCH_OBJECTIVE_ANCHOR", "1").strip().lower() not in (
+                "0",
+                "false",
+                "off",
+            ):
+                try:
+                    import objective_anchor
+
+                    obj_anchor = objective_anchor.anchor_experiment(edir.name)
+                except Exception as exc:
+                    obj_anchor = {"error": str(exc)[:200]}
+
+            subj = meta.get("subject") or research_usage_guard.subject_of_experiment(edir.name)
+            guard_record_error = None
+            try:
+                research_usage_guard.assess_and_record_opportunity(
+                    exp_id=edir.name,
+                    repo=meta.get("repo", ""),
+                    subject=subj,
+                    spec_text=spec_text,
+                    base_sha=meta.get("base_sha") or meta.get("base"),
+                    is_missing_spec=True,
+                    now=int(now),
+                )
+            except Exception as exc:
+                # Telemetry failure must never turn a terminal non-evaluable input back into a
+                # recurring candidate. The daily report independently makes DB outages visible.
+                guard_record_error = str(exc)[:200]
+
+            skip_payload = {
+                "reason": "missing_spec_recovered",
+                "ts": int(now),
+                "objective_anchors": obj_anchor,
+                "spec_provenance": "missing_spec_stub",
+            }
+            if guard_record_error:
+                skip_payload["guard_record_error"] = guard_record_error
+            (edir / "followup-skip.json").write_text(json.dumps(skip_payload, indent=2))
+            try:
+                subject_lifecycle_fn(edir.name, "skipped", reason="missing_spec_recovered")
+            except Exception:
+                pass
+            out["processed"].append(
+                {
+                    "exp_id": edir.name,
+                    "diffs": 0,
+                    "evaluated": False,
+                    "reason": "missing_spec_recovered",
+                    "objective_anchors": obj_anchor,
+                }
+            )
+            missing_spec_skips += 1
+            continue
+
         # ELIGIBILITY IS PER MEMBER, NOT PER AGENT. `prepare_arms` writes one log per MEMBER
         # (`<member_id>.log`), so reading `meta["agents"]` looked for `<agent>.log`, never found it,
         # and every v2 experiment fell out of this loop before it could be collected -- producing
@@ -1530,8 +1650,17 @@ def followup(
             subject_lifecycle_fn(edir.name, "evaluable", reason="all_arm_logs_idle")
         except Exception:
             pass  # Subject telemetry must never break experiment recovery.
-        if len(out["processed"]) >= max_experiments:
+        if evaluator_dispatches >= max_experiments:
             out["skipped"].append({"exp_id": edir.name, "reason": "per-call-cap"})
+            continue
+        if followup_evaluator_error:
+            out["skipped"].append(
+                {
+                    "exp_id": edir.name,
+                    "reason": "invalid-followup-evaluators",
+                    "detail": followup_evaluator_error,
+                }
+            )
             continue
         repo = meta["repo"]
         capabilities.production_heartbeat(
@@ -1552,7 +1681,81 @@ def followup(
             except Exception:
                 pass
         else:
-            ev = evaluate_fn(repo, str(spec_p), edir.name, None, timeout=eval_timeout)
+            try:
+                diffs_dict = _collected_candidate_diffs(collected)
+            except OSError as exc:
+                out["skipped"].append(
+                    {
+                        "exp_id": edir.name,
+                        "reason": "candidate-diff-unreadable",
+                        "detail": str(exc)[:200],
+                    }
+                )
+                continue
+            subj = meta.get("subject") or research_usage_guard.subject_of_experiment(edir.name)
+            sig = research_usage_guard.compute_followup_signature(
+                repo, spec_text, meta.get("base_sha") or meta.get("base"), diffs_dict
+            )
+
+            opp = research_usage_guard.assess_and_record_opportunity(
+                exp_id=edir.name,
+                repo=repo,
+                subject=subj,
+                spec_text=spec_text,
+                base_sha=meta.get("base_sha") or meta.get("base"),
+                candidate_diffs=diffs_dict,
+                evaluator_count=len(followup_evaluators),
+                evaluator_agents=followup_evaluators,
+                is_missing_spec=False,
+                is_manual=False,
+                now=int(now),
+            )
+
+            if opp["decision"] == "duplicate":
+                (edir / "followup-skip.json").write_text(
+                    json.dumps({"reason": "duplicate_signature", "signature": sig, "ts": int(now)})
+                )
+                out["skipped"].append(
+                    {"exp_id": edir.name, "reason": "duplicate_signature", "signature": sig}
+                )
+                try:
+                    subject_lifecycle_fn(edir.name, "skipped", reason="duplicate_signature")
+                except Exception:
+                    pass
+                continue
+
+            if not opp["eligible"]:
+                out["skipped"].append(
+                    {"exp_id": edir.name, "reason": opp["decision"], "alerts": opp.get("alerts")}
+                )
+                continue
+
+            evaluator_dispatches += 1
+            try:
+                ev = evaluate_fn(
+                    repo, str(spec_p), edir.name, followup_evaluators, timeout=eval_timeout
+                )
+            except Exception:
+                research_usage_guard.update_opportunity_outcome(
+                    opp["opportunity_id"], "failed", now=int(time.time())
+                )
+                raise
+            research_usage_guard.update_opportunity_outcome(
+                opp["opportunity_id"], "completed", now=int(time.time())
+            )
+            (edir / "followup-decision.json").write_text(
+                json.dumps(
+                    {
+                        "exp_id": edir.name,
+                        "repo": repo,
+                        "signature": sig,
+                        "ts": int(now),
+                        "evaluators": ev.get("evaluators"),
+                        "objective_anchors": ev.get("objective_anchors"),
+                    },
+                    indent=2,
+                )
+            )
             try:
                 subject_lifecycle_fn(edir.name, "evaluated", reason="followup_evaluation_complete")
             except Exception:
@@ -2131,10 +2334,12 @@ def _selftest():
     ftmp = Path(_tf.mkdtemp(prefix="exp-followup-selftest-"))
     old_followup_db = feedback.DB_PATH
     old_capabilities_reg = capabilities.REG
+    old_research_arm = os.environ.get("ORCH_RESEARCH_ARM")
     try:
         EXP_DIR = ftmp
         feedback.DB_PATH = ftmp / "feedback.db"
         capabilities.REG = ftmp / "capabilities.json"
+        os.environ["ORCH_RESEARCH_ARM"] = "1"
         calls: dict = {"collect": [], "evaluate": [], "subject_lifecycle": []}
         for name, idle, dir_age in (("F1", True, 100), ("F2", True, 200), ("F3", False, 50)):
             d = ftmp / name
@@ -2348,6 +2553,10 @@ def _selftest():
         EXP_DIR = old_exp_dir
         feedback.DB_PATH = old_followup_db
         capabilities.REG = old_capabilities_reg
+        if old_research_arm is None:
+            os.environ.pop("ORCH_RESEARCH_ARM", None)
+        else:
+            os.environ["ORCH_RESEARCH_ARM"] = old_research_arm
         import shutil as _sh
 
         _sh.rmtree(ftmp, ignore_errors=True)

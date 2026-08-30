@@ -1052,6 +1052,8 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     "tick:experiments": {
         "abcd-experiment": "its matcher is `{kind: experiment_phase, name: abcd}` and the phase IS "
         "`[cadence] experiment follow-up (collect+evaluate finished A/B/C runs)`",
+        "research-usage-guard": "the experiments phase consults this pre-dispatch budget and its "
+        "daily local anomaly report before optional evaluator work can consume capacity",
         "synthesis-promotion": "`{kind: experiment_phase, equals: evaluated}` -- the promotion step "
         "that reads what the followup above just evaluated",
         "research-scheduler": "`{kind: tick_phase, name: research}`; the research arm fires on spare "

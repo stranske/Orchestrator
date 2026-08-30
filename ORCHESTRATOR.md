@@ -63,6 +63,7 @@ cursor-agent live outside the default PATH):
   that split alerts into immediate operator work, data-gated waits, and informational status. The weekly
   `orchestrate.sh` cadence writes
   `$ORCH_STATE_DIR/observability-dashboard.json` and `.md` alongside `periodic-report.json`.
+- **Research usage guard** — `python3 src/research_usage_guard.py [report] [--json] [--write-report path] [--fail-on-alert]` → deterministic, zero-network, zero-LLM admission control and anomaly detection for unattended research. It records every opportunity before launch, reconciles admitted rows to terminal outcomes, enforces rolling evaluator/prompt budgets, deduplicates stable inputs, and independently audits recorded runs for missing-spec, wide-panel, or repeated-subject bypasses. Unattended research defaults to opt-in (`ORCH_RESEARCH_ARM=0`) and starts with one Vibe judge; a supervised bypass or wider panel must be explicit. The daily cadence refreshes `$ORCH_STATE_DIR/research-usage-report.json` and stays visibly failed while a 24-hour anomaly/budget block, stale dispatch, or telemetry outage is active.
 - **Discover work** — `python3 src/backlog.py --dry-run` → actionable items `{target, task_type, lane}`
   (ready issues + in-flight agent PRs across the fleet; scope-blocked excluded). `--live` refreshes.
 - **Consult the rule-based prior (OPTIONAL)** — `python3 src/router.py --dry-run` → what a deterministic

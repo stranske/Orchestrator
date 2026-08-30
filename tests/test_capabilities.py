@@ -216,6 +216,13 @@ def test_existing_ledger_reconciles_new_code_declarations(tmp_path):
     assert set(capabilities.KNOWN_GATES) <= set(loaded)
     assert loaded["role-prompt"]["status"] == "wired"
     assert loaded["role-prompt"]["last_invocation"] is None
+    loaded["research-usage-guard"]["notes"] = "stale machine-local dedup claim"
+    capabilities.save(loaded, ledger)
+    reconciled = capabilities.load(ledger)
+    assert (
+        reconciled["research-usage-guard"]["notes"]
+        == capabilities.KNOWN_GATES["research-usage-guard"]["notes"]
+    )
 
 
 def test_liveness_classifications_use_capability_events():
