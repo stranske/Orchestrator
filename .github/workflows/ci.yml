@@ -32,6 +32,99 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # THIS REPO'S COVERAGE NUMBER HAS BEEN WRONG BY 48 POINTS, AND NOTHING SAID SO.
+  #
+  # pr-00-gate.yml measures coverage with pytest alone and reports 34.11%. Measured 2026-08-29 by
+  # running the command this job runs: 82.1%, over 44,740 statements with 8,026 missed, combined
+  # from 94 instrumented processes. (76.1% was the figure recorded on 2026-08-23; the repo has
+  # improved since, which is itself only visible once somebody measures.) The gap exists because
+  # 79 of 102 modules are exercised by a `--selftest` entry point rather
+  # than a pytest file -- the original design, from the initial commit -- and a selftest runs as a
+  # SUBPROCESS that pytest-cov cannot see. So the Gate has been measuring the instrument's blind
+  # spot and calling it a score, which is the same defect stranske/Workflows#3251 drained out of
+  # the fleet reporter: a number nobody could measure rendered as a number that was measured.
+  #
+  # That mattered beyond cosmetics. Every other repo in the fleet now carries a
+  # config/coverage-baseline.json set at measured current, and this one was deliberately SKIPPED,
+  # because a baseline against the wrong instrument would bake the blind spot in permanently.
+  #
+  # A SEPARATE JOB, NOT A FLAG ON THE VERDICT, and the reasons are both real:
+  #   * verify.py --coverage wraps ~90 child processes in `coverage run --parallel-mode`, so it is
+  #     materially slower than the verdict. Measured in CI: the verify job is ~1m30s, and the
+  #     verdict is on the critical path for every PR. This runs beside it, not in front of it.
+  #   * `--coverage` deliberately never touches the exit code (verify.py pins that in a test),
+  #     precisely so measuring cannot change a verdict. Keeping it in its own job keeps that true
+  #     by construction rather than by promise.
+  #
+  # continue-on-error: a coverage MEASUREMENT that fails must never redden a green verdict. If it
+  # cannot run, the summary says so and the verdict is untouched -- but the failure is visible in
+  # the job list rather than swallowed.
+  #
+  # NOT YET WIRED TO THE GUARD, and saying so is the point. Maint Coverage Guard reads
+  # pr-00-gate.yml runs by a hardcoded workflowId, so it cannot see this job's number. Publishing
+  # the honest figure is step one; making the guard able to read it is a separate change, and
+  # until then this repo still has no baseline. The summary states that rather than implying the
+  # number is being enforced.
+  combined-coverage:
+    name: combined coverage (pytest + selftests, the honest number)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml coverage
+
+      - name: Measure combined coverage
+        env:
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          # --floor-may-lag unconditionally: this job is a MEASUREMENT, and a lagging floor is the
+          # verify job's business to report. Duplicating that failure here would mean one drift
+          # reddening two jobs and telling you nothing extra.
+          python3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt
+
+      - name: Publish the figure
+        if: always()
+        run: |
+          {
+            echo "## Combined coverage — pytest AND selftests"
+            echo
+            if grep -q "^coverage:" /tmp/combined.txt 2>/dev/null; then
+              grep -A3 "^coverage:" /tmp/combined.txt | head -8
+            else
+              echo "NOT MEASURED — verify.py --coverage produced no coverage block."
+              echo "Treat that as a missing measurement, not as a low one."
+            fi
+            echo
+            echo "The Gate's own coverage number is pytest-only and reads far lower, because 79 of"
+            echo "102 modules are exercised by a \`--selftest\` subprocess that pytest-cov cannot"
+            echo "see. The figure above is the one comparable to the rest of the fleet."
+            echo
+            echo "Not enforced: Maint Coverage Guard reads pr-00-gate.yml by a hardcoded"
+            echo "workflowId and cannot see this job, so this repo still has no coverage baseline."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the coverage data
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: combined-coverage
+          path: |
+            .coverage
+            /tmp/combined.txt
+          if-no-files-found: warn
+          retention-days: 7
+
   verify:
     name: verify.py (real pytest counts + selftests + capability gates)
     runs-on: ubuntu-latest
