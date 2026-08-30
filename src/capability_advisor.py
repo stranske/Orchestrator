@@ -982,10 +982,15 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "redirect under an open action space is precisely this role",
         "role-prompt": "it hands each sub-task to a cheaper agent, and the generic delegation "
         "template this role replaces is exactly what that hand-off uses today",
-        "agy-runtime-isolation": "its matcher is `{kind: adapter, name: gemini}` and fires on every "
-        "gemini dispatch — this skill is the surface that dispatches to "
-        "gemini/cursor/vibe/codex, so it is the one that can be told the "
-        "runtime is isolated",
+        # agy-runtime-isolation was REMOVED 2026-08-30: it is a declared no_surface rail
+        # (the confinement itself; selection pressure must never reach it, per its own
+        # KNOWN_DECLARATIONS rationale) — a rail bound at an agent surface was a leftover
+        # from before the declaration. The freed slot goes to the capability the R4 abcd
+        # trial proved was UNREACHABLE from exactly this surface: the executor consulted
+        # orchestrate for a three-arm comparison and abcd-experiment was not offered.
+        "abcd-experiment": "when the right owner for a task type is genuinely unknown, the "
+        "skill's decompose-and-hand-off move becomes a QUESTION — and this is the instrument "
+        "that answers it with cross-graded evidence instead of a guess",
     },
     # SUPPRESSED, each with the reason — these are verdicts, not gaps.
     "human-involvement-check": {
@@ -2643,13 +2648,16 @@ HOW_TO_USE = {
     # invoking, because "the work was already small enough by hand" is this fleet's dominant
     # decline reason.
     "abcd-experiment": (
-        "exp_abcd.py prepare <repo> <spec_file> <exp_id> <arms> gives the SAME frozen spec to 2-5 "
+        "exp_abcd.py prepare-arms <repo> <spec_file> <exp_id> <arms> gives the SAME frozen spec to 2-5 "
         "agents in isolated worktrees; collect + evaluate then have every agent cross-grade every "
         "diff into feedback.evaluations_v2 — unbiased cross-agent evidence for which agent should "
         "own a task type. Nothing merges and no PR opens: the deliverable is the comparison, so "
         "shipping a change is dispatcher.delegate's job, not this. Costs 2-5 real agent runs plus "
         "cross-evals, so not worth invoking when the right owner is already obvious or the spec "
-        "cannot be frozen into one file"
+        "cannot be frozen into one file. USE prepare-arms, NOT plain prepare: prepare writes LEGACY "
+        "members and evaluate records v2 rows only for non-legacy members, so the plain command "
+        "structurally guarantees zero evaluations_v2 rows — measured on the first end-to-end run "
+        "(2026-08-30), whose executor had to discover the right subcommand by reading the source"
     ),
     "stall-watcher": (
         "watch.py --agent <a> --pid <pid> --log <log> --worktree <dir> --json classifies ONE "
