@@ -499,6 +499,25 @@ if _cadence_due switch-review && _attempt_ok switch-review; then
     _mark_fail switch-review "see $STAMP_DIR/switch-review.log"
   fi
 fi
+if _cadence_due coverage-testgen-trigger && _attempt_ok coverage-testgen-trigger; then
+  # THE CADENCE ROW IS NOT THE CALLER. `cadence_registry.CADENCE_STEPS` describes a step; this
+  # block is what runs it, and registering the row without writing this left the ledger claiming a
+  # caller that did not exist -- caught by capability_activation_audit as `entrypoint_no_caller`,
+  # which is this repository's founding defect wearing the costume of a completed obligation.
+  #
+  # Reads each repo's combined coverage and decides whether it buys a testgen invocation: below 90
+  # the machine acts, below 85 the owner is told ONCE, on the crossing. Default-OFF behind
+  # ORCH_COVERAGE_TESTGEN, so an unset flag decides nothing and says so.
+  echo "  [cadence] coverage testgen trigger (weekly; below 90 writes, below 85 warns on a fall)"
+  if python3 "$ORCH/coverage_testgen_trigger.py" --json \
+       --repo "${ORCH_COVERAGE_REPO:-stranske/Orchestrator}" \
+       --coverage-json "${ORCH_COVERAGE_REPORT:-$ORCH_REPO/coverage.json}" \
+       > "$STAMP_DIR/coverage-testgen-trigger.json" 2>> "$STAMP_DIR/coverage-testgen-trigger.log"; then
+    _mark_success coverage-testgen-trigger
+  else
+    _mark_fail coverage-testgen-trigger "see $STAMP_DIR/coverage-testgen-trigger.log"
+  fi
+fi
 # Weekly: DOES each capability fire, and did one stop? The can-fire audit and `capabilities usage`
 # are both snapshots; nothing stored firing history, so a capability that fired last week and went
 # quiet this week looked identical to a healthy one. switch_review covers exactly that silence but
