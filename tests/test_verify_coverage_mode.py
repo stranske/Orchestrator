@@ -264,15 +264,24 @@ def test_the_cli_help_actually_renders():
 
 
 def _instrumented(root):
-    """Produce a real combined data set in `root` — a fixture no mock could stand in for."""
-    (root / "m.py").write_text("def f(x):\n    return x + 1\n", encoding="utf-8")
-    (root / "run.py").write_text("from m import f\n\nassert f(1) == 2\n", encoding="utf-8")
-    subprocess.run(
+    """Produce a real combined data set in `root` — a fixture no mock could stand in for.
+
+    Self-contained on purpose: no sibling import, so the fixture cannot fail for reasons about
+    `sys.path` rather than about coverage. And it reports the child's stderr rather than raising a
+    bare CalledProcessError — the first version used `check=True` and, when CI turned out not to
+    install `coverage` at all, the failure said only "exit status 1". A fixture that fails without
+    saying why costs a whole round trip to diagnose.
+    """
+    (root / "run.py").write_text("x = 1\nassert x == 1\n", encoding="utf-8")
+    proc = subprocess.run(
         [sys.executable, "-m", "coverage", "run", "--parallel-mode", "run.py"],
         cwd=root,
         capture_output=True,
         text=True,
-        check=True,
+    )
+    assert proc.returncode == 0, (
+        f"could not produce an instrumented run (exit {proc.returncode}). "
+        f"stdout={proc.stdout.strip()!r} stderr={proc.stderr.strip()!r}"
     )
 
 
@@ -291,7 +300,7 @@ def test_the_combined_run_also_writes_the_machine_readable_report(tmp_path):
     assert written.exists(), out
     assert str(written) in out, "the report must name the file it wrote, or nothing can find it"
     payload = json.loads(written.read_text())
-    assert "m.py" in payload["files"], sorted(payload["files"])
+    assert "run.py" in payload["files"], sorted(payload["files"])
 
 
 def test_a_json_that_could_not_be_written_is_named_and_not_silent(tmp_path, monkeypatch):
