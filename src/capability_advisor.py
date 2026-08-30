@@ -2492,9 +2492,13 @@ HOW_TO_USE = {
         "being large, code-shaped, or multi-step is not"
     ),
     "codemod-campaign": (
-        "label the issue `refactor` (or let the daily issue_readiness task-label "
-        "step do it) so classify() routes it to the codemod lane; the lane hands "
-        "an agent the codemod_lane.py plan schema"
+        "label the issue `refactor` (or let the daily issue_readiness task-label step do it) so "
+        "classify() routes it to the codemod lane; the lane hands an agent the codemod_lane.py "
+        "plan schema. ARMS ONLY when a MECHANICAL change repeated across many sites exists (a "
+        "rename, a pattern migration, dozens of identical edits). Absent that input, decline "
+        "`precondition_unmet`, not `wrong_match` — the binding is right, this round's work is not "
+        "its shape, and 18 wrong_match declines have already accrued against a lane nobody has "
+        "ever fed its own input "
     ),
     # TWO ROUTES, AND ONLY ONE WAS DOCUMENTED. Until 2026-08-25 this entry described the lane route
     # alone — and the lane route is unavailable to a seat that is implementing rather than
@@ -2546,12 +2550,18 @@ HOW_TO_USE = {
     ),
     "ux-review": "run the /ux-review skill; drives every primary surface, not the happy path",
     "epic-decomposition": (
-        "only for a PARENT epic ([Epic] with no #NNN parent ref); produces a "
-        "subtask plan, does not implement"
+        "only for a PARENT epic ([Epic] with no #NNN parent ref); produces a subtask plan, does "
+        "not implement. ARMS ONLY when such a parent exists in the round's inputs — a leaf issue "
+        "offered to an epic tool is a shape mismatch, not a tool defect: decline "
+        "`precondition_unmet`, not `wrong_match` (all 11 of its wrong_match declines were leaf "
+        "issues) "
     ),
     "cross-repo-coordination": (
-        "label `consumer-sync`/`cross-repo`; produces a dry-run rollout plan "
-        "with barrier ordering, creates nothing"
+        "label `consumer-sync`/`cross-repo`; produces a dry-run rollout plan with barrier "
+        "ordering (source seal before canary, canary green before fleet batch), creates nothing. "
+        "ARMS ONLY when a change must land in TWO OR MORE repos in coordinated order — a template "
+        "fleet batch, a shared workflow change. A single-repo deliverable is not its shape: "
+        "decline `precondition_unmet`, not `wrong_match` "
     ),
     "deliberate-break-verifier": (
         "local_verify.py --worktree . --test-cmd '<the gate>' --test-path <file> — proves a test "
@@ -2628,7 +2638,8 @@ HOW_TO_USE = {
         "target confirmation and a fully specified next delegate. BOUNDARY: it plans ONE redirect/"
         "decompose; deciding WHETHER to redirect is redirect_policy, and cadence-driven "
         "application is redirect_apply. Not worth invoking unless a policy decision of redirect "
-        "or decompose is already in hand"
+        "or decompose is already in hand — absent one, decline `precondition_unmet`, not "
+        "`wrong_match`: the binding is right and a stall-free round is not its shape"
     ),
     "redirect-policy": (
         "redirect_policy.py --json < payload.json (a watch.py report, optionally with "
