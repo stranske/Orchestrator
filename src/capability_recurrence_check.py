@@ -1007,6 +1007,14 @@ PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
         "check": lambda: _predicate_heartbeat("feature-scan"),
         "source": "60 of 74 reusable modules were unlogged, including four created the day before.",
     },
+    {
+        "capability": "coverage-testgen-trigger",
+        "check": lambda: _predicate_heartbeat("coverage-testgen-trigger"),
+        "source": "stranske/Workflows sat at 76.72% against an 85 baseline while every part needed "
+        "to act on that existed: a ranker that orders test-writing, a lane that builds the "
+        "gate-backed prompt, and a guard that publishes the number. Nothing read the figure and "
+        "decided, so the gap persisted for as long as anyone was willing to notice it by hand.",
+    },
 )
 
 
