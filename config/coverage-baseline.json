@@ -1,0 +1,6 @@
+{
+  "line": 80.0,
+  "warn_drop": 1.0,
+  "source_workflows": [".github/workflows/ci.yml"],
+  "note": "80.0 sits just under the 80.64% this repo really measures, so the guard can fail without being red on arrival. The number MUST come from ci.yml's combined-coverage job and not from the Gate: the Gate runs pytest alone and reports 34.11%, because 79 of 104 modules are exercised by a --selftest SUBPROCESS that pytest-cov cannot see. Both numbers are honestly produced and only one of them is about this codebase. source_workflows is read by Maint Coverage Guard (Workflows #3270); the payload it reads is written by verify.py --coverage."
+}
