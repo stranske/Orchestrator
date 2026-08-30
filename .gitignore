@@ -130,6 +130,9 @@ venv/
 # land. Deliberately ABOVE the template-managed block, which a Template-Version bump rewrites.
 /.coverage
 /.coverage.*
+# Written by `verify.py --coverage` so the ranker can read per-file figures. Root-anchored
+# like the two above, and NOT `/coverage*`, which would swallow a `coverage.cfg` or `coveragerc`.
+/coverage.json
 
 # --- lock and backup artifacts ---
 *.lock

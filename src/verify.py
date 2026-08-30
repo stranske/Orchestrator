@@ -116,32 +116,64 @@ def coverage_reset() -> None:
             pass
 
 
-def coverage_combine_and_report() -> str:
+def coverage_combine_and_report(root: pathlib.Path | None = None) -> str:
     """Combine the per-process data files and return the report, or say why there is none.
 
     An absent or empty data set is reported as such rather than as 0% or as silence: a coverage
     number nobody produced must not be mistaken for a coverage number that is bad, and neither may
     look like success. That is the same rule the selftest three-way split follows.
+
+    `root` exists so this is TESTABLE WITHOUT WRITING INTO THE REPOSITORY. It used to read the
+    module-level ROOT directly, which is computed at import — so the test that patched
+    `verify.HERE` never reached it, and passed only while the checkout happened to hold no
+    `.coverage.*` files. That is a test asserting nothing and looking like a guard, and it matters
+    more now: this function WRITES a report, so an unparameterised root would have it writing into
+    the working tree every time the suite ran.
     """
-    files = sorted(ROOT.glob(".coverage.*"))
+    root = ROOT if root is None else root
+    files = sorted(root.glob(".coverage.*"))
     if not files:
         return "coverage: NO DATA — no instrumented child wrote a data file (did any test run?)\n"
     subprocess.run(
         [sys.executable, "-m", "coverage", "combine", "--quiet"],
-        cwd=ROOT,
+        cwd=root,
         capture_output=True,
         text=True,
     )
     proc = subprocess.run(
         [sys.executable, "-m", "coverage", "report"],
-        cwd=ROOT,
+        cwd=root,
         capture_output=True,
         text=True,
     )
     body = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0 and not body.strip():
         return "coverage: FAILED to report and said nothing — treat as no measurement\n"
-    return f"coverage: combined {len(files)} instrumented process(es)\n{body}"
+
+    # ALSO EMIT THE MACHINE-READABLE FORM, because the text report has no consumer but a human.
+    # `escaped_defect_priority` ranks test-writing work partly by uncovered statements, and the
+    # only coverage JSON available here was pytest-only -- which on this tree reports the selftest
+    # SUBPROCESSES as unexecuted. Measured 2026-08-30, the seven largest unexecuted blocks in the
+    # top-ranked module were all `_selftest_*` bodies: roughly 600 lines of code that is already
+    # exercised, offered to an agent as the most productive place to add tests. Ranking on that
+    # number sends test-writing at test code, which is the hollow work the ranking exists to
+    # avoid. The honest per-file figures exist right here, one command later.
+    json_path = root / "coverage.json"
+    written = subprocess.run(
+        [sys.executable, "-m", "coverage", "json", "-o", str(json_path), "--quiet"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if written.returncode == 0 and json_path.exists():
+        note = f"coverage json: {json_path}"
+    else:
+        # Named, never silent. An absent JSON that reads as "nothing uncovered" is the same
+        # defect one layer down from the one this function's docstring already refuses.
+        detail = (written.stderr or written.stdout or "").strip().splitlines()
+        why = detail[-1] if detail else f"exit {written.returncode}"
+        note = f"coverage json: NOT WRITTEN — {why}"
+    return f"coverage: combined {len(files)} instrumented process(es)\n{body}{note}\n"
 
 
 # The token a selftest or gate prints to say "I did not run this, and here is what is missing".
