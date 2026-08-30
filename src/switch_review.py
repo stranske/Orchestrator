@@ -41,6 +41,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import capabilities
+import paths
 
 # How long a switch may sit unreviewed before the question comes back.
 REVIEW_DAYS = 7
@@ -148,6 +149,109 @@ def stale_runners(*, now: float | None = None, mirror: Path | None = None) -> li
     return stale
 
 
+def mirror_drift(*, mirror: Path | None = None, checkout: Path | None = None) -> dict:
+    """Whether the deployed mirror actually carries the code that is on main.
+
+    THE SYNC CAN SUCCEED AND LEAVE THE MIRROR WRONG, and that is not hypothetical: on 2026-08-30
+    `orch-sync-mirror.sh` was run twice, reported nothing wrong both times, and copied faithfully
+    from a checkout sitting EIGHT COMMITS behind `origin/main`. The mirror gained nothing and said
+    so nowhere. Four merged changes stayed inert — including the module of the capability whose
+    ledger row had just been registered — while every visible signal read "synced".
+
+    So the question has TWO halves and only asking one is how that happened:
+
+      1. Does the mirror match the checkout? Catches a sync that never ran.
+      2. Is the checkout behind its upstream? Catches a sync that ran from stale code, which the
+         first question CANNOT see, because after such a sync the two trees agree perfectly.
+
+    Read from local refs (`rev-list @{u}..HEAD`), never a fetch: this runs inside a weekly sweep on
+    a Dropbox volume where a network git call can hang for minutes, and a sweep that hangs is a
+    sweep that gets disabled. An un-fetched checkout therefore UNDERCOUNTS, which is stated in the
+    reason rather than presented as a clean bill.
+
+    FYI-only, like everything else in this sweep. It never syncs anything: an automatic deploy is
+    exactly the circuit breaker the manual sync exists to be.
+    """
+    mirror_dir = Path(mirror or MIRROR_DIR)
+    checkout_dir = Path(checkout) if checkout else paths.MODULE_DIR
+    out: dict = {
+        "mirror": str(mirror_dir),
+        "checkout": str(checkout_dir),
+        "absent_from_mirror": [],
+        "differing": [],
+        "checkout_behind": None,
+        "status": "unknown",
+        "reason": "",
+    }
+
+    if not mirror_dir.is_dir():
+        out["reason"] = (
+            f"no mirror at {mirror_dir} — cannot compare, which is not the same as clean"
+        )
+        return out
+    if not checkout_dir.is_dir():
+        out["reason"] = f"no checkout modules at {checkout_dir} — nothing to compare against"
+        return out
+
+    for source in sorted(checkout_dir.glob("*.py")):
+        deployed = mirror_dir / source.name
+        if not deployed.exists():
+            out["absent_from_mirror"].append(source.name)
+            continue
+        try:
+            if source.read_bytes() != deployed.read_bytes():
+                out["differing"].append(source.name)
+        except OSError:
+            out["differing"].append(source.name)
+
+    behind_reason = ""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-list", "--count", "@{u}..HEAD", "--"],
+            cwd=paths.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        ahead = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD..@{u}", "--"],
+            cwd=paths.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if ahead.returncode == 0 and ahead.stdout.strip().isdigit():
+            out["checkout_behind"] = int(ahead.stdout.strip())
+        else:
+            behind_reason = " (no upstream ref locally, so 'behind' is UNMEASURED, not zero)"
+        del proc
+    except (OSError, subprocess.SubprocessError):
+        behind_reason = " (git unavailable, so 'behind' is UNMEASURED, not zero)"
+
+    drifted = bool(out["absent_from_mirror"] or out["differing"]) or bool(out["checkout_behind"])
+    out["status"] = "drifted" if drifted else "ok"
+    if drifted:
+        bits = []
+        if out["absent_from_mirror"]:
+            bits.append(f"{len(out['absent_from_mirror'])} module(s) absent from the mirror")
+        if out["differing"]:
+            bits.append(f"{len(out['differing'])} differing")
+        if out["checkout_behind"]:
+            bits.append(
+                f"the checkout is {out['checkout_behind']} commit(s) behind upstream, so syncing "
+                "again would deploy stale code and report success"
+            )
+        out["reason"] = "; ".join(bits) + behind_reason
+    else:
+        out["reason"] = (
+            "mirror matches the checkout and the checkout is level with its upstream"
+            + behind_reason
+        )
+    return out
+
+
 def _etime_seconds(etime: str) -> int | None:
     """`ps` etime (`[[dd-]hh:]mm:ss`) as seconds."""
     text = etime.strip()
@@ -236,6 +340,10 @@ def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path
         # Reported here rather than in a second auditor, per the standing rule: a stale runner
         # is a switch-shaped problem -- something was decided and the decision never landed.
         "stale_runners": runners,
+        # Same rule, one step earlier in the same chain: a stale RUNNER is code the sync could not
+        # reach, and a drifted MIRROR is code the sync did not carry. Both are decisions that never
+        # landed, so both belong in this sweep rather than in a second auditor.
+        "mirror_drift": mirror_drift(),
         "raise_count": len(due) + len(quiet),
     }
 
@@ -324,7 +432,35 @@ def format_report(rep: dict) -> str:
             "automatically -- a live process may be serving a session.",
             "",
         ]
-    if not rep["raise_count"] and not rep.get("stale_runners"):
+    drift = rep.get("mirror_drift") or {}
+    if drift.get("status") != "ok":
+        lines += ["## The deployed mirror does not carry what the checkout has", ""]
+        if drift.get("status") == "unknown":
+            lines += [f"  NOT MEASURED — {drift.get('reason', 'no reason recorded')}", ""]
+        else:
+            absent = drift.get("absent_from_mirror") or []
+            differing = drift.get("differing") or []
+            if absent:
+                lines.append(f"  absent from the mirror ({len(absent)}): {', '.join(absent[:6])}")
+            if differing:
+                lines.append(f"  differing ({len(differing)}): {', '.join(differing[:6])}")
+            if drift.get("checkout_behind"):
+                lines.append(
+                    f"  the checkout is {drift['checkout_behind']} commit(s) behind upstream — "
+                    "syncing from it would deploy stale code AND report success"
+                )
+            lines += [
+                "",
+                "  FYI only: run `orch-sync-mirror.sh` after bringing the checkout up to date. "
+                "Nothing is deployed automatically -- the manual sync is the circuit breaker "
+                "between an agent's change and the dispatcher that dispatches agents.",
+                "",
+            ]
+    if (
+        not rep["raise_count"]
+        and not rep.get("stale_runners")
+        and (rep.get("mirror_drift") or {}).get("status") == "ok"
+    ):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
 
