@@ -163,3 +163,97 @@ def test_the_reading_failure_reaches_the_decision(tmp_path, monkeypatch, capsys)
     payload = json.loads(capsys.readouterr().out)
     assert payload["action"] == trigger.ACTION_UNKNOWN
     assert "no coverage report" in payload["reason"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Naming WHERE. A decision that says "write tests" and names nowhere is not actionable, and an
+# empty target list must never be the rendering of three different findings.
+# ---------------------------------------------------------------------------------------------
+
+
+def _repo_with_history(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "hot.py").write_text("x = 1\n", encoding="utf-8")
+    for cmd in (
+        ["git", "init", "-q", "."],
+        ["git", "config", "user.email", "a@b.c"],
+        ["git", "config", "user.name", "t"],
+        ["git", "add", "-A"],
+        ["git", "commit", "-qm", "fix: a bug slipped through"],
+    ):
+        subprocess.run(cmd, cwd=repo, check=True)
+    return repo
+
+
+def test_targets_are_named_when_a_checkout_is_given(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_ESCAPED_DEFECT_PRIORITY", "1")
+    repo = _repo_with_history(tmp_path)
+    cov = {"files": {"hot.py": {"summary": {"missing_lines": 4}}}}
+    targets, note = trigger.rank_targets(repo, cov, 3)
+    assert targets == ["hot.py"]
+    assert "ranked 1" in note
+
+
+def test_the_ranker_being_switched_off_is_said_not_shown_as_no_targets(tmp_path, monkeypatch):
+    """Three findings, one empty list — which is why the note carries the difference.
+
+    "Nothing to rank", "the ranker is off" and "I was given no checkout" all produce `targets:
+    []`. Left there, the most actionable decision the trigger can make would render identically
+    to the least.
+    """
+    monkeypatch.delenv("ORCH_ESCAPED_DEFECT_PRIORITY", raising=False)
+    repo = _repo_with_history(tmp_path)
+    targets, note = trigger.rank_targets(
+        repo, {"files": {"hot.py": {"summary": {"missing_lines": 4}}}}, 3
+    )
+    assert targets == []
+    assert "could not rank" in note
+    assert "ORCH_ESCAPED_DEFECT_PRIORITY" in note
+
+
+def test_an_unrankable_repo_says_why(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_ESCAPED_DEFECT_PRIORITY", "1")
+    targets, note = trigger.rank_targets(tmp_path / "not-a-repo", {}, 3)
+    assert targets == []
+    assert "could not rank" in note
+
+
+def test_ranked_and_found_nothing_is_distinct_from_could_not_rank(tmp_path, monkeypatch):
+    """The good-news zero and the no-news zero, kept apart at the last step of the chain."""
+    monkeypatch.setenv("ORCH_ESCAPED_DEFECT_PRIORITY", "1")
+    repo = _repo_with_history(tmp_path)
+    # A report that measures a file the repo does not have: ranking runs, nothing qualifies.
+    targets, note = trigger.rank_targets(
+        repo, {"files": {"elsewhere.py": {"summary": {"missing_lines": 9}}}}, 3
+    )
+    assert targets == []
+    assert "could not rank" not in note
+
+
+def test_without_a_checkout_the_decision_says_nothing_ranked_them(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(trigger.KILL_SWITCH, "1")
+    report = tmp_path / "coverage.json"
+    report.write_text(json.dumps({"totals": {"percent_covered": 50.0}}), encoding="utf-8")
+    trigger.main(["--repo", "r", "--coverage-json", str(report), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["targets"] == []
+    assert "--repo-path was not given" in payload["reason"]
+
+
+def test_a_repo_at_target_names_no_targets_and_does_not_pretend_to_rank(
+    tmp_path, monkeypatch, capsys
+):
+    """Above 90 there is no work, so ranking would be effort spent to produce an unused list."""
+    monkeypatch.setenv(trigger.KILL_SWITCH, "1")
+    report = tmp_path / "coverage.json"
+    report.write_text(json.dumps({"totals": {"percent_covered": 95.0}}), encoding="utf-8")
+    trigger.main(
+        ["--repo", "r", "--repo-path", str(tmp_path), "--coverage-json", str(report), "--json"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == trigger.ACTION_NONE
+    assert payload["targets"] == []
+    assert "rank" not in payload["reason"].lower()
