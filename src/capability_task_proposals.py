@@ -70,6 +70,7 @@ import argparse
 import json
 import sys
 
+import capabilities
 import capability_propensity as propensity
 
 try:  # the advisor reaches the binding tables; absence must degrade, never crash
@@ -92,9 +93,21 @@ def unexercised(*, path=None, window_days: int | None = None) -> dict | None:
         rows = propensity.usefulness(path=path, window_days=days)["rows"]
     except Exception:  # noqa: BLE001
         return None
+    # RAILS ARE NOT UNEXERCISED — THEY ARE UNOFFERABLE, and that is a declared answer, not a gap.
+    # A row whose ledger declares findability_category no_surface (verify-invoked gates, tick
+    # cadence steps, the quarantined trial transport) can never be trialed at an agent surface, so
+    # counting it here would hold the docket open on capabilities whose verdict already exists.
+    # They are EXCLUDED and COUNTED (`excluded_rails` in propose()), never silently dropped —
+    # a shrinking denominator nobody can explain is how counts stop being believed.
+    try:
+        declared = capabilities.load_declared(path or capabilities.REG)
+    except Exception:  # noqa: BLE001
+        declared = {}
     out = {}
     for cap_id, row in rows.items():
         if row["resolved"]:
+            continue
+        if (declared.get(cap_id) or {}).get("findability_category") == "no_surface":
             continue
         out[cap_id] = {
             "capability_id": cap_id,
@@ -274,9 +287,22 @@ def propose(*, path=None, window_days: int | None = None) -> dict:
     )
     for i, p in enumerate(proposals, 1):
         p["rank"] = i
+    try:
+        excluded_rails = sum(
+            1
+            for cap_id, row in propensity.usefulness(path=path, window_days=days)["rows"].items()
+            if not row["resolved"]
+            and (capabilities.load_declared(path or capabilities.REG).get(cap_id) or {}).get(
+                "findability_category"
+            )
+            == "no_surface"
+        )
+    except Exception:  # noqa: BLE001
+        excluded_rails = None
     return {
         "window_days": days,
         "unexercised_count": len(pending),
+        "excluded_rails": excluded_rails,
         "measured": True,
         "actionable_now": sum(1 for p in proposals if p["shape_actionable"]),
         "diagnostics_of_the_system": sum(1 for p in proposals if p["diagnostic_of_the_system"]),

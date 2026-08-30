@@ -142,6 +142,16 @@ EVENT_FIELDS = {
 
 KNOWN_GATES: dict[str, dict[str, Any]] = {
     "local-model-profile-trial": {
+        # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
+        # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
+        # the gate's own fields (measured: the canary status vanished from the summary
+        # view the moment a twin existed).
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "quarantine-only by policy: trial transport goes through model_profile_trial_bridge and "
+            "the pinned read-only Workflows runner; offering it at an agent surface would invite the "
+            "un-quarantined dispatch the policy forbids. "
+        ),
         "status": "shadow",
         "entrypoint": "model_profile_trial.py",
         "matcher": {"kind": "supervised_trial", "name": "sol-terra-luna"},
@@ -159,6 +169,15 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "productive accepted work with causal profile and durability joins",
     },
     "completion-event-lineage": {
+        # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
+        # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
+        # the gate's own fields (measured: the canary status vanished from the summary
+        # view the moment a twin existed).
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "feedback.record_completion_event is the Brain's lineage write path, invoked by the "
+            "tick:learning pattern-miner cadence; no agent selects a lineage stamp. "
+        ),
         "status": "canary",
         "entrypoint": "feedback.py:record_completion_event",
         "matcher": {"kind": "feedback_event", "name": "record_run"},
@@ -172,6 +191,15 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "distinct durable subjects retain complete non-orphan lineage without redaction regressions",
     },
     "live-keepalive-supervisor": {
+        # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
+        # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
+        # the gate's own fields (measured: the canary status vanished from the summary
+        # view the moment a twin existed).
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "a staged planner over already-escalated keepalive PRs that refuses live action under the "
+            "single-authority rule; runs as the keepalive-stage2-plan cadence step. "
+        ),
         "status": "wired",
         "entrypoint": "keepalive_supervisor.py",
         # MATCHER CORRECTED 2026-08-21. It declared `evidence_gate/ready_for_supervised_apply`,
@@ -220,6 +248,15 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "causal arm identity and outcome attribution pass",
     },
     "synthesis-promotion": {
+        # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
+        # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
+        # the gate's own fields (measured: the canary status vanished from the summary
+        # view the moment a twin existed).
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "exp_abcd followup -> synthesis_promotion.reconcile, fired mechanically on "
+            "experiment_phase=evaluated; offering it would invite a second delivery controller. "
+        ),
         "status": "wired",
         "entrypoint": "exp_abcd.py:followup -> synthesis_promotion.py:reconcile",
         "matcher": {"kind": "experiment_phase", "equals": "evaluated"},
@@ -269,6 +306,15 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "joined gate artifacts and durable outcomes demonstrate useful discrimination",
     },
     "redirect-apply-bootstrap": {
+        # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
+        # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
+        # the gate's own fields (measured: the canary status vanished from the summary
+        # view the moment a twin existed).
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "the daily redirect apply/link cadence step, at most one authorised plan per day; an "
+            "agent hand-applying would bypass the self-gating that defines it. "
+        ),
         "status": "canary",
         "entrypoint": "redirect_apply.py:apply_candidates",
         "matcher": {"kind": "evidence_gate", "name": "redirect_apply_bootstrap_eligible"},
@@ -1147,6 +1193,10 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # rather than typed into a live JSON file nobody diffs.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     "agy-runtime-isolation": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "adapters.build_command adds --add-dir on every gemini dispatch and the dispatcher tags it; this capability IS the confinement, and selection pressure must never reach a confinement property."
+        ),
         "kill_switch_category": "safety_guard",
         "kill_switch_rationale": (
             "This capability IS the confinement: adapters.build_command adds an absolute "
@@ -1197,7 +1247,55 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "context to offer it to, so no surface can make it more findable."
         ),
     },
+    # ELEVEN INTERNAL RAILS AND ONE QUARANTINED TRANSPORT, declared 2026-08-29 from the hard-tail
+    # assessment (each rationale names the rail that invokes it). Declared HERE, not only in a live
+    # ledger, because a declaration typed into one machine's capabilities.json is green where it
+    # was typed, absent on a fresh checkout, and invisible in a diff — the drift guard in
+    # test_capability_admission exists to force exactly this placement.
+    "evidence-acquisition": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "evidence_acquisition.py only OBEYS capabilities.unblock() — re-deriving the decision at "
+            "a surface would create a second opinion; it runs as an orchestrate.sh shadow cadence "
+            "step. "
+        ),
+    },
+    "feature-reflection-cli": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "its agent-facing half is already offered as feature-scan (same entrypoint module); this "
+            "row is the features.py registry machinery fed by the daily tick step and read in "
+            "periodic_report. "
+        ),
+    },
+    "issue-readiness": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "orchestrate.sh invokes issue_readiness.py on cadence, feeding backlog._is_ready via the "
+            "status:ready label; agents consume its labels, and a manual invocation would race the "
+            "cadence. "
+        ),
+    },
+    "capability:reference-sync-hygiene-test-gate": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "capability_compiler.run_reference_workflow is invoked only by "
+            "consumer_sync_shadow.record_shadow_result via the consumer-sync ingest cadence; same "
+            "shape as capability-admission-gate. "
+        ),
+    },
+    "research-scheduler": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "tick.research_tick consumes its planning functions behind ORCH_RESEARCH_ARM; an agent "
+            "wanting an experiment invokes exp_abcd directly, not the scheduler. "
+        ),
+    },
     "feedback-store": {
+        "findability_category": "no_surface",
+        "findability_rationale": (
+            "the learning store's spine: every dispatch, outcome and learning-cadence step writes it. Substrate cannot be task-selected."
+        ),
         "kill_switch_category": "compute_only",
         "control_point": "ORCH_DISABLE_STEPS",
         "kill_switch_rationale": (
