@@ -236,6 +236,90 @@ def rank(
     return [s.as_dict() for s in ordered[:limit]]
 
 
+def rank_status(
+    repo: str | Path,
+    coverage_json: dict[str, Any] | None = None,
+    *,
+    hollow_rates: dict[str, float] | None = None,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    limit: int = DEFAULT_LIMIT,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """`rank`, plus whether an empty result means "nothing scored" or "nothing was readable".
+
+    `rank` alone cannot say. Both of its git-backed tiers go through `_git`, which returns "" on a
+    non-zero exit — so a directory that is not a git repository produces exactly the empty list a
+    pristine repository does, and a caller choosing work from it would read "no file needs tests"
+    off a failed subprocess. That is this workspace's most repeated defect wearing its test-writing
+    costume: one value meaning both "measured zero" and "could not measure", where only the first
+    is good news.
+
+    So the git tiers get a probe of their own. `rev-parse --git-dir` is the cheapest question that
+    distinguishes them, and it is asked BEFORE ranking rather than inferred from an empty result.
+    """
+    repo_path = Path(repo).expanduser().resolve()
+    _capability_heartbeat()
+
+    if not repo_path.is_dir():
+        return [], {"status": "unavailable", "reason": f"no such directory: {repo_path}"}
+    probe = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return [], {
+            "status": "unavailable",
+            "reason": (
+                f"not a git repository: {repo_path} — tiers 1 and 2 both read git history, so an "
+                "empty ranking here would report zero signal rather than no reading"
+            ),
+        }
+
+    rows = rank(
+        repo_path,
+        coverage_json,
+        hollow_rates=hollow_rates,
+        lookback_days=lookback_days,
+        limit=limit,
+    )
+    if rows:
+        return rows, {"status": "ok", "reason": f"{len(rows)} file(s) scored"}
+
+    read = f"git history over {lookback_days} days"
+    read += (
+        f" and a coverage report naming {len(coverage_json.get('files', {}))} file(s)"
+        if coverage_json
+        else ", and no coverage report was supplied"
+    )
+    return [], {
+        "status": "no_signal",
+        "reason": f"read {read}; no Python source scored on any tier",
+    }
+
+
+def _capability_heartbeat(event_type: str = "invocation") -> None:
+    """Record that the ranker ran, at its own code path.
+
+    Filed under `testgen-lane` on purpose. This module is a RAIL the lane consults, not a separate
+    capability: it makes no model call, it dispatches nothing, and it does no work a caller could
+    be offered instead of the lane. Giving it its own ledger row would add a lifecycle record for
+    an implementation detail — and a second inventory of the same capability is how this project
+    loses track of features. One capability, two code paths that can prove it ran. Never raises:
+    recording use must not be able to prevent the work. (2026-08-29)
+    """
+    try:
+        import capabilities
+
+        capabilities.production_heartbeat(
+            "testgen-lane", event_type, ref="escaped_defect_priority.rank_status"
+        )
+    except Exception:
+        pass
+
+
 def brain_signal_status(db_path: str | Path | None = None) -> dict[str, Any]:
     """Report whether the Brain's escaped-defect signal is usable yet, and never guess.
 
@@ -375,10 +459,25 @@ def _selftest() -> None:
     absent = brain_signal_status("/no/such/store.db")
     assert absent["source"] == "git" and absent["brain"] == "unknown", absent
 
+    # --- rank_status separates "nothing scored" from "nothing readable" ----------------------
+    # Both produce the SAME empty list from `rank`, because both git tiers go through a helper
+    # that returns "" on a non-zero exit. Only the probe tells them apart, and a caller choosing
+    # test-writing work from the wrong one reads a failed subprocess as "no file needs tests".
+    with tempfile.TemporaryDirectory() as td:
+        pristine = Path(td)
+        subprocess.run(["git", "init", "-q", "."], cwd=pristine, check=True)
+        rows, drained = rank_status(pristine)
+        assert rows == [] and drained["status"] == "no_signal", drained
+        assert "no coverage report" in drained["reason"], drained
+
+    _, unreadable = rank_status("/no/such/directory/at/all")
+    assert unreadable["status"] == "unavailable", unreadable
+    assert drained["status"] != unreadable["status"], "one sentinel must not mean both"
+
     print(
         "escaped_defect_priority.py selftest: OK (tier ordering, hollow multiplier, fix-subject "
-        "matching, contamination drop, live git ranking, and an unreadable Brain reported as "
-        "unknown rather than zero)"
+        "matching, contamination drop, live git ranking, an unreadable Brain reported as "
+        "unknown rather than zero, and an empty ranking distinguished from an unreadable one)"
     )
 
 
