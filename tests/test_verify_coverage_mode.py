@@ -41,7 +41,10 @@ DELIBERATE BREAK -> REVERT, performed 2026-08-23: setting `parallel = false` in 
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -169,10 +172,16 @@ def test_coverage_config_omits_the_tests_themselves():
     )
 
 
-def test_absent_coverage_data_is_reported_as_absent(monkeypatch, tmp_path):
-    """No data must read as 'no measurement' — never as 0%, never as silence."""
-    monkeypatch.setattr(verify, "HERE", tmp_path)
-    out = verify.coverage_combine_and_report()
+def test_absent_coverage_data_is_reported_as_absent(tmp_path):
+    """No data must read as 'no measurement' — never as 0%, never as silence.
+
+    Takes `root` as an argument rather than patching `verify.HERE`, which is what it did until
+    2026-08-30 and which never worked: ROOT is computed from HERE at IMPORT, so patching the
+    attribute afterwards left the function reading the real checkout. It passed for as long as the
+    checkout held no `.coverage.*` files — an assertion about the developer's working tree wearing
+    the costume of an assertion about the code.
+    """
+    out = verify.coverage_combine_and_report(root=tmp_path)
     assert "NO DATA" in out, (
         "an empty data set must say so. Reporting 0% would be indistinguishable from a real, awful "
         "score, and reporting nothing would be indistinguishable from success — the founding defect."
@@ -245,3 +254,72 @@ def test_the_cli_help_actually_renders():
         "badly formed help string" not in combined
     ), "argparse could not format a help string. A literal `%` in help= must be escaped as `%%`."
     assert "--coverage" in combined, "--help no longer documents --coverage"
+
+
+# ---------------------------------------------------------------------------------------------
+# The machine-readable report. Added 2026-08-30 because the text report had no consumer but a
+# human, while `escaped_defect_priority` ranks test-writing work partly on uncovered statements
+# and the only JSON available was pytest-only.
+# ---------------------------------------------------------------------------------------------
+
+
+def _instrumented(root):
+    """Produce a real combined data set in `root` — a fixture no mock could stand in for.
+
+    Self-contained on purpose: no sibling import, so the fixture cannot fail for reasons about
+    `sys.path` rather than about coverage. And it reports the child's stderr rather than raising a
+    bare CalledProcessError — the first version used `check=True` and, when CI turned out not to
+    install `coverage` at all, the failure said only "exit status 1". A fixture that fails without
+    saying why costs a whole round trip to diagnose.
+    """
+    (root / "run.py").write_text("x = 1\nassert x == 1\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "coverage", "run", "--parallel-mode", "run.py"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (
+        f"could not produce an instrumented run (exit {proc.returncode}). "
+        f"stdout={proc.stdout.strip()!r} stderr={proc.stderr.strip()!r}"
+    )
+
+
+def test_the_combined_run_also_writes_the_machine_readable_report(tmp_path):
+    """The whole point of the change: a ranker cannot read a table meant for a person.
+
+    Measured on this repo the day it was added, the difference is not cosmetic. pytest-only put
+    `capability_advisor.py` at 12.0% with 1,159 missing statements — top of the queue by a wide
+    margin — because 79 of 102 modules are exercised by a `--selftest` SUBPROCESS. The combined
+    report puts the same file at 95.1% with 64 missing. Ranking on the first number sends an agent
+    to write a thousand statements' worth of tests for a module that is already covered.
+    """
+    _instrumented(tmp_path)
+    out = verify.coverage_combine_and_report(root=tmp_path)
+    written = tmp_path / "coverage.json"
+    assert written.exists(), out
+    assert str(written) in out, "the report must name the file it wrote, or nothing can find it"
+    payload = json.loads(written.read_text())
+    assert "run.py" in payload["files"], sorted(payload["files"])
+
+
+def test_a_json_that_could_not_be_written_is_named_and_not_silent(tmp_path, monkeypatch):
+    """An absent report that reads as 'nothing uncovered' is this repo's founding defect.
+
+    One layer under the docstring's own rule about NO DATA: the text report can succeed while the
+    JSON write fails, and a consumer reading zeros off a file that was never written would rank
+    every file as fully covered.
+    """
+    _instrumented(tmp_path)
+    real = subprocess.run
+
+    def fail_on_json(cmd, *a, **kw):
+        if "json" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, "", "disk on fire")
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", fail_on_json)
+    out = verify.coverage_combine_and_report(root=tmp_path)
+    assert "NOT WRITTEN" in out, out
+    assert "disk on fire" in out, "the reason must survive into the report"
+    assert not (tmp_path / "coverage.json").exists()

@@ -1,0 +1,106 @@
+"""The coverage baseline and the workflow that feeds it, checked against each other.
+
+Two repos in this fleet were invisible to Maint Coverage Guard on 2026-08-30 and neither was
+misconfigured in any way a reader could see. The guard needs a payload artifact AND a trend
+artifact on a run of the workflow a repo declares; a config naming a workflow that publishes only
+one of them produces the same silence as a repo measuring nothing at all. Counter_Risk is in
+exactly that state today — both payloads, no trend.
+
+So the pairing is asserted here rather than discovered from a guard that has been failing for
+weeks: what the config NAMES must be a workflow that exists, and that workflow must publish BOTH
+artifacts under the names the guard resolves.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+import paths
+
+REPO = paths.REPO_ROOT
+BASELINE = REPO / "config/coverage-baseline.json"
+
+# The names Maint Coverage Guard resolves. `gate-coverage` is its preferred exact payload name;
+# `gate-coverage-trend` is required outright, and a run carrying only the payload is skipped.
+PAYLOAD_ARTIFACT = "gate-coverage"
+TREND_ARTIFACT = "gate-coverage-trend"
+
+
+@pytest.fixture(scope="module")
+def baseline() -> dict:
+    return json.loads(BASELINE.read_text(encoding="utf-8"))
+
+
+def test_the_baseline_exists_and_is_a_number(baseline):
+    """Without a baseline the guard has nothing to compare against and reports a no-op."""
+    assert isinstance(baseline["line"], (int, float))
+    assert 0 < baseline["line"] <= 100
+    assert isinstance(baseline["warn_drop"], (int, float))
+
+
+def test_the_baseline_is_below_the_measured_figure_so_it_can_fail(baseline):
+    """A baseline above reality is red on arrival, and a gate red on arrival gets switched off.
+
+    80.64% is what `verify.py --coverage` measured on 2026-08-30, against CI's 80.3%. The
+    baseline is deliberately under both. This asserts the DIRECTION rather than the number, so it
+    does not go stale the moment coverage moves.
+    """
+    assert baseline["line"] < 80.3, (
+        "the baseline must sit below the last measured combined figure, or the guard opens a "
+        "breach issue on a repo that has not regressed"
+    )
+
+
+def test_the_declared_source_workflow_exists(baseline):
+    declared = baseline.get("source_workflows")
+    assert declared, "source_workflows must name where this repo's coverage is measured"
+    for rel in declared:
+        assert (REPO / rel).is_file(), f"{rel} is named in the baseline config but does not exist"
+
+
+def test_the_declared_workflow_publishes_both_artifacts_the_guard_requires(baseline):
+    """The defect this file exists for.
+
+    A workflow publishing the payload but not the trend is skipped by the guard, and the message
+    it produces says coverage is not being measured — which is the opposite of true. Nothing else
+    in this repo would notice.
+    """
+    for rel in baseline["source_workflows"]:
+        text = (REPO / rel).read_text(encoding="utf-8")
+        for artifact in (PAYLOAD_ARTIFACT, TREND_ARTIFACT):
+            assert f"name: {artifact}\n" in text, (
+                f"{rel} is declared as this repo's coverage source but never publishes an "
+                f"artifact named {artifact}; the guard skips such a run and reports it as "
+                "coverage not being measured"
+            )
+
+
+def test_the_payload_comes_from_the_combined_run_not_the_gate(baseline):
+    """Which number gets enforced is the whole point of pointing at ci.yml.
+
+    The Gate runs pytest alone and reports 34.11%, because most of this codebase is exercised by
+    `--selftest` subprocesses pytest-cov cannot see. Both figures are honestly produced; only one
+    is about this codebase. If the declared workflow ever stopped running the combined
+    measurement, the guard would silently start enforcing the blind spot.
+    """
+    for rel in baseline["source_workflows"]:
+        text = (REPO / rel).read_text(encoding="utf-8")
+        assert "--coverage" in text, f"{rel} must run the combined measurement"
+        assert "coverage.json" in text, f"{rel} must publish the combined report as coverage.json"
+
+
+def test_the_baseline_is_not_shipped_to_other_repos():
+    """Every repo maintains its own baseline; syncing one would impose this repo's number.
+
+    Asserted because the file lives at a template-managed path, and the reason it is excluded is
+    not visible from the path itself.
+    """
+    manifest = REPO / ".github/workflows"
+    assert manifest.is_dir()
+    assert BASELINE.is_file()
+    assert "coverage-baseline" not in (REPO / ".gitignore").read_text(encoding="utf-8"), (
+        "the baseline must be COMMITTED — a gitignored baseline is absent in CI, which the guard "
+        "reports as an unset baseline and treats as a no-op"
+    )

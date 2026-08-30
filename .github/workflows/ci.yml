@@ -103,6 +103,49 @@ jobs:
           # reddening two jobs and telling you nothing extra.
           python3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt
 
+      - name: Build the trend record the coverage guard reads
+        if: always()
+        run: |
+          # tools/coverage_trend.py is synced from Workflows and is the SAME producer every other
+          # repo in the fleet uses, so this repo's number is comparable rather than bespoke.
+          # --soft: this job measures, it does not gate. The guard decides what a drop means.
+          if [ -f coverage.json ]; then
+            python3 tools/coverage_trend.py \
+              --coverage-json coverage.json \
+              --baseline config/coverage-baseline.json \
+              --project-root "${GITHUB_WORKSPACE}" \
+              --artifact-path coverage-trend.json \
+              --job-summary "$GITHUB_STEP_SUMMARY" \
+              --minimum 75 \
+              --soft
+          else
+            # NAMED, never silent. An absent payload that publishes nothing is correct; an absent
+            # payload that publishes an EMPTY artifact would be read by the guard as a real
+            # measurement, which is the failure this repo keeps finding in other people's gates.
+            echo "::warning::verify.py --coverage wrote no coverage.json — publishing no coverage artifacts, which the guard reports as a missing measurement rather than a low one."
+          fi
+
+      # The guard needs BOTH, and skips a run carrying only one. Named exactly `gate-coverage`
+      # and `gate-coverage-trend`: those are the names Maint Coverage Guard resolves, and after
+      # Workflows #3272 it also accepts matrix-suffixed payloads -- but the exact name is
+      # preferred first, so using it keeps this job's payload unambiguous on a run that may also
+      # carry the Gate's.
+      - name: Publish the payload the coverage guard reads
+        if: always() && hashFiles('coverage.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-coverage
+          path: coverage.json
+          if-no-files-found: error
+
+      - name: Publish the coverage trend
+        if: always() && hashFiles('coverage-trend.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gate-coverage-trend
+          path: coverage-trend.json
+          if-no-files-found: error
+
       - name: Publish the figure
         if: always()
         run: |
@@ -120,8 +163,11 @@ jobs:
             echo "102 modules are exercised by a \`--selftest\` subprocess that pytest-cov cannot"
             echo "see. The figure above is the one comparable to the rest of the fleet."
             echo
-            echo "Not enforced: Maint Coverage Guard reads pr-00-gate.yml by a hardcoded"
-            echo "workflowId and cannot see this job, so this repo still has no coverage baseline."
+            echo "ENFORCED as of 2026-08-30. Maint Coverage Guard reads this job, because"
+            echo "\`config/coverage-baseline.json\` names it in \`source_workflows\` (Workflows"
+            echo "#3270) and this job publishes the \`gate-coverage\` payload and"
+            echo "\`gate-coverage-trend\` record the guard requires. A drop past the baseline"
+            echo "opens an issue; it does not block a merge."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the coverage data
@@ -149,7 +195,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pyyaml
+        run: python -m pip install --quiet pytest pyyaml coverage
 
       - name: Verify
         env:
@@ -264,7 +310,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pyyaml
+        run: python -m pip install --quiet pytest pyyaml coverage
 
       - name: Reconcile
         env:

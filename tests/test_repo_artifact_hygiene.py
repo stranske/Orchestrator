@@ -210,6 +210,11 @@ COVERAGE_DATA_FILES = (
     # Third family, third time nothing in this suite opposed it.
     ".coverage",
     ".coverage.a-host.12345.678901",
+    # Added 2026-08-30 with the JSON emission in verify.py's combined run. It is a GENERATED
+    # REPORT rather than a data file, but it lands in the same place for the same reason and
+    # would be committed by the same accident -- `coverage.xml` is ignored by the template block
+    # below, and nothing covered this name.
+    "coverage.json",
 )
 
 # Coverage NAMES that are source and must stay committable, each falsifying a DIFFERENT over-broad
@@ -222,6 +227,10 @@ COVERAGE_MUST_STAY_COMMITTABLE = (
     # these artifacts. `tools/coverage_trend.py`, `scripts/ci_coverage_delta.py` and
     # `.github/workflows/maint-coverage-guard.yml` are its siblings.
     "tools/coverage_guard.py",
+    # `/coverage*` -- the pattern that would have been written to catch coverage.json in one go --
+    # reaches coverage.py's own config under its OTHER spelling. `.coveragerc` above falsifies the
+    # dot-prefixed pattern; this falsifies the bare one, and they are different mistakes.
+    "coverage.cfg",
 )
 # `coverage.xml` is deliberately absent from the list above: it is a generated REPORT, and the
 # template-managed block at the bottom of .gitignore already ignores it. Asserting it stays
