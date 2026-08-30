@@ -264,6 +264,16 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "next_transition": "retry monitor after backoff; repair exact missing-spec or execution reason",
     },
     {
+        "key": "research-usage-guard",
+        "success_stamp": ".last-research-usage-guard",
+        "cadence_days": 0,
+        "artifact": "research-usage-report.json",
+        "log": "research-usage-report.log",
+        "gate": "local research opportunity ledger available; no network or model calls",
+        "next_transition": "retry after backoff while an active budget/anomaly block, stale "
+        "dispatch, or telemetry outage remains",
+    },
+    {
         "key": "relearn",
         "success_stamp": ".last-relearn",
         "cadence_days": 6,

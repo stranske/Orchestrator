@@ -223,6 +223,18 @@ ad hoc. To capture them **consistently**:
 
 ---
 
+## D. Deterministic Research Usage Guard & Anomaly Controls
+
+To prevent runaway evaluator dispatch, budget exhaustion, or repeated missing-spec execution loops:
+
+1. **Opt-in Unattended Research (`ORCH_RESEARCH_ARM=0`):** Unattended research ticks default to disabled (`0`). Explicit opt-in (`ORCH_RESEARCH_ARM=1`) or manual/supervised overrides (`is_manual=True` or `ORCH_RESEARCH_USAGE_BYPASS=1`) enable research execution.
+2. **Missing-Spec Zero LLM Dispatch:** Recovered experiments with missing specs (`spec_provenance: "missing_spec_stub"`, `missing_spec: True`) never invoke LLM evaluators or synthesis. Objective anchors (diff evidence) are preserved, terminal `followup-skip.json` artifacts are written, and subject lifecycle is marked `skipped`.
+3. **Stable Signature Deduplication:** Candidate panel evaluation signatures cover repo, normalized spec hash, base SHA, and candidate diff hashes. Panel width and judge identity are deliberately excluded so changing evaluators cannot bypass immutable-input deduplication. Persisted `followup-decision.json` (the completed unattended decision, signature, evaluator result, and objective anchors), `eval-maps.json`, and the local opportunity ledger prevent re-spending across process restarts.
+4. **Local Usage Guard & Anomaly Report (`src/research_usage_guard.py`):** Operates deterministically with zero network and zero LLM calls. Assesses rolling budget limits (24h evaluator calls, 24h prompt bytes) and anomaly spikes (1h evaluator call spikes, 1h prompt byte spikes, repeated subject share). Records opportunity decisions (`admitted`, `deferred`, `duplicate`, `missing-spec-objective-only`, `blocked_by_limit`, `blocked_by_anomaly`) before launch, reconciles admitted rows to a terminal outcome, and independently audits recorded evaluator runs so bypassed or pre-deployment missing-spec/wide/repeated panels remain visible. The daily cadence writes `$ORCH_STATE_DIR/research-usage-report.json` and fails visibly while a block remains active in the 24-hour alert window, an admitted dispatch is stale, or observed-run telemetry is unavailable.
+5. **Evaluator Panel Sizes:** Direct/manual `evaluate` calls retain the 4-evaluator default, while unattended followup starts with one Vibe judge. A wider calibration panel requires an explicit `ORCH_FOLLOWUP_EVALUATORS` list.
+
+---
+
 ## Build status (honest: designed vs. implemented)
 
 - **Implemented + selftested:** the growth mechanism in `feedback.py` v2 — `evidence_gaps` +
@@ -230,6 +242,7 @@ ad hoc. To capture them **consistently**:
   learning (continuous reward), the free-agent cost fix, rubric/schema versioning. The
   `research_scheduler.py` scaffold — hypothesis registry, capacity-aware acquisition/knapsack, Top-Two
   variable-N arm selection; the feature registry reflection CLI + periodic-report surface.
+  The deterministic research usage guard (`src/research_usage_guard.py`) — rolling limits, anomaly spike detection, missing-spec zero dispatch, stable signature deduplication, and telemetry isolation in `test_feedback_model_provenance.py`.
 - **Designed, scaffolded next:** human calibration regression.
 - **Integration seams (unchanged plan):** LangSmith cost pull; durability sweep; router reads learned weights.
 

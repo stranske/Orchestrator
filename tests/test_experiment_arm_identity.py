@@ -151,6 +151,7 @@ def test_followup_collects_and_evaluates_a_v2_manifest(tmp_path, monkeypatch) ->
     half-fixed state that made this invisible.
     """
     monkeypatch.setenv("ORCH_FOLLOWUP_SHIP_GATE", "0")
+    monkeypatch.setenv("ORCH_RESEARCH_ARM", "1")
     monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     monkeypatch.setattr(exp_abcd.capabilities, "production_heartbeat", lambda *a, **kw: None)

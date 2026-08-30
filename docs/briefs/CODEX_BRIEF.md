@@ -121,12 +121,17 @@ weight. Scores (0–10) are human-facing context only, never the ship gate.
 
 ---
 
-## 4. Research arm & other salient features (`EVAL_AND_TESTING.md`)
+## 4. Research arm & usage guard controls (`EVAL_AND_TESTING.md`, `src/research_usage_guard.py`)
+- **Opt-in Default (`ORCH_RESEARCH_ARM=0`):** Unattended research tick execution is opt-in by default (`ORCH_RESEARCH_ARM=0`), while explicit owner overrides (`ORCH_RESEARCH_ARM=1` or `ORCH_RESEARCH_USAGE_BYPASS=1` for manual/supervised runs) remain fully supported.
 - **Capacity-aware scheduler (`research_scheduler.py`):** never always-on — wakes only on **spare
   capacity** (an idle free/flat seat, or use-it-or-lose-it 5h headroom, or a human "run science" trigger).
   Jobs scored `priority = info_value / capacity_cost`, where `info_value = uncertainty · stakes ·
   staleness`; it **greedily knapsacks the budget** — abundant capacity → an intense job (4–5-way + an
   adversarial panel); scarce → a cheap single-judge spot-check. **Same queue, intensity scales to budget.**
+- **Deterministic Research Usage Guard (`src/research_usage_guard.py`):** local, zero-network, zero-LLM usage guard. Every followup opportunity evaluates rolling limits and anomaly spike detectors (evaluator call count, prompt byte count, repeated subject share). One opportunity decision is recorded for every eligible followup (`admitted`, `deferred`, `duplicate`, `missing-spec-objective-only`, `blocked_by_limit`, `blocked_by_anomaly`). A separate read-side pass audits recorded evaluator runs for legacy or bypassed missing-spec, wide-panel, and repeated-subject traffic. Detected active anomalies block optional followup and surface in `$ORCH_STATE_DIR/research-usage-report.json`.
+- **Missing-Spec Zero LLM Dispatch:** Recovered experiments with missing specs (`missing_spec: True`, `spec_provenance: "missing_spec_stub"`) never launch LLM judges or synthesis. Objective anchors are preserved, an idempotent terminal artifact (`followup-skip.json`) is written, and subject lifecycle is marked as `skipped` (`reason="missing_spec_recovered"`).
+- **Stable Signature Deduplication:** Prevents repeated unchanged followup panel evaluations by a stable signature covering repository, normalized spec hash, base SHA, and candidate diff hashes. Judge identity and panel width are excluded so configuration changes cannot bypass immutable-input deduplication. Decisions are persisted on disk (`followup-decision.json`, `eval-maps.json`) and in the opportunity ledger so restarts cannot re-spend.
+- **Evaluator Panel Size Semantics:** Direct/manual `evaluate` calls retain the 4-evaluator default (neutral judge top-up), while unattended followup starts with one Vibe judge. Wider calibration panels require an explicit `ORCH_FOLLOWUP_EVALUATORS` list.
 - **Arm selection = Top-Two Thompson with variable N (2–5):** best-arm *identification* (not reward
   maximization) — include the current leader + the highest-uncertainty challenger, add random extras up to
   N as capacity permits (randomization prevents the self-confirming blind spot; Top-Two seeding keeps it
