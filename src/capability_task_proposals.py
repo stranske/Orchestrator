@@ -120,6 +120,22 @@ def unexercised(*, path=None, window_days: int | None = None) -> dict | None:
     return out
 
 
+RAIL_CONSULTED_PREFIX = "tick:"
+
+
+def _only_rail_consulted(surfaces: list[str]) -> bool:
+    """Are ALL of this capability's bound surfaces rail-consulted tick phases?
+
+    The tick's phase consults (orchestrate.sh iterating tick_phase_surfaces()) record offers with
+    deliberately NO verdicts — the machine verdicts land at the 'tick' surface via tick-evidence.
+    Counting that silence as "the surface said nothing" told the operator to chase answers no agent
+    could ever give: measured 2026-08-30, four tick phases carried 257 offers and zero answers by
+    construction. A capability ALSO bound at any agent surface keeps the normal accounting — one
+    reachable agent path is enough to make the question askable.
+    """
+    return bool(surfaces) and all(str(s).startswith(RAIL_CONSULTED_PREFIX) for s in surfaces)
+
+
 def _self_scoped(cap_id: str) -> bool:
     """Does this capability measure THIS system? Derived from the declared precondition."""
     if advisor is None:
@@ -239,6 +255,19 @@ def propose(*, path=None, window_days: int | None = None) -> dict:
                 "records a reasoned decline there is no signal to derive a task from. Fix the "
                 "consult before designing the task."
             )
+        elif _only_rail_consulted(surfaces):
+            why = (
+                f"offered {row['offered']}x, but ONLY at rail-consulted tick phases — those "
+                "consults record offers mechanically and, by design, no verdicts (the tick's "
+                "machine verdicts land at the 'tick' surface via tick-evidence)"
+            )
+            shape = (
+                "NOT AN AGENT TASK. Its offers come from the tick's own phase consults, where no "
+                "agent is present to answer. Its scoring paths are tick-evidence (if it is an "
+                "observer whose artifact can be fingerprint-diffed) or a deliberate trial at an "
+                "agent surface it is also bound to — binding one is the actionable move if a fair "
+                "agent trial exists at all."
+            )
         else:
             why = "never offered at any surface — no binding reaches it"
             shape = (
@@ -307,7 +336,16 @@ def propose(*, path=None, window_days: int | None = None) -> dict:
         "actionable_now": sum(1 for p in proposals if p["shape_actionable"]),
         "diagnostics_of_the_system": sum(1 for p in proposals if p["diagnostic_of_the_system"]),
         "blocked_on_recording": sum(
-            1 for p in proposals if p["dominant_decline_kind"] is None and p["bound_surfaces"]
+            1
+            for p in proposals
+            if p["dominant_decline_kind"] is None
+            and p["bound_surfaces"]
+            and not _only_rail_consulted(p["bound_surfaces"])
+        ),
+        # Excluded from blocked_on_recording and COUNTED here, same treatment the rails got: a
+        # shrinking number nobody can explain is how counts stop being believed.
+        "rail_consulted_only": sum(
+            1 for p in proposals if _only_rail_consulted(p["bound_surfaces"])
         ),
         "unbound": sum(1 for p in proposals if not p["bound_surfaces"]),
         "proposals": proposals,
@@ -478,6 +516,16 @@ def _selftest() -> None:
                 )
             finally:
                 del advisor.CAPABILITY_PRECONDITIONS["zzz-selfscoped"]
+
+        # 3c. RAIL-CONSULTED IS NOT SILENCE. A capability bound ONLY at tick phases gets its
+        #     offers from the tick's own consult, where no agent is present to answer — counting
+        #     that as blocked-on-recording told the operator to chase answers no agent could give
+        #     (measured: four tick phases, 257 offers, zero answers, all by construction).
+        assert _only_rail_consulted(["tick:learning", "tick:dispatch"]) is True
+        assert (
+            _only_rail_consulted(["tick:learning", "closer-lane"]) is False
+        ), "one agent surface is enough to keep the normal accounting"
+        assert _only_rail_consulted([]) is False, "unbound is its own category, not rail-consulted"
 
         # 4. EVERY DECLINE KIND CARRIES A SHAPE, so a new kind cannot be added without saying what
         #    task would satisfy it. This is the durable half — it binds future edits, not this one.

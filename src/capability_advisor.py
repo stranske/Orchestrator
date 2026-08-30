@@ -2647,6 +2647,76 @@ HOW_TO_USE = {
     # module's own docstring; each states what it RETURNS and the load below which it is not worth
     # invoking, because "the work was already small enough by hand" is this fleet's dominant
     # decline reason.
+    # THE TEN RAILS, EXPLAINED IN CODE (2026-08-30). None of these is offerable — each is a
+    # declared no_surface rail — but a catalogue entry that is only a bare name cannot even be
+    # UNDERSTOOD, and "offerable in code to the extent possible" means: what it does, which
+    # rail invokes it, why selecting it would be wrong, and where to READ what it produced.
+    # These entries serve format_advice, direct_entry and the docs; they invite nothing.
+    "completion-event-lineage": (
+        "RAIL — the Brain's lineage write path: feedback.record_completion_event stamps every "
+        "completion into the seven-phase episode record. Invoked by the tick:learning "
+        "pattern-miner cadence. Never select it: no agent chooses a lineage stamp, and a second "
+        "writer would fork the episode history. To READ what it wrote: feedback.py "
+        "completion-events --json "
+    ),
+    "evidence-acquisition": (
+        "RAIL — the meta-lane that nominates matching work for capabilities one reuse short of "
+        "their threshold; it only OBEYS capabilities.unblock(). Invoked by the orchestrate.sh "
+        "shadow cadence step. Never select it: invoking it by hand would double-decide unblock(). "
+        "To see its current nominations: evidence_acquisition.py --json (read-only) "
+    ),
+    "feature-reflection-cli": (
+        "RAIL — the features.py registry machinery (record_use / summary) fed by the daily "
+        "feature-scan tick step and surfaced in periodic_report. Never select it: its "
+        "agent-facing half is already offered as feature-scan, and this row is the bookkeeping "
+        "behind it "
+    ),
+    "feedback-store": (
+        "RAIL — the learning store's spine: every dispatch, outcome and learning-cadence step "
+        "writes it, and route weights learn from it. Never select it: substrate is not a task. To "
+        "QUERY it: feedback.py completion-events / route-weights, or sqlite over the feedback db "
+        "(read-only) "
+    ),
+    "issue-readiness": (
+        "RAIL — classifies fleet issues auto_ready / not_opener_work and applies the status:ready "
+        "label the opener's backlog._is_ready reads. Invoked by the orchestrate.sh readiness "
+        "cadence (ORCH_ISSUE_AUTOREADY). Never select it: a manual invocation races the cadence. "
+        "To see its verdicts: ~/.codex/orchestrator/issue-readiness.json "
+    ),
+    "live-keepalive-supervisor": (
+        "RAIL — the staged planner over already-escalated keepalive PRs; refuses live action "
+        "under the single-authority rule. Invoked by the keepalive-stage2-plan cadence step. "
+        "Never select it: its whole design is that only the cadence stages and only "
+        "redirect_apply (self-gated) acts. Its plan artifact: "
+        "keepalive-supervisor-stage2-plan.json "
+    ),
+    "redirect-apply-bootstrap": (
+        "RAIL — lifts the Stage-2 gate without a human: authorizes at most ONE RedirectAgent plan "
+        "per day (pid-dead condition load-bearing) and links outcomes back. Invoked by the daily "
+        "redirect apply/link cadence step behind ORCH_REDIRECT_APPLY_BOOTSTRAP. Never select it: "
+        "hand-applying bypasses the self-gating that defines it. State: redirect_apply.py "
+        "--status --json (read-only) "
+    ),
+    "research-scheduler": (
+        "RAIL — four pure planning functions that pick which experiment spare capacity funds, "
+        "consumed by tick.research_tick behind ORCH_RESEARCH_ARM. Never select it: an agent "
+        "wanting an experiment invokes exp_abcd directly; the scheduler exists to spend IDLE "
+        "capacity, not requested capacity "
+    ),
+    "research-usage-guard": (
+        "RAIL — deterministic admission control for optional research followups: dedups stable "
+        "inputs across ticks, enforces rolling request/prompt budgets, blocks subject spikes, "
+        "emits an anomaly report. Invoked by exp_abcd's followup path (exp_abcd.py:1584). Never "
+        "select it: admission control chosen by the admitted is no control. Its anomaly report is "
+        "the read surface "
+    ),
+    "synthesis-promotion": (
+        "RAIL — advances a verified experiment synthesis through subordinate delivery phases "
+        "mapped onto capabilities.CANONICAL_STATES, with TTL and rollback. Invoked mechanically "
+        "by exp_abcd followup -> reconcile on experiment_phase=evaluated. Never select it: a "
+        "hand-driven promotion would be the second delivery controller the design forbids. State: "
+        "synthesis_promotion.py status <experiment-dir> "
+    ),
     "abcd-experiment": (
         "exp_abcd.py prepare-arms <repo> <spec_file> <exp_id> <arms> gives the SAME frozen spec to 2-5 "
         "agents in isolated worktrees; collect + evaluate then have every agent cross-grade every "
