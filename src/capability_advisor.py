@@ -289,21 +289,50 @@ CONTEXT_FIELDS = (
 def reachable_set(*, path=None) -> dict:
     """Every capability this advisor can name from free text alone, and how.
 
-    Pinned by a selftest. `adversarial-review` and `docs-drift-fix-agent` were once reachable --
-    their advisory match history proves it -- and silently dropped out when their matchers were
-    tightened to `closer_gate` / `ci_workflow` shapes. Nothing noticed, because reach was never
-    measured. A shrinking front door now fails a test instead of going quiet.
+    `adversarial-review` and `docs-drift-fix-agent` were once reachable -- their advisory match
+    history proves it -- and silently dropped out when their matchers were tightened to
+    `closer_gate` / `ci_workflow` shapes. Nothing noticed, because reach was never measured.
+
+    PINNED BY `tests/test_capability_advisor_reach.py`, AND IT WAS NOT PINNED BY ANYTHING UNTIL
+    2026-08-30. This docstring claimed a selftest held it; `_selftest_reach` calls `advise()` and
+    reimplements its own assertions, and a grep found no caller for this function anywhere in
+    `src/` or `tests/`. The measurement that exists to prove capabilities can still be found was
+    itself the thing nobody could find -- and pytest-only coverage could never have shown it, since
+    it reports this module at 12.0% and cannot distinguish an unexecuted guard from the selftest
+    subprocesses it simply cannot see. The COMBINED report put the module at 95.1% with this body
+    among the 64 statements left over, which is what made it visible.
+
+    THE TWO COUNTS ARE NOT A RATIO, and reading them as one is why `unreachable_declared` exists.
+    `reachable` comes from `advise`, which loads through `capabilities.load` and therefore sees
+    KNOWN_DECLARATIONS seeds; `declared_count` comes from `load_declared`, which does not write and
+    reports only what the ledger itself declares. So `reachable_count` can exceed `declared_count`
+    -- an empty ledger measures 1 reachable of 0 declared -- and no "fraction reachable" can be
+    computed from them. What IS actionable is the difference in the answerable direction: declared
+    capabilities that no free text reaches. That list is the drainable quantity, reported beside
+    the blocking one rather than left for a reader to derive from two numbers that do not divide.
     """
-    caps = capabilities.load_declared(path or capabilities.REG)
+    declared = capabilities.load_declared(path or capabilities.REG)
     out: dict[str, list[str]] = {}
+    # Recorded INSIDE the loop, so it reports what was probed rather than what was meant to be.
+    # The first draft returned `sorted(TASK_SIGNALS)` — a field derived from the constant, which
+    # therefore agreed with the constant no matter what the loop did. A deliberate break that cut
+    # the probe to one task type left it reading as full coverage; only a field written by the act
+    # can witness the act.
+    probed: list[str] = []
     for task_type, signals in TASK_SIGNALS.items():
         advice = advise(signals[0], record=False, path=path)
+        probed.append(task_type)
         for entry in advice.get("capabilities") or []:
             out.setdefault(entry["capability_id"], []).append(task_type)
+    reachable = {k: sorted(set(v)) for k, v in sorted(out.items())}
+    unreachable = sorted(set(declared) - set(reachable))
     return {
-        "reachable": {k: sorted(set(v)) for k, v in sorted(out.items())},
-        "reachable_count": len(out),
-        "ledger_count": len(caps),
+        "reachable": reachable,
+        "reachable_count": len(reachable),
+        "declared_count": len(declared),
+        "unreachable_declared": unreachable,
+        "unreachable_count": len(unreachable),
+        "probed_task_types": sorted(probed),
     }
 
 
