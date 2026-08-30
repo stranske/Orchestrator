@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import capabilities
 import feedback
 import research_subjects
 import spec_provenance
@@ -178,6 +179,29 @@ def observe_recent_research_usage(
             "active_alert_count": 1,
         }
 
+    config_alerts: list[dict[str, Any]] = []
+
+    def observed_limit(name: str, default: int) -> int:
+        try:
+            return _int_limit(os.environ, name, default)
+        except ValueError as exc:
+            config_alerts.append(
+                {
+                    "type": "observed_usage_config_invalid",
+                    "class": "observability",
+                    "detail": str(exc),
+                    "setting": name,
+                    "active_panel_count": 1,
+                }
+            )
+            return default
+
+    max_subject_panels = observed_limit(
+        "ORCH_GUARD_MAX_PANELS_PER_SUBJECT_24H", DEFAULT_MAX_PANELS_PER_SUBJECT_24H
+    )
+    max_panel_width = observed_limit(
+        "ORCH_GUARD_MAX_UNATTENDED_PANEL_WIDTH", DEFAULT_MAX_UNATTENDED_PANEL_WIDTH
+    )
     since = now - max(1, int(window_days)) * 86_400
     rows = conn.execute(
         "SELECT experiment_id,agent,ts FROM runs "
@@ -186,7 +210,11 @@ def observe_recent_research_usage(
         (since,),
     ).fetchall()
     if not rows:
-        return empty
+        return {
+            **empty,
+            "alerts": config_alerts,
+            "active_alert_count": len(config_alerts),
+        }
 
     panels: dict[str, dict[str, Any]] = {}
     for experiment_id, agent, ts in rows:
@@ -224,19 +252,9 @@ def observe_recent_research_usage(
     for panel in panels.values():
         subject_panels[str(panel["subject"])].append(panel)
     active_since = now - ACTIVE_ALERT_WINDOW_HOURS * 3_600
-    max_subject_panels = _int_limit(
-        os.environ,
-        "ORCH_GUARD_MAX_PANELS_PER_SUBJECT_24H",
-        DEFAULT_MAX_PANELS_PER_SUBJECT_24H,
-    )
-    max_panel_width = _int_limit(
-        os.environ,
-        "ORCH_GUARD_MAX_UNATTENDED_PANEL_WIDTH",
-        DEFAULT_MAX_UNATTENDED_PANEL_WIDTH,
-    )
     missing_panels = [panel for panel in panels.values() if panel["missing_spec"]]
     wide_panels = [panel for panel in panels.values() if len(panel["agents"]) > max_panel_width]
-    alerts: list[dict[str, Any]] = []
+    alerts: list[dict[str, Any]] = list(config_alerts)
 
     if missing_panels:
         alerts.append(
@@ -688,6 +706,22 @@ def _save_opportunity(
         ),
     )
     db.commit()
+    try:
+        capabilities.production_heartbeat(
+            "research-usage-guard",
+            "invocation",
+            ref=exp_id,
+            metadata={"decision": decision, "eligible": eligible, "subject": subject},
+        )
+        capabilities.production_heartbeat(
+            "research-usage-guard",
+            "success",
+            ref=opportunity_id,
+            metadata={"decision": decision, "terminal_outcome": terminal_outcome},
+        )
+    except Exception:
+        # Capability credit is secondary telemetry; it must never change the admission decision.
+        pass
     return {
         "opportunity_id": opportunity_id,
         "ts": ts,
@@ -882,6 +916,15 @@ def write_usage_report(
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        capabilities.production_heartbeat(
+            "research-usage-guard",
+            "success",
+            ref="daily-report",
+            metadata={"health_status": report["health_status"], "output": str(path)},
+        )
+    except Exception:
+        pass
     return report
 
 

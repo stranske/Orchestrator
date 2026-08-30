@@ -4,12 +4,15 @@
 import json
 import os
 import sqlite3
+import subprocess
+import textwrap
 import time
 from pathlib import Path
 
 import pytest
 
 import adapters
+import capabilities
 import exp_abcd
 import experiment_recovery
 import feedback
@@ -28,11 +31,96 @@ def _isolate_test_state(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_RESEARCH_ARM", "1")
 
 
+def _write_evaluable_experiment(expdir: Path, name: str, *, mtime: float) -> Path:
+    edir = expdir / name
+    edir.mkdir(parents=True)
+    (edir / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "repo": "owner/repo",
+                "base": "main",
+                "exp_id": name,
+                "subject": name,
+                "agents": ["codex"],
+            }
+        )
+    )
+    (edir / "spec.md").write_text(f"Implement the reviewed change for {name}.")
+    (edir / "codex.log").write_text("done")
+    old = time.time() - 3_600
+    os.utime(edir / "codex.log", (old, old))
+    os.utime(edir / "meta.json", (old, old))
+    os.utime(edir, (mtime, mtime))
+    return edir
+
+
 def test_research_arm_opt_in_default(monkeypatch):
     """Requirement 1: Unattended research must be opt-in by default (ORCH_RESEARCH_ARM=0)."""
     orchestrate_sh = Path(__file__).parent.parent / "orchestrate.sh"
     sh_text = orchestrate_sh.read_text(encoding="utf-8")
     assert 'export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"' in sh_text
+
+
+@pytest.mark.parametrize("guard_exit", [0, 1])
+def test_research_usage_guard_cadence_branch_stamps_and_artifacts(tmp_path, guard_exit):
+    """Execute the exact shell branch without launching the rest of the production tick."""
+
+    orchestrate = Path(__file__).parent.parent / "orchestrate.sh"
+    source = orchestrate.read_text(encoding="utf-8")
+    start = source.index("if _cadence_due research-usage-guard")
+    end = source.index("if _cadence_due relearn", start)
+    cadence_branch = source[start:end]
+
+    fake_orch = tmp_path / "fake-orch"
+    fake_orch.mkdir()
+    (fake_orch / "research_usage_guard.py").write_text(textwrap.dedent("""
+            import json
+            import os
+            import sys
+            from pathlib import Path
+
+            output = Path(sys.argv[sys.argv.index("--write-report") + 1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps({"health_status": "OK"}) + "\\n")
+            print("fake deterministic usage guard")
+            raise SystemExit(int(os.environ["FAKE_GUARD_EXIT"]))
+            """).lstrip())
+    state_dir = tmp_path / "state"
+    stamp_dir = tmp_path / "stamps"
+    stamp_dir.mkdir()
+    harness = textwrap.dedent(f"""
+        set -euo pipefail
+        ORCH={fake_orch!s}
+        STAMP_DIR={stamp_dir!s}
+        _cadence_due() {{ return 0; }}
+        _attempt_ok() {{ return 0; }}
+        _mark_success() {{ touch "$STAMP_DIR/.last-$1"; rm -f "$STAMP_DIR/.fail-$1"; }}
+        _mark_fail() {{ echo 1 > "$STAMP_DIR/.fail-$1"; }}
+        {cadence_branch}
+        """)
+    env = dict(os.environ, ORCH_STATE_DIR=str(state_dir), FAKE_GUARD_EXIT=str(guard_exit))
+    completed = subprocess.run(["bash", "-c", harness], env=env, text=True, capture_output=True)
+    assert completed.returncode == 0, completed.stderr
+    assert (state_dir / "research-usage-report.json").exists()
+    assert "fake deterministic usage guard" in (stamp_dir / "research-usage-report.log").read_text()
+    assert (stamp_dir / ".last-research-usage-guard").exists() is (guard_exit == 0)
+    assert (stamp_dir / ".fail-research-usage-guard").exists() is (guard_exit != 0)
+
+
+def test_research_usage_guard_has_declared_lifecycle():
+    declared = capabilities.KNOWN_GATES["research-usage-guard"]
+    assert declared["matcher"] == {"kind": "tick_phase", "name": "research-usage-guard"}
+    for field in (
+        "entrypoint",
+        "trigger_cadence",
+        "flags_defaults",
+        "output_artifact",
+        "downstream_consumer",
+        "learning_sink",
+        "evidence_threshold",
+    ):
+        assert declared[field], field
 
 
 def test_structured_spec_provenance_during_recovery(tmp_path):
@@ -180,6 +268,91 @@ def test_missing_spec_skip_survives_usage_ledger_failure(tmp_path, monkeypatch):
     assert result["processed"][0]["reason"] == "missing_spec_recovered"
     skip = json.loads((edir / "followup-skip.json").read_text())
     assert skip["guard_record_error"] == "ledger unavailable"
+
+
+def test_missing_spec_skip_does_not_consume_evaluator_dispatch_cap(tmp_path, monkeypatch):
+    expdir = tmp_path / "experiments"
+    missing = expdir / "newer-missing-spec"
+    missing.mkdir(parents=True)
+    (missing / "meta.json").write_text(
+        json.dumps(
+            {
+                "repo": "owner/repo",
+                "base": "main",
+                "missing_spec": True,
+                "spec_provenance": "missing_spec_stub",
+            }
+        )
+    )
+    (missing / "spec.md").write_text(experiment_recovery.MISSING_SPEC_STUB_HEADER)
+    _write_evaluable_experiment(expdir, "older-real-spec", mtime=time.time() - 100)
+    os.utime(missing, (time.time(), time.time()))
+
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", expdir)
+    monkeypatch.setenv("ORCH_OBJECTIVE_ANCHOR", "0")
+    monkeypatch.setenv("ORCH_FOLLOWUP_SHIP_GATE", "0")
+    dispatched = []
+
+    def evaluate_once(repo, spec_path, exp_id, evaluators, timeout):
+        dispatched.append((exp_id, list(evaluators)))
+        return {"evaluators": list(evaluators), "objective_anchors": None}
+
+    result = exp_abcd.followup(
+        max_experiments=1,
+        collect_fn=lambda *args: {
+            "diffs": {"codex": {"bytes": 4, "diff": "diff --git a/a b/a\n+x\n"}}
+        },
+        evaluate_fn=evaluate_once,
+        subject_lifecycle_fn=lambda *args, **kwargs: None,
+    )
+    assert dispatched == [("older-real-spec", ["vibe"])]
+    assert {row["exp_id"] for row in result["processed"]} == {
+        "newer-missing-spec",
+        "older-real-spec",
+    }
+    with sqlite3.connect(feedback.DB_PATH) as db:
+        recorded = db.execute(
+            "SELECT evaluator_count,evaluator_agents_json FROM research_usage_opportunities "
+            "WHERE exp_id='older-real-spec' AND decision='admitted'"
+        ).fetchone()
+    assert recorded == (1, '["vibe"]')
+
+
+def test_malformed_followup_panel_skips_without_aborting_tick(tmp_path, monkeypatch):
+    expdir = tmp_path / "experiments"
+    _write_evaluable_experiment(expdir, "bad-panel", mtime=time.time())
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", expdir)
+    monkeypatch.setenv("ORCH_FOLLOWUP_EVALUATORS", ",,")
+    collect_calls = []
+    result = exp_abcd.followup(
+        collect_fn=lambda *args: collect_calls.append(args),
+        evaluate_fn=lambda *args, **kwargs: pytest.fail("malformed panel dispatched a judge"),
+        subject_lifecycle_fn=lambda *args, **kwargs: None,
+    )
+    assert not collect_calls
+    assert result["skipped"] == [
+        {
+            "exp_id": "bad-panel",
+            "reason": "invalid-followup-evaluators",
+            "detail": "ORCH_FOLLOWUP_EVALUATORS must contain at least one evaluator",
+        }
+    ]
+
+
+def test_unreadable_candidate_diff_defers_before_admission(tmp_path, monkeypatch):
+    expdir = tmp_path / "experiments"
+    _write_evaluable_experiment(expdir, "unreadable-diff", mtime=time.time())
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", expdir)
+    missing_path = tmp_path / "vanished.diff"
+    evaluate_calls = []
+    result = exp_abcd.followup(
+        collect_fn=lambda *args: {"diffs": {"codex": {"bytes": 10, "path": str(missing_path)}}},
+        evaluate_fn=lambda *args, **kwargs: evaluate_calls.append(args),
+        subject_lifecycle_fn=lambda *args, **kwargs: None,
+    )
+    assert not evaluate_calls
+    assert result["skipped"][0]["reason"] == "candidate-diff-unreadable"
+    assert "vanished.diff" in result["skipped"][0]["detail"]
 
 
 def test_failed_admission_is_not_automatically_retried(tmp_path):
@@ -453,6 +626,25 @@ def test_observed_usage_detector_fails_visible_without_runs_table(tmp_path):
     db.close()
 
 
+def test_observed_usage_detector_reports_invalid_config_without_crashing(tmp_path, monkeypatch):
+    db = sqlite3.connect(tmp_path / "invalid-config.db")
+    db.execute("CREATE TABLE runs (ts INTEGER,task_type TEXT,experiment_id TEXT,agent TEXT)")
+    monkeypatch.setenv("ORCH_GUARD_MAX_PANELS_PER_SUBJECT_24H", "not-an-integer")
+    observed = research_usage_guard.observe_recent_research_usage(
+        conn=db,
+        window_days=7,
+        now=1_700_000_000,
+        experiment_dir=tmp_path / "experiments",
+    )
+    assert observed["telemetry_available"] is True
+    assert observed["active_alert_count"] == 1
+    assert observed["alerts"][0]["type"] == "observed_usage_config_invalid"
+    assert observed["alerts"][0]["setting"] == "ORCH_GUARD_MAX_PANELS_PER_SUBJECT_24H"
+    report = research_usage_guard.generate_usage_report(conn=db, now=1_700_000_000)
+    assert report["health_status"] == "OBSERVED_ANOMALY"
+    db.close()
+
+
 def test_stale_dispatch_stays_deduplicated_and_visible(tmp_path):
     db = sqlite3.connect(tmp_path / "stale.db")
     db.execute("CREATE TABLE runs (ts INTEGER,task_type TEXT,experiment_id TEXT,agent TEXT)")
@@ -536,6 +728,14 @@ def test_evaluator_panel_size_semantics(tmp_path):
         implementer_agents=["codex", "cursor"],
     )
     assert len(specs_followup) == 2, "Explicit panel of 2 evaluators must preserve 2 evaluators"
+
+    # The unattended one-judge panel is exact even when that judge also implemented an arm.
+    specs_single = exp_abcd._normalize_evaluator_specs(
+        requested=["vibe"],
+        default_agents=["vibe", "codex"],
+        implementer_agents=["vibe", "codex"],
+    )
+    assert [row["agent"] for row in specs_single] == ["vibe"]
 
     with pytest.raises(ValueError, match="must not be empty"):
         exp_abcd._normalize_evaluator_specs(

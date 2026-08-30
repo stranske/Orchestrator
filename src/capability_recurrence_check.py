@@ -791,6 +791,11 @@ PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
         "check": lambda: _predicate_heartbeat("research-scheduler"),
         "source": "runs every tick via research_scheduler.build_research_plan.",
     },
+    {
+        "capability": "research-usage-guard",
+        "check": lambda: _predicate_heartbeat("research-usage-guard"),
+        "source": "daily local anomaly report plus every optional followup admission.",
+    },
     # REPLACED 2026-08-22 — this fixture asserted a blocker that does not exist. It tested
     # `_predicate_flag("ORCH_RUNTIME_AC_ALLOW_COMMANDS")`, on the recorded belief that shell-check
     # execution gated the deliberate-break command too. It does not: `COMMAND_EXEC_GATED_TYPES`

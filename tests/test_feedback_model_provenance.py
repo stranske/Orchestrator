@@ -1128,8 +1128,8 @@ def test_gemini_provenance_reads_the_per_run_log_before_the_conversation_store(
 def test_ledger_isolation_regression(tmp_path, monkeypatch):
     """Regression test ensuring provenance tests write LEDGER into temp state and not to host disk."""
     host_ledger = adapters.HOME / ".codex" / "handoff" / "capacity-ledger.ndjson"
-    host_mtime_before = host_ledger.stat().st_mtime if host_ledger.exists() else None
-    host_size_before = host_ledger.stat().st_size if host_ledger.exists() else None
+    host_existed_before = host_ledger.exists()
+    host_bytes_before = host_ledger.read_bytes() if host_existed_before else None
 
     test_ledger = tmp_path / "isolated-capacity-ledger.ndjson"
     monkeypatch.setattr(adapters, "HANDOFF", tmp_path)
@@ -1140,6 +1140,6 @@ def test_ledger_isolation_regression(tmp_path, monkeypatch):
 
     assert test_ledger.exists()
     assert test_ledger.stat().st_size > 0
-    if host_ledger.exists():
-        assert host_ledger.stat().st_mtime == host_mtime_before
-        assert host_ledger.stat().st_size == host_size_before
+    assert host_ledger.exists() is host_existed_before
+    if host_existed_before:
+        assert host_ledger.read_bytes() == host_bytes_before

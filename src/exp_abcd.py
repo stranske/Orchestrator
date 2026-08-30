@@ -1128,7 +1128,9 @@ def _normalize_evaluator_specs(
     topped_agents = _ensure_min_evaluators(
         [spec["agent"] for spec in explicit],
         minimum=minimum,
-        implementers=implementer_agents,
+        # An explicit panel is an exact dispatch contract (including the unattended one-judge
+        # panel). Neutral-judge top-up belongs only to the default direct/manual panel.
+        implementers=implementer_agents if requested is None else [],
         capacity=_capacity_map(),
     )
     represented = {spec["agent"] for spec in explicit}
@@ -1398,11 +1400,10 @@ def _collected_candidate_diffs(collected: dict) -> dict[str, str]:
             continue
         path = row.get("path")
         if path:
-            try:
-                out[str(member_id)] = Path(path).read_text(errors="replace")
-                continue
-            except OSError:
-                pass
+            # An unreadable diff is not an empty diff. Let the caller defer admission instead of
+            # signing ambiguous content that could deduplicate another experiment forever.
+            out[str(member_id)] = Path(path).read_text(errors="replace")
+            continue
         out[str(member_id)] = ""
     return out
 
@@ -1446,6 +1447,17 @@ def followup(
     evaluate_fn = evaluate_fn or evaluate
     subject_lifecycle_fn = subject_lifecycle_fn or research_subjects.mark_lifecycle
     out: dict = {"processed": [], "skipped": [], "promotions": [], "eligible": 0}
+    followup_eval_env = os.environ.get("ORCH_FOLLOWUP_EVALUATORS", "").strip()
+    followup_evaluators = (
+        [e.strip() for e in followup_eval_env.split(",") if e.strip()]
+        if followup_eval_env
+        else ["vibe"]
+    )
+    followup_evaluator_error = (
+        "ORCH_FOLLOWUP_EVALUATORS must contain at least one evaluator"
+        if followup_eval_env and not followup_evaluators
+        else None
+    )
     if not EXP_DIR.exists():
         return out
     dirs = sorted(
@@ -1458,6 +1470,9 @@ def followup(
     stamp_fresh = gate_stamp.exists() and (now - gate_stamp.stat().st_mtime) < 86400
     launch_available = not stamp_fresh
     promotion_inflight = False
+    evaluator_dispatches = 0
+    missing_spec_skips = 0
+    max_missing_spec_skips = max(1, max_experiments * 10)
 
     def persist_terminal_checkpoint(edir: Path, state: dict) -> None:
         phase = state.get("delivery_phase")
@@ -1547,8 +1562,8 @@ def followup(
 
         # Missing-spec recovered experiments: zero LLM judge dispatch, preserve objective anchors
         if spec_provenance.is_missing_spec(meta, spec_text):
-            if len(out["processed"]) >= max_experiments:
-                out["skipped"].append({"exp_id": edir.name, "reason": "per-call-cap"})
+            if missing_spec_skips >= max_missing_spec_skips:
+                out["skipped"].append({"exp_id": edir.name, "reason": "missing-spec-skip-cap"})
                 continue
             obj_anchor = None
             if os.environ.get("ORCH_OBJECTIVE_ANCHOR", "1").strip().lower() not in (
@@ -1602,6 +1617,7 @@ def followup(
                     "objective_anchors": obj_anchor,
                 }
             )
+            missing_spec_skips += 1
             continue
 
         # ELIGIBILITY IS PER MEMBER, NOT PER AGENT. `prepare_arms` writes one log per MEMBER
@@ -1634,8 +1650,17 @@ def followup(
             subject_lifecycle_fn(edir.name, "evaluable", reason="all_arm_logs_idle")
         except Exception:
             pass  # Subject telemetry must never break experiment recovery.
-        if len(out["processed"]) >= max_experiments:
+        if evaluator_dispatches >= max_experiments:
             out["skipped"].append({"exp_id": edir.name, "reason": "per-call-cap"})
+            continue
+        if followup_evaluator_error:
+            out["skipped"].append(
+                {
+                    "exp_id": edir.name,
+                    "reason": "invalid-followup-evaluators",
+                    "detail": followup_evaluator_error,
+                }
+            )
             continue
         repo = meta["repo"]
         capabilities.production_heartbeat(
@@ -1656,21 +1681,21 @@ def followup(
             except Exception:
                 pass
         else:
-            diffs_dict = _collected_candidate_diffs(collected)
+            try:
+                diffs_dict = _collected_candidate_diffs(collected)
+            except OSError as exc:
+                out["skipped"].append(
+                    {
+                        "exp_id": edir.name,
+                        "reason": "candidate-diff-unreadable",
+                        "detail": str(exc)[:200],
+                    }
+                )
+                continue
             subj = meta.get("subject") or research_usage_guard.subject_of_experiment(edir.name)
             sig = research_usage_guard.compute_followup_signature(
                 repo, spec_text, meta.get("base_sha") or meta.get("base"), diffs_dict
             )
-
-            followup_eval_env = os.environ.get("ORCH_FOLLOWUP_EVALUATORS", "").strip()
-            if followup_eval_env:
-                followup_evaluators = [e.strip() for e in followup_eval_env.split(",") if e.strip()]
-                if not followup_evaluators:
-                    raise ValueError("ORCH_FOLLOWUP_EVALUATORS must contain at least one evaluator")
-            else:
-                # Optional unattended research starts with one inexpensive judge. Owners can opt
-                # into a wider calibration panel explicitly with ORCH_FOLLOWUP_EVALUATORS.
-                followup_evaluators = ["vibe"]
 
             opp = research_usage_guard.assess_and_record_opportunity(
                 exp_id=edir.name,
@@ -1705,6 +1730,7 @@ def followup(
                 )
                 continue
 
+            evaluator_dispatches += 1
             try:
                 ev = evaluate_fn(
                     repo, str(spec_p), edir.name, followup_evaluators, timeout=eval_timeout

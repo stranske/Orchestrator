@@ -141,6 +141,24 @@ EVENT_FIELDS = {
 }
 
 KNOWN_GATES: dict[str, dict[str, Any]] = {
+    "research-usage-guard": {
+        "status": "wired",
+        "entrypoint": "research_usage_guard.py:main",
+        "matcher": {"kind": "tick_phase", "name": "research-usage-guard"},
+        "trigger_cadence": "daily local report plus every optional-research admission",
+        "flags_defaults": {
+            "ORCH_RESEARCH_ARM": "0",
+            "ORCH_RESEARCH_USAGE_BYPASS": "0",
+        },
+        "output_artifact": "research-usage-report.json and research_usage_opportunities rows",
+        "downstream_consumer": "orchestrate.sh cadence health and operator capacity review",
+        "learning_sink": "feedback research-usage opportunity ledger and observed review runs",
+        "gate_reason": "optional research is fail-closed on missing provenance, anomaly, and budget",
+        "gate_evidence": "pre-dispatch decision and terminal outcome share one opportunity id",
+        "evidence_threshold": "seven days with zero missing-spec judge calls and budgets respected",
+        "notes": "dedup: checked research scheduler, experiment followup, feedback telemetry, and "
+        "capacity controls; no existing control bound immutable-input admission to a local budget",
+    },
     "local-model-profile-trial": {
         "status": "shadow",
         "entrypoint": "model_profile_trial.py",
@@ -1121,6 +1139,8 @@ DECLARATION_FIELDS: tuple[str, ...] = (
     "gate_reason",
     "gate_evidence",
     "evidence_threshold",
+    # Dedup-before-develop evidence is part of the reviewed declaration, not machine-local prose.
+    "notes",
     "gate_blocks_execution",
     "kill_switch_category",
     "control_point",
