@@ -15,6 +15,7 @@ import shlex
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 ORCH_DIR = Path(__file__).resolve().parent
 TESTGEN_GATE = ORCH_DIR / "testgen_gate.py"
@@ -23,6 +24,104 @@ READ_ONLY_GATE_GUARD = (
     "gate/helper files. Treat them as acceptance infrastructure. If the gate "
     "appears wrong, stop and report the failing check instead of changing the gate."
 )
+
+
+RANKING_SWITCH = "ORCH_ESCAPED_DEFECT_PRIORITY"
+
+
+def _importable_source(repo: Path, path: str) -> str:
+    """Turn a ranked FILE path into a coverage `--source` value that measures something.
+
+    `coverage run --source=src/mod.py` measures NOTHING and exits 0 — verified, and already
+    documented at the top of `testgen_gate.py` as one of two directions this goes wrong. A ranker
+    that emitted file paths would therefore hand the gate a source with no measured files, so the
+    conversion happens here rather than being left to the caller.
+
+    The leading component is dropped when it is a source ROOT rather than a package, detected by
+    the absence of `__init__.py` — which is why `src/testgen_lane.py` in this repo is importable as
+    `testgen_lane` and not as `src.testgen_lane`. A wrong guess is not silent: `testgen_gate`'s own
+    `unmeasured_sources` fails the gate on a source no measured file belongs to.
+    """
+    parts = Path(path).with_suffix("").as_posix().split("/")
+    while len(parts) > 1 and not (repo / parts[0] / "__init__.py").exists():
+        parts.pop(0)
+    return ".".join(parts)
+
+
+def ranked_sources(
+    *,
+    repo: str | Path,
+    limit: int,
+    coverage_json_path: str | None = None,
+    lookback_days: int = 180,
+    explicit_sources: Sequence[str] = (),
+) -> tuple[list[str], list[dict[str, Any]], str]:
+    """Choose sources by measured priority, and NEVER by silently choosing none.
+
+    Returns `(sources, ranking, note)`. The note is always non-empty and always printed: a lane
+    that quietly fell back to hand-named sources would look identical to one that ranked them, and
+    the whole value of the ordering is knowing which one you got.
+
+    Every failure path FAILS TOWARD MOTION. If the switch is off, the ranker will not import, the
+    repo is unreadable or nothing scores, sources the caller named by hand are used instead and the
+    reason is stated. Only when there is nothing to fall back on does this return no sources — and
+    then the note names what was missing, so the caller's exit is a diagnosis rather than a shrug.
+    """
+    repo_path = Path(repo).expanduser().resolve()
+
+    def _fallback(reason: str) -> tuple[list[str], list[dict[str, Any]], str]:
+        if explicit_sources:
+            return (
+                list(explicit_sources),
+                [],
+                f"testgen_lane: ranking not applied ({reason}); "
+                f"using the {len(explicit_sources)} source(s) named on the command line",
+            )
+        return [], [], f"testgen_lane: no sources — ranking not applied ({reason}), and none named"
+
+    import os
+
+    if os.environ.get(RANKING_SWITCH, "") != "1":
+        return _fallback(f"{RANKING_SWITCH} is not set to 1")
+
+    try:
+        import escaped_defect_priority
+    except Exception as exc:  # pragma: no cover - import failure is environment-specific
+        return _fallback(f"escaped_defect_priority did not import: {exc}")
+
+    coverage_json: dict[str, Any] = {}
+    coverage_note = "no coverage report supplied, so tier 3 is unread"
+    if coverage_json_path:
+        report = Path(coverage_json_path).expanduser()
+        if not report.exists():
+            coverage_note = f"coverage report {report} does not exist, so tier 3 is UNREAD"
+        else:
+            try:
+                coverage_json = json.loads(report.read_text())
+                coverage_note = f"tier 3 read from {report}"
+            except Exception as exc:
+                coverage_note = (
+                    f"coverage report {report} is unreadable ({exc}), so tier 3 is UNREAD"
+                )
+
+    ranking, status = escaped_defect_priority.rank_status(
+        repo_path, coverage_json, lookback_days=lookback_days, limit=limit
+    )
+    if status["status"] != "ok":
+        return _fallback(f"{status['status']}: {status['reason']}")
+
+    seen: dict[str, None] = {}
+    for row in ranking:
+        seen.setdefault(_importable_source(repo_path, str(row["path"])), None)
+    sources = list(seen)[:limit]
+    if not sources:
+        return _fallback("ranking produced rows but no importable source names")
+    return (
+        sources,
+        ranking[:limit],
+        f"testgen_lane: ranked {len(ranking)} candidate(s), taking {len(sources)} "
+        f"({coverage_note})",
+    )
 
 
 def _quote(value: str | Path) -> str:
@@ -98,6 +197,7 @@ def build_prompt(
     timeout: int = 120,
     target: str = "",
     context: str = "",
+    ranking: Sequence[dict[str, Any]] | None = None,
 ) -> str:
     """Build the reusable prompt handed to a local or remote test-generation agent."""
     cmd = gate_command(
@@ -146,6 +246,36 @@ def build_prompt(
         reliability_line,
         f"- Minimum covered-line delta: `{min_covered_lines_delta}`",
         f"- Reliability runs: `{runs}`",
+    ]
+    if ranking:
+        lines += ["", "Why these files, in this order:"]
+        for position, row in enumerate(ranking, start=1):
+            evidence = "; ".join(row.get("evidence") or []) or "no per-file evidence recorded"
+
+            # `?` and never `0` for an absent key. The first draft defaulted these to 0 while
+            # reading names the ranker does not emit, so every file's stated reason was "escaped 0,
+            # churn 0, uncovered 0" — correct ordering under a rationale no input could falsify.
+            # A rendered `?` is a visible defect; a rendered 0 is a lie that reads as good news.
+            def _tier(key: str) -> str:
+                return "?" if key not in row else str(row[key])
+
+            lines.append(
+                f"{position}. `{row.get('path', '?')}` — "
+                f"escaped-defect weight {_tier('tier1_escaped_defects')}, "
+                f"churn {_tier('tier2_churn')}, "
+                f"uncovered {_tier('tier3_uncovered_statements')}, "
+                f"hollow rate {_tier('hollow_rate')} ({evidence})"
+            )
+        lines += [
+            "",
+            "That order is a PRIORITY, not a mandate. It ranks by where testing has already been",
+            "observed to fail, then by churn, then by uncovered mass — never by uncovered mass",
+            "first, because that ordering points at the largest glue modules and is the one most",
+            "likely to produce tests that pass against a broken base. If a file higher in the list",
+            "genuinely cannot be tested meaningfully, SAY SO and take the next one; do not write a",
+            "smoke test to clear it.",
+        ]
+    lines += [
         "",
         "Workflow:",
         "1. Inspect the target source and nearby tests.",
@@ -262,6 +392,24 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--context", default="", help="short inline task context")
     parser.add_argument("--context-file", help="file containing additional task context")
     parser.add_argument(
+        "--rank-sources",
+        type=_positive_int,
+        metavar="N",
+        help=(
+            "choose the N highest-priority sources with escaped_defect_priority instead of "
+            "naming them by hand; requires " + RANKING_SWITCH + "=1"
+        ),
+    )
+    parser.add_argument(
+        "--coverage-json", help="coverage.py JSON report, feeding --rank-sources' third tier"
+    )
+    parser.add_argument(
+        "--lookback-days",
+        type=_positive_int,
+        default=180,
+        help="history window --rank-sources reads for fix commits and churn",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="print JSON with prompt and gate command"
     )
     args = parser.parse_args(list(argv))
@@ -269,8 +417,21 @@ def main(argv: Sequence[str]) -> int:
     if args.selftest:
         _selftest()
         return 0
-    if not args.source:
-        parser.error("--source is required")
+    sources = list(args.source)
+    ranking: list[dict[str, Any]] = []
+    if args.rank_sources:
+        sources, ranking, note = ranked_sources(
+            repo=args.repo,
+            limit=args.rank_sources,
+            coverage_json_path=args.coverage_json,
+            lookback_days=args.lookback_days,
+            explicit_sources=list(args.source),
+        )
+        print(note, file=sys.stderr)
+        if not sources:
+            return 2
+    if not sources:
+        parser.error("--source is required (or --rank-sources N to choose them by priority)")
     if args.baseline_pytest_args is None:
         parser.error("--baseline-pytest-args is required")
     if args.candidate_pytest_args is None:
@@ -281,7 +442,7 @@ def main(argv: Sequence[str]) -> int:
         context = (context + "\n" + Path(args.context_file).read_text()).strip()
     prompt = build_prompt(
         repo=args.repo,
-        sources=args.source,
+        sources=sources,
         baseline_pytest_args=args.baseline_pytest_args,
         candidate_pytest_args=args.candidate_pytest_args,
         reliability_pytest_args=args.reliability_pytest_args,
@@ -290,6 +451,7 @@ def main(argv: Sequence[str]) -> int:
         timeout=args.timeout,
         target=args.target,
         context=context,
+        ranking=ranking,
     )
     if args.json:
         print(
@@ -298,7 +460,7 @@ def main(argv: Sequence[str]) -> int:
                     "prompt": prompt,
                     "gate_command": gate_command(
                         args.repo,
-                        args.source,
+                        sources,
                         args.baseline_pytest_args,
                         args.candidate_pytest_args,
                         reliability_pytest_args=args.reliability_pytest_args,
