@@ -309,7 +309,16 @@ REOFFER_FACTS_KEY = "reoffer_facts"
 # invented gate is an information defect, not a structural one, and `switch_review.review()` holds
 # the real flag/state/criterion — a declared fact, exactly what a re-offer may echo. Where no gate
 # is declared the re-offer still refuses, and correctly: that routes to the offer axis.
-REOFFERABLE_KINDS = ("offer_too_thin", "wrong_match", "precondition_unmet", "gated_off")
+# `status_shadow` joined 2026-08-29 with the kind itself: the echoable fact is the boundary line
+# in `how_to_use` saying shadow permits advisory invocation — precisely the information whose
+# absence produced the measured declines.
+REOFFERABLE_KINDS = (
+    "offer_too_thin",
+    "wrong_match",
+    "precondition_unmet",
+    "gated_off",
+    "status_shadow",
+)
 
 LATE_OUTCOME_SOURCE = "capability_late_outcome"
 # The ledger event type. Distinct from "outcome" so a reader that predates this channel IGNORES the
@@ -653,6 +662,31 @@ DECLINE_KINDS: dict[str, dict] = {
             "NONE YET — fix the offer first. There is no task signal here at all: the caller "
             "could not tell what was on offer, so nothing they said describes the work that "
             "would have fitted. Deriving a task from this decline would be inventing one."
+        ),
+    },
+    # A LIFECYCLE PERMISSION MISFILED AS A GATE, measured 2026-08-29: five role-* declines cited
+    # "status: shadow" under `gated_off`, while NO environment flag gates any role-* capability —
+    # and two sibling declines with identical reasoning ("five items I had just proven by hand")
+    # were filed as `scope_too_small`. One caller population split one judgement across two kinds,
+    # and the task proposer then derived the WRONG prescription ("satisfy the gate's evidence
+    # test") for the pair. Shadow is a permission question, not a fit question — and crucially it
+    # gates ACTING on output, not producing it, so a shadow capability can still be invoked
+    # advisorily and scored. Those scored shadow runs are the evidence the promotion decision is
+    # waiting for, which makes this kind ACTIONABLE where `gated_off` mostly is not.
+    "status_shadow": {
+        "demotable": False,
+        "repairable": False,
+        # An offer axis: the measured declines happened because the offer never said that shadow
+        # permits advisory invocation. A caller told that fact has no reason left to decline on
+        # status alone — which is why this kind is also re-offerable.
+        "offer_improvable": True,
+        "fix": "decide the lifecycle status on its own evidence — and say in the offer that "
+        "shadow permits advisory invocation, because that omission is what produces this decline",
+        "task_shape": (
+            "RUN IT IN SHADOW. Status gates acting on the output, not producing it: invoke the "
+            "capability, treat its output as advisory, and score whether the advice was right "
+            "against what actually happened. Those scored shadow runs are exactly the evidence "
+            "the promotion decision is waiting for."
         ),
     },
     "unspecified": {
@@ -5247,6 +5281,31 @@ def _selftest_reoffer_and_offer_axis() -> None:
                 "the whole reason this kind exists"
             )
             assert DECLINE_KINDS["offer_too_thin"]["repairable"] is False
+            # ---- 7b. A SHADOW STATUS IS A KIND OF ITS OWN, and it is actionable ---------------
+            # `gated_off` was absorbing "status: shadow", a lifecycle permission — and the task
+            # proposer then prescribed gate-satisfying work for capabilities that have no gate.
+            assert "status_shadow" in DECLINE_KINDS, sorted(DECLINE_KINDS)
+            row = DECLINE_KINDS["status_shadow"]
+            assert row["demotable"] is False and row["repairable"] is False, row
+            assert row["offer_improvable"] is True, row
+            assert row["task_shape"].startswith("RUN IT IN SHADOW"), row["task_shape"]
+            assert "status_shadow" in REOFFERABLE_KINDS, REOFFERABLE_KINDS
+            shadow_exp = "advice:reoffer00009"
+            record_decline(
+                "rich",
+                shadow_exp,
+                reason="status: shadow — no evidence it would outperform the scope I was handed",
+                surface="shadow-surface",
+                kind="status_shadow",
+                path=ledger,
+            )
+            sres = record_reoffer("rich", shadow_exp, decline_kind="status_shadow", path=ledger)
+            assert sres["reoffered"] is True, sres
+            assert "how_to_use" in sres["facts_supplied"], sres["facts_supplied"]
+            # And it never counts toward demotion: not demotable, whatever the volume.
+            shadow_counts = surface_decline_counts("shadow-surface", path=ledger)
+            assert shadow_counts["declined_demotable"].get("rich", 0) == 0, shadow_counts
+
             # ---- 8. THE GATE IS A FACT, so a gated_off decline is answerable -------------------
             # Added 2026-08-29. `gated_off` was excluded from REOFFERABLE_KINDS as structural, which
             # holds only if the caller knows WHICH gate. Four runtime-ac-checks declines cited THREE
