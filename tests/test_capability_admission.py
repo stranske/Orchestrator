@@ -433,16 +433,37 @@ def test_findability_exemption_is_declared_in_code_not_in_a_live_ledger():
     `kill_switch_category` into `KNOWN_DECLARATIONS`. So the exempt set is asserted from the CODE
     table, and the ledger may not out-declare it.
     """
+    # BOTH code tables: reconciliation seeds from {**KNOWN_GATES, **KNOWN_DECLARATIONS}, and a
+    # capability may not sit in both, so the union IS the code-side truth. Gate-registered rails
+    # (completion-event-lineage, the keepalive/redirect/synthesis gates, the quarantined trial)
+    # carry the declaration on their gate entry.
     declared = {
         cid
-        for cid, d in capabilities.KNOWN_DECLARATIONS.items()
+        for table in (capabilities.KNOWN_DECLARATIONS, capabilities.KNOWN_GATES)
+        for cid, d in table.items()
         if d.get("findability_category") == admission.FINDABILITY_CATEGORY
     }
-    assert declared == {"capability-admission-gate", "docs-drift-fix-agent"}, declared
+    assert declared == {
+        "capability-admission-gate",
+        "docs-drift-fix-agent",
+        # The 2026-08-29 hard-tail set: eleven internal rails plus the quarantined trial transport,
+        # each rationale naming the rail (or policy) that makes an agent surface wrong for it.
+        "agy-runtime-isolation",
+        "capability:reference-sync-hygiene-test-gate",
+        "completion-event-lineage",
+        "evidence-acquisition",
+        "feature-reflection-cli",
+        "feedback-store",
+        "issue-readiness",
+        "live-keepalive-supervisor",
+        "local-model-profile-trial",
+        "redirect-apply-bootstrap",
+        "research-scheduler",
+        "synthesis-promotion",
+    }, declared
     for cap_id in declared:
-        assert str(
-            capabilities.KNOWN_DECLARATIONS[cap_id].get("findability_rationale") or ""
-        ).strip(), cap_id
+        row = capabilities.KNOWN_DECLARATIONS.get(cap_id) or capabilities.KNOWN_GATES.get(cap_id)
+        assert str((row or {}).get("findability_rationale") or "").strip(), cap_id
     # Reconciliation can only seed these if the fields are declaration-owned.
     for field in ("findability_category", "findability_rationale"):
         assert field in capabilities.DECLARATION_FIELDS, field

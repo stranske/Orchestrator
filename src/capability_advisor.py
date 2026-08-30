@@ -2598,6 +2598,55 @@ HOW_TO_USE = {
         "redirect_sweep applies nothing in shadow. Worth invoking when the right move is genuinely "
         "unclear — not to ratify a decision you have already made"
     ),
+    # FIVE HARD-TAIL OFFERS, 2026-08-29. Every one of these declared NOTHING — offer was the bare
+    # name — and the hard-tail assessment classified them trialable-but-mute. Text grounded in each
+    # module's own docstring; each states what it RETURNS and the load below which it is not worth
+    # invoking, because "the work was already small enough by hand" is this fleet's dominant
+    # decline reason.
+    "abcd-experiment": (
+        "exp_abcd.py prepare <repo> <spec_file> <exp_id> <arms> gives the SAME frozen spec to 2-5 "
+        "agents in isolated worktrees; collect + evaluate then have every agent cross-grade every "
+        "diff into feedback.evaluations_v2 — unbiased cross-agent evidence for which agent should "
+        "own a task type. Nothing merges and no PR opens: the deliverable is the comparison, so "
+        "shipping a change is dispatcher.delegate's job, not this. Costs 2-5 real agent runs plus "
+        "cross-evals, so not worth invoking when the right owner is already obvious or the spec "
+        "cannot be frozen into one file"
+    ),
+    "stall-watcher": (
+        "watch.py --agent <a> --pid <pid> --log <log> --worktree <dir> --json classifies ONE "
+        "detached delegate as running/progress/stalled/exited/missing from its pid, log tail and "
+        "worktree diff, with root-cause hints and a recommended next action. Read-only: it never "
+        "kills, releases claims, or mutates state — acting on the verdict is redirect_policy/"
+        "redirect_plan's job, and redirect_sweep already sweeps every active claim each tick. Not "
+        "worth invoking on a delegate launched minutes ago or whose log is visibly moving; reach "
+        "for it when you need a verdict on one SPECIFIC lane now instead of waiting for the sweep"
+    ),
+    "redirect-plan": (
+        "redirect_plan.py turns a redirect_policy decision plus a watch report into a concrete, "
+        "safe execution plan — the exact next-delegate command, prompt written first, pid-dead "
+        "kill skip — read-only by default; --apply runs the mutating steps only with an exact "
+        "target confirmation and a fully specified next delegate. BOUNDARY: it plans ONE redirect/"
+        "decompose; deciding WHETHER to redirect is redirect_policy, and cadence-driven "
+        "application is redirect_apply. Not worth invoking unless a policy decision of redirect "
+        "or decompose is already in hand"
+    ),
+    "redirect-policy": (
+        "redirect_policy.py --json < payload.json (a watch.py report, optionally with "
+        "attempt_history) returns the history-aware advisory decision — wait, collect, inspect, "
+        "redirect, or decompose — that sits between 'this lane is stalled' and doing anything "
+        "about it. Compute-only: it never kills processes, releases claims, or applies labels; "
+        "every mutating step lives behind redirect_plan/redirect_apply's own guards. Skip it when "
+        "the stall is trivially explained (agent warming up, CI queue) — a report younger than "
+        "one stale window rarely changes the answer from wait"
+    ),
+    "windowed-capacity-policy": (
+        "capacity.py --json reports each agent seat's remaining-capacity state (ok|warn|shed|"
+        "unknown) from ccusage 5h-block projections, the local consumption ledger, and "
+        "authoritative 429-shed flags — consult it before fanning work out so sub-tasks avoid "
+        "spent seats. Compute-only: it changes nothing and reserves nothing; the router and tick "
+        "act on it. Not worth invoking for a single small dispatch to a known-healthy seat, or "
+        "twice within the same 5h block unless a shed or 429 just occurred"
+    ),
     "runtime-ac-checks": (
         "runtime_ac.py — turns acceptance criteria into a structured evidence plan; "
         "execution is opt-in via --confirm-run and mutates nothing. WHICH GATE HOLDS WHAT, "
