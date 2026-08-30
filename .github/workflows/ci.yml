@@ -80,11 +80,11 @@ jobs:
     timeout-minutes: 25
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.14'
 
@@ -92,6 +92,7 @@ jobs:
         run: python -m pip install --quiet pytest pyyaml coverage
 
       - name: Measure combined coverage
+        shell: bash
         env:
           ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
@@ -109,7 +110,7 @@ jobs:
             echo "## Combined coverage — pytest AND selftests"
             echo
             if grep -q "^coverage:" /tmp/combined.txt 2>/dev/null; then
-              grep -A3 "^coverage:" /tmp/combined.txt | head -8
+              grep -E '^(coverage:|TOTAL[[:space:]])' /tmp/combined.txt
             else
               echo "NOT MEASURED — verify.py --coverage produced no coverage block."
               echo "Treat that as a missing measurement, not as a low one."
@@ -125,7 +126,7 @@ jobs:
 
       - name: Upload the coverage data
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: combined-coverage
           path: |
