@@ -177,6 +177,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 from typing import Any
@@ -854,15 +855,19 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     trial["trigger_timestamps"][cap_id] = ts
             elif etype == LATE_OUTCOME_EVENT_TYPE:
                 # NOT a verdict: an outcome that arrived after one. Held aside; applied below.
-                trial["late_outcome_events"].setdefault(
-                    cap_id,
+                # A LIST, not setdefault: a batch trial may attach one amendment per deliverable,
+                # and a second event a setdefault would silently drop is the no-op class this
+                # module exists to kill.
+                trial["late_outcome_events"].setdefault(cap_id, []).append(
                     {
                         "direction": str(meta.get(LATE_OUTCOME_DIRECTION_KEY) or ""),
                         "provenance": verdict_provenance(meta),
                         "judge": verdict_judge(meta),
                         "corroboration": str(meta.get(VERDICT_CORROBORATION_KEY) or ""),
                         "evidence": str(meta.get("evidence") or ""),
-                    },
+                        "deliverable": str(meta.get("deliverable") or ""),
+                        "timestamp": event.get("timestamp") or 0,
+                    }
                 )
             elif etype == "outcome":
                 bucket = "useful" if meta.get(USEFUL_KEY) is True else "not_useful"
@@ -877,6 +882,7 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                 if kind:
                     trial["verdict_kinds"].setdefault(cap_id, kind)
     out = []
+    _consult_outcomes_cache = load_consult_outcomes(path)
     for trial in trials.values():
         trial["skills"] = sorted(trial["skills"])
         # APPLY THE LATE OUTCOMES. Order-independent by construction: every event has been walked
@@ -900,24 +906,47 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
             }
         trial["late_outcomes"] = {}
         trial["late_outcome_orphans"] = {}
-        for cap_id, late in sorted(trial.pop("late_outcome_events").items()):
+        for cap_id, rows in sorted(trial.pop("late_outcome_events").items()):
+            rows = sorted(
+                rows,
+                key=lambda r: (r.get("deliverable") or "", r.get("timestamp") or 0),
+            )
             # NOT named `bucket`: that name is already bound as `str` in the verdict branch above,
             # and reusing it here made mypy read this Optional assignment as a type error.
             held: str | None = next(
                 (b for b in ("useful", "not_useful") if cap_id in trial[b]),
                 None,
             )
-            if held is None or late["direction"] not in LATE_OUTCOME_DIRECTIONS:
+            known = [r for r in rows if r["direction"] in LATE_OUTCOME_DIRECTIONS]
+            unknown = [r for r in rows if r["direction"] not in LATE_OUTCOME_DIRECTIONS]
+            if held is None or not known:
                 trial["late_outcome_orphans"][cap_id] = {
-                    **late,
+                    **rows[0],
+                    "amendments": rows,
                     "why": (
                         "no verdict in window to correct"
                         if held is None
-                        else f"unknown direction {late['direction']!r}"
+                        else f"unknown direction {rows[0]['direction']!r}"
                     ),
                 }
                 continue
-            keeps = LATE_OUTCOME_DIRECTIONS[late["direction"]]["keeps_verdict"]
+            if unknown:
+                # Bad rows never poison good ones, and never vanish either.
+                trial["late_outcome_orphans"][cap_id] = {
+                    **unknown[0],
+                    "amendments": unknown,
+                    "why": f"unknown direction {unknown[0]['direction']!r}",
+                }
+            # ONE verdict adjustment per trial regardless of amendment count: amendments to a
+            # single trial are correlated evidence (one trigger, one context), so they must not
+            # stack weight the way independent trials would (§2). A refuting amendment WINS the
+            # conflict — the conservative direction — and the applied row's provenance/judge
+            # replace the trigger-time tier exactly as the single-amendment channel always did.
+            refuting = [
+                r for r in known if not LATE_OUTCOME_DIRECTIONS[r["direction"]]["keeps_verdict"]
+            ]
+            applied = refuting[0] if refuting else known[0]
+            keeps = LATE_OUTCOME_DIRECTIONS[applied["direction"]]["keeps_verdict"]
             after = held if keeps else ("not_useful" if held == "useful" else "useful")
             if after != held:
                 trial[held].remove(cap_id)
@@ -926,14 +955,24 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
             # OVERWRITE, not setdefault: this is the one place a later observation is ALLOWED to
             # replace the trigger-time tier, and it is why the channel exists. The original event
             # keeps its own provenance in the log, so nothing is lost.
-            trial["verdict_provenance"][cap_id] = late["provenance"]
-            if late["judge"] and late["judge"] != UNATTRIBUTED_JUDGE:
-                trial["verdict_judges"][cap_id] = late["judge"]
+            trial["verdict_provenance"][cap_id] = applied["provenance"]
+            if applied["judge"] and applied["judge"] != UNATTRIBUTED_JUDGE:
+                trial["verdict_judges"][cap_id] = applied["judge"]
             trial["late_outcomes"][cap_id] = {
-                **late,
+                **applied,
                 "superseded_bucket": held,
                 "verdict_after": after,
+                "amendments": known,
+                "applied_deliverable": applied.get("deliverable") or "",
             }
+        # Consulted-but-hand-done outcomes: recorded against the CONSULT, joined here so the trial
+        # shows them, never entering any bucket or weight — the offer set missed the need and the
+        # work landed anyway, which is exactly what binding-quality review wants to see.
+        trial["consult_outcomes"] = [
+            row
+            for row in _consult_outcomes_cache
+            if row.get("experiment_id") == trial["experiment_id"]
+        ]
         # The CONTROL ARM is what makes this an experiment rather than a tally: candidates that were
         # named for this exact task and NOT triggered. Reporting it is not optional -- an experiment
         # with an unreported control arm is a testimonial.
@@ -1132,7 +1171,11 @@ def _weigh_verdicts(verdicts: list[tuple[bool, str, str, str]]) -> dict:
 
 
 def propensity(
-    capability_id: str, *, path=None, window_days: int = WINDOW_DAYS, now: int | None = None
+    capability_id: str,
+    *,
+    path=None,
+    window_days: int = WINDOW_DAYS,
+    now: int | None = None,
 ) -> dict:
     """How strongly should this capability be recommended when it matches? With BOTH quantities.
 
@@ -1289,14 +1332,16 @@ def rank(entries: list[dict], *, path=None, window_days: int = WINDOW_DAYS) -> l
     # the prior. A ranked list that does not say which is which invites being trusted too early.
     # And a THIRD: how many rest on anything other than the user's own opinion of their own choice.
     _capability_heartbeat(
-        "output", f"rank:evidence:{with_evidence}/{len(scored)}:outcome_derived:{outcome_derived}"
+        "output",
+        f"rank:evidence:{with_evidence}/{len(scored)}:outcome_derived:{outcome_derived}",
     )
     return scored
 
 
 def _capability_heartbeat(event_type: str, ref: str) -> None:
     """This capability's own production heartbeat. Absent one, it cannot accrue evidence of its own
-    usefulness -- the exact defect `issue-readiness` and `switch-review` both shipped with."""
+    usefulness -- the exact defect `issue-readiness` and `switch-review` both shipped with.
+    """
     try:
         capabilities.production_heartbeat("capability-propensity", event_type, ref=ref)
     except Exception:  # noqa: BLE001
@@ -1541,23 +1586,36 @@ def existing_late_outcome(
     capability_id: str,
     experiment_id: str,
     *,
+    deliverable: str = "",
     path=None,
     window_days: int = WINDOW_DAYS,
     now: int | None = None,
 ) -> dict | None:
-    """The late outcome already attached to this trial for this capability, or None.
+    """The late outcome already attached to this trial for this capability+deliverable, or None.
 
     Read through `experiments()` rather than by re-walking the events, so "what is attached" is
     answered by the same assembly the WEIGHTING reads. A second reader here could disagree with it,
-    and then a refusal would cite an attachment the measurement never applied.
+    and then a refusal would cite an attachment the measurement never applied. The `deliverable`
+    axis matches exactly: the bare slot ("") and each named deliverable hold one attachment each.
     """
+    want = str(deliverable or "").strip().lower()
+
+    def match(entry: dict | None) -> dict | None:
+        if not entry:
+            return None
+        rows = entry.get("amendments") or [entry]
+        for row in rows:
+            if str(row.get("deliverable") or "") == want:
+                return row
+        return None
+
     for trial in experiments(path=path, window_days=window_days, now=now):
         if trial["experiment_id"] != experiment_id:
             continue
-        applied = (trial.get("late_outcomes") or {}).get(capability_id)
-        if applied:
-            return applied
-        return (trial.get("late_outcome_orphans") or {}).get(capability_id)
+        found = match((trial.get("late_outcomes") or {}).get(capability_id))
+        if found:
+            return found
+        return match((trial.get("late_outcome_orphans") or {}).get(capability_id))
     return None
 
 
@@ -1608,7 +1666,10 @@ def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> 
     try:
         import capability_advisor
     except Exception:  # noqa: BLE001
-        return {"measured": False, "why_not_measured": "capability_advisor is not importable"}
+        return {
+            "measured": False,
+            "why_not_measured": "capability_advisor is not importable",
+        }
     bound: set[str] = set()
     for entries in (getattr(capability_advisor, "SURFACE_BINDINGS", {}) or {}).values():
         try:
@@ -1914,6 +1975,131 @@ def existing_reoffer(
     return None
 
 
+CONSULT_OUTCOME_DIRECTIONS = ("landed", "failed")
+
+
+def consult_outcomes_path(path=None):
+    """The consult-outcome store: a sibling JSONL beside the capability ledger.
+
+    NOT inside capabilities.json — `_write_ledger_unlocked` rebuilds that file with exactly
+    three top-level keys, so any extra section would be silently dropped on the next heartbeat
+    (verified 2026-08-31 before this store was built). And deliberately NOT in feedback.py's
+    tables: these records feed NO weight and NO posterior — they exist so the arcs where every
+    offer was declined with reasons and the work was done by hand stop being invisible to
+    measurement. If they ever feed learning, that move goes through feedback.py with a migration.
+    """
+    ledger = pathlib.Path(path) if path else capabilities.REG
+    return ledger.parent / "consult-outcomes.jsonl"
+
+
+def record_consult_outcome(
+    experiment_id: str,
+    *,
+    direction: str,
+    evidence: str,
+    corroboration: str,
+    provenance: str,
+    deliverable: str = "",
+    surface: str = "",
+    timestamp: int | None = None,
+    path=None,
+) -> dict:
+    """Record the outcome of work done BY HAND after a consult whose offers were all declined.
+
+    The subject is the CONSULT, not any capability: the offer set missed the actual need and the
+    caller did the work anyway. One record per (experiment, deliverable); a duplicate is refused
+    with the existing record named, never silently rewritten. `self_reported` is refused for the
+    same reason the late-outcome channel refuses it: this is an OUTCOME record, and the external
+    event must be named.
+    """
+    if not experiment_id.startswith(ADVICE_REF_PREFIX):
+        return {
+            "recorded": False,
+            "reason": f"experiment_id must start with {ADVICE_REF_PREFIX!r}",
+        }
+    for field, value in (("evidence", evidence), ("corroboration", corroboration)):
+        if not str(value).strip():
+            return {
+                "recorded": False,
+                "reason": f"a consult outcome requires {field} naming the external event",
+            }
+    if str(direction) not in CONSULT_OUTCOME_DIRECTIONS:
+        return {
+            "recorded": False,
+            "reason": f"direction must be one of {CONSULT_OUTCOME_DIRECTIONS}",
+        }
+    if str(provenance) == "self_reported" or str(provenance) not in late_outcome_provenances():
+        return {
+            "recorded": False,
+            "reason": "provenance must be an outcome tier (outcome_corroborated, machine_observed, "
+            "defect_found) — self_reported is the gaming path this channel exists to avoid",
+        }
+    slug = str(deliverable or "").strip().lower()
+    if slug and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,58}", slug):
+        return {
+            "recorded": False,
+            "reason": "deliverable must be a short kebab-case slug ([a-z0-9-], <=59 chars)",
+        }
+    store = consult_outcomes_path(path)
+    key = f"consult:{experiment_id}:{slug}"
+    rows = load_consult_outcomes(path)
+    for row in rows:
+        if row.get("idempotency_key") == key:
+            return {
+                "recorded": False,
+                "reason": "already recorded",
+                "existing": dict(row),
+            }
+    row = {
+        "idempotency_key": key,
+        "experiment_id": str(experiment_id),
+        "deliverable": slug,
+        "surface": str(surface or ""),
+        "direction": str(direction),
+        "evidence": _capped(evidence),
+        "corroboration": _capped(corroboration),
+        "provenance": str(provenance),
+        "timestamp": int(timestamp if timestamp is not None else time.time()),
+    }
+    store.parent.mkdir(parents=True, exist_ok=True)
+    with store.open("a") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+    return {
+        "recorded": True,
+        "experiment": row["experiment_id"],
+        "deliverable": slug,
+        "direction": row["direction"],
+        "store": str(store),
+    }
+
+
+def load_consult_outcomes(path=None) -> list[dict]:
+    """Every consult-outcome row; unreadable lines are COUNTED, never silently skipped."""
+    store = consult_outcomes_path(path)
+    if not store.exists():
+        return []
+    rows: list[dict] = []
+    bad = 0
+    for line in store.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            bad += 1
+    if bad:
+        rows.append(
+            {
+                "idempotency_key": "",
+                "experiment_id": "",
+                "direction": "unreadable",
+                "unreadable_lines": bad,
+            }
+        )
+    return rows
+
+
 def record_late_outcome(
     capability_id: str,
     experiment_id: str,
@@ -1923,6 +2109,7 @@ def record_late_outcome(
     provenance: str,
     corroboration: str,
     judge: str = "",
+    deliverable: str = "",
     path=None,
     window_days: int = WINDOW_DAYS,
     timestamp: int | None = None,
@@ -1955,6 +2142,13 @@ def record_late_outcome(
     """
     if not str(evidence).strip():
         raise ValueError("a late outcome requires evidence naming what the outcome established")
+    deliverable = str(deliverable or "").strip().lower()
+    if deliverable and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,58}", deliverable):
+        raise ValueError(
+            "deliverable must be a short kebab-case slug ([a-z0-9-], <=59 chars) — it becomes part "
+            "of the idempotency key, and an unconstrained string would mint unlimited keys for one "
+            "outcome"
+        )
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
     if str(direction) not in LATE_OUTCOME_DIRECTIONS:
@@ -2020,7 +2214,12 @@ def record_late_outcome(
             ),
         }
     already = existing_late_outcome(
-        capability_id, experiment_id, path=path, window_days=window_days, now=now
+        capability_id,
+        experiment_id,
+        deliverable=deliverable,
+        path=path,
+        window_days=window_days,
+        now=now,
     )
     if already:
         return {
@@ -2035,8 +2234,10 @@ def record_late_outcome(
             "remedy": late_outcome_refusal(
                 "Nothing was written, and the existing attachment stands.",
                 remedy=(
-                    "one attachment per trial is the point — it stops a trial being re-rolled until "
-                    "the number is agreeable. If the NEW outcome genuinely supersedes the old one, "
+                    "one attachment per (trial, deliverable) is the point — it stops a trial being "
+                    "re-rolled until the number is agreeable. A BATCH trial whose deliverables land "
+                    "separately may attach one amendment per deliverable by passing a distinct "
+                    "--deliverable slug; if the NEW outcome genuinely supersedes the old one, "
                     "record a fresh trial for the fresh use rather than overwriting this record"
                 ),
             ),
@@ -2047,7 +2248,9 @@ def record_late_outcome(
         LATE_OUTCOME_EVENT_TYPE,
         ref=experiment_id,
         path=path or capabilities.REG,
-        idempotency_key=f"late:{capability_id}:{experiment_id}",
+        idempotency_key=(
+            f"late:{capability_id}:{experiment_id}" + (f":{deliverable}" if deliverable else "")
+        ),
         timestamp=timestamp,
         metadata={
             "source": LATE_OUTCOME_SOURCE,
@@ -2055,6 +2258,7 @@ def record_late_outcome(
             VERDICT_PROVENANCE_KEY: str(provenance),
             VERDICT_CORROBORATION_KEY: _capped(corroboration),
             "evidence": _capped(evidence),
+            **({"deliverable": deliverable} if deliverable else {}),
             **({VERDICT_JUDGE_KEY: str(judge).strip()} if str(judge).strip() else {}),
         },
     )
@@ -2550,7 +2754,10 @@ def tick_evidence(
                     cap_id,
                     experiment,
                     path=path,
-                    metadata={"surface": TICK_SURFACE, "artifact": plan["artifact"].name},
+                    metadata={
+                        "surface": TICK_SURFACE,
+                        "artifact": plan["artifact"].name,
+                    },
                 ):
                     triggers += 1
             except Exception as exc:  # noqa: BLE001
@@ -2970,17 +3177,36 @@ def _selftest_tick_evidence() -> None:
         capabilities.save(rows, ledger)
 
         t_steps = {
-            "obs-daily": {"key": "obs-daily", "artifact": "obs-daily.json", "cadence_days": 0},
-            "obs-weekly": {"key": "obs-weekly", "artifact": "obs-weekly.json", "cadence_days": 6},
-            "deliverer": {"key": "deliverer", "artifact": "deliverer.json", "cadence_days": 0},
-            "no-projection": {"key": "no-projection", "artifact": "np.json", "cadence_days": 0},
+            "obs-daily": {
+                "key": "obs-daily",
+                "artifact": "obs-daily.json",
+                "cadence_days": 0,
+            },
+            "obs-weekly": {
+                "key": "obs-weekly",
+                "artifact": "obs-weekly.json",
+                "cadence_days": 6,
+            },
+            "deliverer": {
+                "key": "deliverer",
+                "artifact": "deliverer.json",
+                "cadence_days": 0,
+            },
+            "no-projection": {
+                "key": "no-projection",
+                "artifact": "np.json",
+                "cadence_days": 0,
+            },
         }
         real_fields = dict(TICK_FINDING_FIELDS)
         real_binding = capability_advisor.SURFACE_BINDINGS.get(TICK_SURFACE)
         TICK_FINDING_FIELDS.clear()
         TICK_FINDING_FIELDS.update(
             {
-                "obs-daily": {"overdue": ("capability_id",), "regressed": ("capability_id",)},
+                "obs-daily": {
+                    "overdue": ("capability_id",),
+                    "regressed": ("capability_id",),
+                },
                 "obs-weekly": {"held_off": ("flag", "state")},
                 "deliverer": {"findings": ("id",)},
                 # `no-projection` deliberately absent: the "declared empty" case.
@@ -3005,7 +3231,11 @@ def _selftest_tick_evidence() -> None:
                 return {
                     "generated_at": now + tick,
                     "overdue": [
-                        {"capability_id": c, "silent_days": 1.0 + tick, "tolerance_days": 2.0}
+                        {
+                            "capability_id": c,
+                            "silent_days": 1.0 + tick,
+                            "tolerance_days": 2.0,
+                        }
                         for c in overdue
                     ],
                     "regressed": [
@@ -3075,7 +3305,11 @@ def _selftest_tick_evidence() -> None:
             assert r3["verdicts_recorded"] == 1, r3
 
             # 4. A NEW FINDING IS USEFUL, and the evidence names what moved.
-            write("obs-daily.json", daily(["range-lane-rollout", "new-defect"], [], 5), now + 2000)
+            write(
+                "obs-daily.json",
+                daily(["range-lane-rollout", "new-defect"], [], 5),
+                now + 2000,
+            )
             r4 = tick_evidence(now=now + 2 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r4["evaluated"]}
             assert got["obs-daily"]["useful"] is True, got["obs-daily"]
@@ -3117,7 +3351,11 @@ def _selftest_tick_evidence() -> None:
 
             # 6. A SHAPE CHANGE IS REPORTED, NEVER SCORED. A broken parse must not read as
             #    "nothing new" -- that is this repo's founding defect wearing a different hat.
-            write("obs-weekly.json", {"generated_at": now, "renamed_bucket": []}, now + 6000)
+            write(
+                "obs-weekly.json",
+                {"generated_at": now, "renamed_bucket": []},
+                now + 6000,
+            )
             r6 = tick_evidence(now=now + 6 * 86400, state_dir=state_dir, path=ledger, steps=t_steps)
             got = {e["capability_id"]: e for e in r6["evaluated"]}
             assert got["obs-weekly"].get("reason") == "unprojectable", got["obs-weekly"]
@@ -3160,7 +3398,10 @@ def _selftest_tick_evidence() -> None:
                 # key stands between that and five more rows.
                 write("obs-daily.json", daily([f"x{bump}"], [], bump), now + 7000 + bump)
                 tick_evidence(
-                    now=now + 6 * 86400 + bump, state_dir=state_dir, path=ledger, steps=t_steps
+                    now=now + 6 * 86400 + bump,
+                    state_dir=state_dir,
+                    path=ledger,
+                    steps=t_steps,
                 )
             after = usefulness(path=ledger)["rows"]["obs-daily"]["resolved"]
             assert after == before, (
@@ -3214,10 +3455,16 @@ def _selftest_tick_evidence() -> None:
             # A ZERO BUDGET MUST MEAN ZERO WORK, not a silent promotion to the default. A control
             # that quietly does something other than what it says is worse than no control.
             write(
-                "obs-weekly.json", {"held_off": [{"flag": "ORCH_Y", "state": "off"}]}, now + 12_000
+                "obs-weekly.json",
+                {"held_off": [{"flag": "ORCH_Y", "state": "off"}]},
+                now + 12_000,
             )
             starved = tick_evidence_guarded(
-                now=now + 12 * 86400, state_dir=state_dir, path=ledger, steps=t_steps, budget_s=0
+                now=now + 12 * 86400,
+                state_dir=state_dir,
+                path=ledger,
+                steps=t_steps,
+                budget_s=0,
             )
             assert "budget_exhausted" in {s["reason"] for s in starved["skipped"]}, starved
             assert starved["verdicts_recorded"] == 0, starved
@@ -3599,7 +3846,12 @@ REPAIR_MIN_DEFECT_EVIDENCE = 1
 
 
 def record_repair(
-    capability_id: str, *, fix: str, artifact: str, path=None, timestamp: int | None = None
+    capability_id: str,
+    *,
+    fix: str,
+    artifact: str,
+    path=None,
+    timestamp: int | None = None,
 ) -> bool:
     """THE DRAIN. Record that a proposed repair was actually MADE.
 
@@ -3828,7 +4080,11 @@ def _selftest_repair() -> None:
         for cid in ("worth-fixing", "correct-match", "precondition-only", "healthy"):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "generated"
-            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["review"]}
+            cap["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["review"],
+            }
             rows[cid] = cap
         capabilities.save(rows, ledger)
 
@@ -4018,7 +4274,11 @@ def _selftest_repair() -> None:
                 "tie-break": {
                     **capabilities._blank_capability("tie-break"),
                     "status": "generated",
-                    "matcher": {"field": "task_type", "operator": "in", "value": ["review"]},
+                    "matcher": {
+                        "field": "task_type",
+                        "operator": "in",
+                        "value": ["review"],
+                    },
                 },
             },
             ledger,
@@ -4112,7 +4372,11 @@ def _selftest_finds() -> None:
         for cid in ("finder-cap", FIND_CARRIER):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "generated"
-            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["review"]}
+            cap["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["review"],
+            }
             rows[cid] = cap
         capabilities.save(rows, ledger)
 
@@ -4121,7 +4385,10 @@ def _selftest_finds() -> None:
         try:
             # ---- 1. A CLAIM WITHOUT AN ARTIFACT IS WORTH NOTHING, and is refused.
             for kwargs in (
-                {"defect": "the advisor still offered a suppressed surface", "artifact": ""},
+                {
+                    "defect": "the advisor still offered a suppressed surface",
+                    "artifact": "",
+                },
                 {"defect": "", "artifact": "PR #123"},
                 {"defect": "   ", "artifact": "   "},
             ):
@@ -4140,7 +4407,12 @@ def _selftest_finds() -> None:
                 raise AssertionError("a find with no finder must be refused")
             # ...and a capability-attributed find without its experiment id belongs to no trial.
             try:
-                record_find(defect="d", artifact="PR #1", capability_id="finder-cap", path=ledger)
+                record_find(
+                    defect="d",
+                    artifact="PR #1",
+                    capability_id="finder-cap",
+                    path=ledger,
+                )
             except ValueError:
                 pass
             else:
@@ -4165,7 +4437,10 @@ def _selftest_finds() -> None:
             assert res["carrier"] == FIND_CARRIER, res
             after = propensity("finder-cap", path=ledger)
             assert after["propensity"] == before["propensity"], (before, after)
-            assert after["evidence_weight"] == before["evidence_weight"], (before, after)
+            assert after["evidence_weight"] == before["evidence_weight"], (
+                before,
+                after,
+            )
             # ...and it did not touch the CARRIER's numbers either, because `find:` is not `advice:`.
             carrier = usefulness(path=ledger)["rows"][FIND_CARRIER]
             assert carrier["candidates"] == 0 and carrier["resolved"] == 0, carrier
@@ -4311,7 +4586,11 @@ def _selftest_declines() -> None:
         for cid in ("helper", "wrong-tool", "used-here"):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "generated"
-            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            cap["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["testgen"],
+            }
             rows[cid] = cap
         capabilities.save(rows, ledger)
 
@@ -4454,7 +4733,11 @@ def _selftest_declines() -> None:
         # so the coercion would quietly discard the one signal the taxonomy exists to carry.
         try:
             record_decline(
-                "helper", "advice:decline0000ff", reason="x", kind="wrong-match", path=ledger
+                "helper",
+                "advice:decline0000ff",
+                reason="x",
+                kind="wrong-match",
+                path=ledger,
             )
         except ValueError:
             pass
@@ -4631,7 +4914,11 @@ def _selftest_declines() -> None:
             # the binding". Exactly at the floor, so a demotable `precondition_unmet` would fire.
             precond = capabilities._blank_capability("surface-gated")
             precond["status"] = "generated"
-            precond["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            precond["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["testgen"],
+            }
             rows2 = capabilities.load_declared(ledger)
             rows2["surface-gated"] = precond
             capabilities.save(rows2, ledger)
@@ -4665,7 +4952,11 @@ def _selftest_declines() -> None:
                 rows_now = capabilities.load_declared(ledger)
                 blank = capabilities._blank_capability(cid)
                 blank["status"] = "generated"
-                blank["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+                blank["matcher"] = {
+                    "field": "task_type",
+                    "operator": "in",
+                    "value": ["testgen"],
+                }
                 rows_now[cid] = blank
                 capabilities.save(rows_now, ledger)
                 capability_advisor.SURFACE_BINDINGS["t-dec"][cid] = f"bound to probe {kind}"
@@ -4769,10 +5060,21 @@ def _selftest_provenance() -> None:
     with tempfile.TemporaryDirectory(prefix="provenance-selftest-") as td:
         ledger = Path(td) / "capabilities.json"
         rows = {}
-        for cid in ("solo", "many-arms", "corroborated", "legacy", "ticky", "mixed-arm"):
+        for cid in (
+            "solo",
+            "many-arms",
+            "corroborated",
+            "legacy",
+            "ticky",
+            "mixed-arm",
+        ):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "generated"
-            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            cap["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["testgen"],
+            }
             rows[cid] = cap
         capabilities.save(rows, ledger)
 
@@ -4832,7 +5134,11 @@ def _selftest_provenance() -> None:
             ref="advice:legacy000000",
             path=ledger,
             idempotency_key="useful:legacy:advice:legacy000000",
-            metadata={"source": "capability_propensity", USEFUL_KEY: True, "evidence": "helped"},
+            metadata={
+                "source": "capability_propensity",
+                USEFUL_KEY: True,
+                "evidence": "helped",
+            },
         )
         # A TICK ROW, which stamped `verdict_kind` before this axis existed.
         capabilities.heartbeat(
@@ -4949,7 +5255,8 @@ def _selftest_provenance() -> None:
         # WHAT A CALLER RECEIVES. `rank()` is the production path; a mix computed and not handed
         # over is a mix nobody reads.
         ranked = rank(
-            [{"capability_id": c} for c in ("solo", "corroborated", "many-arms")], path=ledger
+            [{"capability_id": c} for c in ("solo", "corroborated", "many-arms")],
+            path=ledger,
         )
         assert [e["capability_id"] for e in ranked][0] == "corroborated", ranked
         for entry in ranked:
@@ -4983,7 +5290,11 @@ def _selftest_provenance() -> None:
         # discard the classification the caller believed it had made.
         try:
             record_usefulness(
-                "solo", "advice:badprov0000", useful=True, evidence="x", provenance="great"
+                "solo",
+                "advice:badprov0000",
+                useful=True,
+                evidence="x",
+                provenance="great",
             )
         except ValueError:
             pass
@@ -5017,7 +5328,10 @@ def _selftest_provenance() -> None:
             kind="wrong_match",
             surface="repo-audit:phase-1",
             path=ledger,
-            metadata={VERDICT_PROVENANCE_KEY: "outcome_corroborated", VERDICT_JUDGE_KEY: "codex"},
+            metadata={
+                VERDICT_PROVENANCE_KEY: "outcome_corroborated",
+                VERDICT_JUDGE_KEY: "codex",
+            },
         )
         post = propensity("many-arms", path=ledger)
         assert post["propensity"] == before["propensity"], (before, post)
@@ -5054,7 +5368,10 @@ def _selftest_provenance() -> None:
         assert "--provenance" in refusal and "--judge" in refusal, refusal
         # NOTHING WAS WRITTEN, which is what keeps the retry the trial's FIRST observation. A
         # refusal that consumed the experiment id would be the deadlock, not the fix.
-        assert propensity("solo", path=ledger) == quiet, (quiet, propensity("solo", path=ledger))
+        assert propensity("solo", path=ledger) == quiet, (
+            quiet,
+            propensity("solo", path=ledger),
+        )
         # ...AND THE WEAKEST TIER IS STILL RECORDABLE. Self-assessment is the only signal most
         # capabilities have; the fix makes it a CHOICE, it does not ban it.
         assert record_usefulness(
@@ -5208,7 +5525,10 @@ def _selftest_reoffer_and_offer_axis() -> None:
 
             # ---- 4. A RE-OFFER WITH NO DECLINE IS NOT A RE-OFFER ------------------------------
             none = record_reoffer(
-                "rich", "advice:reoffer99999", decline_kind="offer_too_thin", path=ledger
+                "rich",
+                "advice:reoffer99999",
+                decline_kind="offer_too_thin",
+                path=ledger,
             )
             assert none["reoffered"] is False and "no in-window decline" in none["reason"], none
 
@@ -5723,6 +6043,157 @@ def _selftest_late_outcome() -> None:
         "attachment per trial, and the report shows both directions)"
     )
 
+    # ---- PER-DELIVERABLE AMENDMENTS + CONSULT OUTCOMES (added 2026-08-31) --------------------
+    # The two arcs this exists for were real and uncreditable: a 5-issue batch trial could bank
+    # only its FIRST landed fix (one attachment per trial), and a consult whose offers were all
+    # declined-with-reasons left NOTHING to attach an outcome to at all — so the campaign's two
+    # strongest outcomes (#3288->#3289 in 65 minutes, #628->#629 in 18) were invisible to
+    # measurement. Owner-approved 2026-08-31.
+    with tempfile.TemporaryDirectory(prefix="deliverable-amendments-selftest-") as td:
+        ledger = Path(td) / "capabilities.json"
+        rows = {}
+        for cid in ("batcher", "solo"):
+            cap = capabilities._blank_capability(cid)
+            cap["status"] = "generated"
+            rows[cid] = cap
+        capabilities.save(rows, ledger)
+
+        def _trial2(cap_id: str, exp: str) -> None:
+            record_trigger(cap_id, exp, path=ledger)
+            record_usefulness(
+                cap_id,
+                exp,
+                useful=True,
+                evidence="batch filed",
+                provenance="self_reported",
+                path=ledger,
+            )
+
+        exp = "advice:deliv0000001"
+        _trial2("batcher", exp)
+
+        def _amend(corroboration: str, deliverable: str = "") -> dict:
+            return record_late_outcome(
+                "batcher",
+                exp,
+                direction=LATE_OUTCOME_CORROBORATES,
+                evidence="fix merged",
+                provenance="outcome_corroborated",
+                corroboration=corroboration,
+                deliverable=deliverable,
+                path=ledger,
+            )
+
+        r1 = _amend("repo#101 merged", "issue-101")
+        assert r1["attached"] is True, r1
+        r2 = _amend("repo#102 merged", "issue-102")
+        assert r2["attached"] is True, "a SECOND deliverable must attach — the one-slot cap is gone"
+        r3 = _amend("repo#101 again", "issue-101")
+        assert (
+            r3["attached"] is False and "already attached" in r3["reason"]
+        ), "the same (trial, deliverable) must still refuse a re-roll: " + str(r3)
+        r4 = _amend("bare slot")
+        assert r4["attached"] is True, "the bare slot is its own single attachment"
+        r5 = _amend("bare again")
+        assert r5["attached"] is False, "and it stays singular"
+        try:
+            _amend("x", "Bad Slug!")
+            raise AssertionError("a non-kebab deliverable must be refused, not slugified silently")
+        except ValueError:
+            pass
+
+        tr = next(t for t in experiments(path=ledger) if t["experiment_id"] == exp)
+        lo = tr["late_outcomes"]["batcher"]
+        # THE SETDEFAULT PIN, behavioral: were the assembly ever to regress to first-event-wins,
+        # this count is what goes red — a silently dropped amendment is the no-op class again.
+        assert len(lo["amendments"]) == 3, lo["amendments"]
+        assert lo["verdict_after"] == "useful" and lo["superseded_bucket"] == "useful", lo
+        aftr = propensity("batcher", path=ledger)
+        assert (
+            aftr["effective_useful"] == 1.0
+        ), "amendments to ONE trial are correlated evidence and must not stack weight: " + str(
+            aftr["effective_useful"]
+        )
+
+        # refutes-wins: conflicting amendments resolve to the conservative direction.
+        exp2 = "advice:deliv0000002"
+        _trial2("solo", exp2)
+        record_late_outcome(
+            "solo",
+            exp2,
+            direction=LATE_OUTCOME_CORROBORATES,
+            evidence="one landed",
+            provenance="outcome_corroborated",
+            corroboration="repo#201 merged",
+            deliverable="issue-201",
+            path=ledger,
+        )
+        res = record_late_outcome(
+            "solo",
+            exp2,
+            direction=LATE_OUTCOME_REFUTES,
+            evidence="the other reverted",
+            provenance="outcome_corroborated",
+            corroboration="repo#202 reverted",
+            deliverable="issue-202",
+            path=ledger,
+        )
+        assert res["attached"] is True, res
+        tr2 = next(t for t in experiments(path=ledger) if t["experiment_id"] == exp2)
+        lo2 = tr2["late_outcomes"]["solo"]
+        assert (
+            lo2["direction"] == LATE_OUTCOME_REFUTES and lo2["verdict_after"] == "not_useful"
+        ), "a refuting amendment must win the conflict — the conservative direction: " + str(lo2)
+        assert len(lo2["amendments"]) == 2, lo2["amendments"]
+
+        # consult outcomes: recorded against the CONSULT, joined to the trial, never bucketed.
+        co = record_consult_outcome(
+            exp,
+            direction="landed",
+            evidence="hand-done fix merged in 65 minutes",
+            corroboration="repo#301 merged",
+            provenance="outcome_corroborated",
+            deliverable="wf-3288",
+            surface="orchestrate",
+            path=ledger,
+        )
+        assert co["recorded"] is True, co
+        dup = record_consult_outcome(
+            exp,
+            direction="landed",
+            evidence="again",
+            corroboration="again",
+            provenance="outcome_corroborated",
+            deliverable="wf-3288",
+            path=ledger,
+        )
+        assert dup["recorded"] is False and "already" in dup["reason"], dup
+        gamed = record_consult_outcome(
+            exp,
+            direction="landed",
+            evidence="trust me",
+            corroboration="me",
+            provenance="self_reported",
+            path=ledger,
+        )
+        assert gamed["recorded"] is False and "gaming" in gamed["reason"], gamed
+        tr = next(t for t in experiments(path=ledger) if t["experiment_id"] == exp)
+        assert [c["deliverable"] for c in tr["consult_outcomes"]] == ["wf-3288"], (
+            "the consult outcome must join its trial — a record nothing reads is the silent no-op "
+            "class: " + str(tr.get("consult_outcomes"))
+        )
+        assert tr["consult_outcomes"][0]["direction"] == "landed"
+        # and it changed NO capability bucket:
+        assert "batcher" in tr["useful"] and tr["consult_outcomes"], tr["useful"]
+
+    print(
+        "capability_propensity deliverable-amendments selftest: OK (one attachment per (trial, "
+        "deliverable) with the bare slot still singular, every amendment visible in the assembly, "
+        "one verdict adjustment per trial with refutes winning conflicts and no weight stacking, "
+        "non-kebab slugs refused, and consult outcomes recorded/deduped/joined without touching "
+        "any bucket)"
+    )
+
 
 def _selftest_second_verdict_is_dropped_not_appended() -> None:
     """THE FIRST VERDICT ON A TRIAL IS THE ONLY ONE — and the mechanism is idempotency.
@@ -5862,7 +6333,11 @@ def _selftest_detection() -> None:
         ):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "generated"
-            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            cap["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["testgen"],
+            }
             rows[cid] = cap
         capabilities.save(rows, ledger)
 
@@ -6051,7 +6526,11 @@ def _selftest() -> None:
         for cid in ("helper", "dud", "never-tried"):
             cap = capabilities._blank_capability(cid)
             cap["status"] = "generated"
-            cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+            cap["matcher"] = {
+                "field": "task_type",
+                "operator": "in",
+                "value": ["testgen"],
+            }
             rows[cid] = cap
         capabilities.save(rows, ledger)
 
@@ -6255,6 +6734,7 @@ def main(argv: list[str]) -> int:
             "trigger",
             "useful",
             "late-outcome",
+            "consult-outcome",
             "reoffer",
             "offer-improvements",
             "decline",
@@ -6271,10 +6751,23 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--capability", default="", help="capability id, for trigger/useful")
     ap.add_argument("--experiment", default="", help="advice:<digest> from capability_advice")
     ap.add_argument(
-        "--evidence", default="", help="what the capability CHANGED (required by useful)"
+        "--deliverable",
+        default="",
+        help=(
+            "kebab-case slug naming WHICH deliverable of a batch trial this outcome belongs to; "
+            "each (trial, deliverable) holds one late-outcome attachment, so a 5-issue batch can "
+            "bank each landed fix instead of only its first"
+        ),
     )
     ap.add_argument(
-        "--not-useful", action="store_true", help="record that triggering it did NOT help"
+        "--evidence",
+        default="",
+        help="what the capability CHANGED (required by useful)",
+    )
+    ap.add_argument(
+        "--not-useful",
+        action="store_true",
+        help="record that triggering it did NOT help",
     )
     # PROVENANCE FROM BASH, because the surfaces that judge are shells. It has NO DEFAULT: an
     # omitted flag used to file the verdict at the weakest tier (0.25) and, because recording
@@ -6297,12 +6790,14 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument(
         "--direction",
-        choices=sorted(LATE_OUTCOME_DIRECTIONS),
+        choices=sorted(LATE_OUTCOME_DIRECTIONS) + sorted(CONSULT_OUTCOME_DIRECTIONS),
         default="",
         help=(
-            "late-outcome: does the outcome CONFIRM the verdict already recorded, or CONTRADICT "
-            "it? REQUIRED — no default, because defaulting would silently pick the direction that "
-            "flatters the capability, and an upgrade-only channel is an inflation ratchet"
+            "late-outcome: does the outcome CONFIRM the verdict already recorded (corroborates), "
+            "or CONTRADICT it (refutes)? consult-outcome: did the hand-done work land or fail? "
+            "REQUIRED — no default, because defaulting would silently pick the direction that "
+            "flatters the record, and an upgrade-only channel is an inflation ratchet. Each verb "
+            "refuses the other verb's directions"
         ),
     )
     ap.add_argument(
@@ -6542,6 +7037,23 @@ def main(argv: list[str]) -> int:
             # Non-zero when nothing was offered again — same contract as `late-outcome`, and for the
             # same reason: a no-op reported at exit 0 is how the idempotent verdict drop hid.
             return 0 if res.get("reoffered") else 3
+    if args.command == "consult-outcome":
+        if not args.experiment:
+            ap.error("--experiment is required — the consult IS the subject of this record")
+        res = record_consult_outcome(
+            args.experiment,
+            direction=args.direction,
+            evidence=args.evidence,
+            corroboration=args.corroboration,
+            provenance=args.provenance,
+            deliverable=args.deliverable,
+            surface=args.surface,
+            path=pathlib.Path(args.ledger) if args.ledger else None,
+        )
+        res["command"] = "consult-outcome"
+        print(json.dumps(res, indent=2))
+        # Same honest-exit contract as late-outcome: a refusal is visible, not a quiet 0.
+        return 0 if res.get("recorded") else 3
     if args.command in {"trigger", "useful", "late-outcome", "decline"}:
         if not args.capability or not args.experiment:
             ap.error("--capability and --experiment are required")
@@ -6567,6 +7079,7 @@ def main(argv: list[str]) -> int:
                     provenance=args.provenance,
                     corroboration=args.corroboration,
                     judge=args.judge,
+                    deliverable=args.deliverable,
                     path=ledger,
                     window_days=args.window_days,
                 )
@@ -6984,7 +7497,12 @@ def missed_selection(
                 "already_bound": cap_id in bound,
             }
         )
-    return {"surface": surface, "record_count": len(records), "bound": sorted(bound), "rows": rows}
+    return {
+        "surface": surface,
+        "record_count": len(records),
+        "bound": sorted(bound),
+        "rows": rows,
+    }
 
 
 def propose_bindings(surface: str, records: list, *, path=None) -> list[dict]:
