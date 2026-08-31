@@ -184,7 +184,7 @@ def _redirect_prompt(ctx: dict) -> str:
             "",
             "Observed evidence supplied with this report:",
             block(evidence),
-            *( ["", "Reporter's note:", f"  {note}"] if note else [] ),
+            *(["", "Reporter's note:", f"  {note}"] if note else []),
             "",
             "Root-cause hints from the prior log:",
             block(hints),
@@ -2954,14 +2954,20 @@ def _selftest() -> None:
             "note": "no local delegate exists",
         }
         remote_prompt = _redirect_prompt({"report": remote_report, "acceptance_criteria": "x"})
-        assert "sweep disabled: USE_CONSOLIDATED_WORKFLOWS unset" in remote_prompt, remote_prompt[:400]
+        assert "sweep disabled: USE_CONSOLIDATED_WORKFLOWS unset" in remote_prompt, remote_prompt[
+            :400
+        ]
         assert "gate green on head" in remote_prompt, "every evidence line must render"
         assert "stall_kind=remote_pr_no_driver" in remote_prompt, "condition bits must render"
         assert "no local delegate exists" in remote_prompt, "reporter note must render"
-        assert "do not answer 'inspect' to re-gather" in remote_prompt, "pre-diagnosed guidance present"
+        assert (
+            "do not answer 'inspect' to re-gather" in remote_prompt
+        ), "pre-diagnosed guidance present"
         # and a report WITHOUT those fields renders the explicit absence marker, not garbage
         bare_prompt = _redirect_prompt({"report": report, "acceptance_criteria": "x"})
-        assert "Observed evidence supplied with this report:\n  (none)" in bare_prompt, "absence must be named"
+        assert (
+            "Observed evidence supplied with this report:\n  (none)" in bare_prompt
+        ), "absence must be named"
 
         # replayed proposal -> the agent's corrected prompt flows into the plan; still dry-run + confirm-gated.
         proposed = {
