@@ -17,6 +17,7 @@ import json
 
 import pytest
 
+import env_prereq
 import paths
 
 REPO = paths.REPO_ROOT
@@ -30,6 +31,11 @@ TREND_ARTIFACT = "gate-coverage-trend"
 
 @pytest.fixture(scope="module")
 def baseline() -> dict:
+    # A missing baseline is a SHAPE, not a wiring defect: the exec mirror carries modules plus a
+    # named data-file list, and this file rides that list — but a mirror synced before the list
+    # gained it must SKIP with the file named, never ERROR five tests into unreadability. The
+    # 2026-08-30 mirror run did exactly that (5 ERRORs), which is how this guard got here.
+    env_prereq.require(env_prereq.repo_files_absent("config/coverage-baseline.json"))
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
@@ -54,6 +60,9 @@ def test_the_baseline_is_below_the_measured_figure_so_it_can_fail(baseline):
 
 
 def test_the_declared_source_workflow_exists(baseline):
+    # The workflow FILES live under .github/, which the exec mirror deliberately does not carry —
+    # directory-shaped absences get a guard, single data files get copied (the standing rule).
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     declared = baseline.get("source_workflows")
     assert declared, "source_workflows must name where this repo's coverage is measured"
     for rel in declared:
@@ -67,6 +76,7 @@ def test_the_declared_workflow_publishes_both_artifacts_the_guard_requires(basel
     it produces says coverage is not being measured — which is the opposite of true. Nothing else
     in this repo would notice.
     """
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     for rel in baseline["source_workflows"]:
         text = (REPO / rel).read_text(encoding="utf-8")
         for artifact in (PAYLOAD_ARTIFACT, TREND_ARTIFACT):
@@ -85,6 +95,7 @@ def test_the_payload_comes_from_the_combined_run_not_the_gate(baseline):
     is about this codebase. If the declared workflow ever stopped running the combined
     measurement, the guard would silently start enforcing the blind spot.
     """
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     for rel in baseline["source_workflows"]:
         text = (REPO / rel).read_text(encoding="utf-8")
         assert "--coverage" in text, f"{rel} must run the combined measurement"
@@ -97,6 +108,11 @@ def test_the_baseline_is_not_shipped_to_other_repos():
     Asserted because the file lives at a template-managed path, and the reason it is excluded is
     not visible from the path itself.
     """
+    env_prereq.require(
+        env_prereq.repo_files_absent(
+            ".github/workflows", ".gitignore", "config/coverage-baseline.json"
+        )
+    )
     manifest = REPO / ".github/workflows"
     assert manifest.is_dir()
     assert BASELINE.is_file()
