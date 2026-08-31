@@ -109,7 +109,9 @@ def test_the_baseline_is_not_shipped_to_other_repos():
     not visible from the path itself.
     """
     env_prereq.require(
-        env_prereq.repo_files_absent(".github/workflows", ".gitignore", "config/coverage-baseline.json")
+        env_prereq.repo_files_absent(
+            ".github/workflows", ".gitignore", "config/coverage-baseline.json"
+        )
     )
     manifest = REPO / ".github/workflows"
     assert manifest.is_dir()
