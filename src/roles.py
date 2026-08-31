@@ -144,6 +144,19 @@ def _redirect_prompt(ctx: dict) -> str:
             )
     tail = (report.get("log_tail") or "").strip()
 
+    # Fields a caller-supplied report may carry that the local watch shape does not.
+    # Dropping them silently is how the first live trial (2026-08-31) starved the
+    # model of a diagnosis it was handed: the report said log:null and carried the
+    # completed root cause in `evidence`, and the model — seeing empty hints/drift/
+    # log — could only answer 'inspect'.
+    evidence = [f"  - {str(e).strip()}" for e in (report.get("evidence") or []) if str(e).strip()]
+    condition_bits = [
+        f"{key}={report.get(key)}"
+        for key in ("status", "classification", "stall_kind", "age_hours", "last_progress")
+        if report.get(key) not in (None, "")
+    ]
+    note = str(report.get("note") or "").strip()
+
     def block(items: list[str]) -> str:
         return "\n".join(items) if items else "  (none)"
 
@@ -155,7 +168,10 @@ def _redirect_prompt(ctx: dict) -> str:
             "",
             "CRITICAL-EVALUATOR STANCE: your job is the correct call, not an eager one. Prefer 'inspect' or",
             "'wait' unless the evidence below clearly supports stopping the agent. Never invent a root cause",
-            "or a file scope you cannot see in the evidence.",
+            "or a file scope you cannot see in the evidence. The inverse also holds: when the observed-",
+            "evidence block already contains a verified root cause, do not answer 'inspect' to re-gather",
+            "what is already in front of you — choose the action that evidence supports and cite the",
+            "evidence lines you used in `reason`.",
             "",
             f"Target: {report.get('target')}    prior agent: {report.get('agent')}    lane: {report.get('lane')}",
             f"Watch state: {report.get('state')}    watch recommended_action: {report.get('recommended_action')}",
@@ -163,6 +179,12 @@ def _redirect_prompt(ctx: dict) -> str:
             "",
             "Acceptance criteria the work must satisfy:",
             ac,
+            "",
+            "Reported condition: " + ("; ".join(condition_bits) if condition_bits else "(none)"),
+            "",
+            "Observed evidence supplied with this report:",
+            block(evidence),
+            *(["", "Reporter's note:", f"  {note}"] if note else []),
             "",
             "Root-cause hints from the prior log:",
             block(hints),
@@ -2920,6 +2942,32 @@ def _selftest() -> None:
         assert (
             "All endpoints return 200." in prompt and "STRICT JSON" in prompt
         ), "prompt must carry AC + JSON contract"
+
+        # A remote-shaped report's evidence/condition/note must reach the model verbatim —
+        # the first live trial failed because these fields were dropped here.
+        remote_report = {
+            "target": "owner/repo#975",
+            "status": "stalled",
+            "stall_kind": "remote_pr_no_driver",
+            "age_hours": 237,
+            "evidence": ["sweep disabled: USE_CONSOLIDATED_WORKFLOWS unset", "gate green on head"],
+            "note": "no local delegate exists",
+        }
+        remote_prompt = _redirect_prompt({"report": remote_report, "acceptance_criteria": "x"})
+        assert "sweep disabled: USE_CONSOLIDATED_WORKFLOWS unset" in remote_prompt, remote_prompt[
+            :400
+        ]
+        assert "gate green on head" in remote_prompt, "every evidence line must render"
+        assert "stall_kind=remote_pr_no_driver" in remote_prompt, "condition bits must render"
+        assert "no local delegate exists" in remote_prompt, "reporter note must render"
+        assert (
+            "do not answer 'inspect' to re-gather" in remote_prompt
+        ), "pre-diagnosed guidance present"
+        # and a report WITHOUT those fields renders the explicit absence marker, not garbage
+        bare_prompt = _redirect_prompt({"report": report, "acceptance_criteria": "x"})
+        assert (
+            "Observed evidence supplied with this report:\n  (none)" in bare_prompt
+        ), "absence must be named"
 
         # replayed proposal -> the agent's corrected prompt flows into the plan; still dry-run + confirm-gated.
         proposed = {
