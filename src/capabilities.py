@@ -744,7 +744,15 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
     accepted = [row for row in rows if row["accepted_consumption"]]
     durable_subjects = sorted({row["subject_id"] for row in accepted if row["durable_success"]})
     terminal = [row for row in accepted if row["terminal_outcome"]]
-    failures = sum(1 for row in terminal if not row["durable_success"])
+    # Count from feedback's tally_class — the single classification both this readiness view and
+    # reconcile_causal_lifecycle's routing prior consume, so the gate's number and the prior's
+    # number cannot drift apart. "Every terminal non-success is a failure" was the defect this
+    # replaced: lifecycle churn nothing ever adjudicated trained as incapability (§2).
+    failures = sum(1 for row in terminal if row.get("tally_class") == "failure")
+    churn_unattributed = sum(
+        1 for row in terminal if row.get("tally_class") == "churn_unattributed"
+    )
+    advisory_self_edges = sum(1 for row in accepted if row.get("tally_class") == "advisory_self")
     rework = sum(1 for row in terminal if row["rework"])
     latest = max((int(row["observed_ts"] or 0) for row in terminal), default=0)
     max_age = int(policy["max_evidence_age_days"]) * 86400
@@ -762,6 +770,10 @@ def _causal_readiness(cap: dict[str, Any], rows: list[dict], now: int) -> dict[s
         "accepted_consumptions": len(accepted),
         "terminal_outcomes": len(terminal),
         "failures": failures,
+        # Excluded-but-VISIBLE: a gate that cannot say what it declined to count is the silent
+        # no-op class again. These two numbers are what the old "failures" over-counted.
+        "churn_unattributed": churn_unattributed,
+        "advisory_self_edges": advisory_self_edges,
         "rework": rework,
         "latest_evidence_ts": latest,
     }
@@ -931,8 +943,8 @@ def reconcile_causal_lifecycle(
         readiness = _causal_readiness(cap, rows, now)
         accepted = [row for row in rows if row["accepted_consumption"]]
         terminal = [row for row in accepted if row["terminal_outcome"]]
-        successes = sum(1 for row in terminal if row["durable_success"])
-        failures = len(terminal) - successes
+        successes = sum(1 for row in terminal if row.get("tally_class") == "success")
+        failures = sum(1 for row in terminal if row.get("tally_class") == "failure")
         evidence_hash = _stable_hash(
             "capability-causal-evidence",
             [
@@ -955,11 +967,12 @@ def reconcile_causal_lifecycle(
             "readiness": readiness,
             "reconciled_at": now,
         }
+        tallied = successes + failures
         cap["routing_prior"] = {
             "alpha": 1.0 + successes,
             "beta": 1.0 + failures,
-            "observations": len(terminal),
-            "posterior": (1.0 + successes) / (2.0 + len(terminal)),
+            "observations": tallied,
+            "posterior": (1.0 + successes) / (2.0 + tallied),
             "evidence_hash": evidence_hash,
         }
         if rows:
@@ -1031,9 +1044,13 @@ def reconcile_causal_lifecycle(
                     "timestamp": now,
                     "type": "causal_reconcile",
                     "evidence_hash": evidence_hash,
-                    "observations": len(terminal),
+                    "observations": successes + failures,
                     "successes": successes,
                     "failures": failures,
+                    # What the tally deliberately did NOT count, so a drained or churn-heavy
+                    # window is legible in the event log rather than silently absorbed.
+                    "churn_unattributed": readiness.get("churn_unattributed", 0),
+                    "advisory_self_edges": readiness.get("advisory_self_edges", 0),
                     "status": cap.get("status"),
                 }
             )
@@ -3278,6 +3295,74 @@ def _selftest() -> None:
         cap.setdefault("gate", {})
     if not report.get("threshold_undefined"):
         assert "the other 0 state" not in text_rl, text_rl[:400]
+
+    # ---- ATTRIBUTABLE-FAILURE TALLY (added 2026-09-01) -----------------------------------
+    # The measured defect: 96 remote keepalive PRs closed unmerged (blanket adjudicated
+    # FAIL/abandoned, failure_class=None) plus 8 advisory self-edges trained role-triage's
+    # routing prior to ~1/106 and pinned its gate at "104 failure(s) over the max of 0" —
+    # a permanently unsatisfiable promotion gate fed by non-failures. Both consumers
+    # (_causal_readiness and reconcile_causal_lifecycle) now count feedback's tally_class,
+    # the single per-row classification, so they cannot drift apart.
+    def _mk_row(tally, *, subject="s", rework=False, ts=1_700_000_000):
+        return {
+            "edge_id": f"e-{tally}-{subject}",
+            "subject_id": subject,
+            "target_run_id": f"run-{subject}",
+            "accepted_consumption": tally != "",
+            "counterfactual": False,
+            "outcome_verdict": None,
+            "durability": None,
+            "profile_attempt_ids": [],
+            "terminal_outcome": tally in ("success", "failure", "churn_unattributed"),
+            "durable_success": tally == "success",
+            "tally_class": tally,
+            "rework": rework,
+            "regression": False,
+            "observed_ts": ts,
+            "acceptance_gate_id": None,
+        }
+
+    synthetic = [
+        _mk_row("success", subject="s1"),
+        _mk_row("success", subject="s2"),
+        _mk_row("failure", subject="s3"),
+        _mk_row("churn_unattributed", subject="s4"),
+        _mk_row("churn_unattributed", subject="s5"),
+        _mk_row("churn_unattributed", subject="s6"),
+        _mk_row("advisory_self", subject="s7"),
+        _mk_row("", subject="s8"),
+    ]
+    fake_cap: dict[str, Any] = {"lifecycle_policy": {}}
+    ready = _causal_readiness(fake_cap, synthetic, 1_700_000_100)
+    assert ready["failures"] == 1, (
+        "only the attributable row may count as failure; churn counted again would recreate "
+        f"the 104-failure artifact: {ready['failures']}"
+    )
+    assert ready["churn_unattributed"] == 3, ready
+    assert ready["advisory_self_edges"] == 1, ready
+    # advisory_self rows are accepted consumptions but not terminal tallies
+    assert ready["accepted_consumptions"] == 7 and ready["terminal_outcomes"] == 6, ready
+    # the excluded classes are REPORTED — a tally that cannot say what it declined to count
+    # is the silent no-op class again
+    for key in ("churn_unattributed", "advisory_self_edges"):
+        assert key in ready, f"exclusion {key} must be visible in readiness"
+    # the naming convention feedback's advisory_self relies on (capability role-<name> for a
+    # role run named <name>) is pinned against the in-code offer table, not assumed:
+    import capability_advisor as _ca
+    import roles as _roles
+
+    _role_ids = {f"role-{name}" for name in _roles.ROLE_REGISTRY}
+    _known = set(_ca.HOW_TO_USE)
+    assert _role_ids <= _known, (
+        "role registry and role-<name> capability ids have diverged; feedback.advisory_self "
+        f"relies on this convention: missing {sorted(_role_ids - _known)}"
+    )
+
+    print(
+        "capabilities.py attributable-failure selftest: OK (churn and advisory self-edges are "
+        "excluded from alpha/beta and named in the readiness view, one tally_class feeds both "
+        "consumers, and the role-id naming convention is pinned)"
+    )
     print(
         "capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
         "gate readiness w/ never-pass-on-silence)"

@@ -1491,6 +1491,13 @@ def record_capability_consumption(
         }
 
 
+# Failure classes that must never train as capability incapability (§2): infra noise and the
+# UNCLASSIFIED bulk. `mark_transient_infra` writes the first; the second is every sweep-adjudicated
+# lifecycle closure ("remote keepalive PR closed unmerged") that nothing ever judged on its merits.
+# Consumed by `capability_causal_evidence`'s tally_class — the ONE predicate both
+# `_causal_readiness` and `reconcile_causal_lifecycle` count from, so the two can never drift.
+NONATTRIBUTABLE_FAILURE_CLASSES = frozenset({"", "transient_infra"})
+
 CAPABILITY_REGRESSION_DURABILITY = {
     "reverted",
     "reworked",
@@ -1525,7 +1532,7 @@ def capability_causal_evidence(
             "ie.target_event_id,ie.target_run_id,ie.accepted,ie.counterfactual,"
             "ie.acceptance_gate_id,ie.created_ts,ie.propagated_ts,"
             "te.validation_status target_validation_status,te.updated_ts target_event_ts,"
-            "r.target,r.task_type,r.routing_metadata,"
+            "r.target,r.task_type,r.routing_metadata,r.role_name target_role_name,"
             "o.verifier_verdict,o.adjudicated_verdict,o.merged,o.ci_status,"
             "o.durability,o.durability_checked_ts,o.failure_class,"
             "co.tokens_in,co.tokens_out,co.cost_usd,co.latency_s "
@@ -1583,6 +1590,42 @@ def capability_causal_evidence(
                 and row["merged"]
                 and durability == "durable"
             )
+            # THE TALLY CLASS — the one predicate every alpha/beta consumer counts from.
+            # A failure must be ATTRIBUTABLE, symmetric with how strong durable_success is:
+            # a regression durability, a VERIFIER's FAIL, or an adjudicated FAIL carrying a
+            # named non-infra failure_class. A terminal row with none of those is lifecycle
+            # churn (the measured case: 96 remote keepalive PRs closed unmerged, blanket
+            # adjudicated FAIL/abandoned with failure_class=None, each counted against
+            # role-triage until its routing prior read ~1/106 and its gate said "104
+            # failure(s) over the max of 0" — trained toward zero from non-failures).
+            # An edge whose TARGET is the capability's own role run is an advisory trace
+            # (§2: evaluator/verifier traces are non-worker) — the role registry's naming
+            # convention role-<name> is asserted by selftest, not assumed.
+            target_role = str(row["target_role_name"] or "")
+            advisory_self = bool(target_role) and capability_id == f"role-{target_role}"
+            verifier_fail = str(row["verifier_verdict"] or "").upper().startswith("FAIL")
+            adjudicated_fail = str(row["adjudicated_verdict"] or "").upper().startswith("FAIL")
+            named_class = str(row["failure_class"] or "")
+            attributable_failure = bool(
+                consumed
+                and terminal_outcome
+                and not durable_success
+                and (
+                    durability in CAPABILITY_REGRESSION_DURABILITY
+                    or verifier_fail
+                    or (adjudicated_fail and named_class not in NONATTRIBUTABLE_FAILURE_CLASSES)
+                )
+            )
+            if advisory_self:
+                tally_class = "advisory_self"
+            elif not (consumed and terminal_outcome):
+                tally_class = ""
+            elif durable_success:
+                tally_class = "success"
+            elif attributable_failure:
+                tally_class = "failure"
+            else:
+                tally_class = "churn_unattributed"
             evidence.append(
                 {
                     "edge_id": row["edge_id"],
@@ -1602,6 +1645,8 @@ def capability_causal_evidence(
                     "merged": bool(row["merged"]) if row["merged"] is not None else None,
                     "durability": durability,
                     "durable_success": durable_success,
+                    "target_role_name": target_role or None,
+                    "tally_class": tally_class,
                     "rework": durability == "reworked",
                     "regression": durability in CAPABILITY_REGRESSION_DURABILITY,
                     "failure_class": row["failure_class"],
