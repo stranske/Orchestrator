@@ -1006,6 +1006,28 @@ def reconcile_causal_lifecycle(
                 "detected_at": now,
                 "predecessor": cap.get("predecessor"),
             }
+        elif (cap.get("rollback_pending") or {}).get(
+            "reason"
+        ) == "joined capability outcome regressed":
+            # The same review that SETS this flag clears it when its own evidence class
+            # drains. Without this branch it is a one-way latch: the only other clear path
+            # (execute_capability_rollback) requires a routable predecessor, and the flag
+            # rejects the capability from routing decisions and derates it in the advisor
+            # while it stands — measured on role-triage, whose pending was set by 96
+            # unmerged-churn rows later reclassified as churn_unattributed. Cleared WITH a
+            # named event, never silently, and only for the reason THIS function writes —
+            # a pending recorded by other machinery is not ours to drain.
+            cap["rollback_pending"] = None
+            cap.setdefault("event_history", []).append(
+                {
+                    "timestamp": now,
+                    "type": "rollback_pending_cleared",
+                    "reason": (
+                        "regression evidence drained under attributable-failure " "reclassification"
+                    ),
+                    "evidence_hash": evidence_hash,
+                }
+            )
         if cap.get("predecessor"):
             cap.setdefault("activation_evidence", {})["rollback_probe"] = {
                 "passed": True,
@@ -3308,6 +3330,12 @@ def _selftest() -> None:
             "edge_id": f"e-{tally}-{subject}",
             "subject_id": subject,
             "target_run_id": f"run-{subject}",
+            "target_event_id": f"event-{subject}",
+            "source_event_id": f"src-event-{subject}",
+            "source_run_id": f"src-run-{subject}",
+            "merged": None,
+            "failure_class": None,
+            "cost": {},
             "accepted_consumption": tally != "",
             "counterfactual": False,
             "outcome_verdict": None,
@@ -3358,6 +3386,60 @@ def _selftest() -> None:
         f"relies on this convention: missing {sorted(_role_ids - _known)}"
     )
 
+    # rollback_pending drains with its own evidence: set by a regression row, cleared —
+    # with a NAMED event — when a later review of the same lineage finds none, because the
+    # only other clear path requires a routable predecessor and the flag rejects routing
+    # while it stands (the one-way-latch shape, measured live on role-triage).
+    import tempfile as _tf
+
+    import feedback as _fb
+
+    with _tf.TemporaryDirectory(prefix="rollback-drain-selftest-") as _td:
+        _ledger = Path(_td) / "capabilities.json"
+        _probe = _blank_capability("latch-probe")
+        _probe["status"] = "shadow"
+        _probe["capability_version_id"] = "capability-version:latchprobe"
+        _probe["artifact_hash"] = "sha256:latchprobe"
+        _probe["lifecycle_policy_hash"] = "sha256:latchprobe"
+        save({"latch-probe": _probe}, _ledger)
+
+        def _regressing(*_a, **_k):
+            row = _mk_row("failure", subject="g1")
+            row["regression"] = True
+            return [row]
+
+        def _drained(*_a, **_k):
+            return [_mk_row("churn_unattributed", subject="g1")]
+
+        _orig_evidence = _fb.capability_causal_evidence
+        try:
+            _fb.capability_causal_evidence = _regressing
+            first = reconcile_causal_lifecycle("latch-probe", path=_ledger, timestamp=1_700_000_200)
+            assert first.get("rollback_pending"), "a regression row must set the pending flag"
+            _fb.capability_causal_evidence = _drained
+            second = reconcile_causal_lifecycle(
+                "latch-probe", path=_ledger, timestamp=1_700_000_300
+            )
+            assert not second.get("rollback_pending"), (
+                "pending must drain when its own regression evidence does — a flag only a "
+                "nonexistent predecessor can clear is the one-way latch this exists to kill: "
+                + str(second.get("rollback_pending"))
+            )
+            _stored = load(_ledger, create=False)["latch-probe"]
+            _cleared = [
+                e for e in _stored["event_history"] if e["type"] == "rollback_pending_cleared"
+            ]
+            assert (
+                _cleared and "reclassification" in _cleared[-1]["reason"]
+            ), "the clear must be a NAMED event, never a silent field wipe: " + str(_cleared)
+        finally:
+            _fb.capability_causal_evidence = _orig_evidence
+
+    print(
+        "capabilities.py rollback-drain selftest: OK (pending set by regression evidence "
+        "drains with it, through a named event, and a pending written by other machinery "
+        "is left alone)"
+    )
     print(
         "capabilities.py attributable-failure selftest: OK (churn and advisory self-edges are "
         "excluded from alpha/beta and named in the readiness view, one tally_class feeds both "
