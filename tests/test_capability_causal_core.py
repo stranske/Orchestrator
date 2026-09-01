@@ -40,7 +40,15 @@ def _register(ledger: Path, *, minimum: int = 2) -> dict:
     )
 
 
-def _episode(cap: dict, ordinal: int, profile_id: str, *, durability: str = "durable") -> str:
+def _episode(
+    cap: dict,
+    ordinal: int,
+    profile_id: str,
+    *,
+    durability: str = "durable",
+    merged: bool = True,
+    adjudicated_verdict: str = "PASS",
+) -> str:
     run_id = f"work:{ordinal}"
     feedback.record_run(
         run_id,
@@ -71,8 +79,8 @@ def _episode(cap: dict, ordinal: int, profile_id: str, *, durability: str = "dur
     )
     feedback.record_outcome(
         run_id,
-        adjudicated_verdict="PASS",
-        merged=True,
+        adjudicated_verdict=adjudicated_verdict,
+        merged=merged,
         durability=durability,
     )
     return attempt_id
@@ -197,6 +205,61 @@ def test_same_version_learns_across_profile_attempts_and_late_outcomes(tmp_path,
     }
     transitions = [event for event in stored["event_history"] if event["type"] == "transition"]
     assert transitions[-1]["from"] == "canary" and transitions[-1]["to"] == "active"
+
+
+def test_abandoned_counts_against_only_when_it_merged_and_delivered_nothing(tmp_path, monkeypatch):
+    """`abandoned` names two populations and only one is evidence against the capability.
+
+    The durability sweep writes it for a MERGED PR whose whole diff was agent bookkeeping
+    (the Counter_Risk#791 anti-gaming guard) — that must stay an attributable regression.
+    A run whose PR closed UNMERGED is fleet churn a sweep blanket-adjudicates FAIL with no
+    named failure_class; 96 of those trained role-triage's routing prior to ~1/106 and pinned
+    its promotion gate at "104 failure(s) over the max of 0". The discriminator is `merged`.
+    """
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    ledger = tmp_path / "capabilities.json"
+    cap = _register(ledger)
+
+    # churn: closed unmerged, blanket FAIL, no named class -> visible churn, never a tally
+    _episode(
+        cap,
+        1,
+        "codex-5.6-sol-high",
+        durability="abandoned",
+        merged=False,
+        adjudicated_verdict="FAIL",
+    )
+    # anti-gaming: merged but delivered nothing -> attributable failure AND regression
+    _episode(
+        cap,
+        2,
+        "codex-5.6-terra-high",
+        durability="abandoned",
+        merged=True,
+        adjudicated_verdict="FAIL",
+    )
+
+    rows = feedback.capability_causal_evidence(cap["capability_id"], cap["capability_version_id"])
+    by_run = {row["target_run_id"]: row for row in rows}
+    churn, gamed = by_run["work:1"], by_run["work:2"]
+    assert churn["tally_class"] == "churn_unattributed", churn
+    assert churn["regression"] is False, "an unmerged closure must not mark rollback pending"
+    assert gamed["tally_class"] == "failure", gamed
+    assert gamed["regression"] is True, "a merged empty win must still count as regression"
+
+    result = capabilities.reconcile_causal_lifecycle(
+        cap["capability_id"], path=ledger, timestamp=NOW + 10
+    )
+    prior = result["routing_prior"]
+    assert prior["beta"] == 2.0 and prior["observations"] == 1, prior
+    readiness = result["readiness"]
+    assert readiness["failures"] == 1 and readiness["churn_unattributed"] == 1, readiness
+    stored = capabilities.load(ledger, create=False)[cap["capability_id"]]
+    recon = [e for e in stored["event_history"] if e["type"] == "causal_reconcile"][-1]
+    assert recon["churn_unattributed"] == 1, (
+        "the excluded class must be NAMED in the event — silently absorbed churn is the "
+        f"defect this exists to prevent: {recon}"
+    )
 
 
 def test_regression_is_join_derived_and_withholds_routing(tmp_path, monkeypatch):

@@ -1611,7 +1611,18 @@ def capability_causal_evidence(
                 and terminal_outcome
                 and not durable_success
                 and (
-                    durability in CAPABILITY_REGRESSION_DURABILITY
+                    # `abandoned` names TWO populations and only one is evidence against the
+                    # capability. The durability sweep writes it for a MERGED PR whose whole
+                    # diff was agent bookkeeping ("delivered nothing" — the Counter_Risk#791
+                    # anti-gaming guard, pinned in durability_sweep's selftest): merged=1,
+                    # and it must count. The other population is a run whose PR closed
+                    # UNMERGED — fleet churn a sweep blanket-adjudicates FAIL with no named
+                    # class; 96 of those trained role-triage's prior to ~1/106. `merged` is
+                    # the discriminator the sweep itself relies on.
+                    (
+                        durability in CAPABILITY_REGRESSION_DURABILITY
+                        and (durability != "abandoned" or bool(row["merged"]))
+                    )
                     or verifier_fail
                     or (adjudicated_fail and named_class not in NONATTRIBUTABLE_FAILURE_CLASSES)
                 )
@@ -1648,7 +1659,8 @@ def capability_causal_evidence(
                     "target_role_name": target_role or None,
                     "tally_class": tally_class,
                     "rework": durability == "reworked",
-                    "regression": durability in CAPABILITY_REGRESSION_DURABILITY,
+                    "regression": durability in CAPABILITY_REGRESSION_DURABILITY
+                    and (durability != "abandoned" or bool(row["merged"])),
                     "failure_class": row["failure_class"],
                     "profile_attempt_ids": attempts,
                     "cost": {
