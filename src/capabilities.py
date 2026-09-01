@@ -3391,16 +3391,17 @@ def _selftest() -> None:
     # only other clear path requires a routable predecessor and the flag rejects routing
     # while it stands (the one-way-latch shape, measured live on role-triage).
     import tempfile as _tf
+
     import feedback as _fb
 
     with _tf.TemporaryDirectory(prefix="rollback-drain-selftest-") as _td:
         _ledger = Path(_td) / "capabilities.json"
-        _cap = _blank_capability("latch-probe")
-        _cap["status"] = "shadow"
-        _cap["capability_version_id"] = "capability-version:latchprobe"
-        _cap["artifact_hash"] = "sha256:latchprobe"
-        _cap["lifecycle_policy_hash"] = "sha256:latchprobe"
-        save({"latch-probe": _cap}, _ledger)
+        _probe = _blank_capability("latch-probe")
+        _probe["status"] = "shadow"
+        _probe["capability_version_id"] = "capability-version:latchprobe"
+        _probe["artifact_hash"] = "sha256:latchprobe"
+        _probe["lifecycle_policy_hash"] = "sha256:latchprobe"
+        save({"latch-probe": _probe}, _ledger)
 
         def _regressing(*_a, **_k):
             row = _mk_row("failure", subject="g1")
