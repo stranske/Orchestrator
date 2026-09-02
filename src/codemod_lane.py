@@ -308,7 +308,23 @@ def _rg_scope_command(
     for glob in exclude_globs:
         excluded = glob if glob.startswith("!") else f"!{glob}"
         parts.extend(["-g", shlex.quote(excluded)])
-    return " ".join(parts + [_SEARCH_ROOT, "|", "head", "-n", str(max_files)])
+    # The cap used to be a bare `| head -n N`, which drops every file past N in silence: measured
+    # 2026-09-02 on a 135-file population with max_files=100, the plan listed 100 files, emitted
+    # `warnings: []` and derived `planned_batches` from the cap, so it asserted full coverage
+    # while dropping 35 files. A gate must report what it blocked next to what it let through,
+    # so the listing now ends with a marker naming both numbers whenever the cap bit.
+    return " ".join(parts + [_SEARCH_ROOT, "|", _capped_listing(max_files)])
+
+
+def _capped_listing(max_files: int) -> str:
+    """awk stage that prints the first `max_files` paths and, when more exist, one final
+    `# TRUNCATED` line carrying the total — so a capped inventory can never pass for a
+    complete one."""
+    return (
+        f"awk -v cap={int(max_files)} 'NR<=cap {{print}} "
+        f'END {{if (NR>cap) print "# TRUNCATED: " NR " files in scope, listed " cap '
+        f'" (raise scope.max_files or narrow include_globs)"}}\''
+    )
 
 
 def _template_is_safe_dry_run(command: str) -> bool:
@@ -536,6 +552,9 @@ def build_dry_run_plan(campaign: dict[str, Any]) -> dict[str, Any]:
             "branch_prefix": rollout["branch_prefix"],
             "pr_strategy": rollout["pr_strategy"],
             "planned_batches": max(1, (max_files + batch_size - 1) // batch_size),
+            "planned_batches_basis": "scope.max_files (an upper bound); the real population is "
+            "whatever scope_inventory lists, and a trailing `# TRUNCATED` line there means the "
+            "cap bit and this number undercounts",
         },
         "acceptance": campaign["acceptance"],
         "validation": campaign["validation"],
@@ -621,10 +640,39 @@ def _selftest() -> None:
     assert "rg --files --hidden -g" in scope_cmds[0]["command"], scope_cmds[0]
     assert "!.git/**" in scope_cmds[0]["command"], scope_cmds[0]
     # search root: without it `rg` reads stdin under a harness and the inventory is empty
-    assert f" {_SEARCH_ROOT} | head -n" in scope_cmds[0]["command"], (
+    assert f" {_SEARCH_ROOT} | awk -v cap=" in scope_cmds[0]["command"], (
         "scope_inventory lacks its search root",
         scope_cmds[0],
     )
+    # the cap must be visible when it bites: pin the marker fragment, then prove it prints
+    assert scope_cmds[0]["command"].count("# TRUNCATED: ") == 1, (
+        "scope_inventory cap is silent",
+        scope_cmds[0],
+    )
+    batches = next(v for v in plan.values() if isinstance(v, dict) and "planned_batches" in v)
+    assert batches["planned_batches_basis"].startswith("scope.max_files"), batches
+    import shutil
+    import subprocess
+    import tempfile
+
+    if shutil.which("rg") and shutil.which("awk"):
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(7):
+                (Path(tmp) / f"f{i}.py").write_text("x = 1\n")
+            capped = _rg_scope_command(["*.py"], [], 5)
+            out = subprocess.run(capped, shell=True, cwd=tmp, capture_output=True, text=True)
+            lines = out.stdout.splitlines()
+            assert len(lines) == 6 and lines[-1].startswith(
+                "# TRUNCATED: 7 files in scope, listed 5"
+            ), (
+                "capped inventory did not name both numbers",
+                lines,
+            )
+            uncapped = _rg_scope_command(["*.py"], [], 50)
+            out = subprocess.run(uncapped, shell=True, cwd=tmp, capture_output=True, text=True)
+            assert len(out.stdout.splitlines()) == 7 and "TRUNCATED" not in out.stdout, out.stdout
+    else:
+        print("codemod_lane selftest: rg or awk absent, truncation marker checked by string only")
     recipe_cmds = [c for c in plan["commands"] if c.get("purpose") == "recipe_dry_run"]
     assert recipe_cmds and recipe_cmds[0]["review_before_run"] is True, plan
     assert recipe_cmds[0]["mutates_files"] is False, plan
