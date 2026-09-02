@@ -3172,12 +3172,61 @@ def _selftest() -> None:
             assert adapters.resolve_model(seat, adapters.DEFAULT_OFFLOAD_TIER) is None, seat
             assert _select_offload_profile(seat, "offload"), seat
 
+        # `--help`, `-h`, a typo'd flag or a stray word must never reach run(): stub run() and
+        # load_decision() to raise, so any fall-through fails the selftest instead of dispatching.
+        _g = globals()
+        _old_run, _old_load = _g["run"], _g["load_decision"]
+
+        def _never(*_a, **_k):
+            raise AssertionError("main() reached run() on input that must not dispatch")
+
+        _calls: list[dict] = []
+
+        def _patched_run(decision, *, dry_run=False, heartbeat=True):
+            _calls.append({"dry_run": dry_run, "heartbeat": heartbeat})
+            return {"launched": [], "skipped": [], "patched": True}
+
+        try:
+            import contextlib
+            import io
+
+            _g["run"], _g["load_decision"] = _never, _never
+            for _argv in (
+                ["--help"],
+                ["-h"],
+                ["--dry-run", "--help"],
+                ["--no-heartbeat", "-h"],
+            ):
+                _out, _err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
+                    _rc = main(_argv)
+                assert _rc == 0, ("help must exit 0 without dispatching", _argv, _rc)
+                assert _USAGE.strip() in _out.getvalue(), (_argv, _out.getvalue())
+                assert "unrecognised" not in _err.getvalue().lower(), (_argv, _err.getvalue())
+            for _argv in (
+                ["--bogus"],
+                ["frobnicate"],
+                ["--dry-run", "--hlep"],
+                ["--selftest", "--bogus"],
+            ):
+                _out, _err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
+                    _rc = main(_argv)
+                assert _rc == 2, ("unknown input must be refused with exit 2", _argv, _rc)
+                assert "unrecognised" in _err.getvalue().lower(), (_argv, _err.getvalue())
+                assert _USAGE.strip() in _err.getvalue(), (_argv, _err.getvalue())
+            _g["run"], _g["load_decision"] = _patched_run, lambda: {}
+            assert main(["--dry-run", "--no-heartbeat"]) == 0
+            assert _calls == [{"dry_run": True, "heartbeat": False}], _calls
+        finally:
+            _g["run"], _g["load_decision"] = _old_run, _old_load
+
         print(
             "dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
             "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
             "offload run_id ledger reconciliation + Gemini progress-only/log-tail fail-closed, heartbeat, bogus-agent skip, "
             "delegate_remote label + guards, proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL, "
-            "offload profile selection)"
+            "offload profile selection, help/typo never dispatches)"
         )
     finally:
         import shutil
@@ -3190,7 +3239,23 @@ def _selftest() -> None:
         adapters.LEDGER = old_adapters_ledger
 
 
+_RUN_FLAGS = frozenset({"--dry-run", "--no-heartbeat"})
+_HELP_FLAGS = frozenset({"-h", "--help"})
+_NO_VERB_FLAGS = _RUN_FLAGS | _HELP_FLAGS
+_USAGE = """usage: dispatcher.py [--dry-run] [--no-heartbeat]
+       dispatcher.py delegate ... | offload ... | review-corpus ... | --show-prompt <agent>
+       dispatcher.py --selftest | --help
+
+With no verb it EXECUTES routing-decision.json: spawns each assignment's agent detached and
+writes the lane-yield heartbeat. --dry-run prints what it would spawn; --no-heartbeat skips
+the heartbeat. Anything unrecognised is refused (exit 2) rather than dispatched."""
+
+
 def main(argv: list[str]) -> int:
+    # A bare `dispatcher.py --help` used to fall through to the LIVE run below — nothing
+    # launched that day, but it wrote the heartbeat the lanes yield to (2026-09-02). Help and
+    # typos must never dispatch: unknown input is refused loudly, the safe direction for the
+    # one command that spawns agents.
     if argv and argv[0] == "--show-prompt":
         if len(argv) < 2:
             print("usage: dispatcher.py --show-prompt <agent>", file=sys.stderr)
@@ -3204,7 +3269,7 @@ def main(argv: list[str]) -> int:
         import partitioned_review
 
         return partitioned_review.main(argv[1:], offload_fn=offload)
-    if "--selftest" in argv:
+    if argv == ["--selftest"]:
         _selftest()
         return 0
     if argv and argv[0] == "delegate":  # the orchestrator seat's hand
@@ -3276,6 +3341,17 @@ def main(argv: list[str]) -> int:
         if out.get("error"):
             print(f"[orchestrator] offload error: {out['error']}", file=sys.stderr)
         return 0 if out["exit"] == 0 and not out.get("error") else 1
+    if argv and all(a in _NO_VERB_FLAGS for a in argv) and ("-h" in argv or "--help" in argv):
+        print(_USAGE)
+        return 0
+    unknown = [a for a in argv if a not in _NO_VERB_FLAGS]
+    if unknown:
+        print(
+            f"dispatcher.py: unrecognised argument(s) {unknown!r}; nothing dispatched.",
+            file=sys.stderr,
+        )
+        print(_USAGE, file=sys.stderr)
+        return 2
     dry = "--dry-run" in argv
     no_hb = "--no-heartbeat" in argv
     out = run(load_decision(), dry_run=dry, heartbeat=not no_hb)
