@@ -193,8 +193,20 @@ def _selftest() -> None:
         base = {
             "status": "shadow",
             "liveness": None,
-            "evidence_threshold": {"independent_durable_reuse": 3},
-            "gate_criteria": {"independent_durable_reuse": 3},
+            "evidence_threshold": {"min_independent_durable_reuse": 3},
+            "gate_blocks_execution": True,
+            "gate_reason": "needs independent durable reuses",
+            "gate_criteria": {"min_independent_durable_reuse": 3},
+            "causal_evidence": {
+                "readiness": {
+                    "durable_subjects": ["subject-a"],
+                    "terminal_outcomes": 1,
+                    "failures": 0,
+                    "rework": 0,
+                    "latest_evidence_ts": now - 3600,
+                    "ready": False,
+                }
+            },
             "matcher": {"field": "task_type", "operator": "in", "value": ["implement"]},
             "kill_switch": "disable via config",
             "rollback": "revert",
@@ -212,7 +224,16 @@ def _selftest() -> None:
 
     # A FAILURE-BLOCKED GATE IS NEVER FED — the completion gate this lane was specified against.
     blocked = cap(
-        gate_criteria={"independent_durable_reuse": 3}, outcome_links=[{"durability": "reverted"}]
+        causal_evidence={
+            "readiness": {
+                "durable_subjects": ["subject-a"],
+                "terminal_outcomes": 1,
+                "failures": 1,
+                "rework": 0,
+                "latest_evidence_ts": now - 3600,
+                "ready": False,
+            }
+        }
     )
     led = {"capabilities": {"blocked": blocked}}
     assert not feedable(led, now=now), "a failure-blocked gate must never be fed"
@@ -227,14 +248,17 @@ def _selftest() -> None:
     # THE CAP HOLDS. Three feedable capabilities, one fed, two deferred — never all at once.
     many = {"capabilities": {f"c{i}": cap() for i in range(3)}}
     rows = feedable(many, now=now)
-    if rows:  # only meaningful if the fixture is feedable at all
-        p = plan(items, ledger=many, now=now)
-        assert len(p["assignments"]) <= MAX_FEEDS_PER_CYCLE, p
-        assert len(p["deferred"]) == max(0, len(rows) - MAX_FEEDS_PER_CYCLE), p
-        for assignment in p["assignments"]:
-            assert len(assignment["items"]) <= MAX_ITEMS_PER_CAPABILITY, assignment
-            # Only matching work is nominated: the `review` item must never appear.
-            assert "o/r#3" not in assignment["items"], assignment
+    assert rows, "feedable fixture must exercise the cap assertions"
+    p = plan(items, ledger=many, now=now)
+    assert len(p["assignments"]) <= MAX_FEEDS_PER_CYCLE, (
+        "MAX_FEEDS_PER_CYCLE must limit assignments",
+        p,
+    )
+    assert len(p["deferred"]) == max(0, len(rows) - MAX_FEEDS_PER_CYCLE), p
+    for assignment in p["assignments"]:
+        assert len(assignment["items"]) <= MAX_ITEMS_PER_CAPABILITY, assignment
+        # Only matching work is nominated: the `review` item must never appear.
+        assert "o/r#3" not in assignment["items"], assignment
 
     # NO WORK AND NO FEEDABLE CAPABILITY ARE DIFFERENT STATES, and both are reported.
     assert plan([], ledger=many, now=now)["state"] in {"no_candidates", "nothing_to_feed"}
