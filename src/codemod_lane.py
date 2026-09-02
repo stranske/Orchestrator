@@ -286,16 +286,29 @@ def parse_campaign_json(content: str) -> dict[str, Any]:
     return parsed
 
 
+# Every generated `rg` command names its search root explicitly. Without a path, `rg <pattern>`
+# searches STDIN whenever stdin is a pipe or a file rather than a terminal — which is how an
+# offloaded agent, a CI step or a subprocess harness runs it — so the identical preview that
+# lists 236 sites at an interactive prompt printed nothing and exited 1 under a harness
+# (measured 2026-09-02 on the first repaired re-trial). `--files` never reads stdin, but it
+# takes the same root so no copy of one command can inherit the other's blind spot.
+_SEARCH_ROOT = "."
+
+
 def _rg_scope_command(
     include_globs: Sequence[str], exclude_globs: Sequence[str], max_files: int
 ) -> str:
-    parts = ["rg", "--files"]
+    # --hidden: the fleet's most common codemod target is `.github/workflows/`, and `rg --files`
+    # skips hidden directories by default — measured on the first live trial (2026-09-02): a
+    # validated plan whose scope_inventory returned ZERO files for a 122-file population. `.git`
+    # is re-excluded explicitly so --hidden never inventories the object store.
+    parts = ["rg", "--files", "--hidden", "-g", shlex.quote("!.git/**")]
     for glob in include_globs:
         parts.extend(["-g", shlex.quote(glob)])
     for glob in exclude_globs:
         excluded = glob if glob.startswith("!") else f"!{glob}"
         parts.extend(["-g", shlex.quote(excluded)])
-    return " ".join(parts + ["|", "head", "-n", str(max_files)])
+    return " ".join(parts + [_SEARCH_ROOT, "|", "head", "-n", str(max_files)])
 
 
 def _template_is_safe_dry_run(command: str) -> bool:
@@ -418,6 +431,25 @@ def _recipe_dry_run_command(
         if _template_is_safe_dry_run(cmd) and _has_dry_run_marker(cmd):
             return cmd, None
         return None, "custom command_template omitted because it is not clearly safe dry-run"
+
+    if tool == "custom" and _is_nonempty_string(match):
+        # The schema admits exactly one mechanism, and (match + rewrite) is the one every
+        # mechanical text migration uses — yet only command_template ever produced a preview,
+        # so a valid custom plan shipped with no recipe_dry_run at all (first live trial,
+        # 2026-09-02). The preview is a read-only `rg` listing of the match sites; the rewrite
+        # rides along as a shell comment so the reviewer sees what WOULD replace each hit.
+        preview = ["rg", "-n", "--hidden", "--fixed-strings", shlex.quote(str(match).strip())]
+        for glob in include:
+            preview.extend(["-g", shlex.quote(str(glob))])
+        for glob in scope.get("exclude_globs") or []:
+            excluded = glob if str(glob).startswith("!") else f"!{glob}"
+            preview.extend(["-g", shlex.quote(excluded)])
+        preview.append(_SEARCH_ROOT)  # before the comment: a comment runs to end of line
+        if _is_nonempty_string(rewrite):
+            preview.append(
+                "# preview only; rewrite not applied: " + shlex.quote(str(rewrite).strip())
+            )
+        return " ".join(preview), None
 
     return None, f"no dry-run command could be derived for tool {tool!r}"
 
@@ -582,14 +614,50 @@ def _selftest() -> None:
     plan = build_dry_run_plan(valid)
     assert plan["campaign_id"] == "rename-legacy-handler", plan
     assert plan["execution_policy"]["auto_apply"] is False, plan
-    assert any(
-        c["purpose"] == "scope_inventory" and "rg --files -g" in c["command"]
-        for c in plan["commands"]
-    ), plan
+    scope_cmds = [c for c in plan["commands"] if c["purpose"] == "scope_inventory"]
+    assert len(scope_cmds) == 1, plan
+    # Hidden directories MUST be inventoried (`.github/workflows` is the fleet's codemod target)
+    # and `.git` must stay excluded even so.
+    assert "rg --files --hidden -g" in scope_cmds[0]["command"], scope_cmds[0]
+    assert "!.git/**" in scope_cmds[0]["command"], scope_cmds[0]
+    # search root: without it `rg` reads stdin under a harness and the inventory is empty
+    assert f" {_SEARCH_ROOT} | head -n" in scope_cmds[0]["command"], (
+        "scope_inventory lacks its search root",
+        scope_cmds[0],
+    )
     recipe_cmds = [c for c in plan["commands"] if c.get("purpose") == "recipe_dry_run"]
     assert recipe_cmds and recipe_cmds[0]["review_before_run"] is True, plan
     assert recipe_cmds[0]["mutates_files"] is False, plan
     assert "ast-grep" in recipe_cmds[0]["command"], recipe_cmds[0]
+
+    # A custom match/rewrite recipe — the shape every text migration uses — must yield a
+    # non-mutating preview, not "no dry-run command could be derived".
+    custom = _valid_campaign()
+    custom["recipe"] = {
+        "tool": "custom",
+        "summary": "pin actions/github-script@v9 to the SHA the template tree already uses",
+        "risk_level": "low",
+        "language": "yaml",
+        "match": "uses: actions/github-script@v9",
+        "rewrite": "uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9",
+    }
+    custom["scope"]["include_globs"] = [".github/workflows/*.yml"]
+    custom["scope"]["exclude_globs"] = ["templates/**"]
+    assert validate_campaign(custom) == [], validate_campaign(custom)
+    custom_plan = build_dry_run_plan(custom)
+    custom_recipe = [c for c in custom_plan["commands"] if c.get("purpose") == "recipe_dry_run"]
+    assert custom_recipe, (
+        "a custom match/rewrite recipe produced no preview — the first live trial shipped exactly "
+        f"this hole: {custom_plan.get('warnings')}"
+    )
+    assert "actions/github-script@v9" in custom_recipe[0]["command"], custom_recipe[0]
+    assert custom_recipe[0]["mutates_files"] is False, custom_recipe[0]
+    assert not any("no dry-run command" in w for w in custom_plan.get("warnings", [])), custom_plan
+    preview_cmd = custom_recipe[0]["command"].split(" #")[0]
+    assert preview_cmd.split()[-1] == _SEARCH_ROOT, (
+        "recipe_dry_run lacks its search root before the comment",
+        custom_recipe[0],
+    )
 
     delegation = build_delegation_prompt(valid, plan)
     assert "Manual review required:" in delegation, delegation
