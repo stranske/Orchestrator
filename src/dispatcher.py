@@ -3104,7 +3104,9 @@ def _selftest() -> None:
         # fix is choosing per task, not deleting the expensive rung.
         gemini_ids = {p["profile_id"] for p in execution_profiles.profiles_for_agent("gemini")}
         assert "gemini-3.1-pro-high" in gemini_ids, gemini_ids
-        assert "gemini-3.6-flash-high" in gemini_ids, gemini_ids
+        assert "gemini-3.7-flash-high" in gemini_ids, gemini_ids
+        # The cheap rung is registered too, so the ladder the router names is fully reachable.
+        assert "gemini-3.7-flash-low" in gemini_ids, gemini_ids
 
         # AGY REPORTS IN ITS LOG, and the log must be PER RUN. agy's structured output carries only
         # conversation_id/cwd/usage; its log carries

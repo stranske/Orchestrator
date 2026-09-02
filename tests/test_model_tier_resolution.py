@@ -279,7 +279,7 @@ def test_build_command_honours_every_tier():
     expected = {
         "codex": ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5", "claude-sonnet-5"),
-        "gemini": ("gemini-3.6-flash-low", "gemini-3.6-flash-high", "gemini-3.1-pro-high"),
+        "gemini": ("gemini-3.7-flash-low", "gemini-3.7-flash-high", "gemini-3.1-pro-high"),
     }
     for agent, models in expected.items():
         for tier, model in zip(adapters.MODEL_TIER_NAMES, models):

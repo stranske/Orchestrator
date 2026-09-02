@@ -46,9 +46,12 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 #   codex  — GPT-5.6 ships a genuine 3-tier family: Sol (flagship $5/$30), Terra (workhorse
 #            $2.50/$15, ~GPT-5.5 class), Luna (fastest/cheapest $1/$6). GA 2026-07-09.
 #   claude — Claude 5 family: Opus 5 flagship, Sonnet 5 mid, Haiku 4.5 cheap.
-#   gemini — agy offers Pro only at 3.1; the 3.5/3.6 generations are Flash-only. Flash is BOTH
-#            newer and far cheaper on this compute-metered seat, so cheap/mid ride 3.6 Flash and
-#            only `full` pays for 3.1 Pro.
+#   gemini — agy offers Pro only at 3.1; the 3.5/3.6/3.7 generations are Flash-only. Flash is BOTH
+#            newer and far cheaper on this compute-metered seat, so cheap/mid ride Flash and only
+#            `full` pays for 3.1 Pro. MOVED 3.6 -> 3.7 Flash on 2026-09-01: the owner received a 3.6
+#            retirement notice and `agy models` now advertises the full 3.7 rung set
+#            (high/medium/low). Pro STAYS at 3.1 — `3.7 > 3.1` is a newer FLASH, not a better PRO
+#            (see the ladder-trap note in execution_profiles.py).
 #   vibe   — Mistral merged its coding line into ONE model (mistral-medium-3.5, 256k, replaced
 #            Devstral 2 as the Vibe default). No tiers to pin; the CLI default is correct.
 #   aider  — 'mistral/codestral-latest' is a floating alias that self-upgrades; pinning would be
@@ -66,8 +69,8 @@ MODEL_TIERS: dict[str, dict[str, str]] = {
     "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5", "full": "claude-opus-5"},
     "gemini": {
-        "cheap": "gemini-3.6-flash-low",
-        "mid": "gemini-3.6-flash-high",
+        "cheap": "gemini-3.7-flash-low",
+        "mid": "gemini-3.7-flash-high",
         "full": "gemini-3.1-pro-high",
     },
     "cursor": {},
@@ -1460,7 +1463,7 @@ def build_command(
             str(AGENT_RUNTIME / "gemini" / "logs" / "agy.log"),
         )
         workspace = Path(cwd or ".").expanduser().resolve()
-        # Tier-aware since 2026-08-08: cheap/mid ride 3.6 Flash (newer generation AND far fewer
+        # Tier-aware since 2026-08-08: cheap/mid ride 3.7 Flash (newer generation AND far fewer
         # compute units on this metered seat); only `full` pays for 3.1 Pro. Non-tier modes keep
         # the full Pro seat, because agy print mode REQUIRES an explicit model (see above).
         # The agy seat's runtime isolation (--gemini_dir + absolute --add-dir) IS this capability,
@@ -1786,11 +1789,11 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         assert agy_advertised_models() == [], "kill-switch must suppress the CLI probe entirely"
         unprobed = gemini_model_health()
         assert unprobed["resolvable"] and unprobed["source"] == "pinned_default", unprobed
-        # THE ask: cheap/mid ride Flash, only full pays for Pro. Flash is both newer (3.6 vs 3.1)
+        # THE ask: cheap/mid ride Flash, only full pays for Pro. Flash is both newer (3.7 vs 3.1)
         # and far cheaper in compute units on this metered seat.
         for tier, expected in (
-            ("cheap", "gemini-3.6-flash-low"),
-            ("mid", "gemini-3.6-flash-high"),
+            ("cheap", "gemini-3.7-flash-low"),
+            ("mid", "gemini-3.7-flash-high"),
             ("full", "gemini-3.1-pro-high"),
         ):
             gt = build_command("gemini", "x", mode=tier, cwd=gemini_cwd)
@@ -1990,7 +1993,7 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         flash = model_health("gemini", "cheap")
         assert flash["model"] == "gemini-4.0-flash-high", flash
         # A pinned model that IS advertised is used verbatim, with no auto-pick.
-        _ADVERTISED_MEMO["gemini"]["models"] = [DEFAULT_GEMINI_MODEL, "gemini-3.6-flash-low"]
+        _ADVERTISED_MEMO["gemini"]["models"] = [DEFAULT_GEMINI_MODEL, "gemini-3.7-flash-low"]
         assert gemini_model_health()["source"] == "pinned_default", gemini_model_health()
         assert gemini_model() == DEFAULT_GEMINI_MODEL
         # An operator override is honoured verbatim but reported UNRESOLVABLE when agy lacks it,
