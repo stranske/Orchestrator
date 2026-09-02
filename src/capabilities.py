@@ -142,7 +142,7 @@ EVENT_FIELDS = {
 
 KNOWN_GATES: dict[str, dict[str, Any]] = {
     "research-usage-guard": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "Deterministic admission control for research followups, invoked by exp_abcd's "
             "followup path. Admission control selected by the admitted is no control, so no "
@@ -170,7 +170,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
         # view the moment a twin existed).
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "quarantine-only by policy: trial transport goes through model_profile_trial_bridge and "
             "the pinned read-only Workflows runner; offering it at an agent surface would invite the "
@@ -197,7 +197,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
         # view the moment a twin existed).
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "feedback.record_completion_event is the Brain's lineage write path, invoked by the "
             "tick:learning pattern-miner cadence; no agent selects a lineage stamp. "
@@ -219,7 +219,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
         # view the moment a twin existed).
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "a staged planner over already-escalated keepalive PRs that refuses live action under the "
             "single-authority rule; runs as the keepalive-stage2-plan cadence step. "
@@ -276,7 +276,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
         # view the moment a twin existed).
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "exp_abcd followup -> synthesis_promotion.reconcile, fired mechanically on "
             "experiment_phase=evaluated; offering it would invite a second delivery controller. "
@@ -334,7 +334,7 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
         # view the moment a twin existed).
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "the daily redirect apply/link cadence step, at most one authorised plan per day; an "
             "agent hand-applying would bypass the self-gating that defines it. "
@@ -1258,7 +1258,7 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # rather than typed into a live JSON file nobody diffs.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     "agy-runtime-isolation": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "adapters.build_command adds --add-dir on every gemini dispatch and the dispatcher tags it; this capability IS the confinement, and selection pressure must never reach a confinement property."
         ),
@@ -1289,14 +1289,20 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "invokes it, ORCH_DISABLE_STEPS=redirect-sweep."
         ),
     },
-    # THE FINDABILITY EXEMPTION, and the two capabilities that legitimately hold it. Both are
-    # INVOKED by a rail rather than OFFERED to a reasoning context, so selection pressure cannot
-    # reach them and a surface binding would be theatre — which is exactly what the `ci` binding in
-    # `capability_advisor.SURFACE_BINDINGS` was until 2026-08-23. Declared here rather than in a
-    # live ledger for the same reason the kill-switch categories moved: a machine-local declaration
-    # is green where it was typed, absent on a fresh checkout, and invisible to review.
+    # THE FORMER FINDABILITY EXEMPTION, ENDED 2026-09-02. These rails are INVOKED by a rail rather
+    # than OFFERED for their job, and their rationales still say so — that part is unchanged and
+    # still true. What changed is the owner's directive that every capability gets a chance to be
+    # exercised and every internal rail is offerable in code: a capability nobody can be offered can
+    # never be triggered under a consult, so it can never earn a verdict, and fifteen rows sat in
+    # the docket as "excluded and counted" for the whole campaign. `exercise_bound` means: bound on
+    # a `rail-exercise:<phase>` surface (capability_advisor.SURFACE_BINDINGS), where the binding
+    # reason IS the exercise — a read-only or dry-run run of the rail's own code against a fixture
+    # or its own artifact, scored by a pre-committed check. The live path stays with the rail.
+    # Declared here rather than in a live ledger for the same reason the kill-switch categories
+    # moved: a machine-local declaration is green where it was typed, absent on a fresh checkout,
+    # and invisible to review.
     "capability-admission-gate": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "verify.py runs this gate on every PR unconditionally, as one of its five gates. No "
             "agent ever chooses it, so binding it to a surface could not change how often it runs; "
@@ -1304,7 +1310,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "docs-drift-fix-agent": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "its entrypoint is a Workflows GitHub Actions workflow that fires per PR in another "
             "repository; invocations arrive here through "
@@ -1318,7 +1324,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     # was typed, absent on a fresh checkout, and invisible in a diff — the drift guard in
     # test_capability_admission exists to force exactly this placement.
     "evidence-acquisition": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "evidence_acquisition.py only OBEYS capabilities.unblock() — re-deriving the decision at "
             "a surface would create a second opinion; it runs as an orchestrate.sh shadow cadence "
@@ -1326,7 +1332,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "feature-reflection-cli": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "its agent-facing half is already offered as feature-scan (same entrypoint module); this "
             "row is the features.py registry machinery fed by the daily tick step and read in "
@@ -1334,7 +1340,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "issue-readiness": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "orchestrate.sh invokes issue_readiness.py on cadence, feeding backlog._is_ready via the "
             "status:ready label; agents consume its labels, and a manual invocation would race the "
@@ -1342,7 +1348,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "capability:reference-sync-hygiene-test-gate": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "capability_compiler.run_reference_workflow is invoked only by "
             "consumer_sync_shadow.record_shadow_result via the consumer-sync ingest cadence; same "
@@ -1350,14 +1356,14 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "research-scheduler": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "tick.research_tick consumes its planning functions behind ORCH_RESEARCH_ARM; an agent "
             "wanting an experiment invokes exp_abcd directly, not the scheduler. "
         ),
     },
     "feedback-store": {
-        "findability_category": "no_surface",
+        "findability_category": "exercise_bound",
         "findability_rationale": (
             "the learning store's spine: every dispatch, outcome and learning-cadence step writes it. Substrate cannot be task-selected."
         ),

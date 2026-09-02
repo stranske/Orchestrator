@@ -893,6 +893,92 @@ def should_reask(previous: dict | None, current_context: dict) -> dict:
 NO_BINDING = "__none__"
 
 SURFACE_BINDINGS: dict[str, dict[str, str]] = {
+    # RAIL EXERCISE, five phases (2026-09-02, owner directive: every capability gets a chance to be
+    # exercised and every internal rail is offerable in code). Each phase binds 3-5 rails — the
+    # safe zone per reasoning context — and the REASON IS THE EXERCISE: a read-only or dry-run run
+    # of the rail's own code against a fixture or its own artifact, with a pre-committed pass
+    # check and a break case. Nothing here invites an agent to do the rail's JOB; each rail's
+    # `findability_rationale` in capabilities.py still says why that would be wrong, and the
+    # exercise leaves the live path with the rail that invokes it. The bare `rail-exercise` key
+    # binds nothing on purpose: a consult must name its phase, so no context gets all eighteen.
+    # Pinned by `_selftest_rail_exercise`: every `exercise_bound` declaration is bound on exactly
+    # one phase, and no phase binds a task-routed capability.
+    "rail-exercise": {
+        NO_BINDING: "the family key is a label, not a surface anyone should consult: every consult "
+        "names a phase so no reasoning context is handed all eighteen rails at once",
+    },
+    "rail-exercise:brain": {
+        "feedback-store": "EXERCISE the learning store's spine on a COPY of the feedback db: "
+        "integrity_check plus a referential recount (every outcome has its run; outcome counts "
+        "match the ledger's outcome events); break case: a copy with an orphaned outcome must fail "
+        "the recount. Never writes the live db",
+        "completion-event-lineage": "EXERCISE the seven-phase episode record read-only "
+        "(feedback.py completion-events --json): recent episodes carry every phase and their "
+        "influence edges resolve to real runs; break case: a fixture episode missing a phase is "
+        "reported incomplete. Never stamps an event",
+        "feature-reflection-cli": "EXERCISE features.py record_use/summary against a fixture tree "
+        "into a temporary registry: recorded use counts equal an independent grep count; break "
+        "case: a tree with no reusable structure records nothing. Never touches the live registry",
+    },
+    "rail-exercise:research": {
+        "research-scheduler": "EXERCISE the pure planning functions tick.research_tick consumes: "
+        "build_research_plan on fixture backlog, capacity and hypotheses with an in-memory db "
+        "against a pre-committed plan; break case: a shed capacity snapshot plans nothing. Never "
+        "launches an experiment",
+        "research-usage-guard": "EXERCISE admission control on an isolated shadow ledger: a "
+        "within-budget request admits, a subject spike is blocked, missing provenance fails "
+        "closed, and the report is generated over the isolated db. Never touches the live "
+        "opportunity ledger",
+        "synthesis-promotion": "EXERCISE reconcile() over a fixture experiment dir with injected "
+        "synthesis and delivery functions: phases map onto capabilities.CANONICAL_STATES with TTL "
+        "and rollback; break case: an unverified synthesis must not advance. Never runs the bare "
+        "`reconcile` CLI, which would launch a real synthesis",
+        "strategy-experiments": "EXERCISE the read-only --json plan for a fixture spec: arm "
+        "metadata validates and an invalid single arm is refused. Never sets "
+        "ORCH_STRATEGY_EXPERIMENT for a live prepare",
+        "local-model-profile-trial": "EXERCISE prepare and validate of the immutable "
+        "packet/profile contract with its source-integrity proof on a fixture; finalize is out of "
+        "scope (it needs Workflows trial artifacts). Never dispatches a trial",
+    },
+    "rail-exercise:redirect": {
+        "redirect-apply-bootstrap": "EXERCISE redirect_apply.py --status --json read-only: at most "
+        "one authorised plan per day and its pid-dead condition re-checked here; break case: a "
+        "fixture status with two plans in one day is reported over-limit. Never applies a plan",
+        "live-keepalive-supervisor": "EXERCISE the stage-2 plan artifact recounted against GitHub: "
+        "every eligible candidate is a post-escalation PR carrying the listed readiness deficits; "
+        "break case: a fixture plan naming a merged PR is flagged. Never acts on a PR",
+        "stall-watcher": "EXERCISE watch.py --json on a fixture claim: a dead pid with a stale log "
+        "and clean worktree classifies exited/stalled with the matching hint, a live pid with a "
+        "fresh log classifies running. Never kills, releases or dispatches",
+    },
+    "rail-exercise:gates": {
+        "capability-admission-gate": "EXERCISE capability_admission.py --preflight: a deliberately "
+        "incomplete spec names each missing part, a complete spec passes, and the report matches "
+        "the suite's verdict. Read-only; never edits the ledger",
+        "capability:reference-sync-hygiene-test-gate": "EXERCISE "
+        "capability_compiler.run_reference_workflow on a fixture consumer-sync shadow result: a "
+        "hygiene violation fails, a clean result passes. Never records a shadow result",
+        "docs-drift-fix-agent": "EXERCISE the read-only --json plan on a fixture repo with a "
+        "planted drift: the plan cites the planted file:line and files nothing (apply=false); "
+        "break case: no drift yields an empty plan. The read-only exit code is 1 when findings "
+        "exist, so the pass check reads the plan, not the code. Never dispatches with apply",
+        "coverage-testgen-trigger": "EXERCISE the dry run on a fixture coverage report: the "
+        "emitted prompt names the lowest-covered module by an independent read; break case: "
+        "uniform coverage yields no prompt. Never dispatches the testgen agent",
+    },
+    "rail-exercise:readiness": {
+        "issue-readiness": "EXERCISE classify_issue on fixture issue bodies with pre-committed "
+        "verdicts (auto_ready / not_opener_work) plus a recount of issue-readiness.json against "
+        "live labels (every auto_ready issue carries status:ready); break case: a body with no "
+        "acceptance criteria must not be auto_ready. Never writes a label",
+        "evidence-acquisition": "EXERCISE evidence_acquisition.py --json read-only: every "
+        "nomination is a capability exactly one reuse short of its threshold per the ledger, "
+        "recounted here; break case: a fixture ledger with no near-threshold rows nominates "
+        "nothing. Never calls unblock()",
+        "agy-runtime-isolation": "EXERCISE adapters.build_command for a gemini dispatch: the "
+        "command carries an absolute --add-dir <cwd>; break case: a non-gemini command carries "
+        "none. Never toggles the confinement",
+    },
     "closer-lane": {
         "adversarial-review": "its matcher IS {kind: closer_gate, name: high_stakes_review} -- built "
         "for this lane's complex-target selection, 0 invocations in 1,766 rounds",
@@ -1357,6 +1443,26 @@ def _promoted_bindings(surface: str, *, path=None, index: dict | None = None) ->
 # findability gate inert exactly where it has to bite.
 # ---------------------------------------------------------------------------
 CONSULT_SITES: dict[str, dict] = {
+    # THE RAIL-EXERCISE FAMILY (2026-09-02). The skill names the family literally and passes one of
+    # the phase surfaces per consult; the phases are enumerated here so `consulting_surfaces` can
+    # count each as reached. The caller is a skill file outside the tree: verified on this machine,
+    # unverified-but-reached on a bare runner, which is the honest reading for a coordinator-run
+    # surface. Bindings and rationale: SURFACE_BINDINGS["rail-exercise:*"].
+    "rail-exercise": {
+        "caller": "~/.claude/skills/rail-exercise/SKILL.md",
+        "instances": [
+            "rail-exercise:brain",
+            "rail-exercise:research",
+            "rail-exercise:redirect",
+            "rail-exercise:gates",
+            "rail-exercise:readiness",
+        ],
+        "how": (
+            'the skill\'s consult stanza passes `surface="rail-exercise:<phase>"` before any rail '
+            "is exercised, then trigger / useful / decline per rail; the phase keeps each consult "
+            "at 3-5 offers"
+        ),
+    },
     # THE TWO LANE SURFACES, moved here from KNOWN_UNCONSULTED on 2026-08-29. That table's own
     # procedure says "when a consult is added, MOVE the entry into CONSULT_SITES", and its entries
     # said "THE DEFECT IS FIXED; THE ENTRIES STAY" — the consult was fixed on 2026-08-23, documented
@@ -2650,11 +2756,12 @@ HOW_TO_USE = {
     # module's own docstring; each states what it RETURNS and the load below which it is not worth
     # invoking, because "the work was already small enough by hand" is this fleet's dominant
     # decline reason.
-    # THE TEN RAILS, EXPLAINED IN CODE (2026-08-30). None of these is offerable — each is a
-    # declared no_surface rail — but a catalogue entry that is only a bare name cannot even be
-    # UNDERSTOOD, and "offerable in code to the extent possible" means: what it does, which
-    # rail invokes it, why selecting it would be wrong, and where to READ what it produced.
-    # These entries serve format_advice, direct_entry and the docs; they invite nothing.
+    # THE TEN RAILS, EXPLAINED IN CODE (2026-08-30), OFFERABLE AS EXERCISES SINCE 2026-09-02.
+    # Each text still says what the rail does, which rail invokes it, why selecting it for its JOB
+    # would be wrong, and where to READ what it produced — all still true. What changed: every one
+    # is now bound on a `rail-exercise:<phase>` surface whose binding reason is a read-only or
+    # dry-run EXERCISE with a pre-committed check, so a consult can trigger it and a verdict can
+    # land. "Never select it" below means never for the live job; the exercise is the offer.
     "completion-event-lineage": (
         "RAIL — the Brain's lineage write path: feedback.record_completion_event stamps every "
         "completion into the seven-phase episode record. Invoked by the tick:learning "
@@ -3465,6 +3572,75 @@ def _selftest_contraindications() -> None:
         "capability_advisor contraindication selftest: OK (offered not concealed, reason + "
         "alternative reach the caller on both paths, ranks last, degrades quietly)"
     )
+
+
+def _selftest_rail_exercise() -> None:
+    """Every rail that gave up the findability exemption is offerable on exactly one exercise phase.
+
+    Pins the 2026-09-02 design in both directions. Forward: a capability declared `exercise_bound`
+    in capabilities.py with no `rail-exercise:*` binding would be right back where the exemption
+    left it — unofferable, untriggerable, unscorable — so the declaration alone must fail here.
+    Reverse: an exercise phase may never bind a task-routed capability, because the phases exist
+    to keep each consult at 3-5 rails and a task-routed capability already has its own front door.
+    The bare family key binds nothing, so a consult must name its phase.
+    """
+    import capabilities as _caps
+
+    phases = sorted(k for k in SURFACE_BINDINGS if k.startswith("rail-exercise:"))
+    assert phases, "no rail-exercise phase declared"
+    assert (
+        NO_BINDING in (SURFACE_BINDINGS.get("rail-exercise") or {})
+        and binding_for("rail-exercise") == {}
+    ), (
+        "the bare rail-exercise surface must be suppressed: a consult names its phase",
+        SURFACE_BINDINGS.get("rail-exercise"),
+    )
+    site = CONSULT_SITES.get("rail-exercise") or {}
+    assert sorted(site.get("instances") or []) == phases, (
+        "CONSULT_SITES['rail-exercise'].instances must equal the declared phases",
+        site.get("instances"),
+        phases,
+    )
+    bound_on: dict[str, list[str]] = {}
+    for phase in phases:
+        entries = SURFACE_BINDINGS[phase]
+        assert 3 <= len(entries) <= 5, (phase, len(entries), "a phase binds 3-5 rails")
+        for cap_id, reason in entries.items():
+            assert reason.startswith("EXERCISE"), (phase, cap_id, "the reason IS the exercise")
+            bound_on.setdefault(cap_id, []).append(phase)
+    declared = {
+        cid
+        for table in (_caps.KNOWN_GATES, _caps.KNOWN_DECLARATIONS)
+        for cid, d in table.items()
+        if d.get("findability_category") == "exercise_bound"
+    }
+    for cid in sorted(declared):
+        assert bound_on.get(cid), (
+            f"{cid} declares exercise_bound but no rail-exercise phase binds it — it is unofferable "
+            "again; add it to one phase in SURFACE_BINDINGS"
+        )
+    # Task-routed capabilities are known from CODE two ways: a `field` matcher in the declaration
+    # tables, and the dispatcher's task-type map (`direct_entry()`), which is where a capability
+    # like epic-decomposition is routed without any table entry here. Checking only the tables let
+    # a routed capability into a phase unnoticed on the first break demo (2026-09-02).
+    routed = set(direct_entry().values())
+    for cid, on in sorted(bound_on.items()):
+        assert len(on) == 1, (
+            cid,
+            on,
+            "one phase per rail, or two consults could double-trigger it",
+        )
+        spec = _caps.KNOWN_GATES.get(cid) or _caps.KNOWN_DECLARATIONS.get(cid) or {}
+        matcher = spec.get("matcher") or {}
+        assert "field" not in matcher and cid not in routed, (
+            cid,
+            matcher,
+            "task-routed capabilities have their own door",
+        )
+    for phase in phases:
+        status = surface_status(phase)
+        assert status["status"] == "declared", (phase, status)
+    assert surface_status("rail-exercise:nonesuch")["status"] == "inherited"
 
 
 def _selftest_bindings() -> None:
@@ -4675,6 +4851,7 @@ def main(argv: list[str]) -> int:
         _selftest_front_door()
         _selftest_how_to_use()
         _selftest_bindings()
+        _selftest_rail_exercise()
         _selftest_phase_consult()
         _selftest_contraindications()
         _selftest_preconditions()
