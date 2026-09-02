@@ -213,9 +213,12 @@ against it existed as prose in the document that argues prose does not survive t
 `binding_for`, so ONE resolver) and `consulting_surfaces()`, and it distinguishes `bound_nowhere` from
 `bound_to_unconsulted_surface` because the fixes differ: declare a surface, versus bind a consulted
 one or make the surface consult. A capability a rail invokes UNCONDITIONALLY rather than offers is
-exempt by declaration — `findability_category: no_surface` plus a rationale in
-`capabilities.KNOWN_DECLARATIONS`, both halves required, which is where `capability-admission-gate`
-and `docs-drift-fix-agent` now sit instead of on a `ci` surface nothing consults.
+NOT exempt (it was, as `findability_category: no_surface`, until 2026-09-02): it declares
+`exercise_bound` in `capabilities.KNOWN_DECLARATIONS` / `KNOWN_GATES` and is bound on exactly one
+`rail-exercise:<phase>` surface, where the binding reason is a read-only or dry-run EXERCISE of the
+rail's own code against a fixture or its own artifact, scored by a pre-committed check. The live path
+stays with the rail; what becomes possible is a consult that can trigger it and a verdict that can
+land — the exemption had made both impossible for fifteen rows.
 
 Two things it deliberately does **not** decide, named rather than omitted. A surface that invokes the
 entrypoint DIRECTLY without surface attribution: the `orchestrate` skill already runs `capacity.py`

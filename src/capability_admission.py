@@ -287,11 +287,21 @@ REQUIREMENT_ENFORCED_FROM: dict[str, int] = {"findable": FINDABILITY_ENFORCED_FR
 # ledger from out-declaring the committed table, exactly as it does for the two kill-switch
 # categories.
 FINDABILITY_CATEGORY = "no_surface"
+# The category that REPLACED the exemption on 2026-09-02: a rail declares `exercise_bound` and is
+# bound on a `rail-exercise:<phase>` surface, so it can be consulted, triggered and scored as an
+# EXERCISE while its live path stays with the rail that invokes it. `findability_cause` does not
+# special-case it — the binding check is the whole point.
+EXERCISE_CATEGORY = "exercise_bound"
 
 # The verdicts that are not failures. `reach_not_evaluated` is here for the same reason
 # `commitments()` returns "cannot judge" with no audit ledger: an unreadable advisor must not
 # reclassify the whole catalogue as unfindable.
-FINDABLE_OK = frozenset({"declared_no_surface", "bound_and_consulted", "reach_not_evaluated"})
+# `declared_no_surface` LEFT THIS SET on 2026-09-02. It was the exemption that let fifteen rails
+# pass findability while no surface could ever offer them, which meant no consult could ever
+# trigger them and no verdict could ever land — the gate was satisfied by the very condition that
+# made measurement impossible. It is still DETECTED (so a stale ledger value gets a precise
+# message) but it now fails, and its drain names the fix.
+FINDABLE_OK = frozenset({"bound_and_consulted", "reach_not_evaluated"})
 
 # Each detectable cause and the DATA EDIT that clears it. Declared, so `report()` can print a
 # drainable count that is falsifiable rather than tautological: add a cause with no drain here and
@@ -299,7 +309,11 @@ FINDABLE_OK = frozenset({"declared_no_surface", "bound_and_consulted", "reach_no
 # the same PR, and neither requires the thing the gate forbids — so this gate fails toward motion.
 FINDABILITY_DRAIN: dict[str, str] = {
     "bound_nowhere": "add one entry to a surface's 3-7 in capability_advisor.SURFACE_BINDINGS with "
-    f"its reason, or declare findability_category={FINDABILITY_CATEGORY!r} + findability_rationale",
+    "its reason; for a rail nobody selects, bind it on a `rail-exercise:<phase>` surface with its "
+    f"exercise as the reason and declare findability_category={EXERCISE_CATEGORY!r}",
+    "declared_no_surface": f"findability_category={FINDABILITY_CATEGORY!r} no longer exempts "
+    "(2026-09-02): bind the rail on a `rail-exercise:<phase>` surface in "
+    f"capability_advisor.SURFACE_BINDINGS and declare findability_category={EXERCISE_CATEGORY!r}",
     "bound_to_unconsulted_surface": "bind a surface listed in capability_advisor.CONSULT_SITES, or "
     "make the bound surface consult (pass --surface / the `surface` field)",
 }
@@ -340,13 +354,18 @@ def findability_cause(cap: dict, ctx: dict) -> tuple[str, str]:
          any predicate over this tree, and named rather than omitted.
     """
     cap_id = cap.get("capability_id")
-    # Checked FIRST, and therefore also for a capability bound only to an unconsulted surface: a
-    # capability a rail invokes unconditionally is exempt whatever the binding table says about it.
+    # Checked FIRST so a stale `no_surface` value — in a live ledger reconciliation has not
+    # refreshed, or in a new declaration written from an old example — gets the precise message,
+    # not a generic bound_nowhere. Until 2026-09-02 this branch was an EXEMPTION; it is now a
+    # failure with a named drain.
     if cap.get("findability_category") == FINDABILITY_CATEGORY and _has(
         cap, "findability_rationale"
     ):
         return "declared_no_surface", (
-            "declared unofferable, with a rationale: " + str(cap.get("findability_rationale"))[:110]
+            "declared_no_surface: declared unofferable ("
+            + str(cap.get("findability_rationale"))[:90]
+            + "). "
+            + FINDABILITY_DRAIN.get("declared_no_surface", "")
         )
     surfaces = list((ctx.get("bound_surfaces") or {}).get(cap_id) or [])
     if not surfaces:
@@ -543,13 +562,29 @@ def preflight(spec: dict) -> dict:
     # Caller/heartbeat/fixture cannot be verified for code that does not exist; they are reported as
     # OBLIGATIONS rather than silently skipped, because silently skipping is how they got skipped.
     obligations = {"caller_exists", "heartbeat", "fixture"}
+    # A RAIL DECLARES ITS EXERCISE BINDING AS INTENT. Since 2026-09-02 a rail nobody selects is not
+    # exempt from findability; it is bound on a `rail-exercise:<phase>` surface, and that binding
+    # is a code-table edit the same PR must carry. Preflight cannot see a table entry that does not
+    # exist yet, so `exercise_bound` + a rationale makes `findable` an OBLIGATION the suite verifies
+    # (`_selftest_rail_exercise` fails a declaration no phase binds) — never a pass.
+    exercise_intent = stub.get("findability_category") == EXERCISE_CATEGORY and _has(
+        stub, "findability_rationale"
+    )
+    if exercise_intent:
+        obligations.add("findable")
     for name, fn in REQUIREMENTS:
         if name in obligations:
-            checks[name] = {
-                "ok": None,
-                "detail": "cannot verify pre-build — OBLIGATION: must be "
-                "demonstrated before the capability is registered",
-            }
+            detail = (
+                "cannot verify pre-build — OBLIGATION: must be demonstrated before the "
+                "capability is registered"
+            )
+            if name == "findable":
+                detail = (
+                    "declared exercise_bound — OBLIGATION: bind it on exactly one "
+                    "`rail-exercise:<phase>` in capability_advisor.SURFACE_BINDINGS in the same "
+                    "PR, with the exercise as the reason; capability_advisor --selftest verifies"
+                )
+            checks[name] = {"ok": None, "detail": detail}
             continue
         try:
             ok, detail = fn(stub, ctx)
@@ -798,7 +833,7 @@ def format_report(rep: dict) -> str:
         f"  ENFORCED (new):  {rep['enforced_total']} capability(ies) — "
         f"{len(rep['enforced_failing'])} failing",
         f"  LEGACY DEBT:     {len(rep['legacy_debt'])} pre-gate capability(ies) short of the "
-        f"full eight (visible every run, not forgiven)",
+        f"full nine (visible every run, not forgiven)",
         "",
     ]
     if rep["enforced_failing"]:
@@ -1124,17 +1159,30 @@ def _selftest() -> None:
     assert not pf_unbound["ready_to_build"], pf_unbound
     assert pf_unbound["declarable_missing"] == ["findable"], pf_unbound
     assert "bound_nowhere" in pf_unbound["checks"]["findable"]["detail"], pf_unbound
-    # ...and declaring the exemption (category AND rationale) clears it.
-    pf = preflight(
+    # ...and the OLD exemption (category AND rationale) no longer clears it: since 2026-09-02 a
+    # rail is bound on an exercise phase, and the verdict names that fix.
+    pf_exempt = preflight(
         {
             **spec,
             "findability_category": FINDABILITY_CATEGORY,
             "findability_rationale": "a rail invokes it unconditionally; it is never offered",
         }
     )
+    assert not pf_exempt["ready_to_build"], pf_exempt
+    assert pf_exempt["declarable_missing"] == ["findable"], pf_exempt
+    assert "no longer exempts" in pf_exempt["checks"]["findable"]["detail"], pf_exempt
+    # Declaring the exercise binding as INTENT makes findability an obligation, not a pass.
+    pf = preflight(
+        {
+            **spec,
+            "findability_category": EXERCISE_CATEGORY,
+            "findability_rationale": "a rail invokes it; exercised read-only on a fixture",
+        }
+    )
     assert pf["ready_to_build"], pf
-    assert set(pf["obligations"]) == {"caller_exists", "heartbeat", "fixture"}, pf
+    assert set(pf["obligations"]) == {"caller_exists", "heartbeat", "fixture", "findable"}, pf
     assert all(pf["checks"][o]["ok"] is None for o in pf["obligations"]), pf
+    assert "rail-exercise" in pf["checks"]["findable"]["detail"], pf
     # The category ALONE must not clear it, exactly as for the kill-switch categories.
     pf_bare_category = preflight({**spec, "findability_category": FINDABILITY_CATEGORY})
     assert not pf_bare_category["ready_to_build"], pf_bare_category

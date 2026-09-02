@@ -231,6 +231,7 @@ def _findability_ledger(tmp_dir):
         "t-stranded": dict(bound="silent", when=after),
         "t-nowhere": dict(bound=None, when=after),
         "t-declared": dict(bound=None, when=after, category=True, rationale=True),
+        "t-exercise": dict(bound="asked", when=after, category="exercise", rationale=True),
         "t-category-only": dict(bound=None, when=after, category=True),
         "t-old-nowhere": dict(bound=None, when=before),
     }
@@ -248,7 +249,9 @@ def _findability_ledger(tmp_dir):
                 "event_history": [{"timestamp": spec["when"], "type": "migrated"}],
             }
         )
-        if spec.get("category"):
+        if spec.get("category") == "exercise":
+            cap["findability_category"] = admission.EXERCISE_CATEGORY
+        elif spec.get("category"):
             cap["findability_category"] = admission.FINDABILITY_CATEGORY
         if spec.get("rationale"):
             cap["findability_rationale"] = "a rail invokes it unconditionally; never offered"
@@ -286,15 +289,20 @@ def test_findability_distinguishes_its_three_sub_causes():
                 "t-stranded",
                 "t-nowhere",
                 "t-declared",
+                "t-exercise",
                 "t-category-only",
             )
         }
         ok = {cap_id: v["checks"]["findable"]["ok"] for cap_id, v in verdicts.items()}
+        # `t-declared` carries the pre-2026-09-02 exemption and FAILS: the category no longer
+        # exempts. `t-exercise` is what replaced it — exercise_bound and bound on a consulted
+        # phase — and passes through the ordinary binding check, no special case.
         assert ok == {
             "t-consulted": True,
             "t-stranded": False,
             "t-nowhere": False,
-            "t-declared": True,
+            "t-declared": False,
+            "t-exercise": True,
             "t-category-only": False,
         }, ok
         # The two failures must be DISTINGUISHABLE, not just both red.
@@ -305,7 +313,10 @@ def test_findability_distinguishes_its_three_sub_causes():
         }
         assert causes["t-nowhere"] == "bound_nowhere", causes
         assert causes["t-stranded"] == "bound_to_unconsulted_surface", causes
-        assert causes["t-nowhere"] != causes["t-stranded"]
+        assert causes["t-declared"] == "declared_no_surface", causes
+        assert len({causes["t-nowhere"], causes["t-stranded"], causes["t-declared"]}) == 3
+        # The ended exemption names its own drain, like every other failing cause.
+        assert "rail-exercise" in verdicts["t-declared"]["checks"]["findable"]["detail"]
         # The stranded verdict must NAME the surface, or the reader cannot act on it.
         assert "silent" in verdicts["t-stranded"]["checks"]["findable"]["detail"]
         # A category with no rationale must not clear the requirement — both halves are required,
@@ -321,7 +332,13 @@ def test_findability_distinguishes_its_three_sub_causes():
         rep = admission.report(path=path, ctx=ctx)
         find = rep["findability"]
         mine = {cap_id for cap_id in find["failing"] if cap_id.startswith("t-")}
-        assert mine == {"t-category-only", "t-nowhere", "t-old-nowhere", "t-stranded"}, mine
+        assert mine == {
+            "t-category-only",
+            "t-declared",
+            "t-nowhere",
+            "t-old-nowhere",
+            "t-stranded",
+        }, mine
         by_cause = {
             cause: [c for c in ids if c.startswith("t-")] for cause, ids in find["by_cause"].items()
         }
@@ -373,6 +390,7 @@ def test_findability_blocks_new_capabilities_and_reports_older_ones_as_debt():
         assert {c for c in find["blocking"] if c.startswith("t-")} == {
             "t-nowhere",
             "t-stranded",
+            "t-declared",
             "t-category-only",
         }, find["blocking"]
         assert "t-old-nowhere" in find["deferred"], find["deferred"]
@@ -425,29 +443,41 @@ def test_unreadable_reach_is_not_evaluated_and_never_a_failure():
         assert len(find["drainable"]) == len(find["failing"]), find
 
 
-def test_findability_exemption_is_declared_in_code_not_in_a_live_ledger():
-    """The `no_surface` category, pinned like the two kill-switch categories.
+def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
+    """The exemption ended on 2026-09-02; what replaced it is pinned like the kill-switch categories.
 
-    A declaration applied straight to the running instance's `capabilities.json` is green where it
-    was typed, absent on a fresh checkout, and invisible in a diff — the exact defect that moved
-    `kill_switch_category` into `KNOWN_DECLARATIONS`. So the exempt set is asserted from the CODE
-    table, and the ledger may not out-declare it.
+    Until that day fifteen rails declared `findability_category: no_surface` and passed findability
+    while no surface could offer them — so no consult could trigger them and no verdict could ever
+    land. The owner's directive: every capability gets a chance to be exercised, every internal rail
+    is offerable in code. So: NOTHING may declare `no_surface` any more (a new rail written from an
+    old example fails here, with the fix named by `FINDABILITY_DRAIN`), the former set declares
+    `exercise_bound` — pinned by name so a rail cannot slip into the category without review — and
+    every one of them is bound on exactly one `rail-exercise:<phase>` surface, the binding whose
+    reason is the exercise. Asserted from the CODE tables, since a live ledger is green where it
+    was typed and absent on a fresh checkout.
     """
-    # BOTH code tables: reconciliation seeds from {**KNOWN_GATES, **KNOWN_DECLARATIONS}, and a
-    # capability may not sit in both, so the union IS the code-side truth. Gate-registered rails
-    # (completion-event-lineage, the keepalive/redirect/synthesis gates, the quarantined trial)
-    # carry the declaration on their gate entry.
-    declared = {
+    import capability_advisor as advisor
+
+    tables = (capabilities.KNOWN_DECLARATIONS, capabilities.KNOWN_GATES)
+    unofferable = {
         cid
-        for table in (capabilities.KNOWN_DECLARATIONS, capabilities.KNOWN_GATES)
+        for table in tables
         for cid, d in table.items()
         if d.get("findability_category") == admission.FINDABILITY_CATEGORY
     }
-    assert declared == {
+    assert not unofferable, (
+        f"{sorted(unofferable)} declare no_surface, which no longer exempts: "
+        + admission.FINDABILITY_DRAIN["declared_no_surface"]
+    )
+    exercise_bound = {
+        cid
+        for table in tables
+        for cid, d in table.items()
+        if d.get("findability_category") == admission.EXERCISE_CATEGORY
+    }
+    assert exercise_bound == {
         "capability-admission-gate",
         "docs-drift-fix-agent",
-        # The 2026-08-29 hard-tail set: eleven internal rails plus the quarantined trial transport,
-        # each rationale naming the rail (or policy) that makes an agent surface wrong for it.
         "agy-runtime-isolation",
         "capability:reference-sync-hygiene-test-gate",
         "completion-event-lineage",
@@ -459,27 +489,27 @@ def test_findability_exemption_is_declared_in_code_not_in_a_live_ledger():
         "local-model-profile-trial",
         "redirect-apply-bootstrap",
         "research-scheduler",
-        # 2026-08-30: exp_abcd's followup admission control — admission control selected by the
-        # admitted is no control. Declared on its gate entry.
         "research-usage-guard",
         "synthesis-promotion",
-    }, declared
-    for cap_id in declared:
+    }, exercise_bound
+    for cap_id in exercise_bound:
         row = capabilities.KNOWN_DECLARATIONS.get(cap_id) or capabilities.KNOWN_GATES.get(cap_id)
         assert str((row or {}).get("findability_rationale") or "").strip(), cap_id
-    # Reconciliation can only seed these if the fields are declaration-owned.
+    bound = advisor.surfaces_binding(sorted(exercise_bound))
+    for cap_id in sorted(exercise_bound):
+        phases = [s for s in bound.get(cap_id, []) if s.startswith("rail-exercise:")]
+        assert len(phases) == 1, (cap_id, bound.get(cap_id), "exactly one exercise phase")
+    # Reconciliation can only push the new category into live rows if the fields are declaration-owned.
     for field in ("findability_category", "findability_rationale"):
         assert field in capabilities.DECLARATION_FIELDS, field
-    # DRIFT GUARD: nothing may carry the exemption that the code table does not declare.
+    # DRIFT GUARD, same direction as before: a live ledger may not out-declare the code table.
     ledger = capabilities.load_declared(capabilities.REG)
     stray = {
         cid
         for cid, cap in ledger.items()
-        if cap.get("findability_category") == admission.FINDABILITY_CATEGORY
-    } - declared
-    assert (
-        not stray
-    ), f"ledger declares the findability exemption for undeclared capabilities: {stray}"
+        if cap.get("findability_category") == admission.EXERCISE_CATEGORY
+    } - exercise_bound
+    assert not stray, f"ledger declares exercise_bound for undeclared capabilities: {stray}"
 
 
 def test_consult_sites_are_falsifiable_claims_about_real_callers():
