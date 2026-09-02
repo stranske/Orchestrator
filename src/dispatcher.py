@@ -3203,7 +3203,12 @@ def _selftest() -> None:
                 assert _rc == 0, ("help must exit 0 without dispatching", _argv, _rc)
                 assert _USAGE.strip() in _out.getvalue(), (_argv, _out.getvalue())
                 assert "unrecognised" not in _err.getvalue().lower(), (_argv, _err.getvalue())
-            for _argv in (["--bogus"], ["frobnicate"], ["--dry-run", "--hlep"], ["--selftest", "--bogus"]):
+            for _argv in (
+                ["--bogus"],
+                ["frobnicate"],
+                ["--dry-run", "--hlep"],
+                ["--selftest", "--bogus"],
+            ):
                 _out, _err = io.StringIO(), io.StringIO()
                 with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
                     _rc = main(_argv)
