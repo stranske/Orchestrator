@@ -189,7 +189,7 @@ ROUTE_TABLE: dict = {
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
             {"agent": "codex", "mode": "cheap", "late": False},
-            # gemini full->cheap is the one real behaviour change in stage 1 (3.1 Pro -> 3.6 Flash-low).
+            # gemini full->cheap is the one real behaviour change in stage 1 (3.1 Pro -> 3.7 Flash-low).
             # Watch this cell: if codemod diff quality drops, promote gemini here to 'mid' (Flash-high)
             # rather than reverting the whole tier.
             {"agent": "gemini", "mode": "cheap", "late": False},

@@ -74,48 +74,68 @@ def _env_float_or_none(name: str):
 
 
 # ── Economic-model re-verification (monthly `orchestrator-capacity-recheck`) ──────────────────
-# 2026-08-01: all seats re-verified against current public pricing/limits; NO cap-VALUE changes
-#   needed again this cycle (the soft caps / plan_limit below are local placeholders, not published
-#   numbers, so there is nothing verified to swap in). Confirmed this cycle:
-#   - codex  = ChatGPT Pro tier (LOCAL_POLICY.md), rolling 5h + weekly. Turbulent month, NET ZERO for this
-#              model: 5h window was temporarily REMOVED 2026-07-12 (Plus/Pro/Business, after GPT-5.6
-#              Sol demand doubled traffic in 48h), then RESTORED 2026-07-30 and again stacks with the
-#              weekly cap — so window="5h" below stays correct. Current model is GPT-5.6 Sol (was
-#              GPT-5.5); Plus ranges ~15-90 msg/5h Sol, 20-110 Terra, 50-280 Luna, Pro = 5×. A
-#              2026-07-29 efficiency fix stretches typical Sol usage ~18%. NEW (2026-06-12): BANKED
-#              rate-limit resets — Go/Plus/Pro/Business get 1 free reset, bankable, 30-day validity,
-#              not purchasable. A banked reset can clear a real 5h exhaustion out-of-band, so an
-#              observed shed is not always time-bound. [ccusage; 429-shed authoritative]
-#   - claude = Max plan, 5h limits doubled 2026-05-06 (peak-hour throttle removed). The weekly +50%
-#              was NOT reverted on 2026-07-13 as last cycle predicted: extended to 07-19, then to
-#              2026-08-19 for Pro/Max/Team + seat-based Enterprise. ACTIVE NOW, expires 2026-08-19 —
-#              i.e. the weekly ceiling may tighten BEFORE the next monthly recheck. Harmless: no cap
-#              value is hard-wired here and 429-shed is authoritative. [ccusage]
-#   - cursor = Pro / Pro+ / Ultra tiers; the mid tier is ~3x Pro's credits (LOCAL_POLICY.md).
-#              First-party Composer 2.5 bills $0.50/M in, $2.50/M out — far under frontier rates,
-#              which is why Auto+Composer stays the cheap usable lane. The 2026-06 two-pool split
-#              (Composer/Auto vs Third-Party API) is unchanged.
-#   - gemini = Antigravity AI Pro, compute-metered since 2026-05-17 (weighs request complexity, tools
-#              in use, and accumulated chat-history length), 5h refresh + weekly ceiling. No cap change
-#              since May's "tripled twice" (~9× the post-nerf floor). TIER RESTRUCTURE this cycle:
-#              Pro $20 baseline, AI Ultra $100 (~5× Pro), Ultra Max $200 (~20× Pro, cut from $249.99);
-#              rate limits for Flash/Pro models UNIFIED into one pool drawn down per API pricing; AI
-#              credits REMOVED from base plans (quotas raised instead) and are now OVERAGE-ONLY, with
-#              an Always/Never auto-spend setting. Google publishes NO numeric quotas → 429-shed stays
-#              authoritative and the caps below stay local estimates. 2026-06-18: Gemini CLI and the
-#              Code Assist IDE extensions STOPPED serving AI Pro/Ultra/free — the closed `agy`
-#              Antigravity CLI is now the only lane (hence no `gemini` CLI on this box).
-#   - vibe   = Mistral Le Chat Pro $14.99/mo, flat "all-day coding in the CLI, IDE, and on web",
-#              fair-use with no published numbers. Pro still does NOT cover API calls (keeps aider on
-#              the separate Codestral credit). Team $24.99/user (min $50); Education $5.99. Unchanged.
-#   - aider  = Codestral API $0.30/$0.90 per 1M tok (in/out), 256K ctx; pay-go credit backstop (amount in LOCAL_POLICY.md)
-#              unchanged. plan_limit below remains a placeholder — no published Mistral API tier cap.
-#   CLI versions this cycle: agy 1.1.9 (was 1.0.13), cursor-agent 2026.07.23 (was 2026.06.29),
-#   vibe 2.15.0, codex-cli 0.145.0 (was 0.142.4), claude 2.1.177, aider 0.86.2 (venv), ccusage 20.0.11.
-#   agy 1.1.9 keeps full headless capability (-p/--print, --output-format json|stream-json,
-#   --dangerously-skip-permissions) and ADDS --effort low|medium|high, --json-schema, --mode, and
-#   --sandbox. NB --effort is a direct COMPUTE lever on a compute-metered seat (see the router/adapters
-#   proposal in the 2026-08-01 recheck report). See ~/.claude/.../memory/orchestrator_local_build.md.
+# 2026-09-01: all seats re-verified against current public pricing/limits. NO cap-VALUE changes
+#   again this cycle (the soft caps / plan_limit below are local placeholders, not published numbers,
+#   so there is nothing verified to swap in). TWO structural findings, both on the ccusage seats:
+#   - codex  = ChatGPT Pro tier (LOCAL_POLICY.md). CORRECTION to last cycle: the 5h window was NOT
+#              "restored 2026-07-30". It stayed off for six weeks after the 2026-07-13 GPT-5.6 Sol
+#              rollout and came back on 2026-08-26 for PLUS + ChatGPT Work ONLY — Pro $100 and Pro
+#              $200 are EXPLICITLY EXEMPT ("we are for the upcoming months keeping the 5h limit not
+#              enabled for Pro $100 and Pro $200 subscriptions", Tibo Sottiaux). So THIS box's seat
+#              currently has NO 5h gate; only the weekly cap binds. window="5h" below is KEPT on
+#              purpose: the exemption is time-boxed by its own wording ("upcoming months", not a
+#              guarantee) and the field is descriptive for ccusage seats (it is read at line ~805 for
+#              reporting; only the count/dollar ledger models consume it as a window). Nothing is
+#              hard-wired and 429-shed stays authoritative, so the exemption cannot cause a false shed.
+#              Weekly limits and legacy credit rates unchanged. Banked rate-limit resets (2026-06-12,
+#              1 free, bankable, 30-day validity) still stand — an observed shed is not always
+#              time-bound. [ccusage; 429-shed authoritative]
+#   - claude = Max plan. CORRECTION to last cycle: the +50% weekly boost did NOT lapse on 2026-08-19.
+#              It was extended to 2026-08-31 and then again to 2026-09-14 — after which it is
+#              REPLACED BY A PERMANENT +25% (Anthropic's first permanent raise here), i.e. a net ~17%
+#              REDUCTION versus the August/early-September meter. The weekly ceiling therefore tightens
+#              MID-MONTH, well before the next recheck. Harmless to this model: no cap value is
+#              hard-wired and 429-shed is authoritative. 5h limits still at the 2026-05-06 doubling.
+#              [ccusage]
+#   - cursor = UNCHANGED. Pro $20 / Pro+ $60 / Ultra $200 / Teams $40 per user; cursor.com/pricing
+#              still states Pro+ = "3x Pro limits on Agent" and Ultra = "20x Pro limits on Agent",
+#              matching the mid-tier ~3x assumption in LOCAL_POLICY.md. Included allocation then
+#              overage billed in arrears. First-party Composer 2.5 still $0.50/M in, $2.50/M out —
+#              far under frontier rates, so Auto+Composer remains the cheap usable lane. The 2026-06
+#              two-pool split (Composer/Auto vs Third-Party API) is intact.
+#   - gemini = Antigravity AI Pro. Tier restructure from last cycle CONFIRMED and stable: Pro $20
+#              baseline, AI Ultra $100 (~5x Pro), Ultra Max $200 (~20x Pro, cut from $249.99); Flash
+#              and Pro model limits unified into ONE pool drawn down per API pricing; AI credits
+#              removed from base entitlements and now OVERAGE-ONLY. WINDOW RE-CONFIRMED: the official
+#              Antigravity plan docs still describe AI Pro as "high, generous quota, refreshed every
+#              five hours" PLUS a higher weekly ceiling, so window="5h+weekly" below is correct. A
+#              secondary source claiming Pro moved to a weekly-only refresh in March 2026 is
+#              contradicted by those docs; the widely-reported multi-day lockouts are the known
+#              erratic behavior of the compute meter, NOT a documented window change — do not re-model
+#              on them. Compute-metered since 2026-05-17 (weighs request complexity, tools in use, and
+#              accumulated chat-history length). Google still publishes NO numeric quotas → the caps
+#              below stay LOCAL ESTIMATES and 429-shed stays authoritative. The Gemini CLI / Code
+#              Assist IDE extensions still do not serve AI Pro/Ultra (since 2026-06-18): the closed
+#              `agy` Antigravity CLI remains the only lane, hence no `gemini` CLI on this box.
+#   - vibe   = Mistral Le Chat Pro $14.99/mo, UNCHANGED, flat "all-day coding in the CLI, IDE, and on
+#              web" with no published numbers (third-party reports a ~150 msg/day soft cap — unofficial,
+#              not modeled). Vibe CLI is included in the Pro subscription. Pro still does NOT cover API
+#              calls, which keeps aider on the separate Codestral credit. Team $24.99/user (min $50);
+#              Education $5.99.
+#   - aider  = Codestral API $0.30/$0.90 per 1M tok (in/out), 256K ctx — UNCHANGED; pay-go credit
+#              backstop (amount in LOCAL_POLICY.md) unchanged. plan_limit below remains a placeholder —
+#              still no published Mistral API tier cap to swap in.
+#   CLI versions this cycle: agy 1.1.23 (was 1.1.9), cursor-agent 2026.08.31-4057e58 (was 2026.07.23),
+#   vibe 2.15.0 (unchanged), codex-cli 0.151.0 (was 0.145.0), claude 2.1.177 (unchanged),
+#   aider 0.86.2 (venv, unchanged), ccusage 20.0.11 (unchanged).
+#   agy 1.1.23 LOSES no headless capability (-p/--print, --output-format json|stream-json,
+#   --dangerously-skip-permissions, --effort low|medium|high, --json-schema, --mode, --sandbox all
+#   present) and ADDS --input-format stream-json (NDJSON: one message per line on stdin, one turn each,
+#   requires --output-format stream-json), --print-timeout (default 5m), --project/--new-project,
+#   --disable-slash-commands, plus `plugin` and `mic-serve` subcommands. --effort remains a direct
+#   COMPUTE lever on a compute-metered seat (router/adapters proposal still open from the 2026-08-01
+#   recheck). No auth-flag change on any CLI this cycle.
+#   See ~/.claude/.../memory/orchestrator_local_build.md.
 AGENTS = {
     # block_token_limit (optional): projected-tokens ceiling for the active 5h block. Unset =>
     # the seat is OK (usable) and 429-shed is the authoritative limiter; set it (env, from your

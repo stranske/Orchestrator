@@ -157,10 +157,29 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         # the comment beside it which had ALREADY diagnosed this exact waste ("a gemini offload
         # burned Pro"). A profile that pins one rung of a three-rung ladder removes the choice the
         # ladder exists to make.
+        # 2026-09-01: Flash moved 3.6 -> 3.7 (owner got a 3.6 retirement notice; `agy models` now
+        # advertises the whole 3.7 rung set). Replaced rather than kept-and-deprecated because
+        # `successor_profile_id` is write-only today -- nothing reads it back for prior transfer,
+        # which `_bounded_prior` does agent/provider-hierarchically anyway -- so a lingering "active"
+        # 3.6 row would only give `_select_offload_profile` a retiring model to pick.
+        # ALL THREE RUNGS ARE NOW REGISTERED. flash-LOW was missing until today while
+        # `adapters.MODEL_TIERS["gemini"]["cheap"]` already pointed at it: the router could pin the
+        # cheap rung but profile selection and feedback bucketing could not reach it. That is the
+        # SAME defect as the Pro-only regression described above, one rung further down -- a ladder
+        # is only a choice if every rung it names is registered.
         _profile(
-            "gemini-3.6-flash-high",
-            "gemini-3.6-flash-high",
+            "gemini-3.7-flash-high",
+            "gemini-3.7-flash-high",
             "high",
+            agent="gemini",
+            provider="google",
+            pool="gemini-prepaid",
+            adapter_version="agy-cli-profile-v1",
+        ),
+        _profile(
+            "gemini-3.7-flash-low",
+            "gemini-3.7-flash-low",
+            "low",
             agent="gemini",
             provider="google",
             pool="gemini-prepaid",
