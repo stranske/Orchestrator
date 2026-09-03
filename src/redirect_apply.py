@@ -38,11 +38,16 @@ WHY THE EASY ESCAPES ARE WRONG.
 
 WHAT THIS DOES INSTEAD. Two functions on one daily cadence:
 
-  1. `link_applied_outcomes()` — ALWAYS ON, mutates nothing. For every redirect role run that has
-     an accepted influence edge to a dispatch that has since reached a terminal outcome, append the
-     `redirect_outcome_link` corpus event. `accepted=True` is truthful here and un-gameable: the
-     edge exists only because the plan's own `--influenced-by-role-run-id` stamp rode a dispatch
-     that really ran. This is the step that makes `synced_role_outcomes` climb with no human.
+  1. `link_applied_outcomes()` — ALWAYS ON. For every redirect role run that has an accepted
+     influence edge to a dispatch that has since reached a terminal outcome, append one
+     `redirect_outcome_link` event to the redirect corpus (`redirect_shadow.CORPUS_PATH` by
+     default) via `redirect_shadow.link_outcome`, which also syncs the accepted advice through
+     `feedback.join_role_to_outcome`. It never kills a process, releases a claim, or delegates a
+     retry — lane mutation is exclusively the apply path. `accepted=True` is truthful here and
+     un-gameable: the edge exists only because the plan's own `--influenced-by-role-run-id` stamp
+     rode a dispatch that really ran. This is the step that makes `synced_role_outcomes` climb with
+     no human. Callers who only want the answer without writing use
+     `preview_link_applied_outcomes()` or `link_applied_outcomes(dry_run=True)`.
   2. `apply_candidates()` / `apply_one()` — the apply path, DEFAULT OFF behind
      `ORCH_REDIRECT_APPLY_BOOTSTRAP`. Candidates are the redirect reports `keepalive_supervisor`
      already writes on its own cadence step — not a second discovery path, and no extra gh
@@ -64,16 +69,17 @@ there is no date to expire unnoticed (FM3) and no latch whose clear path it bloc
 one target at most once, and `MAX_APPLIES_PER_DAY` per day, both derived from the append-only
 corpus rather than a side file.
 
-    python3 redirect_apply.py --status            # gate deficits + what the bootstrap would do
-    python3 redirect_apply.py --link-outcomes     # append links for applied redirects (no mutation)
+    python3 redirect_apply.py --status            # read-only gate deficits + unlinked preview
+    python3 redirect_apply.py --link-outcomes     # append redirect_outcome_link corpus events
     python3 redirect_apply.py                     # dry-run authorisation over live candidates
-    ORCH_REDIRECT_APPLY_BOOTSTRAP=1 python3 redirect_apply.py --apply    # the only mutating form
+    ORCH_REDIRECT_APPLY_BOOTSTRAP=1 python3 redirect_apply.py --apply    # lane mutation (kill/release/delegate)
     python3 redirect_apply.py --selftest
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -161,7 +167,7 @@ def gate_state(corpus_path: Path | None = None) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------------------------
-# 1. The always-on linker: recorded state -> corpus link. No mutation anywhere.
+# 1. The always-on linker: recorded state -> corpus link (never kill/release/delegate).
 # --------------------------------------------------------------------------------------------
 
 
@@ -196,10 +202,24 @@ def pending_outcome_links(*, conn=None) -> list[dict[str, Any]]:
     ]
 
 
+def preview_link_applied_outcomes(*, corpus_path: Path | None = None, conn=None) -> dict[str, Any]:
+    """Read-only: which applied redirects would be linked, without writing the corpus or brain."""
+    return link_applied_outcomes(dry_run=True, corpus_path=corpus_path, conn=conn)
+
+
 def link_applied_outcomes(
     *, dry_run: bool = False, corpus_path: Path | None = None, conn=None
 ) -> dict[str, Any]:
-    """Append a `redirect_outcome_link` event per applied redirect that has an outcome."""
+    """Append a `redirect_outcome_link` event per applied redirect that has an outcome.
+
+    Writes: one `redirect_outcome_link` JSONL event per pending pair to the redirect corpus
+    (``redirect_shadow.CORPUS_PATH`` unless overridden), via ``redirect_shadow.link_outcome``,
+    which also records the accepted advice through ``feedback.join_role_to_outcome``.
+
+    Never does: kill a live process, release a claim, or delegate a retry — those are
+    ``apply_plan`` / ``apply_one`` only. Pass ``dry_run=True`` (or call
+    ``preview_link_applied_outcomes``) to compute pending links without writing.
+    """
     corpus = corpus_path or redirect_shadow.CORPUS_PATH
     already = redirect_shadow.linked_pairs(corpus)
     pending = [
@@ -600,6 +620,7 @@ def status(corpus_path: Path | None = None, *, env: dict | None = None) -> dict[
     corpus = corpus_path or redirect_shadow.CORPUS_PATH
     gate = gate_state(corpus)
     applied_targets, applies_today = _applied_history(corpus)
+    link_preview = preview_link_applied_outcomes(corpus_path=corpus)
     if env is None:
         flag_on, flag_source = flag_as_the_tick_sees_it()
     else:
@@ -613,14 +634,8 @@ def status(corpus_path: Path | None = None, *, env: dict | None = None) -> dict[
         "applied_targets": sorted(applied_targets),
         "applies_today": applies_today,
         "daily_bound": MAX_APPLIES_PER_DAY,
-        "unlinked_applied_outcomes": len(
-            [
-                r
-                for r in pending_outcome_links()
-                if (str(r["role_run_id"]), str(r["influenced_run_id"]))
-                not in redirect_shadow.linked_pairs(corpus)
-            ]
-        ),
+        "unlinked_applied_outcomes": int(link_preview["pending"]),
+        "pending_outcome_links": link_preview["links"],
     }
 
 
@@ -637,6 +652,17 @@ def _recording_role_runner(spent: list):
         return {}
 
     return runner
+
+
+def _corpus_digest(corpus: Path) -> str:
+    """SHA-256 of the corpus file bytes; empty file hashes the empty string."""
+    if not corpus.is_file():
+        return hashlib.sha256(b"").hexdigest()
+    return hashlib.sha256(corpus.read_bytes()).hexdigest()
+
+
+def _outcome_link_event_count(corpus: Path) -> int:
+    return len(redirect_shadow.linked_pairs(corpus))
 
 
 def _selftest() -> None:
@@ -851,11 +877,32 @@ def _selftest() -> None:
         feedback.record_outcome(
             "work:applied-redirect", adjudicated_verdict="PASS", merged=True, durability="durable"
         )
+        pending_preview = preview_link_applied_outcomes(corpus_path=corpus)
+        assert pending_preview["pending"] == 1, pending_preview
+        pending_hash = _corpus_digest(corpus)
+        st_pending = status(corpus, env={})
+        assert _corpus_digest(corpus) == pending_hash, "status must not write the corpus"
+        assert st_pending["unlinked_applied_outcomes"] == 1, st_pending
+
+        link_events_before = _outcome_link_event_count(corpus)
         first = link_applied_outcomes(corpus_path=corpus)
         assert first["linked"] == 1 and first["links"][0]["synced"] is True, first
+        assert (
+            _outcome_link_event_count(corpus) == link_events_before + 1
+        ), "apply-path must append exactly one link"
         # Idempotent: a second pass must not double-count into the gate.
         assert link_applied_outcomes(corpus_path=corpus)["linked"] == 0, "linker re-linked"
         assert redirect_shadow.summarize(corpus)["synced_role_outcomes"] >= 1
+
+        # ---- status stays read-only after links exist too ---------------------------
+        status_hash_before = _corpus_digest(corpus)
+        st_linker = status(corpus, env={})
+        assert _corpus_digest(corpus) == status_hash_before, "status must not write the corpus"
+        assert st_linker["flag_source"] == "explicit", st_linker
+        assert (
+            st_linker["flag_on"] is False and st_linker["gate"]["synced_role_outcomes"] >= 1
+        ), st_linker
+        assert st_linker["unlinked_applied_outcomes"] == 0, st_linker
 
         # A rejected edge is NOT an applied redirect and must never be linked as one.
         feedback.record_role_run(
@@ -942,15 +989,12 @@ def _selftest() -> None:
         finally:
             os.environ.pop(BOOTSTRAP_FLAG, None)
 
-        st = status(corpus, env={})
-        assert st["flag_source"] == "explicit", st
-        assert st["flag_on"] is False and st["gate"]["synced_role_outcomes"] >= 1, st
-
         print(
             "redirect_apply.py selftest: OK (flag-off dry run, live-pid refusal, unstamped "
             "refusal, claim-theft refusal, self-limiting gate, flag-on apply carries the "
             "lineage stamp, per-target/per-day bounds, idempotent linker, rejected-edge "
-            "refusal, free screen agrees with authorize, --dry-run cannot spend silently)"
+            "refusal, free screen agrees with authorize, --dry-run cannot spend silently, "
+            "status read-only corpus hash, linker appends exactly one event)"
         )
     finally:
         feedback.DB_PATH = old_db
@@ -968,7 +1012,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--link-outcomes",
         action="store_true",
-        help="append outcome links for applied redirects (no mutation)",
+        help="append redirect_outcome_link corpus events for applied redirects",
     )
     ap.add_argument(
         "--apply",
