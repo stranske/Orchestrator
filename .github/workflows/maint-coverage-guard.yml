@@ -155,13 +155,16 @@ jobs:
                 Array.isArray(configuredWorkflowIds) &&
                 configuredWorkflowIds.length > 0 &&
                 configuredWorkflowIds.every((workflowId) =>
-                  typeof workflowId === 'string' && workflowId.trim(),
+                  typeof workflowId === 'string' &&
+                  workflowId.trim().startsWith('.github/workflows/') &&
+                  fs.existsSync(workflowId.trim()) &&
+                  fs.statSync(workflowId.trim()).isFile(),
                 )
               ) {
-                workflowIds = configuredWorkflowIds;
+                workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());
               } else {
                 core.warning(
-                  'coverage-baseline.json has no usable source_workflows; falling back to Gate.',
+                  'coverage-baseline.json has no usable existing source_workflows; falling back to Gate.',
                 );
               }
             } catch (error) {
@@ -288,7 +291,9 @@ jobs:
                 'Unable to locate a successful or neutral completed coverage-source workflow run.',
               );
               core.setOutput('run_id', '');
-              core.setFailed('Coverage verification could not find a successful Gate workflow run.');
+              core.setFailed(
+                'Coverage verification could not find a successful coverage-source workflow run.',
+              );
               return;
             }
 

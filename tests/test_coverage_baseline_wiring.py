@@ -76,10 +76,27 @@ def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
 
     assert "const configuredWorkflowIds = baseline.source_workflows;" in source
-    assert "workflowIds = configuredWorkflowIds;" in source
+    assert "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());" in source
     assert "workflowIds.map((workflowId)" in source
     assert "workflow_id: workflowId," in source
     assert baseline["source_workflows"] != [".github/workflows/pr-00-gate.yml"]
+
+
+def test_coverage_guard_normalizes_existing_declared_source_workflows(baseline):
+    """Configured paths must be normalized and resolvable before replacing Gate.
+
+    A whitespace-padded path would otherwise pass the non-empty validation while making the
+    Actions API lookup fail. A missing path is the same configuration failure: keep the known
+    Gate fallback instead of silently querying a nonexistent coverage source.
+    """
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
+    source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+
+    assert "workflowId.trim().startsWith('.github/workflows/')" in source
+    assert "fs.existsSync(workflowId.trim())" in source
+    assert "fs.statSync(workflowId.trim()).isFile()" in source
+    assert "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());" in source
+    assert all((REPO / path).is_file() for path in baseline["source_workflows"])
 
 
 def test_the_declared_workflow_publishes_both_artifacts_the_guard_requires(baseline):
