@@ -274,6 +274,17 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "dispatch, or telemetry outage remains",
     },
     {
+        "key": "route-weights-export",
+        "success_stamp": ".last-route-weights-export",
+        "cadence_days": 0,
+        "artifact": "route-weights-export.json",
+        "log": "route-weights-export.log",
+        "gate": "ORCH_DISABLE_STEPS=route-weights-export stops the daily shadow export; remote "
+        "publication additionally requires --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1",
+        "next_transition": "rewrite the local artifact from the latest route_weights version; "
+        "consumer fetch remains fail-open to its static policy",
+    },
+    {
         "key": "relearn",
         "success_stamp": ".last-relearn",
         "cadence_days": 6,

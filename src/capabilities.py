@@ -141,6 +141,31 @@ EVENT_FIELDS = {
 }
 
 KNOWN_GATES: dict[str, dict[str, Any]] = {
+    "route-weights-export": {
+        "findability_category": "exercise_bound",
+        "findability_rationale": (
+            "The daily export is a deterministic routing rail; rail-exercise:routing can exercise "
+            "the fixture export contract, while the live cadence remains shadow write-only."
+        ),
+        "status": "shadow",
+        "entrypoint": "route_weights_export.py:main",
+        "matcher": {"kind": "tick_phase", "name": "route-weights-export"},
+        "trigger_cadence": "daily",
+        "flags_defaults": {"ORCH_ROUTE_WEIGHTS_PUBLISH": "0"},
+        "output_artifact": "$ORCH_STATE_DIR/route-weights-export.json",
+        "downstream_consumer": "stranske/Workflows agent_delegation_policy (fail-open fetch)",
+        "learning_sink": "none — export-only capability; no learner outcome is claimed",
+        "gate_reason": "write-only shadow export; remote publication requires --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1",
+        "gate_evidence": "latest-version, thresholded fixture export preserves reserve-seat separation",
+        "evidence_threshold": "each public ranking row has n_obs >= min_observations",
+        "kill_switch": "ORCH_DISABLE_STEPS=route-weights-export",
+        "rollback": "disable the cadence step; consumer fails open to its own policy; leave exports/route-weights unmerged",
+        "notes": (
+            "dedup: checked feedback.py route-weights CLI/report, exploration_review.py, and "
+            ".github/scripts/orchestrator_skill.py; local reports and skill-context export exist "
+            "but no route-weights export/publish artifact is present"
+        ),
+    },
     "research-usage-guard": {
         "findability_category": "exercise_bound",
         "findability_rationale": (

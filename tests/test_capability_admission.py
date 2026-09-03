@@ -490,6 +490,7 @@ def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
         "redirect-apply-bootstrap",
         "research-scheduler",
         "research-usage-guard",
+        "route-weights-export",
         "synthesis-promotion",
     }, exercise_bound
     for cap_id in exercise_bound:

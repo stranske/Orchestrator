@@ -676,6 +676,23 @@ def _check_thompson() -> dict:
     return {"fires": mode == "thompson-hybrid", "detail": detail}
 
 
+def _check_route_weights_export() -> dict:
+    """Exercise the exporter against its isolated fixture, never its publish path."""
+    try:
+        import route_weights_export
+
+        route_weights_export._selftest()
+        return {
+            "fires": True,
+            "detail": {
+                "exercise": "fixture latest-version/threshold/reserve/unchanged contract",
+                "publish": "not requested",
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"fires": False, "detail": {"error": str(exc)[:90]}}
+
+
 def _check_reference_sync_gate() -> dict:
     """Can this compiled-workflow rail's PROMOTION GATE ever be satisfied?
 
@@ -989,6 +1006,12 @@ PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
         "check": _check_thompson,
         "source": "5,371 implement runs across 7 agents — enough evidence for sampling to differ "
         "materially from epsilon-greedy.",
+    },
+    {
+        "capability": "route-weights-export",
+        "check": _check_route_weights_export,
+        "source": "2026-09-03 routing exercise: legacy local route_weights had no consumer; "
+        "the fixture proves a thresholded, reserve-separated fail-open export without publishing.",
     },
     {
         "capability": "windowed-capacity-policy",
