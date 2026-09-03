@@ -39,7 +39,8 @@ body, or a risk term found anywhere in the label vocabulary yields owner_review,
 Exclusions are counted and reported, never silently dropped -- silence must not read as a pass.
 
     python3 issue_readiness.py                 # assess the live fleet, decide nothing
-    python3 issue_readiness.py --json
+    python3 issue_readiness.py --json [--input issues.json]
+    python3 issue_readiness.py --input issues.json  # assess an offline issue fixture
     python3 issue_readiness.py --apply         # requires ORCH_ISSUE_AUTOREADY=1
     python3 issue_readiness.py --selftest
 """
@@ -52,6 +53,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 import backlog
@@ -333,6 +335,14 @@ def fetch_failures(limit: int = 200) -> list[str]:
         if proc.returncode != 0:
             bad.append(f"{full}: {(proc.stderr or '').strip()[:80]}")
     return bad
+
+
+def load_input_issues(path: Path) -> list[dict]:
+    """Load an offline fixture in the same list-of-issue-dicts shape as fetch_open_issues()."""
+    raw = json.loads(path.read_text())
+    if not isinstance(raw, list) or not all(isinstance(issue, dict) for issue in raw):
+        raise ValueError("--input must contain a JSON list of issue objects")
+    return raw
 
 
 def repo_ready_label(repo: str, _cache: dict[str, str | None] = {}) -> str | None:
@@ -809,6 +819,10 @@ def format_report(rep: dict) -> str:
 
 
 def _selftest() -> None:
+    import contextlib
+    import io
+    import tempfile
+
     ac = {
         "number": 1,
         "title": "Fix parser",
@@ -930,6 +944,52 @@ def _selftest() -> None:
     assert attention_cost(0.5)["verdict"] == "infeasible", attention_cost(0.5)
     assert attention_cost(0.2)["verdict"] == "redesign", attention_cost(0.2)
     assert "INFEASIBLE" in format_report(assess([dict(ac, labels=[{"name": "risk:major"}])]))
+
+    # Front-door fixture input must classify exactly as classify_issue() does and never enter the
+    # GitHub fetch path. Label-writing modes are refused even when their ORCH_ gate is armed.
+    with tempfile.TemporaryDirectory(prefix="issue-readiness-") as td:
+        input_path = Path(td) / "issues.json"
+        fixture_issues = [
+            dict(ac, repository={"name": "fixture"}),
+            dict(ac, number=2, labels=[{"name": "risk:major"}], repository={"name": "fixture"}),
+            dict(ac, number=3, body="", repository={"name": "fixture"}),
+        ]
+        input_path.write_text(json.dumps(fixture_issues))
+        expected_verdicts = [classify_issue(issue)["verdict"] for issue in fixture_issues]
+        fetch_calls: list[int] = []
+        saved_fetch = fetch_open_issues
+
+        def fixture_fetch(limit: int = 200) -> list[dict]:
+            fetch_calls.append(limit)
+            return []
+
+        globals()["fetch_open_issues"] = fixture_fetch
+        try:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                cli_exit = main(["--input", str(input_path), "--json"])
+        finally:
+            globals()["fetch_open_issues"] = saved_fetch
+        cli_report = json.loads(stdout.getvalue())
+        global APPLY_ENABLED
+        saved_apply_enabled = APPLY_ENABLED
+        APPLY_ENABLED = True
+        try:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                refusal_exit = main(["--input", str(input_path), "--apply"])
+        finally:
+            APPLY_ENABLED = saved_apply_enabled
+        cli_contract = (
+            cli_exit == 0
+            and [row["verdict"] for row in cli_report["rows"]] == expected_verdicts
+            and not fetch_calls
+            and refusal_exit == 2
+            and stderr.getvalue().strip() == "refusing --input with label-writing mode"
+        )
+        assert (
+            cli_contract
+        ), "CLI fixture input used GitHub, changed classification, or allowed label writes"
 
     # Dry run must never write.
     res = apply_ready(rep["rows"], dry_run=True)
@@ -1155,6 +1215,12 @@ def _selftest() -> None:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--input",
+        type=Path,
+        metavar="JSON_FILE",
+        help="offline JSON list of issue objects; skips GitHub fetch",
+    )
     ap.add_argument("--apply", action="store_true", help="write labels / raise questions")
     ap.add_argument(
         "--census",
@@ -1183,7 +1249,15 @@ def main(argv: list[str]) -> int:
         _selftest()
         return 0
 
-    issues = fetch_open_issues(args.limit)
+    if args.input and (args.apply or args.reconcile_durable or args.apply_task_labels):
+        print("refusing --input with label-writing mode", file=sys.stderr)
+        return 2
+
+    try:
+        issues = load_input_issues(args.input) if args.input else fetch_open_issues(args.limit)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"refusing input: {exc}", file=sys.stderr)
+        return 2
     if args.task_labels or args.apply_task_labels:
         gaps = task_label_gaps(issues)
         out = {"candidates": len(gaps), "rows": gaps}
@@ -1218,7 +1292,7 @@ def main(argv: list[str]) -> int:
         return 0
     rep = assess(issues)
     rep["census"] = {k: v for k, v in census(issues).items() if not k.endswith("_rows")}
-    if not issues:
+    if not issues and not args.input:
         rep["unreadable_repos"] = fetch_failures()
     if args.apply and not APPLY_ENABLED:
         print("refusing to apply: set ORCH_ISSUE_AUTOREADY=1 to enable writes", file=sys.stderr)
