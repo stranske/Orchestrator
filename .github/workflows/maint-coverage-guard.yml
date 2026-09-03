@@ -143,8 +143,32 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
-            const workflowId = '.github/workflows/pr-00-gate.yml';
             const fs = require('fs');
+            const fallbackWorkflowId = '.github/workflows/pr-00-gate.yml';
+            let workflowIds = [fallbackWorkflowId];
+            try {
+              const baseline = JSON.parse(
+                fs.readFileSync('config/coverage-baseline.json', 'utf8'),
+              );
+              const configuredWorkflowIds = baseline.source_workflows;
+              if (
+                Array.isArray(configuredWorkflowIds) &&
+                configuredWorkflowIds.length > 0 &&
+                configuredWorkflowIds.every((workflowId) =>
+                  typeof workflowId === 'string' && workflowId.trim(),
+                )
+              ) {
+                workflowIds = configuredWorkflowIds;
+              } else {
+                core.warning(
+                  'coverage-baseline.json has no usable source_workflows; falling back to Gate.',
+                );
+              }
+            } catch (error) {
+              core.warning(
+                `Could not read config/coverage-baseline.json; falling back to Gate: ${error.message}`,
+              );
+            }
             const retryHelperPath = './.github/scripts/github-api-with-retry.js';
             const retryHelpers = fs.existsSync(retryHelperPath)
               ? require(retryHelperPath)
@@ -155,21 +179,31 @@ jobs:
                 };
             const { paginateWithRetry, withRetry } = retryHelpers;
 
-            const runs = await paginateWithRetry(
-              github, github.rest.actions.listWorkflowRuns,
-              {
-                owner,
-                repo,
-                workflow_id: workflowId,
-                status: 'completed',
-                per_page: 50,
-              },
+            const runGroups = await Promise.all(
+              workflowIds.map((workflowId) =>
+                paginateWithRetry(
+                  github, github.rest.actions.listWorkflowRuns,
+                  {
+                    owner,
+                    repo,
+                    workflow_id: workflowId,
+                    status: 'completed',
+                    per_page: 50,
+                  },
+                ),
+              ),
             );
+            const seenRunIds = new Set();
+            const runs = runGroups.flat().filter((run) => {
+              if (seenRunIds.has(run.id)) return false;
+              seenRunIds.add(run.id);
+              return true;
+            });
 
             if (!runs.length) {
-              core.warning('No Gate workflow runs found.');
+              core.warning(`No completed coverage-source workflow runs found: ${workflowIds.join(', ')}.`);
               core.setOutput('run_id', '');
-              core.setFailed('Coverage verification requires at least one completed Gate workflow run.');
+              core.setFailed('Coverage verification requires at least one completed source workflow run.');
               return;
             }
 
@@ -218,7 +252,7 @@ jobs:
                 );
               } catch (error) {
                 core.warning(
-                  `Skipping Gate run ${run.id}; artifact lookup failed: ${error.message}`,
+                  `Skipping coverage-source run ${run.id}; artifact lookup failed: ${error.message}`,
                 );
                 continue;
               }
@@ -243,7 +277,7 @@ jobs:
               }
               core.info(
                 [
-                  `Skipping Gate run ${run.id}; required coverage artifacts are incomplete.`,
+                  `Skipping coverage-source run ${run.id}; required coverage artifacts are incomplete.`,
                   `Looked for payload (${coveragePayloadNames.join(' or ')}) and ${trendArtifactName}.`,
                 ].join(' '),
               );
@@ -251,7 +285,7 @@ jobs:
 
             if (!candidate && !successfulRuns.length) {
               core.warning(
-                'Unable to locate a successful or neutral completed Gate workflow run.',
+                'Unable to locate a successful or neutral completed coverage-source workflow run.',
               );
               core.setOutput('run_id', '');
               core.setFailed('Coverage verification could not find a successful Gate workflow run.');
@@ -261,15 +295,15 @@ jobs:
             if (!candidate) {
               core.warning(
                 [
-                  'Unable to locate a recent successful Gate workflow run carrying a coverage',
+                'Unable to locate a recent successful coverage-source workflow run carrying a coverage',
                   'payload artifact (gate-coverage or gate-coverage.json) and a coverage trend.',
-                  'If the Gate ran but published neither, coverage is not being measured in this repo: check that',
-                  'the reusable CI caller sets coverage: true and enable-soft-gate: true.',
+                  'If the configured source workflow ran but published neither, coverage is not being measured in this repo:',
+                  'check that its coverage job publishes both configured artifacts.',
               ].join(' '),
               );
               core.setOutput('run_id', '');
               core.setFailed(
-                'Coverage verification could not find a coverage payload and trend on a successful Gate run.',
+                'Coverage verification could not find a coverage payload and trend on a successful source workflow run.',
               );
               return;
             }
@@ -284,7 +318,7 @@ jobs:
             core.setOutput('history_artifact_name', resolvedHistoryName);
             core.setOutput('run_url', candidate.html_url || '');
             const url = candidate.html_url || 'no url';
-            core.notice(`Using Gate workflow run ${candidate.id} (${url})`);
+            core.notice(`Using coverage-source workflow run ${candidate.id} (${url})`);
 
       - name: Download coverage trend artifact
         if: ${{ steps.discover.outputs.trend_artifact_name }}

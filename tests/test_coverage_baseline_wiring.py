@@ -22,6 +22,7 @@ import paths
 
 REPO = paths.REPO_ROOT
 BASELINE = REPO / "config/coverage-baseline.json"
+MAINT_COVERAGE_GUARD = REPO / ".github/workflows/maint-coverage-guard.yml"
 
 # The names Maint Coverage Guard resolves. `gate-coverage` is its preferred exact payload name;
 # `gate-coverage-trend` is required outright, and a run carrying only the payload is skipped.
@@ -67,6 +68,18 @@ def test_the_declared_source_workflow_exists(baseline):
     assert declared, "source_workflows must name where this repo's coverage is measured"
     for rel in declared:
         assert (REPO / rel).is_file(), f"{rel} is named in the baseline config but does not exist"
+
+
+def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
+    """Discovery must follow config rather than silently querying the Gate."""
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
+    source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+
+    assert "const configuredWorkflowIds = baseline.source_workflows;" in source
+    assert "workflowIds = configuredWorkflowIds;" in source
+    assert "workflowIds.map((workflowId)" in source
+    assert "workflow_id: workflowId," in source
+    assert baseline["source_workflows"] != [".github/workflows/pr-00-gate.yml"]
 
 
 def test_the_declared_workflow_publishes_both_artifacts_the_guard_requires(baseline):
