@@ -7,6 +7,7 @@ never executes a worker itself. ``prepare`` emits launch requests for a guarded
 transport bridge; ``finalize`` validates returned telemetry and proves source
 integrity. Live Brain recording remains disabled at the CLI boundary until the
 multi-row feedback write has a single atomic transaction.
+``--selftest`` exercises prepare, validation, and reporting fully offline.
 """
 
 from __future__ import annotations
@@ -681,6 +682,147 @@ def build_report(path: Path | None = None) -> dict[str, Any]:
     return {"path": str(path), **payload}
 
 
+def _selftest() -> None:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        root = Path(temporary_directory)
+        orchestrator_root = root / "orchestrator-source"
+        workflows_root = root / "workflows-source"
+        orchestrator_root.mkdir()
+        workflows_root.mkdir()
+        (orchestrator_root / "control.py").write_text(
+            "CONTROL = 'selftest-unchanged'\n", encoding="utf-8"
+        )
+        (workflows_root / "worker.yml").write_text("worker: selftest-read-only\n", encoding="utf-8")
+
+        fixture_packet = {
+            "schema": "orchestrator.model-profile-trial-packet",
+            "version": 1,
+            "purpose": "offline model-profile trial selftest",
+            "instruction": "Acknowledge this immutable selftest packet without changing files.",
+            "expected_output": {
+                "acknowledged": True,
+                "packet_hash": "supplied-by-manifest",
+            },
+        }
+        manifest_path = root / "prepared-manifest.json"
+        manifest = build_trial_manifest(
+            orchestrator_root,
+            workflows_root,
+            seed=14,
+            now=1_000,
+            capacity_state=capacity.OK,
+            packet=fixture_packet,
+        )
+        ensure_artifact_outside_sources(
+            manifest_path,
+            (orchestrator_root, workflows_root),
+        )
+        _atomic_json(manifest_path, manifest)
+        prepared = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert prepared == manifest, "prepare did not persist the exact fixture packet"
+
+        recomputed_source_hashes = {
+            "orchestrator": source_manifest(orchestrator_root)["aggregate_sha256"],
+            "workflows": source_manifest(workflows_root)["aggregate_sha256"],
+        }
+        prepared_source_hashes = {
+            name: proof["aggregate_sha256"] for name, proof in prepared["source_before"].items()
+        }
+        assert (
+            prepared_source_hashes == recomputed_source_hashes
+        ), "prepare source-integrity proof did not validate"
+        try:
+            validate_trial_manifest(prepared)
+        except ValueError as exc:
+            raise AssertionError("validation rejected the untampered prepared packet") from exc
+
+        tampered = json.loads(_canonical(prepared))
+        tampered["frozen_packet"]["instruction"] = "payload altered after proof computation"
+        try:
+            validate_trial_manifest(tampered)
+        except ValueError as exc:
+            assert (
+                str(exc) == "trial packet hash does not match frozen packet"
+            ), f"tampered packet rejection did not name its integrity failure: {exc}"
+        else:
+            raise AssertionError("validation accepted a packet altered after proof computation")
+
+        attempts: list[dict[str, Any]] = []
+        for request in prepared["requests"]:
+            artifact_path = root / "artifacts" / f"{request['profile_id']}.json"
+            artifact = {
+                "run_id": request["run_id"],
+                "packet_hash": prepared["packet_hash"],
+                "acknowledged": True,
+            }
+            _atomic_json(artifact_path, artifact)
+            artifact_hash = "sha256:" + hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            attempts.append(
+                {
+                    "run_id": request["run_id"],
+                    "profile_id": request["profile_id"],
+                    "operation_role": "worker",
+                    "attempt_ordinal": request["launch_ordinal"],
+                    "requested_model": request["requested_model"],
+                    "selected_model": request["requested_model"],
+                    "reported_model": request["requested_model"],
+                    "provider_resolved_provider": request["provider"],
+                    "provider_resolved_model": request["requested_model"],
+                    "fallback_reason": None,
+                    "runner_version": "selftest-runner/v1",
+                    "cli_version": "selftest-cli/v1",
+                    "status": "success",
+                    "latency_s": 0.01,
+                    "tokens_in": 1,
+                    "tokens_out": 1,
+                    "artifact_ref": str(artifact_path),
+                    "packet_hash": prepared["packet_hash"],
+                    "acknowledged": True,
+                    "identity_evidence": {
+                        "schema": IDENTITY_EVIDENCE_SCHEMA,
+                        "version": IDENTITY_EVIDENCE_VERSION,
+                        "authority": "workflows-read-only-trial-artifact/v1",
+                        "artifact_ref": str(artifact_path),
+                        "artifact_sha256": artifact_hash,
+                    },
+                }
+            )
+        results: dict[str, Any] = {
+            "schema": RESULT_SCHEMA,
+            "version": SCHEMA_VERSION,
+            "trial_id": prepared["trial_id"],
+            "packet_hash": prepared["packet_hash"],
+            "acknowledged": True,
+            "attempts": attempts,
+            "auxiliary_traces": [],
+        }
+        state_path = root / "prepared-state.json"
+        state = finalize_trial(
+            prepared,
+            results,
+            state_path=state_path,
+            record_feedback=False,
+            now=2_000,
+        )
+        assert (
+            state["source_integrity"]["unchanged"] is True
+        ), "prepared state did not preserve its source-integrity proof"
+
+        state_before_report = state_path.read_bytes()
+        report = build_report(state_path)
+        assert report == {"path": str(state_path), **state}, "report shape changed"
+        assert state_path.read_bytes() == state_before_report, "report mutated the prepared state"
+        assert report["lifecycle"] == "shadow", "report escaped the shadow lifecycle"
+        assert report["promotion_allowed"] is False, "report allowed profile promotion"
+        assert report["learning_enabled"] is False, "report enabled learning"
+        assert report["recorded_attempt_ids"] == [], "offline selftest recorded trial attempts"
+
+    print(
+        "model_profile_trial.py selftest: OK "
+        "(prepare/source proof, accept/reject validation, shadow report/no promotion)"
+    )
+
+
 def _capability_heartbeat(event_type: str = "invocation") -> None:
     """Record that this capability ran, at its own code path.
 
@@ -701,9 +843,9 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    _capability_heartbeat()
     parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--selftest", action="store_true", help="run the offline selftest")
+    sub = parser.add_subparsers(dest="command")
     prepare = sub.add_parser("prepare")
     prepare.add_argument("--orchestrator-root", type=Path, required=True)
     prepare.add_argument("--workflows-root", type=Path, required=True)
@@ -721,6 +863,13 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
     args = parser.parse_args(argv)
 
+    if args.selftest:
+        _selftest()
+        return 0
+    if args.command is None:
+        parser.error("one of --selftest, prepare, finalize, or report is required")
+
+    _capability_heartbeat()
     if args.command == "prepare":
         ensure_artifact_outside_sources(args.output, (args.orchestrator_root, args.workflows_root))
         payload = build_trial_manifest(
