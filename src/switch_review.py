@@ -32,12 +32,14 @@ flipping a safety switch on silence is precisely what must not happen.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 
 import capabilities
@@ -47,6 +49,28 @@ import paths
 REVIEW_DAYS = 7
 QUESTION_EXPIRY_DAYS = 7.0
 APPLY_ENABLED = os.environ.get("ORCH_SWITCH_REVIEW", "").strip() == "1"
+
+# Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
+# review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
+FLEET_GATE_DAYS = REVIEW_DAYS
+WORKFLOWS_REPO = "stranske/Workflows"
+MAINT_68_WORKFLOW = "maint-68-sync-consumer-repos.yml"
+MAINT_82_WORKFLOW = "maint-82-sync-dependency-campaign.yml"
+CANARY_BRANCHES = frozenset({"sync/workflows-candidate", "sync/workflows-delivery"})
+CONTINUATION_LOG_MARKER = "Dispatched due Maint 71"
+GH_TIMEOUT_S = 30
+MAINT_68_PROMOTE_LOOKBACK = 40
+MAINT_82_LOG_RUN_BUDGET = 2
+MAINT_68_REGISTRY_FALLBACK = [
+    "stranske/Template",
+    "stranske/Ready",
+    "stranske/Collab-Admin",
+    "stranske/learning-management-system",
+    "stranske/Fine-Art-Archive",
+]
+
+# Test-only injection for every `gh` call in this module.
+_GH_CALL_RUNNER: Callable[..., tuple[bool, str, str]] | None = None
 
 # flag -> the capability whose invocations prove the switch is doing anything.
 SWITCH_CAPABILITY = {
@@ -272,6 +296,405 @@ def _etime_seconds(etime: str) -> int | None:
     return days * 86400 + nums[0] * 3600 + nums[1] * 60 + nums[2]
 
 
+def _parse_iso_ts(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def _gh_call(args: list[str], *, timeout_s: int = GH_TIMEOUT_S) -> tuple[bool, str, str]:
+    """Run one `gh` invocation. Returns (ok, stdout, error_reason_for_unmeasured)."""
+    if _GH_CALL_RUNNER is not None:
+        return _GH_CALL_RUNNER(args, timeout_s=timeout_s)
+    cmd = ["gh", *args]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "", f"unmeasured: gh timed out after {timeout_s}s ({' '.join(args[:4])})"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, "", f"unmeasured: gh unavailable ({exc})"
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "gh failed").strip().replace("\n", " ")[:160]
+        return False, "", f"unmeasured: {err}"
+    return True, proc.stdout or "", ""
+
+
+def _parse_maint_68_registry_yaml(content: str) -> list[str]:
+    repos: list[str] = []
+    in_repos = False
+    for line in content.splitlines():
+        if "REGISTERED_CONSUMER_REPOS:" in line:
+            in_repos = True
+            continue
+        if in_repos:
+            if (
+                line.strip()
+                and not line.startswith(" ")
+                and not line.startswith("-")
+                and ":" in line
+            ):
+                break
+            cleaned = line.strip().strip("-").strip().strip('"').strip("'").strip()
+            if cleaned and "/" in cleaned:
+                repos.append(cleaned)
+    return repos
+
+
+def _registered_consumer_repos(
+    repos_fn: Callable[[], list[str]] | None = None,
+    *,
+    gh_fn: Callable[..., tuple[bool, str, str]] | None = None,
+) -> tuple[list[str], str]:
+    if repos_fn is not None:
+        return list(repos_fn()), ""
+    try:
+        from consumer_sync_artifact_ingest import TEST_REGISTRY
+
+        if TEST_REGISTRY:
+            return list(TEST_REGISTRY), ""
+    except Exception:  # noqa: BLE001
+        pass
+    gh = gh_fn or _gh_call
+    ok, out, reason = gh(
+        [
+            "api",
+            "repos/stranske/Workflows/contents/.github/workflows/maint-68-sync-consumer-repos.yml",
+        ]
+    )
+    if ok:
+        try:
+            payload = json.loads(out or "{}")
+            content = base64.b64decode(payload["content"]).decode("utf-8")
+            repos = _parse_maint_68_registry_yaml(content)
+            if repos:
+                return repos, ""
+        except (KeyError, json.JSONDecodeError, ValueError) as exc:
+            reason = f"unmeasured: maint-68 registry parse failed ({exc})"
+    if not reason:
+        reason = "unmeasured: maint-68 registry fetch failed"
+    # Use the same static fallback as consumer_sync_artifact_ingest.get_maint_68_repos so
+    # offline sweeps still scan the cohort rather than reporting zero repos.
+    return list(MAINT_68_REGISTRY_FALLBACK), reason
+
+
+def _checks_all_green(status_check_rollup: object) -> bool:
+    if not isinstance(status_check_rollup, dict):
+        return False
+    state = str(status_check_rollup.get("state") or "").upper()
+    if state == "SUCCESS":
+        return True
+    contexts = status_check_rollup.get("contexts") or []
+    if not isinstance(contexts, list) or not contexts:
+        return False
+    return all(str((row or {}).get("state") or "").upper() == "SUCCESS" for row in contexts)
+
+
+def _unresolved_review_threads(repo: str, number: int, *, gh_fn) -> tuple[int | None, str]:
+    ok, out, reason = gh_fn(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "reviewThreads",
+        ]
+    )
+    if not ok:
+        return None, reason
+    try:
+        payload = json.loads(out or "{}")
+    except json.JSONDecodeError:
+        return None, "unmeasured: reviewThreads JSON parse failed"
+    threads = payload.get("reviewThreads") or []
+    if not isinstance(threads, list):
+        return None, "unmeasured: reviewThreads missing"
+    unresolved = sum(1 for row in threads if not (row or {}).get("isResolved"))
+    return unresolved, ""
+
+
+def _promote_age_days(*, now: int, gh_fn) -> dict:
+    ok, out, reason = gh_fn(
+        [
+            "run",
+            "list",
+            "--repo",
+            WORKFLOWS_REPO,
+            "--workflow",
+            MAINT_68_WORKFLOW,
+            "--limit",
+            str(MAINT_68_PROMOTE_LOOKBACK),
+            "--json",
+            "databaseId,displayTitle,conclusion,createdAt,status",
+        ]
+    )
+    if not ok:
+        return {
+            "days_since_success": None,
+            "last_success_at": None,
+            "display_title": None,
+            "measurement": reason,
+        }
+    try:
+        runs = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        return {
+            "days_since_success": None,
+            "last_success_at": None,
+            "display_title": None,
+            "measurement": "unmeasured: maint-68 run list JSON parse failed",
+        }
+    for row in runs:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("displayTitle") or "")
+        if "promote" not in title.lower():
+            continue
+        if str(row.get("conclusion") or "") != "success":
+            continue
+        created = _parse_iso_ts(str(row.get("createdAt") or ""))
+        if created is None:
+            continue
+        age_days = round((now - created) / 86400, 1)
+        return {
+            "days_since_success": age_days,
+            "last_success_at": row.get("createdAt"),
+            "display_title": title,
+            "measurement": "measured",
+            "run_id": row.get("databaseId"),
+        }
+    return {
+        "days_since_success": None,
+        "last_success_at": None,
+        "display_title": None,
+        "measurement": (
+            f"unmeasured: no successful Maint 68 promote in last {MAINT_68_PROMOTE_LOOKBACK} runs"
+        ),
+    }
+
+
+def _open_canaries(*, now: int, gh_fn, repos_fn) -> dict:
+    repos, registry_reason = _registered_consumer_repos(repos_fn, gh_fn=gh_fn)
+    if not repos:
+        return {
+            "open": [],
+            "open_count": None,
+            "drainable_count": None,
+            "repos_checked": 0,
+            "measurement": registry_reason or "unmeasured: no registered consumer repos",
+        }
+    open_rows: list[dict] = []
+    repo_errors: list[str] = []
+    for repo in repos:
+        ok, out, reason = gh_fn(
+            [
+                "pr",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "open",
+                "--limit",
+                "30",
+                "--json",
+                "number,headRefName,createdAt,statusCheckRollup,isDraft",
+            ]
+        )
+        if not ok:
+            repo_errors.append(f"{repo}: {reason}")
+            continue
+        try:
+            prs = json.loads(out or "[]")
+        except json.JSONDecodeError:
+            repo_errors.append(f"{repo}: unmeasured: pr list JSON parse failed")
+            continue
+        for pr in prs:
+            if not isinstance(pr, dict):
+                continue
+            branch = str(pr.get("headRefName") or "")
+            if branch not in CANARY_BRANCHES:
+                continue
+            if pr.get("isDraft"):
+                continue
+            created = _parse_iso_ts(str(pr.get("createdAt") or ""))
+            age_days = None if created is None else round((now - created) / 86400, 1)
+            checks_green = _checks_all_green(pr.get("statusCheckRollup"))
+            unresolved, thread_reason = _unresolved_review_threads(
+                repo, int(pr["number"]), gh_fn=gh_fn
+            )
+            drainable = (
+                checks_green and unresolved == 0 and age_days is not None and thread_reason == ""
+            )
+            open_rows.append(
+                {
+                    "repo": repo,
+                    "number": pr.get("number"),
+                    "branch": branch,
+                    "age_days": age_days,
+                    "checks_green": checks_green,
+                    "unresolved_threads": unresolved,
+                    "drainable": drainable,
+                    "thread_measurement": thread_reason,
+                }
+            )
+    if repo_errors and not open_rows:
+        return {
+            "open": [],
+            "open_count": None,
+            "drainable_count": None,
+            "repos_checked": len(repos),
+            "measurement": "; ".join(repo_errors[:3]),
+        }
+    drainable_count = sum(1 for row in open_rows if row.get("drainable"))
+    measurement = "measured"
+    if registry_reason:
+        measurement = f"measured with registry gap ({registry_reason})"
+    if repo_errors:
+        measurement = f"{measurement}; {len(repo_errors)} repo(s) unreadable"
+    return {
+        "open": open_rows,
+        "open_count": len(open_rows),
+        "drainable_count": drainable_count,
+        "repos_checked": len(repos),
+        "measurement": measurement,
+        "repo_errors": repo_errors,
+    }
+
+
+def _maint_82_continuation_hours(*, now: int, gh_fn) -> dict:
+    ok, out, reason = gh_fn(
+        [
+            "run",
+            "list",
+            "--repo",
+            WORKFLOWS_REPO,
+            "--workflow",
+            MAINT_82_WORKFLOW,
+            "--limit",
+            "15",
+            "--json",
+            "databaseId,conclusion,createdAt,status",
+        ]
+    )
+    if not ok:
+        return {"hours_since_dispatch": None, "measurement": reason}
+    try:
+        runs = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        return {
+            "hours_since_dispatch": None,
+            "measurement": "unmeasured: maint-82 run list JSON parse failed",
+        }
+    completed = [
+        row for row in runs if isinstance(row, dict) and str(row.get("status") or "") == "completed"
+    ]
+    if not completed:
+        return {
+            "hours_since_dispatch": None,
+            "measurement": "unmeasured: no completed maint-82 runs in lookback",
+        }
+    # Log download is one call per run; budget to the newest few so the sweep stays bounded.
+    for row in completed[:MAINT_82_LOG_RUN_BUDGET]:
+        run_id = row.get("databaseId")
+        if run_id is None:
+            continue
+        log_ok, log_out, log_reason = gh_fn(
+            ["run", "view", str(run_id), "--repo", WORKFLOWS_REPO, "--log"],
+            timeout_s=GH_TIMEOUT_S,
+        )
+        if not log_ok:
+            return {
+                "hours_since_dispatch": None,
+                "measurement": (
+                    "unmeasured: maint-82 log fetch deferred " f"(per-run download; {log_reason})"
+                ),
+            }
+        if CONTINUATION_LOG_MARKER not in log_out:
+            continue
+        created = _parse_iso_ts(str(row.get("createdAt") or ""))
+        if created is None:
+            continue
+        return {
+            "hours_since_dispatch": round((now - created) / 3600, 1),
+            "last_dispatch_at": row.get("createdAt"),
+            "run_id": run_id,
+            "measurement": "measured",
+        }
+    return {
+        "hours_since_dispatch": None,
+        "measurement": (
+            f"unmeasured: no '{CONTINUATION_LOG_MARKER}' in last "
+            f"{MAINT_82_LOG_RUN_BUDGET} completed maint-82 logs"
+        ),
+    }
+
+
+def fleet_gates(
+    *,
+    now: int | None = None,
+    gh_fn: Callable[..., tuple[bool, str, str]] | None = None,
+    repos_fn: Callable[[], list[str]] | None = None,
+) -> dict:
+    """Report-only fleet template-delivery gate health (Maint 68 promote + sync canaries)."""
+    resolved_now = int(now if now is not None else time.time())
+    gh = gh_fn or _gh_call
+    promote = _promote_age_days(now=resolved_now, gh_fn=gh)
+    canaries = _open_canaries(now=resolved_now, gh_fn=gh, repos_fn=repos_fn)
+    continuation = _maint_82_continuation_hours(now=resolved_now, gh_fn=gh)
+
+    promote_days = promote.get("days_since_success")
+    open_count = canaries.get("open_count")
+    drainable_count = canaries.get("drainable_count")
+    stale_canaries = [
+        row
+        for row in (canaries.get("open") or [])
+        if isinstance(row.get("age_days"), (int, float)) and row["age_days"] > FLEET_GATE_DAYS
+    ]
+
+    suspect = False
+    suspect_reason = ""
+    clear_paths = ""
+    if promote_days is not None and promote_days > FLEET_GATE_DAYS and stale_canaries:
+        suspect = True
+        suspect_reason = (
+            f"template-delivery chain SUSPECT: promote stale {promote_days}d / "
+            f"open canaries {open_count} (drainable {drainable_count})"
+        )
+        clear_paths = (
+            "clears when a successful Maint 68 promote runs OR every open canary >7d merges/closes"
+        )
+    elif promote.get("measurement", "").startswith("unmeasured"):
+        suspect_reason = promote["measurement"]
+    elif canaries.get("measurement", "").startswith("unmeasured"):
+        suspect_reason = canaries["measurement"]
+
+    status = "suspect" if suspect else "ok"
+    if promote.get("measurement", "").startswith("unmeasured") and open_count is None:
+        status = "unknown"
+
+    return {
+        "status": status,
+        "gate_horizon_days": FLEET_GATE_DAYS,
+        "promote": promote,
+        "canaries": canaries,
+        "maint_82_continuation": continuation,
+        "suspect": suspect,
+        "suspect_reason": suspect_reason,
+        "clear_paths": clear_paths,
+        "stale_canary_count": len(stale_canaries),
+    }
+
+
 def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path=None) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why."""
     import capability_recurrence_check as rc
@@ -344,6 +767,7 @@ def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path
         # reach, and a drifted MIRROR is code the sync did not carry. Both are decisions that never
         # landed, so both belong in this sweep rather than in a second auditor.
         "mirror_drift": mirror_drift(),
+        "fleet_gates": fleet_gates(now=now),
         "raise_count": len(due) + len(quiet),
     }
 
@@ -456,10 +880,57 @@ def format_report(rep: dict) -> str:
                 "between an agent's change and the dispatcher that dispatches agents.",
                 "",
             ]
+    fleet = rep.get("fleet_gates") or {}
+    if fleet:
+        lines += ["## Fleet template-delivery gates (Maint 68 promote + sync canaries)", ""]
+        promote = fleet.get("promote") or {}
+        if promote.get("measurement", "").startswith("unmeasured"):
+            lines.append(f"  Maint 68 promote: {promote['measurement']}")
+        elif promote.get("days_since_success") is None:
+            lines.append(f"  Maint 68 promote: {promote.get('measurement', 'unmeasured')}")
+        else:
+            lines.append(
+                f"  Maint 68 promote: last success {promote['days_since_success']}d ago "
+                f"({promote.get('display_title', 'n/a')})"
+            )
+        canaries = fleet.get("canaries") or {}
+        if (
+            canaries.get("measurement", "").startswith("unmeasured")
+            and canaries.get("open_count") is None
+        ):
+            lines.append(f"  sync canaries: {canaries['measurement']}")
+        else:
+            lines.append(
+                f"  sync canaries: open={canaries.get('open_count')} "
+                f"drainable={canaries.get('drainable_count')} "
+                f"(repos checked={canaries.get('repos_checked', 0)})"
+            )
+            for row in canaries.get("open") or []:
+                unresolved = row.get("unresolved_threads")
+                unresolved_text = "unmeasured" if unresolved is None else str(unresolved)
+                lines.append(
+                    f"    {row.get('repo')}#{row.get('number')} "
+                    f"{row.get('branch')} age={row.get('age_days')}d "
+                    f"checks_green={row.get('checks_green')} "
+                    f"unresolved_threads={unresolved_text}"
+                )
+        continuation = fleet.get("maint_82_continuation") or {}
+        if continuation.get("measurement", "").startswith("unmeasured"):
+            lines.append(f"  Maint 82 continuation: {continuation['measurement']}")
+        elif continuation.get("hours_since_dispatch") is not None:
+            lines.append(
+                f"  Maint 82 continuation: last dispatch {continuation['hours_since_dispatch']}h ago"
+            )
+        if fleet.get("suspect"):
+            lines.append(f"  SUSPECT — {fleet.get('suspect_reason')}")
+            if fleet.get("clear_paths"):
+                lines.append(f"      {fleet['clear_paths']}")
+        lines.append("")
     if (
         not rep["raise_count"]
         and not rep.get("stale_runners")
         and (rep.get("mirror_drift") or {}).get("status") == "ok"
+        and not (rep.get("fleet_gates") or {}).get("suspect")
     ):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
@@ -543,11 +1014,140 @@ def _selftest_stale_runners() -> None:
         assert row["reason"], "a stale runner must say why it is stale"
 
 
+def _selftest_fleet_gates() -> None:
+    """Template-delivery chain latched when promote and canaries both exceed the horizon."""
+    now = 1_700_000_000
+    promote_ts = datetime.fromtimestamp(now - 8 * 86400, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    canary_ts = datetime.fromtimestamp(now - 8 * 86400, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    cont_ts = datetime.fromtimestamp(now - 12 * 3600, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    maint68_runs = json.dumps(
+        [
+            {
+                "databaseId": 68001,
+                "displayTitle": "Maint 68 promote consumers",
+                "conclusion": "success",
+                "createdAt": promote_ts,
+                "status": "completed",
+            }
+        ]
+    )
+    pr_list = json.dumps(
+        [
+            {
+                "number": 42,
+                "headRefName": "sync/workflows-candidate",
+                "createdAt": canary_ts,
+                "statusCheckRollup": {"state": "FAILURE", "contexts": []},
+                "isDraft": False,
+            }
+        ]
+    )
+    review_threads = json.dumps({"reviewThreads": [{"isResolved": False}]})
+    maint82_runs = json.dumps(
+        [
+            {
+                "databaseId": 82001,
+                "conclusion": "success",
+                "createdAt": cont_ts,
+                "status": "completed",
+            }
+        ]
+    )
+    maint82_log = f"setup\n{CONTINUATION_LOG_MARKER} candidate-lane\n"
+
+    def fake_gh(args, *, timeout_s=30):
+        if args[:2] == ["run", "list"] and MAINT_68_WORKFLOW in args:
+            return True, maint68_runs, ""
+        if args[:2] == ["run", "list"] and MAINT_82_WORKFLOW in args:
+            return True, maint82_runs, ""
+        if args[:2] == ["pr", "list"]:
+            return True, pr_list, ""
+        if args[:2] == ["pr", "view"] and "reviewThreads" in args:
+            return True, review_threads, ""
+        if args[:2] == ["run", "view"] and "--log" in args:
+            return True, maint82_log, ""
+        return False, "", f"unmeasured: unexpected gh call {args!r}"
+
+    def repos():
+        return ["stranske/Example"]
+
+    rep = fleet_gates(now=now, gh_fn=fake_gh, repos_fn=repos)
+    assert rep["suspect"], rep
+    assert "promote stale 8.0d" in rep["suspect_reason"], rep["suspect_reason"]
+    assert "open canaries 1 (drainable 0)" in rep["suspect_reason"], rep["suspect_reason"]
+    assert "clears when" in rep["clear_paths"], rep
+
+    text = format_report(
+        {
+            "generated_at": now,
+            "review_days": REVIEW_DAYS,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "stale_runners": [],
+            "mirror_drift": {"status": "ok"},
+            "fleet_gates": rep,
+            "raise_count": 0,
+        }
+    )
+    assert "SUSPECT" in text, text
+    assert "drainable=0" in text, text
+    assert "Nothing due" not in text, text
+
+    def fail_gh(args, *, timeout_s=30):
+        return False, "", "unmeasured: auth required"
+
+    bad = fleet_gates(now=now, gh_fn=fail_gh, repos_fn=repos)
+    assert bad["promote"]["measurement"].startswith("unmeasured"), bad
+    assert bad["canaries"]["open_count"] is None, bad
+    assert bad["canaries"]["drainable_count"] is None, bad
+
+    young_ts = datetime.fromtimestamp(now - 2 * 86400, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    young_pr_list = json.dumps(
+        [
+            {
+                "number": 7,
+                "headRefName": "sync/workflows-delivery",
+                "createdAt": young_ts,
+                "statusCheckRollup": {"state": "SUCCESS", "contexts": []},
+                "isDraft": False,
+            }
+        ]
+    )
+
+    def young_gh(args, *, timeout_s=30):
+        if args[:2] == ["run", "list"] and MAINT_68_WORKFLOW in args:
+            return True, maint68_runs, ""
+        if args[:2] == ["run", "list"] and MAINT_82_WORKFLOW in args:
+            return True, maint82_runs, ""
+        if args[:2] == ["pr", "list"]:
+            return True, young_pr_list, ""
+        if args[:2] == ["pr", "view"] and "reviewThreads" in args:
+            return True, json.dumps({"reviewThreads": []}), ""
+        if args[:2] == ["run", "view"] and "--log" in args:
+            return True, maint82_log, ""
+        return False, "", f"unmeasured: unexpected gh call {args!r}"
+
+    young = fleet_gates(now=now, gh_fn=young_gh, repos_fn=repos)
+    assert not young[
+        "suspect"
+    ], "SUSPECT must require a canary older than the horizon, not merely an open canary"
+
+
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
 
     _selftest_stale_runners()
+    _selftest_fleet_gates()
     now = 1_700_000_000
     with tempfile.TemporaryDirectory(prefix="switch-review-") as td:
         reg = Path(td) / "capabilities.json"
@@ -615,7 +1215,7 @@ def _selftest() -> None:
 
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
-        "recently-triggering stays silent, '0' is off, dry-run inert)"
+        "recently-triggering stays silent, '0' is off, dry-run inert, fleet_gates SUSPECT rule)"
     )
 
 
