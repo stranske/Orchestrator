@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict, cast
 
 import durability_sweep
 import feedback
@@ -57,7 +57,7 @@ def _resolve_registry_path() -> Path:
 
 PR_LIST_FIELDS = (
     "number,state,title,labels,createdAt,updatedAt,mergedAt,closedAt,"
-    "headRefName,baseRefName,mergeCommit,author,url"
+    "headRefName,baseRefName,mergeCommit,author,body,url"
 )
 PR_CONTEXT_FIELDS = "body,comments"
 PROCESS_WORK_TYPES = {"renovate", "sync", "tooling", "docs"}
@@ -224,8 +224,22 @@ def _author_login(pr: dict) -> str | None:
 
 # Real implementer agents only. `agent:auto` (delegation-policy auto-switch), `agent:rate-limited`, and any
 # other `agent:*` CONTROL labels are NOT agents — counting them would pollute the learner with bogus agents.
-KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "vibe", "aider"}
+KNOWN_AGENTS = {"codex", "claude", "cursor", "gemini", "vibe", "aider", "copilot"}
 NON_AGENT = "none"
+ATTRIBUTION_UNRESOLVED = "unresolved"
+AUTHOR_AGENT_MAP = {
+    "chatgpt-codex-connector": "codex",
+    "chatgpt-codex-connector[bot]": "codex",
+    "cursor": "cursor",
+    "cursor[bot]": "cursor",
+    "copilot": "copilot",
+    "copilot[bot]": "copilot",
+}
+SUMMARY_AGENT_RE = re.compile(
+    r"(?:^|\n)\s*(?:[-*]\s*)?(?:\*{1,2})?agent(?:\s+type)?(?:\*{1,2})?\s*:\s*"
+    r"(?:\*{1,2})?(codex|claude|cursor|gemini|vibe|aider|copilot)(?:\*{1,2})?\b",
+    re.IGNORECASE,
+)
 
 
 class IngestSummary(TypedDict):
@@ -237,16 +251,73 @@ class IngestSummary(TypedDict):
     non_agent_prs_seen: int
     non_agent_runs_recorded: int
     by_source: dict[str, int]
+    attribution: dict[str, object]
 
 
-def _agents_from_labels(labels: list[str]) -> list[str]:
+def _agent_from_labels(labels: list[str]) -> tuple[str, str] | None:
     agents = []
     for label in labels:
-        if label.startswith("agent:"):
+        if label.strip().lower().startswith("agent:"):
             agent = label.split(":", 1)[1].strip()
+            if agent.lower() in KNOWN_AGENTS and agent.lower() not in agents:
+                agents.append(agent.lower())
+    return (agents[0], "agent_label") if len(agents) == 1 else None
+
+
+def _agent_from_tried_labels(labels: list[str]) -> tuple[str, str] | None:
+    agents = []
+    for label in labels:
+        low = label.strip().lower()
+        if low.startswith("agents:tried-"):
+            agent = low.removeprefix("agents:tried-").strip()
             if agent in KNOWN_AGENTS and agent not in agents:
                 agents.append(agent)
-    return agents
+    return (agents[0], "tried_label") if len(agents) == 1 else None
+
+
+def _agent_from_job_names(job_names: list[str]) -> tuple[str, str] | None:
+    agents = []
+    for name in job_names:
+        low = str(name).strip().lower()
+        for agent in KNOWN_AGENTS:
+            if low == f"run-{agent}" or re.search(
+                rf"\bkeepalive\s+next\s+task\s*\(\s*{re.escape(agent)}\s*\)", low
+            ):
+                if agent not in agents:
+                    agents.append(agent)
+    return (agents[0], "keepalive_job") if len(agents) == 1 else None
+
+
+def _agent_from_author(author: str | None) -> tuple[str, str] | None:
+    agent = AUTHOR_AGENT_MAP.get((author or "").strip().lower())
+    return (agent, "author_login") if agent else None
+
+
+def _agent_from_summary(summary: str | None) -> tuple[str, str] | None:
+    if "automated status summary" not in (summary or "").lower():
+        return None
+    match = SUMMARY_AGENT_RE.search((summary or "").replace("*", ""))
+    return (match.group(1).lower(), "automated_status_summary") if match else None
+
+
+def derive_attribution(
+    labels: list[str],
+    *,
+    job_names: list[str] | None = None,
+    author: str | None = None,
+    summary: str | None = None,
+) -> tuple[str, str]:
+    """Resolve only explicit evidence, in the documented priority order."""
+    for resolved in (
+        _agent_from_labels(labels),
+        _agent_from_tried_labels(labels),
+        _agent_from_job_names(job_names or []),
+        _agent_from_author(author),
+        _agent_from_summary(summary),
+    ):
+        if resolved:
+            return resolved
+    return NON_AGENT, ATTRIBUTION_UNRESOLVED
 
 
 def _task_type_from_labels(labels: list[str]) -> str:
@@ -360,6 +431,106 @@ def _source_counts() -> dict[str, int]:
     return {source: count for source, count in rows}
 
 
+def _record_attribution(summary: IngestSummary, source: str) -> None:
+    attribution = summary["attribution"]
+    key = "blocked" if source == ATTRIBUTION_UNRESOLVED else "let_through"
+    attribution[key] = cast(int, attribution[key]) + 1
+    by_source = cast(dict[str, int], attribution["by_source"])
+    by_source[source] = int(by_source.get(source, 0)) + 1
+
+
+def _update_attribution(run_id: str, agent: str, source: str) -> None:
+    """Change only attribution fields: historical run IDs stay immutable."""
+    with feedback._conn() as c:
+        row = c.execute("SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        if not row:
+            return
+        metadata = feedback._routing_metadata_dict(row[0])
+        metadata["attribution_source"] = source
+        c.execute(
+            "UPDATE runs SET agent=?, routing_metadata=? WHERE run_id=?",
+            (agent, json.dumps(metadata, sort_keys=True), run_id),
+        )
+
+
+def _gh_api_json(path: str) -> object | None:
+    """Read-only GitHub API reader, reserved for the explicit historical backfill."""
+    return _run_json(["gh", "api", path])
+
+
+def _backfill_evidence(repo: str, pr_number: int) -> dict:
+    """Return evidence readable now; this is the only new live-GitHub access path."""
+    pr = _gh_api_json(f"repos/{repo}/pulls/{pr_number}")
+    if not isinstance(pr, dict):
+        return {}
+    labels = _label_names(pr)
+    job_names: list[str] = []
+    runs = _gh_api_json(
+        f"repos/{repo}/actions/workflows/agents-keepalive-loop.yml/runs?event=pull_request&per_page=100"
+    )
+    if isinstance(runs, dict):
+        matching = [
+            run
+            for run in runs.get("workflow_runs") or []
+            if any(str(p.get("number")) == str(pr_number) for p in run.get("pull_requests") or [])
+        ]
+        if matching:
+            newest = max(matching, key=lambda run: int(run.get("id") or 0))
+            jobs = _gh_api_json(f"repos/{repo}/actions/runs/{newest['id']}/jobs?per_page=100")
+            if isinstance(jobs, dict):
+                job_names = [str(job.get("name") or "") for job in jobs.get("jobs") or []]
+    return {
+        "labels": labels,
+        "job_names": job_names,
+        "author": _author_login(pr),
+        "summary": str(pr.get("body") or ""),
+    }
+
+
+def backfill_attribution(*, apply: bool = False, _evidence_fetch_fn=None) -> dict:
+    """Re-derive existing keepalive:none rows without changing their stable run IDs."""
+    fetch_evidence = _evidence_fetch_fn or _backfill_evidence
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT run_id, target FROM runs WHERE source='keepalive' AND agent=? "
+            "ORDER BY run_id",
+            (NON_AGENT,),
+        ).fetchall()
+    before = len(rows)
+    summary: dict[str, Any] = {
+        "before_none": before,
+        "after_none": before,
+        "let_through": 0,
+        "blocked": 0,
+        "by_source": {},
+    }
+    for run_id, target in rows:
+        match = re.fullmatch(r"([^#]+)#(\d+)", str(target or ""))
+        if not match:
+            summary["blocked"] += 1
+            summary["by_source"][ATTRIBUTION_UNRESOLVED] = (
+                summary["by_source"].get(ATTRIBUTION_UNRESOLVED, 0) + 1
+            )
+            continue
+        evidence = fetch_evidence(match.group(1), int(match.group(2))) or {}
+        agent, source = derive_attribution(
+            list(evidence.get("labels") or []),
+            job_names=list(evidence.get("job_names") or []),
+            author=evidence.get("author"),
+            summary=evidence.get("summary"),
+        )
+        summary["by_source"][source] = summary["by_source"].get(source, 0) + 1
+        if source == ATTRIBUTION_UNRESOLVED:
+            summary["blocked"] += 1
+            continue
+        summary["let_through"] += 1
+        if apply:
+            _update_attribution(run_id, agent, source)
+    summary["after_none"] = before - summary["let_through"] if apply else before
+    summary["applied"] = apply
+    return summary
+
+
 def _gh_throttle(resource: str) -> None:
     """Pace/defer against the shared GitHub rate budget (gh_capacity) when ORCH_GH_THROTTLE=1;
     no-op + fail-open otherwise so the ingest never breaks on a missing/erroring module."""
@@ -442,6 +613,7 @@ def ingest_keepalive_outcomes(
         "non_agent_prs_seen": 0,
         "non_agent_runs_recorded": 0,
         "by_source": {},
+        "attribution": {"let_through": 0, "blocked": 0, "by_source": {}},
     }
 
     for repo in repos:
@@ -451,12 +623,16 @@ def ingest_keepalive_outcomes(
             prs = []
         for pr in prs:
             labels = _label_names(pr)
-            agents = _agents_from_labels(labels)
+            agent, attribution_source = derive_attribution(
+                labels,
+                author=_author_login(pr),
+                summary=str(pr.get("body") or ""),
+            )
             pr_number = pr.get("number")
             if pr_number is None:
                 continue
             pr_number = int(pr_number)
-            if not agents:
+            if agent == NON_AGENT:
                 if not include_non_agent:
                     continue
                 target = f"{repo}#{pr_number}"
@@ -476,6 +652,7 @@ def ingest_keepalive_outcomes(
                     continue
                 summary["prs_seen"] += 1
                 summary["non_agent_prs_seen"] += 1
+                _record_attribution(summary, attribution_source)
                 if _existing_remote_for_pr(repo, pr_number):
                     summary["skipped_existing"] += 1
                     continue
@@ -502,6 +679,7 @@ def ingest_keepalive_outcomes(
                         source="keepalive",
                         assignment=NON_AGENT,
                         work_type=work_type,
+                        routing_metadata={"attribution_source": attribution_source},
                     )
                     summary["runs_recorded"] += 1
                     summary["non_agent_runs_recorded"] += 1
@@ -516,53 +694,49 @@ def ingest_keepalive_outcomes(
                 continue
 
             summary["prs_seen"] += 1
+            _record_attribution(summary, attribution_source)
             if _existing_remote_for_pr(repo, pr_number):
-                summary["skipped_existing"] += len(agents)
+                summary["skipped_existing"] += 1
                 continue
 
             task_type = _task_type_from_labels(labels)
             work_type = _work_type(labels, str(pr.get("title") or ""), _author_login(pr))
             target = f"{repo}#{pr_number}"
-            for agent in agents:
-                run_id = _stable_run_id(repo, pr_number, agent)
-                run = {
-                    "run_id": run_id,
-                    "target": target,
-                    "mode": "remote",
-                    "pr_number": pr_number,
-                }
-                run_already_exists = _run_exists(run_id)
-                oc = _outcome_for_pr(
-                    repo, pr, run, now=_now, _revert_fn=revert_fn, revert_cache=revert_cache
+            run_id = _stable_run_id(repo, pr_number, agent)
+            run = {"run_id": run_id, "target": target, "mode": "remote", "pr_number": pr_number}
+            run_already_exists = _run_exists(run_id)
+            oc = _outcome_for_pr(
+                repo, pr, run, now=_now, _revert_fn=revert_fn, revert_cache=revert_cache
+            )
+            oc = _maybe_mark_process_ignore(repo, pr, work_type, oc, closure_context_fn)
+            existing_oc = _existing_outcome(run_id)
+
+            if run_already_exists:
+                summary["skipped_existing"] += 1
+            elif not dry_run:
+                feedback.record_run(
+                    run_id,
+                    target,
+                    task_type,
+                    agent,
+                    mode="remote",
+                    rationale="keepalive-discovered agent PR",
+                    pr_number=pr_number,
+                    ts=_run_ts(pr),
+                    model=None,
+                    source="keepalive",
+                    assignment="assigned",
+                    work_type=work_type,
+                    routing_metadata={"attribution_source": attribution_source},
                 )
-                oc = _maybe_mark_process_ignore(repo, pr, work_type, oc, closure_context_fn)
-                existing_oc = _existing_outcome(run_id)
+                summary["runs_recorded"] += 1
+            elif dry_run:
+                summary["runs_recorded"] += 1
 
-                if run_already_exists:
-                    summary["skipped_existing"] += 1
-                elif not dry_run:
-                    feedback.record_run(
-                        run_id,
-                        target,
-                        task_type,
-                        agent,
-                        mode="remote",
-                        rationale="keepalive-discovered agent PR",
-                        pr_number=pr_number,
-                        ts=_run_ts(pr),
-                        model=None,
-                        source="keepalive",
-                        assignment="assigned",
-                        work_type=work_type,
-                    )
-                    summary["runs_recorded"] += 1
-                elif dry_run:
-                    summary["runs_recorded"] += 1
-
-                if oc is not None and _should_record_outcome(existing_oc, oc):
-                    if not dry_run:
-                        feedback.record_outcome(run_id, **oc)
-                    summary["outcomes_recorded"] += 1
+            if oc is not None and _should_record_outcome(existing_oc, oc):
+                if not dry_run:
+                    feedback.record_outcome(run_id, **oc)
+                summary["outcomes_recorded"] += 1
 
     summary["by_source"] = _source_counts()
     return summary
@@ -589,6 +763,23 @@ def _selftest() -> None:
         assert _work_type(["infra"], "ci: tighten workflow", None) == "tooling"
         assert _work_type(["documentation"], "docs: refresh guide", None) == "docs"
         assert _work_type(["agent:codex"], "Fix export edge case", "teacher") == "issue"
+        label = derive_attribution(["agent:codex"])
+        assert label == ("codex", "agent_label"), label
+        assert derive_attribution(["agents:tried-claude"]) == ("claude", "tried_label")
+        assert derive_attribution([], job_names=["run-cursor"]) == ("cursor", "keepalive_job")
+        assert derive_attribution(["agent:codex", "agent:claude"]) == ("none", "unresolved")
+        assert derive_attribution([], author="chatgpt-codex-connector") == (
+            "codex",
+            "author_login",
+        )
+        assert derive_attribution([], summary="## Automated Status Summary\n**Agent:** Gemini") == (
+            "gemini",
+            "automated_status_summary",
+        )
+        assert derive_attribution([], author="stranske-keepalive[bot]") == (
+            "none",
+            "unresolved",
+        )
         old_notes = {"durability": "abandoned", "notes": "remote keepalive PR closed unmerged"}
         tagged_notes = {
             "durability": "abandoned",
@@ -691,6 +882,7 @@ def _selftest() -> None:
         assert res["runs_recorded"] == 3, res
         assert res["outcomes_recorded"] == 3, res
         assert res["skipped_existing"] == 1, res
+        assert res["attribution"]["let_through"] == 4, res
         with feedback._conn() as c:
             rows = {
                 rid: (source, assignment, work_type, durability)
@@ -810,6 +1002,32 @@ def _selftest() -> None:
         assert PROCESS_IGNORE_MARKER in non_agent_rows["keepalive:o/r#6:none"][5], non_agent_rows
         assert "keepalive:o/r#7:none" not in non_agent_rows, non_agent_rows
 
+        feedback.record_run(
+            "keepalive:o/r#8:none", "o/r#8", "implement", "none", mode="remote", source="keepalive"
+        )
+        feedback.record_run(
+            "keepalive:o/r#9:none", "o/r#9", "implement", "none", mode="remote", source="keepalive"
+        )
+        evidence = {
+            ("o/r", 8): {"labels": [], "job_names": ["run-claude"]},
+            ("o/r", 9): {"labels": [], "author": "stranske-keepalive[bot]"},
+        }
+        preview = backfill_attribution(
+            _evidence_fetch_fn=lambda repo, num: evidence.get((repo, num), {})
+        )
+        assert preview["before_none"] == 4 and preview["after_none"] == 4, preview
+        assert preview["let_through"] == 1 and preview["blocked"] == 3, preview
+        applied = backfill_attribution(
+            apply=True, _evidence_fetch_fn=lambda repo, num: evidence.get((repo, num), {})
+        )
+        assert applied["after_none"] == 3 and applied["let_through"] == 1, applied
+        with feedback._conn() as c:
+            restored = c.execute(
+                "SELECT agent, routing_metadata FROM runs WHERE run_id='keepalive:o/r#8:none'"
+            ).fetchone()
+        assert restored[0] == "claude", restored
+        assert json.loads(restored[1])["attribution_source"] == "keepalive_job", restored
+
         print("keepalive_outcomes.py selftest: OK")
     finally:
         feedback.DB_PATH = old_db
@@ -830,10 +1048,23 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument(
+        "--backfill-attribution",
+        action="store_true",
+        help="re-derive source=keepalive agent=none rows; dry-run unless --apply is present",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="allow --backfill-attribution to write"
+    )
     args = parser.parse_args(argv)
 
     if args.selftest:
         _selftest()
+        return 0
+
+    if args.backfill_attribution:
+        result = backfill_attribution(apply=args.apply)
+        print(json.dumps(result, indent=2, sort_keys=True) if args.json else result)
         return 0
 
     res = ingest_keepalive_outcomes(
