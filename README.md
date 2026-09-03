@@ -258,6 +258,9 @@ safety switch, not dead code.
 - **relearn_report.py** (weekly) re-estimates versioned route weights: Beta-Binomial posteriors
   with recency decay, cost/effort imputation (missing telemetry never reads as free — the cost
   plane is repaired), and **Bradley-Terry warm-starts** blended from the A/B/C duel data.
+- **route_weights_export.py** (daily, shadow) writes a thresholded latest-version routing snapshot
+  for Workflows to fetch fail-open; reserve seats are isolated and remote publication requires both
+  `--publish` and `ORCH_ROUTE_WEIGHTS_PUBLISH=1` on `exports/route-weights`.
 - **judge_reliability.py** — leave-one-out consensus weights per judge (de-saturated so real error
   spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
   machine ground-truth anchors (no owner code-review required — see CLAUDE.md).

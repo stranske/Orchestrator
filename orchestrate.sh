@@ -809,6 +809,17 @@ if _cadence_due relearn && _attempt_ok relearn; then
   echo "  [cadence] relearn + beliefs report (weekly)"
   if python3 "$ORCH/relearn_report.py" >/dev/null 2>&1; then _mark_success relearn; else _mark_fail relearn; fi
 fi
+if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
+  # Shadow-only local export. Publication is intentionally absent from the hourly path: it needs
+  # BOTH --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1, so a cadence run can never change remote policy.
+  echo "  [cadence] route weights export (daily; shadow local artifact, remote publish blocked)"
+  if python3 "$ORCH/route_weights_export.py" \
+       > "$STAMP_DIR/route-weights-export.log" 2>&1; then
+    _mark_success route-weights-export
+  else
+    _mark_fail route-weights-export "see $STAMP_DIR/route-weights-export.log"
+  fi
+fi
 if _cadence_due periodic-report && _attempt_ok periodic-report; then
   echo "  [cadence] periodic dataset report + observability dashboard (weekly)"
   if python3 "$ORCH/periodic_report.py" --json > "$STAMP_DIR/periodic-report.json" && \

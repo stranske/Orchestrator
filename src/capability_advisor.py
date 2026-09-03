@@ -986,6 +986,11 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "single-use helpers ranks nothing. Never touches the live registry",
     },
     "rail-exercise:routing": {
+        "route-weights-export": "EXERCISE route_weights_export.py on a fixture route_weights "
+        "database: only the latest version and n_obs >= threshold appear in public rankings, "
+        "claude is separated under reserve, and an unchanged semantic document is not rewritten; "
+        "break case: removing the threshold filter admits the fixture's 12-observation cursor "
+        "row. Never passes --publish or ORCH_ROUTE_WEIGHTS_PUBLISH=1",
         "thompson-hybrid-routing": "EXERCISE the exploration policy on fixture route weights with a "
         "seeded sampler: the sampled arm distribution over N draws tracks the posterior within a "
         "pre-committed tolerance and a collapsed posterior always picks its mode; break case: a "
