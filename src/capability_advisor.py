@@ -900,7 +900,9 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # check and a break case. Nothing here invites an agent to do the rail's JOB; each rail's
     # `findability_rationale` in capabilities.py still says why that would be wrong, and the
     # exercise leaves the live path with the rail that invokes it. The bare `rail-exercise` key
-    # binds nothing on purpose: a consult must name its phase, so no context gets all eighteen.
+    # binds nothing on purpose: a consult must name its phase, so no context gets all of them.
+    # `audit` and `routing` were added 2026-09-03 for seven capabilities that were scored but
+    # offered only on tick phases no agent answers — the same measurement gap the exemption had.
     # Pinned by `_selftest_rail_exercise`: every `exercise_bound` declaration is bound on exactly
     # one phase, and no phase binds a task-routed capability.
     "rail-exercise": {
@@ -965,6 +967,38 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "coverage-testgen-trigger": "EXERCISE the dry run on a fixture coverage report: the "
         "emitted prompt names the lowest-covered module by an independent read; break case: "
         "uniform coverage yields no prompt. Never dispatches the testgen agent",
+    },
+    "rail-exercise:audit": {
+        "capability-activation-audit": "EXERCISE the activation audit against a FIXTURE ledger and "
+        "fixture tree: a row whose entrypoint module is absent must be reported with "
+        "entrypoint_presence naming the miss, a row whose caller exists must pass; break case: a "
+        "fixture that hides the caller must flip the verdict. Never audits the live ledger in place",
+        "capability-firing-monitor": "EXERCISE the firing monitor over fixture heartbeat history: a "
+        "capability silent past its cadence is flagged with the gap in hours, one inside its cadence "
+        "is not; break case: a fixture with a fresh heartbeat must not be flagged. Never writes "
+        "monitor state",
+        "switch-review": "EXERCISE the gate sweep over a fixture of gates: a gate blocking past its "
+        "horizon with an unmoved value and zero drainable is reported SUSPECT with what would clear "
+        "it, a moving gate is not; break case: a drainable count above zero must clear the flag. "
+        "Report-only; never opens a gate",
+        "feature-scan": "EXERCISE the agent-facing scan on a fixture tree into a temporary registry: "
+        "the reusable structures it finds equal an independent count, ranked; break case: a tree of "
+        "single-use helpers ranks nothing. Never touches the live registry",
+    },
+    "rail-exercise:routing": {
+        "thompson-hybrid-routing": "EXERCISE the exploration policy on fixture route weights with a "
+        "seeded sampler: the sampled arm distribution over N draws tracks the posterior within a "
+        "pre-committed tolerance and a collapsed posterior always picks its mode; break case: a "
+        "uniform prior must not always pick one arm. Pure computation; never sets "
+        "ORCH_EXPLORATION_MODE",
+        "range-lane-rollout": "EXERCISE the range-lane preview on a fixture backlog: eligible items "
+        "match the router's own ground-truth eligibility for the same fixture, and nothing is "
+        "dispatched; break case: an item failing admission must be excluded. Never sets "
+        "ORCH_RANGE_LANE_ROLLOUT",
+        "windowed-capacity-policy": "EXERCISE capacity.py's seat classification on fixture ccusage "
+        "blocks and ledger rows: a spent block reads shed, a fresh one ok, an authoritative 429 flag "
+        "wins; break case: a block under threshold must not read shed. Compute-only; reserves "
+        "nothing",
     },
     "rail-exercise:readiness": {
         "issue-readiness": "EXERCISE classify_issue on fixture issue bodies with pre-committed "
@@ -1456,6 +1490,8 @@ CONSULT_SITES: dict[str, dict] = {
             "rail-exercise:redirect",
             "rail-exercise:gates",
             "rail-exercise:readiness",
+            "rail-exercise:audit",
+            "rail-exercise:routing",
         ],
         "how": (
             'the skill\'s consult stanza passes `surface="rail-exercise:<phase>"` before any rail '
