@@ -1,0 +1,35 @@
+{
+  "boundary": "Must not dispatch test generation agents or invoke testgen_lane prompt compilation. Operates purely in evaluation mode (--json) reading fixture coverage report without mutating repository files or git state.",
+  "break_case": {
+    "expected_failure_text": "EXPECTED_FAILURE: refusal to trigger testgen when coverage meets 90% target",
+    "run": [
+      "ORCH_COVERAGE_TESTGEN=1 PYTHONPATH=\"src\" python3 src/coverage_testgen_trigger.py --coverage-json $CONTRACT_DIR/fixtures/coverage_testgen_trigger/cov_high.json --repo test-repo --json > $CONTRACT_DIR/fixtures/coverage_testgen_trigger/break_output.json",
+      "python3 -c '\nimport json, sys\nfrom pathlib import Path\nout = json.loads(Path(\"$CONTRACT_DIR/fixtures/coverage_testgen_trigger/break_output.json\").read_text())\nassert out[\"action\"] == \"none\", \"Expected action none, got: \" + str(out.get(\"action\"))\nassert out[\"warn_human\"] is False, \"Expected warn_human False\"\nassert \"at or above the 90% target\" in out[\"reason\"], \"Expected threshold reason\"\nprint(\"EXPECTED_FAILURE: refusal to trigger testgen when coverage meets 90% target\")\n'"
+    ],
+    "setup": [
+      "mkdir -p $CONTRACT_DIR/fixtures/coverage_testgen_trigger",
+      "printf '{\\n  \"totals\": {\\n    \"percent_covered\": 95.0\\n  }\\n}\\n' > $CONTRACT_DIR/fixtures/coverage_testgen_trigger/cov_high.json"
+    ]
+  },
+  "capability_id": "coverage-testgen-trigger",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/coverage_testgen_trigger.py:267",
+  "notes": "Exercises src/coverage_testgen_trigger.py:267 (main CLI) via read-only fixture report. Validates both machine threshold (<90% buys write_tests) and human warning threshold (<85% crossing triggers warn_human).",
+  "origin": {
+    "proposer": "P2-gemini",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P2-gemini/orch/exercises/coverage-testgen-trigger.json"
+  },
+  "pass_check": "python3 -c '\nimport json\nfrom pathlib import Path\nout = json.loads(Path(\"$CONTRACT_DIR/fixtures/coverage_testgen_trigger/output.json\").read_text())\nassert out[\"action\"] == \"write_tests\", \"Expected action write_tests: got \" + str(out.get(\"action\"))\nassert out[\"coverage\"] == 84.0, \"Expected coverage 84.0\"\nassert out[\"previous\"] == 88.0, \"Expected previous 88.0\"\nassert out[\"warn_human\"] is True, \"Expected warn_human True for crossing below 85%\"\nassert \"CROSSED below 85%\" in out[\"reason\"], \"Expected crossing reason\"\nprint(\"PASS\")\n'",
+  "run": [
+    "ORCH_COVERAGE_TESTGEN=1 PYTHONPATH=\"src\" python3 src/coverage_testgen_trigger.py --coverage-json $CONTRACT_DIR/fixtures/coverage_testgen_trigger/cov_low.json --repo test-repo --previous 88.0 --json > $CONTRACT_DIR/fixtures/coverage_testgen_trigger/output.json"
+  ],
+  "setup": [
+    "mkdir -p $CONTRACT_DIR/fixtures/coverage_testgen_trigger",
+    "rm -f $CONTRACT_DIR/fixtures/coverage_testgen_trigger/cov_low.json $CONTRACT_DIR/fixtures/coverage_testgen_trigger/output.json $CONTRACT_DIR/fixtures/coverage_testgen_trigger/cov_high.json $CONTRACT_DIR/fixtures/coverage_testgen_trigger/break_output.json",
+    "printf '{\\n  \"totals\": {\\n    \"percent_covered\": 84.0\\n  }\\n}\\n' > $CONTRACT_DIR/fixtures/coverage_testgen_trigger/cov_low.json"
+  ],
+  "stated_task": "Evaluate repository coverage reports against two-tiered policy thresholds to decide when to queue test-writing or warn an operator."
+}

@@ -38,7 +38,13 @@ target-version = "py312"
 # The Gate passes `--extend-exclude .workflows-lib` on its command line; Autofix does not. Naming
 # it here means both surfaces skip it. It is a CI-time checkout of stranske/Workflows with its own
 # Ruff configuration, never part of this repo.
-extend-exclude = [".workflows-lib"]
+# tests/rail_exercises holds exercise INPUTS — the round-authored contracts and fixture harnesses a
+# rail is run against — not project code. A `--fix` that edits them changes what the exercise
+# measures (the autofix bot deleted 82 import lines across 125 fixture files on PR #207).
+# force-exclude covers CI's autofix, which passes explicit paths a plain exclude does not filter.
+# This file shadows any [tool.ruff] table in pyproject.toml, so the rule lives here only.
+extend-exclude = [".workflows-lib", "tests/rail_exercises"]
+force-exclude = true
 
 # This repo's modules are flat and top-level (`import capabilities`), so first-party detection has
 # to resolve them from the repo root rather than from a `src/` layout. Stated explicitly instead of

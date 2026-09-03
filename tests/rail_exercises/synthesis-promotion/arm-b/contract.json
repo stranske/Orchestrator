@@ -1,0 +1,30 @@
+{
+  "boundary": "Fixture exp dir only; no launch_fn side effects.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:action=discarded_by_usefulness_gate' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:action=discarded_by_usefulness_gate",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py synthesis-promotion break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "synthesis-promotion",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/synthesis_promotion.py:997 reconcile",
+  "notes": "evaluated branch at synthesis_promotion.py:1035-1038.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/synthesis-promotion.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:action=awaiting_synthesis_launch' /tmp/p2_exercise_out.txt",
+  "run": [
+    "python3 $CONTRACT_DIR/fixtures/harness/run.py synthesis-promotion pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "rm -f $CONTRACT_DIR/fixtures/synthesis_exp/synthesis-promotion.json && test -d $CONTRACT_DIR/fixtures/synthesis_exp"
+  ],
+  "stated_task": "Reconcile evaluated promotion state without launch_fn yields awaiting_synthesis_launch."
+}

@@ -1,0 +1,32 @@
+{
+  "boundary": "--json plan only; no --apply issue creation.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:finding_count=0' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:finding_count=0",
+    "run": [
+      "cd $REPO_ROOT && python3 scripts/docs_drift_fix_agent.py --repo-root $CONTRACT_DIR/fixtures/docs_drift_repo_clean --repo fixture/docs --json | python3 -c \"import json,sys; p=json.load(sys.stdin); print('EXERCISE_BREAK:finding_count='+str(p['finding_count']))\" > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": [
+      "cp -r $CONTRACT_DIR/fixtures/docs_drift_repo $CONTRACT_DIR/fixtures/docs_drift_repo_clean && printf '# Workflows\\n\\n- \\`real-only.yml\\` \u2014 present\\n' > $CONTRACT_DIR/fixtures/docs_drift_repo_clean/docs/ci/WORKFLOWS.md"
+    ]
+  },
+  "capability_id": "docs-drift-fix-agent",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "scripts/docs_drift_fix_agent.py:995 --json",
+  "notes": "check_docs_drift via build_plan at docs_drift_fix_agent.py:1014-1020.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/docs-drift-fix-agent.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:finding_count=' /tmp/p2_exercise_out.txt && python3 -c \"import re; t=open('/tmp/p2_exercise_out.txt').read(); m=re.search(r'finding_count=(\\d+)', t); assert m and int(m.group(1))>0\"",
+  "run": [
+    "cd $REPO_ROOT && python3 scripts/docs_drift_fix_agent.py --repo-root $CONTRACT_DIR/fixtures/docs_drift_repo --repo fixture/docs --json | python3 -c \"import json,sys; p=json.load(sys.stdin); print('EXERCISE_PASS:finding_count='+str(p['finding_count']))\" > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -d $CONTRACT_DIR/fixtures/docs_drift_repo"
+  ],
+  "stated_task": "Build a read-only docs-drift repair plan on a fixture repo with a phantom workflow reference."
+}

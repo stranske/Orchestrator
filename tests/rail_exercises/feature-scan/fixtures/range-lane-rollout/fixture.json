@@ -1,0 +1,37 @@
+{
+  "backlog": {
+    "source": "fixture",
+    "items": [
+      {
+        "target": "fixture/repo#1",
+        "task_type": "testgen",
+        "lane": "opener",
+        "labels": [],
+        "title": "t",
+        "body": ""
+      }
+    ]
+  },
+  "capacity": {
+    "agents": {
+      "claude": {
+        "state": "ok"
+      },
+      "codex": {
+        "state": "ok"
+      },
+      "gemini": {
+        "state": "ok"
+      },
+      "cursor": {
+        "state": "ok"
+      },
+      "vibe": {
+        "state": "ok"
+      },
+      "aider": {
+        "state": "ok"
+      }
+    }
+  }
+}

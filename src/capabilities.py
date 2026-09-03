@@ -1245,6 +1245,7 @@ def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[
 # been applied straight to the running instance's ledger, which made them machine-local: green where
 # someone typed them, absent on a fresh checkout, and invisible to review.
 DECLARATION_FIELDS: tuple[str, ...] = (
+    "status",
     "entrypoint",
     "matcher",
     "trigger_cadence",
@@ -1257,6 +1258,8 @@ DECLARATION_FIELDS: tuple[str, ...] = (
     "evidence_threshold",
     # Dedup-before-develop evidence is part of the reviewed declaration, not machine-local prose.
     "notes",
+    "kill_switch",
+    "rollback",
     "gate_blocks_execution",
     "kill_switch_category",
     "control_point",
@@ -1282,6 +1285,20 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # reconciliation seed it. Adding a capability here means its declaration is reviewed with the diff
 # rather than typed into a live JSON file nobody diffs.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "rail-exercise-cadence": {
+        "status": "shadow",
+        "entrypoint": "rail_exercise.py:main",
+        "matcher": {"kind": "tick_phase", "name": "rail-exercise"},
+        "trigger_cadence": "weekly shadow cadence",
+        "output_artifact": "rail-exercise-report.json",
+        "downstream_consumer": "periodic_report.py rail-exercise section",
+        "learning_sink": "capability ledger via capability_propensity",
+        "kill_switch": "ORCH_DISABLE_STEPS=rail-exercise",
+        "rollback": "disable rail-exercise cadence step and remove its report artifact",
+        "findability_category": "exercise_bound",
+        "findability_rationale": "read-only or dry-run contracts exercise deterministic rails against committed fixtures",
+        "notes": "dedup: PR #191/#197 supplied contracts but no scheduled runner; capability_activation_audit audits activation evidence, not contract behavior.",
+    },
     "agy-runtime-isolation": {
         "findability_category": "exercise_bound",
         "findability_rationale": (

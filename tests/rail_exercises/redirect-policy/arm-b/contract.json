@@ -1,0 +1,23 @@
+{
+  "boundary": "Pure advisory stdin JSON decision. No labels, state writes, claims, or dispatch path. Every executable command unsets ORCH_CAPABILITY_HEARTBEATS.",
+  "break_case": {
+    "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-policy-break.json'\"'\"')); raise SystemExit(0 if p[\"action\"]==\"redirect\" and p[\"history_summary\"][\"prior_attempts\"]==0 and p[\"escalated\"] is False else 1)'",
+    "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/redirect-policy\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STATE_DIR -u ORCH_LOCAL_RUNTIME python3 \"$ROOT/src/redirect_policy.py\" --json < \"$FIX/first_stall_report.json\" > /tmp/orch-exercises2-policy-break.json",
+    "stated_break": "Use the identical current report with no history and prove it stays redirect rather than decomposing prematurely."
+  },
+  "capability_id": "redirect-policy",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/redirect_policy.py main/decide",
+  "notes": "Observable is history-sensitive escalation threshold.",
+  "origin": {
+    "proposer": "P-second-arms-r17",
+    "round": "r17",
+    "source": "rounds/r17/executors/P-second-arms-r17/orch/exercises2/redirect-policy.json"
+  },
+  "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-policy-pass.json'\"'\"')); s=p[\"history_summary\"]; ok=(p[\"advisory\"] is True and p[\"action\"]==\"decompose\" and p[\"confidence\"]==\"medium\" and p[\"escalated\"] is True and s[\"prior_attempts\"]==2 and s[\"prior_redirect_causes\"]==2); raise SystemExit(0 if ok else 1)'",
+  "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/redirect-policy\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STATE_DIR -u ORCH_LOCAL_RUNTIME python3 \"$ROOT/src/redirect_policy.py\" --json < \"$FIX/stall_report.json\" > /tmp/orch-exercises2-policy-pass.json",
+  "setup": "FIX=$CONTRACT_DIR/fixtures/redirect-policy; rm -rf \"$FIX\"; mkdir -p \"$FIX\"; export FIX; python3 -c 'import json, os\nfrom pathlib import Path\nbase = Path(os.environ[\"FIX\"])\nfiles = {'\"'\"'stall_report.json'\"'\"': {'\"'\"'report'\"'\"': {'\"'\"'agent'\"'\"': '\"'\"'fixture-agent'\"'\"', '\"'\"'target'\"'\"': '\"'\"'fixture-owner/policy-fixture#7'\"'\"', '\"'\"'lane'\"'\"': '\"'\"'opener'\"'\"', '\"'\"'task_type'\"'\"': '\"'\"'implement'\"'\"', '\"'\"'state'\"'\"': '\"'\"'stalled'\"'\"', '\"'\"'recommended_action'\"'\"': '\"'\"'redirect'\"'\"', '\"'\"'signals'\"'\"': {}, '\"'\"'hints'\"'\"': [{'\"'\"'kind'\"'\"': '\"'\"'auth'\"'\"', '\"'\"'detail'\"'\"': '\"'\"'fixture token expired'\"'\"'}], '\"'\"'drift'\"'\"': {'\"'\"'severity'\"'\"': '\"'\"'none'\"'\"', '\"'\"'findings'\"'\"': []}, '\"'\"'errors'\"'\"': []}, '\"'\"'attempt_history'\"'\"': [{'\"'\"'state'\"'\"': '\"'\"'stalled'\"'\"', '\"'\"'recommended_action'\"'\"': '\"'\"'redirect'\"'\"', '\"'\"'hints'\"'\"': [{'\"'\"'kind'\"'\"': '\"'\"'auth'\"'\"'}], '\"'\"'drift'\"'\"': {'\"'\"'severity'\"'\"': '\"'\"'none'\"'\"', '\"'\"'findings'\"'\"': []}}, {'\"'\"'state'\"'\"': '\"'\"'stalled'\"'\"', '\"'\"'recommended_action'\"'\"': '\"'\"'redirect'\"'\"', '\"'\"'hints'\"'\"': [{'\"'\"'kind'\"'\"': '\"'\"'auth'\"'\"'}], '\"'\"'drift'\"'\"': {'\"'\"'severity'\"'\"': '\"'\"'none'\"'\"', '\"'\"'findings'\"'\"': []}}]}, '\"'\"'first_stall_report.json'\"'\"': {'\"'\"'report'\"'\"': {'\"'\"'agent'\"'\"': '\"'\"'fixture-agent'\"'\"', '\"'\"'target'\"'\"': '\"'\"'fixture-owner/policy-fixture#7'\"'\"', '\"'\"'lane'\"'\"': '\"'\"'opener'\"'\"', '\"'\"'task_type'\"'\"': '\"'\"'implement'\"'\"', '\"'\"'state'\"'\"': '\"'\"'stalled'\"'\"', '\"'\"'recommended_action'\"'\"': '\"'\"'redirect'\"'\"', '\"'\"'signals'\"'\"': {}, '\"'\"'hints'\"'\"': [{'\"'\"'kind'\"'\"': '\"'\"'auth'\"'\"', '\"'\"'detail'\"'\"': '\"'\"'fixture token expired'\"'\"'}], '\"'\"'drift'\"'\"': {'\"'\"'severity'\"'\"': '\"'\"'none'\"'\"', '\"'\"'findings'\"'\"': []}, '\"'\"'errors'\"'\"': []}, '\"'\"'attempt_history'\"'\"': []}}\nfor rel, value in files.items():\n    path = base / rel\n    path.parent.mkdir(parents=True, exist_ok=True)\n    if rel.endswith(\".json\"):\n        with path.open(\"w\", encoding=\"utf-8\") as f:\n            json.dump(value, f, indent=2)\n            f.write(\"\\n\")\n    else:\n        path.write_text(value, encoding=\"utf-8\")\n'",
+  "stated_task": "Decide a fixture stalled auth report with two prior redirect-worthy stalls and prove history escalates the advisory action to decompose."
+}

@@ -1,0 +1,35 @@
+{
+  "boundary": "Must not enable live routing (ORCH_EVIDENCE_ACQUISITION must remain unset/0). Must not dispatch agents, write to live $ORCH_STATE_DIR, or overwrite live capabilities.json. Writes only to isolated fixture plan file.",
+  "break_case": {
+    "expected_failure_text": "EXPECTED_FAILURE: refusal to feed failure-blocked or default-off capability",
+    "run": [
+      "python3 -c '\nimport json, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\nimport evidence_acquisition\nledger = json.loads(Path(\"$CONTRACT_DIR/fixtures/evidence_acquisition/break_ledger.json\").read_text())\ncandidates = json.loads(Path(\"$CONTRACT_DIR/fixtures/evidence_acquisition/candidates.json\").read_text())\nplan_path = Path(\"$CONTRACT_DIR/fixtures/evidence_acquisition/break_plan.json\")\nevidence_acquisition.run(candidates, ledger=ledger, now=1700000000, env={}, write=plan_path)\nplan = json.loads(plan_path.read_text())\nassert plan[\"state\"] == \"nothing_to_feed\", \"Expected nothing_to_feed, got: \" + str(plan.get(\"state\"))\nassert plan[\"feedable_count\"] == 0, \"Expected 0 feedable, got: \" + str(plan.get(\"feedable_count\"))\nassert plan[\"assignments\"] == [], \"Expected empty assignments\"\nprint(\"EXPECTED_FAILURE: refusal to feed failure-blocked or default-off capability\")\n'"
+    ],
+    "setup": [
+      "mkdir -p $CONTRACT_DIR/fixtures/evidence_acquisition",
+      "printf '{\\n  \"capabilities\": {\\n    \"cap-blocked\": {\\n      \"status\": \"shadow\",\\n      \"gate_blocks_execution\": true,\\n      \"gate_reason\": \"testing gate\",\\n      \"evidence_threshold\": {\"min_independent_durable_reuse\": 3},\\n      \"gate_criteria\": {\"min_independent_durable_reuse\": 3},\\n      \"causal_evidence\": {\\n        \"readiness\": {\\n          \"terminal_outcomes\": 1,\\n          \"durable_subjects\": [\"sub-1\"],\\n          \"failures\": 1,\\n          \"rework\": 0,\\n          \"latest_evidence_ts\": 1700000000\\n        }\\n      },\\n      \"matcher\": {\"field\": \"task_type\", \"operator\": \"in\", \"value\": [\"implement\"]},\\n      \"kill_switch\": \"restore documented default-off gate\",\\n      \"rollback\": \"revert\",\\n      \"outcome_links\": [{\"durability\": \"reverted\"}],\\n      \"event_history\": []\\n    }\\n  }\\n}\\n' > $CONTRACT_DIR/fixtures/evidence_acquisition/break_ledger.json"
+    ]
+  },
+  "capability_id": "evidence-acquisition",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/evidence_acquisition.py:157",
+  "notes": "Exercises src/evidence_acquisition.py:157 (run). Discovered defect in module _selftest (lines 228-238): selftest uses incorrect key independent_durable_reuse instead of min_independent_durable_reuse and omits causal_evidence readiness, causing rows to be empty and silently bypassing lines 230-238 via if rows:. The contract provides correct gate criteria and readiness structure.",
+  "origin": {
+    "proposer": "P2-gemini",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P2-gemini/orch/exercises/evidence-acquisition.json"
+  },
+  "pass_check": "python3 -c '\nimport json\nfrom pathlib import Path\nplan = json.loads(Path(\"$CONTRACT_DIR/fixtures/evidence_acquisition/plan.json\").read_text())\nassert plan[\"state\"] == \"planned\", \"Expected planned state: got \" + str(plan.get(\"state\"))\nassert plan[\"live\"] is False, \"Expected live to be False in shadow mode\"\nassert plan[\"routed\"] == [], \"Expected routed to be empty in shadow mode: got \" + str(plan.get(\"routed\"))\nassert plan[\"feedable_count\"] == 1, \"Expected 1 feedable capability: got \" + str(plan.get(\"feedable_count\"))\nassert len(plan[\"assignments\"]) == 1, \"Expected 1 assignment\"\nassign = plan[\"assignments\"][0]\nassert assign[\"capability_id\"] == \"cap-starved\", \"Unexpected capability assigned: \" + str(assign.get(\"capability_id\"))\nassert assign[\"items\"] == [\"stranske/Orchestrator#201\"], \"Unexpected item nominated: \" + str(assign.get(\"items\"))\nprint(\"PASS\")\n'",
+  "run": [
+    "python3 -c '\nimport json, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\nimport evidence_acquisition\nledger = json.loads(Path(\"$CONTRACT_DIR/fixtures/evidence_acquisition/ledger.json\").read_text())\ncandidates = json.loads(Path(\"$CONTRACT_DIR/fixtures/evidence_acquisition/candidates.json\").read_text())\nplan_path = Path(\"$CONTRACT_DIR/fixtures/evidence_acquisition/plan.json\")\nevidence_acquisition.run(candidates, ledger=ledger, now=1700000000, env={}, write=plan_path)\n'"
+  ],
+  "setup": [
+    "mkdir -p $CONTRACT_DIR/fixtures/evidence_acquisition",
+    "rm -f $CONTRACT_DIR/fixtures/evidence_acquisition/plan.json $CONTRACT_DIR/fixtures/evidence_acquisition/break_plan.json $CONTRACT_DIR/fixtures/evidence_acquisition/ledger.json $CONTRACT_DIR/fixtures/evidence_acquisition/candidates.json $CONTRACT_DIR/fixtures/evidence_acquisition/break_ledger.json",
+    "printf '{\\n  \"capabilities\": {\\n    \"cap-starved\": {\\n      \"status\": \"shadow\",\\n      \"gate_blocks_execution\": true,\\n      \"gate_reason\": \"testing gate\",\\n      \"evidence_threshold\": {\"min_independent_durable_reuse\": 3},\\n      \"gate_criteria\": {\"min_independent_durable_reuse\": 3},\\n      \"causal_evidence\": {\\n        \"readiness\": {\\n          \"terminal_outcomes\": 1,\\n          \"durable_subjects\": [\"sub-1\"],\\n          \"failures\": 0,\\n          \"rework\": 0,\\n          \"latest_evidence_ts\": 1700000000\\n        }\\n      },\\n      \"matcher\": {\"field\": \"task_type\", \"operator\": \"in\", \"value\": [\"implement\"]},\\n      \"kill_switch\": \"disable via config\",\\n      \"rollback\": \"revert\",\\n      \"outcome_links\": [],\\n      \"event_history\": []\\n    }\\n  }\\n}\\n' > $CONTRACT_DIR/fixtures/evidence_acquisition/ledger.json",
+    "printf '[\\n  {\"target\": \"stranske/Orchestrator#201\", \"task_type\": \"implement\"},\\n  {\"target\": \"stranske/Orchestrator#202\", \"task_type\": \"review\"}\\n]\\n' > $CONTRACT_DIR/fixtures/evidence_acquisition/candidates.json"
+  ],
+  "stated_task": "Compute evidence acquisition nominations from candidate tasks against evidence-starved capability gates and verify shadow plan generation without live dispatch."
+}

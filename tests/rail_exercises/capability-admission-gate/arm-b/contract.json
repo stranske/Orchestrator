@@ -1,0 +1,30 @@
+{
+  "boundary": "preflight() only; no registration write.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:ready_to_build=false' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:ready_to_build=false",
+    "run": [
+      "cd $REPO_ROOT && PYTHONPATH=src python3 src/capability_admission.py --preflight @$CONTRACT_DIR/fixtures/admission_spec_bad.json | python3 -c \"import json,sys; p=json.load(sys.stdin); print('EXERCISE_BREAK:ready_to_build='+str(p['ready_to_build']).lower())\" > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "capability-admission-gate",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/capability_admission.py:1208 --preflight",
+  "notes": "findable obligation at capability_admission.py:555-586.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/capability-admission-gate.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:ready_to_build=true' /tmp/p2_exercise_out.txt",
+  "run": [
+    "cd $REPO_ROOT && PYTHONPATH=src python3 src/capability_admission.py --preflight @$CONTRACT_DIR/fixtures/admission_spec_ok.json | python3 -c \"import json,sys; p=json.load(sys.stdin); print('EXERCISE_PASS:ready_to_build='+str(p['ready_to_build']).lower())\" > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/admission_spec_ok.json"
+  ],
+  "stated_task": "Preflight a proposed capability spec before build."
+}

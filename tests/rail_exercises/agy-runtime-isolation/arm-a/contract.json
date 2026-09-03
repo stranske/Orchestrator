@@ -1,0 +1,28 @@
+{
+  "boundary": "Builds argv only; never spawns an agent, never toggles the confinement, never writes outside a temp dir.",
+  "break_case": {
+    "check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/agy/check.py break | grep -q EXPECTED_FAILURE_ABSENT",
+    "expected": "EXPECTED_FAILURE_ABSENT",
+    "run": [
+      "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/agy/check.py break"
+    ],
+    "setup": []
+  },
+  "capability_id": "agy-runtime-isolation",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/adapters.py:1305 build_command; the absolute --add-dir guard at src/adapters.py:1443-1489",
+  "notes": "Coordinator-authored 2026-09-02; build_command may return a list or a dict with argv \u2014 the harness accepts both.",
+  "origin": {
+    "proposer": "P0-coord",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P0-coord/orch/exercises/agy-runtime-isolation.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/agy/check.py pass | grep -q 'PASS agy: gemini argv carries --add-dir'",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/agy/check.py pass"
+  ],
+  "setup": [],
+  "stated_task": "Prove every gemini dispatch command carries an absolute --add-dir equal to its cwd (the confinement this capability IS), and that a non-gemini command carries none."
+}

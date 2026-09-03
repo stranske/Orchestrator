@@ -1,0 +1,24 @@
+{
+  "assignments": [
+    {
+      "capability_id": "cap-starved",
+      "items": [
+        "stranske/Orchestrator#201"
+      ],
+      "matching_candidates": 1,
+      "reason": "needs 2 more independent durable reuse(s)",
+      "remaining": 2
+    }
+  ],
+  "cap_per_cycle": 1,
+  "deferred": [],
+  "feedable_count": 1,
+  "generated_at": 1700000000,
+  "live": false,
+  "max_items_per_capability": 3,
+  "routed": [],
+  "schema": "orchestrator.evidence-acquisition-plan",
+  "state": "planned",
+  "summary": "feedable 1 / capped 1 / candidates 2 / fed 1",
+  "version": 1
+}

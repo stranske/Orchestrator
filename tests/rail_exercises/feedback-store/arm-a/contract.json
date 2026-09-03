@@ -1,0 +1,33 @@
+{
+  "boundary": "Must not write to live runtime feedback store ($ORCH_LOCAL_RUNTIME/feedback/orchestrator.db or $HOME/.codex/orchestrator). Exercises write only to isolated SQLite DB at $CONTRACT_DIR/fixtures/feedback_store/test.db. Must not dispatch agent runs, record live heartbeats (ORCH_CAPABILITY_HEARTBEATS unset), or mutate git state.",
+  "break_case": {
+    "expected_failure_text": "EXPECTED_FAILURE: capability identity/version lineage length mismatch",
+    "run": [
+      "python3 -c '\nimport os, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\ndb_path = Path(\"$CONTRACT_DIR/fixtures/feedback_store/test_break.db\").resolve()\nos.environ[\"ORCH_FEEDBACK_DB\"] = str(db_path)\nimport feedback\ntry:\n    feedback.record_run(\"bad-run\", \"stranske/Orchestrator#1\", \"implement\", \"codex\", capability_ids=[\"feedback-store\"], capability_version_ids=[\"v1\", \"v2\"])\n    print(\"UNEXPECTED_PASS\")\n    sys.exit(1)\nexcept ValueError as e:\n    print(f\"EXPECTED_FAILURE: {e}\")\n    assert \"capability identity/version lineage length mismatch\" in str(e)\n    sys.exit(0)\n'"
+    ],
+    "setup": [
+      "mkdir -p $CONTRACT_DIR/fixtures/feedback_store",
+      "rm -f $CONTRACT_DIR/fixtures/feedback_store/test_break.db"
+    ]
+  },
+  "capability_id": "feedback-store",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/feedback.py:1889",
+  "notes": "Exercises src/feedback.py:1889 (record_run) with pure SQLite backing via ORCH_FEEDBACK_DB override (src/feedback.py:45). Verifies schema migration, run record insertion, and automatic completion_events lineage creation.",
+  "origin": {
+    "proposer": "P2-gemini",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P2-gemini/orch/exercises/feedback-store.json"
+  },
+  "pass_check": "python3 -c '\nimport json\nfrom pathlib import Path\ndata = json.loads(Path(\"$CONTRACT_DIR/fixtures/feedback_store/output.json\").read_text())\nexpected_run = [\"run-store-001\", \"stranske/Orchestrator#42\", \"implement\", \"codex\", \"gpt-5.6-codex\"]\nassert data[\"run\"] == expected_run, \"Unexpected run record: got \" + str(data[\"run\"])\nassert [\"decision\", \"accepted\"] in data[\"completion_events\"], \"Missing decision completion event\"\nassert [\"trigger\", \"accepted\"] in data[\"completion_events\"], \"Missing trigger completion event\"\nprint(\"PASS\")\n'",
+  "run": [
+    "python3 -c '\nimport os, sys, json, sqlite3\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\ndb_path = Path(\"$CONTRACT_DIR/fixtures/feedback_store/test.db\").resolve()\nos.environ[\"ORCH_FEEDBACK_DB\"] = str(db_path)\nimport feedback\nfeedback.record_run(\"run-store-001\", \"stranske/Orchestrator#42\", \"implement\", \"codex\", model=\"gpt-5.6-codex\")\nc = sqlite3.connect(str(db_path))\nrow = c.execute(\"SELECT run_id, target, task_type, agent, model FROM runs WHERE run_id=?\", (\"run-store-001\",)).fetchone()\nevents = c.execute(\"SELECT phase, validation_status FROM completion_events WHERE run_id=? ORDER BY phase\", (\"run-store-001\",)).fetchall()\nout = {\"run\": row, \"completion_events\": events}\nPath(\"$CONTRACT_DIR/fixtures/feedback_store/output.json\").write_text(json.dumps(out, indent=2))\n'"
+  ],
+  "setup": [
+    "mkdir -p $CONTRACT_DIR/fixtures/feedback_store",
+    "rm -f $CONTRACT_DIR/fixtures/feedback_store/test.db $CONTRACT_DIR/fixtures/feedback_store/test_break.db $CONTRACT_DIR/fixtures/feedback_store/output.json"
+  ],
+  "stated_task": "Record an agent execution run in the feedback Brain SQLite store and verify atomic persistence of run attributes and decision lineage."
+}

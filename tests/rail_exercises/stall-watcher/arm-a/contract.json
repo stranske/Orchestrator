@@ -1,0 +1,24 @@
+{
+  "boundary": "The harness temporarily replaces only the in-process claims.active_claims reader and disables heartbeats; it never calls claims.claim/update/release, write_report, record_shadow_candidates, or the live tick path at src/redirect_sweep.py:708-759 and 931-958.",
+  "break_case": {"setup": [], "run": ["ORCH_CAPABILITY_HEARTBEATS=0 PYTHONPATH=src python3 $CONTRACT_DIR/fixtures/stall-watcher-break-harness.py > /tmp/rail-break-stall-watcher 2>&1 || true"], "check": "grep -qx 'DELIBERATE_BREAK: expected policy action wait, got redirect' /tmp/rail-break-stall-watcher", "expected": "DELIBERATE_BREAK: expected policy action wait, got redirect"},
+  "capability_id": "stall-watcher",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/redirect_sweep.py:441; src/watch.py:490; src/redirect_sweep.py:873",
+  "notes": "sweep() declares no side effects and returns dry_run_only/mutates_state=false (src/redirect_sweep.py:448-510); classify_lane is documented as non-mutating (src/watch.py:504-505).",
+  "origin": {
+    "proposer": "P1-codex",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P1-codex/orch/exercises/stall-watcher.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 PYTHONPATH=src python3 $CONTRACT_DIR/fixtures/stall-watcher-harness.py | python3 -c 'import json,sys; assert json.load(sys.stdin)=={\"action\":\"redirect\",\"dry_run_only\":True,\"state\":\"stalled\"}' # exact expected result from the controlled auth-stall fixture",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 PYTHONPATH=src python3 $CONTRACT_DIR/fixtures/stall-watcher-harness.py # invokes real sweep/classify code at src/redirect_sweep.py:441-510 and src/watch.py:490-632"
+  ],
+  "setup": [
+    "touch -t 202311141500.00 $CONTRACT_DIR/fixtures/stall-watcher.log # stale age consumed by src/watch.py:576-610",
+    "test -f $CONTRACT_DIR/fixtures/stall-watcher-claim.json $CONTRACT_DIR/fixtures/stall-watcher-harness.py # controlled active-claim fixture for src/redirect_sweep.py:449-483"
+  ],
+  "stated_task": "Classify one controlled active claim with a stale authentication log as stalled and route it to the advisory redirect policy without touching claims."
+}

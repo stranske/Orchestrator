@@ -1,0 +1,23 @@
+{
+  "boundary": "Uses a controlled loaded ledger and a fixture HISTORY path; no --record, monitor state, ORCH_STATE_DIR, or runtime path is touched.",
+  "break_case": {
+    "check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; r=json.load(open('$CONTRACT_DIR/fixtures/results/capability-firing-monitor/break.json')); raise SystemExit(0 if r['status']=='FAIL' and not r['history_exists'] else 1)\" && python3 -c \"import hashlib,json; from pathlib import Path; p=Path('$CONTRACT_DIR/fixtures/capability-firing-monitor'); saved=json.load((p/'baseline.json').open()); got={str(x.relative_to(p)):hashlib.sha256(x.read_bytes()).hexdigest() for x in p.rglob('*') if x.is_file() and x.name!='baseline.json'}; raise SystemExit(0 if got==saved else 1)\"",
+    "command": "mkdir -p $CONTRACT_DIR/fixtures/results/capability-firing-monitor && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/capability-firing-monitor/run.py break > $CONTRACT_DIR/fixtures/results/capability-firing-monitor/break.json",
+    "expected": "FAIL: silent row is made fresh only in memory, so it no longer appears overdue"
+  },
+  "capability_id": "capability-firing-monitor",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": "3",
+  "entrypoint_read": "src/capability_firing_monitor.py:138-212 review; src/capability_firing_monitor.py:486-508 CLI record opt-in",
+  "notes": "The source CLI lacks a ledger override, so the runner invokes review(now=..., path=...) and supplies the controlled loader; it verifies HISTORY was not created.",
+  "origin": {
+    "proposer": "P-audit-routing",
+    "round": "r18",
+    "source": "rounds/r18/executors/P-audit-routing/orch/exercises2/capability-firing-monitor.json"
+  },
+  "pass_check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; r=json.load(open('$CONTRACT_DIR/fixtures/results/capability-firing-monitor/result.json')); raise SystemExit(0 if r['status']=='PASS' else 1)\"",
+  "run": "mkdir -p $CONTRACT_DIR/fixtures/results/capability-firing-monitor && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/capability-firing-monitor/run.py pass > $CONTRACT_DIR/fixtures/results/capability-firing-monitor/result.json",
+  "setup": "python3 -c \"import base64; exec(compile(base64.b64decode('CmltcG9ydCBqc29uLCBzaHV0aWwKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aChyIi9wcml2YXRlL3RtcC9jbGF1ZGUtNTAyLy1Vc2Vycy10ZWFjaGVyLUxpYnJhcnktQ2xvdWRTdG9yYWdlLURyb3Bib3gtTGVhcm5pbmctQ29kZS1PcmNoZXN0cmF0b3IvOWIzMDE2NzktY2YyNS00OGRhLTg1ODMtMjNmYWRlYWM3ZTI3L3NjcmF0Y2hwYWQvcm91bmRzL3IxOC9leGVjdXRvcnMvUC1hdWRpdC1yb3V0aW5nL29yY2gvZXhlcmNpc2VzMi9maXh0dXJlcy9jYXBhYmlsaXR5LWZpcmluZy1tb25pdG9yIik7IHNodXRpbC5ybXRyZWUocCxpZ25vcmVfZXJyb3JzPVRydWUpOyBwLm1rZGlyKHBhcmVudHM9VHJ1ZSkKbm93PTIwMDAwMDAwMDAKbGVkZ2VyPXsnZml4dHVyZS1zaWxlbnQnOnsnY2FwYWJpbGl0eV9pZCc6J2ZpeHR1cmUtc2lsZW50Jywnc3RhdHVzJzond2lyZWQnLCdtYXRjaGVyJzp7J2tpbmQnOid0aWNrX3BoYXNlJ30sJ3RyaWdnZXJfY2FkZW5jZSc6J2RhaWx5JywnbGFzdF9pbnZvY2F0aW9uJzpub3ctMyo4NjQwMH0sJ2ZpeHR1cmUtZnJlc2gnOnsnY2FwYWJpbGl0eV9pZCc6J2ZpeHR1cmUtZnJlc2gnLCdzdGF0dXMnOid3aXJlZCcsJ21hdGNoZXInOnsna2luZCc6J3RpY2tfcGhhc2UnfSwndHJpZ2dlcl9jYWRlbmNlJzonZGFpbHknLCdsYXN0X2ludm9jYXRpb24nOm5vdy04NjQwMH19Cmpzb24uZHVtcChsZWRnZXIsKHAvJ2xlZGdlci5qc29uJykub3BlbigndycpLGluZGVudD0yKQoocC8ncnVuLnB5Jykud3JpdGVfdGV4dCgiXG5pbXBvcnQganNvbiwgc3lzXG5mcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGhcbmltcG9ydCBjYXBhYmlsaXR5X2ZpcmluZ19tb25pdG9yIGFzIG1cbnA9UGF0aChfX2ZpbGVfXykucGFyZW50OyBsZWRnZXI9anNvbi5sb2FkKChwLydsZWRnZXIuanNvbicpLm9wZW4oKSk7IG5vdz0yMDAwMDAwMDAwXG5pZiBzeXMuYXJndlsxXT09J2JyZWFrJzogbGVkZ2VyWydmaXh0dXJlLXNpbGVudCddWydsYXN0X2ludm9jYXRpb24nXT1ub3ctODY0MDBcbiMgUGF0Y2ggdGhlIGxvYWRlciBvbmx5IGZvciB0aGUgY29udHJvbGxlZCBsZWRnZXIgYW5kIGhpc3RvcnkgcmVhZCBvbmx5OyBuZXZlciByZWNvcmQuXG5tLmNhcGFiaWxpdGllcy5sb2FkPWxhbWJkYSBwYXRoOiBsZWRnZXI7IG0uSElTVE9SWT1wLydoaXN0b3J5Lmpzb24nXG5yZXA9bS5yZXZpZXcobm93PW5vdyxwYXRoPXAvJ2xlZGdlci5qc29uJylcbmlkcz1beFsnY2FwYWJpbGl0eV9pZCddIGZvciB4IGluIHJlcFsnb3ZlcmR1ZSddXVxub2s9aWRzPT1bJ2ZpeHR1cmUtc2lsZW50J10gYW5kIChwLydoaXN0b3J5Lmpzb24nKS5leGlzdHMoKSBpcyBGYWxzZVxucHJpbnQoanNvbi5kdW1wcyh7J3N0YXR1cyc6J1BBU1MnIGlmIG9rIGVsc2UgJ0ZBSUwnLCdvdmVyZHVlJzpyZXBbJ292ZXJkdWUnXSwnaGlzdG9yeV9leGlzdHMnOihwLydoaXN0b3J5Lmpzb24nKS5leGlzdHMoKX0saW5kZW50PTIpKVxuIikKCmltcG9ydCBoYXNobGliCmJhc2VsaW5lPXtzdHIoeC5yZWxhdGl2ZV90byhwKSk6aGFzaGxpYi5zaGEyNTYoeC5yZWFkX2J5dGVzKCkpLmhleGRpZ2VzdCgpIGZvciB4IGluIHAucmdsb2IoJyonKSBpZiB4LmlzX2ZpbGUoKSBhbmQgeC5uYW1lIT0nYmFzZWxpbmUuanNvbid9Cmpzb24uZHVtcChiYXNlbGluZSwocC8nYmFzZWxpbmUuanNvbicpLm9wZW4oJ3cnKSxpbmRlbnQ9MikK'), 'fixture-setup', 'exec'))\"",
+  "stated_task": "Flag a fixture capability silent beyond its declared daily cadence, while a fresh capability is not flagged; write no monitor history."
+}

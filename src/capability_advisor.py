@@ -969,6 +969,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "uniform coverage yields no prompt. Never dispatches the testgen agent",
     },
     "rail-exercise:audit": {
+        "rail-exercise-cadence": "EXERCISE the committed rail contract cadence itself: each fixture-backed read-only or dry-run contract must pass and its counterexample must be detected; never enables recording unless explicitly armed.",
         "capability-activation-audit": "EXERCISE the activation audit against a FIXTURE ledger and "
         "fixture tree: a row whose entrypoint module is absent must be reported with "
         "entrypoint_presence naming the miss, a row whose caller exists must pass; break case: a "

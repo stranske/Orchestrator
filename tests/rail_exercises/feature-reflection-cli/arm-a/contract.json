@@ -1,0 +1,34 @@
+{
+  "boundary": "Must not overwrite live feature registry ($ORCH_FEATURES_PATH or src/experiments/features.json). Must not scan live src/ directory with --apply enabled. Must not emit production heartbeats for feature-reflection-cli or feature-scan.",
+  "break_case": {
+    "expected_failure_text": "EXPECTED_FAILURE: invalid maturity rejected and non-qualifying structure rejected",
+    "run": [
+      "python3 -c '\nimport sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\nimport feature_scan, features\ntry:\n    features.record_use(\"test-feat\", \"nowhere\", maturity=\"super-hardened\")\n    print(\"UNEXPECTED_PASS\")\n    sys.exit(1)\nexcept ValueError as e:\n    assert \"invalid maturity\" in str(e)\nok, why = feature_scan.is_reusable_structure(Path(\"$CONTRACT_DIR/fixtures/feature_reflection/scan_root/no_selftest.py\"))\nassert not ok and \"no _selftest\" in why\nprint(\"EXPECTED_FAILURE: invalid maturity rejected and non-qualifying structure rejected\")\n'"
+    ],
+    "setup": [
+      "mkdir -p $CONTRACT_DIR/fixtures/feature_reflection/scan_root",
+      "printf '\"\"\"Has docstring only.\"\"\"\\ndef run():\\n    pass\\n' > $CONTRACT_DIR/fixtures/feature_reflection/scan_root/no_selftest.py"
+    ]
+  },
+  "capability_id": "feature-reflection-cli",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/feature_scan.py:95",
+  "notes": "Exercises src/feature_scan.py:95 (scan) chaining into src/features.py:176 (record_use). Discovered that feature_scan.py CLI in main() hardcodes scan root to src/ without CLI flags for custom path/root; invoking pure functions with explicit path and root arguments ensures isolation.",
+  "origin": {
+    "proposer": "P2-gemini",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P2-gemini/orch/exercises/feature-reflection-cli.json"
+  },
+  "pass_check": "python3 -c '\nimport json\nfrom pathlib import Path\nout = json.loads(Path(\"$CONTRACT_DIR/fixtures/feature_reflection/output.json\").read_text())\nassert out[\"scan_rep\"][\"qualifying_modules\"] == 1, \"Expected 1 qualifying module\"\nassert out[\"scan_rep\"][\"unlogged\"] == [{\"name\": \"reusable-sample\", \"module\": \"reusable_sample.py\"}], \"Unexpected unlogged list\"\nassert out[\"apply_rep\"][\"recorded\"] == [\"reusable-sample\"], \"Unexpected recorded list\"\nfeat = out[\"feature_record\"]\nassert feat is not None, \"Missing feature record\"\nassert feat[\"maturity\"] == \"ad-hoc\", \"Expected ad-hoc maturity: got \" + str(feat.get(\"maturity\"))\nassert feat[\"uses\"] == [\"feature_scan\"], \"Expected feature_scan in uses\"\nassert out[\"second_scan_unlogged\"] == 0, \"Expected second scan unlogged count 0\"\nprint(\"PASS\")\n'",
+  "run": [
+    "python3 -c '\nimport json, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\nimport feature_scan, features\nreg_path = Path(\"$CONTRACT_DIR/fixtures/feature_reflection/features.json\").resolve()\nroot = Path(\"$CONTRACT_DIR/fixtures/feature_reflection/scan_root\").resolve()\nscan_rep = feature_scan.scan(path=reg_path, root=root)\napply_rep = feature_scan.apply_scan(scan_rep, dry_run=False, path=reg_path)\nreg = features.load(reg_path)\nsecond_scan = feature_scan.scan(path=reg_path, root=root)\nout = {\n    \"scan_rep\": scan_rep,\n    \"apply_rep\": apply_rep,\n    \"feature_record\": reg.get(\"reusable-sample\"),\n    \"second_scan_unlogged\": second_scan.get(\"unlogged_count\")\n}\nPath(\"$CONTRACT_DIR/fixtures/feature_reflection/output.json\").write_text(json.dumps(out, indent=2))\n'"
+  ],
+  "setup": [
+    "rm -rf $CONTRACT_DIR/fixtures/feature_reflection && mkdir -p $CONTRACT_DIR/fixtures/feature_reflection/scan_root",
+    "printf '\"\"\"Reusable sample module.\"\"\"\\ndef _selftest():\\n    pass\\n' > $CONTRACT_DIR/fixtures/feature_reflection/scan_root/reusable_sample.py",
+    "printf 'def _selftest():\\n    pass\\n' > $CONTRACT_DIR/fixtures/feature_reflection/scan_root/no_docstring.py"
+  ],
+  "stated_task": "Scan a fixture directory for qualifying reusable modules (docstring + _selftest) and record unlogged structures into an isolated feature registry at ad-hoc maturity."
+}

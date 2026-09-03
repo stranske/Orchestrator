@@ -1,0 +1,9 @@
+{
+  "number": 42,
+  "title": "Add widget counter",
+  "body": "## Acceptance criteria\n- [ ] Add `src/widget.py`\n- [ ] Tests pass\n",
+  "labels": [],
+  "repository": {
+    "name": "Fixture"
+  }
+}

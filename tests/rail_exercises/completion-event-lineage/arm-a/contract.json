@@ -1,0 +1,34 @@
+{
+  "boundary": "Must not write to live runtime feedback store ($ORCH_LOCAL_RUNTIME/feedback/orchestrator.db or $HOME/.codex/orchestrator). Read path uses feedback.py completion-events CLI on fixture DB. Must not emit live production heartbeats or dispatch agents.",
+  "break_case": {
+    "expected_failure_text": "EXPECTED_FAILURE: completion capability lineage requires both identity and version",
+    "run": [
+      "python3 -c '\nimport os, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\ndb_path = Path(\"$CONTRACT_DIR/fixtures/completion_event_lineage/test_break.db\").resolve()\nos.environ[\"ORCH_FEEDBACK_DB\"] = str(db_path)\nimport feedback\ntry:\n    feedback.record_completion_event(\n        \"run-break-001\",\n        capability_id=\"completion-event-lineage\",\n        capability_version_id=None\n    )\n    print(\"UNEXPECTED_PASS\")\n    sys.exit(1)\nexcept ValueError as e:\n    print(f\"EXPECTED_FAILURE: {e}\")\n    assert \"completion capability lineage requires both identity and version\" in str(e)\n    sys.exit(0)\n'"
+    ],
+    "setup": [
+      "mkdir -p $CONTRACT_DIR/fixtures/completion_event_lineage",
+      "rm -f $CONTRACT_DIR/fixtures/completion_event_lineage/test_break.db"
+    ]
+  },
+  "capability_id": "completion-event-lineage",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/feedback.py:1062",
+  "notes": "Exercises src/feedback.py:1062 (record_completion_event) and reads back via consumer CLI src/feedback.py:6121 (completion_event_episodes). Tests lineage schema validation and payload sanitization.",
+  "origin": {
+    "proposer": "P2-gemini",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P2-gemini/orch/exercises/completion-event-lineage.json"
+  },
+  "pass_check": "python3 -c '\nimport json\nfrom pathlib import Path\nepisodes = json.loads(Path(\"$CONTRACT_DIR/fixtures/completion_event_lineage/output.json\").read_text())\nexec_events = [ep[\"event\"] for ep in episodes if ep[\"event\"][\"phase\"] == \"execution\"]\nassert len(exec_events) == 1, \"Expected 1 execution event\"\nev = exec_events[0]\nassert ev[\"event_type\"] == \"completion\", \"Bad event_type\"\nassert ev[\"producer\"] == \"orchestrator\", \"Bad producer\"\nassert ev[\"validation_status\"] == \"accepted\", \"Bad validation_status\"\nassert ev[\"payload\"][\"capability_ids\"] == [\"completion-event-lineage\"], \"Bad capability_ids\"\nprint(\"PASS\")\n'",
+  "run": [
+    "ORCH_FEEDBACK_DB=\"$(pwd)/$CONTRACT_DIR/fixtures/completion_event_lineage/test.db\" PYTHONPATH=\"src\" python3 src/feedback.py completion-events --json > $CONTRACT_DIR/fixtures/completion_event_lineage/output.json"
+  ],
+  "setup": [
+    "mkdir -p $CONTRACT_DIR/fixtures/completion_event_lineage",
+    "rm -f $CONTRACT_DIR/fixtures/completion_event_lineage/test.db $CONTRACT_DIR/fixtures/completion_event_lineage/test_break.db $CONTRACT_DIR/fixtures/completion_event_lineage/output.json",
+    "python3 -c '\nimport os, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\ndb_path = Path(\"$CONTRACT_DIR/fixtures/completion_event_lineage/test.db\").resolve()\nos.environ[\"ORCH_FEEDBACK_DB\"] = str(db_path)\nimport feedback\nfeedback.record_run(\"run-ce-001\", \"stranske/Orchestrator#100\", \"implement\", \"codex\", model=\"gpt-5.6-codex\")\nfeedback.record_completion_event(\n    \"run-ce-001\",\n    event_type=\"completion\",\n    phase=\"execution\",\n    producer=\"orchestrator\",\n    capability_id=\"completion-event-lineage\",\n    capability_version_id=\"v1.0.0\",\n    status=\"completed\",\n    payload={\"capability_ids\": [\"completion-event-lineage\"], \"command_ids\": [\"pytest\"]}\n)\n'"
+  ],
+  "stated_task": "Record an execution completion event with explicit capability lineage in the feedback store and query the episode envelope via the CLI consumer."
+}

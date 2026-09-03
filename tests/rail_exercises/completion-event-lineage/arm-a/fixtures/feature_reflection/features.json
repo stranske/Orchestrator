@@ -1,0 +1,202 @@
+{
+  "feedback-store": {
+    "problem": "retain decisions/outcomes/cost + learn over time",
+    "maturity": "hardened",
+    "module": "feedback.py",
+    "uses": [
+      "scorecard-eval"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "abcd-experiment": {
+    "problem": "unbiased comparative-advantage by N-way same-spec + cross-eval",
+    "maturity": "hardened",
+    "module": "exp_abcd.py",
+    "uses": [
+      "scorecard-eval"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "offload": {
+    "problem": "delegate token-heavy reading/design to a cheaper agent, get result back",
+    "maturity": "hardened",
+    "module": "dispatcher.offload",
+    "uses": [
+      "scorecard-spec-gen"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "research-scheduler": {
+    "problem": "run science only on spare capacity, ranked by info/cost",
+    "maturity": "hardened",
+    "module": "research_scheduler.py",
+    "uses": [],
+    "first_seen": 1788388818,
+    "count": 0
+  },
+  "stall-watcher": {
+    "problem": "monitor detached agents for progress, stalls, and changed-path drift",
+    "maturity": "hardened",
+    "module": "watch.py",
+    "uses": [
+      "scorecard-eval x2",
+      "exp_abcd.status",
+      "semantic-drift"
+    ],
+    "first_seen": 1788388818,
+    "count": 3
+  },
+  "frontend-verifier": {
+    "problem": "verify frontend behavior through deterministic accessibility-tree assertions",
+    "maturity": "hardened",
+    "module": "frontend_verify.py",
+    "uses": [
+      "live-demo",
+      "trip-planner-runtime"
+    ],
+    "first_seen": 1788388818,
+    "count": 2
+  },
+  "testgen-lane": {
+    "problem": "accept generated pytest tests only after collect, non-regression, reliability, and coverage-delta gates",
+    "maturity": "hardened",
+    "module": "testgen_lane.py/testgen_gate.py",
+    "uses": [
+      "inv-man-workflow-validation-live"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "agy-runtime-isolation": {
+    "problem": "run Antigravity from Codex with real-home auth and writable runtime project/app data",
+    "maturity": "hardened",
+    "module": "adapters.py/dispatcher.py",
+    "uses": [
+      "inv-man-testgen-offload"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "windowed-capacity-policy": {
+    "problem": "model no-usage-API prepaid seats with soft windows and router policy hints",
+    "maturity": "hardened",
+    "module": "capacity.py/router.py",
+    "uses": [
+      "agy-capacity-policy"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "repo-playbook": {
+    "problem": "inject durable repo gotchas and definition-of-done rules into delegated prompts",
+    "maturity": "hardened",
+    "module": "repo_knowledge.py",
+    "uses": [
+      "durable-repo-knowledge",
+      "snapshot-suggestions",
+      "approval-controls",
+      "docs-comments-mining",
+      "suggestion-clustering"
+    ],
+    "first_seen": 1788388818,
+    "count": 5
+  },
+  "redirect-policy": {
+    "problem": "turn watch reports plus attempt history into advisory retry/decompose decisions",
+    "maturity": "hardened",
+    "module": "redirect_policy.py",
+    "uses": [
+      "smarter-stall-redirection"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "redirect-plan": {
+    "problem": "convert redirect/decompose decisions into safe recovery commands, prompts, and guarded apply",
+    "maturity": "hardened",
+    "module": "redirect_plan.py",
+    "uses": [
+      "smarter-stall-redirection",
+      "guarded-redirect-apply"
+    ],
+    "first_seen": 1788388818,
+    "count": 2
+  },
+  "deliberate-break-verifier": {
+    "problem": "catch hollow tests by requiring candidate checks to fail on base code",
+    "maturity": "hardened",
+    "module": "local_verify.py",
+    "uses": [
+      "trustworthy-verification",
+      "feedback-label-wiring"
+    ],
+    "first_seen": 1788388818,
+    "count": 2
+  },
+  "epic-decomposition": {
+    "problem": "turn vague goals into structured subtask plans with re-decomposition triggers",
+    "maturity": "hardened",
+    "module": "epic_lane.py",
+    "uses": [
+      "epic-lane-v0"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "codemod-campaign": {
+    "problem": "plan and validate cross-file structural refactor campaigns with safe dry-run artifacts",
+    "maturity": "hardened",
+    "module": "codemod_lane.py",
+    "uses": [
+      "codemod-lane-v0"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "cross-repo-coordination": {
+    "problem": "plan source and consumer repo changes with dry-run barrier artifacts",
+    "maturity": "hardened",
+    "module": "cross_repo_lane.py",
+    "uses": [
+      "cross-repo-lane-v0"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "runtime-ac-checks": {
+    "problem": "plan, execute, gate, and enforce AC-bound runtime verification evidence",
+    "maturity": "hardened",
+    "module": "runtime_ac.py/runtime_ac_gate.py/runtime_ac_panel.py/merge_guard.py",
+    "uses": [
+      "runtime-ac-v0",
+      "runtime-ac-runner",
+      "runtime-ac-tick-hook",
+      "runtime-ac-merge-guard",
+      "runtime-ac-panel",
+      "runtime-ac-panel-dispatch"
+    ],
+    "first_seen": 1788388818,
+    "count": 6
+  },
+  "adversarial-review": {
+    "problem": "refute-mode + minority-veto ensemble for high-stakes correctness",
+    "maturity": "hardened",
+    "module": "adversarial.py",
+    "uses": [],
+    "first_seen": 1788388818,
+    "count": 0
+  },
+  "reusable-sample": {
+    "problem": "",
+    "maturity": "ad-hoc",
+    "module": "reusable_sample.py",
+    "uses": [
+      "feature_scan"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  }
+}

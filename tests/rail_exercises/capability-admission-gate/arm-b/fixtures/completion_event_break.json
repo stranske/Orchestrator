@@ -1,0 +1,48 @@
+{
+  "schema": "orchestrator.completion-event-envelope",
+  "version": 1,
+  "event": {
+    "event_id": "event-fixture-trigger",
+    "schema_version": 1,
+    "run_id": "run-fixture-1",
+    "attempt_id": null,
+    "event_type": "completion",
+    "phase": "trigger",
+    "producer": "dispatcher",
+    "status": "complete",
+    "validation_status": "accepted",
+    "payload": {
+      "result": {
+        "status": "matched",
+        "version_hash": "sha256:2f328705a873d5e30b22966996deec563d174254effba266ba5cf19ef1a31fca"
+      },
+      "prompt_text": "secret prompt"
+    },
+    "content_hash": "sha256:a74d98e60db9ff7617af271b11dce56d2be9b15b97dcadc15d3378e709ee635e",
+    "redaction_count": 0,
+    "created_ts": 1700000100,
+    "updated_ts": 1700000100
+  },
+  "identity": {
+    "subject_id": "subject:4a38da215d4939b04ed8871c",
+    "observation_id": "sha256:c8d3b7d6ab0dc7214ad06160971c754d508141261e8c9b4d989e85044e4481ca",
+    "family_id": "subject-family:0e9ffda174445fd25d2d3845",
+    "attempt_id": "attempt-fixture-1",
+    "attempt_resolution": "resolved",
+    "canonical_target": "fixture/repo#42",
+    "repository": "fixture/repo",
+    "task_type": "implement",
+    "normalized_spec_hash": "sha256:4b4d577572a824503a5bf51351fc387c0b1d60c7b0c3e8e0d5f032c1d8415f97",
+    "base_sha": "abc123def456",
+    "profile_id": "codex:gpt-5.6",
+    "arm_id": "worker",
+    "resolved_provider": "openai",
+    "resolved_model": "gpt-5.6",
+    "subject_arms": [
+      "worker"
+    ],
+    "subject_profiles": {
+      "worker": "codex:gpt-5.6"
+    }
+  }
+}

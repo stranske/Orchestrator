@@ -1,0 +1,25 @@
+{
+  "capabilities": {
+    "cap-starved": {
+      "status": "shadow",
+      "gate_blocks_execution": true,
+      "gate_reason": "testing gate",
+      "evidence_threshold": {"min_independent_durable_reuse": 3},
+      "gate_criteria": {"min_independent_durable_reuse": 3},
+      "causal_evidence": {
+        "readiness": {
+          "terminal_outcomes": 1,
+          "durable_subjects": ["sub-1"],
+          "failures": 0,
+          "rework": 0,
+          "latest_evidence_ts": 1700000000
+        }
+      },
+      "matcher": {"field": "task_type", "operator": "in", "value": ["implement"]},
+      "kill_switch": "disable via config",
+      "rollback": "revert",
+      "outcome_links": [],
+      "event_history": []
+    }
+  }
+}

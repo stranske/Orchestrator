@@ -1204,6 +1204,23 @@ def _consumer_sync_hygiene_summary(state_dir: Path | None = None) -> dict:
     }
 
 
+def _rail_exercise_summary(state_dir: Path | None = None) -> dict:
+    base = state_dir or Path(
+        os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator")
+    )
+    path = base / "rail-exercise-report.json"
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {"available": False, "reason": "no rail-exercise report"}
+    return {
+        "available": True,
+        "generated_at": report.get("generated_at"),
+        "totals": report.get("totals") or {},
+        "skipped_named": report.get("skipped_named") or [],
+    }
+
+
 def mining_coverage(window_days: int = 30, *, conn=None) -> dict:
     """Per-agent answer to "is the miner working, and on how much of the target?".
 
@@ -1397,6 +1414,7 @@ def build_report(
         "generated_at": int(time.time()),
         "read_only": True,
         "consumer_sync_hygiene": _consumer_sync_hygiene_summary(),
+        "rail_exercise": _rail_exercise_summary(),
         "db_path": str(feedback.DB_PATH),
         "window_days": window_days,
         "min_gap_recurrence": min_gap_recurrence,
@@ -1496,6 +1514,20 @@ def format_human(report: dict) -> str:
     )
     count_bits = [f"{table}={count}" for table, count in dataset["table_counts"].items() if count]
     lines.append(f"dataset: {' '.join(count_bits) if count_bits else 'no rows yet'}")
+    rail_exercise = report.get("rail_exercise") or {}
+    if rail_exercise.get("available"):
+        totals = rail_exercise.get("totals") or {}
+        lines.append(
+            "rail exercise: contracts={contracts} passed={passed} broke-correctly={broke} failed={failed} skipped={skipped}".format(
+                contracts=totals.get("contracts", 0),
+                passed=totals.get("passed", 0),
+                broke=totals.get("broke-correctly", 0),
+                failed=totals.get("failed", 0),
+                skipped=totals.get("skipped", 0),
+            )
+        )
+    else:
+        lines.append(f"rail exercise: unavailable ({rail_exercise.get('reason')})")
 
     experiments = report.get("experiments") or {}
     lines.append(

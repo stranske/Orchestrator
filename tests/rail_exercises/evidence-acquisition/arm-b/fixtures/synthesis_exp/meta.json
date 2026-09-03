@@ -1,0 +1,1 @@
+{"repo": "fixture/repo", "base": "main", "base_sha": "base", "agents": ["codex"], "exp_id": "p2-synth-exp"}

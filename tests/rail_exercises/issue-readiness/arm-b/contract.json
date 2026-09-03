@@ -1,0 +1,30 @@
+{
+  "boundary": "Pure classify_issue; no gh fetch, no --apply.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:verdict=needs_specification' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:verdict=needs_specification",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py issue-readiness break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "issue-readiness",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/issue_readiness.py:165 classify_issue",
+  "notes": "Actionable bar at issue_readiness.py:131-138.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/issue-readiness.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:verdict=auto_ready' /tmp/p2_exercise_out.txt",
+  "run": [
+    "python3 $CONTRACT_DIR/fixtures/harness/run.py issue-readiness pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/issue_actionable.json"
+  ],
+  "stated_task": "Classify a fixture issue body with acceptance criteria."
+}

@@ -1,0 +1,32 @@
+{
+  "boundary": "classify only; --record not used.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:action=no_change' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:action=no_change",
+    "run": [
+      "cd $REPO_ROOT && PYTHONPATH=src python3 src/consumer_sync_shadow.py classify --plan $CONTRACT_DIR/fixtures/consumer_sync_plan.json --repository fixture/consumer --observed $CONTRACT_DIR/fixtures/consumer_sync_observed_match.json | python3 -c \"import json,sys; r=json.load(sys.stdin)['result']; print('EXERCISE_BREAK:action='+r['proposals'][0]['action'])\" > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": [
+      "python3 -c \"import json; p=json.load(open('$CONTRACT_DIR/fixtures/consumer_sync_plan.json')); obs={e['target']: e['content_sha256'] for e in p['entries']}; json.dump(obs, open('$CONTRACT_DIR/fixtures/consumer_sync_observed_match.json','w'), indent=2)\""
+    ]
+  },
+  "capability_id": "capability:reference-sync-hygiene-test-gate",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/consumer_sync_shadow.py:607 classify",
+  "notes": "classify_shadow_drift at consumer_sync_shadow.py:277-304.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/capability_reference-sync-hygiene-test-gate.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:action=create' /tmp/p2_exercise_out.txt",
+  "run": [
+    "cd $REPO_ROOT && PYTHONPATH=src python3 src/consumer_sync_shadow.py classify --plan $CONTRACT_DIR/fixtures/consumer_sync_plan.json --repository fixture/consumer --observed $CONTRACT_DIR/fixtures/consumer_sync_observed.json | python3 -c \"import json,sys; r=json.load(sys.stdin)['result']; print('EXERCISE_PASS:action='+r['proposals'][0]['action'])\" > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/consumer_sync_plan.json"
+  ],
+  "stated_task": "Classify consumer-sync shadow drift from plan + observed targets fixture."
+}

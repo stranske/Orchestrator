@@ -145,6 +145,8 @@ The nine admission parts (`ADDING_CAPABILITIES.md`) are **not** the definition o
 are what must be present for one to work with this system — invocable, observable, findable,
 improvable.
 
+**Rail exercise cadence** is a shadow capability that periodically executes committed read-only or dry-run contracts against disposable fixture copies. It does not add a loop stage or change a rail into a role: it observes the existing deterministic rails, names every skipped contract, and can write machine-observed usefulness evidence only when explicitly armed.
+
 **Two kinds, and their measurement stories differ.** *Workflow* capabilities run implementation code
 and have a definable success condition, so effectiveness is a pass/fail rate. *Sub-agent* capabilities
 spin out a bounded, goal-scoped agent whose backend is router-chosen, so effectiveness is **backend

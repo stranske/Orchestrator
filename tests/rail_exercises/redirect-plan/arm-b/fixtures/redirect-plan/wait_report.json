@@ -1,0 +1,19 @@
+{
+  "agent": "fixture-agent",
+  "target": "fixture-owner/plan-fixture#11",
+  "lane": "opener",
+  "task_type": "implement",
+  "state": "running",
+  "recommended_action": "wait",
+  "hints": [],
+  "drift": {
+    "severity": "none",
+    "findings": []
+  },
+  "policy_decision": {
+    "action": "wait",
+    "reason": "fixture process remains healthy",
+    "confidence": "high",
+    "advisory": true
+  }
+}

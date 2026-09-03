@@ -1,0 +1,74 @@
+{
+  "epic": {
+    "title": "Fixture decomposition",
+    "goal": "Validate a controlled two-slice plan without dispatch.",
+    "repo": "fixture-owner/epic-fixture",
+    "constraints": [
+      "No live dispatch"
+    ],
+    "definition_of_done": [
+      "Both slices validate and final synthesis is specified"
+    ]
+  },
+  "subtasks": [
+    {
+      "id": "E1",
+      "title": "Map inputs",
+      "lane": "local",
+      "task_type": "review",
+      "scope": "Inspect only fixture input semantics.",
+      "files": [
+        "fixtures/input.json"
+      ],
+      "acceptance": [
+        "Input mapping is documented"
+      ],
+      "validation": [
+        "python3 -m json.tool fixtures/input.json"
+      ],
+      "dependencies": [],
+      "dispatch_prompt": "Review the fixture input and report its fields.",
+      "redecompose_if": [
+        "Input schema has an unresolved variant"
+      ]
+    },
+    {
+      "id": "E2",
+      "title": "Validate synthesis",
+      "lane": "local",
+      "task_type": "testgen",
+      "scope": "Validate deterministic fixture checks.",
+      "files": [
+        "fixtures/assertions.py"
+      ],
+      "acceptance": [
+        "Fixture assertions pass"
+      ],
+      "validation": [
+        "python3 fixtures/assertions.py"
+      ],
+      "dependencies": [
+        "E1"
+      ],
+      "dispatch_prompt": "Validate the fixture assertions after E1.",
+      "redecompose_if": [
+        "Validation needs more than one independent harness"
+      ]
+    }
+  ],
+  "integration": {
+    "order": [
+      "E1",
+      "E2"
+    ],
+    "risks": [
+      "Fixture assumptions can hide runtime differences"
+    ],
+    "final_verification": [
+      "Run the two fixture validation commands"
+    ]
+  },
+  "re_decomposition_triggers": [
+    "A subtask cannot name a bounded acceptance check"
+  ]
+}

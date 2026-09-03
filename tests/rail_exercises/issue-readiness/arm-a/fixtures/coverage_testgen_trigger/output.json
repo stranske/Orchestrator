@@ -1,0 +1,9 @@
+{
+  "action": "write_tests",
+  "coverage": 84.0,
+  "previous": 88.0,
+  "reason": "84.00% CROSSED below 85% (was 88.00%) \u2014 test-writing queued and the owner told once; no targets named \u2014 --repo-path was not given, so nothing ranked them",
+  "repo": "test-repo",
+  "targets": [],
+  "warn_human": true
+}

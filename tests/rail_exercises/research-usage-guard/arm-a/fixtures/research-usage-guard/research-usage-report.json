@@ -1,0 +1,58 @@
+{
+  "active_alert_window_hours": 24,
+  "active_anomaly_blocks": 0,
+  "active_budget_blocks": 0,
+  "alerts_summary": {},
+  "decision_counts": {
+    "admitted": 1
+  },
+  "evaluator_call_estimates": {
+    "vibe": 1
+  },
+  "generated_at": 1788388832,
+  "health_status": "OK",
+  "observed_research_usage": {
+    "active_alert_count": 0,
+    "alerts": [],
+    "evaluator_calls": 0,
+    "missing_spec_evaluator_calls": 0,
+    "missing_spec_panel_count": 0,
+    "panel_count": 0,
+    "telemetry_available": true,
+    "top_subjects": [],
+    "wide_panel_count": 0
+  },
+  "recent_opportunities": [
+    {
+      "decision": "admitted",
+      "estimated_prompt_bytes": 2014,
+      "evaluator_agents": [
+        "vibe"
+      ],
+      "evaluator_count": 1,
+      "exp_id": "tick-1700000000-exercise",
+      "opportunity_id": "opp:210a9c3df5f84dcb8831760cb6aef64a",
+      "reason": "admitted",
+      "repo": "owner/repo",
+      "signature": "523b3de1e6f92a94f9bec64ca379df822d47dd993f340ed80ca993149ddcac83",
+      "subject": "exercise-subject",
+      "terminal_outcome": "dispatching",
+      "ts": 1788388832
+    }
+  ],
+  "stale_dispatching_opportunities": 0,
+  "terminal_outcome_counts": {
+    "dispatching": 1
+  },
+  "top_subjects": [
+    [
+      "exercise-subject",
+      1
+    ]
+  ],
+  "total_admitted_evaluator_calls": 1,
+  "total_admitted_prompt_bytes": 2014,
+  "total_admitted_prompt_tokens": 504,
+  "total_opportunities": 1,
+  "window_days": 7
+}

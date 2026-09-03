@@ -1,0 +1,30 @@
+{
+  "boundary": "Must not run exp_abcd.followup against live ORCH_EXP_DIR, spawn real synthesis agents, call link_delivery, mirror outcomes to live feedback DB, or write ship-gate stamps under production experiments; harness uses per-mode fixture exp dirs and injected launch_fn/completion_fn/verify_fn per src/synthesis_promotion.py:997-1007 and selftest pattern at src/synthesis_promotion.py:1325-1402.",
+  "break_case": {
+    "expected_failure_text": "\"delivery_phase\": \"discarded\"",
+    "pass_check": "python3 -c \"import json,sys; r=json.load(open('$CONTRACT_DIR/fixtures/synthesis-promotion/reconcile-out.json')); sys.exit(0 if r['state'].get('delivery_phase')=='discarded' and 'verification_failed' in r.get('actions',[]) else 1)\"",
+    "run": [
+      "cd $REPO_ROOT/orch && unset ORCH_CAPABILITY_HEARTBEATS && python3 $CONTRACT_DIR/fixtures/synthesis-promotion/reconcile_shadow.py break"
+    ],
+    "setup": []
+  },
+  "capability_id": "synthesis-promotion",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 5,
+  "entrypoint_read": "src/synthesis_promotion.py:997",
+  "notes": "Live consumer path is exp_abcd.followup -> promotion_reconcile_fn or synthesis_promotion.reconcile (src/exp_abcd.py:1468,1511-1518,1782-1789). Bare CLI reconcile (src/synthesis_promotion.py:1459-1460) would attempt real synthesis; shadow harness required.",
+  "origin": {
+    "proposer": "P3-cursor",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P3-cursor/orch/exercises/synthesis-promotion.json"
+  },
+  "pass_check": "python3 -c \"import json,sys; r=json.load(open('$CONTRACT_DIR/fixtures/synthesis-promotion/reconcile-out.json')); s=r['state']; ok=s.get('delivery_phase')=='candidate_ready' and bool(s.get('candidate',{}).get('candidate_id')) and any(a.startswith('candidate_ready:') for a in r.get('actions',[])); sys.exit(0 if ok else 1)\"",
+  "run": [
+    "cd $REPO_ROOT/orch && unset ORCH_CAPABILITY_HEARTBEATS && python3 $CONTRACT_DIR/fixtures/synthesis-promotion/reconcile_shadow.py pass"
+  ],
+  "setup": [
+    "chmod +x $CONTRACT_DIR/fixtures/synthesis-promotion/reconcile_shadow.py"
+  ],
+  "stated_task": "Reconcile a fixture evaluated experiment through injected synthesis launch/completion/verify steps to candidate_ready without remote delivery."
+}

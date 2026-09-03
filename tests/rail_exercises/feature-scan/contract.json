@@ -1,0 +1,23 @@
+{
+  "boundary": "Calls feature_scan.main with fixture --root and --registry; no --apply, so only report output is written outside the scan tree.",
+  "break_case": {
+    "check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; r=json.load(open('$CONTRACT_DIR/fixtures/results/feature-scan/break.json')); raise SystemExit(0 if r['status']=='FAIL' and r['registry_unchanged'] else 1)\" && python3 -c \"import hashlib,json; from pathlib import Path; p=Path('$CONTRACT_DIR/fixtures/feature-scan'); saved=json.load((p/'baseline.json').open()); got={str(x.relative_to(p)):hashlib.sha256(x.read_bytes()).hexdigest() for x in p.rglob('*') if x.is_file() and x.name!='baseline.json'}; raise SystemExit(0 if got==saved else 1)\"",
+    "command": "mkdir -p $CONTRACT_DIR/fixtures/results/feature-scan && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/feature-scan/run.py break > $CONTRACT_DIR/fixtures/results/feature-scan/break.json",
+    "expected": "FAIL: removing the unlogged module docstring makes the precommitted independent count false"
+  },
+  "capability_id": "feature-scan",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": "3",
+  "entrypoint_read": "src/feature_scan.py:73-100 qualification; src/feature_scan.py:253-277 CLI root/registry",
+  "notes": "The break overwrites only fixture content and setup is re-run before the final pass; registry bytes are checked unchanged.",
+  "origin": {
+    "proposer": "P-audit-routing",
+    "round": "r18",
+    "source": "rounds/r18/executors/P-audit-routing/orch/exercises2/feature-scan.json"
+  },
+  "pass_check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; raise SystemExit(0 if json.load(open('$CONTRACT_DIR/fixtures/results/feature-scan/result.json'))['status']=='PASS' else 1)\"",
+  "run": "mkdir -p $CONTRACT_DIR/fixtures/results/feature-scan && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/feature-scan/run.py pass > $CONTRACT_DIR/fixtures/results/feature-scan/result.json",
+  "setup": "python3 -c \"import base64; exec(compile(base64.b64decode('CmltcG9ydCBqc29uLCBzaHV0aWwsIGhhc2hsaWIKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aChyIi9wcml2YXRlL3RtcC9jbGF1ZGUtNTAyLy1Vc2Vycy10ZWFjaGVyLUxpYnJhcnktQ2xvdWRTdG9yYWdlLURyb3Bib3gtTGVhcm5pbmctQ29kZS1PcmNoZXN0cmF0b3IvOWIzMDE2NzktY2YyNS00OGRhLTg1ODMtMjNmYWRlYWM3ZTI3L3NjcmF0Y2hwYWQvcm91bmRzL3IxOC9leGVjdXRvcnMvUC1hdWRpdC1yb3V0aW5nL29yY2gvZXhlcmNpc2VzMi9maXh0dXJlcy9mZWF0dXJlLXNjYW4iKTsgc2h1dGlsLnJtdHJlZShwLGlnbm9yZV9lcnJvcnM9VHJ1ZSk7IHJvb3Q9cC8ndHJlZSc7IHJvb3QubWtkaXIocGFyZW50cz1UcnVlKQoocm9vdC8na25vd24ucHknKS53cml0ZV90ZXh0KCdcIlwiXCJxdWFsaWZpZWRcIlwiXCJcbmRlZiBfc2VsZnRlc3QoKTogcGFzc1xuJykKKHJvb3QvJ3VubG9nZ2VkLnB5Jykud3JpdGVfdGV4dCgnXCJcIlwicXVhbGlmaWVkXCJcIlwiXG5kZWYgX3NlbGZ0ZXN0KCk6IHBhc3NcbicpCmpzb24uZHVtcCh7J2tub3duJzp7J21vZHVsZSc6J2tub3duLnB5JywnbWF0dXJpdHknOidhZC1ob2MnLCdjb3VudCc6MX19LChwLydyZWdpc3RyeS5qc29uJykub3BlbigndycpLGluZGVudD0yKQoocC8ncnVuLnB5Jykud3JpdGVfdGV4dCgnXG5pbXBvcnQgY29udGV4dGxpYiwgaW8sIGpzb24sIHN5c1xuZnJvbSBwYXRobGliIGltcG9ydCBQYXRoXG5pbXBvcnQgZmVhdHVyZV9zY2FuIGFzIG1cbnA9UGF0aChfX2ZpbGVfXykucGFyZW50OyByb290PXAvXCd0cmVlXCc7IHJlZz1wL1wncmVnaXN0cnkuanNvblwnOyBiZWZvcmU9cmVnLnJlYWRfYnl0ZXMoKVxuaWYgc3lzLmFyZ3ZbMV09PVwnYnJlYWtcJzogKHJvb3QvXCd1bmxvZ2dlZC5weVwnKS53cml0ZV90ZXh0KFwnZGVmIG5vX2RvYygpOiBwYXNzXFxuXCcpXG5iPWlvLlN0cmluZ0lPKClcbndpdGggY29udGV4dGxpYi5yZWRpcmVjdF9zdGRvdXQoYik6IHJjPW0ubWFpbihbXCctLXJvb3RcJyxzdHIocm9vdCksXCctLXJlZ2lzdHJ5XCcsc3RyKHJlZyksXCctLWpzb25cJ10pXG5yZXA9anNvbi5sb2FkcyhiLmdldHZhbHVlKCkpXG5pZiBzeXMuYXJndlsxXT09XCdicmVha1wnOiAocm9vdC9cJ3VubG9nZ2VkLnB5XCcpLndyaXRlX3RleHQoXCdcXCJcXCJcXCJxdWFsaWZpZWRcXCJcXCJcXCJcXG5kZWYgX3NlbGZ0ZXN0KCk6IHBhc3NcXG5cJylcbm5hbWVzPVtyW1wnbmFtZVwnXSBmb3IgciBpbiByZXBbXCd1bmxvZ2dlZFwnXV1cbm9rPXJjPT0wIGFuZCByZXBbXCdxdWFsaWZ5aW5nX21vZHVsZXNcJ109PTIgYW5kIG5hbWVzPT1bXCd1bmxvZ2dlZFwnXSBhbmQgcmVnLnJlYWRfYnl0ZXMoKT09YmVmb3JlXG5wcmludChqc29uLmR1bXBzKHtcJ3N0YXR1c1wnOlwnUEFTU1wnIGlmIG9rIGVsc2UgXCdGQUlMXCcsXCdyZXBvcnRcJzpyZXAsXCdyZWdpc3RyeV91bmNoYW5nZWRcJzpyZWcucmVhZF9ieXRlcygpPT1iZWZvcmV9LGluZGVudD0yKSlcbicpCmJhc2VsaW5lPXtzdHIoeC5yZWxhdGl2ZV90byhwKSk6aGFzaGxpYi5zaGEyNTYoeC5yZWFkX2J5dGVzKCkpLmhleGRpZ2VzdCgpIGZvciB4IGluIHAucmdsb2IoJyonKSBpZiB4LmlzX2ZpbGUoKSBhbmQgeC5uYW1lIT0nYmFzZWxpbmUuanNvbid9Cmpzb24uZHVtcChiYXNlbGluZSwocC8nYmFzZWxpbmUuanNvbicpLm9wZW4oJ3cnKSxpbmRlbnQ9MikK'), 'fixture-setup', 'exec'))\"",
+  "stated_task": "Scan a fixture tree into a temporary registry; reusable qualified structures and independent qualifying-module count must agree."
+}

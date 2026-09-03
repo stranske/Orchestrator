@@ -1,0 +1,8 @@
+{
+  "agents": {
+    "cursor": {"state": "ok"},
+    "codex": {"state": "ok"},
+    "claude": {"state": "ok"},
+    "vibe": {"state": "ok"}
+  }
+}

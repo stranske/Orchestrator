@@ -1,0 +1,10 @@
+[
+  {
+    "target": "stranske/Orchestrator#42",
+    "task_type": "implement",
+    "lane": "opener",
+    "title": "Exercise backlog item",
+    "body": "Frozen acceptance criteria for r15 exercise",
+    "base_sha": "abc123"
+  }
+]

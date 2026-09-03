@@ -1,0 +1,23 @@
+{
+  "report": {
+    "agent": "fixture-agent",
+    "target": "fixture-owner/policy-fixture#7",
+    "lane": "opener",
+    "task_type": "implement",
+    "state": "stalled",
+    "recommended_action": "redirect",
+    "signals": {},
+    "hints": [
+      {
+        "kind": "auth",
+        "detail": "fixture token expired"
+      }
+    ],
+    "drift": {
+      "severity": "none",
+      "findings": []
+    },
+    "errors": []
+  },
+  "attempt_history": []
+}

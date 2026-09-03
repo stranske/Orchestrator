@@ -1,0 +1,10 @@
+[
+  {
+    "target": "fixture/repo#1",
+    "task_type": "implement"
+  },
+  {
+    "target": "fixture/repo#2",
+    "task_type": "review"
+  }
+]

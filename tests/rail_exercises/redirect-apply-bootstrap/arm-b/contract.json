@@ -1,0 +1,30 @@
+{
+  "boundary": "status(env=...) read-only; isolated corpus path; explicit env avoids tick_env bleed.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:flag_on=true' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:flag_on=true",
+    "run": [
+      "PYTHONPATH=$REPO_ROOT/src P2_CORPUS=/tmp/p2_redirect_corpus.jsonl python3 $CONTRACT_DIR/fixtures/harness/run.py redirect-apply-bootstrap break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "redirect-apply-bootstrap",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/redirect_apply.py:598 status",
+  "notes": "status() accepts env= at redirect_apply.py:598; CLI uses flag_as_the_tick_sees_it() at :112-133 when env unset.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/redirect-apply-bootstrap.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:flag_on=false' /tmp/p2_exercise_out.txt",
+  "run": [
+    "PYTHONPATH=$REPO_ROOT/src P2_CORPUS=/tmp/p2_redirect_corpus.jsonl python3 $CONTRACT_DIR/fixtures/harness/run.py redirect-apply-bootstrap pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "touch /tmp/p2_redirect_corpus.jsonl"
+  ],
+  "stated_task": "Read bootstrap gate status with explicit env flag off (bypasses tick_env resolver)."
+}

@@ -1,0 +1,23 @@
+{
+  "boundary": "Read-only fixture ledger/tree; the runner changes only an in-memory row and must not touch live state.",
+  "break_case": {
+    "check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; r=json.load(open('$CONTRACT_DIR/fixtures/results/capability-activation-audit/break.json')); raise SystemExit(0 if r['status']=='FAIL' and r['entrypoint_presence']['state']=='present' else 1)\" && python3 -c \"import hashlib,json; from pathlib import Path; p=Path('$CONTRACT_DIR/fixtures/capability-activation-audit'); saved=json.load((p/'baseline.json').open()); got={str(x.relative_to(p)):hashlib.sha256(x.read_bytes()).hexdigest() for x in p.rglob('*') if x.is_file() and x.name!='baseline.json'}; raise SystemExit(0 if got==saved else 1)\"",
+    "command": "mkdir -p $CONTRACT_DIR/fixtures/results/capability-activation-audit && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/capability-activation-audit/run.py break > $CONTRACT_DIR/fixtures/results/capability-activation-audit/break.json",
+    "expected": "FAIL: fixture entrypoint becomes present only in the runner memory"
+  },
+  "capability_id": "capability-activation-audit",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": "4",
+  "entrypoint_read": "src/capability_activation_audit.py:355-427 entrypoint_presence; src/capability_activation_audit.py:1359-1407 audit",
+  "notes": "Uses capability_activation_audit.entrypoint_presence directly because its public CLI has no ledger/root override; fixture ledger is read by the runner. The source state spelling is absent_here.",
+  "origin": {
+    "proposer": "P-audit-routing",
+    "round": "r18",
+    "source": "rounds/r18/executors/P-audit-routing/orch/exercises2/capability-activation-audit.json"
+  },
+  "pass_check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; raise SystemExit(0 if json.load(open('$CONTRACT_DIR/fixtures/results/capability-activation-audit/result.json'))['status']=='PASS' else 1)\"",
+  "run": "mkdir -p $CONTRACT_DIR/fixtures/results/capability-activation-audit && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/capability-activation-audit/run.py pass > $CONTRACT_DIR/fixtures/results/capability-activation-audit/result.json",
+  "setup": "python3 -c \"import base64; exec(compile(base64.b64decode('CmltcG9ydCBqc29uLCBzaHV0aWwsIGhhc2hsaWIKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aChyIi9wcml2YXRlL3RtcC9jbGF1ZGUtNTAyLy1Vc2Vycy10ZWFjaGVyLUxpYnJhcnktQ2xvdWRTdG9yYWdlLURyb3Bib3gtTGVhcm5pbmctQ29kZS1PcmNoZXN0cmF0b3IvOWIzMDE2NzktY2YyNS00OGRhLTg1ODMtMjNmYWRlYWM3ZTI3L3NjcmF0Y2hwYWQvcm91bmRzL3IxOC9leGVjdXRvcnMvUC1hdWRpdC1yb3V0aW5nL29yY2gvZXhlcmNpc2VzMi9maXh0dXJlcy9jYXBhYmlsaXR5LWFjdGl2YXRpb24tYXVkaXQiKTsgc2h1dGlsLnJtdHJlZShwLGlnbm9yZV9lcnJvcnM9VHJ1ZSk7IChwLyd0cmVlJykubWtkaXIocGFyZW50cz1UcnVlKQpqc29uLmR1bXAoeydmaXh0dXJlLWFjdGl2YXRpb24nOnsnY2FwYWJpbGl0eV9pZCc6J2ZpeHR1cmUtYWN0aXZhdGlvbicsJ2VudHJ5cG9pbnQnOidtaXNzaW5nX2ZpeHR1cmVfbW9kdWxlLnB5Om1haW4nLCdtYXRjaGVyJzp7J2tpbmQnOid0aWNrX3BoYXNlJywnbmFtZSc6J2ZpeHR1cmUnfSwnc3RhdHVzJzond2lyZWQnfX0sKHAvJ2xlZGdlci5qc29uJykub3BlbigndycpLGluZGVudD0yKQoocC8ncnVuLnB5Jykud3JpdGVfdGV4dCgiXG5pbXBvcnQganNvbiwgc3lzXG5mcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGhcbmltcG9ydCBjYXBhYmlsaXR5X2FjdGl2YXRpb25fYXVkaXQgYXMgbVxucD1QYXRoKF9fZmlsZV9fKS5wYXJlbnQ7IGxlZGdlcj1qc29uLmxvYWQoKHAvJ2xlZGdlci5qc29uJykub3BlbigpKTsgbS5IRVJFPXAvJ3RyZWUnOyBtLnNpYmxpbmdfY2hlY2tvdXRzPWxhbWJkYTogW11cbmNhcD1kaWN0KGxlZGdlclsnZml4dHVyZS1hY3RpdmF0aW9uJ10pXG5xPU5vbmVcbmlmIHN5cy5hcmd2WzFdPT0nYnJlYWsnOlxuICAgIGNhcFsnZW50cnlwb2ludCddPSdwcmVzZW50X2ZpeHR1cmVfbW9kdWxlLnB5Om1haW4nXG4gICAgcT1tLkhFUkUvJ3ByZXNlbnRfZml4dHVyZV9tb2R1bGUucHknOyBxLndyaXRlX3RleHQoJ2RlZiBtYWluKCk6IHBhc3NcXG4nKVxucmVwPW0uZW50cnlwb2ludF9wcmVzZW5jZShjYXApXG5pZiBxIGlzIG5vdCBOb25lOiBxLnVubGluaygpXG5vaz1yZXBbJ3N0YXRlJ109PSdhYnNlbnRfaGVyZScgYW5kIFt4WydjYW5kaWRhdGVzJ11bMF0gZm9yIHggaW4gcmVwWydtaXNzaW5nJ11dPT1bJ21pc3NpbmdfZml4dHVyZV9tb2R1bGUucHknXSBhbmQgJ21pc3NpbmdfZml4dHVyZV9tb2R1bGUucHkgaXMgbm90IGluIHRoaXMgdHJlZScgaW4gcmVwWydkZXRhaWwnXVxucHJpbnQoanNvbi5kdW1wcyh7J3N0YXR1cyc6J1BBU1MnIGlmIG9rIGVsc2UgJ0ZBSUwnLCdlbnRyeXBvaW50X3ByZXNlbmNlJzpyZXAsJ2ZpeHR1cmVfbGVkZ2VyJzpzdHIocC8nbGVkZ2VyLmpzb24nKX0saW5kZW50PTIpKVxuIikKYmFzZWxpbmU9e3N0cih4LnJlbGF0aXZlX3RvKHApKTpoYXNobGliLnNoYTI1Nih4LnJlYWRfYnl0ZXMoKSkuaGV4ZGlnZXN0KCkgZm9yIHggaW4gcC5yZ2xvYignKicpIGlmIHguaXNfZmlsZSgpIGFuZCB4Lm5hbWUhPSdiYXNlbGluZS5qc29uJ30KanNvbi5kdW1wKGJhc2VsaW5lLChwLydiYXNlbGluZS5qc29uJykub3BlbigndycpLGluZGVudD0yKQo='), 'fixture-setup', 'exec'))\"",
+  "stated_task": "Audit a fixture ledger and fixture tree read-only; a declared missing module must be named absent."
+}

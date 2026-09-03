@@ -1,0 +1,10 @@
+[
+  {
+    "id": "H1",
+    "claim": "cursor composer >= premium seats on well-specified integration implements",
+    "task_type": "implement",
+    "conditions": "tightly-specified, bounded",
+    "arms": ["cursor", "codex", "claude"],
+    "evidence": {"n": 1, "posterior": 0.60, "status": "accumulating"}
+  }
+]

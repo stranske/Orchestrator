@@ -1,0 +1,23 @@
+{
+  "boundary": "Always passes --dry-run, never --apply. Plan output may describe guarded commands but executes none; no prompt or state file is written. Every executable command unsets ORCH_CAPABILITY_HEARTBEATS.",
+  "break_case": {
+    "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-plan-break.json'\"'\"')); raise SystemExit(0 if p[\"action\"]==\"wait\" and p[\"apply_supported\"] is False and p[\"mutates_state\"] is False and p[\"requires_confirmation\"] is False and [s[\"id\"] for s in p[\"steps\"]]==[\"wait-and-recheck\"] else 1)'",
+    "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/redirect-plan\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STATE_DIR -u ORCH_LOCAL_RUNTIME python3 \"$ROOT/src/redirect_plan.py\" --report-json \"$FIX/wait_report.json\" --dry-run --json > /tmp/orch-exercises2-plan-break.json",
+    "stated_break": "Use a setup-created wait decision and prove the plan has only a non-mutating recheck step."
+  },
+  "capability_id": "redirect-plan",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/redirect_plan.py main/plan",
+  "notes": "Observable is safe plan shape and confirmation gating.",
+  "origin": {
+    "proposer": "P-second-arms-r17",
+    "round": "r17",
+    "source": "rounds/r17/executors/P-second-arms-r17/orch/exercises2/redirect-plan.json"
+  },
+  "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-plan-pass.json'\"'\"')); ids=[s[\"id\"] for s in p[\"steps\"]]; ok=(p[\"advisory\"] is True and p[\"dry_run_only\"] is True and p[\"apply_supported\"] is True and p[\"action\"]==\"redirect\" and p[\"mutates_state\"] is True and p[\"requires_confirmation\"] is True and ids==[\"inspect-current-state\",\"release-claim\",\"delegate-retry\"] and \"fixture redirect required\" in p[\"prompt_text\"]); raise SystemExit(0 if ok else 1)'",
+  "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/redirect-plan\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STATE_DIR -u ORCH_LOCAL_RUNTIME python3 \"$ROOT/src/redirect_plan.py\" --report-json \"$FIX/decision_report.json\" --dry-run --json > /tmp/orch-exercises2-plan-pass.json",
+  "setup": "FIX=$CONTRACT_DIR/fixtures/redirect-plan; rm -rf \"$FIX\"; mkdir -p \"$FIX\"; export FIX; python3 -c 'import json, os\nfrom pathlib import Path\nbase = Path(os.environ[\"FIX\"])\nfiles = {'\"'\"'decision_report.json'\"'\"': {'\"'\"'agent'\"'\"': '\"'\"'fixture-agent'\"'\"', '\"'\"'target'\"'\"': '\"'\"'fixture-owner/plan-fixture#11'\"'\"', '\"'\"'lane'\"'\"': '\"'\"'opener'\"'\"', '\"'\"'task_type'\"'\"': '\"'\"'implement'\"'\"', '\"'\"'pid'\"'\"': None, '\"'\"'log'\"'\"': '\"'\"''\"'\"', '\"'\"'worktree'\"'\"': '\"'\"''\"'\"', '\"'\"'base_ref'\"'\"': '\"'\"''\"'\"', '\"'\"'expected_paths'\"'\"': ['\"'\"'src/fixture.py'\"'\"'], '\"'\"'state'\"'\"': '\"'\"'stalled'\"'\"', '\"'\"'recommended_action'\"'\"': '\"'\"'redirect'\"'\"', '\"'\"'hints'\"'\"': [{'\"'\"'kind'\"'\"': '\"'\"'network'\"'\"', '\"'\"'detail'\"'\"': '\"'\"'fixture DNS timeout'\"'\"'}], '\"'\"'drift'\"'\"': {'\"'\"'severity'\"'\"': '\"'\"'none'\"'\"', '\"'\"'findings'\"'\"': []}, '\"'\"'policy_decision'\"'\"': {'\"'\"'action'\"'\"': '\"'\"'redirect'\"'\"', '\"'\"'reason'\"'\"': '\"'\"'fixture redirect required after network failure'\"'\"', '\"'\"'confidence'\"'\"': '\"'\"'high'\"'\"', '\"'\"'advisory'\"'\"': True}}, '\"'\"'wait_report.json'\"'\"': {'\"'\"'agent'\"'\"': '\"'\"'fixture-agent'\"'\"', '\"'\"'target'\"'\"': '\"'\"'fixture-owner/plan-fixture#11'\"'\"', '\"'\"'lane'\"'\"': '\"'\"'opener'\"'\"', '\"'\"'task_type'\"'\"': '\"'\"'implement'\"'\"', '\"'\"'state'\"'\"': '\"'\"'running'\"'\"', '\"'\"'recommended_action'\"'\"': '\"'\"'wait'\"'\"', '\"'\"'hints'\"'\"': [], '\"'\"'drift'\"'\"': {'\"'\"'severity'\"'\"': '\"'\"'none'\"'\"', '\"'\"'findings'\"'\"': []}, '\"'\"'policy_decision'\"'\"': {'\"'\"'action'\"'\"': '\"'\"'wait'\"'\"', '\"'\"'reason'\"'\"': '\"'\"'fixture process remains healthy'\"'\"', '\"'\"'confidence'\"'\"': '\"'\"'high'\"'\"', '\"'\"'advisory'\"'\"': True}}}\nfor rel, value in files.items():\n    path = base / rel\n    path.parent.mkdir(parents=True, exist_ok=True)\n    if rel.endswith(\".json\"):\n        with path.open(\"w\", encoding=\"utf-8\") as f:\n            json.dump(value, f, indent=2)\n            f.write(\"\\n\")\n    else:\n        path.write_text(value, encoding=\"utf-8\")\n'",
+  "stated_task": "Build a dry-run fixture redirect plan and prove it exposes confirmation-required mutating steps without applying them or writing the prompt."
+}

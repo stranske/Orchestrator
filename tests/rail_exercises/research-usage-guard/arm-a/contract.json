@@ -1,0 +1,34 @@
+{
+  "boundary": "Must not call live exp_abcd evaluate dispatch, write to default ~/.codex/orchestrator feedback DB, or create GitHub issues; ORCH_FEEDBACK_DB and ORCH_STATE_DIR redirected to fixture dirs. Admission exercised via assess_and_record_opportunity (src/research_usage_guard.py:345-654) because main report subcommand (src/research_usage_guard.py:1052-1056) is read-only over an existing ledger.",
+  "break_case": {
+    "expected_failure_text": "\"decision\": \"duplicate\"",
+    "pass_check": "python3 -c \"import json,sys; d=json.load(open('$CONTRACT_DIR/fixtures/research-usage-guard/guard-out.json')); sys.exit(0 if d['duplicate']['decision']=='duplicate' and d['duplicate']['eligible'] is False else 1)\"",
+    "run": [
+      "cd $REPO_ROOT/orch && unset ORCH_CAPABILITY_HEARTBEATS && ORCH_FEEDBACK_DB=$CONTRACT_DIR/fixtures/research-usage-guard/guard.db python3 $CONTRACT_DIR/fixtures/research-usage-guard/seed_and_report.py break"
+    ],
+    "setup": [
+      "rm -f $CONTRACT_DIR/fixtures/research-usage-guard/guard.db"
+    ]
+  },
+  "capability_id": "research-usage-guard",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 4,
+  "entrypoint_read": "src/research_usage_guard.py:1037",
+  "notes": "Shadow exercise: main CLI only exposes report/selftest (src/research_usage_guard.py:1039-1040); seed harness calls assess_and_record_opportunity then generate_usage_report, matching exp_abcd.followup admission at src/exp_abcd.py:1696-1708. Duplicate dedup logic at src/research_usage_guard.py:456-483.",
+  "origin": {
+    "proposer": "P3-cursor",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P3-cursor/orch/exercises/research-usage-guard.json"
+  },
+  "pass_check": "python3 -c \"import json,sys; d=json.load(open('$CONTRACT_DIR/fixtures/research-usage-guard/guard-out.json')); r=json.load(open('$CONTRACT_DIR/fixtures/research-usage-guard/research-usage-report.json')); ok=d['admitted']['decision']=='admitted' and d['admitted']['eligible'] is True and r['total_opportunities']==1 and r['decision_counts'].get('admitted')==1; sys.exit(0 if ok else 1)\"",
+  "run": [
+    "cd $REPO_ROOT/orch && unset ORCH_CAPABILITY_HEARTBEATS && ORCH_FEEDBACK_DB=$CONTRACT_DIR/fixtures/research-usage-guard/guard.db ORCH_STATE_DIR=$CONTRACT_DIR/fixtures/research-usage-guard/state python3 $CONTRACT_DIR/fixtures/research-usage-guard/seed_and_report.py pass",
+    "cd $REPO_ROOT/orch && ORCH_FEEDBACK_DB=$CONTRACT_DIR/fixtures/research-usage-guard/guard.db ORCH_STATE_DIR=$CONTRACT_DIR/fixtures/research-usage-guard/state python3 src/research_usage_guard.py report --json --write-report $CONTRACT_DIR/fixtures/research-usage-guard/research-usage-report.json"
+  ],
+  "setup": [
+    "chmod +x $CONTRACT_DIR/fixtures/research-usage-guard/seed_and_report.py",
+    "rm -f $CONTRACT_DIR/fixtures/research-usage-guard/guard.db"
+  ],
+  "stated_task": "Record one admitted research opportunity into an isolated ledger DB and emit a usage report JSON without dispatching evaluators."
+}

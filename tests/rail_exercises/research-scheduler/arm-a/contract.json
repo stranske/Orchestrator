@@ -1,0 +1,32 @@
+{
+  "boundary": "Must not call tick.research_tick, exp_abcd.prepare, label writes, or mutate $ORCH_STATE_DIR / $ORCH_LOCAL_RUNTIME; harness passes in-memory sqlite conn to avoid live feedback DB (build_research_plan otherwise opens feedback._conn at src/research_scheduler.py:835-841).",
+  "break_case": {
+    "expected_failure_text": "\"status\": \"no_spare\"",
+    "pass_check": "python3 -c \"import json,sys; p=json.load(open('$CONTRACT_DIR/fixtures/research-scheduler/plan-out.json')); sys.exit(0 if p.get('status')=='no_spare' and not p.get('planned') and 'no_spare_after_production_reserve' in (p.get('blocked_reasons') or []) else 1)\"",
+    "run": [
+      "cd $REPO_ROOT/orch && unset ORCH_CAPABILITY_HEARTBEATS && python3 $CONTRACT_DIR/fixtures/research-scheduler/run_plan.py break"
+    ],
+    "setup": [
+      "chmod +x $CONTRACT_DIR/fixtures/research-scheduler/run_plan.py"
+    ]
+  },
+  "capability_id": "research-scheduler",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/research_scheduler.py:777",
+  "notes": "Pure rail exercised via build_research_plan (src/research_scheduler.py:777-892), the same function tick.research_tick calls at src/tick.py:231. Fixture harness mirrors selftest conn injection at src/research_scheduler.py:1148-1156. CLI --selftest exists (src/research_scheduler.py:1354-1355) but is broader than this contract.",
+  "origin": {
+    "proposer": "P3-cursor",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P3-cursor/orch/exercises/research-scheduler.json"
+  },
+  "pass_check": "python3 -c \"import json,sys; p=json.load(open('$CONTRACT_DIR/fixtures/research-scheduler/plan-out.json')); sys.exit(0 if p.get('status')=='planned' and len(p.get('planned') or [])==1 and p['planned'][0].get('hypothesis')=='H1' and len(p['planned'][0].get('arms') or [])>=2 else 1)\"",
+  "run": [
+    "cd $REPO_ROOT/orch && unset ORCH_CAPABILITY_HEARTBEATS && python3 $CONTRACT_DIR/fixtures/research-scheduler/run_plan.py pass"
+  ],
+  "setup": [
+    "chmod +x $CONTRACT_DIR/fixtures/research-scheduler/run_plan.py"
+  ],
+  "stated_task": "Compute a capacity-budgeted research plan from fixture backlog items, capacity snapshot, and hypotheses without launching experiments."
+}

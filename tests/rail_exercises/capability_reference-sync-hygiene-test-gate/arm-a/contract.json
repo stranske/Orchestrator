@@ -1,0 +1,28 @@
+{
+  "boundary": "Temp ledger only; never the live $ORCH_LOCAL_RUNTIME ledger; never records a consumer-sync shadow result.",
+  "break_case": {
+    "check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/refsync/check.py break | grep -q EXPECTED_FAILURE_REFUSED",
+    "expected": "EXPECTED_FAILURE_REFUSED",
+    "run": [
+      "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/refsync/check.py break"
+    ],
+    "setup": []
+  },
+  "capability_id": "capability:reference-sync-hygiene-test-gate",
+  "confidence": "medium",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/capability_compiler.py:984 run_reference_workflow; consume_workflow_output at :542",
+  "notes": "Coordinator-authored 2026-09-02 from the module source; the except-branch shape of run_reference_workflow was not read, so the break check asserts the absence of a success event rather than a specific error key.",
+  "origin": {
+    "proposer": "P0-coord",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P0-coord/orch/exercises/capability_reference-sync-hygiene-test-gate.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/refsync/check.py pass | grep -q 'PASS refsync'",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 python3 $CONTRACT_DIR/fixtures/refsync/check.py pass"
+  ],
+  "setup": [],
+  "stated_task": "Run the compiled reference sync-hygiene rail as a shadow (compile, dry-run, consume) against a temporary ledger and prove it records the full shadow event chain; prove a rejecting consumer records no success."
+}

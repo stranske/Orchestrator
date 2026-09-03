@@ -1,0 +1,30 @@
+{
+  "boundary": "Pure plan(); no --write, ORCH_EVIDENCE_ACQUISITION unset.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:state=nothing_to_feed' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:state=nothing_to_feed",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py evidence-acquisition break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "evidence-acquisition",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/evidence_acquisition.py:88 plan",
+  "notes": "Default-off kill_switch per evidence_acquisition.py:243-246.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/evidence-acquisition.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:state=planned' /tmp/p2_exercise_out.txt",
+  "run": [
+    "python3 $CONTRACT_DIR/fixtures/harness/run.py evidence-acquisition pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/evidence_ledger_ok.json"
+  ],
+  "stated_task": "Plan bounded evidence routing from an injected ledger fixture (shadow; env live flag off)."
+}

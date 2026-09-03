@@ -1,0 +1,32 @@
+{
+  "boundary": "Offline signals only; no --list-live GitHub calls.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:eligible=false' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:eligible=false",
+    "run": [
+      "cd $REPO_ROOT && PYTHONPATH=src python3 src/keepalive_supervisor.py --signals-json $CONTRACT_DIR/fixtures/keepalive_signals_break.json --json | python3 -c \"import json,sys; p=json.load(sys.stdin); print('EXERCISE_BREAK:eligible='+str(p['eligible']).lower())\" > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": [
+      "python3 -c \"import json, pathlib; p=pathlib.Path('$CONTRACT_DIR/fixtures/keepalive_signals_break.json'); s=json.load(open('$CONTRACT_DIR/fixtures/keepalive_signals.json')); s['labels']=[l for l in s.get('labels',[]) if l!='needs-human']; json.dump(s, open(p,'w'), indent=2)\""
+    ]
+  },
+  "capability_id": "live-keepalive-supervisor",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/keepalive_supervisor.py:790 --signals-json",
+  "notes": "Eligibility gate at keepalive_supervisor.py:53-68.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/live-keepalive-supervisor.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:eligible=true' /tmp/p2_exercise_out.txt",
+  "run": [
+    "cd $REPO_ROOT && PYTHONPATH=src python3 src/keepalive_supervisor.py --signals-json $CONTRACT_DIR/fixtures/keepalive_signals.json --json | python3 -c \"import json,sys; p=json.load(sys.stdin); ok=p['eligible'] and not p['live_action_enabled']; print('EXERCISE_PASS:eligible='+str(ok).lower())\" > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/keepalive_signals.json"
+  ],
+  "stated_task": "Plan supervised recovery from offline normalized keepalive signals JSON."
+}

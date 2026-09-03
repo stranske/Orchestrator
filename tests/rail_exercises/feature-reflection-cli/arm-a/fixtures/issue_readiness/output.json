@@ -1,0 +1,7 @@
+{
+  "verdict": "auto_ready",
+  "reason": "actionable, no risk label, not routed",
+  "task_type": "implement",
+  "actionable": true,
+  "risky": false
+}

@@ -1,0 +1,9 @@
+{
+  "capability_id": "capability:p2-unbound",
+  "notes": "dedup: checked inventory; absent",
+  "downstream_consumer": "fixture.py:main",
+  "learning_sink": "feedback.outcomes",
+  "kill_switch": "ORCH_P2_FIXTURE=0",
+  "rollback": "revert commit",
+  "trigger_cadence": "daily"
+}

@@ -1,0 +1,11 @@
+{
+  "fixture-activation": {
+    "capability_id": "fixture-activation",
+    "entrypoint": "missing_fixture_module.py:main",
+    "matcher": {
+      "kind": "tick_phase",
+      "name": "fixture"
+    },
+    "status": "wired"
+  }
+}

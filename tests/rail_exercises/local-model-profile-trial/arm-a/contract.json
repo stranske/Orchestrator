@@ -1,0 +1,29 @@
+{
+  "boundary": "Must not run finalize with live worker results, set record_feedback=True, write to default ORCH_MODEL_PROFILE_TRIAL_STATE (~/.codex/orchestrator/model-profile-trial.json per src/model_profile_trial.py:40-44), or debit production capacity pools beyond in-process validate path; prepare only writes fixture manifest (src/model_profile_trial.py:724-732).",
+  "break_case": {
+    "expected_failure_text": "trial stop condition: shared_codex_pool_not_ready",
+    "pass_check": "bash -c 'cd $REPO_ROOT/orch && python3 -c \"import sys; sys.path.insert(0,'\"'\"'src'\"'\"'); from pathlib import Path; from model_profile_trial import build_trial_manifest, validate_trial_manifest; f=Path('\"'\"'$CONTRACT_DIR/fixtures/local-model-profile-trial'\"'\"'); m=build_trial_manifest(f/'\"'\"'orch'\"'\"', f/'\"'\"'workflows'\"'\"', capacity_state='\"'\"'unknown'\"'\"'); validate_trial_manifest(m)\" 2>&1 | grep -q shared_codex_pool_not_ready'",
+    "run": [
+      "cd $REPO_ROOT/orch && python3 -c \"import sys; sys.path.insert(0,'src'); from pathlib import Path; from model_profile_trial import build_trial_manifest, validate_trial_manifest; f=Path('$CONTRACT_DIR/fixtures/local-model-profile-trial'); m=build_trial_manifest(f/'orch', f/'workflows', capacity_state='unknown'); validate_trial_manifest(m)\""
+    ],
+    "setup": []
+  },
+  "capability_id": "local-model-profile-trial",
+  "confidence": "medium",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 4,
+  "entrypoint_read": "src/model_profile_trial.py:724",
+  "notes": "Shadow-only by design (src/model_profile_trial.py:3-9). No --selftest CLI; validation logic lives in validate_trial_manifest (src/model_profile_trial.py:324-404). Break uses stop_conditions then validate refusal at src/model_profile_trial.py:334-337. Full finalize path needs authenticated Workflows artifacts (src/model_profile_trial.py:505-652) \u2014 out of scope for local dry-run.",
+  "origin": {
+    "proposer": "P3-cursor",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P3-cursor/orch/exercises/local-model-profile-trial.json"
+  },
+  "pass_check": "python3 -c \"import json,sys; m=json.load(open('$CONTRACT_DIR/fixtures/local-model-profile-trial/manifest.json')); ids={r['profile_id'] for r in m['requests']}; ok=(m.get('promotion_allowed') is False and m.get('learning_enabled') is False and ids=={'codex-5.6-sol-high','codex-5.6-terra-high','codex-5.6-luna-high'} and m.get('stop_conditions',{}).get('triggered') is False); sys.exit(0 if ok else 1)\"",
+  "run": [
+    "cd $REPO_ROOT/orch && python3 src/model_profile_trial.py prepare --orchestrator-root $CONTRACT_DIR/fixtures/local-model-profile-trial/orch --workflows-root $CONTRACT_DIR/fixtures/local-model-profile-trial/workflows --output $CONTRACT_DIR/fixtures/local-model-profile-trial/manifest.json --capacity-state ok > $CONTRACT_DIR/fixtures/local-model-profile-trial/prepare-out.json",
+    "cd $REPO_ROOT/orch && python3 -c \"import json,sys; sys.path.insert(0,'src'); from model_profile_trial import validate_trial_manifest; m=json.load(open('$CONTRACT_DIR/fixtures/local-model-profile-trial/manifest.json')); validate_trial_manifest(m); assert m['schema']=='orchestrator.model-profile-trial'; assert m['lifecycle']=='shadow'; assert len(m['requests'])==3; print('validate_ok')\""
+  ],
+  "setup": [],
+  "stated_task": "Prepare and validate a shadow Sol/Terra/Luna trial manifest from minimal fixture source trees without executing workers or recording feedback."
+}

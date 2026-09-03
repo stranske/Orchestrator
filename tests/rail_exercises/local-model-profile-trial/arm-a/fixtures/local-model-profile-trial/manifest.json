@@ -1,0 +1,241 @@
+{
+  "assignment": "instrumentation",
+  "capacity_snapshot": {
+    "captured_at": 1788388830,
+    "pools": {
+      "aider-paygo": {
+        "account": "mistral-codestral",
+        "agent": "aider",
+        "limit": null,
+        "provider": "mistral",
+        "state": "unknown",
+        "tier": "paygo",
+        "used": 0.0,
+        "window": "daily"
+      },
+      "claude-subscription": {
+        "account": "claude-team-max",
+        "agent": "claude",
+        "limit": null,
+        "provider": "anthropic",
+        "state": "unknown",
+        "tier": "metered",
+        "used": 0.0,
+        "window": "5h+weekly"
+      },
+      "codex-subscription": {
+        "account": "chatgpt-pro",
+        "agent": "codex",
+        "limit": null,
+        "provider": "openai",
+        "state": "ok",
+        "tier": "metered",
+        "used": 0.0,
+        "window": "5h+weekly"
+      },
+      "cursor-subscription": {
+        "account": "cursor-pro-plus",
+        "agent": "cursor",
+        "limit": null,
+        "provider": "cursor",
+        "state": "unknown",
+        "tier": "metered",
+        "used": 0.0,
+        "window": "monthly"
+      },
+      "gemini-prepaid": {
+        "account": "antigravity-ai-pro",
+        "agent": "gemini",
+        "limit": null,
+        "provider": "google",
+        "state": "unknown",
+        "tier": "metered",
+        "used": 0.0,
+        "window": "5h+weekly"
+      },
+      "vibe-subscription": {
+        "account": "mistral-vibe-sub",
+        "agent": "vibe",
+        "limit": null,
+        "provider": "mistral",
+        "state": "unknown",
+        "tier": "flat",
+        "used": 0.0,
+        "window": "subscription"
+      }
+    },
+    "profiles": {
+      "aider-codestral-high": {
+        "capacity_pool_ids": [
+          "aider-paygo"
+        ],
+        "state": "unknown"
+      },
+      "claude-sonnet-5-high": {
+        "capacity_pool_ids": [
+          "claude-subscription"
+        ],
+        "state": "unknown"
+      },
+      "codex-5.6-luna-high": {
+        "capacity_pool_ids": [
+          "codex-subscription"
+        ],
+        "state": "ok"
+      },
+      "codex-5.6-sol-high": {
+        "capacity_pool_ids": [
+          "codex-subscription"
+        ],
+        "state": "ok"
+      },
+      "codex-5.6-terra-high": {
+        "capacity_pool_ids": [
+          "codex-subscription"
+        ],
+        "state": "ok"
+      },
+      "cursor-composer-2.5": {
+        "capacity_pool_ids": [
+          "cursor-subscription"
+        ],
+        "state": "unknown"
+      },
+      "gemini-3.1-pro-high": {
+        "capacity_pool_ids": [
+          "gemini-prepaid"
+        ],
+        "state": "unknown"
+      },
+      "gemini-3.7-flash-high": {
+        "capacity_pool_ids": [
+          "gemini-prepaid"
+        ],
+        "state": "unknown"
+      },
+      "gemini-3.7-flash-low": {
+        "capacity_pool_ids": [
+          "gemini-prepaid"
+        ],
+        "state": "unknown"
+      },
+      "vibe-medium-3.5": {
+        "capacity_pool_ids": [
+          "vibe-subscription"
+        ],
+        "state": "unknown"
+      }
+    },
+    "snapshot_count": 1
+  },
+  "created_at": 1788388830,
+  "frozen_packet": {
+    "expected_output": {
+      "acknowledged": true,
+      "packet_hash": "supplied-by-manifest"
+    },
+    "instruction": "Read this packet without changing files. Return only the bounded identity fields requested by the Workflows worker telemetry contract.",
+    "purpose": "worker identity, fallback, capacity, and lineage plumbing only",
+    "schema": "orchestrator.model-profile-trial-packet",
+    "version": 1
+  },
+  "launch_order": [
+    "codex-5.6-terra-high",
+    "codex-5.6-luna-high",
+    "codex-5.6-sol-high"
+  ],
+  "learning_enabled": false,
+  "lifecycle": "shadow",
+  "packet_hash": "sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605",
+  "promotion_allowed": false,
+  "requests": [
+    {
+      "assignment": "instrumentation",
+      "capacity_pool_ids": [
+        "codex-subscription"
+      ],
+      "launch_ordinal": 1,
+      "learning_enabled": false,
+      "packet_hash": "sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605",
+      "permission_mode": "read-only",
+      "profile_id": "codex-5.6-terra-high",
+      "prompt_version": "orchestrator-prompt-v1",
+      "provider": "openai",
+      "reasoning_effort": "high",
+      "requested_model": "gpt-5.6-terra",
+      "run_id": "model-profile-trial:d965f949e25603e6d56293f9:codex-5.6-terra-high",
+      "sandbox": "read-only",
+      "tools": []
+    },
+    {
+      "assignment": "instrumentation",
+      "capacity_pool_ids": [
+        "codex-subscription"
+      ],
+      "launch_ordinal": 2,
+      "learning_enabled": false,
+      "packet_hash": "sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605",
+      "permission_mode": "read-only",
+      "profile_id": "codex-5.6-luna-high",
+      "prompt_version": "orchestrator-prompt-v1",
+      "provider": "openai",
+      "reasoning_effort": "high",
+      "requested_model": "gpt-5.6-luna",
+      "run_id": "model-profile-trial:d965f949e25603e6d56293f9:codex-5.6-luna-high",
+      "sandbox": "read-only",
+      "tools": []
+    },
+    {
+      "assignment": "instrumentation",
+      "capacity_pool_ids": [
+        "codex-subscription"
+      ],
+      "launch_ordinal": 3,
+      "learning_enabled": false,
+      "packet_hash": "sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605",
+      "permission_mode": "read-only",
+      "profile_id": "codex-5.6-sol-high",
+      "prompt_version": "orchestrator-prompt-v1",
+      "provider": "openai",
+      "reasoning_effort": "high",
+      "requested_model": "gpt-5.6-sol",
+      "run_id": "model-profile-trial:d965f949e25603e6d56293f9:codex-5.6-sol-high",
+      "sandbox": "read-only",
+      "tools": []
+    }
+  ],
+  "schema": "orchestrator.model-profile-trial",
+  "seed": 56014,
+  "source_before": {
+    "orchestrator": {
+      "aggregate_sha256": "sha256:e0f091391afd1ae880217a0bf637828710878cdf34d7e1cc153f0e6cf10a5874",
+      "entries": [
+        {
+          "bytes": 20,
+          "path": "probe.py",
+          "sha256": "sha256:591ec08b7de9f975e735b080a4d83666152cf7d6d1b31aa27e91e307ad4efe34"
+        }
+      ],
+      "file_count": 1,
+      "root": "/private/tmp/claude-502/-Users-teacher-Library-CloudStorage-Dropbox-Learning-Code-Orchestrator/9b301679-cf25-48da-8583-23fadeac7e27/scratchpad/rounds/r15/proposers/P3-cursor/orch/exercises/fixtures/local-model-profile-trial/orch"
+    },
+    "workflows": {
+      "aggregate_sha256": "sha256:e0f091391afd1ae880217a0bf637828710878cdf34d7e1cc153f0e6cf10a5874",
+      "entries": [
+        {
+          "bytes": 20,
+          "path": "probe.py",
+          "sha256": "sha256:591ec08b7de9f975e735b080a4d83666152cf7d6d1b31aa27e91e307ad4efe34"
+        }
+      ],
+      "file_count": 1,
+      "root": "/private/tmp/claude-502/-Users-teacher-Library-CloudStorage-Dropbox-Learning-Code-Orchestrator/9b301679-cf25-48da-8583-23fadeac7e27/scratchpad/rounds/r15/proposers/P3-cursor/orch/exercises/fixtures/local-model-profile-trial/workflows"
+    }
+  },
+  "stop_conditions": {
+    "reasons": [],
+    "triggered": false
+  },
+  "trial_id": "model-profile-trial:d965f949e25603e6d56293f9",
+  "version": 1
+}
