@@ -104,5 +104,5 @@
 <text class="th" x="68" y="556">outside this tree Â· system-of-record: the Workflows repo</text>
 <text class="ts" x="68" y="576">approved-issue queue â opener lane (issues + draft PRs) â KEEPALIVE (Actions) â closer lane</text>
 <text class="ts" x="68" y="596">this loop touches it at 3 points: lanes read capacity.py Â· orchestrator_review fallback Â·</text>
-<text class="ts" x="68" y="612">tick.py --active applies agent:* labels to drive keepalive. Lanes yield on a coarse heartbeat.</text>
+<text class="ts" x="68" y="612">tick.py --active ingests keepalive outcomes; dispatch + heartbeat are shadow unless ORCH_DISPATCH_LANE=1 (2026-09-03).</text>
 </svg>

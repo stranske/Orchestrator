@@ -441,6 +441,9 @@ def research_tick(
     }
 
 
+DISPATCH_LANE_ENV = "ORCH_DISPATCH_LANE"
+
+
 def remote_tick(
     items: list,
     cap: dict,
@@ -448,6 +451,7 @@ def remote_tick(
     learned: dict | None = None,
     dry_run: bool = True,
     do_ingest: bool = True,
+    ingest_dry_run: bool | None = None,
     max_delegations: int | None = None,
     env: Mapping[str, str] | None = None,
     runtime_ac_gate_fn=None,
@@ -605,8 +609,11 @@ def remote_tick(
         excluded_targets=reserved_targets,
         production_reserve=production_reserve,
     )
+    # Ingestion is the Brain's largest evidence source and must not depend on whether this tick
+    # DELEGATES: since 2026-09-03 the default active tick ingests live while delegating nothing
+    # (ORCH_DISPATCH_LANE=0), so the two get separate switches. None keeps the old coupling.
     ingest = (
-        outcomes.ingest_outcomes(dry_run=dry_run)
+        outcomes.ingest_outcomes(dry_run=dry_run if ingest_dry_run is None else ingest_dry_run)
         if do_ingest
         else {"note": "skipped (do_ingest=False)"}
     )
@@ -625,7 +632,57 @@ def remote_tick(
     }
 
 
+def _selftest_dispatch_lane_default_off() -> None:
+    """`--active` ingests live and delegates nothing unless ORCH_DISPATCH_LANE=1 — the default the
+    assessment set; the flag flips only delegation, never ingestion."""
+    import os as _os
+
+    calls: list[dict] = []
+    real = globals()["remote_tick"]
+    real_cap, real_backlog, real_learned = (
+        router.load_capacity,
+        router.load_backlog,
+        router.learned_ranks,
+    )
+
+    def fake_tick(items, cap, **kw):
+        calls.append(kw)
+        return {"chosen": [], "deferred": []}
+
+    saved = _os.environ.pop(DISPATCH_LANE_ENV, None)
+    try:
+        globals()["remote_tick"] = fake_tick
+        router.load_capacity = lambda: {}
+        router.load_backlog = lambda: []
+        router.learned_ranks = lambda: {}
+        main(["--active"])
+        assert calls[-1]["dry_run"] is True and calls[-1]["ingest_dry_run"] is False, (
+            "default active tick must ingest live and delegate nothing",
+            calls[-1],
+        )
+        main([])
+        assert calls[-1]["dry_run"] is True and calls[-1]["ingest_dry_run"] is True, calls[-1]
+        _os.environ[DISPATCH_LANE_ENV] = "1"
+        main(["--active"])
+        assert calls[-1]["dry_run"] is False and calls[-1]["ingest_dry_run"] is False, (
+            "ORCH_DISPATCH_LANE=1 must re-enable delegation",
+            calls[-1],
+        )
+    finally:
+        globals()["remote_tick"] = real
+        router.load_capacity, router.load_backlog, router.learned_ranks = (
+            real_cap,
+            real_backlog,
+            real_learned,
+        )
+        if saved is None:
+            _os.environ.pop(DISPATCH_LANE_ENV, None)
+        else:
+            _os.environ[DISPATCH_LANE_ENV] = saved
+
+
 def _selftest():
+    _selftest_dispatch_lane_default_off()
     import os
     import sqlite3
     import tempfile
@@ -954,10 +1011,26 @@ def main(argv):
     if "--selftest" in argv:
         _selftest()
         return 0
-    dry = "--active" not in argv  # DEFAULT shadow/dry-run; --active really delegates + ingests
+    active = "--active" in argv
+    # THE DISPATCH LANE IS SHADOW BY DEFAULT (assessment 2026-09-03, item 1): in 30 days this lane
+    # made 14 remote dispatches, 9 abandoned, none verified durable, while keepalive ran 1,239 agent
+    # rounds without it — and its heartbeat cost the closer lane a round each time it fired. An
+    # active tick therefore INGESTS live (the Brain's evidence) and DELEGATES nothing unless
+    # ORCH_DISPATCH_LANE=1 is set deliberately. Announced every run so the state is never silent.
+    lane_live = active and os.environ.get(DISPATCH_LANE_ENV, "0") == "1"
+    print(
+        f"[tick] mode={'active' if active else 'shadow'} dispatch_lane={'LIVE' if lane_live else 'shadow (' + DISPATCH_LANE_ENV + '=0)'} ingest={'live' if active else 'dry'}",
+        file=sys.stderr,
+    )
     cap = router.load_capacity()
     items = router.load_backlog()
-    out = remote_tick(items, cap, learned=router.learned_ranks(), dry_run=dry)
+    out = remote_tick(
+        items,
+        cap,
+        learned=router.learned_ranks(),
+        dry_run=not lane_live,
+        ingest_dry_run=not active,
+    )
     print(json.dumps(out, indent=2, default=str))
     return 0
 

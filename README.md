@@ -33,8 +33,10 @@ HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lan
 
 - **Shadow vs active.** `./orchestrate.sh` (no args) = SHADOW: capacity + discovery + a dry-run
   plan, prints what it *would* do, writes no heartbeat and dispatches nothing — safe to run
-  anytime alongside the live fleet. `--active` (launchd only) claims targets, writes the heartbeat,
-  and dispatches.
+  anytime alongside the live fleet. `--active` (launchd only) ingests keepalive outcomes live and, since
+  2026-09-03, dispatches nothing unless `ORCH_DISPATCH_LANE=1`: the tick's own dispatch lane made 14
+  remote dispatches in 30 days (9 abandoned, none durable) while keepalive ran 1,239 rounds without
+  it, so claims and the heartbeat now run only when that flag is set.
 - **Editing safely.** Edit the canonical Dropbox copy, run `orch-sync-mirror.sh`, and confirm the
   mirror matches. A concurrent fleet tick writes only to worktrees and state — never to this
   canonical tree — so canonical edits are yours alone, but always re-sync so the schedule sees them.

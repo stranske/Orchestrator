@@ -47,6 +47,9 @@ fi
 # recovered missing-spec inputs. ORCH_RESEARCH_ARM=1 enables new launches and guarded followups;
 # missing-spec recovery remains objective-only under every setting. See research_usage_guard.py.
 export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"
+# The tick's own remote dispatch lane (agent:* labels + heartbeat). Default OFF since 2026-09-03:
+# 14 dispatches in 30 days, 9 abandoned, none durable, while keepalive ran 1,239 rounds without it.
+export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
 # GitHub API rate-budget awareness (IMPROVEMENT_BACKLOG.md #8 P2). The local lanes share ONE gh token,
 # so gh-heavy cadence steps can hit the REST search (30/min) / core (5000/hr) budget. ORCH_GH_THROTTLE=1
 # turns ON the in-loop pace/defer in durability_sweep/keepalive/langsmith (each a no-op when unset).
@@ -219,9 +222,17 @@ if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
 fi
 
 if [[ "$mode" == "active" ]]; then
-  python3 "$ORCH/claims.py" reap     >/dev/null 2>&1 || true
-  # Heartbeat so the legacy opener/closer cron lanes YIELD to the orchestrator this tick (stale in 15m).
-  printf '{"generated_at": %s, "pid": %s}\n' "$(date +%s)" "$$" > "$HOME/.codex/handoff/orchestrator.json"
+  # THE DISPATCH LANE IS SHADOW BY DEFAULT (assessment 2026-09-03, item 1). Claims and the heartbeat
+  # exist only to protect this tick's own dispatches; with ORCH_DISPATCH_LANE=0 there are none, so
+  # neither runs and the lanes never yield to us. tick.py still runs: it INGESTS keepalive outcomes
+  # live (the Brain's evidence) and only PLANS delegation. Announced every tick.
+  if [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
+    python3 "$ORCH/claims.py" reap     >/dev/null 2>&1 || true
+    # Heartbeat so the legacy opener/closer cron lanes YIELD to the orchestrator this tick (stale in 15m).
+    printf '{"generated_at": %s, "pid": %s}\n' "$(date +%s)" "$$" > "$HOME/.codex/handoff/orchestrator.json"
+  else
+    echo "  dispatch lane: shadow (ORCH_DISPATCH_LANE=0) — no claims, no heartbeat; tick ingests live, delegates nothing"
+  fi
   # REMOTE model (owner's design): for each backlog item, choose a keepalive agent (reserve-aware) ->
   # apply agent:<X> -> the GitHub keepalive runs it on REMOTE capacity -> ingest the PR outcome into the
   # feedback loop. Local CLI delegation (router.py + dispatcher.py) remains available for bounded local work.
