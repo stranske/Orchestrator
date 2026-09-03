@@ -18,12 +18,13 @@ import re
 import shlex
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import capabilities
 import feedback
@@ -38,6 +39,14 @@ CANDIDATE_BODY = "synthesis-delivery-candidate.md"
 DEFAULT_TTL_DAYS = 14
 DEFAULT_CANDIDATE_TTL_DAYS = 7
 DEFAULT_MAX_RETRIES = 3
+FOLLOWUP_SHIP_GATE_ENV = "ORCH_FOLLOWUP_SHIP_GATE"
+LIVE_RECONCILE_GATE_REFUSAL = (
+    "refusing --live reconcile: ORCH_FOLLOWUP_SHIP_GATE is disabled; "
+    "use exp_abcd followup as the sole launch controller"
+)
+LIVE_RECONCILE_CONTROLLER_REFUSAL = (
+    "refusing --live reconcile: use exp_abcd followup as the sole launch and delivery controller"
+)
 
 # Subordinate phases only. These are not a second capability-lifecycle enum.
 DELIVERY_PHASES = (
@@ -84,6 +93,15 @@ SENSITIVE_PATH_RE = re.compile(
     r"(?:^|/)(?:\.env(?:\.|$)|id_rsa$|id_ed25519$|[^/]+\.(?:pem|p12|key)$)",
     re.IGNORECASE,
 )
+
+
+class ShadowReconcileInjectors(TypedDict):
+    launch_fn: Callable[[], dict]
+    completion_fn: Callable[[dict], dict]
+    resume_fn: Callable[[dict], dict]
+    verify_fn: Callable[[dict, Path], dict]
+    outcome_lookup_fn: Callable[[dict], dict | None]
+    mirror_fn: Callable[[dict, str], dict]
 
 
 def _hash(value: Any) -> str:
@@ -994,6 +1012,96 @@ def _mirror_once(
     return state
 
 
+def _followup_ship_gate_enabled() -> bool:
+    """Use the existing followup ship gate; no CLI-specific live switch exists."""
+    return os.environ.get(FOLLOWUP_SHIP_GATE_ENV, "1").strip().lower() not in (
+        "0",
+        "false",
+        "off",
+    )
+
+
+def _shadow_reconcile_plan(state: dict, now: int) -> list[dict]:
+    """State the next transition a shadow CLI invocation would ask followup to make."""
+    phase = state["delivery_phase"]
+    if phase in TERMINAL_PHASES:
+        return [{"action": "none", "phase": phase, "reason": "terminal promotion state"}]
+    if now >= int(state.get("expires_ts") or 0):
+        return [
+            {
+                "action": "transition",
+                "from": phase,
+                "to": "discarded",
+                "reason": "promotion_expired",
+            }
+        ]
+    if phase == "candidate_ready" and now >= int(state.get("candidate_expires_ts") or 0):
+        return [
+            {
+                "action": "transition",
+                "from": phase,
+                "to": "discarded",
+                "reason": "stale_candidate_retired",
+            }
+        ]
+    next_retry = (state.get("retry") or {}).get("next_retry_ts")
+    if next_retry and now < int(next_retry):
+        return [{"action": "wait", "phase": phase, "reason": "retry_backoff"}]
+    transitions = {
+        "evaluated": ("synth_running", "synthesis_process_launched"),
+        "synth_running": ("synth_complete", "synthesis_commit_complete"),
+        "synth_complete": ("synth_verified", "all_synthesis_gates_passed"),
+        "synth_verified": ("candidate_ready", "candidate_compiled"),
+        "delegated_or_pr": ("merged", "delivery_merged_pending_durability"),
+        "merged": ("durable", "delivery_durably_held"),
+    }
+    if phase == "candidate_ready":
+        return [
+            {
+                "action": "wait",
+                "phase": phase,
+                "reason": "awaiting_external_delivery_link",
+            }
+        ]
+    target, reason = transitions[phase]
+    return [{"action": "transition", "from": phase, "to": target, "reason": reason}]
+
+
+def _shadow_reconcile_injectors() -> ShadowReconcileInjectors:
+    """Return inert callbacks so an accidental dry-run bypass cannot launch work."""
+
+    def launch() -> dict:
+        return {"blocked": True, "reason": "shadow CLI never launches synthesis"}
+
+    def completion(_state: dict) -> dict:
+        return {"status": "pending", "reason": "shadow CLI never probes synthesis"}
+
+    def resume(_state: dict) -> dict:
+        return {"blocked": True, "reason": "shadow CLI never resumes synthesis"}
+
+    def verify(_state: dict, _root: Path) -> dict:
+        return {
+            "passed": False,
+            "transient": True,
+            "failure_reason": "shadow CLI never verifies synthesis",
+        }
+
+    def outcome(_state: dict) -> None:
+        return None
+
+    def mirror(_state: dict, _event_key: str) -> dict:
+        return {"recorded": False, "reason": "shadow CLI never records outcomes"}
+
+    return {
+        "launch_fn": launch,
+        "completion_fn": completion,
+        "resume_fn": resume,
+        "verify_fn": verify,
+        "outcome_lookup_fn": outcome,
+        "mirror_fn": mirror,
+    }
+
+
 def reconcile(
     exp_dir: str | Path,
     *,
@@ -1005,9 +1113,20 @@ def reconcile(
     mirror_fn: Callable[[dict, str], dict] | None = None,
     now: int | None = None,
     max_steps: int = 6,
+    dry_run: bool = False,
 ) -> dict:
     root = Path(exp_dir)
     ts = int(now or time.time())
+    if dry_run:
+        state = load_state(root)
+        if state is None:
+            raise ValueError("promotion state is not initialized")
+        return {
+            "actions": ["shadow_no_side_effects"],
+            "mode": "shadow",
+            "state": state,
+            "would_do": _shadow_reconcile_plan(state, ts),
+        }
     with _locked(root):
         state = load_state(root)
         if state is None:
@@ -1286,6 +1405,8 @@ def reconcile(
 
 
 def selftest() -> None:
+    import contextlib
+    import io
     import shutil
 
     with tempfile.TemporaryDirectory(prefix="synthesis-promotion-") as tmp:
@@ -1308,6 +1429,74 @@ def selftest() -> None:
         (root / "eval-maps.json").write_text('{"judge-a": {}}')
         state = ensure_evaluated_state(root, now=100)
         assert state["delivery_phase"] == "evaluated"
+        # CLI reconciliation is advisory: it exposes the next phase transition without
+        # writing state or invoking even its injected inert launcher.
+        shadow_root = Path(tmp) / "cli-shadow"
+        shadow_root.mkdir()
+        (shadow_root / "meta.json").write_text(
+            json.dumps(
+                {
+                    "repo": "owner/repo",
+                    "base": "main",
+                    "base_sha": "base",
+                    "agents": ["codex"],
+                    "exp_id": "cli-shadow",
+                }
+            )
+        )
+        (shadow_root / "spec.md").write_text("## Scope\n- CLI shadow\n")
+        (shadow_root / "eval-maps.json").write_text("{}")
+        ensure_evaluated_state(shadow_root, now=int(time.time()))
+        state_before_shadow = state_path(shadow_root).read_bytes()
+        shadow_injector_calls = 0
+        shadow_launch_calls = 0
+        original_shadow_injectors = _shadow_reconcile_injectors
+
+        def tracked_shadow_injectors() -> ShadowReconcileInjectors:
+            nonlocal shadow_injector_calls, shadow_launch_calls
+            shadow_injector_calls += 1
+            injectors = original_shadow_injectors()
+            original_launch = injectors["launch_fn"]
+
+            def tracked_launch() -> dict:
+                nonlocal shadow_launch_calls
+                shadow_launch_calls += 1
+                return original_launch()
+
+            injectors["launch_fn"] = tracked_launch
+            return injectors
+
+        old_ship_gate = os.environ.get(FOLLOWUP_SHIP_GATE_ENV)
+        globals()["_shadow_reconcile_injectors"] = tracked_shadow_injectors
+        try:
+            shadow_stdout = io.StringIO()
+            with contextlib.redirect_stdout(shadow_stdout):
+                shadow_rc = main(["reconcile", str(shadow_root)])
+            shadow_output = shadow_stdout.getvalue()
+            assert (
+                shadow_rc == 0
+                and shadow_injector_calls == 1
+                and shadow_launch_calls == 0
+                and state_path(shadow_root).read_bytes() == state_before_shadow
+                and '"mode": "shadow"' in shadow_output
+                and '"would_do"' in shadow_output
+                and '"from": "evaluated"' in shadow_output
+                and '"to": "synth_running"' in shadow_output
+            ), "bare CLI shadow reconcile must inject a non-invoked launcher and print its would-do transition"
+
+            os.environ[FOLLOWUP_SHIP_GATE_ENV] = "0"
+            live_stderr = io.StringIO()
+            with contextlib.redirect_stderr(live_stderr):
+                live_rc = main(["reconcile", str(shadow_root), "--live"])
+            assert (
+                live_rc != 0 and live_stderr.getvalue().strip() == LIVE_RECONCILE_GATE_REFUSAL
+            ), "bare CLI --live must refuse when ORCH_FOLLOWUP_SHIP_GATE is disabled"
+        finally:
+            globals()["_shadow_reconcile_injectors"] = original_shadow_injectors
+            if old_ship_gate is None:
+                os.environ.pop(FOLLOWUP_SHIP_GATE_ENV, None)
+            else:
+                os.environ[FOLLOWUP_SHIP_GATE_ENV] = old_ship_gate
         calls = {"launch": 0, "resume": 0}
         wt = Path(tmp) / "worktree"
         wt.mkdir()
@@ -1434,6 +1623,11 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _capability_heartbeat()
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv == ["--selftest"]:
+        selftest()
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init")
@@ -1442,6 +1636,7 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("exp_dir", type=Path)
     rec = sub.add_parser("reconcile")
     rec.add_argument("exp_dir", type=Path)
+    rec.add_argument("--live", action="store_true")
     link = sub.add_parser("link-delivery")
     link.add_argument("exp_dir", type=Path)
     link.add_argument("--run-id", required=True)
@@ -1457,7 +1652,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "status":
         result = load_state(args.exp_dir) or {"status": "missing"}
     elif args.command == "reconcile":
-        result = reconcile(args.exp_dir)
+        if args.live:
+            if not _followup_ship_gate_enabled():
+                print(LIVE_RECONCILE_GATE_REFUSAL, file=sys.stderr)
+            else:
+                print(LIVE_RECONCILE_CONTROLLER_REFUSAL, file=sys.stderr)
+            return 2
+        result = reconcile(args.exp_dir, dry_run=True, **_shadow_reconcile_injectors())
     else:
         result = link_delivery(
             args.exp_dir,
