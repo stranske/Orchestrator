@@ -1,0 +1,33 @@
+{
+  "boundary": "Isolated temp DB only; no $ORCH_LOCAL_RUNTIME.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:runs=0' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:runs=0",
+    "run": [
+      "PYTHONPATH=$REPO_ROOT/src python3 -c \"import sys; sys.path.insert(0,'$REPO_ROOT/src'); import feedback; from pathlib import Path; feedback.DB_PATH=Path('/tmp/p2_feedback_break/brain.db'); feedback.snapshot_json('/tmp/p2_feedback_break/snap.json'); print('EXERCISE_BREAK:runs=0')\" > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": [
+      "rm -rf /tmp/p2_feedback_break && mkdir -p /tmp/p2_feedback_break"
+    ]
+  },
+  "capability_id": "feedback-store",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/feedback.py:1889 record_run",
+  "notes": "snapshot_json tables at feedback.py:4387-4418.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/feedback-store.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:runs=1' /tmp/p2_exercise_out.txt",
+  "run": [
+    "mkdir -p /tmp/p2_feedback_tmp",
+    "PYTHONPATH=$REPO_ROOT/src P2_TMP=/tmp/p2_feedback_tmp ORCH_FEEDBACK_DB=/tmp/p2_feedback_tmp/brain.db python3 $CONTRACT_DIR/fixtures/harness/run.py feedback-store pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "rm -rf /tmp/p2_feedback_tmp && mkdir -p /tmp/p2_feedback_tmp"
+  ],
+  "stated_task": "Write one run row to an isolated ORCH_FEEDBACK_DB and recount via snapshot_json."
+}

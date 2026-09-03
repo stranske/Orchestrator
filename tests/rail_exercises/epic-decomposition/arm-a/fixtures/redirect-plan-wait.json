@@ -1,0 +1,1 @@
+{"agent":"cursor","target":"fixture/repo#12","lane":"opener","task_type":"implement","state":"progress","recommended_action":"wait","signals":{},"hints":[],"drift":{"severity":"none","findings":[]},"policy_decision":{"action":"wait","reason":"active","confidence":"high","advisory":true}}

@@ -1,0 +1,23 @@
+{
+  "boundary": "Must not pass --apply, --confirm-target, or execute any command emitted in steps; that leaves apply_plan's prompt write and stop/release/delegate path (src/redirect_plan.py:447-541) untouched.",
+  "break_case": {"setup": [], "run": ["ORCH_CAPABILITY_HEARTBEATS=0 python3 src/redirect_plan.py --report-json $CONTRACT_DIR/fixtures/redirect-plan-wait.json --dry-run --json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"action\"]==\"wait\" and x[\"apply_supported\"] is False and x[\"dry_run_only\"] is True; open(\"/tmp/rail-break-redirect-plan\",\"w\").write(\"EXERCISE_BREAK:wait-not-redirect\\n\")'"], "check": "grep -qx 'EXERCISE_BREAK:wait-not-redirect' /tmp/rail-break-redirect-plan", "expected": "EXERCISE_BREAK:wait-not-redirect"},
+  "capability_id": "redirect-plan",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/redirect_plan.py:240; src/redirect_plan.py:684; src/redirect_plan.py:447",
+  "notes": "The plan can describe mutating steps while itself remains dry_run_only; mutability is a property of proposed steps (src/redirect_plan.py:362-380), so the command output is inspection-only.",
+  "origin": {
+    "proposer": "P1-codex",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P1-codex/orch/exercises/redirect-plan.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/redirect_plan.py --report-json $CONTRACT_DIR/fixtures/redirect-plan-redirect.json --next-agent fixture-next --dry-run --json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"dry_run_only\"] is True and x[\"action\"]==\"redirect\" and x[\"requires_confirmation\"] is True and [s[\"id\"] for s in x[\"steps\"]]==[\"inspect-current-state\",\"stop-process\",\"release-claim\",\"delegate-retry\"], x' # plan fields assembled at src/redirect_plan.py:362-381",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/redirect_plan.py --report-json $CONTRACT_DIR/fixtures/redirect-plan-redirect.json --next-agent fixture-next --dry-run --json # non-apply branch at src/redirect_plan.py:724-751"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/redirect-plan-redirect.json $CONTRACT_DIR/fixtures/redirect-plan-wait.json # report inputs consumed by src/redirect_plan.py:724-734"
+  ],
+  "stated_task": "Turn a controlled redirect decision into a dry-run plan containing confirmation-gated mutating command shapes without executing them."
+}

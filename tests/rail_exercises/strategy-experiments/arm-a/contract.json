@@ -1,0 +1,28 @@
+{
+  "boundary": "Must not pass --prepare --confirm-strategy or set ORCH_STRATEGY_EXPERIMENT=1 (active prepare guard at src/strategy_experiment.py:579-585); must not write strategy.json under live experiments or invoke exp_abcd.prepare_arms.",
+  "break_case": {
+    "expected_failure_text": "single strategy must name exactly one agent",
+    "pass_check": "bash -c 'cd $REPO_ROOT/orch && python3 src/strategy_experiment.py --repo stranske/Workflows --spec-file $CONTRACT_DIR/fixtures/strategy-experiments/spec.md --exp-id r15-strategy-break --arms-json '\"'\"'[{\"strategy\":\"single\",\"agents\":[\"claude\",\"cursor\"]},{\"strategy\":\"parallel\",\"agents\":[\"codex\",\"cursor\"]}]'\"'\"' --json 2>&1 | grep -q \"single strategy must name exactly one agent\"'",
+    "run": [
+      "cd $REPO_ROOT/orch && python3 src/strategy_experiment.py --repo stranske/Workflows --spec-file $CONTRACT_DIR/fixtures/strategy-experiments/spec.md --exp-id r15-strategy-break --arms-json '[{\"strategy\":\"single\",\"agents\":[\"claude\",\"cursor\"]},{\"strategy\":\"parallel\",\"agents\":[\"codex\",\"cursor\"]}]' --json"
+    ],
+    "setup": []
+  },
+  "capability_id": "strategy-experiments",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/strategy_experiment.py:561",
+  "notes": "Default read-only planning documented at src/strategy_experiment.py:12-16. build_strategy_plan at src/strategy_experiment.py:190-294; normalize_arm validation at src/strategy_experiment.py:98-99.",
+  "origin": {
+    "proposer": "P3-cursor",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P3-cursor/orch/exercises/strategy-experiments.json"
+  },
+  "pass_check": "python3 -c \"import json,sys; p=json.load(open('$CONTRACT_DIR/fixtures/strategy-experiments/plan-out.json')); ok=(p.get('kind')=='strategy_experiment_plan' and p.get('hypothesis')=='H4' and p.get('strategy_aware_auto_launch') is False and set(p.get('implementation_agents') or [])=={'claude','cursor'} and p.get('arms',[{}])[1].get('planned_attempt_count')==3 and 'ORCH_STRATEGY_EXPERIMENT=1' in p.get('commands',{}).get('active_prepare_text','')); sys.exit(0 if ok else 1)\"",
+  "run": [
+    "cd $REPO_ROOT/orch && python3 src/strategy_experiment.py --hypothesis H4 --repo stranske/Workflows --spec-file $CONTRACT_DIR/fixtures/strategy-experiments/spec.md --exp-id r15-strategy-ex --json > $CONTRACT_DIR/fixtures/strategy-experiments/plan-out.json"
+  ],
+  "setup": [],
+  "stated_task": "Emit a read-only H4 strategy experiment plan JSON with guarded active-prepare metadata and no exp_abcd prepare launch."
+}

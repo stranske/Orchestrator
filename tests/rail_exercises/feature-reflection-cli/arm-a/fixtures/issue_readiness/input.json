@@ -1,0 +1,6 @@
+{
+  "target": "stranske/Orchestrator#101",
+  "title": "Fix parser logic in config loader",
+  "body": "Update src/config.py and tests/test_config.py to fix line 42 parser error.",
+  "labels": [{"name": "bug"}]
+}

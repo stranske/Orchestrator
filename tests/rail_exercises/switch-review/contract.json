@@ -1,0 +1,24 @@
+{
+  "boundary": "Report-only fixture invocation; no --raise and ORCH_SWITCH_REVIEW remains unset.",
+  "break_case": {
+    "check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; r=json.load(open('$CONTRACT_DIR/fixtures/results/switch-review/break.json')); raise SystemExit(0 if r['status']=='FAIL' else 1)\" && python3 -c \"import hashlib,json; from pathlib import Path; p=Path('$CONTRACT_DIR/fixtures/switch-review'); saved=json.load((p/'baseline.json').open()); got={str(x.relative_to(p)):hashlib.sha256(x.read_bytes()).hexdigest() for x in p.rglob('*') if x.is_file() and x.name!='baseline.json'}; raise SystemExit(0 if got==saved else 1)\"",
+    "command": "mkdir -p $CONTRACT_DIR/fixtures/results/switch-review && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/switch-review/run.py break > $CONTRACT_DIR/fixtures/results/switch-review/break.json",
+    "expected": "The source remains unable to express the requested SUSPECT/value/drainable contract"
+  },
+  "capability_id": "switch-review",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": "2",
+  "entrypoint_read": "src/switch_review.py:220-284 review; src/switch_review.py:622-650 CLI",
+  "notes": "NOT EXERCISABLE AS REQUESTED: source has only on/off and invocation-age review. This contract deliberately fails rather than inventing the missing gate model.",
+  "skip_reason": "Source-owned contract explicitly declares the requested SUSPECT/value/drainable model absent and deliberately returns status=FAIL in both its original pass arm and break arm; retained as a named non-runnable specification gap rather than weakening its PASS assertion.",
+  "origin": {
+    "proposer": "P-audit-routing",
+    "round": "r18",
+    "source": "rounds/r18/executors/P-audit-routing/orch/exercises2/switch-review.json"
+  },
+  "pass_check": "PYTHONPATH=$REPO_ROOT/src python3 -c \"import json; raise SystemExit(0 if json.load(open('$CONTRACT_DIR/fixtures/results/switch-review/result.json'))['status']=='PASS' else 1)\"",
+  "run": "mkdir -p $CONTRACT_DIR/fixtures/results/switch-review && PYTHONPATH=$REPO_ROOT/src python3 $CONTRACT_DIR/fixtures/switch-review/run.py pass > $CONTRACT_DIR/fixtures/results/switch-review/result.json",
+  "setup": "python3 -c \"import base64; exec(compile(base64.b64decode('CmltcG9ydCBqc29uLCBzaHV0aWwKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aChyIi9wcml2YXRlL3RtcC9jbGF1ZGUtNTAyLy1Vc2Vycy10ZWFjaGVyLUxpYnJhcnktQ2xvdWRTdG9yYWdlLURyb3Bib3gtTGVhcm5pbmctQ29kZS1PcmNoZXN0cmF0b3IvOWIzMDE2NzktY2YyNS00OGRhLTg1ODMtMjNmYWRlYWM3ZTI3L3NjcmF0Y2hwYWQvcm91bmRzL3IxOC9leGVjdXRvcnMvUC1hdWRpdC1yb3V0aW5nL29yY2gvZXhlcmNpc2VzMi9maXh0dXJlcy9zd2l0Y2gtcmV2aWV3Iik7IHNodXRpbC5ybXRyZWUocCxpZ25vcmVfZXJyb3JzPVRydWUpOyBwLm1rZGlyKHBhcmVudHM9VHJ1ZSkKanNvbi5kdW1wKHsncmFuZ2UtbGFuZS1yb2xsb3V0Jzp7J2xhc3RfaW52b2NhdGlvbic6MjAwMDAwMDAwMC04Kjg2NDAwfX0sKHAvJ2xlZGdlci5qc29uJykub3BlbigndycpLGluZGVudD0yKQoocC8ncnVuLnB5Jykud3JpdGVfdGV4dCgiXG5pbXBvcnQganNvbiwgc3lzXG5mcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGhcbmltcG9ydCBzd2l0Y2hfcmV2aWV3IGFzIG1cbnA9UGF0aChfX2ZpbGVfXykucGFyZW50OyBub3c9MjAwMDAwMDAwMFxubGVkZ2VyPWpzb24ubG9hZCgocC8nbGVkZ2VyLmpzb24nKS5vcGVuKCkpXG5pZiBzeXMuYXJndlsxXT09J2JyZWFrJzogbGVkZ2VyWydyYW5nZS1sYW5lLXJvbGxvdXQnXVsnbGFzdF9pbnZvY2F0aW9uJ109bm93LTg2NDAwXG5tLmNhcGFiaWxpdGllcy5sb2FkPWxhbWJkYSBwYXRoOiBsZWRnZXI7IG0uc3RhbGVfcnVubmVycz1sYW1iZGE6IFtdOyBtLm1pcnJvcl9kcmlmdD1sYW1iZGE6IHsnc3RhdHVzJzonb2snfVxucmVwPW0ucmV2aWV3KG5vdz1ub3csZW52PXsnT1JDSF9SQU5HRV9MQU5FX1JPTExPVVQnOicxJ30scGF0aD1wLydsZWRnZXIuanNvbicpXG4jIFRoZSByZXF1ZXN0ZWQgU1VTUEVDVC92YWx1ZS9kcmFpbmFibGUgY2xhc3NpZmljYXRpb24gaXMgYWJzZW50IGZyb20gdGhlIHJlYWwgcmVwb3J0LlxucHJpbnQoanNvbi5kdW1wcyh7J3N0YXR1cyc6J0ZBSUwnLCdzb3VyY2Vfb25fYnV0X2lkbGUnOnJlcFsnb25fYnV0X2lkbGUnXSwnbWlzc2luZ19jb250cmFjdF9maWVsZHMnOlsnU1VTUEVDVCcsJ2dhdGVfdmFsdWUnLCdkcmFpbmFibGUnXX0saW5kZW50PTIpKVxuIikKCmltcG9ydCBoYXNobGliCmJhc2VsaW5lPXtzdHIoeC5yZWxhdGl2ZV90byhwKSk6aGFzaGxpYi5zaGEyNTYoeC5yZWFkX2J5dGVzKCkpLmhleGRpZ2VzdCgpIGZvciB4IGluIHAucmdsb2IoJyonKSBpZiB4LmlzX2ZpbGUoKSBhbmQgeC5uYW1lIT0nYmFzZWxpbmUuanNvbid9Cmpzb24uZHVtcChiYXNlbGluZSwocC8nYmFzZWxpbmUuanNvbicpLm9wZW4oJ3cnKSxpbmRlbnQ9MikK'), 'fixture-setup', 'exec'))\"",
+  "stated_task": "Requested gate sweep: classify a past-horizon, unmoved, zero-drainable fixture gate as SUSPECT and a moving gate as not SUSPECT."
+}

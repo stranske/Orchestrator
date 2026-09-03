@@ -1,0 +1,28 @@
+{
+  "boundary": "Must not pass --apply (GitHub issue creation via gh at scripts/docs_drift_fix_agent.py:641-791), must not scan or mutate the live Workflows checkout, and must not edit fixture files during the run. Default read-only mode per scripts/docs_drift_fix_agent.py:13-14.",
+  "break_case": {
+    "expected_failure_text": "max_per_batch must be positive",
+    "pass_check": "bash -c 'cd $REPO_ROOT/orch && python3 scripts/docs_drift_fix_agent.py --repo-root $CONTRACT_DIR/fixtures/docs-drift-fix-agent --repo stranske/Workflows --max-per-batch 0 --json 2>&1 | grep -q \"max_per_batch must be positive\"'",
+    "run": [
+      "cd $REPO_ROOT/orch && python3 scripts/docs_drift_fix_agent.py --repo-root $CONTRACT_DIR/fixtures/docs-drift-fix-agent --repo stranske/Workflows --max-per-batch 0 --json"
+    ],
+    "setup": []
+  },
+  "capability_id": "docs-drift-fix-agent",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "scripts/docs_drift_fix_agent.py:1002",
+  "notes": "Ledger cites Workflows/scripts/docs_drift_fix_agent.py; this clone vendors an equivalent at scripts/docs_drift_fix_agent.py (same module). CLI exits 1 when findings exist without --apply (scripts/docs_drift_fix_agent.py:1030) \u2014 pass_check inspects JSON only. collect_findings composes check_docs_drift at scripts/docs_drift_fix_agent.py:567-573.",
+  "origin": {
+    "proposer": "P3-cursor",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P3-cursor/orch/exercises/docs-drift-fix-agent.json"
+  },
+  "pass_check": "python3 -c \"import json,sys; p=json.load(open('$CONTRACT_DIR/fixtures/docs-drift-fix-agent/plan-out.json')); kinds={f['kind'] for f in p.get('findings',[])}; ok=(p.get('finding_count',0)>=1 and p.get('batch_count',0)>=1 and 'documented_but_missing' in kinds and any(f.get('target')=='agents-missing.yml' for f in p.get('findings',[]))); sys.exit(0 if ok else 1)\"",
+  "run": [
+    "cd $REPO_ROOT/orch && python3 scripts/docs_drift_fix_agent.py --repo-root $CONTRACT_DIR/fixtures/docs-drift-fix-agent --repo stranske/Workflows --docs docs/ci/WORKFLOWS.md --json > $CONTRACT_DIR/fixtures/docs-drift-fix-agent/plan-out.json || true"
+  ],
+  "setup": [],
+  "stated_task": "Build a read-only docs-drift repair plan JSON from a fixture mini-repo with intentional workflow inventory drift."
+}

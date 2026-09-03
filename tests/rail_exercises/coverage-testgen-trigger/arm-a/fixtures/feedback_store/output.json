@@ -1,0 +1,19 @@
+{
+  "run": [
+    "run-store-001",
+    "stranske/Orchestrator#42",
+    "implement",
+    "codex",
+    "gpt-5.6-codex"
+  ],
+  "completion_events": [
+    [
+      "decision",
+      "accepted"
+    ],
+    [
+      "trigger",
+      "accepted"
+    ]
+  ]
+}

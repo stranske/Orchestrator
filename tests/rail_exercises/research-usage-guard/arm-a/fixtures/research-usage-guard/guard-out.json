@@ -1,0 +1,42 @@
+{
+  "admitted": {
+    "alerts": [],
+    "bypassed": false,
+    "decision": "admitted",
+    "eligible": true,
+    "estimated_prompt_bytes": 2014,
+    "estimated_prompt_tokens": 504,
+    "evaluator_agents": [
+      "vibe"
+    ],
+    "evaluator_count": 1,
+    "exp_id": "tick-1700000000-exercise",
+    "opportunity_id": "opp:7fd72a6faa9a4d6c9b0e278fe06ad787",
+    "reason": "admitted",
+    "repo": "owner/repo",
+    "signature": "523b3de1e6f92a94f9bec64ca379df822d47dd993f340ed80ca993149ddcac83",
+    "subject": "exercise-subject",
+    "terminal_outcome": "dispatching",
+    "ts": 1788388833
+  },
+  "duplicate": {
+    "alerts": [],
+    "bypassed": false,
+    "decision": "duplicate",
+    "eligible": false,
+    "estimated_prompt_bytes": 2014,
+    "estimated_prompt_tokens": 504,
+    "evaluator_agents": [
+      "vibe"
+    ],
+    "evaluator_count": 1,
+    "exp_id": "tick-1700000001-exercise",
+    "opportunity_id": "opp:83dd8111698e4375be17af35f08f99c6",
+    "reason": "duplicate_signature_dispatching",
+    "repo": "owner/repo",
+    "signature": "523b3de1e6f92a94f9bec64ca379df822d47dd993f340ed80ca993149ddcac83",
+    "subject": "exercise-subject",
+    "terminal_outcome": "duplicate",
+    "ts": 1788388843
+  }
+}

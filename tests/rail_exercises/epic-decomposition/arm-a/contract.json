@@ -1,0 +1,23 @@
+{
+  "boundary": "Validation only reads the fixture and formats prompts; it must not call a dispatcher or use the generated prompt as a dispatch instruction. This leaves dispatch external to build_dispatch_prompts (src/epic_lane.py:381-416) and preserves the rail's planning-only scope (src/epic_lane.py:2-7).",
+  "break_case": {"setup": [], "run": ["ORCH_CAPABILITY_HEARTBEATS=0 python3 src/epic_lane.py --validate $CONTRACT_DIR/fixtures/epic-invalid.json --json > /tmp/rail-break-epic.json; rc=$?; python3 -c 'import json; x=json.load(open(\"/tmp/rail-break-epic.json\")); assert any(\"E999\" in e for e in x[\"errors\"])'; test \"$rc\" -eq 1; printf '%s\\n' 'EXERCISE_BREAK:unknown-dependency-E999' > /tmp/rail-break-epic-marker"], "check": "grep -qx 'EXERCISE_BREAK:unknown-dependency-E999' /tmp/rail-break-epic-marker", "expected": "EXERCISE_BREAK:unknown-dependency-E999"},
+  "capability_id": "epic-decomposition",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/epic_lane.py:131; src/epic_lane.py:563; src/epic_lane.py:483",
+  "notes": "The negative fixture uses the concrete unknown-dependency branch covered by the module selftest (src/epic_lane.py:509-515), avoiding a vacuous parser-only failure.",
+  "origin": {
+    "proposer": "P1-codex",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P1-codex/orch/exercises/epic-decomposition.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/epic_lane.py --validate $CONTRACT_DIR/fixtures/epic-valid.json --json --emit-dispatch-prompts | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"valid\"] is True and x[\"errors\"]==[] and len(x[\"dispatch_prompts\"])==1 and x[\"dispatch_prompts\"][0][\"id\"]==\"E1\" and x[\"dispatch_prompts\"][0][\"lane\"]==\"local\", x' # output construction src/epic_lane.py:601-605 and 381-416",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/epic_lane.py --validate $CONTRACT_DIR/fixtures/epic-valid.json --json --emit-dispatch-prompts # validate CLI src/epic_lane.py:594-612"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/epic-valid.json $CONTRACT_DIR/fixtures/epic-invalid.json # plan files read by src/epic_lane.py:594-605"
+  ],
+  "stated_task": "Validate a self-contained epic plan and emit its dispatch-ready prompt record while rejecting a plan that names an unknown dependency."
+}

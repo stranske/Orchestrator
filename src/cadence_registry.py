@@ -17,6 +17,15 @@ from typing import Any
 
 CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
+        "key": "rail-exercise",
+        "success_stamp": ".last-rail-exercise",
+        "cadence_days": 6,
+        "artifact": "rail-exercise-report.json",
+        "log": "rail-exercise.log",
+        "gate": "shadow by default; ORCH_RAIL_EXERCISE_RECORD=1 enables explicit machine-observed ledger evidence",
+        "next_transition": "retry contracts next week; skipped contracts name their missing fixture or malformed break case",
+    },
+    {
         "key": "capability-lifecycle",
         "success_stamp": None,
         "cadence_days": 0,

@@ -1,0 +1,28 @@
+{
+  "boundary": "build_command only; no dispatch execution.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:gemini_dir=no' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:gemini_dir=no",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py agy-runtime-isolation break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "agy-runtime-isolation",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/adapters.py:1305 build_command",
+  "notes": "Isolation flags at adapters.py:1481-1494.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/agy-runtime-isolation.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:gemini_dir=yes' /tmp/p2_exercise_out.txt",
+  "run": [
+    "python3 $CONTRACT_DIR/fixtures/harness/run.py agy-runtime-isolation pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [],
+  "stated_task": "Verify gemini dispatch command carries isolated --gemini_dir and --add-dir."
+}

@@ -1,0 +1,85 @@
+{
+  "candidate": {},
+  "candidate_expires_ts": null,
+  "candidate_ttl_days": 7,
+  "canonical_state": "retired",
+  "created_ts": 100,
+  "delivery": {},
+  "delivery_phase": "discarded",
+  "experiment_id": "p2-synth-exp",
+  "expires_ts": 1209700,
+  "lineage": {
+    "accepted_influences": [],
+    "arms": [],
+    "base": "main",
+    "base_sha": "base",
+    "evaluator_ids": [
+      "judge-a"
+    ],
+    "experiment_id": "p2-synth-exp",
+    "members": [
+      {
+        "agent": "codex",
+        "arm_id": null,
+        "member_id": "codex",
+        "profile_id": null,
+        "source_run_id": "p2-synth-exp:codex",
+        "strategy": "legacy_agent"
+      }
+    ],
+    "profile_ids": [],
+    "repo": "fixture/repo",
+    "shared_capacity_cost": null,
+    "shared_capacity_pool_id": "experiment-shared-pool",
+    "task_type": "implement"
+  },
+  "max_retries": 3,
+  "mirrored_events": [],
+  "outcome": {},
+  "phase_history": [
+    {
+      "canonical_state": "generated",
+      "event_id": "promotion:cb5e7a21556fb95f0afbb197",
+      "from": null,
+      "reason": "cross_evaluation_complete",
+      "to": "evaluated",
+      "ts": 100
+    },
+    {
+      "canonical_state": "retired",
+      "event_id": "promotion:2158f21161c46dd5bd6b65a4",
+      "evidence_hash": "sha256:7152ea4d65d8fa598bded85629d673a3d2f0cf57b7170dd1fe73c7d81d708bb9",
+      "from": "evaluated",
+      "reason": "usefulness_gate_discard",
+      "to": "discarded",
+      "ts": 101
+    }
+  ],
+  "publication": {
+    "auto_merge_allowed": false,
+    "delivery_controller": "Workflows auto-pilot/Keepalive",
+    "direct_publication_allowed": false,
+    "requires_external_delivery_link": true
+  },
+  "repo": "fixture/repo",
+  "retry": {
+    "count": 0,
+    "failures": [],
+    "next_retry_ts": null
+  },
+  "rollback": {
+    "action": "retire local candidate and preserve evidence; no remote mutation",
+    "available": true,
+    "executed": true,
+    "reason": "usefulness_gate_discard",
+    "remote_mutation": false,
+    "retired_ts": 101
+  },
+  "schema_version": 1,
+  "synthesis": {
+    "gate": {},
+    "ranking": {}
+  },
+  "updated_ts": 101,
+  "verification": {}
+}

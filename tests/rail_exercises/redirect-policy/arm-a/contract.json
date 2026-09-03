@@ -1,0 +1,23 @@
+{
+  "boundary": "Never supplies a live watch report, invokes no apply function, and disables heartbeat recording; the policy is explicitly advisory and never kills/releases/applies labels (src/redirect_policy.py:2-7).",
+  "break_case": {"setup": [], "run": ["ORCH_CAPABILITY_HEARTBEATS=0 python3 src/redirect_policy.py --json < $CONTRACT_DIR/fixtures/redirect-policy-repeat-auth.json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"action\"]==\"decompose\" and \"repeated redirect-worthy failures\" in x[\"reason\"]; open(\"/tmp/rail-break-redirect-policy\",\"w\").write(\"EXERCISE_BREAK:decompose-repeated-auth\\n\")'"], "check": "grep -qx 'EXERCISE_BREAK:decompose-repeated-auth' /tmp/rail-break-redirect-policy", "expected": "EXERCISE_BREAK:decompose-repeated-auth"},
+  "capability_id": "redirect-policy",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/redirect_policy.py:63; src/redirect_policy.py:230",
+  "notes": "No CLI rejection exists for an otherwise well-formed policy input; the break case therefore asserts the required adverse decision rather than manufacturing a parser failure.",
+  "origin": {
+    "proposer": "P1-codex",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P1-codex/orch/exercises/redirect-policy.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/redirect_policy.py --json < $CONTRACT_DIR/fixtures/redirect-policy-auth.json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x=={\"action\":\"redirect\",\"reason\":\"stalled with redirect-worthy root cause: auth\",\"confidence\":\"high\",\"escalated\":True,\"history_summary\":{\"prior_attempts\":0,\"prior_stalls\":0,\"prior_drifts\":0,\"prior_redirect_causes\":0,\"prior_actions\":[]},\"advisory\":True}, x' # expected branch src/redirect_policy.py:105-123",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/redirect_policy.py --json < $CONTRACT_DIR/fixtures/redirect-policy-auth.json # read-only JSON CLI at src/redirect_policy.py:230-242"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/redirect-policy-auth.json $CONTRACT_DIR/fixtures/redirect-policy-repeat-auth.json # stdin payload shape consumed by src/redirect_policy.py:235-242"
+  ],
+  "stated_task": "Convert a controlled stalled authentication report to an advisory redirect decision and escalate repeated identical failures to decompose."
+}

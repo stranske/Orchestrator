@@ -1,0 +1,36 @@
+{
+  "scan_rep": {
+    "registry_entries": 18,
+    "qualifying_modules": 1,
+    "unlogged": [
+      {
+        "name": "reusable-sample",
+        "module": "reusable_sample.py"
+      }
+    ],
+    "unlogged_count": 1,
+    "skipped_sample": [
+      {
+        "module": "no_docstring.py",
+        "why": "no docstring"
+      }
+    ]
+  },
+  "apply_rep": {
+    "recorded": [
+      "reusable-sample"
+    ],
+    "dry_run": false
+  },
+  "feature_record": {
+    "problem": "",
+    "maturity": "ad-hoc",
+    "module": "reusable_sample.py",
+    "uses": [
+      "feature_scan"
+    ],
+    "first_seen": 1788388818,
+    "count": 1
+  },
+  "second_scan_unlogged": 0
+}

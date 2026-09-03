@@ -1,0 +1,13 @@
+{
+  "claims": {
+    "fixture-owner/stall-fixture#42": {
+      "agent": "fixture-agent",
+      "lane": "opener",
+      "task_type": "implement",
+      "log": "/private/tmp/claude-502/-Users-teacher-Library-CloudStorage-Dropbox-Learning-Code-Orchestrator/9b301679-cf25-48da-8583-23fadeac7e27/scratchpad/rounds/r17/executors/P-second-arms-r17/orch/exercises2/fixtures/stall-watcher/stalled.log",
+      "expected_paths": [
+        "src/fixture.py"
+      ]
+    }
+  }
+}

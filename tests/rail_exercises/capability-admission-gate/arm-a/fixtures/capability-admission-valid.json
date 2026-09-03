@@ -1,0 +1,16 @@
+{
+  "capability_id": "capability:fixture-admission",
+  "notes": "dedup: checked fixture A/B/C; no equivalent rail exists",
+  "downstream_consumer": "fixture.py:consume",
+  "learning_sink": "feedback.fixture",
+  "kill_switch": "ORCH_FIXTURE=0",
+  "rollback": "remove fixture",
+  "trigger_cadence": "daily",
+  "entrypoint": "fixture.py:run",
+  "matcher": {"kind": "fixture", "name": "admission"},
+  "output": "fixture output",
+  "status": "generated",
+  "consumer": "fixture consumer"
+  ,"findability_category": "exercise_bound"
+  ,"findability_rationale": "bound on rail-exercise:fixture-admission"
+}

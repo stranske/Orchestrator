@@ -1,0 +1,30 @@
+{
+  "boundary": "Read-only envelope validation; no ORCH_FEEDBACK_DB writes.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:payload_field_not_allowlisted:prompt_text' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:payload_field_not_allowlisted:prompt_text",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py completion-event-lineage break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "completion-event-lineage",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/completion_event_adapter.py:417 adapt_completion_event_envelope",
+  "notes": "Adapter rejects prompt_text per completion_event_adapter.py:92 RAW_PROMPT_KEYS.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/completion-event-lineage.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:phase=trigger' /tmp/p2_exercise_out.txt",
+  "run": [
+    "python3 $CONTRACT_DIR/fixtures/harness/run.py completion-event-lineage pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "mkdir -p $CONTRACT_DIR/fixtures/harness"
+  ],
+  "stated_task": "Validate a joined completion-event envelope fixture via adapt_completion_event_envelope (feedback.py:1062 record_completion_event is the write path; adapter is the read contract)."
+}

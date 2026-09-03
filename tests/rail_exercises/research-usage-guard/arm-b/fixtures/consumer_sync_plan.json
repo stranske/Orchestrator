@@ -1,0 +1,26 @@
+{
+  "schema": "workflows.consumer-sync-plan/v1",
+  "version": 1,
+  "manifest_sha256": "sha256:4f809602d038becfd205a0c1e4749590b24447b3cab65597669e66b5ec6ad36e",
+  "entries": [
+    {
+      "section": "workflows",
+      "source": ".github/workflows/p2-new.yml",
+      "resolved_source": "templates/consumer-repo/.github/workflows/p2-new.yml",
+      "target": ".github/workflows/p2-new.yml",
+      "description": "P2 fixture entry",
+      "sync_mode": null,
+      "is_directory": false,
+      "skip_repos": [],
+      "skip_reasons": {},
+      "overwrite_repos": [],
+      "template_sync": null,
+      "delivery": "copy",
+      "requires": [],
+      "content_sha256": "sha256:f6ff91864d982765f721774624ef835006bf845eb687578c232ed3013bb356eb",
+      "effect_fingerprint": "sha256:583586703384d7a3dddab5a979d04f434489cd505860fb4605103039568196b4"
+    }
+  ],
+  "removals": [],
+  "plan_id": "sha256:5eec904116bffb4b76e5bc65506b9022357eb1a67eed4c5cadd935f188d7ceff"
+}

@@ -1,0 +1,1 @@
+{"target":"fixture/repo#7","pr_state":"open","labels":["agents:keepalive","needs-human"],"outcome":"needs_human","iteration":null,"max_iterations":null,"consecutive_no_progress":3,"rounds_without_task_completion":0,"failure_count":3,"failure_threshold":3,"gate_conclusion":null,"last_has_changes":false,"total_tasks_completed":0,"has_marker":true}

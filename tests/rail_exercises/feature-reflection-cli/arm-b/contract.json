@@ -1,0 +1,30 @@
+{
+  "boundary": "scan() only; no --apply registry writes.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:unlogged_count=0' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:unlogged_count=0",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py feature-reflection-cli break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "feature-reflection-cli",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/feature_scan.py:95 scan",
+  "notes": "Uses scan(path=, root=) at feature_scan.py:95-98; CLI lacks --root on main.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/feature-reflection-cli.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:unlogged_count=1' /tmp/p2_exercise_out.txt",
+  "run": [
+    "python3 $CONTRACT_DIR/fixtures/harness/run.py feature-reflection-cli pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -d $CONTRACT_DIR/fixtures/feature_scan_root"
+  ],
+  "stated_task": "Scan a fixture tree for unlogged reusable structures (docstring + _selftest)."
+}

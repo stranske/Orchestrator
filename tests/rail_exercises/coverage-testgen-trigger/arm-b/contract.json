@@ -1,0 +1,23 @@
+{
+  "boundary": "ORCH_COVERAGE_TESTGEN=1 enables only decision emission; --repo-path is intentionally omitted, so no ranker/dispatch runs. ORCH_STATE_DIR and ORCH_LOCAL_RUNTIME are unset. Every executable command unsets ORCH_CAPABILITY_HEARTBEATS.",
+  "break_case": {
+    "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-coverage-break.json'\"'\"')); raise SystemExit(0 if p[\"action\"]==\"none\" and p[\"warn_human\"] is False and p[\"targets\"]==[] else 1)'",
+    "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/coverage-testgen-trigger\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STATE_DIR -u ORCH_LOCAL_RUNTIME ORCH_COVERAGE_TESTGEN=1 python3 \"$ROOT/src/coverage_testgen_trigger.py\" --repo fixture-owner/coverage-fixture --coverage-json \"$FIX/coverage_healthy.json\" --previous 86 --json > /tmp/orch-exercises2-coverage-break.json",
+    "stated_break": "Read setup-created 91.0 report and prove the trigger returns none rather than a test-writing action."
+  },
+  "capability_id": "coverage-testgen-trigger",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/coverage_testgen_trigger.py main",
+  "notes": "Observable is threshold crossing plus deliberate no-target behavior, not selftest.",
+  "origin": {
+    "proposer": "P-second-arms-r17",
+    "round": "r17",
+    "source": "rounds/r17/executors/P-second-arms-r17/orch/exercises2/coverage-testgen-trigger.json"
+  },
+  "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-coverage-pass.json'\"'\"')); ok=(p[\"repo\"]==\"fixture-owner/coverage-fixture\" and p[\"coverage\"]==84.25 and p[\"previous\"]==86.0 and p[\"action\"]==\"write_tests\" and p[\"warn_human\"] is True and p[\"targets\"]==[] and \"no targets named\" in p[\"reason\"]); raise SystemExit(0 if ok else 1)'",
+  "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/coverage-testgen-trigger\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STATE_DIR -u ORCH_LOCAL_RUNTIME ORCH_COVERAGE_TESTGEN=1 python3 \"$ROOT/src/coverage_testgen_trigger.py\" --repo fixture-owner/coverage-fixture --coverage-json \"$FIX/coverage.json\" --previous 86 --json > /tmp/orch-exercises2-coverage-pass.json",
+  "setup": "FIX=$CONTRACT_DIR/fixtures/coverage-testgen-trigger; rm -rf \"$FIX\"; mkdir -p \"$FIX\"; export FIX; python3 -c 'import json, os\nfrom pathlib import Path\nbase = Path(os.environ[\"FIX\"])\nfiles = {'\"'\"'coverage.json'\"'\"': {'\"'\"'totals'\"'\"': {'\"'\"'percent_covered'\"'\"': 84.25}}, '\"'\"'coverage_healthy.json'\"'\"': {'\"'\"'totals'\"'\"': {'\"'\"'percent_covered'\"'\"': 91.0}}}\nfor rel, value in files.items():\n    path = base / rel\n    path.parent.mkdir(parents=True, exist_ok=True)\n    if rel.endswith(\".json\"):\n        with path.open(\"w\", encoding=\"utf-8\") as f:\n            json.dump(value, f, indent=2)\n            f.write(\"\\n\")\n    else:\n        path.write_text(value, encoding=\"utf-8\")\n'",
+  "stated_task": "Read fixture coverage 84.25 after 86.0 and prove dry-run decision is write_tests with one crossing warning but no target ranking or dispatch."
+}

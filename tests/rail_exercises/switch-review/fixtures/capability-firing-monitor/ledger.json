@@ -1,0 +1,20 @@
+{
+  "fixture-silent": {
+    "capability_id": "fixture-silent",
+    "status": "wired",
+    "matcher": {
+      "kind": "tick_phase"
+    },
+    "trigger_cadence": "daily",
+    "last_invocation": 1999740800
+  },
+  "fixture-fresh": {
+    "capability_id": "fixture-fresh",
+    "status": "wired",
+    "matcher": {
+      "kind": "tick_phase"
+    },
+    "trigger_cadence": "daily",
+    "last_invocation": 1999913600
+  }
+}

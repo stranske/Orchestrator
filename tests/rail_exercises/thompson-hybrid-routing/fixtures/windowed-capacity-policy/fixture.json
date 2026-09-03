@@ -1,0 +1,12 @@
+{
+  "ccusage": {
+    "projection": {
+      "totalTokens": 150
+    }
+  },
+  "fresh_ccusage": {
+    "projection": {
+      "totalTokens": 50
+    }
+  }
+}

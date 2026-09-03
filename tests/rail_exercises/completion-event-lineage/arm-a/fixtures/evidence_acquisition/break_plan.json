@@ -1,0 +1,14 @@
+{
+  "assignments": [],
+  "cap_per_cycle": 1,
+  "deferred": [],
+  "feedable_count": 0,
+  "generated_at": 1700000000,
+  "live": false,
+  "max_items_per_capability": 3,
+  "routed": [],
+  "schema": "orchestrator.evidence-acquisition-plan",
+  "state": "nothing_to_feed",
+  "summary": "feedable 0 / capped 1 / candidates 2 / fed 0",
+  "version": 1
+}

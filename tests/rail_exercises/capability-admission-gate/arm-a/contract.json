@@ -1,0 +1,24 @@
+{
+  "boundary": "Does not invoke report() against the live registry, alter the capability ledger, or write heartbeat evidence; it leaves the test-suite report path at src/capability_admission.py:770-790 and all ledger/state paths alone.",
+  "break_case": {"setup": [], "run": ["ORCH_CAPABILITY_HEARTBEATS=0 python3 src/capability_admission.py --preflight @$CONTRACT_DIR/fixtures/capability-admission-invalid.json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"ready_to_build\"] is False and \"kill_switch\" in x[\"declarable_missing\"]; open(\"/tmp/rail-break-admission\",\"w\").write(\"EXERCISE_BREAK:missing-kill-switch\\n\")'"], "check": "grep -qx 'EXERCISE_BREAK:missing-kill-switch' /tmp/rail-break-admission", "expected": "EXERCISE_BREAK:missing-kill-switch"},
+  "capability_id": "capability-admission-gate",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/capability_admission.py:770; src/capability_admission.py:520; src/capability_admission.py:1154",
+  "notes": "The module says it enforces admission and dated commitments in its docstring (src/capability_admission.py:25-38); this fixture exercises the controlled preflight arm because report() hard-codes the live registry load (src/capability_admission.py:770-774).",
+  "origin": {
+    "proposer": "P1-codex",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P1-codex/orch/exercises/capability-admission-gate.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/capability_admission.py --preflight @$CONTRACT_DIR/fixtures/capability-admission-valid.json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"ready_to_build\"] is True and x[\"declarable_missing\"] == [], x' # expected fields from src/capability_admission.py:520",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/capability_admission.py --preflight @$CONTRACT_DIR/fixtures/capability-admission-valid.json # CLI reads @file at src/capability_admission.py:1168-1173"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/capability-admission-valid.json # fixture authored for src/capability_admission.py:520",
+    "test -f $CONTRACT_DIR/fixtures/capability-admission-invalid.json # fixture authored for src/capability_admission.py:520"
+  ],
+  "stated_task": "Prove the admission gate accepts a fully declared proposed capability and reports missing declarations for an incomplete one."
+}

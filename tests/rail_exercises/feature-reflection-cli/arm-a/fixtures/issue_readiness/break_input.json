@@ -1,0 +1,6 @@
+{
+  "target": "stranske/Orchestrator#102",
+  "title": "Fix security vulnerability in auth",
+  "body": "Update src/auth.py and tests/test_auth.py to address CVE.",
+  "labels": [{"name": "security"}, {"name": "bug"}]
+}

@@ -1,0 +1,24 @@
+{
+  "boundary": "This is intentionally a SHADOW exercise: it must not set ORCH_REDIRECT_APPLY_BOOTSTRAP=1, pass --spend-offloads, call apply_one, invoke a backend, write a corpus event, write a prompt, release a claim, kill a PID, or delegate. The avoided live mutation begins at src/redirect_apply.py:397-415 via redirect_plan.apply_plan (src/redirect_plan.py:485-541).",
+  "break_case": {"setup": [], "run": ["ORCH_CAPABILITY_HEARTBEATS=0 PYTHONPATH=src python3 $CONTRACT_DIR/fixtures/redirect-apply-authorize-harness.py > /tmp/rail-break-redirect-apply 2>&1"], "check": "grep -qx 'REFUSED_LIVE_PID' /tmp/rail-break-redirect-apply", "expected": "REFUSED_LIVE_PID"},
+  "capability_id": "redirect-apply-bootstrap",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/redirect_apply.py:502; src/redirect_apply.py:325; src/redirect_apply.py:964",
+  "notes": "A positive apply_candidates test cannot be both real and non-mutating because it calls apply_one (src/redirect_apply.py:564-574), which records corpus events even when it does not apply (src/redirect_apply.py:365-415). This contract therefore measures the canary's safety gate plus its live-PID refusal, not useful recovery efficacy.",
+  "origin": {
+    "proposer": "P1-codex",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P1-codex/orch/exercises/redirect-apply-bootstrap.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 ORCH_REDIRECT_APPLY_BOOTSTRAP=0 python3 src/redirect_apply.py --apply --report-dir $CONTRACT_DIR/fixtures/redirect-apply-empty-reports --corpus $CONTRACT_DIR/fixtures/redirect-apply-empty-corpus.jsonl --json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert (x[\"reports_seen\"],x[\"considered\"],x[\"authorized\"],x[\"applied\"],x[\"results\"])==(0,0,0,0,[]) and \"ORCH_REDIRECT_APPLY_BOOTSTRAP is off\" in x[\"skipped\"], x' # exact safe-off result src/redirect_apply.py:528-539",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 ORCH_REDIRECT_APPLY_BOOTSTRAP=0 python3 src/redirect_apply.py --apply --report-dir $CONTRACT_DIR/fixtures/redirect-apply-empty-reports --corpus $CONTRACT_DIR/fixtures/redirect-apply-empty-corpus.jsonl --json # default-off branch at src/redirect_apply.py:528-539"
+  ],
+  "setup": [
+    "mkdir -p $CONTRACT_DIR/fixtures/redirect-apply-empty-reports # report directory consumed by src/redirect_apply.py:541-546",
+    "test -f $CONTRACT_DIR/fixtures/redirect-apply-authorize-harness.py # pure refusal harness for src/redirect_apply.py:243"
+  ],
+  "stated_task": "Prove the bootstrap entrypoint stays default-off without authorising candidates and separately refuses a live process in its pure authorisation gate."
+}

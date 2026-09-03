@@ -1,0 +1,69 @@
+{
+  "capabilities": {
+    "feed-me": {
+      "schema_version": 1,
+      "capability_id": "feed-me",
+      "status": "shadow",
+      "owner": null,
+      "matcher": {
+        "field": "task_type",
+        "operator": "in",
+        "value": [
+          "implement"
+        ]
+      },
+      "entrypoint": null,
+      "trigger_cadence": null,
+      "flags_defaults": {},
+      "output_artifact": null,
+      "downstream_consumer": null,
+      "learning_sink": null,
+      "activation_evidence": {},
+      "last_match": null,
+      "last_invocation": null,
+      "last_success": null,
+      "outcome_links": [],
+      "gate_reason": "needs independent durable reuses",
+      "gate_evidence": null,
+      "evidence_threshold": {
+        "min_independent_durable_reuse": 3
+      },
+      "activation_deadline": null,
+      "expiry": null,
+      "next_transition": null,
+      "kill_switch": "disable via config",
+      "rollback": "revert",
+      "predecessor": null,
+      "successor": null,
+      "target_kind": null,
+      "capability_version_id": null,
+      "artifact_hash": null,
+      "lifecycle_policy_hash": null,
+      "lifecycle_policy": {},
+      "causal_evidence": {
+        "readiness": {
+          "durable_subjects": [
+            "subject-a"
+          ],
+          "terminal_outcomes": 1,
+          "failures": 0,
+          "rework": 0,
+          "latest_evidence_ts": 1699996400,
+          "ready": false
+        }
+      },
+      "routing_prior": {
+        "alpha": 1.0,
+        "beta": 1.0,
+        "observations": 0
+      },
+      "rollback_pending": null,
+      "event_history": [],
+      "liveness": null,
+      "gate_blocks_execution": true,
+      "gate_criteria": {
+        "min_independent_durable_reuse": 3
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "boundary": "prepare only; no finalize/Brain write.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:stop_reason=shared_codex_pool_not_ready' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:stop_reason=shared_codex_pool_not_ready",
+    "run": [
+      "cd $REPO_ROOT && PYTHONPATH=src python3 src/model_profile_trial.py prepare --orchestrator-root $REPO_ROOT --workflows-root $CONTRACT_DIR/fixtures/workflows_mini --output /tmp/p2_trial_manifest_bad.json --capacity-state shed",
+      "python3 -c \"import json; m=json.load(open('/tmp/p2_trial_manifest_bad.json')); print('EXERCISE_BREAK:stop_reason='+m['stop_conditions']['reasons'][0])\" > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "local-model-profile-trial",
+  "confidence": "medium",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 4,
+  "entrypoint_read": "src/model_profile_trial.py:724 prepare",
+  "notes": "capacity_state must be ok|warn per model_profile_trial.py:256-257.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/local-model-profile-trial.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:requests=3' /tmp/p2_exercise_out.txt",
+  "run": [
+    "rm -f /tmp/p2_trial_manifest.json",
+    "cd $REPO_ROOT && PYTHONPATH=src python3 src/model_profile_trial.py prepare --orchestrator-root $REPO_ROOT --workflows-root $CONTRACT_DIR/fixtures/workflows_mini --output /tmp/p2_trial_manifest.json --capacity-state ok",
+    "python3 -c \"import json; m=json.load(open('/tmp/p2_trial_manifest.json')); print('EXERCISE_PASS:requests='+str(len(m.get('requests',[]))))\" > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "test -d $CONTRACT_DIR/fixtures/workflows_mini"
+  ],
+  "stated_task": "Emit a frozen Sol/Terra/Luna trial manifest via prepare subcommand."
+}

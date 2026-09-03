@@ -1,0 +1,23 @@
+{
+  "boundary": "One-process monkeypatch replaces only redirect_sweep.claims.active_claims with JSON fixture data. sweep is dry-run; no writes, labels, dispatches, or live claims reads. Every executable command unsets ORCH_CAPABILITY_HEARTBEATS.",
+  "break_case": {
+    "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-stall-break.json'\"'\"')); ok=(p[\"active_claim_count\"]==1 and p[\"watched_count\"]==0 and p[\"unwatchable_count\"]==1 and p[\"actionable_count\"]==0 and p[\"reports\"]==[]); raise SystemExit(0 if ok else 1)'",
+    "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/stall-watcher\"; env -u ORCH_CAPABILITY_HEARTBEATS python3 -c 'import json, sys\nsys.path.insert(0, sys.argv[1])\nimport redirect_sweep\npayload=json.load(open(sys.argv[2]))\nredirect_sweep.claims.active_claims=lambda **kwargs: payload[\"claims\"]\nprint(json.dumps(redirect_sweep.sweep(stale_seconds=0, ttl=1, now=2000000000), indent=2))' \"$ROOT/src\" \"$FIX/claims_unwatchable.json\" > /tmp/orch-exercises2-stall-break.json",
+    "stated_break": "Use a setup-created claim with no pid/log/worktree and prove sweep classifies it unwatchable rather than inventing a decision."
+  },
+  "capability_id": "stall-watcher",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/watch.py classify_lane via src/redirect_sweep.py sweep",
+  "notes": "Exercises watch classification through redirect_sweep, not either selftest.",
+  "origin": {
+    "proposer": "P-second-arms-r17",
+    "round": "r17",
+    "source": "rounds/r17/executors/P-second-arms-r17/orch/exercises2/stall-watcher.json"
+  },
+  "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-stall-pass.json'\"'\"')); r=p[\"reports\"][0]\nok=(p[\"dry_run_only\"] is True and p[\"mutates_state\"] is False and p[\"active_claim_count\"]==1 and p[\"watched_count\"]==1 and p[\"actionable_count\"]==1 and r[\"state\"]==\"stalled\" and r[\"a2a_state\"]==\"auth-required\" and r[\"policy_decision\"][\"action\"]==\"redirect\")\nraise SystemExit(0 if ok else 1)'",
+  "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/stall-watcher\"; env -u ORCH_CAPABILITY_HEARTBEATS python3 -c 'import json, sys\nsys.path.insert(0, sys.argv[1])\nimport redirect_sweep\npayload=json.load(open(sys.argv[2]))\nredirect_sweep.claims.active_claims=lambda **kwargs: payload[\"claims\"]\nprint(json.dumps(redirect_sweep.sweep(stale_seconds=0, ttl=1, now=2000000000), indent=2))' \"$ROOT/src\" \"$FIX/claims.json\" > /tmp/orch-exercises2-stall-pass.json",
+  "setup": "FIX=$CONTRACT_DIR/fixtures/stall-watcher; rm -rf \"$FIX\"; mkdir -p \"$FIX\"; export FIX; python3 -c 'import json, os\nfrom pathlib import Path\nbase = Path(os.environ[\"FIX\"])\nfiles = {'\"'\"'claims.json'\"'\"': {'\"'\"'claims'\"'\"': {'\"'\"'fixture-owner/stall-fixture#42'\"'\"': {'\"'\"'agent'\"'\"': '\"'\"'fixture-agent'\"'\"', '\"'\"'lane'\"'\"': '\"'\"'opener'\"'\"', '\"'\"'task_type'\"'\"': '\"'\"'implement'\"'\"', '\"'\"'log'\"'\"': '\"'\"'$CONTRACT_DIR/fixtures/stall-watcher/stalled.log'\"'\"', '\"'\"'expected_paths'\"'\"': ['\"'\"'src/fixture.py'\"'\"']}}}, '\"'\"'stalled.log'\"'\"': '\"'\"'fatal error: fixture credential transport failed\\n'\"'\"', '\"'\"'claims_unwatchable.json'\"'\"': {'\"'\"'claims'\"'\"': {'\"'\"'fixture-owner/stall-fixture#42'\"'\"': {'\"'\"'agent'\"'\"': '\"'\"'fixture-agent'\"'\"', '\"'\"'lane'\"'\"': '\"'\"'opener'\"'\"', '\"'\"'task_type'\"'\"': '\"'\"'implement'\"'\"'}}}}\nfor rel, value in files.items():\n    path = base / rel\n    path.parent.mkdir(parents=True, exist_ok=True)\n    if rel.endswith(\".json\"):\n        with path.open(\"w\", encoding=\"utf-8\") as f:\n            json.dump(value, f, indent=2)\n            f.write(\"\\n\")\n    else:\n        path.write_text(value, encoding=\"utf-8\")\n'",
+  "stated_task": "Sweep one monkeypatched, fixture-only active claim and prove a stale fatal-error log becomes a stalled, auth-required, actionable redirect report without state mutation."
+}

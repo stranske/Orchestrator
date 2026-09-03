@@ -1,0 +1,16 @@
+{
+  "blocked_reasons": [
+    "no_spare_after_production_reserve"
+  ],
+  "budget": 0,
+  "candidates": [],
+  "planned": [],
+  "skipped": [],
+  "spare": {
+    "claude": 0,
+    "codex": 0,
+    "cursor": 0,
+    "vibe": 0
+  },
+  "status": "no_spare"
+}

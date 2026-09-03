@@ -210,6 +210,16 @@ fi
 # Everything from here down may emit capability heartbeats. Capacity + discovery write only
 # orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
 # this is safe in either mode.
+if _cadence_due rail-exercise && _attempt_ok rail-exercise; then
+  echo "  [cadence] rail exercise contracts (weekly shadow)"
+  rail_exercise_args=(--json)
+  if [[ "${ORCH_RAIL_EXERCISE_RECORD:-0}" == "1" ]]; then rail_exercise_args+=(--record); fi
+  if python3 "$ORCH/rail_exercise.py" "${rail_exercise_args[@]}" > "$STAMP_DIR/rail-exercise-report.json"; then
+    _mark_success rail-exercise
+  else
+    _mark_fail rail-exercise
+  fi
+fi
 python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
 python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
 # ORCH-ANCHOR: frontend-verify-doctor -- the ONLY tick caller of the frontend-verifier capability.

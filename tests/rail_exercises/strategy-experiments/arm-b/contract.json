@@ -1,0 +1,23 @@
+{
+  "boundary": "Plan-only. Never passes --prepare and explicitly unsets ORCH_STRATEGY_EXPERIMENT; uses fixture spec/arms only. Every executable command unsets ORCH_CAPABILITY_HEARTBEATS.",
+  "break_case": {
+    "pass_check": "python3 -c 'exit_code=open('\"'\"'/tmp/orch-exercises2-strategy-break.exit'\"'\"').read().strip(); text=open('\"'\"'/tmp/orch-exercises2-strategy-break.txt'\"'\"').read(); raise SystemExit(0 if exit_code==\"1\" and \"single strategy must name exactly one agent\" in text else 1)'",
+    "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/strategy-experiments\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STRATEGY_EXPERIMENT python3 \"$ROOT/src/strategy_experiment.py\" --repo fixture-owner/strategy-fixture --spec-file \"$FIX/spec.md\" --exp-id fixture-strategy-plan-v2 --arms-json \"$FIX/arms_invalid.json\" --json > /tmp/orch-exercises2-strategy-break.txt 2>&1; printf \"%s\" \"$?\" > /tmp/orch-exercises2-strategy-break.exit",
+    "stated_break": "Reject a setup-created invalid single arm that names two agents without ever setting ORCH_STRATEGY_EXPERIMENT."
+  },
+  "capability_id": "strategy-experiments",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/strategy_experiment.py main: build plan only",
+  "notes": "Observable is strategy-arm normalization and active-prepare guard, not module selftest.",
+  "origin": {
+    "proposer": "P-second-arms-r17",
+    "round": "r17",
+    "source": "rounds/r17/executors/P-second-arms-r17/orch/exercises2/strategy-experiments.json"
+  },
+  "pass_check": "python3 -c 'import json\np=json.load(open('\"'\"'/tmp/orch-exercises2-strategy-pass.json'\"'\"'))\nok=(p[\"kind\"]==\"strategy_experiment_plan\" and p[\"strategy_aware_auto_launch\"] is False and len(p[\"arms\"])==2 and p[\"arms\"][1][\"planned_attempt_count\"]==3 and p[\"active_prepare_guard\"][\"requires_env\"]=={\"ORCH_STRATEGY_EXPERIMENT\":\"1\"} and \"ORCH_STRATEGY_EXPERIMENT=1\" in p[\"commands\"][\"active_prepare_text\"])\nraise SystemExit(0 if ok else 1)'",
+  "run": "ROOT=$REPO_ROOT; FIX=\"$ROOT/$CONTRACT_DIR/fixtures/strategy-experiments\"; env -u ORCH_CAPABILITY_HEARTBEATS -u ORCH_STRATEGY_EXPERIMENT python3 \"$ROOT/src/strategy_experiment.py\" --repo fixture-owner/strategy-fixture --spec-file \"$FIX/spec.md\" --exp-id fixture-strategy-plan-v2 --arms-json \"$FIX/arms.json\" --task-type review --json > /tmp/orch-exercises2-strategy-pass.json",
+  "setup": "FIX=$CONTRACT_DIR/fixtures/strategy-experiments; rm -rf \"$FIX\"; mkdir -p \"$FIX\"; export FIX; python3 -c 'import json, os\nfrom pathlib import Path\nbase = Path(os.environ[\"FIX\"])\nfiles = {'\"'\"'spec.md'\"'\"': '\"'\"'Fixture-only planning specification. No live prepare is authorized.\\n'\"'\"', '\"'\"'arms.json'\"'\"': [{'\"'\"'strategy'\"'\"': '\"'\"'single'\"'\"', '\"'\"'agents'\"'\"': ['\"'\"'codex'\"'\"']}, {'\"'\"'strategy'\"'\"': '\"'\"'parallel'\"'\"', '\"'\"'agents'\"'\"': ['\"'\"'claude'\"'\"', '\"'\"'cursor'\"'\"'], '\"'\"'synthesize'\"'\"': True}], '\"'\"'arms_invalid.json'\"'\"': [{'\"'\"'strategy'\"'\"': '\"'\"'single'\"'\"', '\"'\"'agents'\"'\"': ['\"'\"'codex'\"'\"', '\"'\"'cursor'\"'\"']}, {'\"'\"'strategy'\"'\"': '\"'\"'parallel'\"'\"', '\"'\"'agents'\"'\"': ['\"'\"'claude'\"'\"', '\"'\"'cursor'\"'\"']}]}\nfor rel, value in files.items():\n    path = base / rel\n    path.parent.mkdir(parents=True, exist_ok=True)\n    if rel.endswith(\".json\"):\n        with path.open(\"w\", encoding=\"utf-8\") as f:\n            json.dump(value, f, indent=2)\n            f.write(\"\\n\")\n    else:\n        path.write_text(value, encoding=\"utf-8\")\n'",
+  "stated_task": "Build a two-arm fixture strategy plan and prove it remains advisory: auto-launch false, the parallel arm has three planned attempts, and live prepare remains explicitly env-gated."
+}

@@ -1,0 +1,30 @@
+{
+  "boundary": "Pure planning; no exp_abcd dispatch.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:status=no_spare' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:status=no_spare",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py research-scheduler break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "research-scheduler",
+  "confidence": "medium",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/research_scheduler.py:777 build_research_plan",
+  "notes": "Uses isolated ORCH_FEEDBACK_DB for unevaluated cap at research_scheduler.py:835-841.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/research-scheduler.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:status=planned' /tmp/p2_exercise_out.txt",
+  "run": [
+    "PYTHONPATH=$REPO_ROOT/src P2_TMP=/tmp/p2_rs_tmp ORCH_FEEDBACK_DB=/tmp/p2_rs_tmp/brain.db python3 $CONTRACT_DIR/fixtures/harness/run.py research-scheduler pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [
+    "rm -rf /tmp/p2_rs_tmp && mkdir -p /tmp/p2_rs_tmp"
+  ],
+  "stated_task": "Build a research plan from fixture backlog items and capacity snapshot."
+}

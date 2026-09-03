@@ -1,0 +1,9 @@
+{
+  "claims": {
+    "fixture-owner/stall-fixture#42": {
+      "agent": "fixture-agent",
+      "lane": "opener",
+      "task_type": "implement"
+    }
+  }
+}

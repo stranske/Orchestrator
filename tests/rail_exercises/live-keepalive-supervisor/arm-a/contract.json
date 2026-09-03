@@ -1,0 +1,23 @@
+{
+  "boundary": "Does not pass --write-report-dir, --target, --list-live, or --stage2-plan; it therefore makes no GitHub query, does not write report JSON, and leaves the Stage-2 planner's optional report write at src/keepalive_supervisor.py:106-111 and live acquisition path at src/keepalive_supervisor.py:338-373 alone.",
+  "break_case": {"setup": [], "run": ["ORCH_CAPABILITY_HEARTBEATS=0 python3 src/keepalive_supervisor.py --signals-json $CONTRACT_DIR/fixtures/keepalive-blocked-signals.json --json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"eligible\"] is False and x[\"next_step\"]==\"do_not_intervene\" and \"missing_human_escalation_label\" in x[\"eligibility\"][\"blockers\"]; open(\"/tmp/rail-break-keepalive\",\"w\").write(\"EXERCISE_BREAK:ineligible-no-intervention\\n\")'"], "check": "grep -qx 'EXERCISE_BREAK:ineligible-no-intervention' /tmp/rail-break-keepalive", "expected": "EXERCISE_BREAK:ineligible-no-intervention"},
+  "capability_id": "live-keepalive-supervisor",
+  "confidence": "medium",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 2,
+  "entrypoint_read": "src/keepalive_supervisor.py:95; src/keepalive_supervisor.py:728; src/keepalive_supervisor.py:312",
+  "notes": "The source explicitly promises no process, claim, PR-label, delegation, or redirect-plan action (src/keepalive_supervisor.py:2-13). Confidence is medium until this exact fixture is run, because keepalive_shadow normalization defaults influence the shadow action.",
+  "origin": {
+    "proposer": "P1-codex",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P1-codex/orch/exercises/live-keepalive-supervisor.json"
+  },
+  "pass_check": "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/keepalive_supervisor.py --signals-json $CONTRACT_DIR/fixtures/keepalive-eligible-signals.json --json | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x[\"target\"]==\"fixture/repo#7\" and x[\"eligible\"] is True and x[\"live_action_enabled\"] is False and x[\"next_step\"]==\"review_redirectagent_proposal\" and x[\"report\"][\"policy_decision\"][\"action\"]==\"redirect\" and x[\"stage2_record_command\"] is None, x' # eligibility and next-step branches src/keepalive_supervisor.py:102-157",
+  "run": [
+    "ORCH_CAPABILITY_HEARTBEATS=0 python3 src/keepalive_supervisor.py --signals-json $CONTRACT_DIR/fixtures/keepalive-eligible-signals.json --json # pure planning path src/keepalive_supervisor.py:95-189 and CLI src/keepalive_supervisor.py:790-801"
+  ],
+  "setup": [
+    "test -f $CONTRACT_DIR/fixtures/keepalive-eligible-signals.json $CONTRACT_DIR/fixtures/keepalive-blocked-signals.json # offline inputs consumed by src/keepalive_supervisor.py:790-801"
+  ],
+  "stated_task": "Plan a controlled post-escalation keepalive candidate as advisory-only and refuse an otherwise active candidate lacking a human-escalation label."
+}

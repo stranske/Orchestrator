@@ -1,0 +1,28 @@
+{
+  "boundary": "In-memory sqlite only.",
+  "break_case": {
+    "check": "grep -q 'EXERCISE_BREAK:second=True' /tmp/p2_exercise_out.txt",
+    "expected": "EXERCISE_BREAK:second=True",
+    "run": [
+      "python3 $CONTRACT_DIR/fixtures/harness/run.py research-usage-guard break > /tmp/p2_exercise_out.txt"
+    ],
+    "setup": []
+  },
+  "capability_id": "research-usage-guard",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 3,
+  "entrypoint_read": "src/research_usage_guard.py:345 assess_and_record_opportunity",
+  "notes": "Guard limits at research_usage_guard.py:500-509.",
+  "origin": {
+    "proposer": "P2-second-arms",
+    "round": "r16",
+    "source": "rounds/r16/executors/P2-second-arms/orch/exercises2/research-usage-guard.json"
+  },
+  "pass_check": "grep -q 'EXERCISE_PASS:first=True,second=False' /tmp/p2_exercise_out.txt",
+  "run": [
+    "python3 $CONTRACT_DIR/fixtures/harness/run.py research-usage-guard pass > /tmp/p2_exercise_out.txt"
+  ],
+  "setup": [],
+  "stated_task": "Admission control blocks a second opportunity when hourly eval budget is 1."
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "strategy": "single",
+    "agents": [
+      "codex",
+      "cursor"
+    ]
+  },
+  {
+    "strategy": "parallel",
+    "agents": [
+      "claude",
+      "cursor"
+    ]
+  }
+]

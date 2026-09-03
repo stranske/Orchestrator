@@ -1,0 +1,34 @@
+{
+  "boundary": "Must not call apply_ready() or set ORCH_ISSUE_AUTOREADY=1. Must not invoke gh CLI to write labels or create owner questions. Reads only local fixture JSON and invokes pure classifier function classify_issue (src/issue_readiness.py:165).",
+  "break_case": {
+    "expected_failure_text": "EXPECTED_FAILURE: owner_review required for risk-labelled issue",
+    "run": [
+      "python3 -c '\nimport json, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\nimport issue_readiness\nissue = json.loads(Path(\"$CONTRACT_DIR/fixtures/issue_readiness/break_input.json\").read_text())\nres = issue_readiness.classify_issue(issue)\nPath(\"$CONTRACT_DIR/fixtures/issue_readiness/break_output.json\").write_text(json.dumps(res, indent=2))\nassert res[\"verdict\"] == \"owner_review\", \"Expected owner_review, got: \" + str(res.get(\"verdict\"))\nassert res[\"risky\"] is True, \"Expected risky True\"\nassert res[\"reason\"] == \"risk-labelled and actionable\", \"Unexpected reason: \" + str(res.get(\"reason\"))\nprint(\"EXPECTED_FAILURE: owner_review required for risk-labelled issue\")\n'"
+    ],
+    "setup": [
+      "mkdir -p $CONTRACT_DIR/fixtures/issue_readiness",
+      "printf '{\\n  \"target\": \"stranske/Orchestrator#102\",\\n  \"title\": \"Fix security vulnerability in auth\",\\n  \"body\": \"Update src/auth.py and tests/test_auth.py to address CVE.\",\\n  \"labels\": [{\"name\": \"security\"}, {\"name\": \"bug\"}]\\n}\\n' > $CONTRACT_DIR/fixtures/issue_readiness/break_input.json"
+    ]
+  },
+  "capability_id": "issue-readiness",
+  "confidence": "high",
+  "contract_dir": "$CONTRACT_DIR",
+  "cost_minutes": 1,
+  "entrypoint_read": "src/issue_readiness.py:165",
+  "notes": "Exercises src/issue_readiness.py:165 (classify_issue). The module CLI in main() always invokes gh issue list against the live fleet; invoking pure classify_issue directly avoids external network calls while testing exact decision logic.",
+  "origin": {
+    "proposer": "P2-gemini",
+    "round": "r15",
+    "source": "rounds/r15/proposers/P2-gemini/orch/exercises/issue-readiness.json"
+  },
+  "pass_check": "python3 -c '\nimport json\nfrom pathlib import Path\nres = json.loads(Path(\"$CONTRACT_DIR/fixtures/issue_readiness/output.json\").read_text())\nassert res[\"verdict\"] == \"auto_ready\", \"Unexpected verdict: \" + str(res.get(\"verdict\"))\nassert res[\"actionable\"] is True, \"Expected actionable True\"\nassert res[\"risky\"] is False, \"Expected risky False\"\nassert res[\"task_type\"] == \"implement\", \"Unexpected task_type: \" + str(res.get(\"task_type\"))\nprint(\"PASS\")\n'",
+  "run": [
+    "python3 -c '\nimport json, sys\nfrom pathlib import Path\nsys.path.insert(0, \"src\")\nimport issue_readiness\nissue = json.loads(Path(\"$CONTRACT_DIR/fixtures/issue_readiness/input.json\").read_text())\nres = issue_readiness.classify_issue(issue)\nPath(\"$CONTRACT_DIR/fixtures/issue_readiness/output.json\").write_text(json.dumps(res, indent=2))\n'"
+  ],
+  "setup": [
+    "mkdir -p $CONTRACT_DIR/fixtures/issue_readiness",
+    "rm -f $CONTRACT_DIR/fixtures/issue_readiness/input.json $CONTRACT_DIR/fixtures/issue_readiness/output.json $CONTRACT_DIR/fixtures/issue_readiness/break_input.json $CONTRACT_DIR/fixtures/issue_readiness/break_output.json",
+    "printf '{\\n  \"target\": \"stranske/Orchestrator#101\",\\n  \"title\": \"Fix parser logic in config loader\",\\n  \"body\": \"Update src/config.py and tests/test_config.py to fix line 42 parser error.\",\\n  \"labels\": [{\"name\": \"bug\"}]\\n}\\n' > $CONTRACT_DIR/fixtures/issue_readiness/input.json"
+  ],
+  "stated_task": "Evaluate an open issue fixture to decide autonomy readiness (auto_ready vs owner_review vs needs_specification) without touching GitHub labels."
+}

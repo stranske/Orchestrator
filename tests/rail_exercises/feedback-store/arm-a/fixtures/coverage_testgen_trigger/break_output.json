@@ -1,0 +1,9 @@
+{
+  "action": "none",
+  "coverage": 95.0,
+  "previous": null,
+  "reason": "95.00% is at or above the 90% target",
+  "repo": "test-repo",
+  "targets": [],
+  "warn_human": false
+}
