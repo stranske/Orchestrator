@@ -21,7 +21,7 @@ DELIBERATELY CONSERVATIVE. It records at `ad-hoc` maturity and never promotes: `
 ad-hoc -> reused on a second use, and `mark_hardened` stays a deliberate human act so the registry
 never claims maturity the code has not earned. Reporting is the default; `--apply` writes.
 
-    python3 feature_scan.py             # what is unlogged
+    python3 feature_scan.py [--root DIR] [--registry FILE]  # what is unlogged
     python3 feature_scan.py --json
     python3 feature_scan.py --apply     # log the unlogged at ad-hoc maturity
     python3 feature_scan.py --selftest
@@ -162,13 +162,32 @@ def format_report(rep: dict) -> str:
 
 
 def _selftest() -> None:
+    import contextlib
+    import io
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="feat-scan-") as td:
         root = Path(td)
         reg_path = root / "features.json"
+        default_before = features.load()
         # A qualifying module: docstring + _selftest.
         (root / "good_thing.py").write_text('"""A reusable thing."""\ndef _selftest():\n    pass\n')
+        # A registered qualifying module proves --registry changes the CLI's scan source.
+        (root / "known_thing.py").write_text(
+            '"""A known reusable thing."""\ndef _selftest():\n    pass\n'
+        )
+        reg_path.write_text(
+            json.dumps(
+                {
+                    "known-thing": {
+                        "count": 1,
+                        "maturity": "ad-hoc",
+                        "module": "known_thing.py",
+                        "problem": "fixture registry entry",
+                    }
+                }
+            )
+        )
         # Non-qualifying: no selftest, and no docstring.
         (root / "no_selftest.py").write_text('"""Has docs only."""\ndef go():\n    pass\n')
         (root / "no_docs.py").write_text("def _selftest():\n    pass\n")
@@ -176,10 +195,35 @@ def _selftest() -> None:
         (root / "test_thing.py").write_text('"""t."""\ndef _selftest():\n    pass\n')
         (root / "features.py").write_text('"""registry itself."""\ndef _selftest():\n    pass\n')
 
+        # Front-door fixture runs must use the supplied root AND registry. The apply invocation
+        # must update that registry only; `default_before` catches a regression to the default.
+        expected = scan(path=reg_path, root=root)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            cli_exit = main(["--root", str(root), "--registry", str(reg_path), "--json"])
+        cli_report = json.loads(stdout.getvalue())
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            apply_exit = main(
+                ["--root", str(root), "--registry", str(reg_path), "--apply", "--json"]
+            )
+        apply_report = json.loads(stdout.getvalue())
+        cli_contract = (
+            cli_exit == 0
+            and apply_exit == 0
+            and cli_report["unlogged"] == expected["unlogged"]
+            and apply_report["apply"]["recorded"] == ["good-thing"]
+            and "good-thing" in features.load(reg_path)
+            and features.load() == default_before
+        )
+        assert (
+            cli_contract
+        ), "CLI fixture root/registry contract or default-registry isolation failed"
+
         rep = scan(path=reg_path, root=root)
         names = {r["name"] for r in rep["unlogged"]}
-        assert names == {"good-thing"}, names
-        assert rep["qualifying_modules"] == 1, rep
+        assert names == set(), names
+        assert rep["qualifying_modules"] == 2, rep
         # The exclusions must be REPORTED, not silently dropped.
         skipped = {s["module"] for s in rep["skipped_sample"]}
         assert {"no_selftest.py", "no_docs.py", "test_thing.py", "features.py"} <= skipped, skipped
@@ -187,12 +231,10 @@ def _selftest() -> None:
         # Dry run writes nothing.
         assert apply_scan(rep, dry_run=True, path=reg_path)["dry_run"] is True
         before = features.load(reg_path)
-        assert "good-thing" not in before, before
+        assert features.load(reg_path) == before, before
 
-        # Apply records it at AD-HOC, never hardened — the registry must not claim maturity the
-        # code has not earned (that is `mark_hardened`, a deliberate human act).
-        out = apply_scan(rep, dry_run=False, path=reg_path)
-        assert out["recorded"] == ["good-thing"], out
+        # The CLI apply above records at AD-HOC, never hardened — the registry must not claim
+        # maturity the code has not earned (that is `mark_hardened`, a deliberate human act).
         after = features.load(reg_path)
         assert "good-thing" in after, after
         assert (after["good-thing"] or {}).get("maturity") == "ad-hoc", after["good-thing"]
@@ -212,14 +254,18 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--apply", action="store_true", help="log unlogged structures at ad-hoc")
+    ap.add_argument("--root", type=Path, metavar="DIR", help="directory of Python modules to scan")
+    ap.add_argument(
+        "--registry", type=Path, metavar="FILE", help="feature registry to read or update"
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
         return 0
-    rep = scan()
+    rep = scan(path=args.registry, root=args.root)
     if args.apply:
-        rep["apply"] = apply_scan(rep, dry_run=False)
+        rep["apply"] = apply_scan(rep, dry_run=False, path=args.registry)
     print(json.dumps(rep, indent=2) if args.json else format_report(rep), end="")
     return 0
 
