@@ -387,7 +387,13 @@ global `~/.claude/human-involvement-check` skill).
 ## 4. Safety switches
 
 Default-OFF `ORCH_*` flags are deliberate (live keepalive apply, Thompson routing, runtime-AC
-execution, strategy campaigns, range-lane live dispatch). Flipping one is a real change: justify it,
+execution, strategy campaigns, range-lane live dispatch, and since 2026-09-03 the tick's own
+remote dispatch lane and heartbeat, `ORCH_DISPATCH_LANE`).
+
+**Moratorium on new instruments (assessment of 2026-09-03, item 8).** No new capability, ledger,
+measurement surface or instrument until one of that assessment's items changes a fleet outcome;
+the admission gate, the docket and the weekly rail-exercise cadence are enough to know when
+something breaks. Repairs and the assessment's own items are exempt. Flipping one is a real change: justify it,
 prefer the system's own evidence gate where one exists (e.g. exploration_review for routing mode),
 and update the gated-features list in README.md + the dormancy inventory.
 

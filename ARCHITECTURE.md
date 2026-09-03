@@ -35,9 +35,9 @@ this document has already produced confidently wrong fleet-level conclusions.
 |---|---|---|
 | `capacity.py` | pipeline → here | The lanes read it to choose which agent gets an advisory review |
 | `orchestrator_review` fallback | pipeline → here | A review-fallback path routes an advisory review through this tool |
-| `tick.py --active` → `delegate_remote` | here → pipeline | Applies `agent:*` labels, driving keepalive on REMOTE capacity |
+| `tick.py --active` → `delegate_remote` | here → pipeline | Applies `agent:*` labels, driving keepalive on REMOTE capacity — **shadow by default since 2026-09-03** (`ORCH_DISPATCH_LANE=1` re-enables): 14 dispatches in 30 days, 9 abandoned, none durable, while keepalive ran 1,239 rounds without it |
 
-So this tool is a **capacity advisor, a review router, and a keepalive driver**. It is **not** the
+So this tool is a **capacity advisor, a review router, and (in shadow unless deliberately enabled) a keepalive driver**. It is **not** the
 fleet's work-discovery engine: `backlog._is_ready()` is this tool's own private discovery path, and
 the fleet's work originates from the approved-issue queue, not from `status: ready` labels.
 
