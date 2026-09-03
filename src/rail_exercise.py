@@ -10,10 +10,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+import capabilities
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_ROOT = REPO_ROOT / "tests" / "rail_exercises"
@@ -411,6 +414,20 @@ def main() -> int:
         selftest()
         return 0
     result = report(args.only, args.record)
+    # Credit the CADENCE on its executed path. orchestrate.sh runs this module as a script, so
+    # main() IS the path (capability_activation_audit.heartbeat_reachable credits the declared
+    # entrypoint `rail_exercise.py:main`); daily coalescing because a weekly step needs no more.
+    # Never inside report(): the selftest calls report() on a temporary tree and must not credit.
+    try:
+        totals = result["totals"]
+        capabilities.daily_heartbeat(
+            CAPABILITY_ID,
+            "success" if totals.get("failed", 0) == 0 else "failure",
+            ref="rail_exercise.main",
+            metadata={key: int(value) for key, value in totals.items()},
+        )
+    except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
+        print(f"rail_exercise: capability heartbeat failed: {exc}", file=sys.stderr)
     print(
         json.dumps(result, indent=2, sort_keys=True)
         if args.json

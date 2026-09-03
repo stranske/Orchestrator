@@ -676,6 +676,21 @@ def _check_thompson() -> dict:
     return {"fires": mode == "thompson-hybrid", "detail": detail}
 
 
+def _check_rail_exercise_cadence() -> dict:
+    """Exercise the contract runner's own selftest: a pass, a broken break case, a named skip,
+    the tripwire guards, and the committed tree (no nested repository, no run output at rest)."""
+    try:
+        import rail_exercise
+
+        rail_exercise.selftest()
+        return {
+            "fires": True,
+            "detail": {"exercise": "runner selftest incl. committed-tree guards"},
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"fires": False, "detail": {"error": str(exc)[:90]}}
+
+
 def _check_route_weights_export() -> dict:
     """Exercise the exporter against its isolated fixture, never its publish path."""
     try:
@@ -1012,6 +1027,12 @@ PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
         "check": _check_route_weights_export,
         "source": "2026-09-03 routing exercise: legacy local route_weights had no consumer; "
         "the fixture proves a thresholded, reserve-separated fail-open export without publishing.",
+    },
+    {
+        "capability": "rail-exercise-cadence",
+        "check": _check_rail_exercise_cadence,
+        "source": "2026-09-03 program item 5 (#207): 49 round-authored contracts, 48 pass / 48 break "
+        "correctly / 1 named skip on the first run; the weekly shadow step runs them from the tree.",
     },
     {
         "capability": "windowed-capacity-policy",
