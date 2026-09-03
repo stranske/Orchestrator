@@ -806,7 +806,13 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
     _capability_heartbeat("invocation")
     ledger = capabilities.load(path or capabilities.REG)
     ctx = ctx or _context(path)
-    rows = [admit(cid, path=path, ctx=ctx) for cid in sorted(ledger)]
+    # A retired or superseded row owes nothing: the advisor never offers it and no code path will
+    # heartbeat it, so it is not admitted, not enforced and not debt. Retiring a stray row on
+    # 2026-09-03 made this report red on every tree until this line existed.
+    live = [
+        cid for cid in sorted(ledger) if ledger[cid].get("status") not in ("retired", "superseded")
+    ]
+    rows = [admit(cid, path=path, ctx=ctx) for cid in live]
     enforced = [r for r in rows if r["enforced"]]
     return {
         "total": len(rows),
