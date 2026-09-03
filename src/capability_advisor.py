@@ -1013,11 +1013,24 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "command carries an absolute --add-dir <cwd>; break case: a non-gemini command carries "
         "none. Never toggles the confinement",
     },
+    # DEMOTED 2026-09-03 (assessment item 4), from the propensity detector's own numbers over 30 days
+    # of lane rounds:
+    #   closer-lane -> partitioned-review: declined in 49 of 121 offers, 47 attributable to the
+    #     binding (scope_too_small), 0 triggers;
+    #   opener-lane -> offload: declined in 14 of 25 offers, 12 attributable, 0 triggers;
+    #   opener-lane -> testgen-lane: declined in 15 of 25 offers, 6 attributable, 0 triggers.
+    # Demotion is a DATA edit and binding prioritises, never conceals: each capability stays bound on
+    # a consulted surface (partitioned-review on repo-audit:phase-3; offload on orchestrate and the
+    # audit phases; testgen-lane on cross-env-test-doctor and repo-audit:fix) and is still returned,
+    # ranked after, whenever the classifier matches. Promotion back goes through `binding_promotion`
+    # events on evidence, never by editing a prompt. cross-repo-coordination and runtime-ac-checks
+    # stay on closer-lane: their declines were precondition_unmet (non-demotable) and both carry lane
+    # outcomes. The detector also names repo-audit:fix -> offload (8 of 11 attributable), but that
+    # binding is INHERITED from the repo-audit parent, where offload is the whole skill's workhorse;
+    # a phase cannot drop one parent entry without NO_BINDING dropping them all, so it stays.
     "closer-lane": {
         "adversarial-review": "its matcher IS {kind: closer_gate, name: high_stakes_review} -- built "
         "for this lane's complex-target selection, 0 invocations in 1,766 rounds",
-        "partitioned-review": "the ten-class batch sweep (a-j) is a partition adjudicated in prose; "
-        "review-thread work in 1,022 of 1,766 rounds",
         "runtime-ac-checks": "sweep classes (b)(c)(d) are merged-but-unverified, verifier non-PASS, "
         "and PASS-with-issue-open -- 30 fleet issues exist because merged work "
         "missed its own criteria",
@@ -1040,11 +1053,9 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "deliberate-break-verifier": "the lane performs this exact break-then-revert proof in 271 of "
         "2,445 rounds, instructed nowhere -- 0 hits in its TOML, its "
         "rendered prompt and ~/.codex/bin, 10 in its rolling memory",
-        "testgen-lane": "writes regression coverage by hand in 339 rounds",
         "codemod-campaign": "materialises phase series one issue at a time with no campaign identity "
         "(Trend #5935-#5942 is eight issues)",
         "runtime-ac-checks": "stale-checkbox defects on its own PRs are unverified acceptance criteria",
-        "offload": "scans 40 durable holders and full review-thread sets per round",
     },
     # `repo-audit` is SIX PHASES, not one context, so it binds per phase. Phase attribution comes
     # from the skill's own playbook text; volume from 177 audit documents across the four
