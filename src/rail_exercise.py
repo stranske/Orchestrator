@@ -420,8 +420,11 @@ def main() -> int:
     # Never inside report(): the selftest calls report() on a temporary tree and must not credit.
     try:
         totals = result["totals"]
+        # The literal id, not CAPABILITY_ID: test_every_capability_has_a_heartbeat_call_site greps a
+        # five-line window after `heartbeat(` for the quoted id, and a constant hides the wiring
+        # from the very check that proves it. CI never saw this red — it runs on an empty ledger.
         capabilities.daily_heartbeat(
-            CAPABILITY_ID,
+            "rail-exercise-cadence",
             "success" if totals.get("failed", 0) == 0 else "failure",
             ref="rail_exercise.main",
             metadata={key: int(value) for key, value in totals.items()},
