@@ -164,19 +164,28 @@ jobs:
             // and an unreadable or malformed config falls back to it rather than failing: a guard
             // that died on its own config would be worse than one that looks in one place.
             const DEFAULT_WORKFLOWS = ['.github/workflows/pr-00-gate.yml'];
+            const configuredWorkflowIds = (declared) =>
+              Array.isArray(declared)
+                ? declared
+                    .filter((workflow) => typeof workflow === 'string')
+                    .map((workflow) => workflow.trim())
+                    .filter(Boolean)
+                : [];
+            const errorMessage = (error) =>
+              error instanceof Error ? error.message : String(error);
             let workflowIds = DEFAULT_WORKFLOWS;
             let workflowSource = 'default';
             try {
               const cfgRaw = fs.readFileSync('config/coverage-baseline.json', 'utf8');
               const cfg = JSON.parse(cfgRaw);
-              const declared = cfg.source_workflows;
-              if (Array.isArray(declared) && declared.length) {
-                workflowIds = declared.filter((w) => typeof w === 'string' && w.trim());
+              const declared = configuredWorkflowIds(cfg.source_workflows);
+              if (declared.length) {
+                workflowIds = declared;
                 workflowSource = 'config/coverage-baseline.json';
               }
             } catch (err) {
               core.info(
-                `coverage-baseline.json not read for source_workflows (${err.message}); ` +
+                `coverage-baseline.json not read for source_workflows (${errorMessage(err)}); ` +
                   'using the default workflow list'
               );
             }
@@ -214,7 +223,7 @@ jobs:
               } catch (err) {
                 // A workflow named in config that does not exist here is a CONFIG error worth
                 // naming, not a reason to abandon the others.
-                searched.push(`${wf} (UNAVAILABLE: ${err.message})`);
+                searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);
               }
             }
 

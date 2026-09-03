@@ -15,6 +15,7 @@ DEFAULT_WORKFLOW = ".github/workflows/pr-00-gate.yml"
 
 
 def _discover_script() -> str:
+    """Extract the exact inline script executed by actions/github-script."""
     workflow = GUARD.read_text(encoding="utf-8")
     step = workflow.index("      - name: Locate latest Gate workflow run\n")
     marker = "          script: |\n"
@@ -23,7 +24,14 @@ def _discover_script() -> str:
     return textwrap.dedent(workflow[start:end])
 
 
-def _run_discovery(tmp_path: Path, config: str | None) -> dict:
+def _run_discovery(
+    tmp_path: Path,
+    config: str | None,
+    *,
+    run_specs: dict[str, dict] | None = None,
+    unavailable: tuple[str, ...] = (),
+) -> dict:
+    """Execute discovery with deterministic workflow runs and API failures."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     if config is not None:
         config_dir = tmp_path / "config"
@@ -33,11 +41,15 @@ def _run_discovery(tmp_path: Path, config: str | None) -> dict:
     node = shutil.which("node")
     assert node, "Node.js is required to execute the actions/github-script discovery block"
     script = _discover_script()
+    encoded_run_specs = json.dumps(run_specs or {})
+    encoded_unavailable = json.dumps(unavailable)
     harness = f"""
 const context = {{ repo: {{ owner: 'stranske', repo: 'Orchestrator' }} }};
 const calls = [];
 const messages = [];
 const outputs = {{}};
+const runSpecs = {encoded_run_specs};
+const unavailable = new Set({encoded_unavailable});
 const actions = {{
   listWorkflowRuns: Symbol('listWorkflowRuns'),
   listWorkflowRunArtifacts: Symbol('listWorkflowRunArtifacts'),
@@ -47,11 +59,15 @@ const github = {{
   paginate: async (method, params) => {{
     if (method === actions.listWorkflowRuns) {{
       calls.push(params.workflow_id);
+      if (unavailable.has(params.workflow_id)) {{
+        throw new Error(`workflow unavailable: ${{params.workflow_id}}`);
+      }}
+      const spec = runSpecs[params.workflow_id] || {{}};
       return [{{
-        id: calls.length,
-        run_number: calls.length,
+        id: spec.id || calls.length,
+        run_number: spec.run_number || spec.id || calls.length,
         conclusion: 'success',
-        created_at: `2026-09-0${{calls.length}}T00:00:00Z`,
+        created_at: spec.created_at || `2026-09-0${{calls.length}}T00:00:00Z`,
         html_url: `https://example.invalid/runs/${{calls.length}}`,
       }}];
     }}
@@ -110,11 +126,57 @@ def test_guard_discovers_runs_from_configured_source_workflows(tmp_path):
                 ]
             }
         ),
+        run_specs={
+            ".github/workflows/ci.yml": {
+                "id": 101,
+                "created_at": "2026-09-03T00:00:00Z",
+            },
+            ".github/workflows/nightly.yml": {
+                "id": 202,
+                "created_at": "2026-09-01T00:00:00Z",
+            },
+        },
     )
     assert pooled["calls"] == [
         ".github/workflows/ci.yml",
         ".github/workflows/nightly.yml",
     ]
+    assert pooled["outputs"]["run_id"] == "101"
+
+    partial = _run_discovery(
+        tmp_path / "partial",
+        json.dumps(
+            {
+                "source_workflows": [
+                    ".github/workflows/unavailable.yml",
+                    ".github/workflows/ci.yml",
+                ]
+            }
+        ),
+        run_specs={
+            ".github/workflows/ci.yml": {
+                "id": 303,
+                "created_at": "2026-09-03T00:00:00Z",
+            }
+        },
+        unavailable=(".github/workflows/unavailable.yml",),
+    )
+    assert partial["calls"] == [
+        ".github/workflows/unavailable.yml",
+        ".github/workflows/ci.yml",
+    ]
+    assert partial["outputs"]["run_id"] == "303"
+
+    normalized = _run_discovery(
+        tmp_path / "normalized",
+        json.dumps({"source_workflows": ["  .github/workflows/ci.yml  "]}),
+    )
+    invalid = _run_discovery(
+        tmp_path / "invalid",
+        json.dumps({"source_workflows": [" ", 7, None]}),
+    )
+    assert normalized["calls"] == [".github/workflows/ci.yml"]
+    assert invalid["calls"] == [DEFAULT_WORKFLOW]
 
     missing = _run_discovery(tmp_path / "missing", None)
     malformed = _run_discovery(tmp_path / "malformed", "{not-json")
