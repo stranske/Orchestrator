@@ -48,7 +48,14 @@ def test_every_capability_has_a_recurrence_fixture():
     This is the specific failure this file exists to prevent: 19 of 35 capabilities had no fixture
     while the reported score ("18 of 21") looked comprehensive.
     """
-    ledger = set(capabilities.load_declared(capabilities.REG))
+    # A retired or superseded row carries no obligations: the advisor never offers it and no code
+    # path will ever heartbeat it, so it is skipped here (retiring a stray row on 2026-09-03 turned
+    # every sibling worktree red until this skip existed).
+    ledger = {
+        cid
+        for cid, cap in capabilities.load_declared(capabilities.REG).items()
+        if cap.get("status") not in ("retired", "superseded")
+    }
     covered = _fixture_capabilities()
     missing = sorted(ledger - covered - set(FIXTURE_EXEMPT))
     # A row whose MODULE is not in this checkout has no fixture here because it has no CODE here,
@@ -283,7 +290,14 @@ def test_no_fixture_names_an_unknown_capability():
     # that has never run the system the ledger holds only the rows the code declares, and every
     # fixture beyond those would read as a typo. Name the absent rows instead of asserting.
     env_prereq.require(env_prereq.ledger_rows_absent(*sorted(_fixture_capabilities())))
-    ledger = set(capabilities.load_declared(capabilities.REG))
+    # A retired or superseded row carries no obligations: the advisor never offers it and no code
+    # path will ever heartbeat it, so it is skipped here (retiring a stray row on 2026-09-03 turned
+    # every sibling worktree red until this skip existed).
+    ledger = {
+        cid
+        for cid, cap in capabilities.load_declared(capabilities.REG).items()
+        if cap.get("status") not in ("retired", "superseded")
+    }
     unknown = sorted(_fixture_capabilities() - ledger)
     assert not unknown, f"fixtures name capabilities absent from the ledger: {unknown}"
 
@@ -324,7 +338,14 @@ def test_every_defect_is_a_known_class():
 
 def test_exemptions_carry_reasons_and_exist():
     """An exemption must name a real capability and say why — never a bare skip."""
-    ledger = set(capabilities.load_declared(capabilities.REG))
+    # A retired or superseded row carries no obligations: the advisor never offers it and no code
+    # path will ever heartbeat it, so it is skipped here (retiring a stray row on 2026-09-03 turned
+    # every sibling worktree red until this skip existed).
+    ledger = {
+        cid
+        for cid, cap in capabilities.load_declared(capabilities.REG).items()
+        if cap.get("status") not in ("retired", "superseded")
+    }
     for cap_id, reason in FIXTURE_EXEMPT.items():
         assert cap_id in ledger, f"FIXTURE_EXEMPT names unknown capability {cap_id!r}"
         assert reason and len(reason) > 20, f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"

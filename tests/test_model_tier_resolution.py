@@ -892,7 +892,9 @@ def test_every_capability_has_a_heartbeat_call_site():
         ["grep", "-rn", "-A5", "heartbeat(", "--include=*.py", "."], capture_output=True, text=True
     ).stdout
     missing = []
-    for cap_id in C.load():
+    for cap_id, cap in C.load().items():
+        if cap.get("status") in ("retired", "superseded"):
+            continue  # no live code path is expected to heartbeat a retired row
         if cap_id in EXTERNAL or cap_id in VARIABLE_ID or cap_id.startswith("role-"):
             continue
         if f'"{cap_id}"' not in src:
