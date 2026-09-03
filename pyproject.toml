@@ -129,3 +129,11 @@ mypy_path = ["src", "tests"]
 # CI (reusable-10-ci-python.yml:703) runs black with an explicit --line-length 100;
 # pinning it here keeps a plain local `black .` byte-identical with the gate.
 line-length = 100
+# tests/rail_exercises holds exercise INPUTS — the round-authored contracts and fixture harnesses
+# a rail is run against — not project code. A formatter or `--fix` that edits them changes what
+# the exercise measures (the autofix bot rewrote 125 fixture files and deleted 82 import lines on
+# PR #207). `force-exclude` matters: CI's autofix passes explicit file paths, which a plain
+# exclude does not cover. Ruff's copy of this rule lives in ruff.toml, which shadows any
+# [tool.ruff] table here.
+extend-exclude = "^/tests/rail_exercises/"
+force-exclude = "^/tests/rail_exercises/"
