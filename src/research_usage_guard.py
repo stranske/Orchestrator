@@ -771,7 +771,7 @@ def generate_usage_report(
     window_days: int = 7,
     now: int | None = None,
 ) -> dict[str, Any]:
-    """Generate a seven-day report whose health reflects active 24-hour blocks."""
+    """Generate a bounded-window report whose health reflects active 24-hour blocks."""
 
     db = conn or feedback._conn()
     close = conn is None
@@ -779,13 +779,29 @@ def generate_usage_report(
     current_ts = int(time.time() if now is None else now)
     since = current_ts - max(1, int(window_days)) * 86_400
     active_since = current_ts - ACTIVE_ALERT_WINDOW_HOURS * 3_600
+    total_ledger_opportunities = int(
+        db.execute("SELECT COUNT(*) FROM research_usage_opportunities").fetchone()[0]
+    )
     rows = db.execute(
         "SELECT opportunity_id,ts,exp_id,repo,subject,signature,decision,reason,"
         "estimated_prompt_bytes,estimated_prompt_tokens,evaluator_count,"
         "evaluator_agents_json,terminal_outcome,alerts_json "
-        "FROM research_usage_opportunities WHERE ts>=? ORDER BY ts DESC",
-        (since,),
+        "FROM research_usage_opportunities WHERE ts>=? AND ts<=? ORDER BY ts DESC",
+        (since, current_ts),
     ).fetchall()
+    in_window_opportunities = len(rows)
+    outside_window_opportunities = total_ledger_opportunities - in_window_opportunities
+    if total_ledger_opportunities == 0:
+        window_coverage_note = "No ledger rows are recorded."
+    elif in_window_opportunities == 0:
+        window_coverage_note = (
+            f"All {outside_window_opportunities} ledger rows are outside the reporting window."
+        )
+    else:
+        window_coverage_note = (
+            f"{in_window_opportunities} ledger rows are inside the reporting window; "
+            f"{outside_window_opportunities} are outside it."
+        )
 
     decision_counts: Counter[str] = Counter()
     outcome_counts: Counter[str] = Counter()
@@ -882,12 +898,18 @@ def generate_usage_report(
     report = {
         "generated_at": current_ts,
         "window_days": window_days,
+        "window_start_ts": since,
+        "window_end_ts": current_ts,
+        "total_ledger_opportunities": total_ledger_opportunities,
+        "in_window_opportunities": in_window_opportunities,
+        "outside_window_opportunities": outside_window_opportunities,
+        "window_coverage_note": window_coverage_note,
         "active_alert_window_hours": ACTIVE_ALERT_WINDOW_HOURS,
         "health_status": health_status,
         "active_anomaly_blocks": active_anomalies,
         "active_budget_blocks": active_budget_blocks,
         "stale_dispatching_opportunities": stale_dispatches,
-        "total_opportunities": len(rows),
+        "total_opportunities": in_window_opportunities,
         "decision_counts": dict(sorted(decision_counts.items())),
         "terminal_outcome_counts": dict(sorted(outcome_counts.items())),
         "total_admitted_prompt_bytes": total_bytes,
@@ -1031,6 +1053,69 @@ def _selftest() -> None:
     assert report["total_opportunities"] == 6
     assert report["health_status"] in {"ANOMALY_BLOCKED", "BUDGET_BLOCKED"}
     db.close()
+
+    window_db = sqlite3.connect(":memory:")
+    ensure_schema(window_db)
+    for index, timestamp in enumerate(
+        (now - 60, now - 120, now - 180, now - 8 * 86_400, now - 9 * 86_400), start=1
+    ):
+        window_db.execute(
+            "INSERT INTO research_usage_opportunities "
+            "(opportunity_id,ts,exp_id,repo,subject,signature,decision,"
+            "estimated_prompt_bytes,estimated_prompt_tokens,evaluator_count,is_manual,is_missing_spec) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"window-fixture-{index}",
+                timestamp,
+                f"window-exp-{index}",
+                "owner/repo",
+                "window-fixture",
+                f"window-signature-{index}",
+                "deferred",
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+        )
+    window_db.commit()
+    window_report = generate_usage_report(conn=window_db, now=now, window_days=7)
+    assert (
+        window_report["in_window_opportunities"] == 3
+        and window_report["outside_window_opportunities"] == 2
+    ), "window-accounting-mixed-fixture: expected in_window=3 and outside_window=2"
+    window_db.close()
+
+    stale_db = sqlite3.connect(":memory:")
+    ensure_schema(stale_db)
+    for index, timestamp in enumerate((now - 8 * 86_400, now - 9 * 86_400), start=1):
+        stale_db.execute(
+            "INSERT INTO research_usage_opportunities "
+            "(opportunity_id,ts,exp_id,repo,subject,signature,decision,"
+            "estimated_prompt_bytes,estimated_prompt_tokens,evaluator_count,is_manual,is_missing_spec) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"stale-fixture-{index}",
+                timestamp,
+                f"stale-exp-{index}",
+                "owner/repo",
+                "stale-fixture",
+                f"stale-signature-{index}",
+                "deferred",
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+        )
+    stale_db.commit()
+    stale_report = generate_usage_report(conn=stale_db, now=now, window_days=7)
+    assert stale_report["window_coverage_note"] == (
+        "All 2 ledger rows are outside the reporting window."
+    ), "window-accounting-all-stale-fixture: expected explicit outside-window statement"
+    stale_db.close()
     print("research_usage_guard.py selftest: OK")
 
 
@@ -1058,7 +1143,12 @@ def main(argv: list[str]) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"Usage Guard Report — Health: {report['health_status']}")
-        print(f"Total Opportunities ({report['window_days']}d): {report['total_opportunities']}")
+        print(
+            f"Window [{report['window_start_ts']}, {report['window_end_ts']}]: "
+            f"in-window opportunities={report['in_window_opportunities']}; "
+            f"outside-window (dropped)={report['outside_window_opportunities']}. "
+            f"{report['window_coverage_note']}"
+        )
         print(f"Decisions: {report['decision_counts']}")
         print(f"Admitted Prompt Bytes: {report['total_admitted_prompt_bytes']}")
         print(f"Admitted Evaluator Calls: {report['total_admitted_evaluator_calls']}")
