@@ -181,7 +181,11 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         try_index = loop_open + 1 + try_matches[-1].start()
         try_open = code.index("{", try_index, query_index)
         try_close = _matching_brace_index(code, try_open)
-        if not try_open < query_index < query_close < try_close:
+        if (
+            code[loop_open + 1 : try_index].strip()
+            or code[try_open + 1 : query_index].strip()
+            or not try_open < query_index < query_close < try_close
+        ):
             return False
         query_scope = code[params_open + 1 : params_close]
         workflow_id_mentions = list(
@@ -217,7 +221,7 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         unavailable_close = _matching_delimiter_index(code, unavailable_open, "(", ")")
         if (
             "`${wf} (UNAVAILABLE: ${errorMessage(err)})`"
-            not in source[unavailable_open + 1 : unavailable_close]
+            not in comment_free[unavailable_open + 1 : unavailable_close]
         ):
             return False
     except ValueError:
@@ -255,8 +259,13 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         < empty_result_index
     ):
         return False
+    try_scope = code[try_open:try_close]
     catch_scope = code[catch_open:catch_close]
-    return re.search(r"\b(?:break|return|throw)\b", catch_scope) is None
+    return (
+        re.search(r"\b(?:break|continue|return|throw)\b", try_scope) is None
+        and re.search(r"\b(?:break|return|throw)\b", catch_scope) is None
+        and not code[catch_close + 1 : loop_close].strip()
+    )
 
 
 POOLED_CONTROL_FLOW_EXAMPLE = """
@@ -315,6 +324,12 @@ def test_pooled_control_flow_rejects_early_exit_variants(statement: str) -> None
         "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
         f"searched.push(`${{wf}} (UNAVAILABLE: ${{errorMessage(err)}})`);\n    {statement}",
     )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+@pytest.mark.parametrize("statement", ("continue", "break", "return", "throw(err)"))
+def test_pooled_control_flow_rejects_exits_before_the_query(statement: str) -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("  try {", f"  {statement};\n  try {{", 1)
     assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
@@ -380,6 +395,15 @@ def test_pooled_control_flow_binds_unavailable_catch_to_the_pagination_try() -> 
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
         "  } catch (err) {",
         "  } finally {\n    cleanup();\n  }\n  try {\n    observe();\n  } catch (err) {",
+        1,
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_rejects_a_commented_unavailable_message_decoy() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        "searched.push('unknown' /* `${wf} (UNAVAILABLE: ${errorMessage(err)})` */);",
         1,
     )
     assert not _pooled_validation_has_safe_control_flow(unsafe)
