@@ -3072,6 +3072,7 @@ def _selftest() -> None:
         codex_profile = _select_offload_profile("codex", "mid")
         assert codex_profile and codex_profile["agent"] == "codex", codex_profile
         assert codex_profile["profile_id"] in {
+            "codex-6-astra-high",
             "codex-5.6-sol-high",
             "codex-5.6-terra-high",
             "codex-5.6-luna-high",

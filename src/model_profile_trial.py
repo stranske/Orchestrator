@@ -33,8 +33,11 @@ RESULT_SCHEMA = "orchestrator.model-profile-trial-results"
 STATE_SCHEMA = "orchestrator.model-profile-trial-state"
 SCHEMA_VERSION = 1
 CAPABILITY_ID = "local-model-profile-trial"
+# The live three-arm tier comparison: cheap / mid / full. GPT-6 Astra replaced Sol as the codex
+# full tier on 2026-09-04, so it takes Sol's arm here. Sol keeps its registry profile so outcomes
+# already recorded against it stay interpretable, but it is no longer an arm of the running trial.
 EXPECTED_PROFILE_IDS = (
-    "codex-5.6-sol-high",
+    "codex-6-astra-high",
     "codex-5.6-terra-high",
     "codex-5.6-luna-high",
 )
@@ -370,7 +373,9 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("capacity_snapshot", {}).get("snapshot_count") != 1:
         raise ValueError("trial requires one shared-pool snapshot")
     launch_order = manifest.get("launch_order") or []
-    if sorted(launch_order) != sorted(EXPECTED_PROFILE_IDS) or len(set(launch_order)) != 3:
+    if sorted(launch_order) != sorted(EXPECTED_PROFILE_IDS) or len(set(launch_order)) != len(
+        EXPECTED_PROFILE_IDS
+    ):
         raise ValueError("trial launch order is not an exact profile permutation")
     by_ordinal = sorted(requests, key=lambda item: int(item.get("launch_ordinal") or 0))
     if [item.get("profile_id") for item in by_ordinal] != launch_order:
@@ -432,7 +437,7 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
         raise ValueError("trial results did not acknowledge the frozen packet")
     attempts = results.get("attempts") or []
     by_profile = {item.get("profile_id"): item for item in attempts}
-    if set(by_profile) != set(EXPECTED_PROFILE_IDS) or len(attempts) != 3:
+    if set(by_profile) != set(EXPECTED_PROFILE_IDS) or len(attempts) != len(EXPECTED_PROFILE_IDS):
         raise ValueError("trial results require exactly one attempt per profile")
     request_by_profile = {item["profile_id"]: item for item in manifest["requests"]}
     for profile_id, attempt in by_profile.items():
