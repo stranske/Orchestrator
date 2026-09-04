@@ -8,13 +8,16 @@ exactly that state today — both payloads, no trend.
 
 So the pairing is asserted here rather than discovered from a guard that has been failing for
 weeks: what the config NAMES must be a workflow that exists, and that workflow must publish BOTH
-artifacts under the names the guard resolves.
+artifacts under the names the guard resolves. Discovery itself is exercised as JavaScript with
+hermetic API and filesystem doubles so both the legacy and pooled implementations are judged by
+their behavior rather than by source-code tokens.
 """
 
 from __future__ import annotations
 
 import json
-import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -29,538 +32,125 @@ MAINT_COVERAGE_GUARD = REPO / ".github/workflows/maint-coverage-guard.yml"
 # `gate-coverage-trend` is required outright, and a run carrying only the payload is skipped.
 PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
-POOLED_IMPLEMENTATION_MARKER = "const configuredWorkflowIds = (declared) =>"
-LEGACY_VALIDATION_MARKERS = (
-    "workflowId.trim().startsWith('.github/workflows/')",
-    "fs.existsSync(workflowId.trim())",
-    "fs.statSync(workflowId.trim()).isFile()",
-    "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
-)
-LEGACY_DISCOVERY_MARKERS = (
-    "const configuredWorkflowIds = baseline.source_workflows;",
-    "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
-    "workflowIds.map((workflowId)",
-    "workflow_id: workflowId,",
-)
+FALLBACK_WORKFLOW = ".github/workflows/pr-00-gate.yml"
+DISCOVERY_STEP = "      - name: Locate latest Gate workflow run\n"
+SCRIPT_MARKER = "          script: |\n"
+DISCOVERY_END = "\nif (!runs.length) {"
 
-
-def _mask_javascript(source: str, *, mask_strings: bool) -> str:
-    """Mask JavaScript comments and optionally strings while preserving offsets."""
-    masked = list(source)
-    state = "code"
-    quote = ""
-    index = 0
-
-    def mask(position: int) -> None:
-        if source[position] not in "\r\n":
-            masked[position] = " "
-
-    while index < len(source):
-        char = source[index]
-        following = source[index + 1] if index + 1 < len(source) else ""
-        if state == "code":
-            if char in {"'", '"', "`"}:
-                quote = char
-                state = "string"
-                if mask_strings:
-                    mask(index)
-            elif char == "/" and following == "/":
-                state = "line-comment"
-                mask(index)
-                mask(index + 1)
-                index += 1
-            elif char == "/" and following == "*":
-                state = "block-comment"
-                mask(index)
-                mask(index + 1)
-                index += 1
-        elif state == "string":
-            if mask_strings:
-                mask(index)
-            if char == "\\" and following:
-                if mask_strings:
-                    mask(index + 1)
-                index += 1
-            elif char == quote:
-                state = "code"
-        elif state == "line-comment":
-            mask(index)
-            if char in "\r\n":
-                state = "code"
-        else:
-            mask(index)
-            if char == "*" and following == "/":
-                mask(index + 1)
-                index += 1
-                state = "code"
-        index += 1
-    return "".join(masked)
-
-
-def _mask_javascript_non_code(source: str) -> str:
-    """Mask comments and strings for structural delimiter checks."""
-    return _mask_javascript(source, mask_strings=True)
-
-
-def _mask_javascript_comments(source: str) -> str:
-    """Mask comments but retain string contents for literal-key checks."""
-    return _mask_javascript(source, mask_strings=False)
-
-
-def _matching_delimiter_index(source: str, opening_index: int, opening: str, closing: str) -> int:
-    """Return the matching delimiter for a small JavaScript expression or block."""
-    depth = 0
-    for index in range(opening_index, len(source)):
-        if source[index] == opening:
-            depth += 1
-        elif source[index] == closing:
-            depth -= 1
-            if depth == 0:
-                return index
-    raise ValueError("unclosed JavaScript delimiter")
-
-
-def _matching_brace_index(source: str, opening_index: int) -> int:
-    return _matching_delimiter_index(source, opening_index, "{", "}")
-
-
-def _has_executable_marker(source: str, marker: str) -> bool:
-    """Return whether a comment-free marker starts in executable JavaScript."""
-    code = _mask_javascript_non_code(source)
-    comment_free = _mask_javascript_comments(source)
-    start = 0
-    while True:
-        marker_index = comment_free.find(marker, start)
-        if marker_index < 0:
-            return False
-        if code[marker_index] == marker[0]:
-            return True
-        start = marker_index + 1
-
-
-def _is_unconditional_block_statement(code: str, block_open: int, statement_index: int) -> bool:
-    """Reject statements nested in a block or controlled by an unbraced prefix."""
-    depth = 0
-    for char in code[block_open:statement_index]:
-        if char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-    if depth != 1:
-        return False
-    prefix = code[block_open + 1 : statement_index].rstrip()
-    return not prefix or prefix[-1] in ";{}"
-
-
-def _legacy_discovery_uses_declared_workflows(source: str) -> bool:
-    return all(_has_executable_marker(source, marker) for marker in LEGACY_DISCOVERY_MARKERS)
-
-
-def _pooled_validation_has_safe_control_flow(source: str) -> bool:
-    """Check the pooled implementation as ordered scopes, not unrelated markers."""
-    code = _mask_javascript_non_code(source)
-    comment_free = _mask_javascript_comments(source)
-    try:
-        normalizer_index = code.index("const configuredWorkflowIds = (declared) =>")
-        normalizer_end = code.index("const errorMessage", normalizer_index)
-        normalizer_arrow = code.index("=>", normalizer_index, normalizer_end) + 2
-        normalizer_match = re.match(
-            r"""
-            \s*Array\.isArray\(\s*declared\s*\)\s*
-            \?\s*declared\s*
-            \.filter\(\s*\(\s*workflow\s*\)\s*=>\s*
-              typeof\s+workflow\s*===\s*(['\"])string\1\s*\)\s*
-            \.map\(\s*\(\s*workflow\s*\)\s*=>\s*workflow\.trim\(\s*\)\s*\)\s*
-            \.filter\(\s*Boolean\s*\)\s*
-            :\s*\[\s*\]\s*;
-            """,
-            source[normalizer_arrow:normalizer_end],
-            re.DOTALL | re.VERBOSE,
-        )
-        if normalizer_match is None:
-            return False
-        array_check_index = code.index("Array.isArray(declared)", normalizer_arrow, normalizer_end)
-        string_filter_index = code.index("typeof workflow ===", array_check_index, normalizer_end)
-        trim_index = code.index(
-            ".map((workflow) => workflow.trim())", string_filter_index, normalizer_end
-        )
-        nonempty_filter_index = code.index(".filter(Boolean)", trim_index, normalizer_end)
-        empty_fallback_index = code.index(": []", nonempty_filter_index, normalizer_end)
-        default_index = code.index("let workflowIds = DEFAULT_WORKFLOWS;")
-        declared_index = code.index(
-            "const declared = configuredWorkflowIds(cfg.source_workflows);", default_index
-        )
-        configured_branch_index = code.index("if (declared.length) {", declared_index)
-        configured_branch_open = code.index("{", configured_branch_index)
-        configured_branch_close = _matching_brace_index(code, configured_branch_open)
-        replacement_index = code.index("workflowIds = declared;", configured_branch_open)
-        selection_end = code.index("const retryHelperPath", configured_branch_close)
-        if not configured_branch_open < replacement_index < configured_branch_close:
-            return False
-
-        loop_index = code.index("for (const wf of workflowIds)", selection_end)
-        workflow_selection_assignments = list(
-            re.finditer(r"\bworkflowIds\s*=", code[declared_index:loop_index])
-        )
-        if len(workflow_selection_assignments) != 1:
-            return False
-        loop_open = code.index("{", loop_index)
-        loop_close = _matching_brace_index(code, loop_open)
-        empty_result_index = code.index("if (!runs.length)", loop_close)
-        query_index = code.index("const found = await paginateWithRetry(", loop_open, loop_close)
-        query_open = code.index("(", query_index)
-        query_close = _matching_delimiter_index(code, query_open, "(", ")")
-        query_args_match = re.match(
-            r"\s*github\s*,\s*github\.rest\.actions\.listWorkflowRuns\s*,\s*\{",
-            code[query_open + 1 : query_close],
-        )
-        if query_args_match is None:
-            return False
-        params_open = query_open + query_args_match.end()
-        params_close = _matching_brace_index(code, params_open)
-        if re.fullmatch(r"\s*,?\s*", code[params_close + 1 : query_close]) is None:
-            return False
-        try_matches = list(re.finditer(r"\btry\s*\{", code[loop_open + 1 : query_index]))
-        if not try_matches:
-            return False
-        try_index = loop_open + 1 + try_matches[-1].start()
-        try_open = code.index("{", try_index, query_index)
-        try_close = _matching_brace_index(code, try_open)
-        if (
-            code[loop_open + 1 : try_index].strip()
-            or code[try_open + 1 : query_index].strip()
-            or not try_open < query_index < query_close < try_close
-        ):
-            return False
-        query_scope = code[params_open + 1 : params_close]
-        if "..." in query_scope:
-            return False
-        workflow_id_mentions = list(
-            re.finditer(r"\bworkflow_id\b", comment_free[params_open + 1 : params_close])
-        )
-        workflow_id_match = re.search(
-            r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*$",
-            query_scope,
-        )
-        if len(workflow_id_mentions) != 1 or workflow_id_match is None:
-            return False
-        workflow_id_index = params_open + 1 + workflow_id_match.start()
-        successful_match = re.search(
-            r"\bconst\s+successfulForWorkflow\s*=\s*found\b",
-            code[query_close:try_close],
-        )
-        if successful_match is None:
-            return False
-        successful_index = query_close + successful_match.start()
-        pool_index = code.index(
-            "runs = runs.concat(successfulForWorkflow);", successful_index, try_close
-        )
-        catch_match = re.match(r"\s*catch\s*\(\s*err\s*\)\s*\{", code[try_close + 1 : loop_close])
-        if catch_match is None:
-            return False
-        catch_index = code.index(
-            "catch", try_close + 1 + catch_match.start(), try_close + 1 + catch_match.end()
-        )
-        catch_open = try_close + catch_match.end()
-        catch_close = _matching_brace_index(code, catch_open)
-        unavailable_index = code.index("searched.push(", catch_open, catch_close)
-        unavailable_open = code.index("(", unavailable_index)
-        unavailable_close = _matching_delimiter_index(code, unavailable_open, "(", ")")
-        if (
-            "`${wf} (UNAVAILABLE: ${errorMessage(err)})`"
-            not in comment_free[unavailable_open + 1 : unavailable_close]
-        ):
-            return False
-    except ValueError:
-        return False
-
-    if not (
-        normalizer_index
-        < array_check_index
-        < string_filter_index
-        < trim_index
-        < nonempty_filter_index
-        < empty_fallback_index
-        < normalizer_end
-        < default_index
-        < declared_index
-        < configured_branch_open
-        < configured_branch_close
-        < selection_end
-        < loop_index
-        < try_index
-        < try_open
-        < query_index
-        < params_open
-        < workflow_id_index
-        < params_close
-        < query_close
-        < successful_index
-        < pool_index
-        < try_close
-        < catch_index
-        < unavailable_index
-        < unavailable_close
-        < catch_close
-        < loop_close
-        < empty_result_index
-    ):
-        return False
-    try_scope = code[try_open:try_close]
-    catch_before_unavailable = code[catch_open:unavailable_index]
-    catch_after_unavailable = code[unavailable_close:catch_close]
-    return (
-        re.search(r"\b(?:break|continue|return|throw)\b", try_scope) is None
-        and _is_unconditional_block_statement(code, try_open, pool_index)
-        and _is_unconditional_block_statement(code, catch_open, unavailable_index)
-        and re.search(r"\b(?:break|continue|return|throw)\b", catch_before_unavailable) is None
-        and re.search(r"\b(?:break|return|throw)\b", catch_after_unavailable) is None
-        and not code[catch_close + 1 : loop_close].strip()
-    )
-
-
-def _coverage_validation_modes(source: str) -> tuple[bool, bool]:
-    """Select one executable compatibility branch; pooled code cannot fall back to legacy."""
-    code = _mask_javascript_non_code(source)
-    pooled_implementation = POOLED_IMPLEMENTATION_MARKER in code
-    legacy_validation = not pooled_implementation and all(
-        _has_executable_marker(source, marker) for marker in LEGACY_VALIDATION_MARKERS
-    )
-    pooled_validation = pooled_implementation and _pooled_validation_has_safe_control_flow(source)
-    return legacy_validation, pooled_validation
-
-
-POOLED_CONTROL_FLOW_EXAMPLE = """
-const configuredWorkflowIds = (declared) =>
-  Array.isArray(declared)
-    ? declared
-        .filter((workflow) => typeof workflow === 'string')
-        .map((workflow) => workflow.trim())
-        .filter(Boolean)
-    : [];
-const errorMessage = (error) => String(error);
-let workflowIds = DEFAULT_WORKFLOWS;
-const declared = configuredWorkflowIds(cfg.source_workflows);
-if (declared.length) {
-  workflowIds = declared;
-}
-const retryHelperPath = './github-api-with-retry.js';
-for (const wf of workflowIds) {
-  try {
-    const found = await paginateWithRetry(
-      github,
-      github.rest.actions.listWorkflowRuns,
-      {
-        workflow_id: wf,
-      },
-    );
-    const successfulForWorkflow = found.filter(Boolean);
-    runs = runs.concat(successfulForWorkflow);
-  } catch (err) {
-    searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);
-  }
-}
-if (!runs.length) {
-  core.setFailed('no runs');
-}
+NODE_DISCOVERY_HARNESS = r"""
+const payload = JSON.parse(process.argv[1]);
+const requests = [];
+const warnings = [];
+const infos = [];
+const failures = [];
+const outputs = {};
+const existing = new Set(payload.existing);
+const unavailable = new Set(payload.unavailable);
+const mockFs = {
+  readFileSync(path) {
+    if (path !== 'config/coverage-baseline.json') {
+      throw new Error(`unexpected read: ${path}`);
+    }
+    return JSON.stringify({source_workflows: payload.workflows});
+  },
+  existsSync(path) {
+    if (path === './.github/scripts/github-api-with-retry.js') return false;
+    return existing.has(path);
+  },
+  statSync(path) {
+    return {isFile: () => existing.has(path)};
+  },
+};
+const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}};
+const core = {
+  warning(message) { warnings.push(String(message)); },
+  info(message) { infos.push(String(message)); },
+  setFailed(message) { failures.push(String(message)); },
+  setOutput(name, value) { outputs[name] = String(value); },
+};
+const github = {
+  rest: {actions: {listWorkflowRuns: Symbol('listWorkflowRuns')}},
+  async paginate(_method, params) {
+    requests.push(params.workflow_id);
+    if (unavailable.has(params.workflow_id)) {
+      throw new Error(`unavailable: ${params.workflow_id}`);
+    }
+    return [{
+      id: `run-${params.workflow_id}`,
+      conclusion: 'success',
+      run_started_at: '2026-09-04T00:00:00Z',
+    }];
+  },
+};
+const localRequire = (name) => {
+  if (name === 'fs') return mockFs;
+  throw new Error(`unexpected require: ${name}`);
+};
+const body = [
+  'return (async () => {',
+  payload.source,
+  "const exportedSearched = typeof searched === 'undefined' ? [] : searched;",
+  'return {requests, warnings, infos, failures, outputs, exportedSearched, ' +
+    'runIds: runs.map((run) => run.id)};',
+  '})();',
+].join('\n');
+const execute = new Function(
+  'context', 'core', 'github', 'require', 'requests', 'warnings', 'infos',
+  'failures', 'outputs', body,
+);
+execute(context, core, github, localRequire, requests, warnings, infos, failures, outputs)
+  .then((result) => process.stdout.write(JSON.stringify(result)))
+  .catch((error) => {
+    process.stderr.write(`${error.stack || error}\n`);
+    process.exitCode = 1;
+  });
 """
 
 
-def test_pooled_control_flow_example_is_accepted() -> None:
-    assert _pooled_validation_has_safe_control_flow(POOLED_CONTROL_FLOW_EXAMPLE)
+def _discovery_script(workflow_source: str) -> str:
+    """Extract the executable prefix that selects and queries coverage workflows."""
+    step_index = workflow_source.index(DISCOVERY_STEP)
+    script_index = workflow_source.index(SCRIPT_MARKER, step_index) + len(SCRIPT_MARKER)
+    script_lines: list[str] = []
+    for line in workflow_source[script_index:].splitlines():
+        if line.startswith("            "):
+            script_lines.append(line[12:])
+        elif not line.strip():
+            script_lines.append("")
+        else:
+            break
+    script = "\n".join(script_lines)
+    return script[: script.index(DISCOVERY_END)]
 
 
-def test_pooled_control_flow_accepts_double_quoted_string_filter() -> None:
-    equivalent = POOLED_CONTROL_FLOW_EXAMPLE.replace("'string'", '"string"', 1)
-    assert _pooled_validation_has_safe_control_flow(equivalent)
-
-
-def test_pooled_control_flow_requires_the_declared_normalization_chain() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("? declared", "? [] || declared", 1)
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-@pytest.mark.parametrize("statement", ("break", "return", "throw(err)"))
-def test_pooled_control_flow_rejects_early_exit_variants(statement: str) -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-        f"searched.push(`${{wf}} (UNAVAILABLE: ${{errorMessage(err)}})`);\n    {statement}",
+def _run_discovery(
+    workflow_source: str,
+    workflows: list[str],
+    *,
+    existing: set[str],
+    unavailable: set[str] | None = None,
+) -> dict:
+    """Execute workflow discovery with no network, repository, or runner side effects."""
+    node = shutil.which("node")
+    if node is None:
+        raise env_prereq.MissingPrerequisite(
+            "node executable is required to exercise the embedded github-script discovery block"
+        )
+    payload = {
+        "source": _discovery_script(workflow_source),
+        "workflows": workflows,
+        "existing": sorted(existing),
+        "unavailable": sorted(unavailable or set()),
+    }
+    completed = subprocess.run(
+        [node, "-e", NODE_DISCOVERY_HARNESS, json.dumps(payload)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_rejects_continue_before_unavailable_logging() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-        "continue;\n    searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_allows_continue_after_unavailable_logging() -> None:
-    safe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);\n    continue;",
-        1,
-    )
-    assert _pooled_validation_has_safe_control_flow(safe)
-
-
-@pytest.mark.parametrize("statement", ("continue", "break", "return", "throw(err)"))
-def test_pooled_control_flow_rejects_exits_before_the_query(statement: str) -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("  try {", f"  {statement};\n  try {{", 1)
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-@pytest.mark.parametrize(
-    "decoy",
-    (
-        "workflow_id: DEFAULT_WORKFLOW, // workflow_id: wf,",
-        "workflow_id: DEFAULT_WORKFLOW,\n        /*\n        workflow_id: wf,\n        */",
-    ),
-)
-def test_pooled_control_flow_rejects_commented_workflow_id_decoys(decoy: str) -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflow_id: wf,", decoy)
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-@pytest.mark.parametrize(
-    "duplicate",
-    (
-        "workflow_id: DEFAULT_WORKFLOW,\n        workflow_id: wf,",
-        "workflow_id: wf,\n        workflow_id: DEFAULT_WORKFLOW,",
-        'workflow_id: wf,\n        "workflow_id": DEFAULT_WORKFLOW,',
-        "workflow_id: wf,\n        ['workflow_id']: DEFAULT_WORKFLOW,",
-        "workflow_id: wf,\n        workflow_id,",
-    ),
-)
-def test_pooled_control_flow_rejects_duplicate_workflow_id_properties(duplicate: str) -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflow_id: wf,", duplicate, 1)
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_rejects_request_object_spreads() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "workflow_id: wf,", "workflow_id: wf,\n        ...requestOverride,", 1
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_requires_unconditional_pooling() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "runs = runs.concat(successfulForWorkflow);",
-        "if (false) runs = runs.concat(successfulForWorkflow);",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_requires_unconditional_unavailable_logging() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-        "if (false) searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_legacy_markers_inside_a_string_are_not_executable() -> None:
-    string_decoy = (
-        "const diagnostic = `\n"
-        + "\n".join((*LEGACY_DISCOVERY_MARKERS, *LEGACY_VALIDATION_MARKERS))
-        + "\n`;"
-    )
-    legacy_validation, pooled_validation = _coverage_validation_modes(string_decoy)
-    assert not _legacy_discovery_uses_declared_workflows(string_decoy)
-    assert not legacy_validation
-    assert not pooled_validation
-
-
-def test_pooled_control_flow_queries_workflow_runs() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "github.rest.actions.listWorkflowRuns", "github.rest.issues.listForRepo", 1
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_keeps_default_for_an_empty_configured_list() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("if (declared.length) {", "if (true) {", 1)
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-@pytest.mark.parametrize(
-    "reset",
-    (
-        "workflowIds = declared;\n  workflowIds = DEFAULT_WORKFLOWS;",
-        "workflowIds = declared;\n}\nworkflowIds = DEFAULT_WORKFLOWS;\nif (false) {",
-    ),
-)
-def test_pooled_control_flow_rejects_later_workflow_selection_resets(reset: str) -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflowIds = declared;", reset, 1)
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_requires_a_positive_array_guard() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "Array.isArray(declared)", "!Array.isArray(declared)", 1
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_binds_unavailable_catch_to_the_pagination_try() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "  } catch (err) {",
-        "  } finally {\n    cleanup();\n  }\n  try {\n    observe();\n  } catch (err) {",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_rejects_a_commented_unavailable_message_decoy() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-        "searched.push('unknown' /* `${wf} (UNAVAILABLE: ${errorMessage(err)})` */);",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_cannot_fall_back_to_commented_legacy_markers() -> None:
-    legacy_decoy = "\n/*\n" + "\n".join(LEGACY_VALIDATION_MARKERS) + "\n*/\n"
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "workflow_id: wf,", "workflow_id: DEFAULT_WORKFLOW,", 1
-    )
-    legacy_validation, pooled_validation = _coverage_validation_modes(unsafe + legacy_decoy)
-    assert not legacy_validation
-    assert not pooled_validation
-
-
-def test_pooled_control_flow_rejects_commented_normalization_decoys() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        ".map((workflow) => workflow.trim())",
-        ".map((workflow) => workflow) // .map((workflow) => workflow.trim())",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_requires_found_runs_to_join_the_pool() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "runs = runs.concat(successfulForWorkflow);",
-        "// runs = runs.concat(successfulForWorkflow);",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
-
-
-def test_pooled_control_flow_rejects_a_found_identifier_prefix_decoy() -> None:
-    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
-        "const successfulForWorkflow = found.filter(Boolean);",
-        "const successfulForWorkflow = foundFallback.filter(Boolean);",
-        1,
-    )
-    assert not _pooled_validation_has_safe_control_flow(unsafe)
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
 
 
 @pytest.fixture(scope="module")
@@ -603,48 +193,45 @@ def test_the_declared_source_workflow_exists(baseline):
         assert (REPO / rel).is_file(), f"{rel} is named in the baseline config but does not exist"
 
 
-def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
-    """Discovery must follow config rather than silently querying the Gate."""
+def test_coverage_guard_discovery_uses_every_normalized_declared_workflow(baseline):
+    """Discovery must query every configured path after trimming it."""
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
-    code = _mask_javascript_non_code(source)
-    pooled_implementation = POOLED_IMPLEMENTATION_MARKER in code
+    declared = ["  .github/workflows/ci.yml  ", " .github/workflows/pr-00-gate.yml "]
+    expected = [path.strip() for path in declared]
 
-    legacy_discovery = not pooled_implementation and _legacy_discovery_uses_declared_workflows(
-        source
-    )
-    pooled_discovery = pooled_implementation and all(
-        marker in code
-        for marker in (
-            "const declared = configuredWorkflowIds(cfg.source_workflows);",
-            "workflowIds = declared;",
-            "for (const wf of workflowIds)",
-            "workflow_id: wf,",
-        )
-    )
-    assert (
-        legacy_discovery or pooled_discovery
-    ), "coverage discovery must query every workflow declared by the repo-specific baseline"
-    assert baseline["source_workflows"] != [".github/workflows/pr-00-gate.yml"]
+    result = _run_discovery(source, declared, existing=set(expected))
+
+    assert result["requests"] == expected
+    assert result["runIds"] == [f"run-{path}" for path in expected]
+    assert baseline["source_workflows"] != [FALLBACK_WORKFLOW]
 
 
-def test_coverage_guard_normalizes_and_validates_declared_source_workflows(baseline):
-    """Configured paths must be normalized and invalid sources must be visible.
+def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(baseline):
+    """Both supported implementations must fail visibly and retain a usable query path.
 
-    The legacy guard validates every path locally before replacing the Gate fallback. The pooled
-    guard trims each configured value, keeps the fallback when the list is empty, and records an
-    unavailable workflow while continuing to probe the other declared sources.
+    The legacy guard rejects a missing local workflow and deliberately falls back to Gate. The
+    pooled guard queries every declared workflow, records an unavailable API target, and retains
+    runs from the other sources. The behavior, rather than a version marker, selects the branch.
     """
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
-
-    legacy_validation, pooled_validation = _coverage_validation_modes(source)
-    assert legacy_validation or pooled_validation, (
-        "coverage discovery must normalize configured sources and expose unusable entries; "
-        f"legacy_validation={legacy_validation}, pooled_validation={pooled_validation}. "
-        "A false pooled branch means its expected scoped marker or control-flow contract did not "
-        "match."
+    missing = ".github/workflows/missing.yml"
+    usable = ".github/workflows/ci.yml"
+    result = _run_discovery(
+        source,
+        [missing, usable],
+        existing={usable},
+        unavailable={missing},
     )
+
+    if result["requests"] == [FALLBACK_WORKFLOW]:
+        assert any("falling back" in warning.lower() for warning in result["warnings"])
+        assert result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+    else:
+        assert result["requests"] == [missing, usable]
+        assert result["runIds"] == [f"run-{usable}"]
+        assert any("UNAVAILABLE" in entry for entry in result["exportedSearched"])
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
 
 
