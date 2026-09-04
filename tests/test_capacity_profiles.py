@@ -96,9 +96,7 @@ def test_capacity_build_reads_shared_pool_burn_once(tmp_path, monkeypatch, codex
     monkeypatch.setattr(capacity, "LEDGER", ledger)
     monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "shed")
     built = capacity.build(ccusage_block=None)
-    codex_profile_count = sum(
-        1 for p in codex_profile_registry.values() if p["agent"] == "codex"
-    )
+    codex_profile_count = sum(1 for p in codex_profile_registry.values() if p["agent"] == "codex")
     assert built["pools"]["codex-subscription"]["used"] == float(codex_profile_count)
     # Only codex burned this pool, and all of its profiles map to it. Other agents now have
     # their own pools, so filter rather than assert the registry is codex-only.
