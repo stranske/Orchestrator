@@ -2186,7 +2186,10 @@ def _selftest() -> None:
         assert trend is not None, "known trend dispatch agent is dispatchable"
         trend_prompt = " ".join(trend["argv"])
         assert "REPO PLAYBOOK (stranske/Trend_Model_Project)" in trend_prompt, trend["argv"]
-        assert "phase-3" in trend_prompt and "ruff check" in trend_prompt, trend["argv"]
+        assert "Base branch: main" in trend_prompt and "ruff check" in trend_prompt, trend["argv"]
+        normalized_trend_prompt = trend_prompt.lower().replace("`", "")
+        assert "phase-3 is the default branch" not in normalized_trend_prompt, trend["argv"]
+        assert "there is no main" not in normalized_trend_prompt, trend["argv"]
         # review prompt is advisory/non-gating
         rev_argv = by_t["stranske/Repo#3"]["argv"]
         assert any("non-gating" in tok.lower() for tok in rev_argv), rev_argv

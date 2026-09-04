@@ -412,7 +412,7 @@ cursor-agent live outside the default PATH):
 - **Inject repo playbooks (NEW)** — `python3 src/repo_knowledge.py <owner/repo[#N]> [task_type] [lane]` previews
   the concise per-repo `REPO PLAYBOOK` block auto-appended to delegated prompts. The registry lives at
   `experiments/repo_knowledge.json` by default; set `ORCH_REPO_KNOWLEDGE_PATH` to review or test a
-  separate registry. It captures recurring definition-of-done rules and gotchas such as Trend phase-3,
+  separate registry. It captures recurring definition-of-done rules and gotchas such as Trend default-branch facts,
   Counter_Risk formatting, LMS Postgres migrations, and Workflows sync/doc surfaces.
   Use `python3 src/repo_knowledge.py --search owner/repo[#N] [--query TEXT] [--task-type T] [--lane L]`
   to retrieve approved playbook entries plus retained run/outcome notes for prompt authoring or triage.

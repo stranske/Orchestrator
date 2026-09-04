@@ -157,21 +157,22 @@ DOC_SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".nex
 DOC_SKIP_FILE_PREFIXES = ("BRIEF_",)
 DOC_SKIP_FILE_NAMES = {"docs/briefs/CODEX_BRIEF.md"}
 
-# v2 (2026-08-23): corrects a factually wrong Trend summary, unscopes seeded invariants, and adds
-# the `contraindications` section. Bumping this runs `_migrate()` once against an existing registry.
-SEED_SCHEMA_VERSION = 2
+# v3 corrects Trend's retired phase-3 branch in both fresh seeds and existing v2 registries. Bumping
+# this runs `_migrate()` once against an existing registry; changing SEED alone would leave deployed
+# copies serving the stale branch instructions indefinitely.
+SEED_SCHEMA_VERSION = 3
 
-# The three corrected Trend lines, named once and consumed twice -- by the SEED below and by the
-# v1 -> v2 migration table. A migration that wrote different words than the SEED would leave two
+# The corrected Trend lines are named once and consumed by the SEED and migration table. A migration
+# that wrote different words than the SEED would leave two
 # instances of this tool disagreeing about the same repo, which is the failure the correction is
 # for; the selftest asserts every replacement value is actually present in the SEED.
 _TREND_SUMMARY = (
     "Quant trend-model app: a Streamlit operator surface, a notebook GUI and the `trend` CLI over "
-    "one config contract. `phase-3` IS the default branch -- there is no `main`."
+    "one config contract. `main` is the default branch; `phase-3` no longer exists."
 )
 _TREND_BASE_GOTCHA = (
-    "`phase-3` is the default branch and the base for all work here; there is no `main`. Anything "
-    "that assumes `main` is wrong for this repo."
+    "`main` is the current default branch and opener base. The retired `phase-3` branch no longer "
+    "exists."
 )
 _TREND_FORMAT_GOTCHA = (
     "Formatting is Black at line-length 100 (`black --check --line-length 100`, gated by "
@@ -180,12 +181,21 @@ _TREND_FORMAT_GOTCHA = (
     "here and produces pure churn."
 )
 
-# v1 -> v2 text corrections, keyed by repo and matched EXACTLY, so an instance that edited one of
-# these lines by hand is never clobbered -- only the seeded wording is replaced.
+# Seeded text corrections, keyed by repo and matched EXACTLY, so an instance that edited one of
+# these lines by hand is never clobbered. The phase-3 strings are historical migration inputs, not
+# current guidance.
 SUPERSEDED_TEXT = {
     "stranske/Trend_Model_Project": {
         "Trend opener work cuts from phase-3, not the default branch.": _TREND_SUMMARY,
         "Use phase-3 as the base for opener work; do not assume main.": _TREND_BASE_GOTCHA,
+        (
+            "Quant trend-model app: a Streamlit operator surface, a notebook GUI and the `trend` "
+            "CLI over one config contract. `phase-3` IS the default branch -- there is no `main`."
+        ): _TREND_SUMMARY,
+        (
+            "`phase-3` is the default branch and the base for all work here; there is no `main`. "
+            "Anything that assumes `main` is wrong for this repo."
+        ): _TREND_BASE_GOTCHA,
         "CI convention is ruff check; do not introduce unrelated ruff format churn.": _TREND_FORMAT_GOTCHA,
     },
 }
@@ -209,10 +219,10 @@ SEED: dict[str, Any] = {
         },
         "stranske/Trend_Model_Project": {
             "summary": _TREND_SUMMARY,
-            # ONE CONSTANT, NOT A MATCHING PAIR OF LITERALS. provision.BASE_BRANCH_OVERRIDES is what
-            # actually decides the base an opener branch is cut from; a second "phase-3" literal here
-            # would be free to drift away from it silently.
-            "base_branch": provision.BASE_BRANCH_OVERRIDES["stranske/Trend_Model_Project"],
+            # Advisory current-state fact shown to agents. Dispatch authority remains
+            # provision.default_branch(): Trend is deliberately absent from the override table so
+            # provisioning follows GitHub if the default changes again.
+            "base_branch": "main",
             "gotchas": [
                 {"text": _TREND_BASE_GOTCHA},
                 {"text": _TREND_FORMAT_GOTCHA},
@@ -362,9 +372,9 @@ def _migrate(reg: dict) -> bool:
             if live:
                 entry[section] = live
         if seed_entry.get("base_branch"):
-            # Overwritten, not filled: the seeded value now comes from provision's override table,
-            # which is what actually decides the base. A registry that disagreed with it would be
-            # telling agents one branch while the dispatcher cut from another.
+            # Overwritten, not filled: this is the reviewed branch fact agents are shown. The
+            # dispatcher independently resolves non-overridden repos through GitHub, so this
+            # knowledge value can never pin provisioning to a retired branch.
             entry["base_branch"] = seed_entry["base_branch"]
     reg["schema_version"] = SEED_SCHEMA_VERSION
     return True
@@ -1935,6 +1945,13 @@ def _load_suggestion_file(path: Path, index: int) -> dict:
 
 
 def _selftest() -> None:
+    def assert_current_trend_branch_text(value: str) -> None:
+        normalized = value.lower().replace("`", "")
+        assert "main is the default branch" in normalized, value
+        assert "phase-3 no longer exists" in normalized, value
+        assert "phase-3 is the default branch" not in normalized, value
+        assert "there is no main" not in normalized, value
+
     p = Path("/tmp/__repo_knowledge_selftest.json")
     p.unlink(missing_ok=True)
     try:
@@ -1953,36 +1970,44 @@ def _selftest() -> None:
                 assert _new in _seeded, (_repo, _old)
                 assert _old not in _seeded, (_repo, _old, "superseded text is still seeded")
 
-        # ONE CONSTANT: the registry's base branch is provision's, not a second literal beside it.
+        trend_repo = "stranske/Trend_Model_Project"
+        trend_seed = SEED["repos"][trend_repo]
+        trend_seed_text = "\n".join(
+            [
+                str(trend_seed["summary"]),
+                *(_text(item) for item in trend_seed["gotchas"]),
+            ]
+        )
+        assert_current_trend_branch_text(trend_seed_text)
+
+        # An intentional non-default override may be repeated in knowledge, but Trend must not have
+        # one: dispatch follows GitHub while the reviewed playbook records today's main-branch fact.
         for repo, base in provision.BASE_BRANCH_OVERRIDES.items():
             seeded = (SEED["repos"].get(repo) or {}).get("base_branch")
             assert seeded in (None, base), (repo, seeded, base)
-        # ...and no seeded base_branch may name a repo provision does not override, which is how the
-        # two would drift apart in the other direction.
-        for repo, entry in SEED["repos"].items():
-            if entry.get("base_branch"):
-                assert repo in provision.BASE_BRANCH_OVERRIDES, repo
+        assert trend_repo not in provision.BASE_BRANCH_OVERRIDES
+        assert trend_seed["base_branch"] == "main"
 
         ctx = context_for(
             "stranske/Trend_Model_Project#123", task_type="implement", lane="opener", path=p
         )
         assert "REPO PLAYBOOK (stranske/Trend_Model_Project)" in ctx, ctx
-        assert "Base branch: phase-3" in ctx, ctx
+        assert "Base branch: main" in ctx, ctx
         assert "ruff check" in ctx, ctx
-        # The summary must not claim phase-3 is something other than the default branch: it IS the
-        # default branch, and the old wording sent a reader looking for a `main` that is not there.
         summary = SEED["repos"]["stranske/Trend_Model_Project"]["summary"]
-        assert "IS the default branch" in summary, summary
+        assert_current_trend_branch_text(summary)
         assert "not the default branch" not in summary, summary
+        assert_current_trend_branch_text(ctx)
 
         # A GOTCHA AN AUDITOR CANNOT SEE IS A GOTCHA THAT DOES NOT EXIST. Every seeded invariant must
         # reach a review/audit/unclassified consult, not only the task types that happen to be listed.
         for consult in (None, "review", "audit", "ux"):
             seen = context_for("stranske/Trend_Model_Project#123", task_type=consult, path=p)
-            assert "Base branch: phase-3" in seen, (consult, seen)
+            assert "Base branch: main" in seen, (consult, seen)
             assert "ruff check" in seen, (consult, seen)
             assert "frontend_verify.py" in seen, (consult, seen)
             assert "stlite/Pyodide" in seen, (consult, seen)
+            assert_current_trend_branch_text(seen)
         review_ctx = context_for("stranske/Trend_Model_Project#123", task_type="review", path=p)
         impl_ctx = context_for("stranske/Trend_Model_Project#123", task_type="implement", path=p)
         assert len(review_ctx) == len(impl_ctx), (len(review_ctx), len(impl_ctx))
@@ -2017,7 +2042,8 @@ def _selftest() -> None:
         closer_ctx = context_for(
             "stranske/Trend_Model_Project#123", task_type="implement", lane="closer", path=p
         )
-        assert "Base branch: phase-3" in closer_ctx, closer_ctx
+        assert "Base branch: main" in closer_ctx, closer_ctx
+        assert_current_trend_branch_text(closer_ctx)
 
         lms_ctx = context_for(
             "stranske/learning-management-system#7", task_type="mechanical", lane="opener", path=p
@@ -2042,22 +2068,30 @@ def _selftest() -> None:
         scoped_reg["repos"]["stranske/learning-management-system"].pop("validation")
         save(scoped_reg, p)
 
-        # MIGRATION: a v1 registry carrying the wrong seeded lines is corrected in place, keeps every
-        # instance-added entry, and is idempotent.
-        legacy = Path("/tmp/__repo_knowledge_selftest_v1.json")
+        # MIGRATION: a deployed v2 registry carrying the now-stale seeded lines is corrected in
+        # place, keeps every instance-added entry, and is idempotent.
+        legacy = Path("/tmp/__repo_knowledge_selftest_v2.json")
         legacy.unlink(missing_ok=True)
         try:
             legacy.write_text(
                 json.dumps(
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "repos": {
                             "stranske/Trend_Model_Project": {
-                                "summary": "Trend opener work cuts from phase-3, not the default branch.",
+                                "summary": (
+                                    "Quant trend-model app: a Streamlit operator surface, a notebook "
+                                    "GUI and the `trend` CLI over one config contract. `phase-3` IS "
+                                    "the default branch -- there is no `main`."
+                                ),
                                 "base_branch": "phase-3",
                                 "gotchas": [
                                     {
-                                        "text": "Use phase-3 as the base for opener work; do not assume main.",
+                                        "text": (
+                                            "`phase-3` is the default branch and the base for all "
+                                            "work here; there is no `main`. Anything that assumes "
+                                            "`main` is wrong for this repo."
+                                        ),
                                         "lanes": ["opener"],
                                     },
                                     {
@@ -2079,9 +2113,9 @@ def _selftest() -> None:
             migrated = load(legacy)
             assert migrated["schema_version"] == SEED_SCHEMA_VERSION, migrated["schema_version"]
             trend = migrated["repos"]["stranske/Trend_Model_Project"]
-            assert "IS the default branch" in trend["summary"], trend["summary"]
+            assert trend["base_branch"] == "main", trend
             texts = [_text(item) for item in trend["gotchas"]]
-            assert any("there is no `main`" in t for t in texts), texts
+            assert_current_trend_branch_text("\n".join([trend["summary"], *texts]))
             assert any("black --check --line-length 100" in t for t in texts), texts
             assert "An instance rule nobody seeded." in texts, texts
             kept = [i for i in trend["gotchas"] if _text(i) == "An instance rule nobody seeded."][0]
@@ -2122,7 +2156,8 @@ def _selftest() -> None:
         assert "Black" in export, export
         assert len(export.splitlines()) <= AGENTS_EXPORT_MAX_LINES, export
         trend_export = export_agents_md("stranske/Trend_Model_Project", path=p)
-        assert "Base branch: `phase-3`" in trend_export, trend_export
+        assert "Base branch: `main`" in trend_export, trend_export
+        assert_current_trend_branch_text(trend_export)
         assert "### Contraindicated Capabilities" in trend_export, trend_export
         assert "frontend-verifier:" in trend_export, trend_export
         assert export_agents_md("stranske/Unknown", path=p) == ""
