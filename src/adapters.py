@@ -66,7 +66,7 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 VIBE_MODEL = "mistral-medium-3.5"
 
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
+    "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6-astra"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5", "full": "claude-opus-5"},
     "gemini": {
         "cheap": "gemini-3.7-flash-low",
@@ -1679,12 +1679,13 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         ca[:5] == ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only"]
         and "--json" not in ca
     ), ca
-    # Three-tier GPT-5.6 family: Luna (cheap) / Terra (mid) / Sol (full). Codex has no catalog
-    # probe, so these resolve straight from MODEL_TIERS without a subprocess.
+    # Codex tiers: Luna (cheap) / Terra (mid) / GPT-6 Astra (full, since 2026-09-04). Codex has no
+    # catalog probe, so these resolve straight from MODEL_TIERS without a subprocess. Astra needs
+    # codex-cli >= 0.153.2; older builds reject it with a 400 naming the CLI version.
     for tier, expected in (
         ("cheap", "gpt-5.6-luna"),
         ("mid", "gpt-5.6-terra"),
-        ("full", "gpt-5.6-sol"),
+        ("full", "gpt-6-astra"),
     ):
         cc = build_command("codex", "x", mode=tier)
         assert cc[cc.index("--model") + 1] == expected, (tier, cc)
@@ -1724,11 +1725,16 @@ def _selftest_inner(*, gaps: list[str] | None = None):
                 "--json" not in assess
                 and assess[assess.index("--model") + 1] == profile["requested_model"]
             ), assess
+        # Derived from the registry, not pinned: the codex profile set changes when a model is
+        # promoted or retired (astra replaced sol as the full tier on 2026-09-04, and sol's profile
+        # was KEPT so its recorded outcomes stay interpretable). A literal set here would fail on
+        # every legitimate promotion while proving nothing the per-profile assertion above misses.
         assert {cmd[cmd.index("--model") + 1] for cmd in profile_commands.values()} == {
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
+            p["requested_model"] for p in execution_profiles.profiles_for_agent("codex")
         }
+        assert model_identity("codex", "full") in {
+            cmd[cmd.index("--model") + 1] for cmd in profile_commands.values()
+        }, "the full-tier model must have a profile the seat can actually run"
     env_prereq.report_gaps("adapters.py", gaps)
     codex_cwd = HOME / ".codex" / "orchestrator" / "worktrees" / "selftest"
     ccwd = build_command("codex", "x", cwd=codex_cwd)

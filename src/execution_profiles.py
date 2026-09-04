@@ -118,6 +118,11 @@ def _profile(
 PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
     p["profile_id"]: p
     for p in (
+        # GPT-6 Astra replaced Sol as the codex full tier on 2026-09-04. Sol keeps its profile so
+        # the outcomes already recorded against it stay interpretable, but it is no longer selected:
+        # `adapters.model_identity("codex", "full")` now reports astra, and the registry test below
+        # fails if a profile claims a model the seat never runs.
+        _profile("codex-6-astra-high", "gpt-6-astra", "high", prior_offset=0.05),
         _profile("codex-5.6-sol-high", "gpt-5.6-sol", "high", prior_offset=0.05),
         _profile("codex-5.6-terra-high", "gpt-5.6-terra", "high"),
         _profile("codex-5.6-luna-high", "gpt-5.6-luna", "high", prior_offset=-0.02),
