@@ -46,8 +46,10 @@ const infos = [];
 const failures = [];
 const rejections = [];
 const helperLoads = [];
+const callTrace = [];
 const outputs = {};
-const existing = new Set(payload.existing);
+const existingFiles = new Set(payload.existing);
+const existingDirectories = new Set(payload.directories);
 const unavailable = new Set(payload.unavailable);
 const rejectionNonce = require('node:crypto').randomUUID();
 const retryHelperPath = './.github/scripts/github-api-with-retry.js';
@@ -60,15 +62,15 @@ const mockFs = {
   },
   existsSync(path) {
     if (path === retryHelperPath) return payload.useRetryHelper;
-    return existing.has(path);
+    return existingFiles.has(path) || existingDirectories.has(path);
   },
   statSync(path) {
-    if (!existing.has(path)) {
+    if (!existingFiles.has(path) && !existingDirectories.has(path)) {
       const error = new Error(`ENOENT: no such file or directory, stat '${path}'`);
       error.code = 'ENOENT';
       throw error;
     }
-    return {isFile: () => true};
+    return {isFile: () => existingFiles.has(path)};
   },
 };
 const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}};
@@ -84,6 +86,7 @@ const github = {
     if (_method !== github.rest.actions.listWorkflowRuns) {
       throw new Error('unexpected pagination method');
     }
+    callTrace.push({type: 'github.paginate', workflow: params.workflow_id});
     requests.push(params.workflow_id);
     if (unavailable.has(params.workflow_id)) {
       const error = new Error(`unavailable: ${params.workflow_id} (${rejectionNonce})`);
@@ -101,7 +104,14 @@ const localRequire = (name) => {
   if (name === 'fs') return mockFs;
   if (name === retryHelperPath && payload.useRetryHelper) {
     helperLoads.push(name);
-    return require(name);
+    const retryHelpers = require(name);
+    return {
+      ...retryHelpers,
+      paginateWithRetry(...args) {
+        callTrace.push({type: 'paginateWithRetry', workflow: args[2]?.workflow_id});
+        return retryHelpers.paginateWithRetry(...args);
+      },
+    };
   }
   throw new Error(`unexpected require: ${name}`);
 };
@@ -109,20 +119,17 @@ const body = [
   '(async () => {',
   payload.source,
   "const exportedSearched = typeof searched === 'undefined' ? [] : searched;",
-  'return {requests, warnings, infos, failures, rejections, helperLoads, outputs, ' +
-    'exportedSearched, ' +
-    'runIds: runs.map((run) => run.id)};',
+  'return {exportedSearched, runIds: runs.map((run) => run.id)};',
   '})();',
 ].join('\n');
 vm.runInNewContext(
   body,
-  {
-    context, core, github, require: localRequire, requests, warnings, infos, failures,
-    rejections, helperLoads, outputs,
-  },
+  {context, core, github, require: localRequire},
   {timeout: 5000},
 )
-  .then((result) => process.stdout.write(JSON.stringify(result)))
+  .then((result) => process.stdout.write(JSON.stringify({
+    ...result, requests, warnings, infos, failures, rejections, helperLoads, callTrace, outputs,
+  })))
   .catch((error) => {
     process.stderr.write(`${error.stack || error}\n`);
     process.exitCode = 1;
@@ -157,6 +164,7 @@ def _run_discovery(
     *,
     existing: set[str],
     unavailable: set[str] | None = None,
+    directories: set[str] | None = None,
     use_retry_helper: bool = False,
 ) -> dict:
     """Execute workflow discovery with no network, repository, or runner side effects."""
@@ -169,6 +177,7 @@ def _run_discovery(
         "source": _discovery_script(workflow_source),
         "workflows": workflows,
         "existing": sorted(existing),
+        "directories": sorted(directories or set()),
         "unavailable": sorted(unavailable or set()),
         "useRetryHelper": use_retry_helper,
     }
@@ -182,6 +191,19 @@ def _run_discovery(
     )
     assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
+
+
+def _assert_rejection_is_recorded(result: dict, workflow: str) -> None:
+    """Require the actual API rejection to produce the workflow's unavailable record."""
+    assert len(result["rejections"]) == 1
+    rejected = result["rejections"][0]
+    assert rejected["workflow"] == workflow
+    recorded = [
+        entry
+        for entry in result["exportedSearched"]
+        if entry.startswith(f"{workflow} (UNAVAILABLE:") and rejected["error"] in entry
+    ]
+    assert len(recorded) == 1
 
 
 @pytest.fixture(scope="module")
@@ -237,6 +259,15 @@ def test_coverage_guard_discovery_uses_every_normalized_declared_workflow(baseli
     assert result["runIds"] == [f"run-{path}" for path in expected]
     assert result["failures"] == []
     assert result["helperLoads"] == ["./.github/scripts/github-api-with-retry.js"]
+    expected_trace = [
+        event
+        for path in expected
+        for event in (
+            {"type": "paginateWithRetry", "workflow": path},
+            {"type": "github.paginate", "workflow": path},
+        )
+    ]
+    assert result["callTrace"] == expected_trace
     assert baseline["source_workflows"] != [FALLBACK_WORKFLOW]
 
 
@@ -264,17 +295,42 @@ def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(ba
     else:
         assert result["requests"] == [missing, usable]
         assert result["runIds"] == [f"run-{usable}"]
-        assert len(result["rejections"]) == 1
-        rejected = result["rejections"][0]
-        assert rejected["workflow"] == missing
-        recorded = [
-            entry
-            for entry in result["exportedSearched"]
-            if entry.startswith(f"{missing} (UNAVAILABLE:") and rejected["error"] in entry
-        ]
-        assert len(recorded) == 1
+        _assert_rejection_is_recorded(result, missing)
     assert result["failures"] == []
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
+
+
+def test_coverage_guard_does_not_treat_an_existing_directory_as_a_workflow(baseline):
+    """Legacy validation must reject directories; pooled discovery must expose API rejection."""
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
+    source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+    missing = ".github/workflows/missing.yml"
+    usable = ".github/workflows/ci.yml"
+    branch_probe = _run_discovery(
+        source,
+        [missing, usable],
+        existing={usable},
+        unavailable={missing},
+    )
+
+    directory = ".github/workflows"
+    result = _run_discovery(
+        source,
+        [directory],
+        existing=set(),
+        directories={directory},
+        unavailable={directory},
+    )
+
+    if branch_probe["requests"] == [FALLBACK_WORKFLOW]:
+        assert result["requests"] == [FALLBACK_WORKFLOW]
+        assert result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+        assert any("falling back" in warning.lower() for warning in result["warnings"])
+    else:
+        assert result["requests"] == [directory]
+        assert result["runIds"] == []
+        _assert_rejection_is_recorded(result, directory)
+    assert result["failures"] == []
 
 
 def test_the_declared_workflow_publishes_both_artifacts_the_guard_requires(baseline):
