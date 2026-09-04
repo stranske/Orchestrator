@@ -36,6 +36,12 @@ LEGACY_VALIDATION_MARKERS = (
     "fs.statSync(workflowId.trim()).isFile()",
     "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
 )
+LEGACY_DISCOVERY_MARKERS = (
+    "const configuredWorkflowIds = baseline.source_workflows;",
+    "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
+    "workflowIds.map((workflowId)",
+    "workflow_id: workflowId,",
+)
 
 
 def _mask_javascript(source: str, *, mask_strings: bool) -> str:
@@ -118,6 +124,38 @@ def _matching_brace_index(source: str, opening_index: int) -> int:
     return _matching_delimiter_index(source, opening_index, "{", "}")
 
 
+def _has_executable_marker(source: str, marker: str) -> bool:
+    """Return whether a comment-free marker starts in executable JavaScript."""
+    code = _mask_javascript_non_code(source)
+    comment_free = _mask_javascript_comments(source)
+    start = 0
+    while True:
+        marker_index = comment_free.find(marker, start)
+        if marker_index < 0:
+            return False
+        if code[marker_index] == marker[0]:
+            return True
+        start = marker_index + 1
+
+
+def _is_unconditional_block_statement(code: str, block_open: int, statement_index: int) -> bool:
+    """Reject statements nested in a block or controlled by an unbraced prefix."""
+    depth = 0
+    for char in code[block_open:statement_index]:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+    if depth != 1:
+        return False
+    prefix = code[block_open + 1 : statement_index].rstrip()
+    return not prefix or prefix[-1] in ";{}"
+
+
+def _legacy_discovery_uses_declared_workflows(source: str) -> bool:
+    return all(_has_executable_marker(source, marker) for marker in LEGACY_DISCOVERY_MARKERS)
+
+
 def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     """Check the pooled implementation as ordered scopes, not unrelated markers."""
     code = _mask_javascript_non_code(source)
@@ -195,6 +233,8 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         ):
             return False
         query_scope = code[params_open + 1 : params_close]
+        if "..." in query_scope:
+            return False
         workflow_id_mentions = list(
             re.finditer(r"\bworkflow_id\b", comment_free[params_open + 1 : params_close])
         )
@@ -271,6 +311,8 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     catch_after_unavailable = code[unavailable_close:catch_close]
     return (
         re.search(r"\b(?:break|continue|return|throw)\b", try_scope) is None
+        and _is_unconditional_block_statement(code, try_open, pool_index)
+        and _is_unconditional_block_statement(code, catch_open, unavailable_index)
         and re.search(r"\b(?:break|continue|return|throw)\b", catch_before_unavailable) is None
         and re.search(r"\b(?:break|return|throw)\b", catch_after_unavailable) is None
         and not code[catch_close + 1 : loop_close].strip()
@@ -280,10 +322,9 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
 def _coverage_validation_modes(source: str) -> tuple[bool, bool]:
     """Select one executable compatibility branch; pooled code cannot fall back to legacy."""
     code = _mask_javascript_non_code(source)
-    comment_free = _mask_javascript_comments(source)
     pooled_implementation = POOLED_IMPLEMENTATION_MARKER in code
     legacy_validation = not pooled_implementation and all(
-        marker in comment_free for marker in LEGACY_VALIDATION_MARKERS
+        _has_executable_marker(source, marker) for marker in LEGACY_VALIDATION_MARKERS
     )
     pooled_validation = pooled_implementation and _pooled_validation_has_safe_control_flow(source)
     return legacy_validation, pooled_validation
@@ -397,6 +438,43 @@ def test_pooled_control_flow_rejects_commented_workflow_id_decoys(decoy: str) ->
 def test_pooled_control_flow_rejects_duplicate_workflow_id_properties(duplicate: str) -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflow_id: wf,", duplicate, 1)
     assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_rejects_request_object_spreads() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "workflow_id: wf,", "workflow_id: wf,\n        ...requestOverride,", 1
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_requires_unconditional_pooling() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "runs = runs.concat(successfulForWorkflow);",
+        "if (false) runs = runs.concat(successfulForWorkflow);",
+        1,
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_requires_unconditional_unavailable_logging() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        "if (false) searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        1,
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_legacy_markers_inside_a_string_are_not_executable() -> None:
+    string_decoy = (
+        "const diagnostic = `\n"
+        + "\n".join((*LEGACY_DISCOVERY_MARKERS, *LEGACY_VALIDATION_MARKERS))
+        + "\n`;"
+    )
+    legacy_validation, pooled_validation = _coverage_validation_modes(string_decoy)
+    assert not _legacy_discovery_uses_declared_workflows(string_decoy)
+    assert not legacy_validation
+    assert not pooled_validation
 
 
 def test_pooled_control_flow_queries_workflow_runs() -> None:
@@ -530,17 +608,10 @@ def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
     code = _mask_javascript_non_code(source)
-    comment_free = _mask_javascript_comments(source)
     pooled_implementation = POOLED_IMPLEMENTATION_MARKER in code
 
-    legacy_discovery = not pooled_implementation and all(
-        marker in comment_free
-        for marker in (
-            "const configuredWorkflowIds = baseline.source_workflows;",
-            "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
-            "workflowIds.map((workflowId)",
-            "workflow_id: workflowId,",
-        )
+    legacy_discovery = not pooled_implementation and _legacy_discovery_uses_declared_workflows(
+        source
     )
     pooled_discovery = pooled_implementation and all(
         marker in code
