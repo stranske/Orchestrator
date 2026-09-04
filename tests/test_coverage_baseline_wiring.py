@@ -38,6 +38,7 @@ SCRIPT_MARKER = "          script: |\n"
 DISCOVERY_END = "\nif (!runs.length) {"
 
 NODE_DISCOVERY_HARNESS = r"""
+const vm = require('node:vm');
 const payload = JSON.parse(process.argv[1]);
 const requests = [];
 const warnings = [];
@@ -87,18 +88,18 @@ const localRequire = (name) => {
   throw new Error(`unexpected require: ${name}`);
 };
 const body = [
-  'return (async () => {',
+  '(async () => {',
   payload.source,
   "const exportedSearched = typeof searched === 'undefined' ? [] : searched;",
   'return {requests, warnings, infos, failures, outputs, exportedSearched, ' +
     'runIds: runs.map((run) => run.id)};',
   '})();',
 ].join('\n');
-const execute = new Function(
-  'context', 'core', 'github', 'require', 'requests', 'warnings', 'infos',
-  'failures', 'outputs', body,
-);
-execute(context, core, github, localRequire, requests, warnings, infos, failures, outputs)
+vm.runInNewContext(
+  body,
+  {context, core, github, require: localRequire, requests, warnings, infos, failures, outputs},
+  {timeout: 5000},
+)
   .then((result) => process.stdout.write(JSON.stringify(result)))
   .catch((error) => {
     process.stderr.write(`${error.stack || error}\n`);
