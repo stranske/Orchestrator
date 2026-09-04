@@ -277,7 +277,7 @@ def test_build_command_honours_every_tier():
     capped at `mid`, so its `full` lane sends Sonnet 5 (see the scarce-seat ceiling tests).
     """
     expected = {
-        "codex": ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"),
+        "codex": ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra"),
         "claude": ("claude-haiku-4-5", "claude-sonnet-5", "claude-sonnet-5"),
         "gemini": ("gemini-3.7-flash-low", "gemini-3.7-flash-high", "gemini-3.1-pro-high"),
     }
