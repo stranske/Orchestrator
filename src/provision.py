@@ -10,8 +10,8 @@ So we keep a LOCAL-disk canonical clone per repo under ~/.codex/orchestrator/rep
 fs) and add worktrees off THAT — both worktree add and push work on normal fs.
 
   - closer target (PR repo#N): worktree on the PR's head branch (push updates the PR).
-  - opener target (issue repo#N): worktree on a NEW branch off the base
-    (phase-3 for Trend_Model_Project; the repo's default branch otherwise).
+  - opener target (issue repo#N): worktree on a NEW branch off the repo's live default branch,
+    unless that repo has an explicit non-default base override.
 
 Pure helpers are selftested offline; `--smoke owner/repo#N opener|closer` provisions one
 target live (clone + worktree) to verify the normal-fs path works, then cleans up.
@@ -24,6 +24,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 ORCH = Path(__file__).resolve().parent
 # Git checkouts MUST live on LOCAL disk: Dropbox rejects `git worktree add` ("Operation not permitted")
@@ -37,16 +38,10 @@ WORKTREES_DIR = Path(
     os.environ.get("ORCH_WORKTREE_BASE", LOCAL_RUNTIME / "worktrees")
 )  # per-target worktrees
 
-# Base branch a NEW opener branch is cut from, when it must NOT be the repo's default branch.
-# The Trend pin is currently a NO-OP and is kept deliberately: `phase-3` IS that repo's default
-# branch (`gh repo view stranske/Trend_Model_Project --json defaultBranchRef` -> phase-3), so the
-# override and the fallback agree today. The old comment here said Trend "uses phase-3" as though
-# that were distinct from the default, and the repo playbook had copied the same wrong belief as
-# "Trend opener work cuts from phase-3, not the default branch" -- which sent readers looking for a
-# `main` that does not exist. Keeping the pin means the base stays phase-3 if the default ever moves.
-# repo_knowledge's SEED reads this dict rather than repeating the branch name; a matching pair of
-# literals would be free to drift, one name cannot.
-BASE_BRANCH_OVERRIDES = {"stranske/Trend_Model_Project": "phase-3"}
+# Base branch a NEW opener branch is cut from only when it intentionally differs from the repo's
+# default. Repos that follow their default must stay absent: default_branch() queries GitHub, while
+# a redundant registration can outlive a branch rename and make every opener worktree fail.
+BASE_BRANCH_OVERRIDES: dict[str, str] = {}
 
 
 def parse_target(target: str) -> tuple[str, int | None]:
@@ -218,12 +213,16 @@ def _selftest() -> None:
     assert worktree_path("o/r#1", "closer").name == "o__r__1__closer"
     assert canonical_path("stranske/Counter_Risk").name == "stranske__Counter_Risk"
     assert _existing_worktree_reuse_error(Path("/definitely/not/a/worktree")) is not None
-    # base-branch override is pure (no network); Trend => phase-3
-    assert BASE_BRANCH_OVERRIDES["stranske/Trend_Model_Project"] == "phase-3"
-    assert base_branch.__name__ == "base_branch"  # the override is consulted before gh
+    # Trend follows its live default. Prove the fallback is consulted instead of pinning the current
+    # name into BASE_BRANCH_OVERRIDES, where a future default-branch rename could strand dispatch.
+    trend_repo = "stranske/Trend_Model_Project"
+    assert trend_repo not in BASE_BRANCH_OVERRIDES
+    with mock.patch.object(sys.modules[__name__], "default_branch", return_value="main") as queried:
+        assert base_branch(trend_repo) == "main"
+        queried.assert_called_once_with(trend_repo)
     print(
         "provision.py selftest: OK (target parse, slug, worktree naming/paths, "
-        "Trend phase-3 base override) — live clone/worktree covered by --smoke"
+        "Trend live-default fallback) — live clone/worktree covered by --smoke"
     )
 
 

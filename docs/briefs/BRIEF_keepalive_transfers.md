@@ -183,7 +183,7 @@ is the highest-value, highest-TNR, store-free guard against hollow PRs.
 
 **What it is.** Stop letting the GitHub-side agents start cold. Surface the Orchestrator's curated
 per-repo "definition of done / known gotchas" registry (`repo_knowledge.json` — already encodes
-Counter_Risk=black, Trend=phase-3, LMS=Postgres, Workflows=sync surfaces) to the keepalive agents.
+Counter_Risk=black, Trend=default-branch facts, LMS=Postgres, Workflows=sync surfaces) to the keepalive agents.
 
 **Channel (this is the whole design decision).** Do **not** fork the registry into keepalive
 prompt code. Have the local Orchestrator remain the single owner and **export a tiny, curated
