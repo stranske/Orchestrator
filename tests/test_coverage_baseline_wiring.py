@@ -154,6 +154,11 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
             return False
 
         loop_index = code.index("for (const wf of workflowIds)", selection_end)
+        workflow_selection_assignments = list(
+            re.finditer(r"\bworkflowIds\s*=", code[declared_index:loop_index])
+        )
+        if len(workflow_selection_assignments) != 1:
+            return False
         loop_open = code.index("{", loop_index)
         loop_close = _matching_brace_index(code, loop_open)
         empty_result_index = code.index("if (!runs.length)", loop_close)
@@ -349,6 +354,18 @@ def test_pooled_control_flow_queries_workflow_runs() -> None:
 
 def test_pooled_control_flow_keeps_default_for_an_empty_configured_list() -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("if (declared.length) {", "if (true) {", 1)
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+@pytest.mark.parametrize(
+    "reset",
+    (
+        "workflowIds = declared;\n  workflowIds = DEFAULT_WORKFLOWS;",
+        "workflowIds = declared;\n}\nworkflowIds = DEFAULT_WORKFLOWS;\nif (false) {",
+    ),
+)
+def test_pooled_control_flow_rejects_later_workflow_selection_resets(reset: str) -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflowIds = declared;", reset, 1)
     assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
