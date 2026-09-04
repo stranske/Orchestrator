@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -1952,8 +1953,9 @@ def _selftest() -> None:
         assert "phase-3 is the default branch" not in normalized, value
         assert "there is no main" not in normalized, value
 
-    p = Path("/tmp/__repo_knowledge_selftest.json")
-    p.unlink(missing_ok=True)
+    _selftest_ctx = tempfile.TemporaryDirectory(prefix="repo-knowledge-selftest-")
+    _tmp = Path(_selftest_ctx.__enter__())
+    p = _tmp / "selftest.json"
     try:
         reg = load(p)
         assert reg["schema_version"] == SEED_SCHEMA_VERSION
@@ -2070,68 +2072,64 @@ def _selftest() -> None:
 
         # MIGRATION: a deployed v2 registry carrying the now-stale seeded lines is corrected in
         # place, keeps every instance-added entry, and is idempotent.
-        legacy = Path("/tmp/__repo_knowledge_selftest_v2.json")
-        legacy.unlink(missing_ok=True)
-        try:
-            legacy.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "repos": {
-                            "stranske/Trend_Model_Project": {
-                                "summary": (
-                                    "Quant trend-model app: a Streamlit operator surface, a notebook "
-                                    "GUI and the `trend` CLI over one config contract. `phase-3` IS "
-                                    "the default branch -- there is no `main`."
-                                ),
-                                "base_branch": "phase-3",
-                                "gotchas": [
-                                    {
-                                        "text": (
-                                            "`phase-3` is the default branch and the base for all "
-                                            "work here; there is no `main`. Anything that assumes "
-                                            "`main` is wrong for this repo."
-                                        ),
-                                        "lanes": ["opener"],
-                                    },
-                                    {
-                                        "text": "CI convention is ruff check; do not introduce unrelated ruff format churn.",
-                                        "task_types": ["mechanical", "implement", "testgen"],
-                                    },
-                                    {
-                                        "text": "An instance rule nobody seeded.",
-                                        "task_types": ["docs"],
-                                    },
-                                ],
-                            },
+        legacy = _tmp / "legacy_v2.json"
+        legacy.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "repos": {
+                        "stranske/Trend_Model_Project": {
+                            "summary": (
+                                "Quant trend-model app: a Streamlit operator surface, a notebook "
+                                "GUI and the `trend` CLI over one config contract. `phase-3` IS "
+                                "the default branch -- there is no `main`."
+                            ),
+                            "base_branch": "phase-3",
+                            "gotchas": [
+                                {
+                                    "text": (
+                                        "`phase-3` is the default branch and the base for all "
+                                        "work here; there is no `main`. Anything that assumes "
+                                        "`main` is wrong for this repo."
+                                    ),
+                                    "lanes": ["opener"],
+                                },
+                                {
+                                    "text": "CI convention is ruff check; do not introduce unrelated ruff format churn.",
+                                    "task_types": ["mechanical", "implement", "testgen"],
+                                },
+                                {
+                                    "text": "An instance rule nobody seeded.",
+                                    "task_types": ["docs"],
+                                },
+                            ],
                         },
                     },
-                    indent=2,
-                )
-                + "\n"
+                },
+                indent=2,
             )
-            migrated = load(legacy)
-            assert migrated["schema_version"] == SEED_SCHEMA_VERSION, migrated["schema_version"]
-            trend = migrated["repos"]["stranske/Trend_Model_Project"]
-            assert trend["base_branch"] == "main", trend
-            texts = [_text(item) for item in trend["gotchas"]]
-            assert_current_trend_branch_text("\n".join([trend["summary"], *texts]))
-            assert any("black --check --line-length 100" in t for t in texts), texts
-            assert "An instance rule nobody seeded." in texts, texts
-            kept = [i for i in trend["gotchas"] if _text(i) == "An instance rule nobody seeded."][0]
-            assert kept["task_types"] == ["docs"], kept  # instance scope survives untouched
-            assert not any(
-                item.get("task_types") or item.get("lanes")
-                for item in trend["gotchas"]
-                if _text(item) != "An instance rule nobody seeded."
-            )
-            assert trend[CONTRAINDICATION_SECTION][0]["capability"] == "frontend-verifier", trend
-            assert scope_audit(path=legacy)["clean"], scope_audit(path=legacy)
-            before = legacy.read_text()
-            load(legacy)
-            assert legacy.read_text() == before, "migration must be idempotent"
-        finally:
-            legacy.unlink(missing_ok=True)
+            + "\n"
+        )
+        migrated = load(legacy)
+        assert migrated["schema_version"] == SEED_SCHEMA_VERSION, migrated["schema_version"]
+        trend = migrated["repos"]["stranske/Trend_Model_Project"]
+        assert trend["base_branch"] == "main", trend
+        texts = [_text(item) for item in trend["gotchas"]]
+        assert_current_trend_branch_text("\n".join([trend["summary"], *texts]))
+        assert any("black --check --line-length 100" in t for t in texts), texts
+        assert "An instance rule nobody seeded." in texts, texts
+        kept = [i for i in trend["gotchas"] if _text(i) == "An instance rule nobody seeded."][0]
+        assert kept["task_types"] == ["docs"], kept  # instance scope survives untouched
+        assert not any(
+            item.get("task_types") or item.get("lanes")
+            for item in trend["gotchas"]
+            if _text(item) != "An instance rule nobody seeded."
+        )
+        assert trend[CONTRAINDICATION_SECTION][0]["capability"] == "frontend-verifier", trend
+        assert scope_audit(path=legacy)["clean"], scope_audit(path=legacy)
+        before = legacy.read_text()
+        load(legacy)
+        assert legacy.read_text() == before, "migration must be idempotent"
 
         assert context_for("stranske/Unknown#1", path=p) == ""
         appended = append_context(
@@ -2557,7 +2555,7 @@ def _selftest() -> None:
         assert len(clustered) == 2, clustered
         assert clustered[1]["cluster_key"] == "always_run_pytest_before_merging", clustered
     finally:
-        p.unlink(missing_ok=True)
+        _selftest_ctx.__exit__(None, None, None)
 
     # ---- MALFORMED current_refs IS REJECTED, WHATEVER SHAPE THE MALFORMATION TAKES.
     # `validate_current_refs` declares `refs: list[dict]`, and its caller in capability_compiler
