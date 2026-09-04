@@ -72,6 +72,9 @@ const core = {
 const github = {
   rest: {actions: {listWorkflowRuns: Symbol('listWorkflowRuns')}},
   async paginate(_method, params) {
+    if (_method !== github.rest.actions.listWorkflowRuns) {
+      throw new Error('unexpected pagination method');
+    }
     requests.push(params.workflow_id);
     if (unavailable.has(params.workflow_id)) {
       throw new Error(`unavailable: ${params.workflow_id}`);
@@ -205,6 +208,7 @@ def test_coverage_guard_discovery_uses_every_normalized_declared_workflow(baseli
 
     assert result["requests"] == expected
     assert result["runIds"] == [f"run-{path}" for path in expected]
+    assert result["failures"] == []
     assert baseline["source_workflows"] != [FALLBACK_WORKFLOW]
 
 
@@ -233,6 +237,7 @@ def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(ba
         assert result["requests"] == [missing, usable]
         assert result["runIds"] == [f"run-{usable}"]
         assert any("UNAVAILABLE" in entry for entry in result["exportedSearched"])
+    assert result["failures"] == []
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
 
 
