@@ -236,7 +236,8 @@ def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(ba
     else:
         assert result["requests"] == [missing, usable]
         assert result["runIds"] == [f"run-{usable}"]
-        assert any("UNAVAILABLE" in entry for entry in result["exportedSearched"])
+        expected_unavailable = f"{missing} (UNAVAILABLE: unavailable: {missing})"
+        assert expected_unavailable in result["exportedSearched"]
     assert result["failures"] == []
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
 
