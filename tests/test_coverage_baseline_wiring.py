@@ -44,9 +44,13 @@ const requests = [];
 const warnings = [];
 const infos = [];
 const failures = [];
+const rejections = [];
+const helperLoads = [];
 const outputs = {};
 const existing = new Set(payload.existing);
 const unavailable = new Set(payload.unavailable);
+const rejectionNonce = require('node:crypto').randomUUID();
+const retryHelperPath = './.github/scripts/github-api-with-retry.js';
 const mockFs = {
   readFileSync(path) {
     if (path !== 'config/coverage-baseline.json') {
@@ -55,11 +59,16 @@ const mockFs = {
     return JSON.stringify({source_workflows: payload.workflows});
   },
   existsSync(path) {
-    if (path === './.github/scripts/github-api-with-retry.js') return false;
+    if (path === retryHelperPath) return payload.useRetryHelper;
     return existing.has(path);
   },
   statSync(path) {
-    return {isFile: () => existing.has(path)};
+    if (!existing.has(path)) {
+      const error = new Error(`ENOENT: no such file or directory, stat '${path}'`);
+      error.code = 'ENOENT';
+      throw error;
+    }
+    return {isFile: () => true};
   },
 };
 const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}};
@@ -77,7 +86,9 @@ const github = {
     }
     requests.push(params.workflow_id);
     if (unavailable.has(params.workflow_id)) {
-      throw new Error(`unavailable: ${params.workflow_id}`);
+      const error = new Error(`unavailable: ${params.workflow_id} (${rejectionNonce})`);
+      rejections.push({workflow: params.workflow_id, error: error.message});
+      throw error;
     }
     return [{
       id: `run-${params.workflow_id}`,
@@ -88,19 +99,27 @@ const github = {
 };
 const localRequire = (name) => {
   if (name === 'fs') return mockFs;
+  if (name === retryHelperPath && payload.useRetryHelper) {
+    helperLoads.push(name);
+    return require(name);
+  }
   throw new Error(`unexpected require: ${name}`);
 };
 const body = [
   '(async () => {',
   payload.source,
   "const exportedSearched = typeof searched === 'undefined' ? [] : searched;",
-  'return {requests, warnings, infos, failures, outputs, exportedSearched, ' +
+  'return {requests, warnings, infos, failures, rejections, helperLoads, outputs, ' +
+    'exportedSearched, ' +
     'runIds: runs.map((run) => run.id)};',
   '})();',
 ].join('\n');
 vm.runInNewContext(
   body,
-  {context, core, github, require: localRequire, requests, warnings, infos, failures, outputs},
+  {
+    context, core, github, require: localRequire, requests, warnings, infos, failures,
+    rejections, helperLoads, outputs,
+  },
   {timeout: 5000},
 )
   .then((result) => process.stdout.write(JSON.stringify(result)))
@@ -113,8 +132,11 @@ vm.runInNewContext(
 
 def _discovery_script(workflow_source: str) -> str:
     """Extract the executable prefix that selects and queries coverage workflows."""
-    step_index = workflow_source.index(DISCOVERY_STEP)
-    script_index = workflow_source.index(SCRIPT_MARKER, step_index) + len(SCRIPT_MARKER)
+    step_index = workflow_source.find(DISCOVERY_STEP)
+    assert step_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {DISCOVERY_STEP!r}"
+    marker_index = workflow_source.find(SCRIPT_MARKER, step_index)
+    assert marker_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {SCRIPT_MARKER!r}"
+    script_index = marker_index + len(SCRIPT_MARKER)
     script_lines: list[str] = []
     for line in workflow_source[script_index:].splitlines():
         if line.startswith("            "):
@@ -124,7 +146,9 @@ def _discovery_script(workflow_source: str) -> str:
         else:
             break
     script = "\n".join(script_lines)
-    return script[: script.index(DISCOVERY_END)]
+    end_index = script.find(DISCOVERY_END)
+    assert end_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {DISCOVERY_END!r}"
+    return script[:end_index]
 
 
 def _run_discovery(
@@ -133,6 +157,7 @@ def _run_discovery(
     *,
     existing: set[str],
     unavailable: set[str] | None = None,
+    use_retry_helper: bool = False,
 ) -> dict:
     """Execute workflow discovery with no network, repository, or runner side effects."""
     node = shutil.which("node")
@@ -145,11 +170,13 @@ def _run_discovery(
         "workflows": workflows,
         "existing": sorted(existing),
         "unavailable": sorted(unavailable or set()),
+        "useRetryHelper": use_retry_helper,
     }
     completed = subprocess.run(
         [node, "-e", NODE_DISCOVERY_HARNESS, json.dumps(payload)],
         check=False,
         capture_output=True,
+        cwd=REPO,
         text=True,
         timeout=10,
     )
@@ -204,11 +231,12 @@ def test_coverage_guard_discovery_uses_every_normalized_declared_workflow(baseli
     declared = ["  .github/workflows/ci.yml  ", " .github/workflows/pr-00-gate.yml "]
     expected = [path.strip() for path in declared]
 
-    result = _run_discovery(source, declared, existing=set(expected))
+    result = _run_discovery(source, declared, existing=set(expected), use_retry_helper=True)
 
     assert result["requests"] == expected
     assert result["runIds"] == [f"run-{path}" for path in expected]
     assert result["failures"] == []
+    assert result["helperLoads"] == ["./.github/scripts/github-api-with-retry.js"]
     assert baseline["source_workflows"] != [FALLBACK_WORKFLOW]
 
 
@@ -236,8 +264,15 @@ def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(ba
     else:
         assert result["requests"] == [missing, usable]
         assert result["runIds"] == [f"run-{usable}"]
-        expected_unavailable = f"{missing} (UNAVAILABLE: unavailable: {missing})"
-        assert expected_unavailable in result["exportedSearched"]
+        assert len(result["rejections"]) == 1
+        rejected = result["rejections"][0]
+        assert rejected["workflow"] == missing
+        recorded = [
+            entry
+            for entry in result["exportedSearched"]
+            if entry.startswith(f"{missing} (UNAVAILABLE:") and rejected["error"] in entry
+        ]
+        assert len(recorded) == 1
     assert result["failures"] == []
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
 
