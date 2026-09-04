@@ -31,6 +31,56 @@ PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
 
 
+def _mask_javascript_non_code(source: str) -> str:
+    """Mask comments and strings while preserving offsets for structural checks."""
+    masked = list(source)
+    state = "code"
+    quote = ""
+    index = 0
+
+    def mask(position: int) -> None:
+        if source[position] not in "\r\n":
+            masked[position] = " "
+
+    while index < len(source):
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if char in {"'", '"', "`"}:
+                quote = char
+                state = "string"
+                mask(index)
+            elif char == "/" and following == "/":
+                state = "line-comment"
+                mask(index)
+                mask(index + 1)
+                index += 1
+            elif char == "/" and following == "*":
+                state = "block-comment"
+                mask(index)
+                mask(index + 1)
+                index += 1
+        elif state == "string":
+            mask(index)
+            if char == "\\" and following:
+                mask(index + 1)
+                index += 1
+            elif char == quote:
+                state = "code"
+        elif state == "line-comment":
+            mask(index)
+            if char in "\r\n":
+                state = "code"
+        else:
+            mask(index)
+            if char == "*" and following == "/":
+                mask(index + 1)
+                index += 1
+                state = "code"
+        index += 1
+    return "".join(masked)
+
+
 def _matching_delimiter_index(source: str, opening_index: int, opening: str, closing: str) -> int:
     """Return the matching delimiter for a small JavaScript expression or block."""
     depth = 0
@@ -50,41 +100,45 @@ def _matching_brace_index(source: str, opening_index: int) -> int:
 
 def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     """Check the pooled implementation as ordered scopes, not unrelated markers."""
+    code = _mask_javascript_non_code(source)
     try:
-        default_index = source.index("let workflowIds = DEFAULT_WORKFLOWS;")
-        declared_index = source.index(
+        default_index = code.index("let workflowIds = DEFAULT_WORKFLOWS;")
+        declared_index = code.index(
             "const declared = configuredWorkflowIds(cfg.source_workflows);", default_index
         )
-        configured_branch_index = source.index("if (declared.length) {", declared_index)
-        configured_branch_open = source.index("{", configured_branch_index)
-        configured_branch_close = _matching_brace_index(source, configured_branch_open)
-        replacement_index = source.index("workflowIds = declared;", configured_branch_open)
-        selection_end = source.index("const retryHelperPath", configured_branch_close)
+        configured_branch_index = code.index("if (declared.length) {", declared_index)
+        configured_branch_open = code.index("{", configured_branch_index)
+        configured_branch_close = _matching_brace_index(code, configured_branch_open)
+        replacement_index = code.index("workflowIds = declared;", configured_branch_open)
+        selection_end = code.index("const retryHelperPath", configured_branch_close)
         if not configured_branch_open < replacement_index < configured_branch_close:
             return False
 
-        loop_index = source.index("for (const wf of workflowIds)", selection_end)
-        loop_open = source.index("{", loop_index)
-        loop_close = _matching_brace_index(source, loop_open)
-        empty_result_index = source.index("if (!runs.length)", loop_close)
-        query_index = source.index("const found = await paginateWithRetry(", loop_open, loop_close)
-        query_open = source.index("(", query_index)
-        query_close = _matching_delimiter_index(source, query_open, "(", ")")
+        loop_index = code.index("for (const wf of workflowIds)", selection_end)
+        loop_open = code.index("{", loop_index)
+        loop_close = _matching_brace_index(code, loop_open)
+        empty_result_index = code.index("if (!runs.length)", loop_close)
+        query_index = code.index("const found = await paginateWithRetry(", loop_open, loop_close)
+        query_open = code.index("(", query_index)
+        query_close = _matching_delimiter_index(code, query_open, "(", ")")
         workflow_id_match = re.search(
-            r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*(?://[^\n]*)?$",
-            source[query_open + 1 : query_close],
+            r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*$",
+            code[query_open + 1 : query_close],
         )
         if workflow_id_match is None:
             return False
         workflow_id_index = query_open + 1 + workflow_id_match.start()
-        catch_index = source.index("} catch (err) {", query_index, loop_close)
-        catch_open = source.index("{", catch_index)
-        catch_close = _matching_brace_index(source, catch_open)
-        unavailable_index = source.index(
-            "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
-            catch_open,
-            catch_close,
-        )
+        catch_index = code.index("} catch (err) {", query_close, loop_close)
+        catch_open = code.index("{", catch_index)
+        catch_close = _matching_brace_index(code, catch_open)
+        unavailable_index = code.index("searched.push(", catch_open, catch_close)
+        unavailable_open = code.index("(", unavailable_index)
+        unavailable_close = _matching_delimiter_index(code, unavailable_open, "(", ")")
+        if (
+            "`${wf} (UNAVAILABLE: ${errorMessage(err)})`"
+            not in source[unavailable_open + 1 : unavailable_close]
+        ):
+            return False
     except ValueError:
         return False
 
@@ -100,13 +154,70 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         < query_close
         < catch_index
         < unavailable_index
+        < unavailable_close
         < catch_close
         < loop_close
         < empty_result_index
     ):
         return False
-    catch_scope = source[catch_open:catch_close]
-    return all(token not in catch_scope for token in ("break;", "return;", "throw "))
+    catch_scope = code[catch_open:catch_close]
+    return re.search(r"\b(?:break|return|throw)\b", catch_scope) is None
+
+
+POOLED_CONTROL_FLOW_EXAMPLE = """
+let workflowIds = DEFAULT_WORKFLOWS;
+const declared = configuredWorkflowIds(cfg.source_workflows);
+if (declared.length) {
+  workflowIds = declared;
+}
+const retryHelperPath = './github-api-with-retry.js';
+for (const wf of workflowIds) {
+  try {
+    const found = await paginateWithRetry(
+      github,
+      github.rest.actions.listWorkflowRuns,
+      {
+        workflow_id: wf,
+      },
+    );
+  } catch (err) {
+    searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);
+  }
+}
+if (!runs.length) {
+  core.setFailed('no runs');
+}
+"""
+
+
+def test_pooled_control_flow_example_is_accepted() -> None:
+    assert _pooled_validation_has_safe_control_flow(POOLED_CONTROL_FLOW_EXAMPLE)
+
+
+@pytest.mark.parametrize("statement", ("break", "return", "throw(err)"))
+def test_pooled_control_flow_rejects_early_exit_variants(statement: str) -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        f"searched.push(`${{wf}} (UNAVAILABLE: ${{errorMessage(err)}})`);\n    {statement}",
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+@pytest.mark.parametrize(
+    "decoy",
+    (
+        "workflow_id: DEFAULT_WORKFLOW, // workflow_id: wf,",
+        "workflow_id: DEFAULT_WORKFLOW,\n        /*\n        workflow_id: wf,\n        */",
+    ),
+)
+def test_pooled_control_flow_rejects_commented_workflow_id_decoys(decoy: str) -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflow_id: wf,", decoy)
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_keeps_default_for_an_empty_configured_list() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("if (declared.length) {", "if (true) {", 1)
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
 @pytest.fixture(scope="module")
