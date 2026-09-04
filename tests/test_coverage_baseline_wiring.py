@@ -102,6 +102,17 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     """Check the pooled implementation as ordered scopes, not unrelated markers."""
     code = _mask_javascript_non_code(source)
     try:
+        normalizer_index = code.index("const configuredWorkflowIds = (declared) =>")
+        normalizer_end = code.index("const errorMessage", normalizer_index)
+        array_check_index = code.index("Array.isArray(declared)", normalizer_index, normalizer_end)
+        string_filter_index = code.index("typeof workflow ===", array_check_index, normalizer_end)
+        if not source.startswith("typeof workflow === 'string'", string_filter_index):
+            return False
+        trim_index = code.index(
+            ".map((workflow) => workflow.trim())", string_filter_index, normalizer_end
+        )
+        nonempty_filter_index = code.index(".filter(Boolean)", trim_index, normalizer_end)
+        empty_fallback_index = code.index(": []", nonempty_filter_index, normalizer_end)
         default_index = code.index("let workflowIds = DEFAULT_WORKFLOWS;")
         declared_index = code.index(
             "const declared = configuredWorkflowIds(cfg.source_workflows);", default_index
@@ -136,6 +147,10 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         if workflow_id_match is None:
             return False
         workflow_id_index = query_open + 1 + workflow_id_match.start()
+        successful_index = code.index("const successfulForWorkflow = found", query_close, try_close)
+        pool_index = code.index(
+            "runs = runs.concat(successfulForWorkflow);", successful_index, try_close
+        )
         catch_match = re.match(r"\s*catch\s*\(\s*err\s*\)\s*\{", code[try_close + 1 : loop_close])
         if catch_match is None:
             return False
@@ -156,7 +171,14 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         return False
 
     if not (
-        default_index
+        normalizer_index
+        < array_check_index
+        < string_filter_index
+        < trim_index
+        < nonempty_filter_index
+        < empty_fallback_index
+        < normalizer_end
+        < default_index
         < declared_index
         < configured_branch_open
         < configured_branch_close
@@ -167,6 +189,8 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         < query_index
         < workflow_id_index
         < query_close
+        < successful_index
+        < pool_index
         < try_close
         < catch_index
         < unavailable_index
@@ -181,6 +205,14 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
 
 
 POOLED_CONTROL_FLOW_EXAMPLE = """
+const configuredWorkflowIds = (declared) =>
+  Array.isArray(declared)
+    ? declared
+        .filter((workflow) => typeof workflow === 'string')
+        .map((workflow) => workflow.trim())
+        .filter(Boolean)
+    : [];
+const errorMessage = (error) => String(error);
 let workflowIds = DEFAULT_WORKFLOWS;
 const declared = configuredWorkflowIds(cfg.source_workflows);
 if (declared.length) {
@@ -196,6 +228,8 @@ for (const wf of workflowIds) {
         workflow_id: wf,
       },
     );
+    const successfulForWorkflow = found.filter(Boolean);
+    runs = runs.concat(successfulForWorkflow);
   } catch (err) {
     searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);
   }
@@ -240,6 +274,24 @@ def test_pooled_control_flow_binds_unavailable_catch_to_the_pagination_try() -> 
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
         "  } catch (err) {",
         "  } finally {\n    cleanup();\n  }\n  try {\n    observe();\n  } catch (err) {",
+        1,
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_rejects_commented_normalization_decoys() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        ".map((workflow) => workflow.trim())",
+        ".map((workflow) => workflow) // .map((workflow) => workflow.trim())",
+        1,
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_requires_found_runs_to_join_the_pool() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "runs = runs.concat(successfulForWorkflow);",
+        "// runs = runs.concat(successfulForWorkflow);",
         1,
     )
     assert not _pooled_validation_has_safe_control_flow(unsafe)
@@ -333,16 +385,7 @@ def test_coverage_guard_normalizes_and_validates_declared_source_workflows(basel
             "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
         )
     )
-    pooled_validation = all(
-        marker in source
-        for marker in (
-            ".filter((workflow) => typeof workflow === 'string')",
-            ".map((workflow) => workflow.trim())",
-            ".filter(Boolean)",
-        )
-    )
-    if pooled_validation:
-        pooled_validation = _pooled_validation_has_safe_control_flow(source)
+    pooled_validation = _pooled_validation_has_safe_control_flow(source)
     assert (
         legacy_validation or pooled_validation
     ), "coverage discovery must normalize configured sources and expose unusable entries"
