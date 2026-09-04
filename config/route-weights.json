@@ -1,0 +1,113 @@
+{
+  "generated_at": "2026-09-04T00:46:11Z",
+  "min_observations": 20,
+  "reserve": {
+    "implement": [
+      {
+        "agent": "claude",
+        "n_obs": 156,
+        "posterior": 0.5794101133693836,
+        "success_rate": 0.5750833099392093
+      }
+    ],
+    "review": [
+      {
+        "agent": "claude",
+        "n_obs": 153,
+        "posterior": 0.5646173807726319,
+        "success_rate": 0.5710154412029592
+      }
+    ]
+  },
+  "schema": "orchestrator.route-weights/v1",
+  "source_version": 61,
+  "task_types": {
+    "codemod": {
+      "evidence_ok": false,
+      "ranking": []
+    },
+    "cross_repo": {
+      "evidence_ok": false,
+      "ranking": []
+    },
+    "implement": {
+      "evidence_ok": true,
+      "ranking": [
+        {
+          "agent": "cursor",
+          "n_obs": 305,
+          "posterior": 0.7632370515677257,
+          "success_rate": 0.7775676215357702
+        },
+        {
+          "agent": "codex",
+          "n_obs": 282,
+          "posterior": 0.6723135407817148,
+          "success_rate": 0.6747036308548813
+        },
+        {
+          "agent": "vibe",
+          "n_obs": 131,
+          "posterior": 0.6278282312271465,
+          "success_rate": 0.6467384765357295
+        },
+        {
+          "agent": "gemini",
+          "n_obs": 108,
+          "posterior": 0.4459606482374494,
+          "success_rate": 0.41462333954373276
+        }
+      ]
+    },
+    "mechanical": {
+      "evidence_ok": false,
+      "ranking": []
+    },
+    "review": {
+      "evidence_ok": true,
+      "ranking": [
+        {
+          "agent": "cursor",
+          "n_obs": 306,
+          "posterior": 0.755284023353522,
+          "success_rate": 0.757988107026492
+        },
+        {
+          "agent": "codex",
+          "n_obs": 273,
+          "posterior": 0.7274920285848102,
+          "success_rate": 0.7341677620630491
+        },
+        {
+          "agent": "vibe",
+          "n_obs": 139,
+          "posterior": 0.6317007093093712,
+          "success_rate": 0.6323904183559171
+        },
+        {
+          "agent": "gemini",
+          "n_obs": 108,
+          "posterior": 0.5323705935551267,
+          "success_rate": 0.5232864976902931
+        }
+      ]
+    },
+    "testgen": {
+      "evidence_ok": true,
+      "ranking": [
+        {
+          "agent": "codex",
+          "n_obs": 34,
+          "posterior": 0.8034562428972886,
+          "success_rate": 0.9806495140460264
+        },
+        {
+          "agent": "vibe",
+          "n_obs": 24,
+          "posterior": 0.7029170836906028,
+          "success_rate": 0.8569444444444444
+        }
+      ]
+    }
+  }
+}
