@@ -31,8 +31,8 @@ PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
 
 
-def _mask_javascript_non_code(source: str) -> str:
-    """Mask comments and strings while preserving offsets for structural checks."""
+def _mask_javascript(source: str, *, mask_strings: bool) -> str:
+    """Mask JavaScript comments and optionally strings while preserving offsets."""
     masked = list(source)
     state = "code"
     quote = ""
@@ -49,7 +49,8 @@ def _mask_javascript_non_code(source: str) -> str:
             if char in {"'", '"', "`"}:
                 quote = char
                 state = "string"
-                mask(index)
+                if mask_strings:
+                    mask(index)
             elif char == "/" and following == "/":
                 state = "line-comment"
                 mask(index)
@@ -61,9 +62,11 @@ def _mask_javascript_non_code(source: str) -> str:
                 mask(index + 1)
                 index += 1
         elif state == "string":
-            mask(index)
+            if mask_strings:
+                mask(index)
             if char == "\\" and following:
-                mask(index + 1)
+                if mask_strings:
+                    mask(index + 1)
                 index += 1
             elif char == quote:
                 state = "code"
@@ -79,6 +82,16 @@ def _mask_javascript_non_code(source: str) -> str:
                 state = "code"
         index += 1
     return "".join(masked)
+
+
+def _mask_javascript_non_code(source: str) -> str:
+    """Mask comments and strings for structural delimiter checks."""
+    return _mask_javascript(source, mask_strings=True)
+
+
+def _mask_javascript_comments(source: str) -> str:
+    """Mask comments but retain string contents for literal-key checks."""
+    return _mask_javascript(source, mask_strings=False)
 
 
 def _matching_delimiter_index(source: str, opening_index: int, opening: str, closing: str) -> int:
@@ -101,6 +114,7 @@ def _matching_brace_index(source: str, opening_index: int) -> int:
 def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     """Check the pooled implementation as ordered scopes, not unrelated markers."""
     code = _mask_javascript_non_code(source)
+    comment_free = _mask_javascript_comments(source)
     try:
         normalizer_index = code.index("const configuredWorkflowIds = (declared) =>")
         normalizer_end = code.index("const errorMessage", normalizer_index)
@@ -165,12 +179,14 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         if not try_open < query_index < query_close < try_close:
             return False
         query_scope = code[params_open + 1 : params_close]
-        workflow_id_properties = list(re.finditer(r"(?m)^[ \t]*workflow_id[ \t]*:", query_scope))
+        workflow_id_mentions = list(
+            re.finditer(r"\bworkflow_id\b", comment_free[params_open + 1 : params_close])
+        )
         workflow_id_match = re.search(
             r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*$",
             query_scope,
         )
-        if len(workflow_id_properties) != 1 or workflow_id_match is None:
+        if len(workflow_id_mentions) != 1 or workflow_id_match is None:
             return False
         workflow_id_index = params_open + 1 + workflow_id_match.start()
         successful_match = re.search(
@@ -314,6 +330,9 @@ def test_pooled_control_flow_rejects_commented_workflow_id_decoys(decoy: str) ->
     (
         "workflow_id: DEFAULT_WORKFLOW,\n        workflow_id: wf,",
         "workflow_id: wf,\n        workflow_id: DEFAULT_WORKFLOW,",
+        'workflow_id: wf,\n        "workflow_id": DEFAULT_WORKFLOW,',
+        "workflow_id: wf,\n        ['workflow_id']: DEFAULT_WORKFLOW,",
+        "workflow_id: wf,\n        workflow_id,",
     ),
 )
 def test_pooled_control_flow_rejects_duplicate_workflow_id_properties(duplicate: str) -> None:
