@@ -24,6 +24,7 @@ def codex_profile_registry():
             pid: p
             for pid, p in execution_profiles.PROFILE_REGISTRY.items()
             if p["lifecycle_status"] == "active"
+            and pid not in execution_profiles.PROFILE_RETIREMENTS
         }
     )
 
@@ -39,7 +40,8 @@ def test_three_profiles_share_one_pool(codex_profile_registry):
     codex_pools = {
         pool_id
         for profile in codex_profile_registry.values()
-        if profile["agent"] == "codex" and profile["lifecycle_status"] == "active"
+        if profile["agent"] == "codex"
+        and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
         for pool_id in profile["capacity_pool_ids"]
     }
     assert len(codex_pools) == 1, "shared subscription counted as 3 pools"
@@ -54,7 +56,8 @@ def test_three_profiles_share_one_pool(codex_profile_registry):
     codex_only = {
         pid: profile
         for pid, profile in codex_profile_registry.items()
-        if profile["agent"] == "codex" and profile["lifecycle_status"] == "active"
+        if profile["agent"] == "codex"
+        and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     }
     assert len(codex_only) == 3, sorted(codex_only)
     events = [
@@ -525,7 +528,8 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     codex_candidates = sorted(
         pid
         for pid, profile in execution_profiles.PROFILE_REGISTRY.items()
-        if profile["agent"] == "codex" and profile["lifecycle_status"] == "active"
+        if profile["agent"] == "codex"
+        and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     )
     assert len(codex_candidates) == 3, codex_candidates
     envelope = execution_profiles.select_profile(
