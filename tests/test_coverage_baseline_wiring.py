@@ -313,7 +313,7 @@ def test_coverage_guard_does_not_treat_an_existing_directory_as_a_workflow(basel
         unavailable={missing},
     )
 
-    directory = ".github/workflows"
+    directory = ".github/workflows/subdir"
     result = _run_discovery(
         source,
         [directory],
