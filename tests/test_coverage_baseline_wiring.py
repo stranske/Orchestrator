@@ -105,20 +105,23 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         normalizer_index = code.index("const configuredWorkflowIds = (declared) =>")
         normalizer_end = code.index("const errorMessage", normalizer_index)
         normalizer_arrow = code.index("=>", normalizer_index, normalizer_end) + 2
-        array_guard_match = re.match(
-            r"\s*Array\.isArray\(\s*declared\s*\)\s*\?",
-            code[normalizer_arrow:normalizer_end],
+        normalizer_match = re.match(
+            r"""
+            \s*Array\.isArray\(\s*declared\s*\)\s*
+            \?\s*declared\s*
+            \.filter\(\s*\(\s*workflow\s*\)\s*=>\s*
+              typeof\s+workflow\s*===\s*(['\"])string\1\s*\)\s*
+            \.map\(\s*\(\s*workflow\s*\)\s*=>\s*workflow\.trim\(\s*\)\s*\)\s*
+            \.filter\(\s*Boolean\s*\)\s*
+            :\s*\[\s*\]\s*;
+            """,
+            source[normalizer_arrow:normalizer_end],
+            re.DOTALL | re.VERBOSE,
         )
-        if array_guard_match is None:
+        if normalizer_match is None:
             return False
-        array_check_index = normalizer_arrow + array_guard_match.start()
+        array_check_index = code.index("Array.isArray(declared)", normalizer_arrow, normalizer_end)
         string_filter_index = code.index("typeof workflow ===", array_check_index, normalizer_end)
-        string_filter_match = re.match(
-            r"typeof\s+workflow\s*===\s*(['\"])string\1",
-            source[string_filter_index:normalizer_end],
-        )
-        if string_filter_match is None:
-            return False
         trim_index = code.index(
             ".map((workflow) => workflow.trim())", string_filter_index, normalizer_end
         )
@@ -143,6 +146,16 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         query_index = code.index("const found = await paginateWithRetry(", loop_open, loop_close)
         query_open = code.index("(", query_index)
         query_close = _matching_delimiter_index(code, query_open, "(", ")")
+        query_args_match = re.match(
+            r"\s*github\s*,\s*github\.rest\.actions\.listWorkflowRuns\s*,\s*\{",
+            code[query_open + 1 : query_close],
+        )
+        if query_args_match is None:
+            return False
+        params_open = query_open + query_args_match.end()
+        params_close = _matching_brace_index(code, params_open)
+        if re.fullmatch(r"\s*,?\s*", code[params_close + 1 : query_close]) is None:
+            return False
         try_matches = list(re.finditer(r"\btry\s*\{", code[loop_open + 1 : query_index]))
         if not try_matches:
             return False
@@ -151,7 +164,7 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         try_close = _matching_brace_index(code, try_open)
         if not try_open < query_index < query_close < try_close:
             return False
-        query_scope = code[query_open + 1 : query_close]
+        query_scope = code[params_open + 1 : params_close]
         workflow_id_properties = list(re.finditer(r"(?m)^[ \t]*workflow_id[ \t]*:", query_scope))
         workflow_id_match = re.search(
             r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*$",
@@ -159,7 +172,7 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         )
         if len(workflow_id_properties) != 1 or workflow_id_match is None:
             return False
-        workflow_id_index = query_open + 1 + workflow_id_match.start()
+        workflow_id_index = params_open + 1 + workflow_id_match.start()
         successful_match = re.search(
             r"\bconst\s+successfulForWorkflow\s*=\s*found\b",
             code[query_close:try_close],
@@ -206,7 +219,9 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         < try_index
         < try_open
         < query_index
+        < params_open
         < workflow_id_index
+        < params_close
         < query_close
         < successful_index
         < pool_index
@@ -268,6 +283,11 @@ def test_pooled_control_flow_accepts_double_quoted_string_filter() -> None:
     assert _pooled_validation_has_safe_control_flow(equivalent)
 
 
+def test_pooled_control_flow_requires_the_declared_normalization_chain() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("? declared", "? [] || declared", 1)
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
 @pytest.mark.parametrize("statement", ("break", "return", "throw(err)"))
 def test_pooled_control_flow_rejects_early_exit_variants(statement: str) -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
@@ -298,6 +318,13 @@ def test_pooled_control_flow_rejects_commented_workflow_id_decoys(decoy: str) ->
 )
 def test_pooled_control_flow_rejects_duplicate_workflow_id_properties(duplicate: str) -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflow_id: wf,", duplicate, 1)
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_queries_workflow_runs() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "github.rest.actions.listWorkflowRuns", "github.rest.issues.listForRepo", 1
+    )
     assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
@@ -438,9 +465,12 @@ def test_coverage_guard_normalizes_and_validates_declared_source_workflows(basel
         )
     )
     pooled_validation = _pooled_validation_has_safe_control_flow(source)
-    assert (
-        legacy_validation or pooled_validation
-    ), "coverage discovery must normalize configured sources and expose unusable entries"
+    assert legacy_validation or pooled_validation, (
+        "coverage discovery must normalize configured sources and expose unusable entries; "
+        f"legacy_validation={legacy_validation}, pooled_validation={pooled_validation}. "
+        "A false pooled branch means its expected scoped marker or control-flow contract did not "
+        "match."
+    )
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
 
 
