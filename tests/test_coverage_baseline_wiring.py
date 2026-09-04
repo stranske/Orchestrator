@@ -267,10 +267,12 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     ):
         return False
     try_scope = code[try_open:try_close]
-    catch_scope = code[catch_open:catch_close]
+    catch_before_unavailable = code[catch_open:unavailable_index]
+    catch_after_unavailable = code[unavailable_close:catch_close]
     return (
         re.search(r"\b(?:break|continue|return|throw)\b", try_scope) is None
-        and re.search(r"\b(?:break|return|throw)\b", catch_scope) is None
+        and re.search(r"\b(?:break|continue|return|throw)\b", catch_before_unavailable) is None
+        and re.search(r"\b(?:break|return|throw)\b", catch_after_unavailable) is None
         and not code[catch_close + 1 : loop_close].strip()
     )
 
@@ -344,6 +346,24 @@ def test_pooled_control_flow_rejects_early_exit_variants(statement: str) -> None
         f"searched.push(`${{wf}} (UNAVAILABLE: ${{errorMessage(err)}})`);\n    {statement}",
     )
     assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_rejects_continue_before_unavailable_logging() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        "continue;\n    searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        1,
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_allows_continue_after_unavailable_logging() -> None:
+    safe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);\n    continue;",
+        1,
+    )
+    assert _pooled_validation_has_safe_control_flow(safe)
 
 
 @pytest.mark.parametrize("statement", ("continue", "break", "return", "throw(err)"))
