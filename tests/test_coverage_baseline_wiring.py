@@ -30,17 +30,21 @@ PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
 
 
-def _matching_brace_index(source: str, opening_index: int) -> int:
-    """Return the closing brace for a small JavaScript control-flow block."""
+def _matching_delimiter_index(source: str, opening_index: int, opening: str, closing: str) -> int:
+    """Return the matching delimiter for a small JavaScript expression or block."""
     depth = 0
     for index in range(opening_index, len(source)):
-        if source[index] == "{":
+        if source[index] == opening:
             depth += 1
-        elif source[index] == "}":
+        elif source[index] == closing:
             depth -= 1
             if depth == 0:
                 return index
-    raise ValueError("unclosed JavaScript block")
+    raise ValueError("unclosed JavaScript delimiter")
+
+
+def _matching_brace_index(source: str, opening_index: int) -> int:
+    return _matching_delimiter_index(source, opening_index, "{", "}")
 
 
 def _pooled_validation_has_safe_control_flow(source: str) -> bool:
@@ -63,6 +67,9 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         loop_close = _matching_brace_index(source, loop_open)
         empty_result_index = source.index("if (!runs.length)", loop_close)
         query_index = source.index("const found = await paginateWithRetry(", loop_open, loop_close)
+        query_open = source.index("(", query_index)
+        query_close = _matching_delimiter_index(source, query_open, "(", ")")
+        workflow_id_index = source.index("workflow_id: wf,", query_open, query_close)
         catch_index = source.index("} catch (err) {", query_index, loop_close)
         catch_open = source.index("{", catch_index)
         catch_close = _matching_brace_index(source, catch_open)
@@ -82,6 +89,8 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         < selection_end
         < loop_index
         < query_index
+        < workflow_id_index
+        < query_close
         < catch_index
         < unavailable_index
         < catch_close
