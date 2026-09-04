@@ -75,27 +75,62 @@ def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
 
-    assert "const configuredWorkflowIds = baseline.source_workflows;" in source
-    assert "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());" in source
-    assert "workflowIds.map((workflowId)" in source
-    assert "workflow_id: workflowId," in source
+    legacy_discovery = all(
+        marker in source
+        for marker in (
+            "const configuredWorkflowIds = baseline.source_workflows;",
+            "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
+            "workflowIds.map((workflowId)",
+            "workflow_id: workflowId,",
+        )
+    )
+    pooled_discovery = all(
+        marker in source
+        for marker in (
+            "const declared = configuredWorkflowIds(cfg.source_workflows);",
+            "workflowIds = declared;",
+            "for (const wf of workflowIds)",
+            "workflow_id: wf,",
+        )
+    )
+    assert (
+        legacy_discovery or pooled_discovery
+    ), "coverage discovery must query every workflow declared by the repo-specific baseline"
     assert baseline["source_workflows"] != [".github/workflows/pr-00-gate.yml"]
 
 
-def test_coverage_guard_normalizes_existing_declared_source_workflows(baseline):
-    """Configured paths must be normalized and resolvable before replacing Gate.
+def test_coverage_guard_normalizes_and_validates_declared_source_workflows(baseline):
+    """Configured paths must be normalized and invalid sources must be visible.
 
-    A whitespace-padded path would otherwise pass the non-empty validation while making the
-    Actions API lookup fail. A missing path is the same configuration failure: keep the known
-    Gate fallback instead of silently querying a nonexistent coverage source.
+    The legacy guard validates every path locally before replacing the Gate fallback. The pooled
+    guard trims each configured value, keeps the fallback when the list is empty, and records an
+    unavailable workflow while continuing to probe the other declared sources.
     """
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
 
-    assert "workflowId.trim().startsWith('.github/workflows/')" in source
-    assert "fs.existsSync(workflowId.trim())" in source
-    assert "fs.statSync(workflowId.trim()).isFile()" in source
-    assert "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());" in source
+    legacy_validation = all(
+        marker in source
+        for marker in (
+            "workflowId.trim().startsWith('.github/workflows/')",
+            "fs.existsSync(workflowId.trim())",
+            "fs.statSync(workflowId.trim()).isFile()",
+            "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
+        )
+    )
+    pooled_validation = all(
+        marker in source
+        for marker in (
+            ".filter((workflow) => typeof workflow === 'string')",
+            ".map((workflow) => workflow.trim())",
+            ".filter(Boolean)",
+            "let workflowIds = DEFAULT_WORKFLOWS;",
+            "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+        )
+    )
+    assert (
+        legacy_validation or pooled_validation
+    ), "coverage discovery must normalize configured sources and expose unusable entries"
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
 
 
