@@ -121,6 +121,14 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         query_index = code.index("const found = await paginateWithRetry(", loop_open, loop_close)
         query_open = code.index("(", query_index)
         query_close = _matching_delimiter_index(code, query_open, "(", ")")
+        try_matches = list(re.finditer(r"\btry\s*\{", code[loop_open + 1 : query_index]))
+        if not try_matches:
+            return False
+        try_index = loop_open + 1 + try_matches[-1].start()
+        try_open = code.index("{", try_index, query_index)
+        try_close = _matching_brace_index(code, try_open)
+        if not try_open < query_index < query_close < try_close:
+            return False
         workflow_id_match = re.search(
             r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*$",
             code[query_open + 1 : query_close],
@@ -128,8 +136,13 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         if workflow_id_match is None:
             return False
         workflow_id_index = query_open + 1 + workflow_id_match.start()
-        catch_index = code.index("} catch (err) {", query_close, loop_close)
-        catch_open = code.index("{", catch_index)
+        catch_match = re.match(r"\s*catch\s*\(\s*err\s*\)\s*\{", code[try_close + 1 : loop_close])
+        if catch_match is None:
+            return False
+        catch_index = code.index(
+            "catch", try_close + 1 + catch_match.start(), try_close + 1 + catch_match.end()
+        )
+        catch_open = try_close + catch_match.end()
         catch_close = _matching_brace_index(code, catch_open)
         unavailable_index = code.index("searched.push(", catch_open, catch_close)
         unavailable_open = code.index("(", unavailable_index)
@@ -149,9 +162,12 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         < configured_branch_close
         < selection_end
         < loop_index
+        < try_index
+        < try_open
         < query_index
         < workflow_id_index
         < query_close
+        < try_close
         < catch_index
         < unavailable_index
         < unavailable_close
@@ -217,6 +233,15 @@ def test_pooled_control_flow_rejects_commented_workflow_id_decoys(decoy: str) ->
 
 def test_pooled_control_flow_keeps_default_for_an_empty_configured_list() -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("if (declared.length) {", "if (true) {", 1)
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_binds_unavailable_catch_to_the_pagination_try() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "  } catch (err) {",
+        "  } finally {\n    cleanup();\n  }\n  try {\n    observe();\n  } catch (err) {",
+        1,
+    )
     assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
