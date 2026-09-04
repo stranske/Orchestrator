@@ -151,11 +151,13 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         try_close = _matching_brace_index(code, try_open)
         if not try_open < query_index < query_close < try_close:
             return False
+        query_scope = code[query_open + 1 : query_close]
+        workflow_id_properties = list(re.finditer(r"(?m)^[ \t]*workflow_id[ \t]*:", query_scope))
         workflow_id_match = re.search(
             r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*$",
-            code[query_open + 1 : query_close],
+            query_scope,
         )
-        if workflow_id_match is None:
+        if len(workflow_id_properties) != 1 or workflow_id_match is None:
             return False
         workflow_id_index = query_open + 1 + workflow_id_match.start()
         successful_match = re.search(
@@ -284,6 +286,18 @@ def test_pooled_control_flow_rejects_early_exit_variants(statement: str) -> None
 )
 def test_pooled_control_flow_rejects_commented_workflow_id_decoys(decoy: str) -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflow_id: wf,", decoy)
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+@pytest.mark.parametrize(
+    "duplicate",
+    (
+        "workflow_id: DEFAULT_WORKFLOW,\n        workflow_id: wf,",
+        "workflow_id: wf,\n        workflow_id: DEFAULT_WORKFLOW,",
+    ),
+)
+def test_pooled_control_flow_rejects_duplicate_workflow_id_properties(duplicate: str) -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace("workflow_id: wf,", duplicate, 1)
     assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
