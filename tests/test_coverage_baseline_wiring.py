@@ -29,6 +29,13 @@ MAINT_COVERAGE_GUARD = REPO / ".github/workflows/maint-coverage-guard.yml"
 # `gate-coverage-trend` is required outright, and a run carrying only the payload is skipped.
 PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
+POOLED_IMPLEMENTATION_MARKER = "const configuredWorkflowIds = (declared) =>"
+LEGACY_VALIDATION_MARKERS = (
+    "workflowId.trim().startsWith('.github/workflows/')",
+    "fs.existsSync(workflowId.trim())",
+    "fs.statSync(workflowId.trim()).isFile()",
+    "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
+)
 
 
 def _mask_javascript(source: str, *, mask_strings: bool) -> str:
@@ -268,6 +275,18 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     )
 
 
+def _coverage_validation_modes(source: str) -> tuple[bool, bool]:
+    """Select one executable compatibility branch; pooled code cannot fall back to legacy."""
+    code = _mask_javascript_non_code(source)
+    comment_free = _mask_javascript_comments(source)
+    pooled_implementation = POOLED_IMPLEMENTATION_MARKER in code
+    legacy_validation = not pooled_implementation and all(
+        marker in comment_free for marker in LEGACY_VALIDATION_MARKERS
+    )
+    pooled_validation = pooled_implementation and _pooled_validation_has_safe_control_flow(source)
+    return legacy_validation, pooled_validation
+
+
 POOLED_CONTROL_FLOW_EXAMPLE = """
 const configuredWorkflowIds = (declared) =>
   Array.isArray(declared)
@@ -409,6 +428,16 @@ def test_pooled_control_flow_rejects_a_commented_unavailable_message_decoy() -> 
     assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
+def test_pooled_control_flow_cannot_fall_back_to_commented_legacy_markers() -> None:
+    legacy_decoy = "\n/*\n" + "\n".join(LEGACY_VALIDATION_MARKERS) + "\n*/\n"
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "workflow_id: wf,", "workflow_id: DEFAULT_WORKFLOW,", 1
+    )
+    legacy_validation, pooled_validation = _coverage_validation_modes(unsafe + legacy_decoy)
+    assert not legacy_validation
+    assert not pooled_validation
+
+
 def test_pooled_control_flow_rejects_commented_normalization_decoys() -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
         ".map((workflow) => workflow.trim())",
@@ -480,9 +509,12 @@ def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
     """Discovery must follow config rather than silently querying the Gate."""
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+    code = _mask_javascript_non_code(source)
+    comment_free = _mask_javascript_comments(source)
+    pooled_implementation = POOLED_IMPLEMENTATION_MARKER in code
 
-    legacy_discovery = all(
-        marker in source
+    legacy_discovery = not pooled_implementation and all(
+        marker in comment_free
         for marker in (
             "const configuredWorkflowIds = baseline.source_workflows;",
             "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
@@ -490,8 +522,8 @@ def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
             "workflow_id: workflowId,",
         )
     )
-    pooled_discovery = all(
-        marker in source
+    pooled_discovery = pooled_implementation and all(
+        marker in code
         for marker in (
             "const declared = configuredWorkflowIds(cfg.source_workflows);",
             "workflowIds = declared;",
@@ -515,16 +547,7 @@ def test_coverage_guard_normalizes_and_validates_declared_source_workflows(basel
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
 
-    legacy_validation = all(
-        marker in source
-        for marker in (
-            "workflowId.trim().startsWith('.github/workflows/')",
-            "fs.existsSync(workflowId.trim())",
-            "fs.statSync(workflowId.trim()).isFile()",
-            "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());",
-        )
-    )
-    pooled_validation = _pooled_validation_has_safe_control_flow(source)
+    legacy_validation, pooled_validation = _coverage_validation_modes(source)
     assert legacy_validation or pooled_validation, (
         "coverage discovery must normalize configured sources and expose unusable entries; "
         f"legacy_validation={legacy_validation}, pooled_validation={pooled_validation}. "
