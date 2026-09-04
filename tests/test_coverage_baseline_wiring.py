@@ -104,9 +104,20 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
     try:
         normalizer_index = code.index("const configuredWorkflowIds = (declared) =>")
         normalizer_end = code.index("const errorMessage", normalizer_index)
-        array_check_index = code.index("Array.isArray(declared)", normalizer_index, normalizer_end)
+        normalizer_arrow = code.index("=>", normalizer_index, normalizer_end) + 2
+        array_guard_match = re.match(
+            r"\s*Array\.isArray\(\s*declared\s*\)\s*\?",
+            code[normalizer_arrow:normalizer_end],
+        )
+        if array_guard_match is None:
+            return False
+        array_check_index = normalizer_arrow + array_guard_match.start()
         string_filter_index = code.index("typeof workflow ===", array_check_index, normalizer_end)
-        if not source.startswith("typeof workflow === 'string'", string_filter_index):
+        string_filter_match = re.match(
+            r"typeof\s+workflow\s*===\s*(['\"])string\1",
+            source[string_filter_index:normalizer_end],
+        )
+        if string_filter_match is None:
             return False
         trim_index = code.index(
             ".map((workflow) => workflow.trim())", string_filter_index, normalizer_end
@@ -147,7 +158,13 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         if workflow_id_match is None:
             return False
         workflow_id_index = query_open + 1 + workflow_id_match.start()
-        successful_index = code.index("const successfulForWorkflow = found", query_close, try_close)
+        successful_match = re.search(
+            r"\bconst\s+successfulForWorkflow\s*=\s*found\b",
+            code[query_close:try_close],
+        )
+        if successful_match is None:
+            return False
+        successful_index = query_close + successful_match.start()
         pool_index = code.index(
             "runs = runs.concat(successfulForWorkflow);", successful_index, try_close
         )
@@ -244,6 +261,11 @@ def test_pooled_control_flow_example_is_accepted() -> None:
     assert _pooled_validation_has_safe_control_flow(POOLED_CONTROL_FLOW_EXAMPLE)
 
 
+def test_pooled_control_flow_accepts_double_quoted_string_filter() -> None:
+    equivalent = POOLED_CONTROL_FLOW_EXAMPLE.replace("'string'", '"string"', 1)
+    assert _pooled_validation_has_safe_control_flow(equivalent)
+
+
 @pytest.mark.parametrize("statement", ("break", "return", "throw(err)"))
 def test_pooled_control_flow_rejects_early_exit_variants(statement: str) -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
@@ -270,6 +292,13 @@ def test_pooled_control_flow_keeps_default_for_an_empty_configured_list() -> Non
     assert not _pooled_validation_has_safe_control_flow(unsafe)
 
 
+def test_pooled_control_flow_requires_a_positive_array_guard() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "Array.isArray(declared)", "!Array.isArray(declared)", 1
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
 def test_pooled_control_flow_binds_unavailable_catch_to_the_pagination_try() -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
         "  } catch (err) {",
@@ -292,6 +321,15 @@ def test_pooled_control_flow_requires_found_runs_to_join_the_pool() -> None:
     unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
         "runs = runs.concat(successfulForWorkflow);",
         "// runs = runs.concat(successfulForWorkflow);",
+        1,
+    )
+    assert not _pooled_validation_has_safe_control_flow(unsafe)
+
+
+def test_pooled_control_flow_rejects_a_found_identifier_prefix_decoy() -> None:
+    unsafe = POOLED_CONTROL_FLOW_EXAMPLE.replace(
+        "const successfulForWorkflow = found.filter(Boolean);",
+        "const successfulForWorkflow = foundFallback.filter(Boolean);",
         1,
     )
     assert not _pooled_validation_has_safe_control_flow(unsafe)
