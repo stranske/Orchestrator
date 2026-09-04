@@ -398,16 +398,32 @@ def _checks_all_green(status_check_rollup: object) -> bool:
     return all(str((row or {}).get("state") or "").upper() == "SUCCESS" for row in contexts)
 
 
+_REVIEW_THREADS_QUERY = (
+    "query($owner: String!, $name: String!, $number: Int!) {"
+    " repository(owner: $owner, name: $name) {"
+    " pullRequest(number: $number) {"
+    " reviewThreads(first: 100) { nodes { isResolved } }"
+    " } } }"
+)
+
+
 def _unresolved_review_threads(repo: str, number: int, *, gh_fn) -> tuple[int | None, str]:
+    parts = repo.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None, "unmeasured: invalid repo slug"
+    owner, name = parts
     ok, out, reason = gh_fn(
         [
-            "pr",
-            "view",
-            str(number),
-            "--repo",
-            repo,
-            "--json",
-            "reviewThreads",
+            "api",
+            "graphql",
+            "-f",
+            f"query={_REVIEW_THREADS_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={number}",
         ]
     )
     if not ok:
@@ -415,10 +431,15 @@ def _unresolved_review_threads(repo: str, number: int, *, gh_fn) -> tuple[int | 
     try:
         payload = json.loads(out or "{}")
     except json.JSONDecodeError:
-        return None, "unmeasured: reviewThreads JSON parse failed"
-    threads = payload.get("reviewThreads") or []
+        return None, "unmeasured: reviewThreads GraphQL JSON parse failed"
+    threads = (
+        ((payload.get("data") or {}).get("repository") or {})
+        .get("pullRequest", {})
+        .get("reviewThreads", {})
+        .get("nodes")
+    )
     if not isinstance(threads, list):
-        return None, "unmeasured: reviewThreads missing"
+        return None, "unmeasured: reviewThreads nodes missing"
     unresolved = sum(1 for row in threads if not (row or {}).get("isResolved"))
     return unresolved, ""
 
@@ -1048,7 +1069,17 @@ def _selftest_fleet_gates() -> None:
             }
         ]
     )
-    review_threads = json.dumps({"reviewThreads": [{"isResolved": False}]})
+    review_threads = json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {"nodes": [{"isResolved": False}]},
+                    }
+                }
+            }
+        }
+    )
     maint82_runs = json.dumps(
         [
             {
@@ -1068,7 +1099,7 @@ def _selftest_fleet_gates() -> None:
             return True, maint82_runs, ""
         if args[:2] == ["pr", "list"]:
             return True, pr_list, ""
-        if args[:2] == ["pr", "view"] and "reviewThreads" in args:
+        if args[:2] == ["api", "graphql"] and "reviewThreads" in " ".join(args):
             return True, review_threads, ""
         if args[:2] == ["run", "view"] and "--log" in args:
             return True, maint82_log, ""
@@ -1130,8 +1161,20 @@ def _selftest_fleet_gates() -> None:
             return True, maint82_runs, ""
         if args[:2] == ["pr", "list"]:
             return True, young_pr_list, ""
-        if args[:2] == ["pr", "view"] and "reviewThreads" in args:
-            return True, json.dumps({"reviewThreads": []}), ""
+        if args[:2] == ["api", "graphql"] and "reviewThreads" in " ".join(args):
+            return (
+                True,
+                json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {"reviewThreads": {"nodes": []}},
+                            }
+                        }
+                    }
+                ),
+                "",
+            )
         if args[:2] == ["run", "view"] and "--log" in args:
             return True, maint82_log, ""
         return False, "", f"unmeasured: unexpected gh call {args!r}"

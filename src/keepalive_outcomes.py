@@ -487,27 +487,58 @@ def _backfill_evidence(repo: str, pr_number: int) -> dict:
     }
 
 
-def backfill_attribution(*, apply: bool = False, _evidence_fetch_fn=None) -> dict:
+BACKFILL_LIMIT_DEFAULT = 200
+
+
+def backfill_attribution(
+    *,
+    apply: bool = False,
+    backfill_limit: int = BACKFILL_LIMIT_DEFAULT,
+    _evidence_fetch_fn=None,
+) -> dict:
     """Re-derive existing keepalive:none rows without changing their stable run IDs."""
     fetch_evidence = _evidence_fetch_fn or _backfill_evidence
     with feedback._conn() as c:
         rows = c.execute(
-            "SELECT run_id, target FROM runs WHERE source='keepalive' AND agent=? "
-            "ORDER BY run_id",
+            "SELECT run_id, target, routing_metadata FROM runs WHERE source='keepalive' AND agent=? "
+            "ORDER BY run_id DESC",
             (NON_AGENT,),
         ).fetchall()
-    before = len(rows)
+    pending: list[tuple[str, str]] = []
+    for run_id, target, routing_metadata_raw in rows:
+        metadata = feedback._routing_metadata_dict(routing_metadata_raw)
+        existing_source = metadata.get("attribution_source")
+        if existing_source and existing_source != ATTRIBUTION_UNRESOLVED:
+            continue
+        pending.append((str(run_id), str(target or "")))
+    before = len(pending)
     summary: dict[str, Any] = {
         "before_none": before,
         "after_none": before,
         "let_through": 0,
         "blocked": 0,
         "by_source": {},
+        "examined": 0,
+        "resolved": 0,
+        "unresolved": 0,
+        "remaining": before,
+        "backfill_limit": backfill_limit,
     }
-    for run_id, target in rows:
-        match = re.fullmatch(r"([^#]+)#(\d+)", str(target or ""))
+    examined = 0
+    for run_id, target in pending:
+        if examined >= backfill_limit:
+            break
+        examined += 1
+        if examined % 25 == 0:
+            print(
+                f"backfill_attribution: examined {examined}/{min(backfill_limit, before)} "
+                f"(resolved={summary['resolved']} unresolved={summary['unresolved']})",
+                file=sys.stderr,
+            )
+        match = re.fullmatch(r"([^#]+)#(\d+)", target)
         if not match:
             summary["blocked"] += 1
+            summary["unresolved"] += 1
             summary["by_source"][ATTRIBUTION_UNRESOLVED] = (
                 summary["by_source"].get(ATTRIBUTION_UNRESOLVED, 0) + 1
             )
@@ -522,12 +553,22 @@ def backfill_attribution(*, apply: bool = False, _evidence_fetch_fn=None) -> dic
         summary["by_source"][source] = summary["by_source"].get(source, 0) + 1
         if source == ATTRIBUTION_UNRESOLVED:
             summary["blocked"] += 1
+            summary["unresolved"] += 1
             continue
         summary["let_through"] += 1
+        summary["resolved"] += 1
         if apply:
             _update_attribution(run_id, agent, source)
+    summary["examined"] = examined
+    summary["remaining"] = max(0, before - examined)
     summary["after_none"] = before - summary["let_through"] if apply else before
     summary["applied"] = apply
+    print(
+        "backfill_attribution: "
+        f"examined={examined} resolved={summary['resolved']} "
+        f"unresolved={summary['unresolved']} remaining={summary['remaining']}",
+        file=sys.stderr,
+    )
     return summary
 
 
@@ -1028,6 +1069,30 @@ def _selftest() -> None:
         assert restored[0] == "claude", restored
         assert json.loads(restored[1])["attribution_source"] == "keepalive_job", restored
 
+        fetch_calls: list[tuple[str, int]] = []
+
+        def counting_fetch(repo, num):
+            fetch_calls.append((repo, num))
+            return {}
+
+        for idx in range(5):
+            feedback.record_run(
+                f"keepalive:o/r#{idx}:none",
+                f"o/r#{idx}",
+                "implement",
+                "none",
+                mode="remote",
+                source="keepalive",
+            )
+        limited = backfill_attribution(
+            backfill_limit=2,
+            _evidence_fetch_fn=counting_fetch,
+        )
+        assert limited["examined"] == 2, limited
+        assert limited["remaining"] == limited["before_none"] - limited["examined"], limited
+        assert len(fetch_calls) == 2, fetch_calls
+        assert fetch_calls[0][0] == "o/r", fetch_calls
+
         print("keepalive_outcomes.py selftest: OK")
     finally:
         feedback.DB_PATH = old_db
@@ -1054,6 +1119,12 @@ def main(argv: list[str]) -> int:
         help="re-derive source=keepalive agent=none rows; dry-run unless --apply is present",
     )
     parser.add_argument(
+        "--backfill-limit",
+        type=int,
+        default=BACKFILL_LIMIT_DEFAULT,
+        help="max unresolved rows to examine per invocation (newest first; default 200)",
+    )
+    parser.add_argument(
         "--apply", action="store_true", help="allow --backfill-attribution to write"
     )
     args = parser.parse_args(argv)
@@ -1063,7 +1134,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     if args.backfill_attribution:
-        result = backfill_attribution(apply=args.apply)
+        result = backfill_attribution(apply=args.apply, backfill_limit=args.backfill_limit)
         print(json.dumps(result, indent=2, sort_keys=True) if args.json else result)
         return 0
 

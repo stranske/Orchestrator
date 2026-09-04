@@ -1216,6 +1216,7 @@ def _rail_exercise_summary(state_dir: Path | None = None) -> dict:
     return {
         "available": True,
         "generated_at": report.get("generated_at"),
+        "tree": report.get("tree"),
         "totals": report.get("totals") or {},
         "skipped_named": report.get("skipped_named") or [],
     }
@@ -1518,7 +1519,9 @@ def format_human(report: dict) -> str:
     if rail_exercise.get("available"):
         totals = rail_exercise.get("totals") or {}
         lines.append(
-            "rail exercise: contracts={contracts} passed={passed} broke-correctly={broke} failed={failed} skipped={skipped}".format(
+            "rail exercise: tree={tree} contracts={contracts} passed={passed} "
+            "broke-correctly={broke} failed={failed} skipped={skipped}".format(
+                tree=rail_exercise.get("tree", "unknown"),
                 contracts=totals.get("contracts", 0),
                 passed=totals.get("passed", 0),
                 broke=totals.get("broke-correctly", 0),

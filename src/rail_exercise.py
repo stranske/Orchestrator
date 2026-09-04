@@ -279,6 +279,7 @@ def _record(row: dict[str, Any]) -> str:
 
 
 def report(only: str = "", record: bool = False) -> dict[str, Any]:
+    tree = "present" if CONTRACT_ROOT.exists() else f"absent: {CONTRACT_ROOT}"
     rows = [run_contract(path, contract) for path, contract in contracts(only)]
     for row in rows:
         if record and row["status"] != "skip":
@@ -293,6 +294,7 @@ def report(only: str = "", record: bool = False) -> dict[str, Any]:
     return {
         "generated_at": int(time.time()),
         "recording": record,
+        "tree": tree,
         "totals": totals,
         "skipped_named": [
             {"contract": r["contract"], "reason": r["reason"]}
@@ -384,6 +386,14 @@ def selftest() -> None:
         assert committed_run_outputs(root) == [
             "tripwire/arm-a/fixtures/out.json"
         ], committed_run_outputs(root)
+        absent_root = Path(temp) / "missing-contract-tree"
+        globals()["CONTRACT_ROOT"] = absent_root
+        try:
+            absent_rep = report()
+            assert absent_rep["tree"] == f"absent: {absent_root}", absent_rep
+            assert absent_rep["totals"]["contracts"] == 0, absent_rep
+        finally:
+            globals()["CONTRACT_ROOT"] = original
     # The committed tree: no nested repository, no run output at rest.
     if CONTRACT_ROOT.exists():
         nested = nested_repositories()
@@ -434,7 +444,7 @@ def main() -> int:
     print(
         json.dumps(result, indent=2, sort_keys=True)
         if args.json
-        else json.dumps(result["totals"], sort_keys=True)
+        else json.dumps({**result["totals"], "tree": result["tree"]}, sort_keys=True)
     )
     return 0
 

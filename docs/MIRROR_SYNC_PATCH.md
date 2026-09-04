@@ -89,3 +89,19 @@ this doc points you at worthless. The shape is detected by `env_prereq.exec_mirr
 from `$CI`, and the summary's first line says which tree it decided it was in. If you ever teach
 the sync to copy `.github/`, 12 of those skips become real checks and `mirror_skipped_max` must
 come down to 19 in the same change.
+
+## The cadence's contracts (2026-09-04)
+
+`orch-sync-mirror.sh` copied `tests/*.py` only, so the flat mirror had no `tests/rail_exercises` and
+the weekly rail-exercise cadence (PR #207) ran against an ABSENT tree. The runner now says so —
+`report()` carries `"tree": "absent: <path>"` and the totals line and the periodic report print it,
+so the zero is named rather than silent — and the sync script gained, after its `tests/*.py` copy:
+
+```bash
+if [[ -d "$SRC/tests/rail_exercises" ]]; then
+  cp -R "$SRC/tests/rail_exercises" "$MIRROR/tests/"
+fi
+```
+
+Confirm with `find ~/.codex/orchestrator-mirror/tests/rail_exercises -name contract.json | wc -l`
+(49 at the time of writing) and a mirror run's totals line reading `tree=present`.
