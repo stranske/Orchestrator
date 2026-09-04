@@ -19,7 +19,14 @@ import router
 @pytest.fixture
 def codex_profile_registry():
     """Deliberate-break fixture named by audit issue 5."""
-    return copy.deepcopy(execution_profiles.PROFILE_REGISTRY)
+    return copy.deepcopy(
+        {
+            pid: p
+            for pid, p in execution_profiles.PROFILE_REGISTRY.items()
+            if p["lifecycle_status"] == "active"
+            and pid not in execution_profiles.PROFILE_RETIREMENTS
+        }
+    )
 
 
 def test_three_profiles_share_one_pool(codex_profile_registry):
@@ -34,6 +41,7 @@ def test_three_profiles_share_one_pool(codex_profile_registry):
         pool_id
         for profile in codex_profile_registry.values()
         if profile["agent"] == "codex"
+        and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
         for pool_id in profile["capacity_pool_ids"]
     }
     assert len(codex_pools) == 1, "shared subscription counted as 3 pools"
@@ -49,6 +57,7 @@ def test_three_profiles_share_one_pool(codex_profile_registry):
         pid: profile
         for pid, profile in codex_profile_registry.items()
         if profile["agent"] == "codex"
+        and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     }
     assert len(codex_only) == 3, sorted(codex_only)
     events = [
@@ -132,7 +141,7 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
         )
         assert assess[assess.index("--sandbox") + 1] == "read-only"
         assert "--json" not in assess
-    assert models == {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
+    assert models == {"gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna"}
 
 
 def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
@@ -520,6 +529,7 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
         pid
         for pid, profile in execution_profiles.PROFILE_REGISTRY.items()
         if profile["agent"] == "codex"
+        and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     )
     assert len(codex_candidates) == 3, codex_candidates
     envelope = execution_profiles.select_profile(
@@ -541,7 +551,7 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     assert "codex-subscription" in summary["shared_capacity_pools"]
     # The decision itself was scoped to codex, so only codex's models may appear in it.
     assert {row["requested_model"] for row in summary["profiles"]} == {
-        "gpt-5.6-sol",
+        "gpt-6-astra",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
     }
