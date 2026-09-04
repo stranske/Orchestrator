@@ -30,6 +30,69 @@ PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
 
 
+def _matching_brace_index(source: str, opening_index: int) -> int:
+    """Return the closing brace for a small JavaScript control-flow block."""
+    depth = 0
+    for index in range(opening_index, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise ValueError("unclosed JavaScript block")
+
+
+def _pooled_validation_has_safe_control_flow(source: str) -> bool:
+    """Check the pooled implementation as ordered scopes, not unrelated markers."""
+    try:
+        default_index = source.index("let workflowIds = DEFAULT_WORKFLOWS;")
+        declared_index = source.index(
+            "const declared = configuredWorkflowIds(cfg.source_workflows);", default_index
+        )
+        configured_branch_index = source.index("if (declared.length) {", declared_index)
+        configured_branch_open = source.index("{", configured_branch_index)
+        configured_branch_close = _matching_brace_index(source, configured_branch_open)
+        replacement_index = source.index("workflowIds = declared;", configured_branch_open)
+        selection_end = source.index("const retryHelperPath", configured_branch_close)
+        if not configured_branch_open < replacement_index < configured_branch_close:
+            return False
+
+        loop_index = source.index("for (const wf of workflowIds)", selection_end)
+        loop_open = source.index("{", loop_index)
+        loop_close = _matching_brace_index(source, loop_open)
+        empty_result_index = source.index("if (!runs.length)", loop_close)
+        query_index = source.index("const found = await paginateWithRetry(", loop_open, loop_close)
+        catch_index = source.index("} catch (err) {", query_index, loop_close)
+        catch_open = source.index("{", catch_index)
+        catch_close = _matching_brace_index(source, catch_open)
+        unavailable_index = source.index(
+            "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
+            catch_open,
+            catch_close,
+        )
+    except ValueError:
+        return False
+
+    if not (
+        default_index
+        < declared_index
+        < configured_branch_open
+        < configured_branch_close
+        < selection_end
+        < loop_index
+        < query_index
+        < catch_index
+        < unavailable_index
+        < catch_close
+        < loop_close
+        < empty_result_index
+    ):
+        return False
+    catch_scope = source[catch_open:catch_close]
+    return all(token not in catch_scope for token in ("break;", "return;", "throw "))
+
+
 @pytest.fixture(scope="module")
 def baseline() -> dict:
     # A missing baseline is a SHAPE, not a wiring defect: the exec mirror carries modules plus a
@@ -124,10 +187,10 @@ def test_coverage_guard_normalizes_and_validates_declared_source_workflows(basel
             ".filter((workflow) => typeof workflow === 'string')",
             ".map((workflow) => workflow.trim())",
             ".filter(Boolean)",
-            "let workflowIds = DEFAULT_WORKFLOWS;",
-            "searched.push(`${wf} (UNAVAILABLE: ${errorMessage(err)})`);",
         )
     )
+    if pooled_validation:
+        pooled_validation = _pooled_validation_has_safe_control_flow(source)
     assert (
         legacy_validation or pooled_validation
     ), "coverage discovery must normalize configured sources and expose unusable entries"
