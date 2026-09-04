@@ -14,6 +14,7 @@ artifacts under the names the guard resolves.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -69,7 +70,13 @@ def _pooled_validation_has_safe_control_flow(source: str) -> bool:
         query_index = source.index("const found = await paginateWithRetry(", loop_open, loop_close)
         query_open = source.index("(", query_index)
         query_close = _matching_delimiter_index(source, query_open, "(", ")")
-        workflow_id_index = source.index("workflow_id: wf,", query_open, query_close)
+        workflow_id_match = re.search(
+            r"(?m)^[ \t]*workflow_id:[ \t]*wf,[ \t]*(?://[^\n]*)?$",
+            source[query_open + 1 : query_close],
+        )
+        if workflow_id_match is None:
+            return False
+        workflow_id_index = query_open + 1 + workflow_id_match.start()
         catch_index = source.index("} catch (err) {", query_index, loop_close)
         catch_open = source.index("{", catch_index)
         catch_close = _matching_brace_index(source, catch_open)
