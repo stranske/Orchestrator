@@ -305,3 +305,23 @@ def test_trial_readiness_surfaces_in_reports_and_lifecycle(
     assert gate["status"] == "shadow"
     assert gate["flags_defaults"]["learning_enabled"] is False
     assert gate["flags_defaults"]["promotion_allowed"] is False
+
+
+def test_frozen_sol_trial_remains_valid_after_astra_migration(trial_roots, monkeypatch):
+    current = model_profile_trial.EXPECTED_PROFILE_IDS
+    monkeypatch.setattr(
+        model_profile_trial, "EXPECTED_PROFILE_IDS", model_profile_trial.LEGACY_PROFILE_IDS
+    )
+    frozen = model_profile_trial.build_trial_manifest(
+        *trial_roots, seed=14, now=1000, capacity_state="ok"
+    )
+    results = trial_attempt_fixture.__wrapped__(frozen)
+    monkeypatch.setattr(model_profile_trial, "EXPECTED_PROFILE_IDS", current)
+    model_profile_trial.validate_trial_manifest(frozen)
+    attempts = model_profile_trial._validate_results(frozen, results)
+    assert {item["profile_id"] for item in attempts} == set(model_profile_trial.LEGACY_PROFILE_IDS)
+    fresh = model_profile_trial.build_trial_manifest(
+        *trial_roots, seed=14, now=1000, capacity_state="ok"
+    )
+    assert "codex-6-astra-high" in fresh["launch_order"]
+    assert fresh["trial_id"] != frozen["trial_id"]
