@@ -8,12 +8,16 @@ exactly that state today — both payloads, no trend.
 
 So the pairing is asserted here rather than discovered from a guard that has been failing for
 weeks: what the config NAMES must be a workflow that exists, and that workflow must publish BOTH
-artifacts under the names the guard resolves.
+artifacts under the names the guard resolves. Discovery itself is exercised as JavaScript with
+hermetic API and filesystem doubles so both the legacy and pooled implementations are judged by
+their behavior rather than by source-code tokens.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -28,6 +32,178 @@ MAINT_COVERAGE_GUARD = REPO / ".github/workflows/maint-coverage-guard.yml"
 # `gate-coverage-trend` is required outright, and a run carrying only the payload is skipped.
 PAYLOAD_ARTIFACT = "gate-coverage"
 TREND_ARTIFACT = "gate-coverage-trend"
+FALLBACK_WORKFLOW = ".github/workflows/pr-00-gate.yml"
+DISCOVERY_STEP = "      - name: Locate latest Gate workflow run\n"
+SCRIPT_MARKER = "          script: |\n"
+DISCOVERY_END = "\nif (!runs.length) {"
+
+NODE_DISCOVERY_HARNESS = r"""
+const vm = require('node:vm');
+const payload = JSON.parse(process.argv[1]);
+const requests = [];
+const warnings = [];
+const infos = [];
+const failures = [];
+const rejections = [];
+const helperLoads = [];
+const callTrace = [];
+const outputs = {};
+const existingFiles = new Set(payload.existing);
+const existingDirectories = new Set(payload.directories);
+const unavailable = new Set(payload.unavailable);
+const rejectionNonce = require('node:crypto').randomUUID();
+const retryHelperPath = './.github/scripts/github-api-with-retry.js';
+const mockFs = {
+  readFileSync(path) {
+    if (path !== 'config/coverage-baseline.json') {
+      throw new Error(`unexpected read: ${path}`);
+    }
+    return JSON.stringify({source_workflows: payload.workflows});
+  },
+  existsSync(path) {
+    if (path === retryHelperPath) return payload.useRetryHelper;
+    return existingFiles.has(path) || existingDirectories.has(path);
+  },
+  statSync(path) {
+    if (!existingFiles.has(path) && !existingDirectories.has(path)) {
+      const error = new Error(`ENOENT: no such file or directory, stat '${path}'`);
+      error.code = 'ENOENT';
+      throw error;
+    }
+    return {isFile: () => existingFiles.has(path)};
+  },
+};
+const context = {repo: {owner: 'stranske', repo: 'Orchestrator'}};
+const core = {
+  warning(message) { warnings.push(String(message)); },
+  info(message) { infos.push(String(message)); },
+  setFailed(message) { failures.push(String(message)); },
+  setOutput(name, value) { outputs[name] = String(value); },
+};
+const github = {
+  rest: {actions: {listWorkflowRuns: Symbol('listWorkflowRuns')}},
+  async paginate(_method, params) {
+    if (_method !== github.rest.actions.listWorkflowRuns) {
+      throw new Error('unexpected pagination method');
+    }
+    callTrace.push({type: 'github.paginate', workflow: params.workflow_id});
+    requests.push(params.workflow_id);
+    if (unavailable.has(params.workflow_id)) {
+      const error = new Error(`unavailable: ${params.workflow_id} (${rejectionNonce})`);
+      rejections.push({workflow: params.workflow_id, error: error.message});
+      throw error;
+    }
+    return [{
+      id: `run-${params.workflow_id}`,
+      conclusion: 'success',
+      run_started_at: '2026-09-04T00:00:00Z',
+    }];
+  },
+};
+const localRequire = (name) => {
+  if (name === 'fs') return mockFs;
+  if (name === retryHelperPath && payload.useRetryHelper) {
+    helperLoads.push(name);
+    const retryHelpers = require(name);
+    return {
+      ...retryHelpers,
+      paginateWithRetry(...args) {
+        callTrace.push({type: 'paginateWithRetry', workflow: args[2]?.workflow_id});
+        return retryHelpers.paginateWithRetry(...args);
+      },
+    };
+  }
+  throw new Error(`unexpected require: ${name}`);
+};
+const body = [
+  '(async () => {',
+  payload.source,
+  "const exportedSearched = typeof searched === 'undefined' ? [] : searched;",
+  'return {exportedSearched, runIds: runs.map((run) => run.id)};',
+  '})();',
+].join('\n');
+vm.runInNewContext(
+  body,
+  {context, core, github, require: localRequire},
+  {timeout: 5000},
+)
+  .then((result) => process.stdout.write(JSON.stringify({
+    ...result, requests, warnings, infos, failures, rejections, helperLoads, callTrace, outputs,
+  })))
+  .catch((error) => {
+    process.stderr.write(`${error.stack || error}\n`);
+    process.exitCode = 1;
+  });
+"""
+
+
+def _discovery_script(workflow_source: str) -> str:
+    """Extract the executable prefix that selects and queries coverage workflows."""
+    step_index = workflow_source.find(DISCOVERY_STEP)
+    assert step_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {DISCOVERY_STEP!r}"
+    marker_index = workflow_source.find(SCRIPT_MARKER, step_index)
+    assert marker_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {SCRIPT_MARKER!r}"
+    script_index = marker_index + len(SCRIPT_MARKER)
+    script_lines: list[str] = []
+    for line in workflow_source[script_index:].splitlines():
+        if line.startswith("            "):
+            script_lines.append(line[12:])
+        elif not line.strip():
+            script_lines.append("")
+        else:
+            break
+    script = "\n".join(script_lines)
+    end_index = script.find(DISCOVERY_END)
+    assert end_index >= 0, f"{MAINT_COVERAGE_GUARD}: missing marker {DISCOVERY_END!r}"
+    return script[:end_index]
+
+
+def _run_discovery(
+    workflow_source: str,
+    workflows: list[str],
+    *,
+    existing: set[str],
+    unavailable: set[str] | None = None,
+    directories: set[str] | None = None,
+    use_retry_helper: bool = False,
+) -> dict:
+    """Execute workflow discovery with no network, repository, or runner side effects."""
+    node = shutil.which("node")
+    if node is None:
+        raise env_prereq.MissingPrerequisite(
+            "node executable is required to exercise the embedded github-script discovery block"
+        )
+    payload = {
+        "source": _discovery_script(workflow_source),
+        "workflows": workflows,
+        "existing": sorted(existing),
+        "directories": sorted(directories or set()),
+        "unavailable": sorted(unavailable or set()),
+        "useRetryHelper": use_retry_helper,
+    }
+    completed = subprocess.run(
+        [node, "-e", NODE_DISCOVERY_HARNESS, json.dumps(payload)],
+        check=False,
+        capture_output=True,
+        cwd=REPO,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def _assert_rejection_is_recorded(result: dict, workflow: str) -> None:
+    """Require the actual API rejection to produce the workflow's unavailable record."""
+    assert len(result["rejections"]) == 1
+    rejected = result["rejections"][0]
+    assert rejected["workflow"] == workflow
+    recorded = [
+        entry
+        for entry in result["exportedSearched"]
+        if entry.startswith(f"{workflow} (UNAVAILABLE:") and rejected["error"] in entry
+    ]
+    assert len(recorded) == 1
 
 
 @pytest.fixture(scope="module")
@@ -70,33 +246,91 @@ def test_the_declared_source_workflow_exists(baseline):
         assert (REPO / rel).is_file(), f"{rel} is named in the baseline config but does not exist"
 
 
-def test_coverage_guard_discovery_uses_declared_source_workflows(baseline):
-    """Discovery must follow config rather than silently querying the Gate."""
+def test_coverage_guard_discovery_uses_every_normalized_declared_workflow(baseline):
+    """Discovery must query every configured path after trimming it."""
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+    declared = ["  .github/workflows/ci.yml  ", " .github/workflows/pr-00-gate.yml "]
+    expected = [path.strip() for path in declared]
 
-    assert "const configuredWorkflowIds = baseline.source_workflows;" in source
-    assert "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());" in source
-    assert "workflowIds.map((workflowId)" in source
-    assert "workflow_id: workflowId," in source
-    assert baseline["source_workflows"] != [".github/workflows/pr-00-gate.yml"]
+    result = _run_discovery(source, declared, existing=set(expected), use_retry_helper=True)
+
+    assert result["requests"] == expected
+    assert result["runIds"] == [f"run-{path}" for path in expected]
+    assert result["failures"] == []
+    assert result["helperLoads"] == ["./.github/scripts/github-api-with-retry.js"]
+    expected_trace = [
+        event
+        for path in expected
+        for event in (
+            {"type": "paginateWithRetry", "workflow": path},
+            {"type": "github.paginate", "workflow": path},
+        )
+    ]
+    assert result["callTrace"] == expected_trace
+    assert baseline["source_workflows"] != [FALLBACK_WORKFLOW]
 
 
-def test_coverage_guard_normalizes_existing_declared_source_workflows(baseline):
-    """Configured paths must be normalized and resolvable before replacing Gate.
+def test_coverage_guard_exposes_an_unusable_declared_source_and_keeps_working(baseline):
+    """Both supported implementations must fail visibly and retain a usable query path.
 
-    A whitespace-padded path would otherwise pass the non-empty validation while making the
-    Actions API lookup fail. A missing path is the same configuration failure: keep the known
-    Gate fallback instead of silently querying a nonexistent coverage source.
+    The legacy guard rejects a missing local workflow and deliberately falls back to Gate. The
+    pooled guard queries every declared workflow, records an unavailable API target, and retains
+    runs from the other sources. The behavior, rather than a version marker, selects the branch.
     """
     env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
     source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+    missing = ".github/workflows/missing.yml"
+    usable = ".github/workflows/ci.yml"
+    result = _run_discovery(
+        source,
+        [missing, usable],
+        existing={usable},
+        unavailable={missing},
+    )
 
-    assert "workflowId.trim().startsWith('.github/workflows/')" in source
-    assert "fs.existsSync(workflowId.trim())" in source
-    assert "fs.statSync(workflowId.trim()).isFile()" in source
-    assert "workflowIds = configuredWorkflowIds.map((workflowId) => workflowId.trim());" in source
+    if result["requests"] == [FALLBACK_WORKFLOW]:
+        assert any("falling back" in warning.lower() for warning in result["warnings"])
+        assert result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+    else:
+        assert result["requests"] == [missing, usable]
+        assert result["runIds"] == [f"run-{usable}"]
+        _assert_rejection_is_recorded(result, missing)
+    assert result["failures"] == []
     assert all((REPO / path).is_file() for path in baseline["source_workflows"])
+
+
+def test_coverage_guard_does_not_treat_an_existing_directory_as_a_workflow(baseline):
+    """Legacy validation must reject directories; pooled discovery must expose API rejection."""
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
+    source = MAINT_COVERAGE_GUARD.read_text(encoding="utf-8")
+    missing = ".github/workflows/missing.yml"
+    usable = ".github/workflows/ci.yml"
+    branch_probe = _run_discovery(
+        source,
+        [missing, usable],
+        existing={usable},
+        unavailable={missing},
+    )
+
+    directory = ".github/workflows/subdir"
+    result = _run_discovery(
+        source,
+        [directory],
+        existing=set(),
+        directories={directory},
+        unavailable={directory},
+    )
+
+    if branch_probe["requests"] == [FALLBACK_WORKFLOW]:
+        assert result["requests"] == [FALLBACK_WORKFLOW]
+        assert result["runIds"] == [f"run-{FALLBACK_WORKFLOW}"]
+        assert any("falling back" in warning.lower() for warning in result["warnings"])
+    else:
+        assert result["requests"] == [directory]
+        assert result["runIds"] == []
+        _assert_rejection_is_recorded(result, directory)
+    assert result["failures"] == []
 
 
 def test_the_declared_workflow_publishes_both_artifacts_the_guard_requires(baseline):
