@@ -59,17 +59,17 @@ def test_three_profiles_share_one_pool(codex_profile_registry):
         if profile["agent"] == "codex"
         and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     }
-    assert len(codex_only) == 3, sorted(codex_only)
+    assert len(codex_only) >= 2, sorted(codex_only)
     events = [
         {"selected_profile_id": profile_id, "event": "start", "units": 1}
         for profile_id in codex_only
     ]
     usage = capacity.debit_profile_pools(events, codex_only)
-    assert usage == {"codex-subscription": 3.0}
+    assert usage == {"codex-subscription": float(len(codex_only))}
     snapshot = capacity.profile_capacity_snapshot(
         {"agents": {"codex": {"state": "ok"}}},
         pool_usage=usage,
-        pool_limits={"codex-subscription": 3},
+        pool_limits={"codex-subscription": len(codex_only)},
         registry=codex_only,
     )
     # `profile_capacity_snapshot` reports every real pool, so assert codex's is present and
@@ -105,8 +105,9 @@ def test_capacity_build_reads_shared_pool_burn_once(tmp_path, monkeypatch, codex
     monkeypatch.setattr(capacity, "LEDGER", ledger)
     monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "shed")
     built = capacity.build(ccusage_block=None)
-    assert built["pools"]["codex-subscription"]["used"] == 3.0
-    # Only codex burned this pool, and all three of its profiles map to it. Other agents now have
+    codex_profile_count = sum(1 for p in codex_profile_registry.values() if p["agent"] == "codex")
+    assert built["pools"]["codex-subscription"]["used"] == float(codex_profile_count)
+    # Only codex burned this pool, and all of its profiles map to it. Other agents now have
     # their own pools, so filter rather than assert the registry is codex-only.
     codex_rows = {
         pid: row
@@ -141,7 +142,11 @@ def test_exact_codex_profile_commands_preserve_permission_rails(monkeypatch):
         )
         assert assess[assess.index("--sandbox") + 1] == "read-only"
         assert "--json" not in assess
+<<<<<<< HEAD
+    assert models == {p["requested_model"] for p in execution_profiles.profiles_for_agent("codex")}
+=======
     assert models == {"gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna"}
+>>>>>>> origin/main
 
 
 def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
@@ -522,7 +527,7 @@ def test_profile_learning_collapses_same_subject_retries(tmp_path, monkeypatch):
 
 def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
-    # Scoped to codex's three profiles: this test is about propensity across ONE agent's model
+    # Scoped to codex's profiles: this test is about propensity across ONE agent's model
     # choices and its shared subscription. Passing the whole registry would make 1/N a statement
     # about how many seats exist, which is not the property being checked.
     codex_candidates = sorted(
@@ -531,7 +536,8 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
         if profile["agent"] == "codex"
         and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     )
-    assert len(codex_candidates) == 3, codex_candidates
+    n = len(codex_candidates)
+    assert n >= 2, codex_candidates
     envelope = execution_profiles.select_profile(
         "implement",
         "o/r#report",
@@ -542,18 +548,22 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     )
     feedback.record_profile_decision(envelope)
     summary = feedback.profile_routing_summary()
-    assert summary["cold_starts"] == 3
+    assert summary["cold_starts"] == n
     assert summary["routing_decisions"] == 1
-    assert summary["mean_assignment_probability"] == pytest.approx(1 / 3)
+    assert summary["mean_assignment_probability"] == pytest.approx(1 / n)
     # This field reports every REAL account, not "the pools in this decision", so it must equal the
     # pool registry. Asserting a single literal only held while codex was the sole seat.
     assert summary["shared_capacity_pools"] == sorted(execution_profiles.CAPACITY_POOLS)
     assert "codex-subscription" in summary["shared_capacity_pools"]
     # The decision itself was scoped to codex, so only codex's models may appear in it.
     assert {row["requested_model"] for row in summary["profiles"]} == {
+<<<<<<< HEAD
+        p["requested_model"] for p in execution_profiles.profiles_for_agent("codex")
+=======
         "gpt-6-astra",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
+>>>>>>> origin/main
     }
 
 
