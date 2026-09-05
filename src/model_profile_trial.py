@@ -38,9 +38,29 @@ CAPABILITY_ID = "local-model-profile-trial"
 # already recorded against it stay interpretable, but it is no longer an arm of the running trial.
 EXPECTED_PROFILE_IDS = (
     "codex-6-astra-high",
+<<<<<<< HEAD
+=======
     "codex-5.6-terra-high",
     "codex-5.6-luna-high",
 )
+# Frozen pre-Astra trials retain their original identity and can still be ingested.
+LEGACY_PROFILE_IDS = (
+    "codex-5.6-sol-high",
+>>>>>>> origin/main
+    "codex-5.6-terra-high",
+    "codex-5.6-luna-high",
+)
+
+
+def _manifest_profile_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
+    requests = manifest.get("requests") or []
+    actual = {item.get("profile_id") for item in requests}
+    for supported in (EXPECTED_PROFILE_IDS, LEGACY_PROFILE_IDS):
+        if actual == set(supported) and len(requests) == len(supported):
+            return supported
+    raise ValueError("trial requires an exact supported three-profile set")
+
+
 DEFAULT_STATE_PATH = Path(
     os.environ.get(
         "ORCH_MODEL_PROFILE_TRIAL_STATE",
@@ -352,10 +372,11 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
             or not source.get("aggregate_sha256")
         ):
             raise ValueError("trial source manifest is incomplete")
+    profile_ids = _manifest_profile_ids(manifest)
     identity = {
         "created_at": manifest.get("created_at"),
         "packet_hash": manifest.get("packet_hash"),
-        "profile_ids": list(EXPECTED_PROFILE_IDS),
+        "profile_ids": list(profile_ids),
         "seed": manifest.get("seed"),
         "source_hashes": {
             key: source_before[key]["aggregate_sha256"] for key in ("orchestrator", "workflows")
@@ -366,16 +387,20 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("trial identity is not reproducible")
 
     requests = manifest.get("requests") or []
-    if {item.get("profile_id") for item in requests} != set(EXPECTED_PROFILE_IDS):
-        raise ValueError("trial requires the exact Sol/Terra/Luna profile set")
+    if {item.get("profile_id") for item in requests} != set(profile_ids):
+        raise ValueError("trial requires an exact supported three-profile set")
     if len({item.get("run_id") for item in requests}) != 3:
         raise ValueError("trial requires three distinct run identities")
     if manifest.get("capacity_snapshot", {}).get("snapshot_count") != 1:
         raise ValueError("trial requires one shared-pool snapshot")
     launch_order = manifest.get("launch_order") or []
+<<<<<<< HEAD
     if sorted(launch_order) != sorted(EXPECTED_PROFILE_IDS) or len(set(launch_order)) != len(
         EXPECTED_PROFILE_IDS
     ):
+=======
+    if sorted(launch_order) != sorted(profile_ids) or len(set(launch_order)) != len(profile_ids):
+>>>>>>> origin/main
         raise ValueError("trial launch order is not an exact profile permutation")
     by_ordinal = sorted(requests, key=lambda item: int(item.get("launch_ordinal") or 0))
     if [item.get("profile_id") for item in by_ordinal] != launch_order:
@@ -423,6 +448,7 @@ def _weight_snapshot() -> dict[str, Any]:
 
 
 def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list[dict[str, Any]]:
+    profile_ids = _manifest_profile_ids(manifest)
     unknown_results = sorted(set(results) - RESULT_FIELDS)
     if unknown_results:
         raise ValueError(f"trial results contain unsupported fields: {unknown_results}")
@@ -437,7 +463,11 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
         raise ValueError("trial results did not acknowledge the frozen packet")
     attempts = results.get("attempts") or []
     by_profile = {item.get("profile_id"): item for item in attempts}
+<<<<<<< HEAD
     if set(by_profile) != set(EXPECTED_PROFILE_IDS) or len(attempts) != len(EXPECTED_PROFILE_IDS):
+=======
+    if set(by_profile) != set(profile_ids) or len(attempts) != len(profile_ids):
+>>>>>>> origin/main
         raise ValueError("trial results require exactly one attempt per profile")
     request_by_profile = {item["profile_id"]: item for item in manifest["requests"]}
     for profile_id, attempt in by_profile.items():
@@ -504,7 +534,7 @@ def _validate_results(manifest: dict[str, Any], results: dict[str, Any]) -> list
     # caller-supplied secret or raw provider response by accident.
     return [
         {key: by_profile[profile_id].get(key) for key in sorted(ATTEMPT_FIELDS)}
-        for profile_id in EXPECTED_PROFILE_IDS
+        for profile_id in profile_ids
     ]
 
 

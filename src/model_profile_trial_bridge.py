@@ -448,11 +448,7 @@ def preflight(
             if not PINNED_REF_RE.search(runner_ref):
                 blockers.append(f"remote_runner_not_immutable:{profile_id}")
             model_row = models.get(local["requested_model"])
-            if (
-                not model_row
-                or model_row.get("worker_profile") is not True
-                or model_row.get("lifecycle") != "trial"
-            ):
+            if not model_row or model_row.get("lifecycle") not in {"current", "trial"}:
                 blockers.append(f"remote_model_registry_mismatch:{profile_id}")
         contract = registry.get("model_profile_trial_contract") or {}
         remote_runner_ref = str(contract.get("runner_ref") or "")

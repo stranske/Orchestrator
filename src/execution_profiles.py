@@ -261,6 +261,10 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 """
 
 
+# Retain historical identity without offering the superseded full-tier model to routing.
+PROFILE_RETIREMENTS = {"codex-5.6-sol-high": "codex-6-astra-high"}
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -309,7 +313,9 @@ def profiles_for_agent(agent: str, *, transport: str | None = None) -> list[dict
     rows = [
         dict(p)
         for p in PROFILE_REGISTRY.values()
-        if p["agent"] == agent and p["lifecycle_status"] == "active"
+        if p["agent"] == agent
+        and p["lifecycle_status"] == "active"
+        and p["profile_id"] not in PROFILE_RETIREMENTS
     ]
     if transport:
         rows = [p for p in rows if transport in p["transport_support"]]
