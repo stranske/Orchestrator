@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guarded, read-only Sol/Terra/Luna worker-profile plumbing trial.
+"""Guarded, read-only Astra/Terra/Luna worker-profile plumbing trial.
 
 The trial is instrumentation, not a benchmark: one frozen packet, one shared
 Codex capacity snapshot, randomized launch order, and three exact profiles. It
@@ -55,7 +55,7 @@ def _manifest_profile_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
     for supported in (EXPECTED_PROFILE_IDS, LEGACY_PROFILE_IDS):
         if actual == set(supported) and len(requests) == len(supported):
             return supported
-    raise ValueError("trial requires an exact supported three-profile set")
+    raise ValueError("trial requires an exact supported profile set")
 
 
 DEFAULT_STATE_PATH = Path(
@@ -370,6 +370,7 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
         ):
             raise ValueError("trial source manifest is incomplete")
     profile_ids = _manifest_profile_ids(manifest)
+    expected_count = len(profile_ids)
     identity = {
         "created_at": manifest.get("created_at"),
         "packet_hash": manifest.get("packet_hash"),
@@ -385,9 +386,9 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
 
     requests = manifest.get("requests") or []
     if {item.get("profile_id") for item in requests} != set(profile_ids):
-        raise ValueError("trial requires an exact supported three-profile set")
-    if len({item.get("run_id") for item in requests}) != 3:
-        raise ValueError("trial requires three distinct run identities")
+        raise ValueError("trial requires an exact supported profile set")
+    if len({item.get("run_id") for item in requests}) != expected_count:
+        raise ValueError("trial requires one distinct run identity per profile")
     if manifest.get("capacity_snapshot", {}).get("snapshot_count") != 1:
         raise ValueError("trial requires one shared-pool snapshot")
     launch_order = manifest.get("launch_order") or []
@@ -396,8 +397,10 @@ def validate_trial_manifest(manifest: dict[str, Any]) -> None:
     by_ordinal = sorted(requests, key=lambda item: int(item.get("launch_ordinal") or 0))
     if [item.get("profile_id") for item in by_ordinal] != launch_order:
         raise ValueError("trial request ordinals do not match launch order")
-    if [int(item.get("launch_ordinal") or 0) for item in by_ordinal] != [1, 2, 3]:
-        raise ValueError("trial launch ordinals must be exactly 1,2,3")
+    if [int(item.get("launch_ordinal") or 0) for item in by_ordinal] != list(
+        range(1, expected_count + 1)
+    ):
+        raise ValueError("trial launch ordinals must cover the selected profile set")
     for request in requests:
         profile = execution_profiles.get_profile(request["profile_id"])
         expected_run_id = f"{manifest['trial_id']}:{request['profile_id']}"
@@ -635,8 +638,8 @@ def finalize_trial(
             for request in manifest["requests"]
         ]
     )
-    if debit != {"codex-subscription": 3.0}:
-        raise AssertionError("trial did not debit one shared pool exactly three times")
+    if debit != {"codex-subscription": float(len(manifest["requests"]))}:
+        raise AssertionError("trial did not debit one shared pool once per profile")
     state = {
         "schema": STATE_SCHEMA,
         "version": SCHEMA_VERSION,

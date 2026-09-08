@@ -95,6 +95,12 @@
         ],
         "state": "ok"
       },
+      "codex-6-astra-high": {
+        "capacity_pool_ids": [
+          "codex-subscription"
+        ],
+        "state": "ok"
+      },
       "cursor-composer-2.5": {
         "capacity_pool_ids": [
           "cursor-subscription"
@@ -142,7 +148,7 @@
   "launch_order": [
     "codex-5.6-terra-high",
     "codex-5.6-luna-high",
-    "codex-5.6-sol-high"
+    "codex-6-astra-high"
   ],
   "learning_enabled": false,
   "lifecycle": "shadow",
@@ -163,7 +169,7 @@
       "provider": "openai",
       "reasoning_effort": "high",
       "requested_model": "gpt-5.6-terra",
-      "run_id": "model-profile-trial:d965f949e25603e6d56293f9:codex-5.6-terra-high",
+      "run_id": "model-profile-trial:e5267a218ea4136c9682a5ff:codex-5.6-terra-high",
       "sandbox": "read-only",
       "tools": []
     },
@@ -181,7 +187,7 @@
       "provider": "openai",
       "reasoning_effort": "high",
       "requested_model": "gpt-5.6-luna",
-      "run_id": "model-profile-trial:d965f949e25603e6d56293f9:codex-5.6-luna-high",
+      "run_id": "model-profile-trial:e5267a218ea4136c9682a5ff:codex-5.6-luna-high",
       "sandbox": "read-only",
       "tools": []
     },
@@ -194,12 +200,12 @@
       "learning_enabled": false,
       "packet_hash": "sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605",
       "permission_mode": "read-only",
-      "profile_id": "codex-5.6-sol-high",
+      "profile_id": "codex-6-astra-high",
       "prompt_version": "orchestrator-prompt-v1",
       "provider": "openai",
       "reasoning_effort": "high",
-      "requested_model": "gpt-5.6-sol",
-      "run_id": "model-profile-trial:d965f949e25603e6d56293f9:codex-5.6-sol-high",
+      "requested_model": "gpt-6-astra",
+      "run_id": "model-profile-trial:e5267a218ea4136c9682a5ff:codex-6-astra-high",
       "sandbox": "read-only",
       "tools": []
     }
@@ -236,6 +242,6 @@
     "reasons": [],
     "triggered": false
   },
-  "trial_id": "model-profile-trial:d965f949e25603e6d56293f9",
+  "trial_id": "model-profile-trial:e5267a218ea4136c9682a5ff",
   "version": 1
 }
