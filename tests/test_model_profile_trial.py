@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -325,3 +329,50 @@ def test_frozen_sol_trial_remains_valid_after_astra_migration(trial_roots, monke
     )
     assert "codex-6-astra-high" in fresh["launch_order"]
     assert fresh["trial_id"] != frozen["trial_id"]
+
+
+@pytest.mark.parametrize("profile_count", [2, 4])
+def test_manifest_cardinality_follows_selected_profiles(trial_roots, monkeypatch, profile_count):
+    profiles = (
+        "codex-6-astra-high",
+        "codex-5.6-terra-high",
+        "codex-5.6-luna-high",
+        "codex-5.6-sol-high",
+    )[:profile_count]
+    monkeypatch.setattr(model_profile_trial, "EXPECTED_PROFILE_IDS", profiles)
+    manifest = model_profile_trial.build_trial_manifest(
+        *trial_roots, seed=14, now=1000, capacity_state="ok"
+    )
+    model_profile_trial.validate_trial_manifest(manifest)
+    results = trial_attempt_fixture.__wrapped__(manifest)
+    assert len(model_profile_trial._validate_results(manifest, results)) == profile_count
+    state = model_profile_trial.finalize_trial(manifest, results, now=1000)
+    assert state["shared_pool_debit"] == {"codex-subscription": float(profile_count)}
+    assert state["attempt_count"] == profile_count
+
+
+def test_committed_rail_contract_accepts_current_astra_trial(tmp_path):
+    source = Path(__file__).parent / "rail_exercises/local-model-profile-trial/arm-a"
+    contract = json.loads((source / "contract.json").read_text())
+    fixture = source / "fixtures/local-model-profile-trial/manifest.json"
+    frozen = json.loads(fixture.read_text())
+    assert {r["profile_id"] for r in frozen["requests"]} == {
+        "codex-6-astra-high",
+        "codex-5.6-terra-high",
+        "codex-5.6-luna-high",
+    }
+    model_profile_trial.validate_trial_manifest(frozen)
+    copied = tmp_path / "arm-a"
+    shutil.copytree(source, copied)
+    roots = copied / "fixtures/local-model-profile-trial"
+    fresh = model_profile_trial.build_trial_manifest(
+        roots / "orch", roots / "workflows", seed=14, now=1000, capacity_state="ok"
+    )
+    (roots / "manifest.json").write_text(json.dumps(fresh))
+    result = subprocess.run(
+        ["bash", "-eu", "-c", contract["pass_check"]],
+        env={**os.environ, "CONTRACT_DIR": str(copied)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

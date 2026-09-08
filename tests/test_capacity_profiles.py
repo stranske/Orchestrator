@@ -161,6 +161,19 @@ def test_nested_sandbox_never_widens_read_only_profile(monkeypatch):
     assert command[command.index("--sandbox") + 1] == "read-only"
 
 
+def test_full_tier_selects_astra_and_keeps_historical_sol_lookup():
+    assert adapters.resolve_model("codex", "full") == "gpt-6-astra"
+    active = execution_profiles.profiles_for_agent("codex")
+    full = [p for p in active if p["requested_model"] == adapters.resolve_model("codex", "full")]
+    assert [p["profile_id"] for p in full] == ["codex-6-astra-high"]
+    assert "codex-5.6-sol-high" not in {p["profile_id"] for p in active}
+    selected = execution_profiles.select_profile(
+        "implement", "o/r#full-tier", [p["profile_id"] for p in full], rng_seed=0
+    )
+    assert selected["selected_profile_id"] == "codex-6-astra-high"
+    assert execution_profiles.get_profile("codex-5.6-sol-high")["requested_model"] == "gpt-5.6-sol"
+
+
 def test_router_profile_envelope_replays_exact_choice():
     cap = capacity.profile_capacity_snapshot(
         {

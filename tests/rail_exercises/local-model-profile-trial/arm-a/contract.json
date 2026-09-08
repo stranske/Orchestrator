@@ -19,11 +19,11 @@
     "round": "r15",
     "source": "rounds/r15/proposers/P3-cursor/orch/exercises/local-model-profile-trial.json"
   },
-  "pass_check": "python3 -c \"import json,sys; m=json.load(open('$CONTRACT_DIR/fixtures/local-model-profile-trial/manifest.json')); ids={r['profile_id'] for r in m['requests']}; ok=(m.get('promotion_allowed') is False and m.get('learning_enabled') is False and ids=={'codex-5.6-sol-high','codex-5.6-terra-high','codex-5.6-luna-high'} and m.get('stop_conditions',{}).get('triggered') is False); sys.exit(0 if ok else 1)\"",
+  "pass_check": "python3 -c \"import json,sys; m=json.load(open('$CONTRACT_DIR/fixtures/local-model-profile-trial/manifest.json')); ids={r['profile_id'] for r in m['requests']}; ok=(m.get('promotion_allowed') is False and m.get('learning_enabled') is False and ids=={'codex-6-astra-high','codex-5.6-terra-high','codex-5.6-luna-high'} and m.get('stop_conditions',{}).get('triggered') is False); sys.exit(0 if ok else 1)\"",
   "run": [
     "cd $REPO_ROOT/orch && python3 src/model_profile_trial.py prepare --orchestrator-root $CONTRACT_DIR/fixtures/local-model-profile-trial/orch --workflows-root $CONTRACT_DIR/fixtures/local-model-profile-trial/workflows --output $CONTRACT_DIR/fixtures/local-model-profile-trial/manifest.json --capacity-state ok > $CONTRACT_DIR/fixtures/local-model-profile-trial/prepare-out.json",
     "cd $REPO_ROOT/orch && python3 -c \"import json,sys; sys.path.insert(0,'src'); from model_profile_trial import validate_trial_manifest; m=json.load(open('$CONTRACT_DIR/fixtures/local-model-profile-trial/manifest.json')); validate_trial_manifest(m); assert m['schema']=='orchestrator.model-profile-trial'; assert m['lifecycle']=='shadow'; assert len(m['requests'])==3; print('validate_ok')\""
   ],
   "setup": [],
-  "stated_task": "Prepare and validate a shadow Sol/Terra/Luna trial manifest from minimal fixture source trees without executing workers or recording feedback."
+  "stated_task": "Prepare and validate a shadow Astra/Terra/Luna trial manifest from minimal fixture source trees without executing workers or recording feedback."
 }
