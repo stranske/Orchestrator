@@ -14,7 +14,11 @@
 set -euo pipefail
 # Self-locating: code lives in Code/Orchestrator (Dropbox); git checkouts + feedback DB stay LOCAL
 # (defaults baked into provision.py/feedback.py). Override with ORCH_DIR.
-ORCH_REPO="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# The `:-$0` fallback below: bash 5.3 (Homebrew, 2026-09-12) makes BASH_SOURCE[0] an unbound variable under
+# `set -u` when the text runs via `bash -c` or stdin (no script file), which is how the recurrence
+# check replays this prologue; 3.2 and 5.2 returned "". The fallback keeps the replay evaluating and
+# changes nothing for a real run, where BASH_SOURCE[0] is this file.
+ORCH_REPO="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
 # ORCH points at the MODULES, which are not the checkout root any more: a checkout keeps them under
 # src/, while the exec mirror is FLAT (orch-sync-mirror.sh copies root-level .py only). Detected,
 # never assumed — the same rule paths.py applies in Python, for the same reason: a hardcoded path

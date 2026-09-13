@@ -58,3 +58,20 @@ def test_every_cadence_step_key_is_registered() -> None:
     registered = set(re.findall(r"^\s*([a-z0-9-]+)\)\s", shell, flags=re.M))
     unknown = sorted(keys - registered)
     assert not unknown, f"steps not known to cadence_registry (they ABORT at runtime): {unknown}"
+
+
+def test_prologue_does_not_depend_on_bash_source_being_set() -> None:
+    """bash 5.3 (Homebrew, 2026-09-12) made `${BASH_SOURCE[0]}` an unbound variable under `set -u` when the
+    prologue is replayed with `bash -c`, which is how capability_recurrence_check evaluates it; the tick
+    itself was unaffected (a script file sets BASH_SOURCE), so the red appeared only in the local verdict.
+    The fragment is pinned once so a "simplification" back to the bare form is caught by name."""
+    text = ORCHESTRATE.read_text(encoding="utf-8")
+    needle = (
+        'dirname "${BASH_SOURCE[0]:-$0}"'  # the code fragment, not the comment that explains it
+    )
+    assert (
+        text.count(needle) == 1
+    ), f"expected exactly one prologue use of {needle!r}, found {text.count(needle)}"
+    assert (
+        'dirname "${BASH_SOURCE[0]}"' not in text
+    ), "the bare form breaks the `bash -c` replay under set -u"
