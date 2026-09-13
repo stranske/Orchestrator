@@ -210,16 +210,6 @@ fi
 # Everything from here down may emit capability heartbeats. Capacity + discovery write only
 # orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
 # this is safe in either mode.
-if _cadence_due rail-exercise && _attempt_ok rail-exercise; then
-  echo "  [cadence] rail exercise contracts (weekly shadow)"
-  rail_exercise_args=(--json)
-  if [[ "${ORCH_RAIL_EXERCISE_RECORD:-0}" == "1" ]]; then rail_exercise_args+=(--record); fi
-  if python3 "$ORCH/rail_exercise.py" "${rail_exercise_args[@]}" > "$STAMP_DIR/rail-exercise-report.json"; then
-    _mark_success rail-exercise
-  else
-    _mark_fail rail-exercise
-  fi
-fi
 python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
 python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
 # ORCH-ANCHOR: frontend-verify-doctor -- the ONLY tick caller of the frontend-verifier capability.
@@ -364,6 +354,20 @@ fi
 # and mine them into a durable candidate/tombstone state. This is read-only from the Brain's
 # perspective; the state/report artifacts are local operator evidence. A failed run backs off and
 # remains visible instead of silently starving continuous learning.
+# Weekly rail-exercise cadence (PR #207). Placed HERE, after the cadence helpers above are defined:
+# it first lived at the heartbeat-producers anchor, ~100 lines before _cadence_due(), so bash printed
+# `_cadence_due: command not found` on every tick and the step never ran (2026-09-04..13).
+if _cadence_due rail-exercise && _attempt_ok rail-exercise; then
+  echo "  [cadence] rail exercise contracts (weekly shadow)"
+  rail_exercise_args=(--json)
+  if [[ "${ORCH_RAIL_EXERCISE_RECORD:-0}" == "1" ]]; then rail_exercise_args+=(--record); fi
+  if python3 "$ORCH/rail_exercise.py" "${rail_exercise_args[@]}" > "$STAMP_DIR/rail-exercise-report.json"; then
+    _mark_success rail-exercise
+  else
+    _mark_fail rail-exercise
+  fi
+fi
+
 # Layer 3 evidence acquisition. SHADOW unless ORCH_EVIDENCE_ACQUISITION=1: it computes which
 # evidence-starved capability it would feed and writes the plan, routing nothing. Reports the
 # feedable count so "nothing happened" is a stated number rather than an absent line -- the whole
