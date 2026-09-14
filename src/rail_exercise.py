@@ -378,6 +378,28 @@ def committed_run_outputs(root: Path | None = None) -> list[str]:
     return found
 
 
+_UNSYNCABLE_PART = re.compile(r'[<>:"|?*\\]')
+
+
+def unsyncable_paths(root: Path | None = None) -> list[str]:
+    """Committed paths a Dropbox checkout cannot hold: a component with leading or trailing
+    whitespace, a trailing dot, or one of `<>:"|?*\\`. Seven contracts carried a duplicate fixture
+    directory named `capability-activation-audit ` (trailing space; PR #207). The owner's Dropbox
+    checkout collapsed the two names into "conflicted copy" files, then deleted the live `run.py`
+    beside each one, and a sync from that working tree would have shipped the damage. Reported by
+    name; the selftest refuses a committed tree that has any."""
+    root = CONTRACT_ROOT if root is None else root
+    found = []
+    for path in sorted(root.rglob("*")):
+        parts = path.relative_to(root).parts
+        if any(
+            part != part.strip() or part.endswith(".") or _UNSYNCABLE_PART.search(part)
+            for part in parts
+        ):
+            found.append(str(path.relative_to(root)))
+    return found
+
+
 def nested_repositories(root: Path | None = None) -> list[str]:
     """`.git` entries under the contract tree. A fixture repository is built at run time, never
     committed: git records a nested repository as a gitlink with no URL, and every CI checkout
@@ -424,6 +446,10 @@ def selftest() -> None:
         assert committed_run_outputs(root) == [
             "tripwire/arm-a/fixtures/out.json"
         ], committed_run_outputs(root)
+        (bad / "fixtures" / "trailing ").mkdir()
+        assert unsyncable_paths(root) == ["tripwire/arm-a/fixtures/trailing "], unsyncable_paths(
+            root
+        )
         absent_root = Path(temp) / "missing-contract-tree"
         globals()["CONTRACT_ROOT"] = absent_root
         try:
@@ -440,12 +466,14 @@ def selftest() -> None:
         assert (
             not stale
         ), f"a committed run output lets a pass check succeed without the run: {stale}"
+        unsyncable = unsyncable_paths()
+        assert not unsyncable, f"a Dropbox checkout cannot hold these committed paths: {unsyncable}"
         tree = f"committed tree clean ({len(contract_paths())} contracts)"
     else:
         tree = f"committed tree absent at {CONTRACT_ROOT} — not checked"
     print(
         "rail_exercise.py selftest: OK (pass, broken break case, named missing-fixture skip, "
-        f"tripwire guards; {tree})"
+        f"tripwire guards incl. unsyncable names; {tree})"
     )
 
 
