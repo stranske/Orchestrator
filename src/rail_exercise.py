@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import json
 import os
@@ -17,9 +18,45 @@ from pathlib import Path
 from typing import Any
 
 import capabilities
+import paths
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# The CHECKOUT root, by the detected rule — never `parents[1]`. This module's first run from the
+# flat exec mirror (the 00:40 UTC tick of 2026-09-14, the cadence's first run ever) resolved the
+# tree to `~/.codex/tests/rail_exercises`, one level ABOVE the mirror, reported it absent by name,
+# and stamped six days of success on a zero. `parents[1]` is right under `src/` and wrong on a flat
+# tree; `paths.checkout_root` is right on both, which is the whole reason that module exists.
+REPO_ROOT = paths.REPO_ROOT
 CONTRACT_ROOT = REPO_ROOT / "tests" / "rail_exercises"
+_EXEC_ROOT: Path | None = None
+
+
+def exec_root() -> Path:
+    """The directory contracts run in, and what `$REPO_ROOT` expands to.
+
+    The committed contracts were written against a src/ checkout — `python3 src/<mod>.py`,
+    `PYTHONPATH=src`, `cd $REPO_ROOT && ...` (33 of 49 say `src/` somewhere) — and the exec mirror
+    is FLAT, so run there they fail on layout before they exercise anything. A src/ checkout is
+    returned as itself. A flat tree gets a per-process VIEW: a temporary directory where `src`
+    links to the module directory and every other top-level entry links to its original, so the
+    shell sees the shape the contracts assume while the modules, which resolve `__file__` through
+    the link, still see the real flat tree. Built once per process, removed at exit; contracts
+    write only under their own sandboxed fixture copies, never under the view.
+    """
+    global _EXEC_ROOT
+    if _EXEC_ROOT is None:
+        if (REPO_ROOT / "src").is_dir():
+            _EXEC_ROOT = REPO_ROOT
+        else:
+            view = Path(tempfile.mkdtemp(prefix="rail-exercise-view-"))
+            for entry in REPO_ROOT.iterdir():
+                if entry.name != "src":
+                    (view / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+            (view / "src").symlink_to(paths.MODULE_DIR, target_is_directory=True)
+            atexit.register(shutil.rmtree, view, True)
+            _EXEC_ROOT = view
+    return _EXEC_ROOT
+
+
 CAPABILITY_ID = "rail-exercise-cadence"
 
 
@@ -59,10 +96,11 @@ def _expand(command: str, contract_dir: Path, fixture_dir: Path) -> str:
         "$CONTRACT_DIR/fixtures",
     ):
         command = command.replace(expression, str(fixture_dir))
+    root = exec_root()
     command = (
-        command.replace("$REPO_ROOT/orch", str(REPO_ROOT))
+        command.replace("$REPO_ROOT/orch", str(root))
         .replace("$CONTRACT_DIR", str(contract_dir))
-        .replace("$REPO_ROOT", str(REPO_ROOT))
+        .replace("$REPO_ROOT", str(root))
         .replace("$FIXTURE_DIR", str(fixture_dir))
     )
     # r18 fixture builders were shipped as base64 Python snippets containing
@@ -98,7 +136,7 @@ def _run(
             proc = subprocess.run(
                 expanded,
                 shell=True,
-                cwd=REPO_ROOT,
+                cwd=exec_root(),
                 env=env,
                 text=True,
                 capture_output=True,
@@ -177,7 +215,7 @@ def run_contract(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
         # by hand — which git does not store, so every fresh checkout failed.
         shadow_root = sandbox / "orch"
         shadow_root.mkdir()
-        (shadow_root / "src").symlink_to(REPO_ROOT / "src", target_is_directory=True)
+        (shadow_root / "src").symlink_to(paths.MODULE_DIR, target_is_directory=True)
         contract_dir = shadow_root / "exercises2"
         copied = contract_dir / "fixtures"
         shutil.copytree(fixtures, copied)
@@ -446,6 +484,13 @@ def main() -> int:
         if args.json
         else json.dumps({**result["totals"], "tree": result["tree"]}, sort_keys=True)
     )
+    # Zero contracts — the tree absent, or present and empty — is a FAILED run. orchestrate.sh
+    # stamps success on exit 0 and then waits six days; a stamped zero is exactly the latched
+    # silence this cadence exists to break, and the mirror's first run produced one. Non-zero
+    # here means `_mark_fail`: retry in six hours, ALERT after three, and the report still names
+    # the tree, so the reader sees WHY rather than a missing file.
+    if result["totals"]["contracts"] == 0:
+        return 1
     return 0
 
 

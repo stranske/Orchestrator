@@ -13,6 +13,7 @@ with the same silence.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -75,3 +76,12 @@ def test_prologue_does_not_depend_on_bash_source_being_set() -> None:
     assert (
         'dirname "${BASH_SOURCE[0]}"' not in text
     ), "the bare form breaks the `bash -c` replay under set -u"
+
+
+def test_orchestrate_sh_is_executable() -> None:
+    # launchd runs `/bin/bash -lc '<mirror>/orchestrate.sh --active'`, which needs the mode bit.
+    # git carried the file as 100644 until 2026-09-14, so a `cp` from any checkout produced a
+    # non-executable copy; an interrupted mirror sync left exactly that, and three ticks died
+    # with `Permission denied`. The bit is in the index now (100755), so every checkout — and
+    # the sync's copy of it — carries it, and this fails any tree where it is missing.
+    assert os.access(ORCHESTRATE, os.X_OK), f"{ORCHESTRATE} is not executable"

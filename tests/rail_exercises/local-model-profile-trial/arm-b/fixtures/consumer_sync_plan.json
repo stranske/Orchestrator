@@ -6,6 +6,7 @@
     {
       "section": "workflows",
       "source": ".github/workflows/p2-new.yml",
+      "source_tree": "template",
       "resolved_source": "templates/consumer-repo/.github/workflows/p2-new.yml",
       "target": ".github/workflows/p2-new.yml",
       "description": "P2 fixture entry",
@@ -18,9 +19,9 @@
       "delivery": "copy",
       "requires": [],
       "content_sha256": "sha256:f6ff91864d982765f721774624ef835006bf845eb687578c232ed3013bb356eb",
-      "effect_fingerprint": "sha256:583586703384d7a3dddab5a979d04f434489cd505860fb4605103039568196b4"
+      "effect_fingerprint": "sha256:7b38e3fbbb1d90e0626259523c05f7a4685fbe37e93281c9b8b52ab917118a2a"
     }
   ],
   "removals": [],
-  "plan_id": "sha256:5eec904116bffb4b76e5bc65506b9022357eb1a67eed4c5cadd935f188d7ceff"
+  "plan_id": "sha256:be2aea96884bcbf27854c34e6086095b4009a82aae4ce4e1ddfc6451d720e112"
 }
