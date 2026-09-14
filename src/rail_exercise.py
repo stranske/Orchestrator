@@ -222,9 +222,25 @@ def run_contract(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
         (shadow_root / "exercises").symlink_to(contract_dir, target_is_directory=True)
         state = sandbox / "state"
         runtime = sandbox / "runtime"
+        handoff = sandbox / "handoff"
         state.mkdir()
         runtime.mkdir()
-        env = {**os.environ, "ORCH_STATE_DIR": str(state), "ORCH_LOCAL_RUNTIME": str(runtime)}
+        handoff.mkdir()
+        # Everything a contract reads must come from its fixtures or from this sandbox. ORCH_STATE_DIR
+        # and ORCH_LOCAL_RUNTIME were sandboxed from the start; HANDOFF_DIR was not, so router.plan()
+        # under a contract still read the LIVE ~/.codex/handoff — capacity.json, backlog.json, the
+        # capacity-shed markers — which the lanes and the tick's own capacity step rewrite every few
+        # minutes. The cadence's first complete run from the mirror (2026-09-14 02:40Z) failed
+        # range-lane-rollout's pass arm, where two router.plan() calls in one process must agree,
+        # while every isolated re-run of that contract — tick environment included — passed. A
+        # verdict that depends on what the fleet happened to be doing that minute is not a rail
+        # exercise; the sandbox owns the handoff directory too.
+        env = {
+            **os.environ,
+            "ORCH_STATE_DIR": str(state),
+            "ORCH_LOCAL_RUNTIME": str(runtime),
+            "HANDOFF_DIR": str(handoff),
+        }
         env.pop("ORCH_CAPABILITY_HEARTBEATS", None)
         setup = _run(contract.get("setup"), contract_dir=contract_dir, fixture_dir=copied, env=env)
         run = _run(contract.get("run"), contract_dir=contract_dir, fixture_dir=copied, env=env)
