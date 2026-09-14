@@ -1115,6 +1115,7 @@ def run_selftests():
                 {
                     "section": "workflows",
                     "source": ".github/workflows/new.yml",
+                    "source_tree": "template",
                     "resolved_source": "templates/consumer-repo/.github/workflows/new.yml",
                     "target": ".github/workflows/new.yml",
                     "description": "Fixture entry",

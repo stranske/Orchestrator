@@ -33,6 +33,7 @@ def entry(
     record = {
         "section": "workflows",
         "source": target,
+        "source_tree": "template",
         "resolved_source": "templates/consumer-repo/" + target,
         "target": target,
         "description": "Fixture entry",
@@ -158,6 +159,35 @@ def test_plan_entry_schema_tracks_producer_requires_field() -> None:
     with pytest.raises(ConsumerSyncShadowError) as caught:
         validate_consumer_sync_plan(tampered)
     assert "entry_effect_identity_mismatch:0" in caught.value.reasons
+
+
+def test_plan_entry_schema_tracks_producer_source_tree_field() -> None:
+    # Workflows #3354 (2026-09-04) added `source_tree` to plan_record() and effect_core. The pinned
+    # ENTRY_FIELDS lacked it, so every real plan failed `invalid_entry_fields` for ten days: 69
+    # consecutive cadence failures, visible only as an ALERT line in the tick log.
+    assert "source_tree" in consumer_sync_shadow.ENTRY_FIELDS
+    plan = valid_plan()
+    assert all(row["source_tree"] == "template" for row in plan["entries"])
+    validated = validate_consumer_sync_plan(plan)
+    assert validated["plan_id"] == plan["plan_id"]
+
+    # It is part of the effect identity: a different source tree is a different effect.
+    tampered = valid_plan()
+    tampered["entries"][0]["source_tree"] = "root"
+    with pytest.raises(ConsumerSyncShadowError) as caught:
+        validate_consumer_sync_plan(tampered)
+    assert "entry_effect_identity_mismatch:0" in caught.value.reasons
+
+    # A plan WITHOUT it is the pre-#3354 shape; the exact set still refuses it, naming the field.
+    legacy = valid_plan()
+    for row in legacy["entries"]:
+        del row["source_tree"]
+    with pytest.raises(ConsumerSyncShadowError) as caught:
+        validate_consumer_sync_plan(legacy)
+    assert any(
+        reason.startswith("invalid_entry_fields:0") and "missing=['source_tree']" in reason
+        for reason in caught.value.reasons
+    ), caught.value.reasons
 
     # The field set stays exact, and the diagnostic now names the drift instead of repeating
     # `invalid_entry_fields:N` once per entry with no clue which field moved.

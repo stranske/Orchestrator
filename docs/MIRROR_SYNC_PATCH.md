@@ -105,3 +105,42 @@ fi
 
 Confirm with `find ~/.codex/orchestrator-mirror/tests/rail_exercises -name contract.json | wc -l`
 (49 at the time of writing) and a mirror run's totals line reading `tree=present`.
+
+## The cadence's first run from the mirror, and the sync that never finished (2026-09-14)
+
+Two independent defects, found the same night, both in the seam this document is about.
+
+**The sync hung inside `rsync`.** Dropbox keeps most of `tests/rail_exercises` as online-only
+placeholders (341 of 962 files on 2026-09-13; `ls -lO` prints `dataless`), and any content read of
+one blocks until Dropbox fetches it. Two syncs sat in the rsync of that subtree for hours, and
+`cp -R` reproduces the hang. The script runs under `set -e`, so nothing after that line ran: no
+`chmod +x` (the copy had just replaced `orchestrate.sh` with a 100644 file, and three ticks died
+with `Permission denied`), no `.verify-floor.json`, no `pyproject.toml`. The fix ships that
+subtree from git, whose objects are always local because `.git` is dropbox-ignored:
+
+```bash
+if git -C "$SRC" rev-parse --verify -q HEAD:tests/rail_exercises >/dev/null 2>&1; then
+  rm -rf "$MIRROR/tests/rail_exercises"
+  git -C "$SRC" archive --format=tar HEAD tests/rail_exercises | tar -x -C "$MIRROR/tests" --strip-components=1
+  echo "tests/rail_exercises shipped from git HEAD $(git -C "$SRC" rev-parse --short HEAD) — uncommitted fixture edits are NOT shipped"
+elif [[ -d "$SRC/tests/rail_exercises" ]]; then
+  rsync -a --delete --exclude '*conflicted copy*' "$SRC/tests/rail_exercises/" "$MIRROR/tests/rail_exercises/"
+fi
+```
+
+It finished in 0.4 s against the same checkout. The one semantic change is printed every run:
+uncommitted fixture edits are not shipped. `orchestrate.sh` is also 100755 in git now, and
+`test_orchestrate_sh_is_executable` fails any tree where the bit is missing, so the copy step can
+no longer produce a tick that cannot start.
+
+**The cadence resolved the tree one level above the mirror.** `rail_exercise.py` derived its root
+as `Path(__file__).resolve().parents[1]` — right under `src/`, wrong on the flat mirror, where it
+named `~/.codex/tests/rail_exercises`, reported it absent, exited 0, and `orchestrate.sh` stamped
+six days of success on a zero. It now takes the root from `paths`, builds a per-process view with a
+`src/` link when the tree is flat (33 of 49 committed contracts say `src/` somewhere), and exits
+non-zero on zero contracts, so the tick records a FAILURE and retries in six hours instead of
+stamping. After the next sync, clear the stamp so the cadence runs again before its week is up:
+
+```bash
+rm -f ~/.codex/orchestrator/.last-rail-exercise
+```

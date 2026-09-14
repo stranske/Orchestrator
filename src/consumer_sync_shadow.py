@@ -35,6 +35,13 @@ RUN_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#@-]{0,255}$")
 ENTRY_FIELDS = {
     "section",
     "source",
+    # `source_tree` — which tree a managed file is copied FROM, `template` or `root` (Workflows
+    # #3354, 2026-09-04). The producer carries it in plan_record() AND effect_core, so it is part
+    # of the identity hash below. The exact-set pin did its job: every ingest from 09-04 on failed
+    # `invalid_entry_fields:N:unexpected=['source_tree']` — 69 consecutive attempts, an ALERT line
+    # in the tick log that nobody reads (found 2026-09-14). A producer field addition lands here or
+    # the bridge stays shut; that is the cost the comment further down already names.
+    "source_tree",
     "resolved_source",
     "target",
     "description",
