@@ -741,7 +741,9 @@ fi
 if _cadence_due durability-sweep && _attempt_ok durability-sweep; then
   if _gh_gate search; then
     echo "  [cadence] durability sweep (daily)"
-    if python3 "$ORCH/durability_sweep.py" >/dev/null 2>&1; then _mark_success durability-sweep; else _mark_fail durability-sweep; fi
+    # Output goes to a LOG, never /dev/null: this step failed 71 times in a row (2026-08-21..09-14)
+    # with its traceback discarded, so the ALERT named the step and nothing said why.
+    if python3 "$ORCH/durability_sweep.py" >> "$STAMP_DIR/durability-sweep.log" 2>&1; then _mark_success durability-sweep; else _mark_fail durability-sweep "see $STAMP_DIR/durability-sweep.log"; fi
   else echo "  [cadence] durability sweep SKIPPED — gh search budget shed (stamp untouched; retry next tick)"; fi
 fi
 # Refresh promotion readiness and active priors only after late outcomes and

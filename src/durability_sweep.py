@@ -552,11 +552,20 @@ def sweep_durability(
     _now: int | None = None,
 ) -> dict:
     """Patch old merged+pending outcomes when their durability can be resolved with confidence."""
+    # Every class classify_durability() can return starts at ZERO here, so the summary always prints
+    # them all — a class that never occurred reads as `0`, not as a missing key. And the increment
+    # below tolerates a class this table has not learned, because the alternative was measured: the
+    # sweep died with `KeyError: 'abandoned'` on every attempt from 2026-08-21 to 2026-09-14 — 71
+    # consecutive failures, output discarded by the tick, every merged outcome since then left
+    # `pending`, and the router's durability signal silently frozen. A new verdict must never be
+    # able to switch the sweep off.
     summary: dict[str, Any] = {
         "checked": 0,
         "durable": 0,
         "reverted": 0,
         "reopened": 0,
+        "abandoned": 0,
+        "broke_later": 0,
         "skipped": 0,
         "details": [],
     }
@@ -587,7 +596,7 @@ def sweep_durability(
             )
             continue
 
-        summary[durability] += 1
+        summary[durability] = summary.get(durability, 0) + 1
         detail = {
             "run_id": run["run_id"],
             "target": run["target"],
@@ -985,6 +994,23 @@ def _selftest():
                 },
                 "pending",
             ),
+            # Merged, but every changed path is agent bookkeeping: `abandoned`. This class was
+            # added to classify_durability() without a row in the sweep's summary table, and the
+            # first real PR that matched it killed every sweep for 24 days (KeyError: 'abandoned').
+            (
+                "bookkeeping-only",
+                "o/r#7",
+                {
+                    "state": "MERGED",
+                    "number": 7,
+                    "mergedAt": old,
+                    "baseRefName": "main",
+                    "mergeCommit": {"oid": "abc"},
+                    "reverted": False,
+                    "files": [{"path": ".agents/checkpoints/CHECKPOINT.md"}],
+                },
+                "abandoned",
+            ),
         ]
         states = {}
         for run_id, target, state, _expected in cases:
@@ -1023,8 +1049,9 @@ def _selftest():
         res = sweep_durability(
             grace_days=GRACE_DAYS, _state_fn=lambda target: states.get(target), _now=now
         )
-        assert res["checked"] == 6 and res["durable"] == 2 and res["reverted"] == 1, res
+        assert res["checked"] == 7 and res["durable"] == 2 and res["reverted"] == 1, res
         assert res["reopened"] == 1 and res["skipped"] == 2, res
+        assert res["abandoned"] == 1 and res["broke_later"] == 0, res
 
         with feedback._conn() as c:
             got = dict(c.execute("SELECT run_id, durability FROM outcomes").fetchall())
