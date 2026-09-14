@@ -114,3 +114,31 @@ def test_src_checkout_runs_in_place(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(rail_exercise, "REPO_ROOT", checkout)
     monkeypatch.setattr(rail_exercise, "_EXEC_ROOT", None)
     assert rail_exercise.exec_root() == checkout
+
+
+def test_contract_env_is_fully_sandboxed(monkeypatch, tmp_path) -> None:
+    """A contract sees a sandbox for state, runtime AND handoff — never the live ~/.codex/handoff.
+
+    HANDOFF_DIR was the one input still inherited from the tick: router.plan() reads capacity.json
+    and the shed markers from it, and those move with the fleet. The first complete mirror run failed
+    range-lane-rollout on exactly that while every isolated re-run passed.
+    """
+    seen: list[dict] = []
+
+    def fake_run(commands_, *, contract_dir, fixture_dir, env):
+        seen.append(dict(env))
+        return [{"command": "true", "rc": 0, "output": ""}]
+
+    monkeypatch.setattr(rail_exercise, "_run", fake_run)
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "live-handoff"))
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+    _write_contract(tmp_path / "tree", "sandboxed")
+    contract_path = tmp_path / "tree" / "sandboxed" / "contract.json"
+    row = rail_exercise.run_contract(contract_path, json.loads(contract_path.read_text()))
+    assert seen, row
+    env = seen[0]
+    sandbox = Path(env["ORCH_STATE_DIR"]).parent
+    assert Path(env["ORCH_LOCAL_RUNTIME"]).parent == sandbox
+    assert Path(env["HANDOFF_DIR"]).parent == sandbox
+    assert env["HANDOFF_DIR"] != str(tmp_path / "live-handoff")
+    assert "ORCH_CAPABILITY_HEARTBEATS" not in env
