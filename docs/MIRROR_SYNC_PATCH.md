@@ -144,3 +144,34 @@ stamping. After the next sync, clear the stamp so the cadence runs again before 
 ```bash
 rm -f ~/.codex/orchestrator/.last-rail-exercise
 ```
+
+## `scripts/` ships whole, and the unsyncable fixture names are gone (2026-09-14, later that night)
+
+Two of the 49 committed contracts (`docs-drift-fix-agent/arm-a` and `arm-b`) run
+`scripts/docs_drift_fix_agent.py` from the tree they execute in. The sync copied only
+`scripts/check_checks_reported.py`, so both failed on the mirror for that absence alone — the only
+two failures left once the root fix above landed. The script now ships the whole `scripts/` tree
+from `git archive HEAD` (the placeholder reasoning above applies), keeping the repository-relative
+path and the `+x` on `check_checks_reported.py`, which the lanes execute directly:
+
+```bash
+if git -C "$SRC" rev-parse --verify -q HEAD:scripts >/dev/null 2>&1; then
+  mkdir -p "$MIRROR/scripts"
+  find "$MIRROR/scripts" -mindepth 1 -delete 2>/dev/null || true
+  git -C "$SRC" archive --format=tar HEAD scripts | tar -x -C "$MIRROR"
+  chmod +x "$MIRROR/scripts/check_checks_reported.py"
+fi
+```
+
+Witnessed in a scratch flat mirror: both contracts pass with correct break demos.
+`env_prereq.repo_files_absent` detects the FILE, so the tests that assert against `scripts/` now
+run on the mirror instead of skipping; the mirror's skip count goes down, never up.
+
+Separately, seven contracts had carried a duplicate fixture directory named
+`capability-activation-audit ` — trailing space — since #207. Dropbox cannot hold that name: the
+owner's checkout collapsed the two into "conflicted copy" files and then deleted the live `run.py`
+beside each one, so a working-tree sync would have shipped the damage (the git-archive sync above
+did not). The 14 paths are removed, and `rail_exercise.unsyncable_paths()` refuses a committed tree
+whose path components carry leading or trailing whitespace, a trailing dot, or one of `<>:"|?*\` —
+enforced by the module selftest, which CI runs; the selftest also plants a `trailing ` directory in
+its tripwire tree and asserts the guard names it.
