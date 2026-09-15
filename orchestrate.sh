@@ -82,7 +82,10 @@ export ORCH_FRONTEND_VERIFY_START_BROWSER="${ORCH_FRONTEND_VERIFY_START_BROWSER:
 # RedirectAgent to PRODUCE advice and records it (caps: max 3 records/tick, 24h dedupe). Backend=cursor
 # (cheapest bucket). Export ORCH_REDIRECT_SWEEP_RECORD_CORPUS=0 to pause. (Was unset → sweep ran
 # shadow-only and recorded NO role:redirect rows since ~2026-06-25; this restores accumulation.)
-export ORCH_REDIRECT_SWEEP_RECORD_CORPUS="${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-1}"
+# OFF since 2026-09-15: with the corpus on, every tick dispatched a RedirectAgent (gemini) on shadow
+# redirect reports — 202 gemini runs and 187 role-redirect invocations in eleven days, 0 applied,
+# 0 consumers. Set to 1 only with a consumer of the corpus named.
+export ORCH_REDIRECT_SWEEP_RECORD_CORPUS="${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}"
 export ORCH_REDIRECT_SWEEP_BACKEND="${ORCH_REDIRECT_SWEEP_BACKEND:-cursor}"
 # Typed role activation (bounded, shadow/advisory): Prompt and Decomposer can author
 # dispatch context, Triage compares one bounded backlog snapshot, and Adjudicator runs
@@ -215,7 +218,15 @@ fi
 # orchestrator-owned artifacts (capacity.json/backlog.json); the legacy lanes never read them, so
 # this is safe in either mode.
 python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py failed (continuing)"
-python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
+# DISCOVERY FEEDS ONLY THIS TOOL'S OWN DISPATCH LANE, and that lane is shadow by default (assessment
+# 2026-09-03, item 1). Measured 2026-09-04..15: 119 shadow ticks planned 0 dispatches; the lanes
+# read capacity.json and never backlog.json. So discovery runs only when the lane is live — the
+# day-10 verdict was "retire", and this is the retirement: nothing is built, nothing is counted.
+if [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
+  python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
+else
+  echo "  discovery: skipped (dispatch lane shadow; ORCH_DISPATCH_LANE=1 to run backlog discovery)"
+fi
 # ORCH-ANCHOR: frontend-verify-doctor -- the ONLY tick caller of the frontend-verifier capability.
 if [[ "${ORCH_FRONTEND_VERIFY_START_BROWSER:-0}" == "1" ]]; then
   if python3 "$ORCH/frontend_verify.py" --doctor --require-browser-endpoint --start-browser >/dev/null 2>&1; then
@@ -707,7 +718,11 @@ if _step_disabled tick-phase-consult; then :; else
     echo "  warn: tick phase consult failed (continuing; see $STAMP_DIR/tick-phase-consult.log)"
   fi
 fi   # end: _step_disabled tick-phase-consult
-if _cadence_due issue-readiness && _attempt_ok issue-readiness; then
+# The readiness assessment exists for the dispatch lane's backlog and its label writes are gated
+# (ORCH_ISSUE_AUTOREADY); with both off it was 1,350 invocations in eleven days feeding nothing.
+if [[ "${ORCH_DISPATCH_LANE:-0}" != "1" && "${ORCH_ISSUE_AUTOREADY:-}" != "1" ]]; then
+  :  # retired with the dispatch lane (2026-09-15); re-enable either flag to bring it back
+elif _cadence_due issue-readiness && _attempt_ok issue-readiness; then
   # Decide which open issues the fleet may work, WITHOUT routing that decision through the owner.
   # `backlog._is_ready` reads a label only a human ever applied, so the ready queue tracked one
   # person's spare time: 94 issues open, backlog at 1. This applies `status: ready` to actionable
