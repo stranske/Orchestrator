@@ -86,3 +86,18 @@ def test_deliberate_break_rule_disabled_restores_the_inflated_score(brain, monke
     w = _weights()
     assert w["cursor"]["score"] > 50 * w["codex"]["score"]
     assert "telemetry implausible" not in _rationale("cursor")
+
+
+def test_costs_without_token_telemetry_stay_measured(brain):
+    """A ledger cost that reports no tokens at all says nothing about plausibility."""
+    _seed({"codex": 400_000, "cursor": 0}, {"codex": 2.0, "cursor": 0.5})
+    feedback.relearn(PRIORS, window_days=30)
+    assert "telemetry implausible" not in _rationale("cursor")
+    with feedback._conn() as c:
+        cps = dict(
+            c.execute(
+                "SELECT agent, cost_per_success FROM route_weights WHERE task_type='implement' "
+                "AND version=(SELECT MAX(version) FROM route_weights)"
+            ).fetchall()
+        )
+    assert cps["cursor"] == pytest.approx(0.5)

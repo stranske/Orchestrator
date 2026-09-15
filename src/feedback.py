@@ -4285,13 +4285,16 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
         # the agent's telemetry must be plausible (PLAUSIBLE_TOKENS_PER_RUN), or every one of its
         # cells is unmeasured: absence of data must not beat presence of data, and neither must
         # near-empty data.
+        # Judged on costed runs that REPORT tokens: a ledger cost with no token telemetry at all says
+        # nothing about plausibility either way and stays measured, exactly as before this rule.
         implausible: dict[str, str] = {}
         for agent in {a for priors in task_type_priors.values() for a in priors}:
             tokens = sorted(
-                int(tok or 0)
+                int(tok)
                 for (tok,) in c.execute(
                     "SELECT COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0) FROM runs r "
-                    "JOIN costs co ON r.run_id=co.run_id WHERE r.agent=? AND r.ts>=? AND co.cost_usd>0",
+                    "JOIN costs co ON r.run_id=co.run_id WHERE r.agent=? AND r.ts>=? AND co.cost_usd>0 "
+                    "AND COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)>0",
                     (agent, since),
                 ).fetchall()
             )
