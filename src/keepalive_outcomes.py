@@ -351,8 +351,8 @@ def _bot_class(head_ref: str | None, author: str | None) -> tuple[str, str] | No
     for prefix, cls in BOT_BRANCH_CLASSES:
         if branch.startswith(prefix):
             return NON_AGENT, cls
-    cls = BOT_AUTHOR_CLASSES.get((author or "").strip().lower())
-    return (NON_AGENT, cls) if cls else None
+    author_cls = BOT_AUTHOR_CLASSES.get((author or "").strip().lower())
+    return (NON_AGENT, author_cls) if author_cls else None
 
 
 def _agent_from_commit_identities(identities: list[str] | None) -> tuple[str, str] | None:
@@ -408,14 +408,16 @@ def _commit_identities(pr: dict) -> list[str]:
     for node in nodes or []:
         if not isinstance(node, dict):
             continue
-        commit = node.get("commit") if isinstance(node.get("commit"), dict) else node
+        raw_commit = node.get("commit")
+        commit: dict = raw_commit if isinstance(raw_commit, dict) else node
         author = commit.get("author")
-        authors = (
+        authors: list = (
             author if isinstance(author, list) else [author] if isinstance(author, dict) else []
         )
         for a in commit.get("authors") or authors:
             if isinstance(a, dict):
-                user = a.get("user") if isinstance(a.get("user"), dict) else {}
+                raw_user = a.get("user")
+                user: dict = raw_user if isinstance(raw_user, dict) else {}
                 for key in (a.get("name"), a.get("login"), a.get("email"), user.get("login")):
                     if key:
                         out.append(str(key).lower())
@@ -660,13 +662,15 @@ def _backfill_evidence_batch(repo: str, numbers: list[int]) -> dict[int, dict]:
         for pr in (repo_data or {}).values():
             if not isinstance(pr, dict) or pr.get("number") is None:
                 continue
-            labels_node = pr.get("labels") if isinstance(pr.get("labels"), dict) else {}
+            raw_labels = pr.get("labels")
+            labels_node: dict = raw_labels if isinstance(raw_labels, dict) else {}
             labels = [
                 str(n.get("name"))
                 for n in labels_node.get("nodes") or []
                 if isinstance(n, dict) and n.get("name")
             ]
-            author_node = pr.get("author") if isinstance(pr.get("author"), dict) else {}
+            raw_author = pr.get("author")
+            author_node: dict = raw_author if isinstance(raw_author, dict) else {}
             out[int(pr["number"])] = {
                 "labels": labels,
                 "job_names": [],
