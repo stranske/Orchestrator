@@ -629,6 +629,99 @@ def learned_ranks() -> dict | None:
     return out or None
 
 
+# ---------------------------------------------------------------------------------------------
+# Receiver recommendation for the lane relay (Decide stage, a RAIL: deterministic, model-free).
+# The relay's rule since the lanes existed has been "codex unless shed, else claude" — capacity
+# only. The learner's weights never reached that decision, and when they were inspected on
+# 2026-09-15 they would have sent implementation work to cursor (implement score .72 vs codex .05,
+# on implausible cost telemetry) while cursor's merged work regressed 3x more often than codex's.
+# So the learned order is followed ONLY when the ground truth agrees: the candidate's broke-later
+# rate on merges at least a week old, over at least RECEIVER_MIN_N resolved merges, must be no worse
+# than the default's by more than RECEIVER_DURABILITY_TOLERANCE. Otherwise the default stands, and
+# the reason names the numbers. Data-gated, not time-gated: re-evaluated on every call.
+RECEIVER_DEFAULT_ORDER = ("codex", "claude")
+RECEIVER_MIN_N = 20
+RECEIVER_DURABILITY_TOLERANCE = 0.02
+RECEIVER_WINDOW_DAYS = 90
+RECEIVER_BAD_DURABILITY = ("broke_later", "reverted", "reopened", "abandoned")
+
+
+def merged_durability_by_agent(
+    *, window_days: int = RECEIVER_WINDOW_DAYS, min_age_days: int = 7, now: int | None = None
+) -> dict[str, dict]:
+    """{agent: {resolved, bad, bad_rate}} over merged outcomes whose durability is resolved, at least
+    min_age_days old and inside the window. Bot and owner rows (attribution_source `bot:*` / `human`)
+    are excluded, so the table compares agents with agents."""
+    now = int(now or time.time())
+    since, until = now - window_days * 86400, now - min_age_days * 86400
+    out: dict[str, dict] = {}
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT r.agent, o.durability, r.routing_metadata FROM runs r "
+            "JOIN outcomes o ON o.run_id=r.run_id WHERE o.merged=1 AND r.ts>=? AND r.ts<=?",
+            (since, until),
+        ).fetchall()
+    for agent, durability, metadata_raw in rows:
+        source = str(feedback._routing_metadata_dict(metadata_raw).get("attribution_source") or "")
+        if not agent or agent == "none" or source.startswith("bot:") or source == "human":
+            continue
+        if durability not in ("durable",) + RECEIVER_BAD_DURABILITY:
+            continue
+        cell = out.setdefault(agent, {"resolved": 0, "bad": 0, "bad_rate": None})
+        cell["resolved"] += 1
+        cell["bad"] += 1 if durability in RECEIVER_BAD_DURABILITY else 0
+    for cell in out.values():
+        cell["bad_rate"] = cell["bad"] / cell["resolved"] if cell["resolved"] else None
+    return out
+
+
+def recommend_receiver(
+    task_type: str = "implement",
+    *,
+    allowed: tuple[str, ...] = RECEIVER_DEFAULT_ORDER,
+    cap: dict | None = None,
+    learned: dict | None = None,
+    durability: dict[str, dict] | None = None,
+) -> dict:
+    """Which agent should take the next lane round. Returns {agent, source, reason, candidates}."""
+    cap = load_capacity() if cap is None else cap
+    available = [a for a in allowed if _state(cap, a) != "shed"]
+    default = next((a for a in RECEIVER_DEFAULT_ORDER if a in available), None)
+    if default is None:
+        return {
+            "agent": None,
+            "source": "none",
+            "reason": f"every allowed agent is shed ({', '.join(allowed)})",
+            "candidates": [],
+        }
+    ranks = (learned if learned is not None else (learned_ranks() or {})).get(task_type) or {}
+    ordered = sorted((a for a in ranks if a in available), key=lambda a: ranks[a]["rank"])
+    if not ordered or ordered[0] == default:
+        why = "no learned weights for this task type" if not ordered else "learned order agrees"
+        return {"agent": default, "source": "default", "reason": why, "candidates": ordered}
+    candidate = ordered[0]
+    table = merged_durability_by_agent() if durability is None else durability
+    cand, base = table.get(candidate, {}), table.get(default, {})
+    c_rate, b_rate = cand.get("bad_rate"), base.get("bad_rate")
+    if (cand.get("resolved") or 0) < RECEIVER_MIN_N or c_rate is None:
+        reason = (
+            f"learned top {candidate} has {cand.get('resolved') or 0} resolved merges "
+            f"(< {RECEIVER_MIN_N}); default {default} stands"
+        )
+        return {"agent": default, "source": "default", "reason": reason, "candidates": ordered}
+    if b_rate is not None and c_rate > b_rate + RECEIVER_DURABILITY_TOLERANCE:
+        reason = (
+            f"learned top {candidate} breaks later {c_rate:.1%} vs {default} {b_rate:.1%} "
+            f"(tolerance {RECEIVER_DURABILITY_TOLERANCE:.0%}); default {default} stands"
+        )
+        return {"agent": default, "source": "default", "reason": reason, "candidates": ordered}
+    reason = (
+        f"learned top {candidate}: breaks later {c_rate:.1%} over {cand['resolved']} merges"
+        + (f" vs {default} {b_rate:.1%}" if b_rate is not None else "")
+    )
+    return {"agent": candidate, "source": "learned", "reason": reason, "candidates": ordered}
+
+
 def select_remote_agent(
     task_type: str,
     cap: dict,
@@ -1444,6 +1537,15 @@ def _selftest() -> None:
 def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         _selftest()
+        return 0
+    if "--recommend-receiver" in argv:
+        task_type = argv[argv.index("--recommend-receiver") + 1]
+        allowed = RECEIVER_DEFAULT_ORDER
+        if "--allowed" in argv:
+            allowed = tuple(
+                a.strip() for a in argv[argv.index("--allowed") + 1].split(",") if a.strip()
+            )
+        print(json.dumps(recommend_receiver(task_type, allowed=allowed), indent=2))
         return 0
     dry = "--dry-run" in argv
     cap = load_capacity()
