@@ -57,7 +57,7 @@ def _resolve_registry_path() -> Path:
 
 PR_LIST_FIELDS = (
     "number,state,title,labels,createdAt,updatedAt,mergedAt,closedAt,"
-    "headRefName,baseRefName,mergeCommit,author,body,url"
+    "headRefName,baseRefName,mergeCommit,author,body,url,commits"
 )
 PR_CONTEXT_FIELDS = "body,comments"
 PROCESS_WORK_TYPES = {"renovate", "sync", "tooling", "docs"}
@@ -242,6 +242,47 @@ SUMMARY_AGENT_RE = re.compile(
 )
 
 
+# Evidence that names the implementer once the keepalive labels are gone. The lanes open PRs from
+# the owner's own GitHub identity and never label them `agent:*`, so on 2026-09-15 3,576 keepalive
+# rows sat at agent=none — 567 of them merged since 08-15 — while the branch name, the commit
+# identity, or THIS MACHINE'S OWN DISPATCH ROWS named the agent nearly every time. Measured on those
+# 567: 48% real agents, 48% bots (template sync, release-please, deps sync, renovate), 3% the owner's
+# own hand-made PRs, 3% unresolved. Explicit fleet labels still win; these come after them.
+BRANCH_AGENT_RE = re.compile(r"^(codex|claude|cursor|gemini|vibe|aider|copilot)/", re.IGNORECASE)
+LANE_ISSUE_BRANCH_RE = re.compile(r"^orchestrator/issue-(\d+)", re.IGNORECASE)
+# Non-agent PR classes. The agent column stays NON_AGENT, exactly as for an unresolved row, but the
+# attribution_source NAMES the class, so a consumer can exclude bots and the owner's own work from
+# agent metrics instead of averaging them into an "unattributed" bucket (that bucket was 517 of 774
+# merged outcomes since 08-15, and it mixed Maint 71 deliveries, release-please, and the owner).
+BOT_BRANCH_CLASSES = (
+    ("sync/workflows", "bot:template-sync"),
+    ("renovate/", "bot:renovate"),
+    ("release-please", "bot:release"),
+    ("deps/", "bot:deps-sync"),
+    ("verifier-corpus-harvest/", "bot:verifier-corpus"),
+)
+BOT_AUTHOR_CLASSES = {
+    "renovate[bot]": "bot:renovate",
+    "renovate": "bot:renovate",
+    "agents-workflows-bot": "bot:release",
+    "agents-workflows-bot[bot]": "bot:release",
+    "app/agents-workflows-bot": "bot:release",
+}
+# Substrings of a lowercased commit author name / login / email or a Co-authored-by trailer. Cursor
+# commits as `cursoragent <cursoragent@cursor.com>`, Claude Code as author `claude` or with a
+# `Co-Authored-By: Claude ...` trailer; codex commits under the owner's identity and leaves no mark,
+# so codex resolves through labels, the branch prefix, or the local dispatch join instead.
+COMMIT_IDENTITY_AGENTS = (
+    ("cursor", "cursor"),
+    ("claude", "claude"),
+    ("codex", "codex"),
+    ("gemini", "gemini"),
+    ("aider", "aider"),
+)
+HUMAN_COMMIT_IDENTITIES = {"tim stranske"}
+ATTRIBUTION_HUMAN = "human"
+
+
 class IngestSummary(TypedDict):
     repos: int
     prs_seen: int
@@ -300,20 +341,133 @@ def _agent_from_summary(summary: str | None) -> tuple[str, str] | None:
     return (match.group(1).lower(), "automated_status_summary") if match else None
 
 
+def _agent_from_branch(head_ref: str | None) -> tuple[str, str] | None:
+    match = BRANCH_AGENT_RE.match((head_ref or "").strip())
+    return (match.group(1).lower(), "branch_prefix") if match else None
+
+
+def _bot_class(head_ref: str | None, author: str | None) -> tuple[str, str] | None:
+    branch = (head_ref or "").strip().lower()
+    for prefix, cls in BOT_BRANCH_CLASSES:
+        if branch.startswith(prefix):
+            return NON_AGENT, cls
+    author_cls = BOT_AUTHOR_CLASSES.get((author or "").strip().lower())
+    return (NON_AGENT, author_cls) if author_cls else None
+
+
+def _agent_from_commit_identities(identities: list[str] | None) -> tuple[str, str] | None:
+    ids = {str(i).strip().lower() for i in (identities or []) if i}
+    found: list[str] = []
+    for needle, agent in COMMIT_IDENTITY_AGENTS:
+        if any(needle in i for i in ids) and agent not in found:
+            found.append(agent)
+    return (found[0], "commit_identity") if len(found) == 1 else None
+
+
+def _agent_from_local_dispatch(
+    repo: str | None, head_ref: str | None, created_ts: int | None
+) -> tuple[str, str] | None:
+    """The opener lane names its branch `orchestrator/issue-N`, and this machine's Brain already
+    holds the dispatch row for repo#N with the agent that ran it. Joined on the issue number, bounded
+    to dispatches made before the PR existed (plus a day of clock slack), newest first."""
+    match = LANE_ISSUE_BRANCH_RE.match((head_ref or "").strip())
+    if not (match and repo):
+        return None
+    limit = int(created_ts or time.time()) + 86400
+    with feedback._conn() as c:
+        row = c.execute(
+            "SELECT agent FROM runs WHERE target=? AND agent!=? AND source!='keepalive' "
+            "AND ts<=? ORDER BY ts DESC LIMIT 1",
+            (f"{repo}#{match.group(1)}", NON_AGENT, limit),
+        ).fetchone()
+    if row and str(row[0]).strip().lower() in KNOWN_AGENTS:
+        return str(row[0]).strip().lower(), "local_dispatch_join"
+    return None
+
+
+def _human_class(identities: list[str] | None) -> tuple[str, str] | None:
+    """The owner's own hand-made PRs: every commit identity is the owner's, and at least one is the
+    human git identity rather than the login the lanes and codex commit under."""
+    # Names and logins only: an email or a Co-authored-by trailer says who, never that it was by hand.
+    ids = {
+        str(i).strip().lower()
+        for i in (identities or [])
+        if i and "@" not in str(i) and "o-authored-by" not in str(i).lower()
+    }
+    if ids & HUMAN_COMMIT_IDENTITIES and ids <= HUMAN_COMMIT_IDENTITIES | {"stranske"}:
+        return NON_AGENT, ATTRIBUTION_HUMAN
+    return None
+
+
+def _commit_identities(pr: dict) -> list[str]:
+    """Author names, logins, emails and Co-authored-by trailers from either `gh pr list --json
+    commits` (authors[] + messageBody) or a GraphQL `commits.nodes[].commit` shape."""
+    out: list[str] = []
+    commits = pr.get("commits")
+    nodes = commits.get("nodes") if isinstance(commits, dict) else commits
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        raw_commit = node.get("commit")
+        commit: dict = raw_commit if isinstance(raw_commit, dict) else node
+        author = commit.get("author")
+        authors: list = (
+            author if isinstance(author, list) else [author] if isinstance(author, dict) else []
+        )
+        for a in commit.get("authors") or authors:
+            if isinstance(a, dict):
+                raw_user = a.get("user")
+                user: dict = raw_user if isinstance(raw_user, dict) else {}
+                for key in (a.get("name"), a.get("login"), a.get("email"), user.get("login")):
+                    if key:
+                        out.append(str(key).lower())
+        message = str(commit.get("message") or commit.get("messageBody") or "")
+        for line in message.splitlines():
+            if "o-authored-by" in line.lower():
+                out.append(line.strip().lower())
+    return out
+
+
+def _created_epoch(pr: dict) -> int | None:
+    raw = str(pr.get("createdAt") or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(
+            _dt.datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=_dt.timezone.utc)
+            .timestamp()
+        )
+    except ValueError:
+        return None
+
+
 def derive_attribution(
     labels: list[str],
     *,
     job_names: list[str] | None = None,
     author: str | None = None,
     summary: str | None = None,
+    head_ref: str | None = None,
+    commit_identities: list[str] | None = None,
+    repo: str | None = None,
+    created_ts: int | None = None,
 ) -> tuple[str, str]:
-    """Resolve only explicit evidence, in the documented priority order."""
+    """Resolve only explicit evidence, in the documented priority order: the fleet's own labels and
+    job names, then the PR author, then the branch prefix, then the bot classes, then commit
+    identities, then this machine's dispatch rows, then the status summary, then the owner's own
+    hand-made PRs. Anything else stays unresolved, never guessed."""
     for resolved in (
         _agent_from_labels(labels),
         _agent_from_tried_labels(labels),
         _agent_from_job_names(job_names or []),
         _agent_from_author(author),
+        _agent_from_branch(head_ref),
+        _bot_class(head_ref, author),
+        _agent_from_commit_identities(commit_identities),
+        _agent_from_local_dispatch(repo, head_ref, created_ts),
         _agent_from_summary(summary),
+        _human_class(commit_identities),
     ):
         if resolved:
             return resolved
@@ -487,6 +641,48 @@ def _backfill_evidence(repo: str, pr_number: int) -> dict:
     }
 
 
+def _backfill_evidence_batch(repo: str, numbers: list[int]) -> dict[int, dict]:
+    """One GraphQL query per 40 PRs: branch, author, labels, commit identities, body, createdAt.
+    Replaces three REST calls per PR; a failed chunk simply leaves its PRs to the per-PR fallback.
+    """
+    owner, _, name = repo.partition("/")
+    out: dict[int, dict] = {}
+    for i in range(0, len(numbers), 40):
+        chunk = numbers[i : i + 40]
+        fields = " ".join(
+            f"p{n}: pullRequest(number:{n}){{ number headRefName createdAt author{{login}} "
+            f"labels(first:30){{nodes{{name}}}} commits(last:30){{nodes{{commit{{author{{name email "
+            f"user{{login}}}} message}}}}}} body }}"
+            for n in chunk
+        )
+        query = f'query {{ repository(owner:"{owner}", name:"{name}") {{ {fields} }} }}'
+        data = _run_json(["gh", "api", "graphql", "-f", f"query={query}"], timeout=120)
+        payload = data.get("data") if isinstance(data, dict) else None
+        repo_data = payload.get("repository") if isinstance(payload, dict) else None
+        for pr in (repo_data or {}).values():
+            if not isinstance(pr, dict) or pr.get("number") is None:
+                continue
+            raw_labels = pr.get("labels")
+            labels_node: dict = raw_labels if isinstance(raw_labels, dict) else {}
+            labels = [
+                str(n.get("name"))
+                for n in labels_node.get("nodes") or []
+                if isinstance(n, dict) and n.get("name")
+            ]
+            raw_author = pr.get("author")
+            author_node: dict = raw_author if isinstance(raw_author, dict) else {}
+            out[int(pr["number"])] = {
+                "labels": labels,
+                "job_names": [],
+                "author": author_node.get("login"),
+                "summary": str(pr.get("body") or ""),
+                "head_ref": str(pr.get("headRefName") or ""),
+                "commit_identities": _commit_identities(pr),
+                "created_ts": _created_epoch(pr),
+            }
+    return out
+
+
 BACKFILL_LIMIT_DEFAULT = 200
 
 
@@ -524,6 +720,17 @@ def backfill_attribution(
         "remaining": before,
         "backfill_limit": backfill_limit,
     }
+    # Prefetch in batches: the rows this call will examine, grouped by repository.
+    batch: dict[tuple[str, int], dict] = {}
+    if _evidence_fetch_fn is None:
+        by_repo: dict[str, list[int]] = {}
+        for _run_id, target in pending[:backfill_limit]:
+            match = re.fullmatch(r"([^#]+)#(\d+)", target)
+            if match:
+                by_repo.setdefault(match.group(1), []).append(int(match.group(2)))
+        for repo, numbers in by_repo.items():
+            for number, evidence in _backfill_evidence_batch(repo, numbers).items():
+                batch[(repo, number)] = evidence
     examined = 0
     for run_id, target in pending:
         if examined >= backfill_limit:
@@ -543,12 +750,17 @@ def backfill_attribution(
                 summary["by_source"].get(ATTRIBUTION_UNRESOLVED, 0) + 1
             )
             continue
-        evidence = fetch_evidence(match.group(1), int(match.group(2))) or {}
+        repo, number = match.group(1), int(match.group(2))
+        evidence = batch.get((repo, number)) or fetch_evidence(repo, number) or {}
         agent, source = derive_attribution(
             list(evidence.get("labels") or []),
             job_names=list(evidence.get("job_names") or []),
             author=evidence.get("author"),
             summary=evidence.get("summary"),
+            head_ref=evidence.get("head_ref"),
+            commit_identities=list(evidence.get("commit_identities") or []),
+            repo=repo,
+            created_ts=evidence.get("created_ts"),
         )
         summary["by_source"][source] = summary["by_source"].get(source, 0) + 1
         if source == ATTRIBUTION_UNRESOLVED:
@@ -668,6 +880,10 @@ def ingest_keepalive_outcomes(
                 labels,
                 author=_author_login(pr),
                 summary=str(pr.get("body") or ""),
+                head_ref=str(pr.get("headRefName") or ""),
+                commit_identities=_commit_identities(pr),
+                repo=repo,
+                created_ts=_created_epoch(pr),
             )
             pr_number = pr.get("number")
             if pr_number is None:
@@ -821,6 +1037,67 @@ def _selftest() -> None:
             "none",
             "unresolved",
         )
+        # The evidence classes added 2026-09-15, in priority order.
+        assert derive_attribution(["agent:claude"], head_ref="codex/x") == ("claude", "agent_label")
+        assert derive_attribution([], head_ref="codex/issue-554-guard") == (
+            "codex",
+            "branch_prefix",
+        )
+        assert derive_attribution([], head_ref="sync/workflows-delivery") == (
+            "none",
+            "bot:template-sync",
+        )
+        assert derive_attribution([], head_ref="fix/x", author="renovate[bot]") == (
+            "none",
+            "bot:renovate",
+        )
+        assert derive_attribution(
+            [],
+            head_ref="fix/x",
+            commit_identities=["cursoragent", "co-authored-by: cursor <c@cursor.com>"],
+        ) == ("cursor", "commit_identity")
+        assert derive_attribution([], commit_identities=["claude", "cursoragent"]) == (
+            "none",
+            "unresolved",
+        )  # two agents' identities on one PR is ambiguity, not a vote
+        assert derive_attribution(
+            [], head_ref="fix/x", commit_identities=["tim stranske", "stranske", "tim@example.com"]
+        ) == ("none", "human")
+        assert derive_attribution([], commit_identities=["tim stranske", "closer-lane"]) == (
+            "none",
+            "unresolved",
+        )  # a lane commit beside the owner's is not the owner's own PR
+        feedback.record_run(
+            "local-42",
+            "o/r#42",
+            "implement",
+            "vibe",
+            mode="full",
+            ts=now - 600,
+            source="orchestrator_local",
+        )
+        assert derive_attribution(
+            [], head_ref="orchestrator/issue-42", repo="o/r", created_ts=now
+        ) == (
+            "vibe",
+            "local_dispatch_join",
+        )
+        assert derive_attribution(
+            [], head_ref="orchestrator/issue-43", repo="o/r", created_ts=now
+        ) == (
+            "none",
+            "unresolved",
+        )
+        assert _commit_identities(
+            {
+                "commits": [
+                    {
+                        "authors": [{"login": "", "name": "closer-lane", "email": "a@b"}],
+                        "messageBody": "x\n\nCo-Authored-By: Claude Opus 5 <n@a>",
+                    }
+                ]
+            }
+        ) == ["closer-lane", "a@b", "co-authored-by: claude opus 5 <n@a>"]
         old_notes = {"durability": "abandoned", "notes": "remote keepalive PR closed unmerged"}
         tagged_notes = {
             "durability": "abandoned",
@@ -1056,12 +1333,20 @@ def _selftest() -> None:
         preview = backfill_attribution(
             _evidence_fetch_fn=lambda repo, num: evidence.get((repo, num), {})
         )
-        assert preview["before_none"] == 4 and preview["after_none"] == 4, preview
-        assert preview["let_through"] == 1 and preview["blocked"] == 3, preview
+        # PR #5 (author renovate[bot]) is classified bot:renovate AT INGEST since 2026-09-15, so it is
+        # no longer pending: 3 unresolved rows remain (#6 template-sync by github-actions, #8, #9).
+        with feedback._conn() as c:
+            renovate_row = c.execute(
+                "SELECT agent, routing_metadata FROM runs WHERE run_id='keepalive:o/r#5:none'"
+            ).fetchone()
+        assert renovate_row[0] == "none", renovate_row
+        assert json.loads(renovate_row[1])["attribution_source"] == "bot:renovate", renovate_row
+        assert preview["before_none"] == 3 and preview["after_none"] == 3, preview
+        assert preview["let_through"] == 1 and preview["blocked"] == 2, preview
         applied = backfill_attribution(
             apply=True, _evidence_fetch_fn=lambda repo, num: evidence.get((repo, num), {})
         )
-        assert applied["after_none"] == 3 and applied["let_through"] == 1, applied
+        assert applied["after_none"] == 2 and applied["let_through"] == 1, applied
         with feedback._conn() as c:
             restored = c.execute(
                 "SELECT agent, routing_metadata FROM runs WHERE run_id='keepalive:o/r#8:none'"
