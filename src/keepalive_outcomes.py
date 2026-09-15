@@ -279,6 +279,14 @@ COMMIT_IDENTITY_AGENTS = (
     ("gemini", "gemini"),
     ("aider", "aider"),
 )
+# Automation identities in the commit log. A PR whose commits are ALL by these (and none by an agent)
+# is process evidence, not agent work: the Workflows app pushes dev-version syncs to `sync/*` branches
+# under the owner's PR, and GitHub Actions commits the deps syncs.
+BOT_COMMIT_IDENTITIES = (
+    ("agents-workflows-bot", "bot:workflows-app"),
+    ("github-actions[bot]", "bot:actions"),
+    ("renovate", "bot:renovate"),
+)
 HUMAN_COMMIT_IDENTITIES = {"tim stranske"}
 ATTRIBUTION_HUMAN = "human"
 
@@ -385,6 +393,16 @@ def _agent_from_local_dispatch(
     return None
 
 
+def _bot_commit_class(identities: list[str] | None) -> tuple[str, str] | None:
+    ids = {str(i).strip().lower() for i in (identities or []) if i and "@" not in str(i)}
+    if not ids or _agent_from_commit_identities(list(ids)):
+        return None
+    for needle, cls in BOT_COMMIT_IDENTITIES:
+        if any(needle in i for i in ids):
+            return NON_AGENT, cls
+    return None
+
+
 def _human_class(identities: list[str] | None) -> tuple[str, str] | None:
     """The owner's own hand-made PRs: every commit identity is the owner's, and at least one is the
     human git identity rather than the login the lanes and codex commit under."""
@@ -467,6 +485,7 @@ def derive_attribution(
         _agent_from_commit_identities(commit_identities),
         _agent_from_local_dispatch(repo, head_ref, created_ts),
         _agent_from_summary(summary),
+        _bot_commit_class(commit_identities),
         _human_class(commit_identities),
     ):
         if resolved:
@@ -659,6 +678,14 @@ def _backfill_evidence_batch(repo: str, numbers: list[int]) -> dict[int, dict]:
         data = _run_json(["gh", "api", "graphql", "-f", f"query={query}"], timeout=120)
         payload = data.get("data") if isinstance(data, dict) else None
         repo_data = payload.get("repository") if isinstance(payload, dict) else None
+        if repo_data is None and len(chunk) > 1:
+            # One deleted or inaccessible PR fails the whole query (gh exits non-zero on any GraphQL
+            # error, and _run_json drops the partial data). Ask for each PR alone so the others keep
+            # their branch and commit evidence instead of falling back to the label-only REST path —
+            # the 2026-09-15 apply left 126 rows unresolved for exactly this reason.
+            for n in chunk:
+                out.update(_backfill_evidence_batch(repo, [n]))
+            continue
         for pr in (repo_data or {}).values():
             if not isinstance(pr, dict) or pr.get("number") is None:
                 continue
@@ -1067,6 +1094,13 @@ def _selftest() -> None:
             "none",
             "unresolved",
         )  # a lane commit beside the owner's is not the owner's own PR
+        assert derive_attribution(
+            [], head_ref="sync/dev-versions-abc", commit_identities=["agents-workflows-bot[bot]"]
+        ) == ("none", "bot:workflows-app")
+        assert derive_attribution([], commit_identities=["github-actions[bot]", "cursoragent"]) == (
+            "cursor",
+            "commit_identity",
+        )  # an agent commit beside the bot's is agent work
         feedback.record_run(
             "local-42",
             "o/r#42",
