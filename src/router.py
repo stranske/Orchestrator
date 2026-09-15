@@ -1540,7 +1540,7 @@ def main(argv: list[str]) -> int:
         return 0
     if "--recommend-receiver" in argv:
         task_type = argv[argv.index("--recommend-receiver") + 1]
-        allowed = RECEIVER_DEFAULT_ORDER
+        allowed: tuple[str, ...] = RECEIVER_DEFAULT_ORDER
         if "--allowed" in argv:
             allowed = tuple(
                 a.strip() for a in argv[argv.index("--allowed") + 1].split(",") if a.strip()
