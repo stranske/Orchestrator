@@ -388,7 +388,12 @@ def _agent_from_local_dispatch(
 def _human_class(identities: list[str] | None) -> tuple[str, str] | None:
     """The owner's own hand-made PRs: every commit identity is the owner's, and at least one is the
     human git identity rather than the login the lanes and codex commit under."""
-    ids = {str(i).strip().lower() for i in (identities or []) if i}
+    # Names and logins only: an email or a Co-authored-by trailer says who, never that it was by hand.
+    ids = {
+        str(i).strip().lower()
+        for i in (identities or [])
+        if i and "@" not in str(i) and "o-authored-by" not in str(i).lower()
+    }
     if ids & HUMAN_COMMIT_IDENTITIES and ids <= HUMAN_COMMIT_IDENTITIES | {"stranske"}:
         return NON_AGENT, ATTRIBUTION_HUMAN
     return None
@@ -650,19 +655,22 @@ def _backfill_evidence_batch(repo: str, numbers: list[int]) -> dict[int, dict]:
         )
         query = f'query {{ repository(owner:"{owner}", name:"{name}") {{ {fields} }} }}'
         data = _run_json(["gh", "api", "graphql", "-f", f"query={query}"], timeout=120)
-        repo_data = (
-            (data or {}).get("data", {}).get("repository") if isinstance(data, dict) else None
-        )
+        payload = data.get("data") if isinstance(data, dict) else None
+        repo_data = payload.get("repository") if isinstance(payload, dict) else None
         for pr in (repo_data or {}).values():
             if not isinstance(pr, dict) or pr.get("number") is None:
                 continue
+            labels_node = pr.get("labels") if isinstance(pr.get("labels"), dict) else {}
             labels = [
-                n.get("name") for n in (pr.get("labels") or {}).get("nodes") or [] if n.get("name")
+                str(n.get("name"))
+                for n in labels_node.get("nodes") or []
+                if isinstance(n, dict) and n.get("name")
             ]
+            author_node = pr.get("author") if isinstance(pr.get("author"), dict) else {}
             out[int(pr["number"])] = {
                 "labels": labels,
                 "job_names": [],
-                "author": (pr.get("author") or {}).get("login"),
+                "author": author_node.get("login"),
                 "summary": str(pr.get("body") or ""),
                 "head_ref": str(pr.get("headRefName") or ""),
                 "commit_identities": _commit_identities(pr),
@@ -1048,10 +1056,13 @@ def _selftest() -> None:
             "none",
             "unresolved",
         )  # two agents' identities on one PR is ambiguity, not a vote
-        assert derive_attribution([], head_ref="fix/x", commit_identities=["tim stranske"]) == (
+        assert derive_attribution(
+            [], head_ref="fix/x", commit_identities=["tim stranske", "stranske", "tim@example.com"]
+        ) == ("none", "human")
+        assert derive_attribution([], commit_identities=["tim stranske", "closer-lane"]) == (
             "none",
-            "human",
-        )
+            "unresolved",
+        )  # a lane commit beside the owner's is not the owner's own PR
         feedback.record_run(
             "local-42",
             "o/r#42",
