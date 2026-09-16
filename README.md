@@ -36,7 +36,12 @@ HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lan
   anytime alongside the live fleet. `--active` (launchd only) ingests keepalive outcomes live and, since
   2026-09-03, dispatches nothing unless `ORCH_DISPATCH_LANE=1`: the tick's own dispatch lane made 14
   remote dispatches in 30 days (9 abandoned, none durable) while keepalive ran 1,239 rounds without
-  it, so claims and the heartbeat now run only when that flag is set.
+  it, so claims and the heartbeat now run only when that flag is set. Since 2026-09-15 the same
+  flag also gates backlog discovery and the issue-readiness cadence (119 shadow ticks had planned 0
+  dispatches; the lanes read `capacity.json` and never `backlog.json`), the tick-phase consult is
+  opt-in (`ORCH_TICK_PHASE_CONSULT=1`; 3,371 offers in eleven days that no agent answers), and the
+  redirect sweep records no shadow corpus unless `ORCH_REDIRECT_SWEEP_RECORD_CORPUS=1` (202 gemini
+  runs in eleven days, 0 applied). `capacity.py` still runs every tick: the lane relay reads it.
 - **Editing safely.** Edit the canonical Dropbox copy, run `orch-sync-mirror.sh`, and confirm the
   mirror matches. A concurrent fleet tick writes only to worktrees and state — never to this
   canonical tree — so canonical edits are yours alone, but always re-sync so the schedule sees them.
