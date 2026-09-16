@@ -344,6 +344,205 @@ def _route_weight_summary(route_table=None) -> dict:
     }
 
 
+# The six numbers the owner asked for (2026-09-15): a weekly evaluation of the combined
+# keepalive/lane system that fits on one screen, computed from the Brain with every number carrying
+# its denominator and "unmeasured: <why>" wherever the Brain cannot answer. An EXTENSION of this
+# report, not a new instrument (CLAUDE.md §4): the 15 MB JSON nobody read now carries a section the
+# tick prints as six lines and writes to <ORCH_STATE_DIR>/fleet-six.md.
+FLEET_SIX_WINDOWS = (7, 28)
+# Rows whose attribution_source names a bot class or the owner are process evidence, not agent work
+# (keepalive_outcomes.py sets them since 2026-09-15). Absent field = agent work, attributed or not.
+# COALESCE matters: a NULL routing_metadata would make the whole predicate NULL, and `NOT NULL` is
+# NULL, so an unattributed agent row would silently vanish from every count.
+_NOT_AGENT_WORK = (
+    "(r.agent='none' AND (COALESCE(json_extract(r.routing_metadata,'$.attribution_source'),'') "
+    "LIKE 'bot:%' OR COALESCE(json_extract(r.routing_metadata,'$.attribution_source'),'')='human'))"
+)
+
+
+def _fleet_six_summary(now: int | None = None) -> dict:
+    """merged/day, verifier pass rate, broke-later by agent, cost per merged PR by agent,
+    unattributed share, time-to-merge — per window, with denominators; unmeasured is named."""
+    now = int(now or time.time())
+    out: dict = {"windows": {}, "time_to_merge": None, "implausible_telemetry": {}}
+    with feedback._conn() as c:
+        # Telemetry plausibility per agent (same rule as feedback.relearn) over the longest window.
+        since_long = now - max(FLEET_SIX_WINDOWS) * 86400
+        for (agent,) in c.execute(
+            "SELECT DISTINCT r.agent FROM runs r JOIN costs co ON r.run_id=co.run_id "
+            "WHERE r.ts>=? AND co.cost_usd>0",
+            (since_long,),
+        ).fetchall():
+            toks = sorted(
+                int(v or 0)
+                for (v,) in c.execute(
+                    "SELECT COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0) FROM runs r "
+                    "JOIN costs co ON r.run_id=co.run_id WHERE r.agent=? AND r.ts>=? AND co.cost_usd>0",
+                    (agent, since_long),
+                ).fetchall()
+            )
+            median = toks[len(toks) // 2] if toks else 0
+            if median < feedback.PLAUSIBLE_TOKENS_PER_RUN:
+                out["implausible_telemetry"][agent] = f"median {median} tokens/run"
+        for days in FLEET_SIX_WINDOWS:
+            since = now - days * 86400
+            w: dict = {"days": days}
+            merged_total, merged_agent_work = c.execute(
+                "SELECT COUNT(*), SUM(CASE WHEN NOT " + _NOT_AGENT_WORK + " THEN 1 ELSE 0 END) "
+                "FROM runs r JOIN outcomes o ON o.run_id=r.run_id WHERE o.merged=1 AND r.ts>=?",
+                (since,),
+            ).fetchone()
+            merged_agent_work = int(merged_agent_work or 0)
+            w["merged_per_day"] = {
+                "value": round(merged_agent_work / days, 2),
+                "merged": merged_agent_work,
+                "merged_including_bots_and_owner": int(merged_total or 0),
+            }
+            with_verdict, passed = c.execute(
+                "SELECT SUM(CASE WHEN COALESCE(o.verifier_verdict,'')!='' THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN UPPER(COALESCE(o.verifier_verdict,''))='PASS' THEN 1 ELSE 0 END) "
+                "FROM runs r JOIN outcomes o ON o.run_id=r.run_id WHERE o.merged=1 AND r.ts>=? "
+                "AND NOT " + _NOT_AGENT_WORK,
+                (since,),
+            ).fetchone()
+            with_verdict, passed = int(with_verdict or 0), int(passed or 0)
+            w["verifier_pass_rate"] = (
+                {
+                    "value": round(passed / with_verdict, 3),
+                    "passed": passed,
+                    "with_verdict": with_verdict,
+                    "merged_without_verdict": merged_agent_work - with_verdict,
+                }
+                if with_verdict
+                else {
+                    "value": None,
+                    "unmeasured": f"no verifier verdict on any of {merged_agent_work} merged runs",
+                }
+            )
+            by_agent: dict = {}
+            for agent, resolved, bad in c.execute(
+                "SELECT r.agent, COUNT(*), SUM(CASE WHEN o.durability IN "
+                "('broke_later','reverted','reopened','abandoned') THEN 1 ELSE 0 END) "
+                "FROM runs r JOIN outcomes o ON o.run_id=r.run_id WHERE o.merged=1 AND r.ts>=? "
+                "AND r.ts<=? AND o.durability IN ('durable','broke_later','reverted','reopened','abandoned') "
+                "AND NOT " + _NOT_AGENT_WORK + " GROUP BY r.agent",
+                (since, now - 7 * 86400),
+            ).fetchall():
+                by_agent[agent] = {
+                    "resolved": int(resolved),
+                    "bad": int(bad or 0),
+                    "bad_rate": round(int(bad or 0) / int(resolved), 3) if resolved else None,
+                }
+            w["broke_later_by_agent"] = by_agent or {
+                "unmeasured": "no merged run at least 7 days old has a resolved durability"
+            }
+            cost: dict = {}
+            for agent, merged, usd, toks in c.execute(
+                "SELECT r.agent, SUM(CASE WHEN o.merged=1 THEN 1 ELSE 0 END), "
+                "SUM(COALESCE(co.cost_usd,0)), SUM(COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)) "
+                "FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id LEFT JOIN costs co ON co.run_id=r.run_id "
+                "WHERE r.ts>=? AND COALESCE(r.role_name,'')='' AND NOT "
+                + _NOT_AGENT_WORK
+                + " GROUP BY r.agent",
+                (since,),
+            ).fetchall():
+                merged = int(merged or 0)
+                cell = {
+                    "merged": merged,
+                    "usd": round(float(usd or 0), 2),
+                    "tokens": int(toks or 0),
+                    "usd_per_merged": round(float(usd or 0) / merged, 2) if merged else None,
+                }
+                if agent in out["implausible_telemetry"]:
+                    cell["telemetry"] = "implausible: " + out["implausible_telemetry"][agent]
+                cost[agent] = cell
+            w["cost_per_merged_by_agent"] = cost
+            unresolved = c.execute(
+                "SELECT COUNT(*) FROM runs r JOIN outcomes o ON o.run_id=r.run_id WHERE o.merged=1 AND r.ts>=? "
+                "AND r.agent='none' AND NOT " + _NOT_AGENT_WORK,
+                (since,),
+            ).fetchone()[0]
+            w["unattributed_share"] = {
+                "value": (
+                    round(int(unresolved) / merged_agent_work, 3) if merged_agent_work else None
+                ),
+                "unresolved": int(unresolved),
+                "merged": merged_agent_work,
+            }
+            out["windows"][str(days)] = w
+        # The Brain records when a run was ingested (runs.ts) and when durability was checked, never
+        # when the PR merged; time-to-merge needs the PR's mergedAt, which the ingest does not store.
+        out["time_to_merge"] = {
+            "value": None,
+            "unmeasured": "the Brain records no merge timestamp (runs.ts is the PR's creation/ingest time, outcomes hold no mergedAt)",
+        }
+    return out
+
+
+def render_fleet_six(section: dict) -> list[str]:
+    """Six lines, one per number, the 7-day figure with the 28-day figure beside it."""
+
+    def win(days: str) -> dict:
+        return section.get("windows", {}).get(days, {})
+
+    w7, w28 = win("7"), win("28")
+
+    def rate(d: dict) -> str:
+        if not d or d.get("value") is None:
+            return f"unmeasured ({d.get('unmeasured', 'no data')})" if d else "unmeasured"
+        return f"{d['value']:.1%} ({d.get('passed', d.get('unresolved', '?'))}/{d.get('with_verdict', d.get('merged', '?'))})"
+
+    def broke(d: dict) -> str:
+        if "unmeasured" in d:
+            return f"unmeasured ({d['unmeasured']})"
+        return ", ".join(
+            (
+                f"{a} {v['bad_rate']:.1%} ({v['bad']}/{v['resolved']})"
+                if v.get("bad_rate") is not None
+                else f"{a} n={v.get('resolved')}"
+            )
+            for a, v in sorted(d.items(), key=lambda kv: -kv[1]["resolved"])
+        )
+
+    def cost(d: dict) -> str:
+        return (
+            ", ".join(
+                f"{a} ${v['usd_per_merged']:.2f}/merged ({v['merged']} merged"
+                + (", " + v["telemetry"] if v.get("telemetry") else "")
+                + ")"
+                for a, v in sorted(d.items(), key=lambda kv: -kv[1]["merged"])
+                if v.get("usd_per_merged") is not None
+            )
+            or "unmeasured (no costed merged run)"
+        )
+
+    m7, m28 = w7.get("merged_per_day", {}), w28.get("merged_per_day", {})
+    ttm = section.get("time_to_merge") or {}
+    return [
+        f"FLEET-6 merged/day: {m7.get('value')} over 7d ({m7.get('merged')} merged; {m7.get('merged_including_bots_and_owner')} incl. bots+owner) | 28d {m28.get('value')}",
+        f"FLEET-6 verifier pass rate: 7d {rate(w7.get('verifier_pass_rate', {}))} | 28d {rate(w28.get('verifier_pass_rate', {}))}",
+        f"FLEET-6 broke-later by agent (merges >=7d old, 28d): {broke(w28.get('broke_later_by_agent', {}))}",
+        f"FLEET-6 cost per merged PR by agent (28d): {cost(w28.get('cost_per_merged_by_agent', {}))}",
+        f"FLEET-6 unattributed share of merged agent work: 7d {rate(w7.get('unattributed_share', {}))} | 28d {rate(w28.get('unattributed_share', {}))}",
+        f"FLEET-6 time-to-merge: unmeasured ({ttm.get('unmeasured', 'no data')})",
+    ]
+
+
+def write_fleet_six_md(section: dict, path: Path | None = None) -> Path:
+    state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    target = path or (state_dir / "fleet-six.md")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    target.write_text(
+        "# Fleet six — "
+        + stamp
+        + "\n\n"
+        + "\n".join(f"- {line}" for line in render_fleet_six(section))
+        + "\n"
+    )
+    return target
+
+
 def _outcome_summary(window_days: int) -> dict:
     since = _since(window_days)
     failure_durabilities = {
@@ -1464,6 +1663,7 @@ def build_report(
             keepalive_corpus_path,
             redirect_corpus_path,
         ),
+        "fleet_six": _fleet_six_summary(),
         "costs_traces": _cost_trace_summary(
             window_days,
             langsmith_artifact_health=langsmith_artifact_health,
@@ -1654,6 +1854,8 @@ def format_human(report: dict) -> str:
     )
     if production_flow.get("recommendation"):
         lines.append(f"  next: {production_flow['recommendation']}")
+    if report.get("fleet_six"):
+        lines.extend(render_fleet_six(report["fleet_six"]))
     for row in outcomes["by_task_agent_verdict"]:
         verdict = row["adjudicated_verdict"] or "-"
         durability = row["durability"] or "-"
@@ -2867,6 +3069,12 @@ def main(argv: list[str]) -> int:
             min_gap_recurrence=args.min_gap_recurrence,
             probe_langsmith_artifacts=not args.no_langsmith_artifact_probe,
         )
+    if args.json and not args.snapshot_json and report.get("fleet_six"):
+        # The tick redirects stdout to periodic-report.json; the six lines go to stderr (the tick
+        # log) and to <ORCH_STATE_DIR>/fleet-six.md, so the owner's weekly read is one short file.
+        for line in render_fleet_six(report["fleet_six"]):
+            print(line, file=sys.stderr)
+        write_fleet_six_md(report["fleet_six"])
     if args.approve_evidence_type:
         if args.snapshot_json:
             original_db = feedback.DB_PATH

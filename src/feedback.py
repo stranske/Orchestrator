@@ -171,6 +171,15 @@ PRIOR_STRENGTH = 8.0
 # Floor ($/success) for the score division in relearn(): a near-zero measured cost_per_success
 # must not catapult an arm x100 past its peers (2026-07-03 audit F1) — cheap stays cheap, bounded.
 CPS_FLOOR = 0.01
+# An agent's cost telemetry counts as MEASURED only when its costed runs carry a plausible number of
+# tokens. Measured 2026-09-15 in the live Brain: cursor's 1,888 cost rows totalled 394,791 tokens
+# (about 209 per run) and gemini's 1,443 rows 28,153, against codex's 2.77 billion and claude's 378
+# million. Those are near-empty telemetry, not cheap work — yet because every row had cost_usd > 0,
+# relearn() treated them as measured and v62 ranked cursor first for implementation (score .72 vs
+# codex .05, cost_per_success .057 vs 14.08) while cursor's merged work regressed three times as often.
+# Below this median the agent's cells are UNMEASURED and the existing imputation applies; real
+# telemetry arriving raises the median and the rule releases on the next weekly relearn.
+PLAUSIBLE_TOKENS_PER_RUN = 2000
 # Recency half-life (days) for relearn_quality evidence weights — a stale outcome must not vote
 # with yesterday's strength (agents get silent model/prompt bumps; without decay an agent keeps
 # winning on old glory — audit item 16a / R3 routing survey). Complements the model-supersession
@@ -4272,7 +4281,30 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
     with _conn() as c:
         ver = (c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]) + 1
         # Pass 1: per-cell outcome + measured-cost stats. Measured = cost_usd > 0 only — the $0
-        # ledger rows are the killed-completion class (audit F2), not evidence of free work.
+        # ledger rows are the killed-completion class (audit F2), not evidence of free work — AND
+        # the agent's telemetry must be plausible (PLAUSIBLE_TOKENS_PER_RUN), or every one of its
+        # cells is unmeasured: absence of data must not beat presence of data, and neither must
+        # near-empty data.
+        # Judged on costed runs that REPORT tokens: a ledger cost with no token telemetry at all says
+        # nothing about plausibility either way and stays measured, exactly as before this rule.
+        implausible: dict[str, str] = {}
+        for agent in {a for priors in task_type_priors.values() for a in priors}:
+            tokens = sorted(
+                int(tok)
+                for (tok,) in c.execute(
+                    "SELECT COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0) FROM runs r "
+                    "JOIN costs co ON r.run_id=co.run_id WHERE r.agent=? AND r.ts>=? AND co.cost_usd>0 "
+                    "AND COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)>0",
+                    (agent, since),
+                ).fetchall()
+            )
+            if tokens:
+                median = tokens[len(tokens) // 2]
+                if median < PLAUSIBLE_TOKENS_PER_RUN:
+                    implausible[agent] = (
+                        f"telemetry implausible: median {median} tokens/run over {len(tokens)} costed "
+                        f"runs < {PLAUSIBLE_TOKENS_PER_RUN}"
+                    )
         cells: dict[tuple[str, str], dict] = {}
         for task_type, priors in task_type_priors.items():
             for agent, prior in priors.items():
@@ -4287,12 +4319,15 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
                 n = len(rows)
                 succ = sum(1 for d, a, v, _ in rows if _is_success(d, a, v))
                 measured = [cu for d, a, v, cu in rows if _is_success(d, a, v) and cu and cu > 0]
+                if agent in implausible:
+                    measured = []  # the cell is UNMEASURED; imputation below decides its cps
                 cells[(task_type, agent)] = {
                     "prior": prior,
                     "n": n,
                     "succ": succ,
                     "m_cost": sum(measured),
                     "m_succ": len(measured),
+                    "telemetry": implausible.get(agent),
                 }
         # Imputation pools: the agent's own measured cps (mean over its measured cells), then the
         # global median of measured cell cps.
@@ -4333,7 +4368,8 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
                     (s["succ"] / s["n"]) if s["n"] else None,
                     cps,
                     score,
-                    f"k={PRIOR_STRENGTH} n={s['n']} succ={s['succ']} cps_src={cps_src}",
+                    f"k={PRIOR_STRENGTH} n={s['n']} succ={s['succ']} cps_src={cps_src}"
+                    + (f" {s['telemetry']}" if s.get("telemetry") else ""),
                     since,
                     now,
                 ),
