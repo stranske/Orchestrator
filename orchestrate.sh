@@ -712,12 +712,18 @@ fi   # end: _step_disabled tick-capability-evidence
 # flock), fails open PER PHASE so one broken phase cannot silence the others, and the CLI always
 # exits 0. Kill switch: ORCH_DISABLE_STEPS=tick-phase-consult (registered in cadence_registry.py,
 # so the switch is real rather than a no-op that WARNs).
-if _step_disabled tick-phase-consult; then :; else
+# OPT-IN since 2026-09-15 (ORCH_TICK_PHASE_CONSULT=1). Measured 2026-09-04..15: 3,371 offers to the
+# five tick phases in eleven days, 0 declines, 0 triggers — nobody answers a tick phase — and the
+# consult exhausted its 30 s budget before the redirect phase on every tick. Every capability that
+# was bound to a tick phase is also bound to a rail-exercise phase, so nothing loses its findability.
+if [[ "${ORCH_TICK_PHASE_CONSULT:-0}" != "1" ]] || _step_disabled tick-phase-consult; then
+  echo "  tick-phase consult: off by default (ORCH_TICK_PHASE_CONSULT=1 to re-enable)"
+else
   if python3 "$ORCH/capability_advisor.py" --consult-tick-phases \
        2>> "$STAMP_DIR/tick-phase-consult.log"; then :; else
     echo "  warn: tick phase consult failed (continuing; see $STAMP_DIR/tick-phase-consult.log)"
   fi
-fi   # end: _step_disabled tick-phase-consult
+fi   # end: tick-phase-consult
 # The readiness assessment exists for the dispatch lane's backlog and its label writes are gated
 # (ORCH_ISSUE_AUTOREADY); with both off it was 1,350 invocations in eleven days feeding nothing.
 if [[ "${ORCH_DISPATCH_LANE:-0}" != "1" && "${ORCH_ISSUE_AUTOREADY:-}" != "1" ]]; then

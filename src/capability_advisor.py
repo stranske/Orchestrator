@@ -36,6 +36,7 @@ import difflib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 import time
 from typing import Any
@@ -385,6 +386,15 @@ def _attach_how_to_use(entries: list[dict]) -> list[str]:
     named = []
     for entry in entries:
         how = HOW_TO_USE.get(entry["capability_id"])
+        auto = entry.get("auto_declined")
+        if auto:
+            # Said where the caller reads: the lanes used to write this sentence by hand, 2,030
+            # times in eleven days.
+            how = (
+                f"AUTO-DECLINED by the advisor ({auto.get('kind')}): {auto.get('reason')}. "
+                f"Already recorded with judge=machine — no action and no written reason needed."
+                + (f" If you use it anyway: {how}" if how else "")
+            )
         entry["how_to_use"] = how
         if how:
             named.append(entry["capability_id"])
@@ -439,6 +449,12 @@ def advise(
     missing input named. It never guesses, and it never withholds or reorders the offer.
     """
     caps = capabilities.load(path or capabilities.REG)
+    # THE PR THIS CONSULT IS ABOUT, read once. Absent or unreadable, every PR fact stays UNEVALUATED
+    # and nothing below is auto-declined — the failure mode is "offered as before", never "hidden".
+    pr = _pr_number_from(text, repository, context)
+    pr_facts = PR_FACTS_FETCH(repository, pr) if (pr and repository) else None
+    if pr_facts is not None:
+        pr_facts = {**pr_facts, "task_text": text}
     # THE SURFACE'S OWN STATE, computed once and reported on every branch. Purely additive: it
     # changes neither the candidate set nor its order, exactly like the precondition axis. What it
     # removes is one specific wrong reading — an invented name answering "nothing applies here".
@@ -483,7 +499,9 @@ def advise(
                 "not_applicable": 0,
                 "by_entry_mode": {},
             },
-            "precondition": _annotate_preconditions([], repository, repo_path),
+            "precondition": _annotate_preconditions(
+                [], repository, repo_path, pr_facts=pr_facts, pr=pr
+            ),
             "surface_template": unsubstituted_surface(surface) or None,
             "surface_status": surface_state,
             "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
@@ -515,7 +533,9 @@ def advise(
                 }
                 for cid, why in live
             ]
-            precondition = _annotate_preconditions(entries, repository, repo_path)
+            precondition = _annotate_preconditions(
+                entries, repository, repo_path, pr_facts=pr_facts, pr=pr
+            )
             _attach_how_to_use(entries)
             try:
                 import capability_propensity
@@ -583,6 +603,9 @@ def advise(
                 result["recorded_matches"] = _record_matches(
                     result, skill=skill, surface=surface or skill, path=path
                 )
+                result["recorded_auto_declines"] = _record_auto_declines(
+                    result, surface=surface or skill, path=path
+                )
             return result
         return {
             "task": text,
@@ -599,7 +622,9 @@ def advise(
             "surface": (surface or skill) or None,
             "bound_count": 0,
             "bound_capabilities": [],
-            "precondition": _annotate_preconditions([], repository, repo_path),
+            "precondition": _annotate_preconditions(
+                [], repository, repo_path, pr_facts=pr_facts, pr=pr
+            ),
             "surface_template": unsubstituted_surface(surface or skill) or None,
             "surface_status": surface_state,
             "coverage": {
@@ -716,7 +741,7 @@ def advise(
     # capability that was noise on two frontend-less repositories produced the highest
     # evidence-to-effort finding of a third audit on a repository that has a display surface, so two
     # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
-    precondition = _annotate_preconditions(matched, repository, repo_path)
+    precondition = _annotate_preconditions(matched, repository, repo_path, pr_facts=pr_facts, pr=pr)
     _attach_how_to_use(matched)
     try:
         import capability_propensity
@@ -798,6 +823,9 @@ def advise(
         # Asking the question is itself the observation that improves the answer.
         result["recorded_matches"] = _record_matches(
             result, skill=skill, surface=surface or skill, path=path
+        )
+        result["recorded_auto_declines"] = _record_auto_declines(
+            result, surface=surface or skill, path=path
         )
     return result
 
@@ -2153,8 +2181,140 @@ CAPABILITY_PRECONDITIONS: dict[str, dict] = {
     # `both` is behaviourally identical to undeclared. It is here to record that the most-offered
     # capability in the catalogue was CONSIDERED, not overlooked: one round declined it at nine
     # surfaces and another used it successfully against an audited repo.
-    "offload": {"applies_to": APPLIES_BOTH},
+    "offload": {"applies_to": APPLIES_BOTH, "requires_pr": "nontrivial_change"},
+    # PR-FACT PRECONDITIONS (2026-09-15). Measured on the live ledger, 2026-09-04..15: the closer and
+    # opener lanes received ~4,900 offers and hand-wrote 2,030 decline reasons — `precondition_unmet`
+    # ~700 (redirect-policy 171, redirect-plan 181, cross-repo-coordination 150, codemod-campaign 188:
+    # offered every round with the trigger condition absent, and the lane said so each time) and
+    # `scope_too_small` ~1,000 (runtime-ac-checks 322, adversarial-review 175, offload 176,
+    # testgen-lane 131: offered regardless of how small the PR was). Each fact below is evaluable from
+    # the PR a consult names, so the ADVISOR evaluates it and records the decline itself; the entry
+    # stays in the answer (never concealed), marked `auto_declined`, and the lane writes nothing.
+    "redirect-policy": {"requires_pr": "stalled_worker"},
+    "redirect-plan": {"requires_pr": "stalled_worker"},
+    "cross-repo-coordination": {"requires_pr": "multi_repo_change"},
+    "codemod-campaign": {"requires_pr": "repeated_pattern"},
+    "runtime-ac-checks": {"requires_pr": "nontrivial_change"},
+    "adversarial-review": {"requires_pr": "nontrivial_change"},
+    "testgen-lane": {"requires_pr": "nontrivial_change"},
 }
+
+# The keepalive's own stall signals, as labels. A PR without one has no stalled worker to redirect.
+STALL_LABELS = ("agent:needs-attention", "agent:retry", "agent:rate-limited")
+# A change small enough that an adversarial review, a runtime-AC sweep, a test-generation lane or an
+# offload costs more than it can find. Two files or twenty changed lines; the lanes' hand-written
+# `scope_too_small` reasons named "one isolated function", "one SHA replacement", "single test-only
+# exception guard" — all below both. Re-evaluated on every consult: a PR that grows is offered again.
+NONTRIVIAL_MIN_FILES = 2
+NONTRIVIAL_MIN_LINES = 20
+PATTERN_KEYWORDS = ("codemod", "mechanical", "sweep", "campaign", "bulk", "across the fleet")
+
+
+def _probe_stalled_worker(facts: dict) -> tuple[bool | None, str]:
+    labels = facts.get("labels")
+    if not isinstance(labels, list):
+        return None, "PR labels unknown"
+    hits = sorted(str(lab) for lab in labels if str(lab).lower() in STALL_LABELS)
+    if hits:
+        return True, f"stall signal present: {', '.join(hits)}"
+    return False, f"no stall signal on the PR (none of {', '.join(STALL_LABELS)})"
+
+
+def _probe_nontrivial_change(facts: dict) -> tuple[bool | None, str]:
+    files, adds, dels = facts.get("changedFiles"), facts.get("additions"), facts.get("deletions")
+    if not (isinstance(files, int) and isinstance(adds, int) and isinstance(dels, int)):
+        return None, "PR size unknown"
+    lines = adds + dels
+    ok = files >= NONTRIVIAL_MIN_FILES or lines >= NONTRIVIAL_MIN_LINES
+    return ok, (
+        f"PR {facts.get('number', '?')}: {files} file(s), {lines} changed line(s) "
+        f"(threshold {NONTRIVIAL_MIN_FILES} files or {NONTRIVIAL_MIN_LINES} lines)"
+    )
+
+
+def _probe_multi_repo_change(facts: dict) -> tuple[bool | None, str]:
+    # A pull request lives in one repository; only the task text can name a second one.
+    refs = set(
+        re.findall(r"\b[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+", str(facts.get("task_text") or ""))
+    )
+    if len({ref.split("#")[0] for ref in refs}) >= 2:
+        return True, f"task names changes in several repositories: {', '.join(sorted(refs))}"
+    return False, "one pull request touches one repository; the task names no second one"
+
+
+def _probe_repeated_pattern(facts: dict) -> tuple[bool | None, str]:
+    text = " ".join([str(facts.get("task_text") or ""), str(facts.get("title") or "")]).lower()
+    labels = [str(lab).lower() for lab in facts.get("labels") or []]
+    hit = next((k for k in PATTERN_KEYWORDS if k in text or any(k in lab for lab in labels)), None)
+    if hit:
+        return True, f"repeated-pattern signal: {hit!r}"
+    if facts.get("changedFiles") is None and not facts.get("title"):
+        return None, "no title, labels or size to judge a pattern by"
+    return False, "no codemod/mechanical/sweep signal in the task, title or labels"
+
+
+PR_FACT_PROBES = {
+    "stalled_worker": _probe_stalled_worker,
+    "nontrivial_change": _probe_nontrivial_change,
+    "multi_repo_change": _probe_multi_repo_change,
+    "repeated_pattern": _probe_repeated_pattern,
+}
+PR_REF_RE = re.compile(r"\b(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d{1,6})\b")
+
+
+def _pr_number_from(text: str, repository: str, context: dict | None) -> int | None:
+    """The PR a consult is about: `context['pr']`, else the first `owner/repo#N` or `#N` in the task."""
+    raw = (context or {}).get("pr")
+    if raw not in (None, ""):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+    if repository:
+        match = re.search(re.escape(repository) + r"#(\d{1,6})\b", text or "")
+        if match:
+            return int(match.group(1))
+    match = PR_REF_RE.search(text or "")
+    return int(match.group(1)) if match else None
+
+
+def _fetch_pr_facts(repository: str, pr: int) -> dict | None:
+    """ONE read of the PR the consult names. None when gh cannot answer — every PR fact then stays
+    UNEVALUATED, and nothing is auto-declined on a fetch failure."""
+    try:
+        proc = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr),
+                "-R",
+                repository,
+                "--json",
+                "number,labels,changedFiles,additions,deletions,title",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return None
+        raw = json.loads(proc.stdout)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return {
+        "number": raw.get("number"),
+        "labels": [lab.get("name") for lab in raw.get("labels") or [] if isinstance(lab, dict)],
+        "changedFiles": raw.get("changedFiles"),
+        "additions": raw.get("additions"),
+        "deletions": raw.get("deletions"),
+        "title": raw.get("title"),
+    }
+
+
+PR_FACTS_FETCH = _fetch_pr_facts
 
 
 def applies_to(capability_id: str) -> str | None:
@@ -2165,6 +2325,11 @@ def applies_to(capability_id: str) -> str | None:
 def required_repo_fact(capability_id: str) -> str | None:
     """The named repo fact this capability requires, or None."""
     return (CAPABILITY_PRECONDITIONS.get(capability_id) or {}).get("requires")
+
+
+def required_pr_fact(capability_id: str) -> str | None:
+    """The named PR fact this capability requires, or None."""
+    return (CAPABILITY_PRECONDITIONS.get(capability_id) or {}).get("requires_pr")
 
 
 def transferable_concept(capability_id: str) -> str | None:
@@ -2314,7 +2479,12 @@ REPO_FACT_PROBES = {"observable_surface": detect_observable_surface}
 
 
 def evaluate_precondition(
-    capability_id: str, *, repository: str = "", repo_path: str = "", facts: dict | None = None
+    capability_id: str,
+    *,
+    repository: str = "",
+    repo_path: str = "",
+    facts: dict | None = None,
+    pr_facts: dict | None = None,
 ) -> dict:
     """Does this capability's declared precondition hold for this consult?
 
@@ -2327,6 +2497,7 @@ def evaluate_precondition(
     """
     declared = applies_to(capability_id)
     needs = required_repo_fact(capability_id)
+    needs_pr = required_pr_fact(capability_id)
     target = consult_target(repository)
     out: dict[str, Any] = {
         "applies_to": declared,
@@ -2335,6 +2506,9 @@ def evaluate_precondition(
         "requires": needs,
         "requirement_met": None,
         "requirement_evidence": None,
+        "requires_pr": needs_pr,
+        "pr_requirement_met": None,
+        "pr_requirement_evidence": None,
         "precondition_met": None,
         "precondition_note": None,
         # ALWAYS PRESENT, None until the scope mismatch below fires. Same discipline as
@@ -2400,25 +2574,50 @@ def evaluate_precondition(
                     f"dismissible without investigating it"
                 )
 
-    verdicts = [v for v in (out["scope_match"], out["requirement_met"]) if v is not None]
+    if needs_pr:
+        probe_pr = PR_FACT_PROBES.get(needs_pr)
+        if probe_pr is None:
+            out["unevaluated_because"].append(f"no PR probe is registered for {needs_pr!r}")
+        elif pr_facts is None:
+            out["unevaluated_because"].append(
+                f"{needs_pr!r} is a fact about the PR and needs `pr` — name it (`--pr N`, or "
+                f"`owner/repo#N` in the task)"
+            )
+        else:
+            value, evidence = probe_pr(pr_facts)
+            out["pr_requirement_met"] = value
+            out["pr_requirement_evidence"] = evidence
+            if value is None:
+                out["unevaluated_because"].append(f"{needs_pr!r}: {evidence}")
+            elif not value:
+                out["precondition_note"] = f"requires {needs_pr}: {evidence}"
+
+    verdicts = [
+        v
+        for v in (out["scope_match"], out["requirement_met"], out["pr_requirement_met"])
+        if v is not None
+    ]
     out["precondition_met"] = all(verdicts) if verdicts else None
     # THE DECLINE KIND THIS IMPLIES, handed to the caller so the RIGHT correction gets recorded.
     # `capability_propensity` marks `precondition_unmet` non-demotable on purpose: the fix is to
     # evaluate the condition, never to unbind a capability that fires where the condition holds.
-    out["suggested_decline_kind"] = (
-        "precondition_unmet" if out["precondition_met"] is False else None
-    )
+    # A change too small for the capability is `scope_too_small` — the kind the lanes wrote by hand.
+    if out["precondition_met"] is False:
+        too_small = needs_pr == "nontrivial_change" and out["pr_requirement_met"] is False
+        out["suggested_decline_kind"] = "scope_too_small" if too_small else "precondition_unmet"
+    else:
+        out["suggested_decline_kind"] = None
     return out
 
 
 # WHICH CONSULT INPUT ANSWERS WHICH DECLARATION. Declared once so the answer's remedy cannot drift
 # from the thing `evaluate_precondition` actually reads: `applies_to` is decided by `repository`
 # alone, a named repo FACT additionally needs a checkout.
-PRECONDITION_INPUT_FOR = {"applies_to": "repository", "requires": "repo_path"}
+PRECONDITION_INPUT_FOR = {"applies_to": "repository", "requires": "repo_path", "requires_pr": "pr"}
 
 
 def missing_precondition_inputs(
-    capability_ids, *, repository: str = "", repo_path: str = ""
+    capability_ids, *, repository: str = "", repo_path: str = "", pr: int | None = None
 ) -> list:
     """The consult inputs that would turn an UNEVALUATED precondition into a real verdict.
 
@@ -2434,10 +2633,19 @@ def missing_precondition_inputs(
             needed.add(PRECONDITION_INPUT_FOR["applies_to"])
         if required_repo_fact(cap_id) and not str(repo_path).strip():
             needed.add(PRECONDITION_INPUT_FOR["requires"])
+        if required_pr_fact(cap_id) and not pr:
+            needed.add(PRECONDITION_INPUT_FOR["requires_pr"])
     return sorted(needed)
 
 
-def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str) -> dict:
+def _annotate_preconditions(
+    entries: list[dict],
+    repository: str,
+    repo_path: str,
+    *,
+    pr_facts: dict | None = None,
+    pr: int | None = None,
+) -> dict:
     """Stamp every entry with its precondition verdict. ORDER AND MEMBERSHIP ARE UNTOUCHED.
 
     Returns a summary: which capabilities declared a precondition, which failed it, and which could
@@ -2452,22 +2660,37 @@ def _annotate_preconditions(entries: list[dict], repository: str, repo_path: str
     declared, unmet, unevaluated = [], [], {}
     for entry in entries:
         verdict = evaluate_precondition(
-            entry["capability_id"], repository=repository, repo_path=repo_path, facts=facts
+            entry["capability_id"],
+            repository=repository,
+            repo_path=repo_path,
+            facts=facts,
+            pr_facts=pr_facts,
         )
         entry.update(verdict)
-        if verdict["applies_to"] or verdict["requires"]:
+        if verdict["applies_to"] or verdict["requires"] or verdict["requires_pr"]:
             declared.append(entry["capability_id"])
         if verdict["precondition_met"] is False:
             unmet.append(entry["capability_id"])
+            # AUTO-DECLINED: the advisor evaluated the condition and it is false. The entry stays
+            # in the list and in its rank (prioritise, never conceal); the decline is recorded by
+            # `_record_auto_declines` with judge=machine, so the caller writes nothing.
+            entry["auto_declined"] = {
+                "kind": verdict["suggested_decline_kind"],
+                "reason": verdict["precondition_note"],
+            }
         if verdict["unevaluated_because"]:
             unevaluated[entry["capability_id"]] = list(verdict["unevaluated_because"])
-    missing = missing_precondition_inputs(declared, repository=repository, repo_path=repo_path)
+    missing = missing_precondition_inputs(
+        declared, repository=repository, repo_path=repo_path, pr=pr
+    )
     return {
         "repository": repository,
         "target": consult_target(repository),
         "repo_path": repo_path or None,
+        "pr": pr,
         "declared": sorted(declared),
         "unmet": sorted(unmet),
+        "auto_declined": sorted(e["capability_id"] for e in entries if e.get("auto_declined")),
         "unevaluated": dict(sorted(unevaluated.items())),
         "declared_capabilities": sorted(CAPABILITY_PRECONDITIONS),
         # THE REMEDY, named in the same place as the gap. Empty when this consult already supplied
@@ -2502,6 +2725,39 @@ def experiment_id(task: str) -> str:
     import hashlib
 
     return "advice:" + hashlib.sha1(str(task or "").encode()).hexdigest()[:12]
+
+
+def _record_auto_declines(advice: dict, *, surface: str = "", path=None) -> int:
+    """Record the machine-evaluated declines beside the matches they belong to.
+
+    Same experiment_id as the offer, so the trial reads offered → declined(machine) in one place;
+    idempotent per (capability, experiment) through `record_decline`'s own key, so a repeated
+    consult records nothing new. Judge is `machine`: this is the advisor's verdict on a fact it
+    read, never an agent's opinion, and the propensity report keeps the two apart.
+    """
+    try:
+        import capability_propensity
+    except Exception:  # noqa: BLE001
+        return 0
+    written = 0
+    for entry in advice.get("capabilities") or []:
+        auto = entry.get("auto_declined")
+        if not auto:
+            continue
+        try:
+            ok = capability_propensity.record_decline(
+                entry["capability_id"],
+                advice["experiment_id"],
+                reason=str(auto.get("reason") or "precondition evaluated false"),
+                surface=surface,
+                kind=str(auto.get("kind") or "precondition_unmet"),
+                path=path,
+                metadata={"judge": "machine", "auto_declined": True},
+            )
+        except Exception:  # noqa: BLE001
+            ok = False
+        written += 1 if ok else 0
+    return written
 
 
 def _record_matches(advice: dict, *, skill: str = "", surface: str = "", path=None) -> int:
@@ -4193,7 +4449,12 @@ def _selftest_preconditions() -> None:
         # A CLOSED KEY SET, so a typo cannot become a declaration nothing reads. `concept` joined it
         # on 2026-08-24; `_selftest_how_to_use` holds the rule that makes it obligatory on a
         # self-scoped row, and this one only holds its shape.
-        assert set(spec) <= {"applies_to", "requires", "concept"}, (cap_id, sorted(spec))
+        assert set(spec) <= {"applies_to", "requires", "requires_pr", "concept"}, (
+            cap_id,
+            sorted(spec),
+        )
+        if spec.get("requires_pr"):
+            assert spec["requires_pr"] in PR_FACT_PROBES, (cap_id, spec["requires_pr"])
         if "applies_to" in spec:
             assert spec["applies_to"] in APPLIES_TO_VALUES, (cap_id, spec)
         if "requires" in spec:
@@ -4889,6 +5150,13 @@ def main(argv: list[str]) -> int:
         help="JSON of trigger context you actually know, e.g. "
         '\'{"closer_gate":"high_stakes_review"}\'',
     )
+    ap.add_argument(
+        "--pr",
+        type=int,
+        default=None,
+        help="the pull request this consult is about; lets a declared PR-fact precondition "
+        "(stall signal, change size) be EVALUATED and auto-declined instead of offered blindly",
+    )
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument(
@@ -4924,7 +5192,13 @@ def main(argv: list[str]) -> int:
         " ".join(args.task),
         repository=args.repository,
         lane=args.lane,
-        context=json.loads(args.context) if args.context else None,
+        context=(
+            {
+                **(json.loads(args.context) if args.context else {}),
+                **({"pr": args.pr} if args.pr else {}),
+            }
+            or None
+        ),
         surface=args.surface,
         repo_path=args.repo_path,
     )
