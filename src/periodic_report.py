@@ -19,6 +19,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import agent_switches
 import capabilities
 import dry_seam_audit
 import evidence_schema
@@ -1666,6 +1667,7 @@ def build_report(
         ),
         "fleet_six": _fleet_six_summary(),
         "fleet_shapes": fleet_shapes.summary_for_report(),
+        "agent_switches": agent_switches.summary_for_report(),
         "costs_traces": _cost_trace_summary(
             window_days,
             langsmith_artifact_health=langsmith_artifact_health,
@@ -1860,6 +1862,8 @@ def format_human(report: dict) -> str:
         lines.extend(render_fleet_six(report["fleet_six"]))
     if report.get("fleet_shapes"):
         lines.extend(fleet_shapes.render_report_lines(report["fleet_shapes"]))
+    if report.get("agent_switches"):
+        lines.extend(agent_switches.render_report_lines(report["agent_switches"]))
     for row in outcomes["by_task_agent_verdict"]:
         verdict = row["adjudicated_verdict"] or "-"
         durability = row["durability"] or "-"

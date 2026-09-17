@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS influence_edges (
   created_ts INTEGER NOT NULL, propagated_ts INTEGER,
   metadata_hash TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_switches (
+  pr_ref TEXT NOT NULL, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, switched_ts INTEGER NOT NULL,
+  auto_label INTEGER NOT NULL DEFAULT 0, commits_before INTEGER, commits_after INTEGER,
+  merged INTEGER, durability TEXT, recorded_ts INTEGER NOT NULL,
+  PRIMARY KEY (pr_ref, switched_ts)
+);
 CREATE TABLE IF NOT EXISTS route_weights (
   version INTEGER, ts INTEGER, task_type TEXT, agent TEXT,
   prior REAL, posterior REAL, n_obs INTEGER, success_rate REAL,
