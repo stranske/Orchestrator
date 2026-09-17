@@ -130,6 +130,14 @@ Attribution is to the ACTING run: only an `accepted=1` edge back-propagates, so 
 rejected records the disagreement and inherits no PASS. This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery.
 
+A third, coarser feedback surface re-keys pattern mining to the fleet rather than to this tool's own
+completion events (which require a research-subject identity the fleet's work never carries, so the
+miner accepted 0 of 5,770 events). `fleet_shapes.py` — a rail, daily — groups merged fleet PRs by
+commit type, label family and the path classes they touched, and measures broke-later, hours to merge,
+cost and commit count per shape and agent. It is what lets the advisor's `repeated_pattern`
+precondition answer from data (codemod-campaign is offered where a shape recurs across repos), and it
+is the population a shape-keyed router would learn from. It feeds no weight table directly.
+
 ## The capability layer — what the tool can do, and how a surface finds it
 
 This doc described rails and roles and never once said "capability", which let a whole session treat

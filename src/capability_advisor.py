@@ -43,6 +43,7 @@ from typing import Any
 
 import capabilities
 import env_prereq
+import fleet_shapes
 
 # Free text -> the task_type vocabulary the fleet actually records. Deterministic and inspectable;
 # a model call here would make the same task classify differently on different days, which would
@@ -2243,6 +2244,21 @@ def _probe_multi_repo_change(facts: dict) -> tuple[bool | None, str]:
 
 
 def _probe_repeated_pattern(facts: dict) -> tuple[bool | None, str]:
+    """Does this PR's work shape recur across the fleet? Answered from fleet_shapes' daily artifact
+    when the PR's paths are known (the shape is commit type | label family | path classes), and from
+    the title/label keywords otherwise — a keyword is a weaker signal, so it stays the fallback."""
+    if facts.get("paths") is not None:
+        sig = fleet_shapes.shape_signature(
+            facts.get("title"), facts.get("labels"), facts.get("paths")
+        )
+        shape = fleet_shapes.recurring_shape(sig["key"])
+        if shape:
+            examples = ", ".join(shape.get("examples") or [][:2])
+            return True, (
+                f"shape {sig['key']!r} recurs across the fleet: {shape.get('prs')} PRs in "
+                f"{len(shape.get('repos') or [])} repos over {shape.get('window_days')}d"
+                + (f" (e.g. {examples})" if examples else "")
+            )
     text = " ".join([str(facts.get("task_text") or ""), str(facts.get("title") or "")]).lower()
     labels = [str(lab).lower() for lab in facts.get("labels") or []]
     hit = next((k for k in PATTERN_KEYWORDS if k in text or any(k in lab for lab in labels)), None)
@@ -2250,7 +2266,9 @@ def _probe_repeated_pattern(facts: dict) -> tuple[bool | None, str]:
         return True, f"repeated-pattern signal: {hit!r}"
     if facts.get("changedFiles") is None and not facts.get("title"):
         return None, "no title, labels or size to judge a pattern by"
-    return False, "no codemod/mechanical/sweep signal in the task, title or labels"
+    return False, (
+        "no recurring fleet shape and no codemod/mechanical/sweep signal in the task, title or labels"
+    )
 
 
 PR_FACT_PROBES = {
@@ -2291,7 +2309,7 @@ def _fetch_pr_facts(repository: str, pr: int) -> dict | None:
                 "-R",
                 repository,
                 "--json",
-                "number,labels,changedFiles,additions,deletions,title",
+                "number,labels,changedFiles,additions,deletions,title,files",
             ],
             capture_output=True,
             text=True,
@@ -2310,6 +2328,11 @@ def _fetch_pr_facts(repository: str, pr: int) -> dict | None:
         "changedFiles": raw.get("changedFiles"),
         "additions": raw.get("additions"),
         "deletions": raw.get("deletions"),
+        "paths": [
+            str(f.get("path"))
+            for f in raw.get("files") or []
+            if isinstance(f, dict) and f.get("path")
+        ],
         "title": raw.get("title"),
     }
 

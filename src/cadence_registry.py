@@ -44,6 +44,16 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "next_transition": "retry mining after backoff; candidates expire automatically",
     },
     {
+        "key": "fleet-shapes",
+        "success_stamp": ".last-fleet-shapes",
+        "cadence_days": 1,
+        "artifact": "fleet-shapes.json",
+        "log": "fleet-shapes.log",
+        "gate": "merged agent PRs in the window whose facts gh can return",
+        "next_transition": "retry after backoff; a PR gh cannot return stays counted as missing, "
+        "never mined as a shape",
+    },
+    {
         "key": "evidence-acquisition",
         "success_stamp": ".last-evidence-acquisition",
         "cadence_days": 1,

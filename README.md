@@ -308,6 +308,14 @@ safety switch, not dead code.
   `pattern-miner-state.json` after the daily cadence (or run `python3 src/pattern_miner.py status`
   and `inventory`). A useful first check-in is after 7 daily runs or 20 accepted episodes, whichever
   comes first; review candidate evidence, counterexamples, and expiry before promoting anything.
+- **Fleet work shapes** (`fleet_shapes.py`, daily): re-keys pattern mining to the population that
+  exists. Merged agent PRs are grouped by commit type, label family and the path classes they touched,
+  and each shape carries per-agent broke-later, hours to merge, cost and commit count (the rounds
+  proxy; the Brain holds no round count). Bot, owner and unattributed rows are excluded. Consumers:
+  `capability_advisor`'s `repeated_pattern` precondition, so codemod-campaign is offered where a shape
+  recurs across repos rather than on a title keyword, and the periodic report's FLEET-SHAPES lines.
+  Artifacts `~/.codex/orchestrator/fleet-shapes.json` and `fleet-shapes.md`; PR facts cached in
+  `fleet-shapes-facts.json`; kill switch `ORCH_DISABLE_STEPS=fleet-shapes`.
   Deterministic candidates can then be dry-compiled by `capability_compiler.py`; its reference rail
   proves lifecycle consumption without granting an apply or arbitrary-shell path.
   The same existing `capability:reference-sync-hygiene-test-gate` now accepts typed
