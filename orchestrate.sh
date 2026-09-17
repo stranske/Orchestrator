@@ -446,6 +446,31 @@ MINING_HEALTH
     _mark_fail pattern-miner "see $STAMP_DIR/pattern-miner.log"
   fi
 fi
+# Fleet-native work shapes (daily). Re-keys pattern mining to the population that exists: merged fleet
+# PRs grouped by commit type, label family and the path classes they touched, with broke-later, hours to
+# merge, cost and commit count per shape and agent (bot and owner rows excluded). Consumers: the
+# advisor's repeated_pattern precondition (codemod-campaign is offered where a shape recurs across
+# repos, not on a title keyword) and the periodic report's FLEET-SHAPES lines. One GraphQL read per 40
+# PRs, cached per PR. Kill switch: ORCH_DISABLE_STEPS=fleet-shapes.
+if _cadence_due fleet-shapes && _attempt_ok fleet-shapes; then
+  echo "  [cadence] fleet work shapes (daily; merged agent PRs by commit type, labels, path classes)"
+  if python3 "$ORCH/fleet_shapes.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/fleet-shapes.log" 2>&1; then
+    python3 - "$STAMP_DIR/fleet-shapes.json" <<'FLEET_SHAPES' || true
+import json, sys
+try:
+    p = json.load(open(sys.argv[1])) or {}
+except Exception as exc:
+    print(f"  SHAPES: artifact unreadable ({exc})"); raise SystemExit(0)
+c = p.get("counts") or {}
+print(f"  SHAPES: {c.get('prs')} merged agent PRs in {p.get('window_days')}d, facts for {c.get('with_facts')}"
+      f" ({c.get('missing_facts')} missing, {c.get('fetched_this_run')} fetched now), "
+      f"{c.get('shapes')} shapes, {c.get('recurring')} recurring")
+FLEET_SHAPES
+    _mark_success fleet-shapes
+  else
+    _mark_fail fleet-shapes "see $STAMP_DIR/fleet-shapes.log"
+  fi
+fi
 # Every tick: classify active local claims and persist redirect/decompose advisories.
 # SHADOW-ONLY: redirect_sweep.py never kills, releases claims, delegates, or applies redirect_plan.
 if _step_disabled redirect-sweep; then :; else
