@@ -644,22 +644,34 @@ RECEIVER_MIN_N = 20
 RECEIVER_DURABILITY_TOLERANCE = 0.02
 RECEIVER_WINDOW_DAYS = 90
 RECEIVER_BAD_DURABILITY = ("broke_later", "reverted", "reopened", "abandoned")
+# Rows whose durability was CHECKED before this moment hold "durable" under an older definition. The
+# sweep produced only durable/reverted/reopened until c76e7e0 (2026-08-29) taught it to find the fix PR
+# that names a merge, and a verdict is terminal, so those rows were never re-judged: every merged agent
+# row from June to early August reads "durable" with zero broke-later — not because the work held but
+# because nothing looked. Mixing them in dilutes every agent's rate (codex read 3.2% over 90 days
+# against 7.2% over the judged month) and could hide a real difference inside the tolerance. The
+# receiver rail therefore compares agents only over rows judged since detection existed, and says so.
+DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
+DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
 
 
 def merged_durability_by_agent(
     *, window_days: int = RECEIVER_WINDOW_DAYS, min_age_days: int = 7, now: int | None = None
 ) -> dict[str, dict]:
     """{agent: {resolved, bad, bad_rate}} over merged outcomes whose durability is resolved, at least
-    min_age_days old and inside the window. Bot and owner rows (attribution_source `bot:*` / `human`)
-    are excluded, so the table compares agents with agents."""
+    min_age_days old, inside the window, and JUDGED since broke-later detection existed
+    (DURABILITY_DETECTION_SINCE; a row with no checked timestamp counts by its own ts). Bot and owner
+    rows (attribution_source `bot:*` / `human`) are excluded, so the table compares agents with agents.
+    """
     now = int(now or time.time())
     since, until = now - window_days * 86400, now - min_age_days * 86400
     out: dict[str, dict] = {}
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT r.agent, o.durability, r.routing_metadata FROM runs r "
-            "JOIN outcomes o ON o.run_id=r.run_id WHERE o.merged=1 AND r.ts>=? AND r.ts<=?",
-            (since, until),
+            "JOIN outcomes o ON o.run_id=r.run_id WHERE o.merged=1 AND r.ts>=? AND r.ts<=? "
+            "AND COALESCE(o.durability_checked_ts, r.ts)>=?",
+            (since, until, DURABILITY_DETECTION_SINCE),
         ).fetchall()
     for agent, durability, metadata_raw in rows:
         source = str(feedback._routing_metadata_dict(metadata_raw).get("attribution_source") or "")
@@ -673,6 +685,14 @@ def merged_durability_by_agent(
     for cell in out.values():
         cell["bad_rate"] = cell["bad"] / cell["resolved"] if cell["resolved"] else None
     return out
+
+
+def receiver_population(*, window_days: int = RECEIVER_WINDOW_DAYS, min_age_days: int = 7) -> str:
+    """The population every receiver verdict is measured on, in one sentence for the relay's log."""
+    return (
+        f"merges >={min_age_days}d old within {window_days}d, durability judged since "
+        f"{DURABILITY_DETECTION_SINCE_DATE}"
+    )
 
 
 def recommend_receiver(
@@ -693,12 +713,19 @@ def recommend_receiver(
             "source": "none",
             "reason": f"every allowed agent is shed ({', '.join(allowed)})",
             "candidates": [],
+            "population": receiver_population(),
         }
     ranks = (learned if learned is not None else (learned_ranks() or {})).get(task_type) or {}
     ordered = sorted((a for a in ranks if a in available), key=lambda a: ranks[a]["rank"])
     if not ordered or ordered[0] == default:
         why = "no learned weights for this task type" if not ordered else "learned order agrees"
-        return {"agent": default, "source": "default", "reason": why, "candidates": ordered}
+        return {
+            "agent": default,
+            "source": "default",
+            "reason": why,
+            "candidates": ordered,
+            "population": receiver_population(),
+        }
     candidate = ordered[0]
     table = merged_durability_by_agent() if durability is None else durability
     cand, base = table.get(candidate, {}), table.get(default, {})
@@ -708,18 +735,36 @@ def recommend_receiver(
             f"learned top {candidate} has {cand.get('resolved') or 0} resolved merges "
             f"(< {RECEIVER_MIN_N}); default {default} stands"
         )
-        return {"agent": default, "source": "default", "reason": reason, "candidates": ordered}
+        return {
+            "agent": default,
+            "source": "default",
+            "reason": reason,
+            "candidates": ordered,
+            "population": receiver_population(),
+        }
     if b_rate is not None and c_rate > b_rate + RECEIVER_DURABILITY_TOLERANCE:
         reason = (
             f"learned top {candidate} breaks later {c_rate:.1%} vs {default} {b_rate:.1%} "
             f"(tolerance {RECEIVER_DURABILITY_TOLERANCE:.0%}); default {default} stands"
         )
-        return {"agent": default, "source": "default", "reason": reason, "candidates": ordered}
+        return {
+            "agent": default,
+            "source": "default",
+            "reason": reason,
+            "candidates": ordered,
+            "population": receiver_population(),
+        }
     reason = (
         f"learned top {candidate}: breaks later {c_rate:.1%} over {cand['resolved']} merges"
         + (f" vs {default} {b_rate:.1%}" if b_rate is not None else "")
     )
-    return {"agent": candidate, "source": "learned", "reason": reason, "candidates": ordered}
+    return {
+        "agent": candidate,
+        "source": "learned",
+        "reason": reason,
+        "candidates": ordered,
+        "population": receiver_population(),
+    }
 
 
 def select_remote_agent(

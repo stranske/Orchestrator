@@ -42,6 +42,10 @@ HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lan
   opt-in (`ORCH_TICK_PHASE_CONSULT=1`; 3,371 offers in eleven days that no agent answers), and the
   redirect sweep records no shadow corpus unless `ORCH_REDIRECT_SWEEP_RECORD_CORPUS=1` (202 gemini
   runs in eleven days, 0 applied). `capacity.py` still runs every tick: the lane relay reads it.
+  Since 2026-09-15 the relay also asks `router.py --recommend-receiver implement`: the learned order
+  is followed only with 20+ judged merges and a broke-later rate within 2 points of the default's,
+  measured over merges judged since 2026-08-29, when the sweep began producing broke-later (older
+  rows read "durable" because nothing looked); every verdict prints that population.
 - **Editing safely.** Edit the canonical Dropbox copy, run `orch-sync-mirror.sh`, and confirm the
   mirror matches. A concurrent fleet tick writes only to worktrees and state — never to this
   canonical tree — so canonical edits are yours alone, but always re-sync so the schedule sees them.
