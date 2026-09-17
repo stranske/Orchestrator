@@ -138,6 +138,13 @@ cost and commit count per shape and agent. It is what lets the advisor's `repeat
 precondition answer from data (codemod-campaign is offered where a shape recurs across repos), and it
 is the population a shape-keyed router would learn from. It feeds no weight table directly.
 
+The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
+policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain
+table `agent_switches` from the PR's own label timeline — commits before and after the switch and the
+terminal outcome — and, only when `ORCH_AUTO_SWITCH_SAMPLE_RATE` is set, assigns eligible open PRs to
+arms by a stable hash and labels the auto arm. The policy still picks the replacement; this surface
+only makes the pair observable and the sample known.
+
 ## The capability layer — what the tool can do, and how a surface finds it
 
 This doc described rails and roles and never once said "capability", which let a whole session treat

@@ -471,6 +471,40 @@ FLEET_SHAPES
     _mark_fail fleet-shapes "see $STAMP_DIR/fleet-shapes.log"
   fi
 fi
+# Paired agent-switch observations (daily). The delegation policy switches agents on agent:auto PRs
+# after two rounds without progress; nothing recorded the pair. This reads each keepalive PR's agent
+# label timeline and commit dates (one GraphQL read per 25 PRs, cached per PR), writes every from->to
+# switch to the Brain table agent_switches with commits before/after and the terminal outcome, and
+# reports the base rate. Sampling is OFF unless ORCH_AUTO_SWITCH_SAMPLE_RATE is set above zero: then
+# eligible open fleet PRs are assigned to arms by a stable hash and the auto arm gets agent:auto, so
+# the delegation policy runs on a known sample. Kill switch: ORCH_DISABLE_STEPS=agent-switches.
+if _cadence_due agent-switches && _attempt_ok agent-switches; then
+  echo "  [cadence] agent switches (daily; paired from->to observations from the label timeline)"
+  if python3 "$ORCH/agent_switches.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/agent-switches.log" 2>&1; then
+    python3 - "$STAMP_DIR/agent-switches.json" <<'AGENT_SWITCHES' || true
+import json, sys
+try:
+    p = json.load(open(sys.argv[1])) or {}
+except Exception as exc:
+    print(f"  SWITCHES: artifact unreadable ({exc})"); raise SystemExit(0)
+c = p.get("counts") or {}
+print(f"  SWITCHES: {c.get('switched_prs')} of {c.get('with_facts')} keepalive PRs switched agents "
+      f"({c.get('switches')} switches, {c.get('recorded_in_brain')} recorded; {c.get('missing_facts')} facts missing); "
+      f"agent:auto on {c.get('auto_labeled')}, {c.get('auto_and_switched')} of those switched")
+AGENT_SWITCHES
+    sample_rate="${ORCH_AUTO_SWITCH_SAMPLE_RATE:-0}"
+    if python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) > 0 else 1)" "$sample_rate" 2>/dev/null; then
+      if python3 "$ORCH/agent_switches.py" sample --rate "$sample_rate" --apply --state-dir "$STAMP_DIR" >> "$STAMP_DIR/agent-switches.log" 2>&1; then
+        echo "  SWITCHES-SAMPLE: rate $sample_rate applied — see $STAMP_DIR/agent-switches.log"
+      else
+        echo "  SWITCHES-SAMPLE: sampling failed — see $STAMP_DIR/agent-switches.log"
+      fi
+    fi
+    _mark_success agent-switches
+  else
+    _mark_fail agent-switches "see $STAMP_DIR/agent-switches.log"
+  fi
+fi
 # Every tick: classify active local claims and persist redirect/decompose advisories.
 # SHADOW-ONLY: redirect_sweep.py never kills, releases claims, delegates, or applies redirect_plan.
 if _step_disabled redirect-sweep; then :; else

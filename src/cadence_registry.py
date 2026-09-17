@@ -54,6 +54,17 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "never mined as a shape",
     },
     {
+        "key": "agent-switches",
+        "success_stamp": ".last-agent-switches",
+        "cadence_days": 1,
+        "artifact": "agent-switches.json",
+        "log": "agent-switches.log",
+        "gate": "keepalive PRs in the window whose label timeline gh can return; sampling only with "
+        "ORCH_AUTO_SWITCH_SAMPLE_RATE > 0",
+        "next_transition": "retry after backoff; a PR gh cannot return stays counted as missing; "
+        "arms are recorded only when agent:auto was actually applied",
+    },
+    {
         "key": "evidence-acquisition",
         "success_stamp": ".last-evidence-acquisition",
         "cadence_days": 1,

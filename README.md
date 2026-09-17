@@ -316,6 +316,16 @@ safety switch, not dead code.
   recurs across repos rather than on a title keyword, and the periodic report's FLEET-SHAPES lines.
   Artifacts `~/.codex/orchestrator/fleet-shapes.json` and `fleet-shapes.md`; PR facts cached in
   `fleet-shapes-facts.json`; kill switch `ORCH_DISABLE_STEPS=fleet-shapes`.
+- **Agent switches** (`agent_switches.py`, daily): the paired observations behind comparative
+  advantage. Each keepalive PR's `agent:*` label timeline and commit dates are read once (GraphQL, 25
+  PRs per query, cached), every from→to switch lands in the Brain table `agent_switches` with commits
+  before and after and the terminal outcome, and the report carries the base rate (measured
+  2026-09-17: 7 switches in 986 merged agent PRs over 60 days; `agent:auto` on 14, none of which
+  switched). Sampling is OFF by default: `ORCH_AUTO_SWITCH_SAMPLE_RATE=0.25` makes the tick assign
+  eligible open fleet PRs to arms by a stable hash and add `agent:auto` to the auto arm, so the
+  delegation policy runs on a known sample; arms are recorded only when the label was applied.
+  Artifacts `~/.codex/orchestrator/agent-switches.json`, facts in `agent-switches-facts.json`; kill
+  switch `ORCH_DISABLE_STEPS=agent-switches`.
   Deterministic candidates can then be dry-compiled by `capability_compiler.py`; its reference rail
   proves lifecycle consumption without granting an apply or arbitrary-shell path.
   The same existing `capability:reference-sync-hygiene-test-gate` now accepts typed
