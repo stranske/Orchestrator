@@ -152,3 +152,42 @@ def test_cli_prints_json_for_the_relay(brain):
     )
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout)["agent"] == "claude"
+
+
+def test_durability_table_ignores_rows_judged_before_broke_later_existed(brain, monkeypatch):
+    """A row whose durability was checked before the sweep could produce broke_later holds "durable"
+    under a weaker definition (nothing looked for the fix PR), so the rail must not count it.
+    Deliberate break: with the floor at 0 the old row is counted again — the floor is what excludes it.
+    """
+    now = int(time.time())
+    old = now - 20 * 86400
+    for run_id, target in (("j1", "o/r#11"), ("j2", "o/r#12")):
+        feedback.record_run(
+            run_id, target, "implement", "codex", mode="remote", ts=old, source="keepalive"
+        )
+        feedback.record_outcome(
+            run_id, adjudicated_verdict="PASS", merged=True, durability="durable"
+        )
+    judged_before_detection = router.DURABILITY_DETECTION_SINCE - 86400
+    with feedback._conn() as c:
+        c.execute(
+            "UPDATE outcomes SET durability_checked_ts=? WHERE run_id='j2'",
+            (judged_before_detection,),
+        )
+    table = router.merged_durability_by_agent(now=now)
+    assert table == {"codex": {"resolved": 1, "bad": 0, "bad_rate": 0.0}}
+    monkeypatch.setattr(router, "DURABILITY_DETECTION_SINCE", 0)
+    assert router.merged_durability_by_agent(now=now)["codex"]["resolved"] == 2
+
+
+def test_every_verdict_names_its_population(brain):
+    r = router.recommend_receiver("implement", cap=_cap(codex="ok", claude="ok"), learned={})
+    assert router.DURABILITY_DETECTION_SINCE_DATE in r["population"]
+    assert ">=7d" in r["population"] and "90d" in r["population"]
+    r = router.recommend_receiver(
+        "implement",
+        cap=_cap(codex="ok", claude="ok"),
+        learned=_learned(["claude", "codex"]),
+        durability=_dur(claude=(40, 2), codex=(221, 15)),
+    )
+    assert r["source"] == "learned" and r["population"] == router.receiver_population()
