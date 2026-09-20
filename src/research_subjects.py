@@ -1571,6 +1571,111 @@ def _selftest() -> None:
     )
 
 
+def rounds_report(
+    window_days: int = 30, *, conn: sqlite3.Connection | None = None, now: int | None = None
+) -> dict:
+    """BOTH quantities for round-bound offload evidence: how many offload runs in the window carry a
+    research round (their `experiment_id`), how many of those are SCORED (an outcome row), and which
+    round ids are not registered subjects. Written 2026-09-20, the day a count showed 3,285 offload
+    runs over four months with zero outcome rows and no line anywhere that said so — the learner's
+    test bed had been producing unrelated runs, exactly as `dispatcher.offload`'s docstring warns.
+    """
+    db = conn or feedback._conn()
+    close = conn is None
+    try:
+        ensure_schema(db)
+        now = int(now or time.time())
+        since = now - int(window_days) * 86400
+        rows = db.execute(
+            "SELECT r.experiment_id, r.agent, o.run_id IS NOT NULL, o.adjudicated_verdict, "
+            "COALESCE(o.failure_class,'') FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id "
+            "WHERE r.mode='offload' AND r.ts>=? AND r.experiment_id IS NOT NULL AND r.experiment_id!=''",
+            (since,),
+        ).fetchall()
+        offload_runs = db.execute(
+            "SELECT COUNT(*) FROM runs WHERE mode='offload' AND ts>=?", (since,)
+        ).fetchone()[0]
+        registered: set[str] = set()
+        if _table_exists(db, "research_subject_experiments"):
+            registered = {
+                str(x[0]) for x in db.execute("SELECT exp_id FROM research_subject_experiments")
+            }
+        kinds: dict[str, dict] = {}
+        rounds: set[str] = set()
+        scored = passed = failed = infra = 0
+        for exp_id, agent, has_outcome, verdict, failure_class in rows:
+            rounds.add(str(exp_id))
+            parts = str(exp_id).split(":")
+            kind = parts[1] if len(parts) == 3 else "other"
+            cell = kinds.setdefault(
+                kind, {"runs": 0, "scored": 0, "pass": 0, "fail": 0, "infra": 0, "agents": {}}
+            )
+            cell["runs"] += 1
+            cell["agents"][str(agent)] = cell["agents"].get(str(agent), 0) + 1
+            if has_outcome:
+                scored += 1
+                cell["scored"] += 1
+                if failure_class == "transient_infra":
+                    infra += 1
+                    cell["infra"] += 1
+                elif str(verdict or "").upper() == "PASS":
+                    passed += 1
+                    cell["pass"] += 1
+                elif str(verdict or "").upper() == "FAIL":
+                    failed += 1
+                    cell["fail"] += 1
+        return {
+            "window_days": int(window_days),
+            "offload_runs": int(offload_runs),
+            "bound_runs": len(rows),
+            "rounds": len(rounds),
+            "scored": scored,
+            "pass": passed,
+            "fail": failed,
+            "infra": infra,
+            "unscored": len(rows) - scored,
+            "unregistered_rounds": sorted(r for r in rounds if r not in registered),
+            "by_kind": kinds,
+        }
+    finally:
+        if close:
+            db.close()
+
+
+def summary_for_report(window_days: int = 30) -> dict:
+    """The periodic report's section: the rounds report, or the reason it could not be measured."""
+    try:
+        return rounds_report(window_days)
+    except Exception as exc:  # the report must print the absence, never die on it
+        return {"window_days": int(window_days), "error": f"{type(exc).__name__}: {exc}"}
+
+
+def render_report_lines(section: dict) -> list[str]:
+    if section.get("error"):
+        return [f"ROUNDS: UNMEASURABLE — {section['error']}"]
+    return [rounds_headline(section).strip()]
+
+
+def rounds_headline(report: dict) -> str:
+    """One line, both quantities, and a zero that says what would clear it."""
+    w = report["window_days"]
+    if not report["bound_runs"]:
+        return (
+            f"  ROUNDS ({w}d): none of {report['offload_runs']} offload runs carries a research round"
+            " — nothing here is comparable evidence (bind with dispatcher.offload(research_round=...))"
+        )
+    kinds = ", ".join(
+        f"{k} {v['runs']} runs/{v['scored']} scored" for k, v in sorted(report["by_kind"].items())
+    )
+    unreg = report["unregistered_rounds"]
+    tail = f"; {len(unreg)} round id(s) unregistered" if unreg else ""
+    return (
+        f"  ROUNDS ({w}d): {report['rounds']} rounds over {report['bound_runs']} of "
+        f"{report['offload_runs']} offload runs; scored {report['scored']} (PASS {report['pass']}, "
+        f"FAIL {report['fail']}, infra {report['infra']}), unscored {report['unscored']}{tail} — {kinds}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI so the ISSUE FILER can record a linkage without importing this module.
 
@@ -1609,7 +1714,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="write the linkage into influence_edges (default: read only)",
     )
+    rr = sub.add_parser(
+        "rounds-report",
+        help="round-bound offload evidence: bound runs AND scored runs, so silence cannot pass as patience",
+    )
+    rr.add_argument("--window-days", type=int, default=30)
+    rr.add_argument("--json", action="store_true")
+    rr.add_argument("--headline", action="store_true", help="one report line for the tick log")
     args = parser.parse_args(argv)
+    if args.cmd == "rounds-report":
+        report = rounds_report(args.window_days)
+        print(
+            json.dumps(report, sort_keys=True)
+            if args.json and not args.headline
+            else rounds_headline(report)
+        )
+        return 0
     if args.cmd == "finding-filed":
         conn = feedback._conn()
         try:
