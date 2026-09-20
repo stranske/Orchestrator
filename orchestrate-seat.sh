@@ -40,7 +40,8 @@ case "$SEAT" in
     exec claude -p "$PROMPT" --dangerously-skip-permissions
     ;;
   codex)
-    exec codex exec --skip-git-repo-check --sandbox workspace-write "$PROMPT"
+    exec codex exec --skip-git-repo-check --sandbox workspace-write \
+      --model gpt-5.6-sol -c 'model_reasoning_effort="medium"' "$PROMPT"
     ;;
   *)
     echo "orchestrate-seat: unknown seat agent '$SEAT' (expected claude|codex)" >&2; exit 2 ;;

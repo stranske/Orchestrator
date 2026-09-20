@@ -523,6 +523,17 @@ cursor-agent live outside the default PATH):
 
 ## Priors for *who does what* (override freely)
 
+For Codex local dispatch, normal `implement` work uses Sol High; bounded code,
+test generation, and ordinary review use Terra Medium. `epic`, `cross_repo`, and
+`runtime_ac` planning use Astra Medium when the design or diagnosis has wider
+consequences. The coordinator seat uses Sol Medium. An ordinary `offload` uses
+Terra Medium; `--mode cheap` selects Luna Low for structured extraction, and
+`--mode assess` selects Sol Medium for read-only assessment. For a bounded hard
+diagnosis, run `dispatcher.py offload --agent codex --mode assess --profile-id
+codex-6-astra-medium --prompt '...'`; name `codex-6-astra-high` only for the
+hardest case. `--profile-id` also works with `delegate` when an exact execution
+profile is needed. The older high-effort trial IDs remain available explicitly.
+
 | work | lean toward | why |
 |---|---|---|
 | mechanical (format, lint, deps, docstrings, codemods) | cursor(composer, free) → vibe → codex(cheap model) | cheap/fast; don't spend premium reasoning on rote edits |

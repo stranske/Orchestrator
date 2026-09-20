@@ -1089,6 +1089,8 @@ def delegate(
     the feedback loop (the REAL kind of work, not a generic 'delegated')."""
     if mode is None:
         mode = "composer" if agent == "cursor" else "full"
+    if agent == "codex" and profile_id is None:
+        profile_id = execution_profiles.default_codex_profile(task_type, mode)
     claims.reap_stale()
     if not claims.claim(target, agent):
         h = claims.holder(target)
@@ -1263,6 +1265,10 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
         if not profiles:
             return None
+        if agent == "codex":
+            return execution_profiles.get_profile(
+                execution_profiles.default_codex_profile("offload", mode)
+            )
         # HONOUR THE TIER THE CODEBASE ALREADY CHOSE. `DEFAULT_OFFLOAD_TIER` is "mid" with a comment
         # that had already diagnosed this exact waste -- "a codex offload burned Sol and a gemini
         # offload burned Pro" -- and selecting from ALL offload-capable profiles silently overrode
@@ -3282,6 +3288,7 @@ def main(argv: list[str]) -> int:
         p.add_argument("--target", required=True)
         p.add_argument("--lane", default="opener")
         p.add_argument("--mode")
+        p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
         p.add_argument(
             "--influenced-by-role-run-id",
@@ -3304,6 +3311,7 @@ def main(argv: list[str]) -> int:
             prompt,
             ns.mode,
             task_type=ns.task_type,
+            profile_id=ns.profile_id,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
         )
         print(json.dumps(out, default=str))
@@ -3315,6 +3323,7 @@ def main(argv: list[str]) -> int:
         p.add_argument("--agent", required=True)
         p.add_argument("--cwd", default=".")
         p.add_argument("--mode")
+        p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--timeout", type=int, default=None)
         p.add_argument(
             "--isolate",
@@ -3330,7 +3339,8 @@ def main(argv: list[str]) -> int:
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         try:
             out = offload(
-                ns.agent, prompt, cwd=ns.cwd, mode=ns.mode, timeout=ns.timeout, isolate=ns.isolate
+                ns.agent, prompt, cwd=ns.cwd, mode=ns.mode, timeout=ns.timeout,
+                isolate=ns.isolate, profile_id=ns.profile_id,
             )
         except KeyboardInterrupt:
             out = {

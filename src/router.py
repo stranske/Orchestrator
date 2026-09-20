@@ -488,6 +488,9 @@ def select_agent(
         agent_profiles = execution_profiles.profiles_for_agent(
             entry["agent"], transport=profile_transport
         )
+        if entry["agent"] == "codex":
+            preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
+            agent_profiles = [p for p in agent_profiles if p["profile_id"] == preferred]
         if agent_profiles and not any(
             (
                 cap.get("profiles", {}).get(profile["profile_id"], {}).get("state", st)
@@ -546,6 +549,9 @@ def select_agent(
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
     }
     profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=profile_transport)
+    if entry["agent"] == "codex":
+        preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
+        profiles = [profile for profile in profiles if profile["profile_id"] == preferred]
     if profiles:
         candidate_ids = [profile["profile_id"] for profile in profiles]
         gates = {
