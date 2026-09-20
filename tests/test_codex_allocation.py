@@ -1,0 +1,169 @@
+"""Production Codex allocation and explicit escalation without model dispatch."""
+
+import adapters
+import dispatcher
+import execution_profiles
+import router
+
+
+def _profile_binary_stub(tmp_path, monkeypatch):
+    binary = tmp_path / "codex-profile-bin"
+    binary.touch()
+    monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN", binary)
+
+
+def test_task_routes_use_the_requested_effort_and_preserve_escalation(tmp_path, monkeypatch):
+    _profile_binary_stub(tmp_path, monkeypatch)
+    cap = {"agents": {"codex": {"state": "ok"}}}
+    expected = {
+        "implement": ("codex-5.6-sol-high", "high"),
+        "testgen": ("codex-5.6-terra-medium", "medium"),
+        "review": ("codex-5.6-terra-medium", "medium"),
+        "epic": ("codex-6-astra-medium", "medium"),
+        "cross_repo": ("codex-6-astra-medium", "medium"),
+    }
+    for task_type, (profile_id, effort) in expected.items():
+        selected = router.select_agent(task_type, cap, only={"codex"})
+        assert selected["selected_profile_id"] == profile_id
+        assert selected["reasoning_effort"] == effort
+        profile = execution_profiles.get_profile(profile_id)
+        argv = adapters.build_command("codex", "x", profile=profile, transport="local")
+        assert argv[argv.index("--model") + 1] == profile["requested_model"]
+        assert argv[argv.index("-c") + 1] == f'model_reasoning_effort="{effort}"'
+    assert execution_profiles.get_profile("codex-6-astra-high")["reasoning_effort"] == "high"
+
+
+def test_explicit_astra_assessment_pins_model_effort_and_read_only_sandbox(tmp_path, monkeypatch):
+    _profile_binary_stub(tmp_path, monkeypatch)
+    profile = execution_profiles.get_profile("codex-6-astra-medium")
+    argv = adapters.build_command(
+        "codex", "diagnose", mode="assess", profile=profile, transport="offload"
+    )
+    assert argv[argv.index("--model") + 1] == "gpt-6-astra"
+    assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="medium"'
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
+
+
+def test_offload_modes_select_bounded_profiles():
+    for mode, profile_id in {
+        None: "codex-5.6-terra-medium",
+        "cheap": "codex-5.6-luna-low",
+        "mid": "codex-5.6-terra-medium",
+        "full": "codex-5.6-sol-high",
+        "assess": "codex-5.6-sol-medium",
+    }.items():
+        assert dispatcher._select_offload_profile("codex", mode)["profile_id"] == profile_id
+
+
+def test_operator_tier_pins_and_ceiling_override_automatic_profiles(monkeypatch, tmp_path):
+    _profile_binary_stub(tmp_path, monkeypatch)
+    cap = {"agents": {"codex": {"state": "ok"}}}
+    monkeypatch.setenv("ORCH_CODEX_MODEL_FULL", "gpt-5.6-terra")
+    routed = router.select_agent("implement", cap, only={"codex"})
+    assert "selected_profile_id" not in routed
+    assert routed["reasoning_effort"] == "high"
+    argv = adapters.build_command(
+        "codex", "x", mode=routed["mode"], reasoning_effort=routed["reasoning_effort"]
+    )
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-terra"
+    assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="high"'
+    explicit = adapters.build_command(
+        "codex", "x", profile="codex-6-astra-medium", transport="offload"
+    )
+    assert explicit[explicit.index("--model") + 1] == "gpt-6-astra"
+
+    monkeypatch.delenv("ORCH_CODEX_MODEL_FULL")
+    monkeypatch.setenv("ORCH_CODEX_MAX_TIER", "mid")
+    routed = router.select_agent("implement", cap, only={"codex"})
+    assert "selected_profile_id" not in routed
+    argv = adapters.build_command(
+        "codex", "x", mode=routed["mode"], reasoning_effort=routed["reasoning_effort"]
+    )
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-terra"
+
+
+def test_default_offload_honors_mid_override(monkeypatch):
+    monkeypatch.setenv("ORCH_CODEX_MODEL_MID", "gpt-5.6-luna")
+    normalized_default = adapters.DEFAULT_OFFLOAD_TIER
+    assert normalized_default == "mid"
+    assert dispatcher._select_offload_profile("codex", normalized_default) is None
+
+
+def test_direct_delegate_honors_closer_lane_and_explicit_mode():
+    choose = execution_profiles.default_codex_delegate_profile
+    assert choose("implement", "opener") == "codex-5.6-sol-high"
+    assert choose("implement", "closer") == "codex-5.6-sol-medium"
+    assert choose("implement", "closer", "mid") == "codex-5.6-terra-medium"
+    assert choose("implement", "opener", "cheap") == "codex-5.6-luna-low"
+
+
+def test_invalid_explicit_delegate_profile_fails_before_claim(monkeypatch):
+    def unexpected_claim(*_args, **_kwargs):
+        raise AssertionError("invalid profile must not claim a target")
+
+    monkeypatch.setattr(dispatcher.claims, "claim", unexpected_claim)
+    result = dispatcher.delegate(
+        "codex", "owner/repo#1", "closer", "diagnose", profile_id="missing-profile"
+    )
+    assert "unknown execution profile" in result["error"]
+
+
+def test_cli_forwards_explicit_astra_profile_without_running_it(monkeypatch, capsys):
+    observed = {}
+
+    def fake_offload(agent, prompt, **kwargs):
+        observed.update(agent=agent, prompt=prompt, **kwargs)
+        return {"exit": 0, "output": "planned"}
+
+    monkeypatch.setattr(dispatcher, "offload", fake_offload)
+    assert (
+        dispatcher.main(
+            [
+                "offload",
+                "--agent",
+                "codex",
+                "--mode",
+                "assess",
+                "--profile-id",
+                "codex-6-astra-medium",
+                "--prompt",
+                "Diagnose the blocker",
+            ]
+        )
+        == 0
+    )
+    assert observed["profile_id"] == "codex-6-astra-medium"
+    assert observed["mode"] == "assess"
+    assert capsys.readouterr().out.strip() == "planned"
+
+
+def test_delegate_cli_forwards_explicit_profile_without_claiming(monkeypatch, capsys):
+    observed = {}
+
+    def fake_delegate(agent, target, lane, prompt, mode, **kwargs):
+        observed.update(agent=agent, target=target, lane=lane, prompt=prompt, mode=mode, **kwargs)
+        return {"exit": 0}
+
+    monkeypatch.setattr(dispatcher, "delegate", fake_delegate)
+    assert (
+        dispatcher.main(
+            [
+                "delegate",
+                "--agent",
+                "codex",
+                "--target",
+                "owner/repo#1",
+                "--lane",
+                "closer",
+                "--profile-id",
+                "codex-6-astra-medium",
+                "--prompt",
+                "Diagnose the blocker",
+            ]
+        )
+        == 0
+    )
+    assert observed["profile_id"] == "codex-6-astra-medium"
+    assert observed["lane"] == "closer"
+    assert observed["prompt"] == "Diagnose the blocker"
+    assert '"exit": 0' in capsys.readouterr().out

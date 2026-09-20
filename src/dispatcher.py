@@ -731,7 +731,14 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
                 requested_model=assignment.get("requested_model"),
             )
         else:
-            argv = adapters.build_command(agent, prompt, mode, cwd=cwd)
+            argv = adapters.build_command(
+                agent,
+                prompt,
+                mode,
+                cwd=cwd,
+                reasoning_effort=assignment.get("reasoning_effort"),
+                requested_model=assignment.get("requested_model"),
+            )
     except ValueError:
         return None  # unknown agent — skip gracefully
     # Detached wrapper, in order: (1) PATH fix so local tools (agy, vibe, cursor-agent) resolve
@@ -1087,8 +1094,31 @@ def delegate(
     wrapper). Returns {pid, log, worktree} to monitor, or {error}. This is the seat's hand —
     it decides WHO/WHAT/HOW (the prompt); this just executes safely. `task_type` is recorded for
     the feedback loop (the REAL kind of work, not a generic 'delegated')."""
+    explicit_mode = mode
     if mode is None:
-        mode = "composer" if agent == "cursor" else "full"
+        mode = (
+            "composer"
+            if agent == "cursor"
+            else ("mid" if agent == "codex" and lane == "closer" else "full")
+        )
+    codex_override_effort = None
+    if agent == "codex" and profile_id is None:
+        default_profile_id = execution_profiles.default_codex_delegate_profile(
+            task_type, lane, explicit_mode
+        )
+        if execution_profiles.codex_operator_tier_override(mode):
+            codex_override_effort = execution_profiles.get_profile(default_profile_id)[
+                "reasoning_effort"
+            ]
+        else:
+            profile_id = default_profile_id
+    if profile_id:
+        try:
+            requested_profile = execution_profiles.get_profile(profile_id)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if requested_profile["agent"] != agent:
+            return {"error": f"profile {profile_id} does not belong to {agent}"}
     claims.reap_stale()
     if not claims.claim(target, agent):
         h = claims.holder(target)
@@ -1108,6 +1138,8 @@ def delegate(
         "capability_version_ids": list(capability_version_ids or []),
         "acceptance_gate_ids": list(acceptance_gate_ids or []),
     }
+    if codex_override_effort:
+        a["reasoning_effort"] = codex_override_effort
     if profile_id:
         profile = execution_profiles.get_profile(profile_id)
         a.update(
@@ -1263,6 +1295,12 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
         if not profiles:
             return None
+        if agent == "codex" and execution_profiles.codex_operator_tier_override(mode):
+            return None
+        if agent == "codex":
+            return execution_profiles.get_profile(
+                execution_profiles.default_codex_profile("offload", mode)
+            )
         # HONOUR THE TIER THE CODEBASE ALREADY CHOSE. `DEFAULT_OFFLOAD_TIER` is "mid" with a comment
         # that had already diagnosed this exact waste -- "a codex offload burned Sol and a gemini
         # offload burned Pro" -- and selecting from ALL offload-capable profiles silently overrode
@@ -1426,7 +1464,20 @@ def offload(
             transport="offload",
         )
         if profile
-        else adapters.build_command(agent, prepared_prompt, mode, cwd=run_cwd, transport="offload")
+        else adapters.build_command(
+            agent,
+            prepared_prompt,
+            mode,
+            cwd=run_cwd,
+            transport="offload",
+            reasoning_effort=(
+                execution_profiles.get_profile(
+                    execution_profiles.default_codex_profile("offload", mode)
+                )["reasoning_effort"]
+                if agent == "codex"
+                else None
+            ),
+        )
     )  # raises ValueError on unknown agent
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
@@ -3282,6 +3333,7 @@ def main(argv: list[str]) -> int:
         p.add_argument("--target", required=True)
         p.add_argument("--lane", default="opener")
         p.add_argument("--mode")
+        p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
         p.add_argument(
             "--influenced-by-role-run-id",
@@ -3304,6 +3356,7 @@ def main(argv: list[str]) -> int:
             prompt,
             ns.mode,
             task_type=ns.task_type,
+            profile_id=ns.profile_id,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
         )
         print(json.dumps(out, default=str))
@@ -3315,6 +3368,7 @@ def main(argv: list[str]) -> int:
         p.add_argument("--agent", required=True)
         p.add_argument("--cwd", default=".")
         p.add_argument("--mode")
+        p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--timeout", type=int, default=None)
         p.add_argument(
             "--isolate",
@@ -3330,7 +3384,13 @@ def main(argv: list[str]) -> int:
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         try:
             out = offload(
-                ns.agent, prompt, cwd=ns.cwd, mode=ns.mode, timeout=ns.timeout, isolate=ns.isolate
+                ns.agent,
+                prompt,
+                cwd=ns.cwd,
+                mode=ns.mode,
+                timeout=ns.timeout,
+                isolate=ns.isolate,
+                profile_id=ns.profile_id,
             )
         except KeyboardInterrupt:
             out = {

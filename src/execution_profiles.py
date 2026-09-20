@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 PROFILE_SCHEMA_VERSION = 1
-PROFILE_POLICY_VERSION = "execution-profile-policy-v1"
+PROFILE_POLICY_VERSION = "execution-profile-policy-v2"
 MIN_RESOLVED_COVERAGE = float(os.environ.get("ORCH_PROFILE_MIN_RESOLVED_COVERAGE", "0.8"))
 MIN_EXACT_OBSERVATIONS = int(os.environ.get("ORCH_PROFILE_MIN_EXACT_OBSERVATIONS", "3"))
 PRIOR_STRENGTH = 8.0
@@ -118,14 +118,16 @@ def _profile(
 PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
     p["profile_id"]: p
     for p in (
-        # GPT-6 Astra replaced Sol as the codex full tier on 2026-09-04. Sol keeps its profile so
-        # the outcomes already recorded against it stay interpretable, but it is no longer selected:
-        # `adapters.model_identity("codex", "full")` now reports astra, and the registry test below
-        # fails if a profile claims a model the seat never runs.
+        # Keep existing definitions immutable: historical trials and outcomes still refer to them.
+        # New model/effort combinations receive new profile IDs.
         _profile("codex-6-astra-high", "gpt-6-astra", "high", prior_offset=0.05),
+        _profile("codex-6-astra-medium", "gpt-6-astra", "medium"),
         _profile("codex-5.6-sol-high", "gpt-5.6-sol", "high", prior_offset=0.05),
+        _profile("codex-5.6-sol-medium", "gpt-5.6-sol", "medium"),
         _profile("codex-5.6-terra-high", "gpt-5.6-terra", "high"),
+        _profile("codex-5.6-terra-medium", "gpt-5.6-terra", "medium"),
         _profile("codex-5.6-luna-high", "gpt-5.6-luna", "high", prior_offset=-0.02),
+        _profile("codex-5.6-luna-low", "gpt-5.6-luna", "low"),
         # One profile per agent so every seat can record a worker attempt. Models are the identities
         # `adapters.model_identity(agent, "full")` reports; `test_registry_models_match_adapters`
         # fails if they drift, because a registry that disagrees with the adapter would request a
@@ -261,8 +263,58 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 """
 
 
-# Retain historical identity without offering the superseded full-tier model to routing.
-PROFILE_RETIREMENTS = {"codex-5.6-sol-high": "codex-6-astra-high"}
+# All older profile IDs remain available for explicit trials and historical joins.
+PROFILE_RETIREMENTS: dict[str, str] = {}
+
+# Production defaults are task-specific. Astra High remains an explicit escalation;
+# immutable trial profiles stay addressable without being chosen for routine work.
+CODEX_TASK_PROFILES = {
+    "implement": "codex-5.6-sol-high",
+    "epic": "codex-6-astra-medium",
+    "cross_repo": "codex-6-astra-medium",
+    "runtime_ac": "codex-6-astra-medium",
+    "mechanical": "codex-5.6-terra-medium",
+    "testgen": "codex-5.6-terra-medium",
+    "codemod": "codex-5.6-terra-medium",
+    "polish": "codex-5.6-terra-medium",
+    "review": "codex-5.6-terra-medium",
+    "closer": "codex-5.6-sol-medium",
+    "coordinator": "codex-5.6-sol-medium",
+}
+CODEX_OFFLOAD_PROFILES = {
+    "cheap": "codex-5.6-luna-low",
+    "mid": "codex-5.6-terra-medium",
+    "full": "codex-5.6-sol-high",
+    "assess": "codex-5.6-sol-medium",
+}
+
+
+def default_codex_profile(task_type: str, mode: str | None = None) -> str:
+    if task_type == "offload":
+        return CODEX_OFFLOAD_PROFILES.get(mode or "mid", CODEX_OFFLOAD_PROFILES["mid"])
+    return CODEX_TASK_PROFILES.get(task_type, "codex-5.6-sol-medium")
+
+
+def default_codex_delegate_profile(
+    task_type: str, lane: str, explicit_mode: str | None = None
+) -> str:
+    """Pick a direct delegate's profile without losing explicit tier requests."""
+    if explicit_mode in CODEX_OFFLOAD_PROFILES:
+        return CODEX_OFFLOAD_PROFILES[explicit_mode]
+    if lane == "closer" and task_type == "implement":
+        return CODEX_TASK_PROFILES["closer"]
+    return default_codex_profile(task_type)
+
+
+def codex_operator_tier_override(mode: str | None) -> bool:
+    """Whether an operator pin or ceiling should bypass an automatic exact profile."""
+    tiers = ("cheap", "mid", "full")
+    if mode not in tiers:
+        return False
+    ceiling = os.environ.get("ORCH_CODEX_MAX_TIER", "").strip().lower()
+    if ceiling in tiers and tiers.index(ceiling) < tiers.index(mode):
+        return True
+    return bool(os.environ.get(f"ORCH_CODEX_MODEL_{mode.upper()}", "").strip())
 
 
 def _canonical(value: Any) -> str:

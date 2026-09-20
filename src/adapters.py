@@ -66,7 +66,7 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 VIBE_MODEL = "mistral-medium-3.5"
 
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6-astra"},
+    "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5", "full": "claude-opus-5"},
     "gemini": {
         "cheap": "gemini-3.7-flash-low",
@@ -1679,13 +1679,12 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         ca[:5] == ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only"]
         and "--json" not in ca
     ), ca
-    # Codex tiers: Luna (cheap) / Terra (mid) / GPT-6 Astra (full, since 2026-09-04). Codex has no
-    # catalog probe, so these resolve straight from MODEL_TIERS without a subprocess. Astra needs
-    # codex-cli >= 0.153.2; older builds reject it with a 400 naming the CLI version.
+    # Routine Codex tiers: Luna (cheap) / Terra (mid) / Sol (full). Astra remains
+    # available through an explicit immutable execution profile for difficult work.
     for tier, expected in (
         ("cheap", "gpt-5.6-luna"),
         ("mid", "gpt-5.6-terra"),
-        ("full", "gpt-6-astra"),
+        ("full", "gpt-5.6-sol"),
     ):
         cc = build_command("codex", "x", mode=tier)
         assert cc[cc.index("--model") + 1] == expected, (tier, cc)
