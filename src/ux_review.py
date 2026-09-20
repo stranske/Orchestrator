@@ -1052,7 +1052,7 @@ def _selftest_substance() -> None:
     """
     responds = _sample_bundle()
     assert substance_findings(responds) == [] and substance_gaps(responds) == []
-    fab = {
+    fab: dict = {
         "screens": [{"name": "Compare"}],
         "substance": [
             {
@@ -1074,7 +1074,7 @@ def _selftest_substance() -> None:
     assert sf[0]["failure_mode"] == "fabricated_output" and sf[0]["dimension"] == "truthfulness"
     assert "1160" in sf[0]["actual"] and sf[0]["source"] == "substance"
     assert substance_gaps(fab) == ["Budget: no substance probe run"], substance_gaps(fab)
-    clean_panel = {
+    clean_panel: dict[str, dict | None] = {
         ev: {
             "scores": {d: 9 for d in DIMENSIONS},
             "overall": 9,
