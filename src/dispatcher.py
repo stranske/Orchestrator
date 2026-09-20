@@ -731,7 +731,14 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
                 requested_model=assignment.get("requested_model"),
             )
         else:
-            argv = adapters.build_command(agent, prompt, mode, cwd=cwd)
+            argv = adapters.build_command(
+                agent,
+                prompt,
+                mode,
+                cwd=cwd,
+                reasoning_effort=assignment.get("reasoning_effort"),
+                requested_model=assignment.get("requested_model"),
+            )
     except ValueError:
         return None  # unknown agent — skip gracefully
     # Detached wrapper, in order: (1) PATH fix so local tools (agy, vibe, cursor-agent) resolve
@@ -1089,11 +1096,22 @@ def delegate(
     the feedback loop (the REAL kind of work, not a generic 'delegated')."""
     explicit_mode = mode
     if mode is None:
-        mode = "composer" if agent == "cursor" else "full"
+        mode = (
+            "composer"
+            if agent == "cursor"
+            else ("mid" if agent == "codex" and lane == "closer" else "full")
+        )
+    codex_override_effort = None
     if agent == "codex" and profile_id is None:
-        profile_id = execution_profiles.default_codex_delegate_profile(
+        default_profile_id = execution_profiles.default_codex_delegate_profile(
             task_type, lane, explicit_mode
         )
+        if execution_profiles.codex_operator_tier_override(mode):
+            codex_override_effort = execution_profiles.get_profile(default_profile_id)[
+                "reasoning_effort"
+            ]
+        else:
+            profile_id = default_profile_id
     if profile_id:
         try:
             requested_profile = execution_profiles.get_profile(profile_id)
@@ -1120,6 +1138,8 @@ def delegate(
         "capability_version_ids": list(capability_version_ids or []),
         "acceptance_gate_ids": list(acceptance_gate_ids or []),
     }
+    if codex_override_effort:
+        a["reasoning_effort"] = codex_override_effort
     if profile_id:
         profile = execution_profiles.get_profile(profile_id)
         a.update(
@@ -1274,6 +1294,8 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
     try:
         profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
         if not profiles:
+            return None
+        if agent == "codex" and execution_profiles.codex_operator_tier_override(mode):
             return None
         if agent == "codex":
             return execution_profiles.get_profile(
@@ -1442,7 +1464,20 @@ def offload(
             transport="offload",
         )
         if profile
-        else adapters.build_command(agent, prepared_prompt, mode, cwd=run_cwd, transport="offload")
+        else adapters.build_command(
+            agent,
+            prepared_prompt,
+            mode,
+            cwd=run_cwd,
+            transport="offload",
+            reasoning_effort=(
+                execution_profiles.get_profile(
+                    execution_profiles.default_codex_profile("offload", mode)
+                )["reasoning_effort"]
+                if agent == "codex"
+                else None
+            ),
+        )
     )  # raises ValueError on unknown agent
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)

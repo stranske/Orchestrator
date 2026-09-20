@@ -94,7 +94,8 @@ Codex model and reasoning selection is also a deterministic rail: `execution_pro
 the task and lane to an immutable profile, `router` records the selected profile, and
 `dispatcher` passes its model and effort to `adapters`. An explicit `--profile-id` on a
 bounded offload or delegation chooses that exact profile; it does not create a new role or
-change the feedback loop.
+change the feedback loop. Operator `ORCH_CODEX_MODEL_*` pins and `ORCH_CODEX_MAX_TIER` ceilings
+continue through the tier adapter for automatic routes; the explicit profile stays exact.
 
 Determinism here is load-bearing: the claims/capacity/provision rails are what the "0 unsafe
 delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An

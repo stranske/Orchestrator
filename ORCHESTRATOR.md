@@ -538,9 +538,9 @@ The older high-effort trial IDs remain available explicitly.
 
 | work | lean toward | why |
 |---|---|---|
-| mechanical (format, lint, deps, docstrings, codemods) | cursor(composer, free) → vibe → codex(cheap model) | cheap/fast; don't spend premium reasoning on rote edits |
+| mechanical (format, lint, deps, docstrings, codemods) | cursor(composer, free) → vibe → codex(Terra Medium) | cheap seats first; Codex handles bounded execution with its routine profile |
 | implement (needs real reasoning) | claude → codex → **gemini** → cursor → vibe | premium reasoning seats first; gemini is a strong reasoning fallback and has a separate windowed-prepaid clock; frontier pool LATE |
-| bounded polish (small follow-ups) | cursor(composer) → vibe → codex(cheap) | cheap specialists |
+| bounded polish (small follow-ups) | cursor(composer) → vibe → codex(Terra Medium) | cheap seats first, then routine Codex execution |
 | review (advisory, **non-gating**) | cursor(composer) → vibe → **gemini** (Google = 5th family); idle codex/claude only | free cross-family eyes first; gemini adds a distinct family but costs a unit |
 
 **When to spend a cross-family review (learned 2026-06-14, Scorecard run):** an independent review earns its cost on *ambiguous or reasoning-heavy* work, where a second family catches real issues. For tightly-specified mechanical work (a config file authored to an exact spec), your own integration check *against that spec* is enough — don't spend a review unit (and your coordination overhead) re-confirming a checklist. Reserve cross-family review for where judgment can differ.

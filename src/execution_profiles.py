@@ -306,6 +306,17 @@ def default_codex_delegate_profile(
     return default_codex_profile(task_type)
 
 
+def codex_operator_tier_override(mode: str | None) -> bool:
+    """Whether an operator pin or ceiling should bypass an automatic exact profile."""
+    tiers = ("cheap", "mid", "full")
+    if mode not in tiers:
+        return False
+    ceiling = os.environ.get("ORCH_CODEX_MAX_TIER", "").strip().lower()
+    if ceiling in tiers and tiers.index(ceiling) < tiers.index(mode):
+        return True
+    return bool(os.environ.get(f"ORCH_CODEX_MODEL_{mode.upper()}", "").strip())
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 

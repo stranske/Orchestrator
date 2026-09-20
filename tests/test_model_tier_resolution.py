@@ -497,9 +497,8 @@ def test_compute_arity_holds_for_every_seat(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Tier policy per task type (2026-08-08). Stage 1 = cheap tier applied;
-# stage 2 (review/testgen -> mid) is asserted as NOT YET applied so it can't be
-# quietly forgotten — flip STAGE_2_APPLIED when it lands.
+# Tier policy per task type. Codex bounded work has since moved to mid;
+# other providers retain the earlier cheap stage-1 tier.
 # ---------------------------------------------------------------------------
 
 TIER_POLICY = {
@@ -530,10 +529,11 @@ def test_tier_policy_covers_every_task_type():
     assert set(TIER_POLICY) == set(router.ROUTE_TABLE), set(router.ROUTE_TABLE) ^ set(TIER_POLICY)
 
 
-def test_stage1_cheap_tier_is_applied():
+def test_bounded_codex_uses_mid_while_other_stage1_tiers_stay_cheap():
     for task_type in ("mechanical", "polish", "codemod"):
         for entry in _tiered_entries(task_type):
-            assert entry["mode"] == "cheap", (task_type, entry)
+            expected = "mid" if entry["agent"] == "codex" else "cheap"
+            assert entry["mode"] == expected, (task_type, entry)
 
 
 def test_full_tier_task_types_stay_full():

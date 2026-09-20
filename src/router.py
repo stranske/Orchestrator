@@ -108,16 +108,16 @@ ScoredSelection = Tuple[Score, RouteEntry, str, int]
 # Never mechanical/polish; use capacity.py's steady/reserve/drain policy for substantial good-fit work.
 ROUTE_TABLE: dict = {
     # TIER POLICY (2026-08-08, stage 1 of 2): task types are assigned a model LEVEL, not just an
-    # agent order. cheap = mechanical/polish/codemod (low reasoning), mid = review/testgen (gated or
-    # read-heavy, stage 2), full = implement/epic/cross_repo/runtime_ac (a mistake is expensive to
-    # unwind). Modes map to adapters.MODEL_TIERS; unpinned agents (vibe/aider/cursor) ignore the
+    # agent order. Codex uses mid for routine bounded code and review, full for implementation
+    # and consequential planning, and cheap only for explicit structured offloads. Other providers
+    # retain their tiers. Modes map to adapters.MODEL_TIERS; unpinned agents ignore the
     # tier and use their single lane, so a tier token there is documentation, not behaviour.
     "mechanical": {
         "role": "code",
         "agents": [  # NO gemini — wasteful for low-reasoning work
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
-            {"agent": "codex", "mode": "cheap", "late": False},
+            {"agent": "codex", "mode": "mid", "late": False},
             {"agent": "aider", "mode": "cheap", "late": True},  # paygo credit -> late
             {"agent": "claude", "mode": "cheap", "late": False},
         ],
@@ -188,7 +188,7 @@ ROUTE_TABLE: dict = {
         "agents": [  # cross-file structural campaigns; cheap lanes first
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
-            {"agent": "codex", "mode": "cheap", "late": False},
+            {"agent": "codex", "mode": "mid", "late": False},
             # gemini full->cheap is the one real behaviour change in stage 1 (3.1 Pro -> 3.7 Flash-low).
             # Watch this cell: if codemod diff quality drops, promote gemini here to 'mid' (Flash-high)
             # rather than reverting the whole tier.
@@ -201,7 +201,7 @@ ROUTE_TABLE: dict = {
         "agents": [  # NO gemini — bounded follow-ups are cheap work
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "cheap", "late": False},
-            {"agent": "codex", "mode": "cheap", "late": False},
+            {"agent": "codex", "mode": "mid", "late": False},
             {"agent": "aider", "mode": "cheap", "late": True},
         ],
     },
@@ -488,7 +488,11 @@ def select_agent(
         agent_profiles = execution_profiles.profiles_for_agent(
             entry["agent"], transport=profile_transport
         )
-        if entry["agent"] == "codex":
+        if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
+            entry.get("mode")
+        ):
+            agent_profiles = []
+        elif entry["agent"] == "codex":
             preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
             agent_profiles = [p for p in agent_profiles if p["profile_id"] == preferred]
         if agent_profiles and not any(
@@ -549,7 +553,14 @@ def select_agent(
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
     }
     profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=profile_transport)
-    if entry["agent"] == "codex":
+    if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
+        entry.get("mode")
+    ):
+        profiles = []
+        result["reasoning_effort"] = execution_profiles.get_profile(
+            execution_profiles.default_codex_profile(task_type, entry.get("mode"))
+        )["reasoning_effort"]
+    elif entry["agent"] == "codex":
         preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
         profiles = [profile for profile in profiles if profile["profile_id"] == preferred]
     if profiles:
@@ -1286,14 +1297,14 @@ def _selftest() -> None:
         assert replayed["rng_seed"] == profile_assignment["profile_rng_seed"]
         assert replayed["policy_version"] == profile_assignment["profile_policy_version"]
 
-        # mechanical with composer+vibe shed → codex (cheap) BEFORE aider (paygo/late)
+        # mechanical with composer+vibe shed → codex (mid) BEFORE aider (paygo/late)
         p3 = plan(
             [bk[0]],
             cap({"cursor": "shed", "vibe": "shed", "codex": "ok", "aider": "ok"}),
             dry_run=True,
         )
         assert (
-            p3["assignments"][0]["agent"] == "codex" and p3["assignments"][0]["mode"] == "cheap"
+            p3["assignments"][0]["agent"] == "codex" and p3["assignments"][0]["mode"] == "mid"
         ), p3["assignments"]
 
         # backup-only (owner 2026-06-21): everything non-late shed → aider is NOT auto-selected; it is

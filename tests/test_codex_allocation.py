@@ -55,6 +55,40 @@ def test_offload_modes_select_bounded_profiles():
         assert dispatcher._select_offload_profile("codex", mode)["profile_id"] == profile_id
 
 
+def test_operator_tier_pins_and_ceiling_override_automatic_profiles(monkeypatch, tmp_path):
+    _profile_binary_stub(tmp_path, monkeypatch)
+    cap = {"agents": {"codex": {"state": "ok"}}}
+    monkeypatch.setenv("ORCH_CODEX_MODEL_FULL", "gpt-5.6-terra")
+    routed = router.select_agent("implement", cap, only={"codex"})
+    assert "selected_profile_id" not in routed
+    assert routed["reasoning_effort"] == "high"
+    argv = adapters.build_command(
+        "codex", "x", mode=routed["mode"], reasoning_effort=routed["reasoning_effort"]
+    )
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-terra"
+    assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="high"'
+    explicit = adapters.build_command(
+        "codex", "x", profile="codex-6-astra-medium", transport="offload"
+    )
+    assert explicit[explicit.index("--model") + 1] == "gpt-6-astra"
+
+    monkeypatch.delenv("ORCH_CODEX_MODEL_FULL")
+    monkeypatch.setenv("ORCH_CODEX_MAX_TIER", "mid")
+    routed = router.select_agent("implement", cap, only={"codex"})
+    assert "selected_profile_id" not in routed
+    argv = adapters.build_command(
+        "codex", "x", mode=routed["mode"], reasoning_effort=routed["reasoning_effort"]
+    )
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-terra"
+
+
+def test_default_offload_honors_mid_override(monkeypatch):
+    monkeypatch.setenv("ORCH_CODEX_MODEL_MID", "gpt-5.6-luna")
+    normalized_default = adapters.DEFAULT_OFFLOAD_TIER
+    assert normalized_default == "mid"
+    assert dispatcher._select_offload_profile("codex", normalized_default) is None
+
+
 def test_direct_delegate_honors_closer_lane_and_explicit_mode():
     choose = execution_profiles.default_codex_delegate_profile
     assert choose("implement", "opener") == "codex-5.6-sol-high"
