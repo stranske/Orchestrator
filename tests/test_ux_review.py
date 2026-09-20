@@ -390,3 +390,73 @@ class TestPanelBaseSha(unittest.TestCase):
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())
+
+
+class TestTruthfulnessSubstanceRail(unittest.TestCase):
+    """2026-09-20: the panel scores rendering; the substance rail scores truth. A probe whose output
+    did not move is a blocker whatever the panel said, and an unprobed computed surface blocks the
+    gate by name instead of passing silently."""
+
+    def _fab_bundle(self):
+        return {
+            "screens": [{"name": "Compare"}],
+            "substance": [
+                {
+                    "surface": "Compare",
+                    "figure": "estimated_total",
+                    "input_a": "Reykjavik, party 1",
+                    "output_a": "1160",
+                    "input_b": "Nairobi, party 8",
+                    "output_b": "1160",
+                    "diff": "none",
+                    "verdict": "constant",
+                }
+            ],
+            "coverage": [{"surface": "Budget", "driven": False, "note": "no substance probe run"}],
+        }
+
+    def _clean_panel(self):
+        return {
+            ev: {
+                "scores": {d: 9 for d in ur.DIMENSIONS},
+                "overall": 9,
+                "findings": [],
+                "evidence_gaps": [],
+            }
+            for ev in ("claude", "codex", "cursor", "gemini")
+        }
+
+    def test_constant_probe_is_a_blocker_that_caps_a_unanimous_panel(self):
+        agg = ur.aggregate_panel(
+            self._clean_panel(), {"findings": []}, 4, bundle=self._fab_bundle()
+        )
+        self.assertLessEqual(agg["overall_median"], 3.0)
+        self.assertTrue(any(f["failure_mode"] == "fabricated_output" for f in agg["blockers"]))
+        self.assertEqual(agg["substance"], {"probed": 1, "fabricated": 1, "unprobed": 1})
+
+    def test_unprobed_surface_blocks_the_gate_by_name(self):
+        agg = ur.aggregate_panel(
+            self._clean_panel(), {"findings": []}, 4, bundle=self._fab_bundle()
+        )
+        gate = ur.gate_decision({"ok": True}, agg)
+        self.assertFalse(gate["done"])
+        self.assertIn("blockers_present", gate["reasons"])
+        self.assertTrue(any(r.startswith("substance_unprobed:1") for r in gate["reasons"]))
+        self.assertEqual(gate["substance_gaps"], ["Budget: no substance probe run"])
+
+    def test_responding_probe_and_missing_bundle_change_nothing(self):
+        clean = self._clean_panel()
+        without = ur.aggregate_panel(clean, {"findings": []}, 4)
+        self.assertEqual(without["overall_median"], 9.0)
+        self.assertEqual(without["blockers"], [])
+        self.assertTrue(ur.gate_decision({"ok": True}, without)["done"])
+        responds = ur.aggregate_panel(clean, {"findings": []}, 4, bundle=ur._sample_bundle())
+        self.assertTrue(ur.gate_decision({"ok": True}, responds)["done"])
+
+    def test_rubric_names_truthfulness_and_the_failure_mode(self):
+        rubric = ur.build_rubric_prompt(ur._sample_bundle())
+        self.assertIn('"truthfulness":0-10', rubric)
+        self.assertIn("fabricated_output", rubric)
+        self.assertIn("fabricated_output", ur.build_adversarial_prompt(ur._sample_bundle()))
+        self.assertIn("truthfulness", ur.DIMENSIONS)
+        self.assertIn("fabricated_output", ur.FAILURE_MODES)

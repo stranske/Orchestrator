@@ -835,8 +835,17 @@ which is the delivery defect `how_to_use` already paid for once.
 Frontend work has two gates. **Gate 1** is `frontend_verify` (a deterministic rail: assert→click→assert
 on the accessibility tree — *does the control do what it claims*). **Gate 2** is `ux_review` — an
 evidence-bound *usability* review by an anonymized panel of ≥4 evaluator backends plus an adversarial
-critic, scoring four dimensions (`wired` / `usability` / `help_clarity` / `workflow_productivity`) where
-every sub-8 score must cite screen + click-path + expected-vs-actual (no abstract findings).
+critic, scoring five dimensions (`wired` / `usability` / `help_clarity` / `workflow_productivity` /
+`truthfulness`) where every sub-8 score must cite screen + click-path + expected-vs-actual (no abstract
+findings). `truthfulness` (2026-09-20) asks whether the figures and verdicts on a surface are DERIVED
+FROM THE USER'S INPUTS, judged only from the bundle's `substance` block (per computed surface: two
+materially different inputs, their outputs, the diff). It exists because the other four score
+rendering and completion, and trip-planner rendered the same `$1,160` for every destination and party
+size across ten reviews without any of them able to object. Two pieces of it are rails, not judgment:
+`ux_review.substance_findings` turns every probe whose output did not move into a severity-4
+`fabricated_output` finding regardless of panel scores, and `ux_review.substance_gaps` lists every
+computed surface the bundle declares but did not probe, which `gate_decision` prints by name as
+`substance_unprobed:N` and refuses to call done. (No new stage or role; the loop diagram is unchanged.)
 
 Per the rule above — *an LLM review panel is a **supplement** to a gate, never a replacement* — the
 **panel is LLM judgment, not a rail.** The **rail is the deterministic `ux_review.gate_decision`**, which
