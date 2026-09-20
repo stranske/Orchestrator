@@ -6,7 +6,14 @@ import execution_profiles
 import router
 
 
-def test_task_routes_use_the_requested_effort_and_preserve_escalation():
+def _profile_binary_stub(tmp_path, monkeypatch):
+    binary = tmp_path / "codex-profile-bin"
+    binary.touch()
+    monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN", binary)
+
+
+def test_task_routes_use_the_requested_effort_and_preserve_escalation(tmp_path, monkeypatch):
+    _profile_binary_stub(tmp_path, monkeypatch)
     cap = {"agents": {"codex": {"state": "ok"}}}
     expected = {
         "implement": ("codex-5.6-sol-high", "high"),
@@ -26,7 +33,8 @@ def test_task_routes_use_the_requested_effort_and_preserve_escalation():
     assert execution_profiles.get_profile("codex-6-astra-high")["reasoning_effort"] == "high"
 
 
-def test_explicit_astra_assessment_pins_model_effort_and_read_only_sandbox():
+def test_explicit_astra_assessment_pins_model_effort_and_read_only_sandbox(tmp_path, monkeypatch):
+    _profile_binary_stub(tmp_path, monkeypatch)
     profile = execution_profiles.get_profile("codex-6-astra-medium")
     argv = adapters.build_command(
         "codex", "diagnose", mode="assess", profile=profile, transport="offload"
