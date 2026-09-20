@@ -135,3 +135,35 @@ def test_cli_forwards_explicit_astra_profile_without_running_it(monkeypatch, cap
     assert observed["profile_id"] == "codex-6-astra-medium"
     assert observed["mode"] == "assess"
     assert capsys.readouterr().out.strip() == "planned"
+
+
+def test_delegate_cli_forwards_explicit_profile_without_claiming(monkeypatch, capsys):
+    observed = {}
+
+    def fake_delegate(agent, target, lane, prompt, mode, **kwargs):
+        observed.update(agent=agent, target=target, lane=lane, prompt=prompt, mode=mode, **kwargs)
+        return {"exit": 0}
+
+    monkeypatch.setattr(dispatcher, "delegate", fake_delegate)
+    assert (
+        dispatcher.main(
+            [
+                "delegate",
+                "--agent",
+                "codex",
+                "--target",
+                "owner/repo#1",
+                "--lane",
+                "closer",
+                "--profile-id",
+                "codex-6-astra-medium",
+                "--prompt",
+                "Diagnose the blocker",
+            ]
+        )
+        == 0
+    )
+    assert observed["profile_id"] == "codex-6-astra-medium"
+    assert observed["lane"] == "closer"
+    assert observed["prompt"] == "Diagnose the blocker"
+    assert '"exit": 0' in capsys.readouterr().out
