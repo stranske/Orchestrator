@@ -44,7 +44,7 @@ from exp_abcd import (
 ORCH = Path(__file__).resolve().parent
 REVIEW_DIR = Path(os.environ.get("ORCH_UX_REVIEW_DIR", ORCH / "ux_reviews"))
 
-DIMENSIONS = ("wired", "usability", "help_clarity", "workflow_productivity")
+DIMENSIONS = ("wired", "usability", "help_clarity", "workflow_productivity", "truthfulness")
 FAILURE_MODES = frozenset(
     {
         "false_success",
@@ -52,8 +52,19 @@ FAILURE_MODES = frozenset(
         "efficiency_trap",
         "confusion",
         "missing_help",
+        "fabricated_output",
     }
 )
+# `truthfulness` (added 2026-09-20): are the figures, statuses and recommendations on a surface
+# DERIVED FROM THE USER'S INPUTS? The four original dimensions score whether controls act and tasks
+# complete; trip-planner rendered `$1,160` correctly for every destination and party size across ten
+# reviews, and scored well on all four, because none of them asks whether a number is real. The
+# evidence is the bundle's `substance` block: one entry per computed surface, holding two materially
+# different inputs, their two outputs and the diff. A probe whose output did not move is a
+# `fabricated_output` blocker BY RAIL (`substance_findings`), whatever the panel scored; a computed
+# surface with no probe is a gate gap (`substance_gaps`), never a pass.
+SUBSTANCE_BAD_VERDICTS = frozenset({"constant", "fabricated"})
+SUBSTANCE_UNPROBED_VERDICTS = frozenset({"unprobed", "missing", "not_probed"})
 
 
 def median(values: list[float]) -> float:
@@ -215,7 +226,86 @@ _DIM_FAILMODE = {
     "usability": "confusion",
     "help_clarity": "missing_help",
     "workflow_productivity": "efficiency_trap",
+    "truthfulness": "fabricated_output",
 }
+
+
+def _substance_entries(bundle: dict) -> list[dict]:
+    raw = (bundle or {}).get("substance") or []
+    return [e for e in raw if isinstance(e, dict)]
+
+
+def _substance_verdict(entry: dict) -> str:
+    """Normalise a probe's verdict. A missing verdict is judged from the outputs: two outputs that
+    are present and equal is `constant`; one missing is `unprobed`. Pure; selftested."""
+    v = str(entry.get("verdict") or "").strip().lower()
+    if v:
+        return v
+    a, b = entry.get("output_a"), entry.get("output_b")
+    if a is None or b is None or str(a) == "" or str(b) == "":
+        return "unprobed"
+    return "constant" if str(a) == str(b) else "responds"
+
+
+def substance_findings(bundle: dict) -> list[dict]:
+    """Deterministic RAIL, not panel judgment: every substance probe whose output did not move when its
+    determinants moved is a severity-4 `fabricated_output` finding, regardless of what any evaluator
+    scored. The panel judges from text and can be shown a rendered figure it has no way to doubt; the
+    diff is the evidence, and a diff of nothing is a blocker. Pure; selftested."""
+    out: list[dict] = []
+    for e in _substance_entries(bundle):
+        if _substance_verdict(e) not in SUBSTANCE_BAD_VERDICTS:
+            continue
+        surface = str(e.get("surface") or "computed surface")
+        figure = str(e.get("figure") or "figure")
+        out.append(
+            {
+                "dimension": "truthfulness",
+                "severity": 4,
+                "screen": surface,
+                "element": figure,
+                "click_path": [
+                    f"produce {figure} with input A: {str(e.get('input_a') or '?')[:120]}",
+                    f"produce {figure} with input B: {str(e.get('input_b') or '?')[:120]}",
+                    "diff the outputs",
+                ],
+                "expected": f"{figure} changes when its determinants change",
+                "actual": (
+                    f"output A = {str(e.get('output_a') or '')[:160]}; "
+                    f"output B = {str(e.get('output_b') or '')[:160]}; "
+                    f"diff: {str(e.get('diff') or 'none')[:160]}"
+                ),
+                "failure_mode": "fabricated_output",
+                "confidence": 1.0,
+                "source": "substance",
+                "fix_hint": (
+                    "derive the value from the inputs it claims to depend on, or label it as not "
+                    "computed and remove it from any screen whose purpose is a decision"
+                ),
+            }
+        )
+    return out
+
+
+def substance_gaps(bundle: dict) -> list[str]:
+    """Computed surfaces the bundle declares but did not probe: substance entries without both outputs
+    (or an explicit unprobed verdict), plus coverage rows not driven for want of a probe. Printed with
+    the gate so an unprobed surface is a named gap, never a silent pass. Pure; selftested."""
+    gaps: list[str] = []
+    for e in _substance_entries(bundle):
+        if _substance_verdict(e) in SUBSTANCE_UNPROBED_VERDICTS:
+            gaps.append(
+                f"{e.get('surface') or 'computed surface'}: {e.get('figure') or 'figure'} not probed"
+            )
+    for row in (bundle or {}).get("coverage") or []:
+        if not isinstance(row, dict) or row.get("driven") is not False:
+            continue
+        text = f"{row.get('note') or ''} {row.get('reason') or ''}".lower()
+        if "substance" in text or "probe" in text:
+            gaps.append(
+                f"{row.get('surface') or 'surface'}: {row.get('note') or row.get('reason')}"
+            )
+    return gaps
 
 
 def severity_from_median(m: float) -> int:
@@ -275,6 +365,23 @@ def derive_findings(
             element = "in-app help / field labels / error messages"
             evidence = str(help_text)[:300]
             click_path = ["open the app", "read the labels and any error/help text"]
+        elif dim == "truthfulness":
+            # The rail (`substance_findings`) already emits a blocker for every bad probe; here the
+            # low median only needs grounding. No probe in the bundle -> no finding (evidence gap).
+            bad = [
+                e
+                for e in _substance_entries(bundle)
+                if _substance_verdict(e) in SUBSTANCE_BAD_VERDICTS
+            ]
+            if bad:
+                e0 = bad[0]
+                screen = str(e0.get("surface") or first_screen)
+                element = str(e0.get("figure") or "computed figure")
+                evidence = (
+                    f"output did not change between input A and input B "
+                    f"(A={str(e0.get('output_a') or '')[:80]}, B={str(e0.get('output_b') or '')[:80]})"
+                )
+                click_path = ["produce the figure twice with different inputs", "diff the outputs"]
         if evidence is None:
             continue  # no concrete bundle evidence -> leave as evidence_gap; do NOT fabricate
         out.append(
@@ -302,18 +409,26 @@ def build_rubric_prompt(bundle: dict) -> str:
         "You are a UX evaluator reviewing a pre-captured frontend bundle (accessibility trees, "
         "scenario transcripts with OBSERVED outcomes, and Gate-1 wiring findings). Evaluators do "
         "NOT browse the live URL — judge ONLY from the supplied evidence.\n\n"
-        "Score four dimensions 0-10:\n"
+        "Score five dimensions 0-10:\n"
         "- wired: do controls do what they claim? cross-check the wired findings; flag claimed-but-dead\n"
         "- usability: can a first-time user finish the core task without confusion?\n"
         "- help_clarity: are labels/tooltips/empty-states/errors sufficient & clear?\n"
-        "- workflow_productivity: is the core workflow efficient — steps/clicks/friction?\n\n"
+        "- workflow_productivity: is the core workflow efficient — steps/clicks/friction?\n"
+        "- truthfulness: are the figures, statuses and recommendations shown DERIVED FROM THE USER'S "
+        "INPUTS? Judge ONLY from the bundle's `substance` block (per computed surface: two materially "
+        "different inputs, their outputs, the diff). An output that did not change when its "
+        "determinants changed is fabricated_output at severity 4. A rendered figure is not evidence "
+        "that it is real. If the screens show computed figures and the bundle has no `substance` "
+        "entry for them, score truthfulness 0 and name each such surface in evidence_gaps.\n\n"
         "Return STRICT JSON only, exactly this shape:\n"
-        '{"scores":{"wired":0-10,"usability":0-10,"help_clarity":0-10,"workflow_productivity":0-10},\n'
-        ' "findings":[{"dimension":"<wired|usability|help_clarity|workflow_productivity>",'
+        '{"scores":{"wired":0-10,"usability":0-10,"help_clarity":0-10,"workflow_productivity":0-10,'
+        '"truthfulness":0-10},\n'
+        ' "findings":[{"dimension":"<wired|usability|help_clarity|workflow_productivity|truthfulness>",'
         '"severity":0-4,"screen":"<name>","element":"<what>",'
         '"click_path":["step1","step2"],"expected":"<...>","actual":"<...>","fix_hint":"<...>",'
         '"confidence":0-1,'
-        '"failure_mode":"<false_success|recovery_failure|efficiency_trap|confusion|missing_help>"}],\n'
+        '"failure_mode":"<false_success|recovery_failure|efficiency_trap|confusion|missing_help|'
+        'fabricated_output>"}],\n'
         ' "overall":0-10,\n'
         ' "evidence_gaps":["<bundle data that was missing to judge well>"]}\n\n'
         "HARD RULES:\n"
@@ -321,7 +436,9 @@ def build_rubric_prompt(bundle: dict) -> str:
         'dimension, citing screen + click_path + expected + actual — no abstract findings ("feels '
         'clunky") allowed. A low score with no finding is invalid output.\n'
         "(b) severity scale 0=none, 1=cosmetic, 2=minor, 3=major, 4=blocker;\n"
-        "(c) return STRICT JSON only, no prose.\n\n"
+        "(c) return STRICT JSON only, no prose;\n"
+        "(d) truthfulness is scored from the `substance` block and nothing else — never from how "
+        "plausible a number looks.\n\n"
         'OBSERVED OUTCOMES RULE: Each scenario step includes an "observed" field documenting what '
         "actually happened (from Gate-1 click→assert). Never infer behavior not present in observed. "
         "But an OBSERVED failure — a dead-end, an error, a cryptic message, a missing affordance — IS "
@@ -343,7 +460,8 @@ def build_adversarial_prompt(bundle: dict) -> str:
         '{"findings":[{"dimension":"adversarial","severity":0-4,"screen":"<name>","element":"<what>",'
         '"click_path":["step1","step2"],"expected":"<...>","actual":"<...>","fix_hint":"<...>",'
         '"confidence":0-1,'
-        '"failure_mode":"<false_success|recovery_failure|efficiency_trap|confusion|missing_help>",'
+        '"failure_mode":"<false_success|recovery_failure|efficiency_trap|confusion|missing_help|'
+        'fabricated_output>",'
         '"stuck_probability":0-1}],\n'
         ' "worst_case":"<the single most likely point of failure>",\n'
         ' "evidence_gaps":["<bundle data that was missing>"]}\n\n'
@@ -413,8 +531,14 @@ def aggregate_panel(
     evaluator_results: dict[str, dict | None],
     adversarial_result: dict | None,
     n_evaluators: int,
+    bundle: dict | None = None,
 ) -> dict:
-    """Pure aggregation of parsed evaluator JSON into dimension medians, flags, and findings."""
+    """Pure aggregation of parsed evaluator JSON into dimension medians, flags, and findings.
+
+    When the bundle is supplied, its `substance` probes are applied as a RAIL on top of the panel:
+    every constant/fabricated probe becomes an accepted severity-4 finding (so it caps the overall
+    and lands in `blockers`), and every unprobed computed surface is listed in `substance_gaps`.
+    """
     dimension_scores: dict[str, list[float]] = {d: [] for d in DIMENSIONS}
     evaluator_overalls: list[float] = []
     evaluator_findings: dict[str, list[dict]] = {}
@@ -452,6 +576,13 @@ def aggregate_panel(
         n_evaluators,
     )
 
+    # Substance rail: the diff is the evidence, and it does not need corroboration.
+    rail = substance_findings(bundle or {})
+    if rail:
+        have = {finding_key(f) for f in accepted}
+        accepted = list(accepted) + [f for f in rail if finding_key(f) not in have]
+    gaps = substance_gaps(bundle or {})
+
     for f in accepted:
         sev = int(f.get("severity") or 0)
         if sev >= 3:
@@ -476,6 +607,12 @@ def aggregate_panel(
         "evidence_gaps": all_gaps,
         "panel": panel,
         "blockers": blockers,
+        "substance_gaps": gaps,
+        "substance": {
+            "probed": len(_substance_entries(bundle or {})),
+            "fabricated": len(rail),
+            "unprobed": len(gaps),
+        },
     }
 
 
@@ -677,7 +814,7 @@ def review(
     adv_out.close()
     adversarial_result = _extract_json(adv_out_path.read_text(errors="replace"))
 
-    agg = aggregate_panel(evaluator_results, adversarial_result, len(evaluators))
+    agg = aggregate_panel(evaluator_results, adversarial_result, len(evaluators), bundle=bundle)
     # Corroborated-consensus set, computed once: the arm labels below are relative to what the
     # PANEL accepted, not to what any single arm claimed.
     accepted_keys = {finding_key(f) for f in (agg.get("findings") or [])}
@@ -831,7 +968,14 @@ def gate_decision(gate1_verdict: dict, gate2_report: dict, min_overall: float = 
         done = False
         reasons.append("blockers_present")
 
-    return {"done": done, "reasons": reasons}
+    # A computed surface nobody probed is not a pass. The gate prints the gap by name so "done" can
+    # never be reached by leaving the substance block out of the bundle.
+    unprobed = list(gate2_report.get("substance_gaps") or [])
+    if unprobed:
+        done = False
+        reasons.append(f"substance_unprobed:{len(unprobed)}")
+
+    return {"done": done, "reasons": reasons, "substance_gaps": unprobed}
 
 
 def synthesize_improvements(report: dict) -> dict:
@@ -887,7 +1031,74 @@ def _sample_bundle() -> dict:
                 "goal": "see results",
             }
         ],
+        "substance": [
+            {
+                "surface": "Results",
+                "figure": "annualised return",
+                "input_a": "lookback=12",
+                "output_a": "0.081",
+                "input_b": "lookback=36",
+                "output_b": "0.054",
+                "diff": "0.081 -> 0.054",
+                "verdict": "responds",
+            }
+        ],
     }
+
+
+def _selftest_substance() -> None:
+    """The truthfulness rail: a probe whose output did not move is a blocker whatever the panel
+    scored; an unprobed computed surface blocks the gate by name; a responding probe adds nothing.
+    """
+    responds = _sample_bundle()
+    assert substance_findings(responds) == [] and substance_gaps(responds) == []
+    fab = {
+        "screens": [{"name": "Compare"}],
+        "substance": [
+            {
+                "surface": "Compare",
+                "figure": "estimated_total",
+                "input_a": "Reykjavik, party 1",
+                "output_a": "1160",
+                "input_b": "Nairobi, party 8",
+                "output_b": "1160",
+                "diff": "none",
+            }
+        ],
+        "coverage": [{"surface": "Budget", "driven": False, "note": "no substance probe run"}],
+    }
+    # verdict omitted -> judged from equal outputs -> constant
+    assert _substance_verdict(fab["substance"][0]) == "constant"
+    sf = substance_findings(fab)
+    assert len(sf) == 1 and sf[0]["severity"] == 4, sf
+    assert sf[0]["failure_mode"] == "fabricated_output" and sf[0]["dimension"] == "truthfulness"
+    assert "1160" in sf[0]["actual"] and sf[0]["source"] == "substance"
+    assert substance_gaps(fab) == ["Budget: no substance probe run"], substance_gaps(fab)
+    clean_panel = {
+        ev: {
+            "scores": {d: 9 for d in DIMENSIONS},
+            "overall": 9,
+            "findings": [],
+            "evidence_gaps": [],
+        }
+        for ev in ("a", "b", "c", "d")
+    }
+    agg = aggregate_panel(clean_panel, {"findings": []}, 4, bundle=fab)
+    assert agg["overall_median"] <= 3.0, agg["overall_median"]  # rail caps a unanimous 9
+    assert any(f["failure_mode"] == "fabricated_output" for f in agg["blockers"]), agg["blockers"]
+    assert agg["substance"] == {"probed": 1, "fabricated": 1, "unprobed": 1}, agg["substance"]
+    g = gate_decision({"ok": True}, agg)
+    assert not g["done"] and "blockers_present" in g["reasons"], g
+    assert any(r.startswith("substance_unprobed:1") for r in g["reasons"]), g
+    # without the bundle the aggregation is unchanged (old callers, old behaviour)
+    agg0 = aggregate_panel(clean_panel, {"findings": []}, 4)
+    assert agg0["overall_median"] == 9.0 and agg0["blockers"] == [] and agg0["substance_gaps"] == []
+    # a responding probe with the same clean panel: done
+    aggr = aggregate_panel(clean_panel, {"findings": []}, 4, bundle=responds)
+    assert gate_decision({"ok": True}, aggr)["done"], gate_decision({"ok": True}, aggr)
+    # derive_findings grounds a low truthfulness median only when a bad probe exists
+    assert derive_findings(fab, {"truthfulness": 1})[0]["failure_mode"] == "fabricated_output"
+    assert derive_findings({"screens": [{"name": "X"}]}, {"truthfulness": 1}) == []
 
 
 def _selftest_panel_backfill() -> None:
@@ -946,12 +1157,16 @@ def _selftest_panel_backfill() -> None:
 
 def _selftest() -> None:
     _selftest_panel_backfill()
+    _selftest_substance()
     bundle = _sample_bundle()
 
     rubric = build_rubric_prompt(bundle)
     for dim in DIMENSIONS:
         assert dim in rubric, dim
     assert "workflow_productivity" in rubric
+    assert "truthfulness" in DIMENSIONS and "fabricated_output" in FAILURE_MODES
+    assert '"truthfulness":0-10' in rubric and "fabricated_output" in rubric
+    assert "fabricated_output" in build_adversarial_prompt(bundle)
     assert '"scores":{"wired":0-10' in rubric or '"scores":{"wired":0-10,' in rubric.replace(
         "\n", ""
     )
@@ -1211,7 +1426,8 @@ def _selftest() -> None:
     print(
         "ux_review.py selftest: OK (rubric+adversarial prompts, median, consensus_flag, finding "
         "dedupe+acceptance+non_findings, blocker-capped overall, gate_decision, evidence-gap passthrough, "
-        "fix_hint collection + improvement synthesis, derive_findings grounded synthesis)"
+        "fix_hint collection + improvement synthesis, derive_findings grounded synthesis, "
+        "truthfulness substance rail + gate gap)"
     )
 
 
