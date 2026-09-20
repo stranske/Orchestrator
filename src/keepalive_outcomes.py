@@ -55,9 +55,15 @@ def _resolve_registry_path() -> Path:
     return DROPBOX_REGISTRY_PATH
 
 
+# NO `commits` HERE. `gh pr list --json ...,commits --limit 300` fails as a whole — GitHub answers
+# "requesting up to 1,000,000 possible nodes which exceeds the maximum limit of 500,000" — and
+# _run_json turned that failure into an empty list, so from the 2026-09-18 mirror sync until
+# 2026-09-20 every tick reported `prs_seen: 0` across all repos while the fleet merged dozens of
+# PRs. Commit identities are fetched separately, 40 PRs per GraphQL query, and only for PRs the
+# cheaper resolvers could not attribute (`_attach_commit_identities`).
 PR_LIST_FIELDS = (
     "number,state,title,labels,createdAt,updatedAt,mergedAt,closedAt,"
-    "headRefName,baseRefName,mergeCommit,author,body,url,commits"
+    "headRefName,baseRefName,mergeCommit,author,body,url"
 )
 PR_CONTEXT_FIELDS = "body,comments"
 PROCESS_WORK_TYPES = {"renovate", "sync", "tooling", "docs"}
@@ -115,8 +121,9 @@ def _since_date(lookback_days: int, now: int | None = None) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
-def _fetch_prs(repo: str, lookback_days: int, *, now: int | None = None) -> list[dict]:
-    """Live GitHub fetch: broad PR metadata, filtered locally by agent labels."""
+def _fetch_prs(repo: str, lookback_days: int, *, now: int | None = None) -> list[dict] | None:
+    """Live GitHub fetch: broad PR metadata, filtered locally by agent labels. Returns None when
+    `gh pr list` failed, so a failed fetch can never read as an empty repo."""
     since = _since_date(lookback_days, now=now)
     arr = _run_json(
         [
@@ -135,7 +142,39 @@ def _fetch_prs(repo: str, lookback_days: int, *, now: int | None = None) -> list
             PR_LIST_FIELDS,
         ]
     )
-    return arr if isinstance(arr, list) else []
+    return arr if isinstance(arr, list) else None
+
+
+def _attach_commit_identities(repo: str, prs: list[dict], *, evidence_fn=None) -> int:
+    """For PRs the cheap resolvers leave unattributed, fetch commit identities in batches of 40
+    (one GraphQL query each, per-PR retry inside) and stash them on the row as
+    `_commit_identities`. Returns how many PRs were enriched."""
+    fetch = evidence_fn or _backfill_evidence_batch
+    pending: list[int] = []
+    for pr in prs:
+        if pr.get("number") is None:
+            continue
+        agent, source = derive_attribution(
+            _label_names(pr),
+            author=_author_login(pr),
+            summary=str(pr.get("body") or ""),
+            head_ref=str(pr.get("headRefName") or ""),
+            commit_identities=_commit_identities(pr),
+            repo=repo,
+            created_ts=_created_epoch(pr),
+        )
+        if agent == NON_AGENT and source == ATTRIBUTION_UNRESOLVED:
+            pending.append(int(pr["number"]))
+    if not pending:
+        return 0
+    evidence = fetch(repo, pending)
+    enriched = 0
+    for pr in prs:
+        ev = evidence.get(int(pr["number"])) if pr.get("number") is not None else None
+        if isinstance(ev, dict) and ev.get("commit_identities"):
+            pr["_commit_identities"] = list(ev["commit_identities"])
+            enriched += 1
+    return enriched
 
 
 def _fetch_pr_context(repo: str, pr_number: int) -> str:
@@ -301,6 +340,8 @@ class IngestSummary(TypedDict):
     non_agent_runs_recorded: int
     by_source: dict[str, int]
     attribution: dict[str, object]
+    fetch_failed_repos: list[str]
+    commit_identity_enriched: int
 
 
 def _agent_from_labels(labels: list[str]) -> tuple[str, str] | None:
@@ -873,6 +914,7 @@ def ingest_keepalive_outcomes(
     _revert_fn=None,
     include_non_agent: bool = False,
     _closure_context_fn=None,
+    _evidence_fetch_fn=None,
 ) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
@@ -894,13 +936,28 @@ def ingest_keepalive_outcomes(
         "non_agent_runs_recorded": 0,
         "by_source": {},
         "attribution": {"let_through": 0, "blocked": 0, "by_source": {}},
+        "fetch_failed_repos": [],
+        "commit_identity_enriched": 0,
     }
 
     for repo in repos:
         _gh_throttle("core")  # `gh pr list` per repo = CORE (5000/hr)
         prs = pr_fetch_fn(repo, lookback_days)
+        if prs is None:
+            # A failed `gh pr list` is NOT an empty repo. Name it in the summary and on stderr so
+            # `prs_seen: 0` can never again pass for three days as "nothing merged".
+            summary["fetch_failed_repos"].append(repo)
+            print(
+                f"keepalive_outcomes: gh pr list FAILED for {repo} — its PRs were not ingested "
+                "this run (a fetch failure, not an empty repo)",
+                file=sys.stderr,
+            )
+            continue
         if not isinstance(prs, list):
             prs = []
+        summary["commit_identity_enriched"] += _attach_commit_identities(
+            repo, prs, evidence_fn=_evidence_fetch_fn
+        )
         for pr in prs:
             labels = _label_names(pr)
             agent, attribution_source = derive_attribution(
@@ -908,7 +965,7 @@ def ingest_keepalive_outcomes(
                 author=_author_login(pr),
                 summary=str(pr.get("body") or ""),
                 head_ref=str(pr.get("headRefName") or ""),
-                commit_identities=_commit_identities(pr),
+                commit_identities=pr.get("_commit_identities") or _commit_identities(pr),
                 repo=repo,
                 created_ts=_created_epoch(pr),
             )
