@@ -3349,8 +3349,13 @@ def main(argv: list[str]) -> int:
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         try:
             out = offload(
-                ns.agent, prompt, cwd=ns.cwd, mode=ns.mode, timeout=ns.timeout,
-                isolate=ns.isolate, profile_id=ns.profile_id,
+                ns.agent,
+                prompt,
+                cwd=ns.cwd,
+                mode=ns.mode,
+                timeout=ns.timeout,
+                isolate=ns.isolate,
+                profile_id=ns.profile_id,
             )
         except KeyboardInterrupt:
             out = {

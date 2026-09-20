@@ -74,10 +74,22 @@ def test_cli_forwards_explicit_astra_profile_without_running_it(monkeypatch, cap
         return {"exit": 0, "output": "planned"}
 
     monkeypatch.setattr(dispatcher, "offload", fake_offload)
-    assert dispatcher.main([
-        "offload", "--agent", "codex", "--mode", "assess",
-        "--profile-id", "codex-6-astra-medium", "--prompt", "Diagnose the blocker",
-    ]) == 0
+    assert (
+        dispatcher.main(
+            [
+                "offload",
+                "--agent",
+                "codex",
+                "--mode",
+                "assess",
+                "--profile-id",
+                "codex-6-astra-medium",
+                "--prompt",
+                "Diagnose the blocker",
+            ]
+        )
+        == 0
+    )
     assert observed["profile_id"] == "codex-6-astra-medium"
     assert observed["mode"] == "assess"
     assert capsys.readouterr().out.strip() == "planned"
