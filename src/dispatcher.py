@@ -1339,6 +1339,7 @@ def offload(
     isolate: bool = False,
     profile_id: str | None = None,
     research_round: str | None = None,
+    task_type: str | None = None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -1365,7 +1366,11 @@ def offload(
     `research_subjects.record_research_round`). An audit or study that fans work out to several
     agents is comparable evidence, but only if the runs carry the round as their experiment_id:
     without it each agent is an unrelated run against an ephemeral temp path, which is why
-    thousands of offload runs across six agents produced nothing the learner could compare."""
+    thousands of offload runs across six agents produced nothing the learner could compare.
+
+    `task_type` names what the work IS (review, mechanical, implement, ...) so the run the learner
+    reads is ranked under that type. None keeps the historical literal "offload", under which every
+    offload run before 2026-09-20 was recorded regardless of the work it did."""
     # KILL SWITCH. Added 2026-08-21 because the admission gate was literally right: nothing could
     # stop the fleet's most-used capability (~196 runs/week) without a code change. That is not
     # theoretical -- on 2026-08-08 the gemini model pin rotted and EVERY offload to that seat exited
@@ -1507,7 +1512,7 @@ def offload(
     )
     run_id = f"offload:{agent}:{time.time_ns()}"
     target = f"offload:{run_cwd}"
-    task_type = "offload"
+    task_type = task_type or "offload"
     model = adapters.model_identity(agent, mode, profile)
     started_ts = int(time.time())
     adapters.record_ledger(
@@ -3371,6 +3376,15 @@ def main(argv: list[str]) -> int:
         p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--timeout", type=int, default=None)
         p.add_argument(
+            "--research-round",
+            help="bind this offload to a multi-agent research round (its experiment_id); see "
+            "research_subjects.record_research_round — without it the run is not comparable evidence",
+        )
+        p.add_argument(
+            "--task-type",
+            help="what the work is (review, mechanical, implement, ...); default keeps the literal offload",
+        )
+        p.add_argument(
             "--isolate",
             "--worktree-isolation",
             action="store_true",
@@ -3391,6 +3405,8 @@ def main(argv: list[str]) -> int:
                 timeout=ns.timeout,
                 isolate=ns.isolate,
                 profile_id=ns.profile_id,
+                research_round=ns.research_round,
+                task_type=ns.task_type,
             )
         except KeyboardInterrupt:
             out = {

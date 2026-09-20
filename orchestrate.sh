@@ -264,6 +264,12 @@ else
   # SHADOW: print what the remote tick WOULD delegate; applies NO labels, no heartbeat, no ingest writes.
   python3 "$ORCH/tick.py"
 fi
+# ROUNDS: BOTH QUANTITIES, EVERY TICK. Offload runs bound to a research round are the only offload
+# evidence the learner can compare (dispatcher.offload research_round=); how many of them are SCORED is
+# the drain. Added 2026-09-20, when 3,285 offload runs over four months had zero outcome rows and no
+# line anywhere said so. Read-only, never fatal.
+python3 "$ORCH/research_subjects.py" rounds-report --headline 2>> "$STAMP_DIR/rounds-report.log" \
+  || echo "  ROUNDS: report unavailable — see $STAMP_DIR/rounds-report.log"
 
 # --- Learning cadence (fail-open; safe in BOTH modes — only updates the feedback store) --------------
 # Closes the loop "in production" (IMPROVEMENT_BACKLOG.md #1): DAILY durability sweep resolves
