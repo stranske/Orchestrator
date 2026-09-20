@@ -47,6 +47,25 @@ def test_offload_modes_select_bounded_profiles():
         assert dispatcher._select_offload_profile("codex", mode)["profile_id"] == profile_id
 
 
+def test_direct_delegate_honors_closer_lane_and_explicit_mode():
+    choose = execution_profiles.default_codex_delegate_profile
+    assert choose("implement", "opener") == "codex-5.6-sol-high"
+    assert choose("implement", "closer") == "codex-5.6-sol-medium"
+    assert choose("implement", "closer", "mid") == "codex-5.6-terra-medium"
+    assert choose("implement", "opener", "cheap") == "codex-5.6-luna-low"
+
+
+def test_invalid_explicit_delegate_profile_fails_before_claim(monkeypatch):
+    def unexpected_claim(*_args, **_kwargs):
+        raise AssertionError("invalid profile must not claim a target")
+
+    monkeypatch.setattr(dispatcher.claims, "claim", unexpected_claim)
+    result = dispatcher.delegate(
+        "codex", "owner/repo#1", "closer", "diagnose", profile_id="missing-profile"
+    )
+    assert "unknown execution profile" in result["error"]
+
+
 def test_cli_forwards_explicit_astra_profile_without_running_it(monkeypatch, capsys):
     observed = {}
 

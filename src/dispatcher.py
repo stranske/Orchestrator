@@ -1087,10 +1087,20 @@ def delegate(
     wrapper). Returns {pid, log, worktree} to monitor, or {error}. This is the seat's hand —
     it decides WHO/WHAT/HOW (the prompt); this just executes safely. `task_type` is recorded for
     the feedback loop (the REAL kind of work, not a generic 'delegated')."""
+    explicit_mode = mode
     if mode is None:
         mode = "composer" if agent == "cursor" else "full"
     if agent == "codex" and profile_id is None:
-        profile_id = execution_profiles.default_codex_profile(task_type, mode)
+        profile_id = execution_profiles.default_codex_delegate_profile(
+            task_type, lane, explicit_mode
+        )
+    if profile_id:
+        try:
+            requested_profile = execution_profiles.get_profile(profile_id)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if requested_profile["agent"] != agent:
+            return {"error": f"profile {profile_id} does not belong to {agent}"}
     claims.reap_stale()
     if not claims.claim(target, agent):
         h = claims.holder(target)

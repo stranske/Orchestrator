@@ -295,6 +295,17 @@ def default_codex_profile(task_type: str, mode: str | None = None) -> str:
     return CODEX_TASK_PROFILES.get(task_type, "codex-5.6-sol-medium")
 
 
+def default_codex_delegate_profile(
+    task_type: str, lane: str, explicit_mode: str | None = None
+) -> str:
+    """Pick a direct delegate's profile without losing explicit tier requests."""
+    if explicit_mode in CODEX_OFFLOAD_PROFILES:
+        return CODEX_OFFLOAD_PROFILES[explicit_mode]
+    if lane == "closer" and task_type == "implement":
+        return CODEX_TASK_PROFILES["closer"]
+    return default_codex_profile(task_type)
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 

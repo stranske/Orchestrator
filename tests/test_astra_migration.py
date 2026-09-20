@@ -13,33 +13,26 @@ def test_full_tier_routes_sol_and_astra_remains_explicit():
     assert execution_profiles.get_profile("codex-6-astra-high")["reasoning_effort"] == "high"
 
 
-def test_existing_profile_database_survives_full_tier_retirement(monkeypatch):
+def test_existing_profile_database_accepts_new_immutable_profiles(tmp_path, monkeypatch):
     import copy
     import sqlite3
 
     current = execution_profiles.PROFILE_REGISTRY
-    before = copy.deepcopy(current)
-    before.pop("codex-6-astra-high")
-    with sqlite3.connect(":memory:") as conn:
+    new_ids = {
+        "codex-6-astra-medium",
+        "codex-5.6-sol-medium",
+        "codex-5.6-terra-medium",
+        "codex-5.6-luna-low",
+    }
+    before = copy.deepcopy({pid: p for pid, p in current.items() if pid not in new_ids})
+    with sqlite3.connect(tmp_path / "old-profiles.db") as conn:
         monkeypatch.setattr(execution_profiles, "PROFILE_REGISTRY", before)
         execution_profiles.ensure_schema(conn)
-        old = conn.execute(
-            "SELECT definition_json FROM execution_profiles WHERE profile_id=?",
-            ("codex-5.6-sol-high",),
-        ).fetchone()[0]
+        old = dict(conn.execute("SELECT profile_id, definition_json FROM execution_profiles"))
+        assert set(old) == set(before)
         monkeypatch.setattr(execution_profiles, "PROFILE_REGISTRY", current)
         execution_profiles.ensure_schema(conn)
-        assert (
-            conn.execute(
-                "SELECT definition_json FROM execution_profiles WHERE profile_id=?",
-                ("codex-5.6-sol-high",),
-            ).fetchone()[0]
-            == old
-        )
-        assert (
-            conn.execute(
-                "SELECT count(*) FROM execution_profiles WHERE profile_id=?",
-                ("codex-6-astra-high",),
-            ).fetchone()[0]
-            == 1
-        )
+        updated = dict(conn.execute("SELECT profile_id, definition_json FROM execution_profiles"))
+        assert {pid: updated[pid] for pid in old} == old
+        assert set(updated) == set(current)
+        assert new_ids <= set(updated)

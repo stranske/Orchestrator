@@ -532,7 +532,9 @@ Terra Medium; `--mode cheap` selects Luna Low for structured extraction, and
 diagnosis, run `dispatcher.py offload --agent codex --mode assess --profile-id
 codex-6-astra-medium --prompt '...'`; name `codex-6-astra-high` only for the
 hardest case. `--profile-id` also works with `delegate` when an exact execution
-profile is needed. The older high-effort trial IDs remain available explicitly.
+profile is needed. Direct `delegate --lane closer` defaults to Sol Medium; an
+explicit `--mode cheap|mid|full|assess` on `delegate` overrides that default.
+The older high-effort trial IDs remain available explicitly.
 
 | work | lean toward | why |
 |---|---|---|
