@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-09-04T00:46:11Z",
+  "generated_at": "2026-09-21T23:51:52Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
       {
         "agent": "claude",
         "n_obs": 156,
-        "posterior": 0.5794101133693836,
-        "success_rate": 0.5750833099392093
+        "posterior": 0.5909803141669991,
+        "success_rate": 0.588431108455187
       }
     ],
     "review": [
       {
         "agent": "claude",
         "n_obs": 153,
-        "posterior": 0.5646173807726319,
-        "success_rate": 0.5710154412029592
+        "posterior": 0.562464439492965,
+        "success_rate": 0.5710239621642846
       }
     ]
   },
   "schema": "orchestrator.route-weights/v1",
-  "source_version": 61,
+  "source_version": 63,
   "task_types": {
     "codemod": {
       "evidence_ok": false,
@@ -35,27 +35,27 @@
       "ranking": [
         {
           "agent": "cursor",
-          "n_obs": 305,
-          "posterior": 0.7632370515677257,
-          "success_rate": 0.7775676215357702
+          "n_obs": 309,
+          "posterior": 0.7743682776195336,
+          "success_rate": 0.7937722077941248
         },
         {
           "agent": "codex",
-          "n_obs": 282,
-          "posterior": 0.6723135407817148,
-          "success_rate": 0.6747036308548813
+          "n_obs": 289,
+          "posterior": 0.6735282121466221,
+          "success_rate": 0.6766104244886273
         },
         {
           "agent": "vibe",
-          "n_obs": 131,
-          "posterior": 0.6278282312271465,
-          "success_rate": 0.6467384765357295
+          "n_obs": 132,
+          "posterior": 0.6336092711753538,
+          "success_rate": 0.6606365336539632
         },
         {
           "agent": "gemini",
-          "n_obs": 108,
-          "posterior": 0.4459606482374494,
-          "success_rate": 0.41462333954373276
+          "n_obs": 109,
+          "posterior": 0.46753827272285936,
+          "success_rate": 0.43367967692483483
         }
       ]
     },
@@ -68,27 +68,27 @@
       "ranking": [
         {
           "agent": "cursor",
-          "n_obs": 306,
-          "posterior": 0.755284023353522,
-          "success_rate": 0.757988107026492
+          "n_obs": 307,
+          "posterior": 0.7529280281800504,
+          "success_rate": 0.7564888697737803
         },
         {
           "agent": "codex",
-          "n_obs": 273,
-          "posterior": 0.7274920285848102,
-          "success_rate": 0.7341677620630491
+          "n_obs": 274,
+          "posterior": 0.7262077731258664,
+          "success_rate": 0.7352936056466979
         },
         {
           "agent": "vibe",
           "n_obs": 139,
-          "posterior": 0.6317007093093712,
-          "success_rate": 0.6323904183559171
+          "posterior": 0.6314876046358155,
+          "success_rate": 0.6324118585911501
         },
         {
           "agent": "gemini",
-          "n_obs": 108,
-          "posterior": 0.5323705935551267,
-          "success_rate": 0.5232864976902931
+          "n_obs": 109,
+          "posterior": 0.5286797756237284,
+          "success_rate": 0.5153880817131923
         }
       ]
     },
@@ -97,14 +97,14 @@
       "ranking": [
         {
           "agent": "codex",
-          "n_obs": 34,
-          "posterior": 0.8034562428972886,
-          "success_rate": 0.9806495140460264
+          "n_obs": 64,
+          "posterior": 0.735100560039653,
+          "success_rate": 0.7644256809323431
         },
         {
           "agent": "vibe",
           "n_obs": 24,
-          "posterior": 0.7029170836906028,
+          "posterior": 0.6837445503340556,
           "success_rate": 0.8569444444444444
         }
       ]
