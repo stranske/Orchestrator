@@ -85,7 +85,15 @@ PROCESS_DUPLICATE_CLOSURE_RE = re.compile(
 )
 
 
+INGEST_STATUSES = frozenset({"active", "paused"})
+
+
 def _active_repos(registry_path: Path | None = None) -> list[str]:
+    """Repos whose PR outcomes are evidence. `paused` pauses the weekly REPO REVIEW, not the fleet:
+    keepalive keeps merging PRs there, and until 2026-09-20 this read only `active`, so Doc-Lineage,
+    Deliverable-Render and Manager-Mosaic (74 merged PRs in 60 days, 41 agent-labelled) had zero
+    Brain rows and 23 audit findings closed there could not inherit durability. `ignored` stays out.
+    """
     path = registry_path or _resolve_registry_path()
     try:
         data = json.loads(path.expanduser().read_text())
@@ -97,7 +105,7 @@ def _active_repos(registry_path: Path | None = None) -> list[str]:
         ) from exc
     repos = []
     for item in data.get("repos", []):
-        if item.get("status") == "active" and item.get("repo"):
+        if item.get("status") in INGEST_STATUSES and item.get("repo"):
             repos.append(item["repo"])
     return repos
 
