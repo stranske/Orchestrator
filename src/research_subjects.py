@@ -531,12 +531,17 @@ def record_finding_issue(
             db.close()
 
 
+CLOSURE_SOURCES = frozenset({"github:closedByPullRequestsReferences"})
+
+
 def record_finding_implementation(
     round_id: str,
     issue_target: str,
     implementation_run_id: str,
     *,
     identity: dict | None = None,
+    closed_by: str | None = None,
+    closure_source: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> str:
     """Bind a filed finding to THE run that implemented it. The causal half of the linkage.
@@ -556,12 +561,31 @@ def record_finding_implementation(
 
     Same event log, one more `decision`. A second table for "which run delivered this" would be the
     parallel store the learning-loop rules forbid.
+
+    THE FLEET IMPLEMENTS ISSUES THROUGH PULL REQUESTS, AND THE BRAIN RECORDS THOSE RUNS BY PR. Every
+    keepalive run targets `owner/repo#<PR>`, never the issue, so for a fleet-delivered finding the
+    validator above could only ever refuse -- measured 2026-09-20: 145 of 162 audit findings were
+    closed by a merged PR and not one could be bound. `closed_by` names that PR and the run must
+    have targeted IT; `closure_source` names where the issue->PR fact came from (GitHub's own
+    closing reference, never a title match or a timestamp guess), and both are recorded on the
+    event so the binding stays a declared, auditable fact. A `closed_by` without its source is
+    refused: an unnamed source would let a heuristic wear the validator's clothes.
     """
     db = conn or feedback._conn()
     close = conn is None
     try:
         ensure_schema(db)
         issue_key = canonical_target(issue_target)
+        closed_key: str | None = None
+        if closed_by:
+            if str(closure_source or "") not in CLOSURE_SOURCES:
+                raise ValueError(
+                    f"closed_by requires closure_source in {sorted(CLOSURE_SOURCES)}; "
+                    f"got {closure_source!r}"
+                )
+            closed_key = canonical_target(closed_by)
+            if closed_key == issue_key:
+                raise ValueError("closed_by must name the pull request, not the issue itself")
         filed_arm: str | None = None
         for (blob,) in db.execute(
             "SELECT metadata_json FROM research_subject_events "
@@ -579,17 +603,21 @@ def record_finding_implementation(
                 f"no filed finding for {issue_key!r} in round {round_id!r}; "
                 "record the filing before binding its implementation"
             )
-        run_id = _validated_issue_run(db, issue_key, implementation_run_id)
+        run_id = _validated_issue_run(db, closed_key or issue_key, implementation_run_id)
+        metadata: dict = {
+            "issue_target": issue_key,
+            "arm": filed_arm,
+            "implementation_run_id": run_id,
+        }
+        if closed_key:
+            metadata["closed_by"] = closed_key
+            metadata["closure_source"] = str(closure_source)
         return record_event(
             FINDING_IMPLEMENTED,
             identity=identity or round_identity(round_id, conn=db) or {},
             reason=f"{filed_arm}_finding_implemented",
             exp_id=round_id,
-            metadata={
-                "issue_target": issue_key,
-                "arm": filed_arm,
-                "implementation_run_id": run_id,
-            },
+            metadata=metadata,
             conn=db,
         )
     finally:
@@ -1707,6 +1735,16 @@ def main(argv: list[str] | None = None) -> int:
     impl.add_argument("--round-id", required=True)
     impl.add_argument("--issue", required=True, help="owner/repo#N the finding became")
     impl.add_argument("--run-id", required=True, help="the run that delivered that issue")
+    impl.add_argument(
+        "--closed-by-pr",
+        help="owner/repo#N of the merged PR that closed the issue, when the run targeted the PR "
+        "(the fleet's keepalive runs always do); requires --closure-source",
+    )
+    impl.add_argument(
+        "--closure-source",
+        choices=sorted(CLOSURE_SOURCES),
+        help="where the issue->PR fact came from",
+    )
     dur = sub.add_parser("round-durability", help="inherit downstream durability for a round")
     dur.add_argument("--round-id", required=True)
     dur.add_argument(
@@ -1780,7 +1818,12 @@ def main(argv: list[str] | None = None) -> int:
             ensure_schema(conn)
             try:
                 event_id = record_finding_implementation(
-                    args.round_id, args.issue, args.run_id, conn=conn
+                    args.round_id,
+                    args.issue,
+                    args.run_id,
+                    closed_by=args.closed_by_pr,
+                    closure_source=args.closure_source,
+                    conn=conn,
                 )
             except ValueError as exc:
                 print(json.dumps({"recorded": False, "reason": str(exc)}))
