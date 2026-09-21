@@ -84,3 +84,25 @@ def test_unresolved_prs_get_commit_identities_from_the_batch_only(brain):
     assert summary["prs_seen"] == 2 and summary["runs_recorded"] == 2
     assert summary["attribution"]["by_source"].get("commit_identity") == 1
     assert summary["attribution"]["by_source"].get("branch_prefix") == 1
+
+
+def test_paused_review_repos_are_ingested_and_ignored_ones_are_not(tmp_path):
+    """Review cadence and PR evidence are different questions: a paused review still merges PRs."""
+    import json
+
+    import keepalive_outcomes as ko
+
+    reg = tmp_path / "repo_review_registry.json"
+    reg.write_text(
+        json.dumps(
+            {
+                "repos": [
+                    {"repo": "stranske/A", "status": "active"},
+                    {"repo": "stranske/B", "status": "paused"},
+                    {"repo": "stranske/C", "status": "ignored"},
+                    {"status": "active"},
+                ]
+            }
+        )
+    )
+    assert ko._active_repos(reg) == ["stranske/A", "stranske/B"]
