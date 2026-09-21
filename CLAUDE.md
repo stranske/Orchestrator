@@ -390,12 +390,16 @@ Default-OFF `ORCH_*` flags are deliberate (live keepalive apply, Thompson routin
 execution, strategy campaigns, range-lane live dispatch, and since 2026-09-03 the tick's own
 remote dispatch lane and heartbeat, `ORCH_DISPATCH_LANE`).
 
-**Moratorium on new instruments (assessment of 2026-09-03, item 8).** No new capability, ledger,
-measurement surface or instrument until one of that assessment's items changes a fleet outcome;
-the admission gate, the docket and the weekly rail-exercise cadence are enough to know when
-something breaks. Repairs and the assessment's own items are exempt. Flipping one is a real change: justify it,
-prefer the system's own evidence gate where one exists (e.g. exploration_review for routing mode),
-and update the gated-features list in README.md + the dormancy inventory.
+**Moratorium on new instruments — LIFTED 2026-09-21 by the owner.** The 2026-09-03 assessment's
+item 8 held every new capability, ledger, measurement surface and instrument until one of its items
+changed a measured fleet outcome. That condition was met on 2026-09-04: the fleet-gates sweep (#203)
+flagged the Maint 68 promote latch, the repair landed in Workflows #3337, and promote ran after 8.5
+days. The bar for anything new is now the admission gate alone — `ADDING_CAPABILITIES.md` and §0's
+dedup-before-develop: a capability arrives with its nine parts and a stated task it will be scored
+on, or it does not arrive. The objective in §−2 still governs: build nothing whose only output is a
+measurement of itself. Flipping a default-OFF flag is still a real change: justify it, prefer the
+system's own evidence gate where one exists (e.g. exploration_review for routing mode), and update
+the gated-features list in README.md + the dormancy inventory.
 
 ## 5. Keep the docs true
 
