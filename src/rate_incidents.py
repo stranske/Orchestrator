@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +66,11 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
     if _contains_explicit_resource_exhausted(text):
         return "capacity", "resource_exhausted", "high"
     if re.search(
-        r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)", text, re.I
+        r"(?:out of usage|usage exhausted|quota exhausted|capacity exhausted)"
+        r"|(?:you(?:'|’)ve hit your usage limit)"
+        r"|(?:credit(?:s| balance)? (?:exhausted|depleted|used up|too low))",
+        text,
+        re.I,
     ):
         return "quota", "quota_exhausted", "high"
     # A bare number is ordinary task prose (issue 429, 429 lines, 429 tests).
@@ -93,6 +98,81 @@ def classify_provider_failure(text: str) -> tuple[str, str, str]:
 
 def is_authoritative_error(text: str) -> bool:
     return classify_provider_failure(text)[2] == "high"
+
+
+def parse_relay_reset_at(text: str, *, now: int | None = None) -> int | None:
+    """Parse a provider's 'try again at' clock; naive times use host local time."""
+    match = re.search(
+        r"try again at\s+([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+"
+        r"(\d{4})\s+(\d{1,2}:\d{2})\s*(AM|PM)\b\s*(UTC|GMT|Z|[+-]\d{2}:?\d{2})?",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    month, day, year, clock, meridiem, zone = match.groups()
+    try:
+        month_format = "%b" if len(month) == 3 else "%B"
+        parsed = datetime.strptime(
+            f"{month} {day} {year} {clock} {meridiem}",
+            f"{month_format} %d %Y %I:%M %p",
+        )
+        if zone and zone.upper() in {"UTC", "GMT", "Z"}:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        elif zone:
+            normalized = zone if ":" in zone else zone[:3] + ":" + zone[3:]
+            parsed = datetime.fromisoformat(parsed.isoformat() + normalized)
+        reset_at = int(parsed.timestamp())
+    except ValueError:
+        return None
+    return reset_at if reset_at > int(now or time.time()) else None
+
+
+def record_lane_round(
+    *,
+    agent: str,
+    surface: str = "handoff-relay",
+    lane: str,
+    receiver_reason: str | None,
+    exit_status: int,
+    output_file: Path,
+    ts: int | None = None,
+) -> dict[str, Any]:
+    """Persist every relay exit and shed only on a nonzero authoritative failure."""
+    import feedback
+
+    if agent not in {"codex", "claude"}:
+        raise ValueError("agent must be codex or claude")
+    if not surface.strip():
+        raise ValueError("surface must be nonempty")
+    if not output_file.is_file() or output_file.stat().st_size > 128 * 1024:
+        raise ValueError("output-file must be a readable tail of at most 128 KiB")
+    evidence = "\n".join(output_file.read_text(errors="replace").splitlines()[-40:])
+    timestamp = int(ts or time.time())
+    category, subcategory, confidence = classify_provider_failure(evidence)
+    authoritative = exit_status != 0 and confidence == "high"
+    error_class = subcategory if authoritative else ("none" if exit_status == 0 else "unknown")
+    decision_id = feedback.record_lane_round(
+        agent, lane, receiver_reason, exit_status, error_class, timestamp
+    )
+    incident = None
+    if authoritative:
+        incident = record_incident(
+            agent=agent,
+            surface=surface,
+            category=category,
+            run_id=decision_id,
+            evidence=evidence,
+            timestamp=timestamp,
+            reset_at=parse_relay_reset_at(evidence, now=timestamp),
+            extra={"subcategory": subcategory, "lane": lane},
+        )
+    return {
+        "decision_id": decision_id,
+        "error_class": error_class,
+        "incident_id": incident.get("incident_id") if incident else None,
+        "shed": bool(incident and incident.get("shed")),
+    }
 
 
 def stdout_carries_capacity_evidence(text: str) -> bool:
@@ -413,6 +493,16 @@ def main(argv: list[str]) -> int:
     record_parser.add_argument("--status", default="observed")
     record_parser.add_argument("--evidence")
     record_parser.add_argument("--no-shed", action="store_true")
+    lane_parser = subparsers.add_parser(
+        "record-lane-round", help="record a detached handoff relay round"
+    )
+    lane_parser.add_argument("--agent", choices=("codex", "claude"), required=True)
+    lane_parser.add_argument("--surface", required=True)
+    lane_parser.add_argument("--lane", choices=("opener", "closer"), required=True)
+    lane_parser.add_argument("--receiver-reason")
+    lane_parser.add_argument("--exit", dest="exit_status", type=int, required=True)
+    lane_parser.add_argument("--output-file", type=Path, required=True)
+    lane_parser.add_argument("--ts", type=int)
     subparsers.add_parser("summary", help="summarize the append-only incident ledger")
     args = parser.parse_args(argv)
     if args.selftest:
@@ -446,6 +536,21 @@ def main(argv: list[str]) -> int:
             next_success_at=args.next_success_at,
             extra={"subcategory": subcategory},
         )
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    if args.command == "record-lane-round":
+        try:
+            result = record_lane_round(
+                agent=args.agent,
+                surface=args.surface,
+                lane=args.lane,
+                receiver_reason=args.receiver_reason,
+                exit_status=args.exit_status,
+                output_file=args.output_file,
+                ts=args.ts,
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
         print(json.dumps(result, sort_keys=True))
         return 0
     if args.command == "summary":
