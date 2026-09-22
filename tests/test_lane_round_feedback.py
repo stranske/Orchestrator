@@ -61,13 +61,26 @@ def test_full_month_reset_and_cli_surface_reach_incident(tmp_path, monkeypatch):
     tail = tmp_path / "tail.txt"
     tail.write_text(f"You've hit your usage limit. Try again at {future:%B %d, %Y %I:%M %p}\n")
 
-    assert rate_incidents.main(
-        [
-            "record-lane-round", "--agent", "codex", "--surface", "another-relay",
-            "--lane", "closer", "--exit", "1", "--output-file", str(tail),
-            "--ts", str(now),
-        ]
-    ) == 0
+    assert (
+        rate_incidents.main(
+            [
+                "record-lane-round",
+                "--agent",
+                "codex",
+                "--surface",
+                "another-relay",
+                "--lane",
+                "closer",
+                "--exit",
+                "1",
+                "--output-file",
+                str(tail),
+                "--ts",
+                str(now),
+            ]
+        )
+        == 0
+    )
     incident = json.loads(rate_incidents.INCIDENT_FILE.read_text().splitlines()[0])
     assert incident["surface"] == "another-relay"
     assert incident["reset_at"] == int(future.timestamp())
