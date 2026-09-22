@@ -1031,7 +1031,34 @@ def main(argv):
         dry_run=not lane_live,
         ingest_dry_run=not active,
     )
-    print(json.dumps(out, indent=2, default=str))
+    if "--summary" in argv:
+        state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
+        artifact = state_dir / "tick-plan.json"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".tick-plan-", suffix=".json", dir=state_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(out, handle, indent=2, default=str)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, artifact)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        chosen = out.get("chosen") or []
+        applied = sum(bool(row.get("applied")) for row in chosen)
+        skipped = len(chosen) - applied
+        shadow = " (shadow)" if not lane_live else ""
+        print(
+            f"TICK-PLAN: {len(chosen)} targets chosen, {applied} applied, "
+            f"{skipped} skipped{shadow}; "
+            f"{len(out.get('no_capacity') or [])} no capacity, "
+            f"{len(out.get('deferred') or [])} deferred, "
+            f"{len(out.get('blocked') or [])} blocked -> {artifact}"
+        )
+    else:
+        print(json.dumps(out, indent=2, default=str))
     return 0
 
 
