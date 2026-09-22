@@ -646,7 +646,13 @@ def attribute_fleet_deliverable_edges(
     missing_event = 0
     try:
         rows = c.execute(
-            "SELECT run_id, target, source FROM runs WHERE source='keepalive'"
+            """SELECT r.run_id, r.target, r.source
+                 FROM runs r
+                 JOIN outcomes o
+                   ON o.run_id = r.run_id
+                  AND UPPER(COALESCE(o.adjudicated_verdict, o.verifier_verdict, ''))
+                      IN ('PASS', 'FAIL')
+                WHERE r.source = 'keepalive'"""
         ).fetchall()
         for run_id, target, source in rows:
             verdicts = verdict_index.get(_fleet_deliverable(target), [])
@@ -667,7 +673,8 @@ def attribute_fleet_deliverable_edges(
             ):
                 if c.execute(
                     "SELECT 1 FROM influence_edges WHERE target_run_id=? AND "
-                    "influence_type='capability' AND capability_id=? AND capability_version_id=?",
+                    "influence_type='capability' AND capability_id=? AND capability_version_id=? "
+                    "AND accepted=1",
                     (run_id, cap_id, version),
                 ).fetchone():
                     continue

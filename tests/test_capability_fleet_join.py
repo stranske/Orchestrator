@@ -119,6 +119,78 @@ def test_negative_and_wrong_target_do_not_attribute(tmp_path, monkeypatch):
         )
 
 
+def test_record_run_without_outcome_creates_no_fleet_edge(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run("keepalive:o/r#7:codex", "o/r#7", "implement", "codex", source="keepalive")
+    assert propensity.record_trigger("offload", "advice:nooutcome", deliverable="O/R#7", path=ledger)
+    assert propensity.record_usefulness(
+        "offload",
+        "advice:nooutcome",
+        useful=True,
+        evidence="review exposed the missing edge before delivery",
+        provenance=propensity.PROVENANCE_DEFAULT,
+        deliverable="O/R#7",
+        path=ledger,
+    )
+    index = bridge._fleet_verdict_index(capabilities.load(ledger, create=False))
+    with feedback._conn() as conn:
+        report = bridge.attribute_fleet_deliverable_edges(verdict_index=index, conn=conn)
+        assert report["attributed"] == 0
+        assert conn.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 0
+
+
+def test_rejected_edge_does_not_block_accepted_fleet_edge(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    _keepalive(monkeypatch, tmp_path)
+    assert propensity.record_trigger("offload", "advice:rejected", deliverable="O/R#7", path=ledger)
+    assert propensity.record_usefulness(
+        "offload",
+        "advice:rejected",
+        useful=False,
+        evidence="review missed the issue",
+        provenance=propensity.PROVENANCE_DEFAULT,
+        deliverable="O/R#7",
+        path=ledger,
+    )
+    with feedback._conn() as conn:
+        feedback._record_influence_edge_in_conn(
+            conn,
+            target_run_id="keepalive:o/r#7:codex",
+            influence_type="capability",
+            influence_id="fleet-deliverable:v1:capability-version:" + "a" * 32,
+            accepted=False,
+            capability_id="offload",
+            capability_version_id="capability-version:" + "a" * 32,
+        )
+        conn.commit()
+    assert propensity.record_usefulness(
+        "offload",
+        "advice:accepted",
+        useful=True,
+        evidence="review exposed the missing edge before delivery",
+        provenance=propensity.PROVENANCE_DEFAULT,
+        deliverable="O/R#7",
+        path=ledger,
+    )
+    index = bridge._fleet_verdict_index(capabilities.load(ledger, create=False))
+    with feedback._conn() as conn:
+        report = bridge.attribute_fleet_deliverable_edges(verdict_index=index, conn=conn)
+        accepted = conn.execute(
+            "SELECT accepted FROM influence_edges WHERE capability_id='offload' ORDER BY accepted DESC"
+        ).fetchall()
+    assert report["attributed"] == 1
+    assert accepted == [(1,), (0,)]
+
+
+def test_usage_report_marks_fleet_edges_unavailable_when_brain_unreadable(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **kwargs: None)
+    usage = capabilities.usage_report(capabilities.summary(ledger))
+    assert usage["rows"][0]["fleet_edges"] is None
+    assert "unavailable" in capabilities.format_usage_report(usage)
+
+
 def test_cli_verdict_is_visible_across_processes_and_requires_a_target_event(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     _keepalive(monkeypatch, tmp_path)
