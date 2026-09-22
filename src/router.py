@@ -668,8 +668,9 @@ RECEIVER_BAD_DURABILITY = ("broke_later", "reverted", "reopened", "abandoned")
 # because nothing looked. Mixing them in dilutes every agent's rate (codex read 3.2% over 90 days
 # against 7.2% over the judged month) and could hide a real difference inside the tolerance. The
 # receiver rail therefore compares agents only over rows judged since detection existed, and says so.
-DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
-DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
+# ONE definition: feedback owns the floor, and since 2026-09-21 both route-weight learners use it.
+DURABILITY_DETECTION_SINCE = feedback.DURABILITY_DETECTION_SINCE
+DURABILITY_DETECTION_SINCE_DATE = feedback.DURABILITY_DETECTION_SINCE_DATE
 
 
 def merged_durability_by_agent(

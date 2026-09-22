@@ -268,7 +268,13 @@ safety switch, not dead code.
   auto-pilot/Keepalive; no `gh`, push, publication, or merge path exists in the promotion module.
 - **relearn_report.py** (weekly) re-estimates versioned route weights: Beta-Binomial posteriors
   with recency decay, cost/effort imputation (missing telemetry never reads as free — the cost
-  plane is repaired), and **Bradley-Terry warm-starts** blended from the A/B/C duel data.
+  plane is repaired), and **Bradley-Terry warm-starts** blended from the A/B/C duel data. Since
+  2026-09-21 the learners read the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as
+  well as the tool's own `experimental` rows, under the broke-later detection floor of 2026-08-29
+  the receiver rail already uses; an agent whose costed runs report implausibly few tokens has its
+  cost and tokens imputed rather than read as cheap. Every rationale records `population=`,
+  `fleet_rows=`, `pre_detection_skipped=` and `telemetry=`. `ORCH_RELEARN_FLEET_ROWS=0` restores
+  the experimental-only population.
 - **route_weights_export.py** (daily) writes a thresholded latest-version routing snapshot for
   Workflows to fetch fail-open; reserve seats are isolated. The cadence passes `--publish` (owner
   decision 2026-09-21) and the script publishes to `exports/route-weights` only when
