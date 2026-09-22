@@ -170,7 +170,7 @@ def test_single_model_agents_pin_nothing():
 
 def test_claude_routine_work_is_capped_at_mid():
     """Owner policy: claude's weekly is frequently the binding constraint, so routine
-    'full' work runs Sonnet 5 rather than Opus 5."""
+    'full' work runs Sonnet 5 rather than Opus 5.5."""
     assert adapters.tier_ceiling("claude") == "mid"
     assert adapters.effective_tier("claude", "full") == "mid"
     argv = adapters.build_command("claude", "x", mode="full")
@@ -187,16 +187,16 @@ def test_frontier_model_stays_reachable_three_ways(monkeypatch):
     """THE requirement: a capacity-limited high-quality model must remain AVAILABLE.
     Capping routine spend must not delete the option."""
     # 1. the tier map still names it
-    assert adapters.MODEL_TIERS["claude"]["full"] == "claude-opus-5"
+    assert adapters.MODEL_TIERS["claude"]["full"] == "claude-opus-5-5"
     # 2. raising the ceiling reaches it
     monkeypatch.setenv("ORCH_CLAUDE_MAX_TIER", "full")
     assert adapters.effective_tier("claude", "full") == "full"
     argv = adapters.build_command("claude", "x", mode="full")
-    assert argv[argv.index("--model") + 1] == "claude-opus-5", argv
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5", argv
     monkeypatch.delenv("ORCH_CLAUDE_MAX_TIER")
     # 3. an explicit requested_model bypasses the ceiling entirely
-    argv = adapters.build_command("claude", "x", mode="full", requested_model="claude-opus-5")
-    assert argv[argv.index("--model") + 1] == "claude-opus-5", argv
+    argv = adapters.build_command("claude", "x", mode="full", requested_model="claude-opus-5-5")
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5", argv
 
 
 def test_uncapped_agents_are_unaffected():
