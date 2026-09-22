@@ -645,15 +645,13 @@ def attribute_fleet_deliverable_edges(
     links: list[dict] = []
     missing_event = 0
     try:
-        rows = c.execute(
-            """SELECT r.run_id, r.target, r.source
+        rows = c.execute("""SELECT r.run_id, r.target, r.source
                  FROM runs r
                  JOIN outcomes o
                    ON o.run_id = r.run_id
                   AND UPPER(COALESCE(o.adjudicated_verdict, o.verifier_verdict, ''))
                       IN ('PASS', 'FAIL')
-                WHERE r.source = 'keepalive'"""
-        ).fetchall()
+                WHERE r.source = 'keepalive'""").fetchall()
         for run_id, target, source in rows:
             verdicts = verdict_index.get(_fleet_deliverable(target), [])
             row = {"source": source, "target": target, "fleet_verdicts": verdicts}

@@ -123,7 +123,9 @@ def test_record_run_without_outcome_creates_no_fleet_edge(tmp_path, monkeypatch)
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     feedback.record_run("keepalive:o/r#7:codex", "o/r#7", "implement", "codex", source="keepalive")
-    assert propensity.record_trigger("offload", "advice:nooutcome", deliverable="O/R#7", path=ledger)
+    assert propensity.record_trigger(
+        "offload", "advice:nooutcome", deliverable="O/R#7", path=ledger
+    )
     assert propensity.record_usefulness(
         "offload",
         "advice:nooutcome",
