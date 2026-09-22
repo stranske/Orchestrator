@@ -916,10 +916,18 @@ if _cadence_due relearn && _attempt_ok relearn; then
   if python3 "$ORCH/relearn_report.py" >/dev/null 2>&1; then _mark_success relearn; else _mark_fail relearn; fi
 fi
 if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
-  # Shadow-only local export. Publication is intentionally absent from the hourly path: it needs
-  # BOTH --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1, so a cadence run can never change remote policy.
-  echo "  [cadence] route weights export (daily; shadow local artifact, remote publish blocked)"
-  if python3 "$ORCH/route_weights_export.py" \
+  # Daily export, PUBLISHED ON CADENCE when the owner's switch is set. Until 2026-09-21 the hourly
+  # path never passed --publish, so the export the fleet's delegation policy fetches from
+  # exports/route-weights was the one-off of 2026-09-04 while relearn moved from version ~50 to 63:
+  # a learner whose output nobody could receive. The owner asked for cadence publication on
+  # 2026-09-21. The script still refuses to publish unless ORCH_ROUTE_WEIGHTS_PUBLISH=1 is in the
+  # environment (~/.bash_profile for launchd) and pushes only when the remote artifact would change.
+  if [[ "${ORCH_ROUTE_WEIGHTS_PUBLISH:-0}" == "1" ]]; then
+    echo "  [cadence] route weights export (daily; publishing to exports/route-weights when changed)"
+  else
+    echo "  [cadence] route weights export (daily; shadow — ORCH_ROUTE_WEIGHTS_PUBLISH!=1, remote publish blocked)"
+  fi
+  if python3 "$ORCH/route_weights_export.py" --publish \
        > "$STAMP_DIR/route-weights-export.log" 2>&1; then
     _mark_success route-weights-export
   else

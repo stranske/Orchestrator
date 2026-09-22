@@ -309,8 +309,9 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "cadence_days": 0,
         "artifact": "route-weights-export.json",
         "log": "route-weights-export.log",
-        "gate": "ORCH_DISABLE_STEPS=route-weights-export stops the daily shadow export; remote "
-        "publication additionally requires --publish and ORCH_ROUTE_WEIGHTS_PUBLISH=1",
+        "gate": "ORCH_DISABLE_STEPS=route-weights-export stops the daily export; the cadence passes "
+        "--publish (owner decision 2026-09-21) and the script publishes to exports/route-weights only "
+        "when ORCH_ROUTE_WEIGHTS_PUBLISH=1 and the remote artifact would change",
         "next_transition": "rewrite the local artifact from the latest route_weights version; "
         "consumer fetch remains fail-open to its static policy",
     },
