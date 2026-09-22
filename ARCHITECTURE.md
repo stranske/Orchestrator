@@ -20,7 +20,7 @@ this document has already produced confidently wrong fleet-level conclusions.
   repo review (Workflows)  ->  human-decision packet  ->  APPROVED-ISSUE QUEUE (steward repo)
                                                                     |
                                                      opener lane (local, outside this tree)
-                                                     creates issues + draft PRs, own PR cap
+                                                     creates issues + ready PRs, own PR cap
                                                                     |
                                         KEEPALIVE (Workflows GitHub Actions) drives each PR:
                                         agent:* label + green Gate + unchecked tasks -> rounds,
@@ -29,12 +29,13 @@ this document has already produced confidently wrong fleet-level conclusions.
                                                      closer lane (local) merge -> verify -> close
 ```
 
-**The Orchestrator's three real interfaces to that pipeline:**
+**The Orchestrator's four real interfaces to that pipeline:**
 
 | Interface | Direction | What it is |
 |---|---|---|
 | `capacity.py` | pipeline → here | The lanes read it to choose which agent gets an advisory review |
 | `orchestrator_review` fallback | pipeline → here | A review-fallback path routes an advisory review through this tool |
+| `capability_propensity --deliverable` → `capability_outcome_bridge` | pipeline → here | Lane verdicts name a PR explicitly; the bridge joins positive versioned verdicts to keepalive runs and records capability influence edges |
 | `tick.py --active` → `delegate_remote` | here → pipeline | Applies `agent:*` labels, driving keepalive on REMOTE capacity — **shadow by default since 2026-09-03** (`ORCH_DISPATCH_LANE=1` re-enables): 14 dispatches in 30 days, 9 abandoned, none durable, while keepalive ran 1,239 rounds without it |
 
 So this tool is a **capacity advisor, a review router, and (in shadow unless deliberately enabled) a keepalive driver**. It is **not** the
@@ -149,6 +150,13 @@ commit type, label family and the path classes they touched, and measures broke-
 cost and commit count per shape and agent. It is what lets the advisor's `repeated_pattern`
 precondition answer from data (codemod-campaign is offered where a shape recurs across repos), and it
 is the population a shape-keyed router would learn from. It feeds no weight table directly.
+
+Lane-invoked capabilities have a separate explicit bridge to fleet outcomes. `trigger` and `useful`
+can record `--deliverable owner/repo#N`; the positive verdict captures the capability version then.
+`capability_outcome_bridge` joins that structured key to a keepalive run's exact target and writes
+a versioned influence edge only when the run has a completion event. It does not infer attribution
+from prose or from a capability merely being offered. `capabilities.py usage` reports all-time
+`fleet_edges`, which counts edges rather than independent durable successes.
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain

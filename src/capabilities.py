@@ -2633,9 +2633,30 @@ def unblock(
     }
 
 
-def usage_report(report: dict[str, Any], *, now: int | None = None) -> dict[str, Any]:
+def _fleet_edge_counts(*, conn=None) -> dict[str, int] | None:
+    """All-time, versioned capability edges targeting actual keepalive runs."""
+    close = conn is None
+    try:
+        c = conn or feedback._conn()
+        rows = c.execute(
+            "SELECT e.capability_id, COUNT(DISTINCT e.edge_id) "
+            "FROM influence_edges e JOIN runs r ON r.run_id=e.target_run_id "
+            "WHERE r.source='keepalive' AND e.influence_type='capability' "
+            "AND e.capability_id IS NOT NULL AND e.capability_version_id IS NOT NULL "
+            "AND e.target_event_id IS NOT NULL GROUP BY e.capability_id"
+        ).fetchall()
+        return {str(cap_id): int(count) for cap_id, count in rows}
+    except Exception:
+        return None  # An unreadable Brain is unavailable, never a measured zero.
+    finally:
+        if close and "c" in locals():
+            c.close()
+
+
+def usage_report(report: dict[str, Any], *, now: int | None = None, conn=None) -> dict[str, Any]:
     """Per-capability usage + debt + next action, plus the roll-ups a digest needs."""
     current = _now() if now is None else now
+    fleet_counts = _fleet_edge_counts(conn=conn)
     rows = []
     for name, cap in sorted(report["capabilities"].items()):
         live = classify_liveness(cap, now=current)
@@ -2648,10 +2669,12 @@ def usage_report(report: dict[str, Any], *, now: int | None = None) -> dict[str,
                 "debt": evidence_debt(cap),
                 "gate": gate_readiness(cap, now=current),
                 "unblock": unblock(cap, liveness=live, now=current),
+                "fleet_edges": None if fleet_counts is None else fleet_counts.get(name, 0),
             }
         )
     return {
         "generated_at": current,
+        "fleet_edges_scope": "all_time_versioned_edges_to_keepalive_runs",
         "total": len(rows),
         "ready_to_lift": [
             r["capability_id"] for r in rows if r["unblock"]["action"].startswith("READY TO LIFT")
@@ -2749,14 +2772,16 @@ def format_usage_report(usage: dict[str, Any]) -> str:
         lines.extend(f"- {name}" for name in items)
         lines.append("")
     lines += [
-        "| Capability | State | Liveness | Inv/wk | Durable | Need | Next action |",
-        "|---|---|---|---:|---:|---:|---|",
+        "| Capability | State | Liveness | Inv/wk | Fleet edges (all time) | Durable | Need | Next action |",
+        "|---|---|---|---:|---:|---:|---:|---|",
     ]
     for row in usage["rows"]:
         d = row["debt"]
         lines.append(
             f"| {row['capability_id']} | {row['status']} | {row['liveness']} | "
-            f"{row['usage']['invocations_per_week']} | {d['durable_reuses']} | {d['required']} | "
+            f"{row['usage']['invocations_per_week']} | "
+            f"{row['fleet_edges'] if row['fleet_edges'] is not None else 'unavailable'} | "
+            f"{d['durable_reuses']} | {d['required']} | "
             f"{row['unblock']['action']} |"
         )
     return "\n".join(lines) + "\n"

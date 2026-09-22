@@ -83,10 +83,51 @@ def _tagged_capability_ids(run_id: str, row: dict) -> list[str]:
     return [str(c) for c in (raw or []) if c]
 
 
+_FLEET_DELIVERABLE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$")
+
+
+def _fleet_deliverable(value: object) -> str:
+    value = str(value or "").strip()
+    return value.lower() if _FLEET_DELIVERABLE_RE.fullmatch(value) else ""
+
+
+def _fleet_verdict_index(ledger: dict) -> dict[str, list[dict]]:
+    """Index explicit, positive lane verdicts from one coherent ledger snapshot."""
+    index: dict[str, list[dict]] = {}
+    for cap_id, cap in ledger.items():
+        for event in cap.get("event_history") or []:
+            meta = event.get("metadata") or {}
+            ref = str(event.get("ref") or "")
+            deliverable = _fleet_deliverable(meta.get("deliverable"))
+            version = str(meta.get("capability_version_id") or "")
+            if not (
+                event.get("type") == "outcome"
+                and ref.startswith("advice:")
+                and event.get("idempotency_key") == f"useful:{cap_id}:{ref}"
+                and meta.get("source") == "capability_propensity"
+                and meta.get("useful") is True
+                and deliverable
+                and version
+            ):
+                continue
+            index.setdefault(deliverable, []).append(
+                {"capability_id": cap_id, "version_id": version, "verdict_ref": ref}
+            )
+    return index
+
+
+def _keepalive_deliverable_capability_ids(run_id: str, row: dict) -> list[str]:
+    """Only an explicit verdict for this exact keepalive PR can name a capability."""
+    if row.get("source") != "keepalive" or not _fleet_deliverable(row.get("target")):
+        return []
+    return [item["capability_id"] for item in row.get("fleet_verdicts") or []]
+
+
 # Ordered; every resolver must return ids backed by a RECORDED link, never a heuristic.
 RESOLVERS = [
     ("role_influence", _role_capability_ids),
     ("run_tagged", _tagged_capability_ids),
+    ("keepalive_deliverable", _keepalive_deliverable_capability_ids),
 ]
 
 
@@ -97,7 +138,9 @@ def _known_capability_ids(path: Path | None = None) -> set[str]:
         return set()
 
 
-def collect(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, conn=None) -> list[dict]:
+def collect(
+    *, lookback_days: int = DEFAULT_LOOKBACK_DAYS, conn=None, verdict_index: dict | None = None
+) -> list[dict]:
     """Terminal outcomes in the window, with their raw attribution inputs."""
     close = conn is None
     c = conn or feedback._conn()
@@ -105,7 +148,7 @@ def collect(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, conn=None) -> list[di
         cutoff = f"-{int(lookback_days)} days"
         rows = c.execute(
             """SELECT o.run_id, o.adjudicated_verdict, o.merged, o.durability,
-                      o.influenced_by_run_id, r.task_type, r.agent, r.ts
+                      o.influenced_by_run_id, r.task_type, r.agent, r.ts, r.source, r.target
                FROM outcomes o JOIN runs r ON r.run_id = o.run_id
                WHERE o.adjudicated_verdict IS NOT NULL
                  AND r.ts >= strftime('%s', 'now', ?)
@@ -142,7 +185,10 @@ def collect(*, lookback_days: int = DEFAULT_LOOKBACK_DAYS, conn=None) -> list[di
             "task_type": r[5],
             "agent": r[6],
             "ts": r[7],
+            "source": r[8],
+            "target": r[9],
             "capability_ids": sorted(set(tagged.get(str(r[0]), []))),
+            "fleet_verdicts": (verdict_index or {}).get(_fleet_deliverable(r[9]), []),
         }
         for r in rows
     ]
@@ -587,6 +633,80 @@ def ingest_external_ci_invocations(
     return out
 
 
+def attribute_fleet_deliverable_edges(
+    *, verdict_index: dict[str, list[dict]], conn=None, dry_run: bool = False
+) -> dict:
+    """Join explicit lane verdicts to keepalive runs with versioned, idempotent edges."""
+    resolver = next((fn for name, fn in RESOLVERS if name == "keepalive_deliverable"), None)
+    if resolver is None:
+        return {"attributed": 0, "missing_event": 0, "links": [], "dry_run": dry_run}
+    close = conn is None
+    c = conn or feedback._conn()
+    links: list[dict] = []
+    missing_event = 0
+    try:
+        rows = c.execute("""SELECT r.run_id, r.target, r.source
+                 FROM runs r
+                 JOIN outcomes o
+                   ON o.run_id = r.run_id
+                  AND UPPER(COALESCE(o.adjudicated_verdict, o.verifier_verdict, ''))
+                      IN ('PASS', 'FAIL')
+                WHERE r.source = 'keepalive'""").fetchall()
+        for run_id, target, source in rows:
+            verdicts = verdict_index.get(_fleet_deliverable(target), [])
+            row = {"source": source, "target": target, "fleet_verdicts": verdicts}
+            permitted = set(resolver(str(run_id), row))
+            if not permitted:
+                continue
+            # A target envelope is required by the edge writer. Never manufacture one or opt out.
+            if feedback._latest_completion_event_id(c, str(run_id)) is None:
+                missing_event += 1
+                continue
+            for cap_id, version in sorted(
+                {
+                    (v["capability_id"], v["version_id"])
+                    for v in verdicts
+                    if v["capability_id"] in permitted
+                }
+            ):
+                if c.execute(
+                    "SELECT 1 FROM influence_edges WHERE target_run_id=? AND "
+                    "influence_type='capability' AND capability_id=? AND capability_version_id=? "
+                    "AND accepted=1",
+                    (run_id, cap_id, version),
+                ).fetchone():
+                    continue
+                link = {"capability_id": cap_id, "version_id": version, "target_run_id": run_id}
+                links.append(link)
+                if dry_run:
+                    continue
+                feedback._record_influence_edge_in_conn(
+                    c,
+                    target_run_id=str(run_id),
+                    influence_type="capability",
+                    influence_id=f"fleet-deliverable:v1:{version}",
+                    accepted=True,
+                    capability_id=cap_id,
+                    capability_version_id=version,
+                    metadata={
+                        "resolver": "keepalive_deliverable",
+                        "deliverable": _fleet_deliverable(target),
+                    },
+                )
+                feedback._propagate_outcome_lineage_in_conn(c, str(run_id))
+        if not dry_run:
+            c.commit()
+    finally:
+        if close:
+            c.close()
+    return {
+        "attributed": len(links),
+        "missing_event": missing_event,
+        "dry_run": dry_run,
+        "links": links[:20],
+    }
+
+
 def run(
     *, lookback_days: int = DEFAULT_LOOKBACK_DAYS, dry_run: bool = False, path: Path | None = None
 ) -> dict:
@@ -615,8 +735,20 @@ def run(
         external_ci = ingest_external_ci_invocations(dry_run=dry_run, path=path)
     except Exception as exc:  # noqa: BLE001
         external_ci = {"error": str(exc)[:200], "credited": 0, "observed": {}}
-    rows = collect(lookback_days=lookback_days)
-    mapped = attribute(rows, known=_known_capability_ids(path))
+    # A single locked ledger read supplies both matching and version provenance. A later verdict
+    # becomes visible on the next cadence; no global cache can turn an absent verdict into a zero.
+    try:
+        ledger = capabilities.load(path or capabilities.REG, create=False)
+        verdict_index = _fleet_verdict_index(ledger)
+        fleet_edges = attribute_fleet_deliverable_edges(
+            verdict_index=verdict_index, dry_run=dry_run
+        )
+    except Exception as exc:  # noqa: BLE001 — name an unreadable join, preserve older bridge paths
+        ledger = {}
+        verdict_index = {}
+        fleet_edges = {"error": str(exc)[:200], "attributed": None}
+    rows = collect(lookback_days=lookback_days, verdict_index=verdict_index)
+    mapped = attribute(rows, known=set(ledger) if ledger else _known_capability_ids(path))
     result = apply_links(mapped["links"], path=path, dry_run=dry_run)
     # Compiled-workflow rails are a SECOND producer class the role filter never covered; without
     # this their promotion gates read an empty evidence set forever. Reports 0 honestly until a
@@ -630,6 +762,7 @@ def run(
         by_cap[link["capability_id"]] = by_cap.get(link["capability_id"], 0) + 1
     return {
         "offload_capability_edges": offload_fix,
+        "fleet_deliverable_edges": fleet_edges,
         "lookback_days": lookback_days,
         "dry_run": dry_run,
         "terminal_outcomes": len(rows),
