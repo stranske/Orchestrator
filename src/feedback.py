@@ -256,6 +256,8 @@ def _implausible_telemetry(c, agents, since: int) -> dict[str, str]:
 # ORCH_RELEARN_HALF_LIFE_DAYS; <=0 disables decay.
 DEFAULT_RELEARN_HALF_LIFE_DAYS = 30.0
 VERIFIER_FAILURES = {
+    "NON_PASS",
+    "FAIL",
     "FAIL_HOLLOW",
     "FAIL_BROKEN",
     "FAIL_RUNTIME_AC",
@@ -977,7 +979,7 @@ def _normalize_completion_status(status: str | None) -> str:
         return value
     if value in SUCCESSFUL_ATTEMPT_STATUSES or value.startswith("pass"):
         return "succeeded" if value not in {"pass", "passed"} else "pass"
-    if value in VERIFIER_FAILURES or value.startswith(("fail", "error")):
+    if value.upper() in VERIFIER_FAILURES or value.startswith(("fail", "error")):
         return "fail"
     if value in {"blocked", "block"}:
         return "fail"
@@ -1657,14 +1659,20 @@ def capability_causal_evidence(
                 or row["merged"] is not None
                 or row["durability"] is not None
             )
+            verifier_fail = str(row["verifier_verdict"] or "").upper() in VERIFIER_FAILURES
             terminal_outcome = bool(
                 outcome_present
-                and (durability not in (None, "pending") or verdict.startswith("FAIL"))
+                and (
+                    durability not in (None, "pending")
+                    or verdict.startswith("FAIL")
+                    or verifier_fail
+                )
             )
             durable_success = bool(
                 consumed
                 and outcome_present
                 and verdict.startswith("PASS")
+                and not verifier_fail
                 and row["merged"]
                 and durability == "durable"
             )
@@ -1681,7 +1689,6 @@ def capability_causal_evidence(
             # convention role-<name> is asserted by selftest, not assumed.
             target_role = str(row["target_role_name"] or "")
             advisory_self = bool(target_role) and capability_id == f"role-{target_role}"
-            verifier_fail = str(row["verifier_verdict"] or "").upper().startswith("FAIL")
             adjudicated_fail = str(row["adjudicated_verdict"] or "").upper().startswith("FAIL")
             named_class = str(row["failure_class"] or "")
             attributable_failure = bool(

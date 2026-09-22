@@ -22,6 +22,7 @@ from typing import Any, TypedDict, cast
 import durability_sweep
 import feedback
 import outcomes
+import verifier_evidence
 
 # Source-of-truth registry lives in Dropbox, but launchd/cron CANNOT read CloudStorage
 # paths (EPERM "Operation not permitted") — so under the scheduled tick we must read a
@@ -350,6 +351,7 @@ class IngestSummary(TypedDict):
     attribution: dict[str, object]
     fetch_failed_repos: list[str]
     commit_identity_enriched: int
+    verifier_verdicts_seen: int
 
 
 def _agent_from_labels(labels: list[str]) -> tuple[str, str] | None:
@@ -617,7 +619,8 @@ def _run_exists(run_id: str) -> bool:
 def _existing_outcome(run_id: str) -> dict | None:
     with feedback._conn() as c:
         row = c.execute(
-            "SELECT merged, adjudicated_verdict, durability, notes FROM outcomes WHERE run_id=?",
+            "SELECT merged, adjudicated_verdict, durability, notes, verifier_verdict "
+            "FROM outcomes WHERE run_id=?",
             (run_id,),
         ).fetchone()
     if not row:
@@ -627,6 +630,7 @@ def _existing_outcome(run_id: str) -> dict | None:
         "adjudicated_verdict": row[1],
         "durability": row[2],
         "notes": row[3],
+        "verifier_verdict": row[4],
     }
 
 
@@ -883,6 +887,17 @@ def _outcome_for_pr(
     oc = outcomes.state_to_outcome(pr)
     if not oc:
         return None
+    decision = pr.get("_verifier_decision")
+    if (
+        isinstance(decision, dict)
+        and decision.get("verdict") in {"PASS", "NON_PASS"}
+        and isinstance(pr.get("number"), int)
+        and durability_sweep.verifier_candidate_run_ids(
+            repo, pr["number"], prospective_run_id=run["run_id"]
+        )
+        == {run["run_id"]}
+    ):
+        oc["verifier_verdict"] = decision["verdict"]
     if oc.get("merged"):
         pr_for_durability = dict(pr)
         pr_for_durability.setdefault("repo", repo)
@@ -900,6 +915,8 @@ def _should_record_outcome(existing: dict | None, oc: dict | None) -> bool:
     if oc is None:
         return False
     if existing is None:
+        return True
+    if oc.get("verifier_verdict") and oc["verifier_verdict"] != existing.get("verifier_verdict"):
         return True
     existing_durability = existing.get("durability")
     new_durability = oc.get("durability")
@@ -923,10 +940,14 @@ def ingest_keepalive_outcomes(
     include_non_agent: bool = False,
     _closure_context_fn=None,
     _evidence_fetch_fn=None,
+    _verifier_fetch_fn=None,
 ) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
     closure_context_fn = _closure_context_fn or _fetch_pr_context
+    verifier_fetch_fn = _verifier_fetch_fn or (
+        verifier_evidence.fetch_decisions if _pr_fetch_fn is None else lambda _repo, _nums: {}
+    )
     revert_fn = _revert_fn
     if dry_run and revert_fn is None:
 
@@ -946,6 +967,7 @@ def ingest_keepalive_outcomes(
         "attribution": {"let_through": 0, "blocked": 0, "by_source": {}},
         "fetch_failed_repos": [],
         "commit_identity_enriched": 0,
+        "verifier_verdicts_seen": 0,
     }
 
     for repo in repos:
@@ -963,6 +985,18 @@ def ingest_keepalive_outcomes(
             continue
         if not isinstance(prs, list):
             prs = []
+        verifier_numbers = [
+            int(pr["number"])
+            for pr in prs
+            if pr.get("number") is not None and str(pr.get("state") or "").upper() == "MERGED"
+        ]
+        verifier_decisions = verifier_fetch_fn(repo, verifier_numbers) if verifier_numbers else {}
+        for pr in prs:
+            number = pr.get("number")
+            decision = verifier_decisions.get(int(number)) if number is not None else None
+            if decision:
+                pr["_verifier_decision"] = decision
+                summary["verifier_verdicts_seen"] += 1
         summary["commit_identity_enriched"] += _attach_commit_identities(
             repo, prs, evidence_fn=_evidence_fetch_fn
         )
