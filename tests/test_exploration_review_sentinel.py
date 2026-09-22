@@ -47,6 +47,8 @@ def test_db_error_is_named_not_zero(tmp_path, monkeypatch):
     sweep = switch_review.review(env={})
     assert sweep["exploration_gate"]["suspect"] is True
     assert sweep["exploration_gate"]["status"] == "direct_mode_evidence_unreadable"
+    assert sweep["exploration_gate"]["evidence_error"].startswith("OperationalError:")
+    assert sweep["exploration_gate"]["drainable"] == "repair the Brain read"
     assert "SUSPECT — direct_mode_evidence_unreadable" in switch_review.format_report(sweep)
 
 
