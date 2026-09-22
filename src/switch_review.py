@@ -725,14 +725,22 @@ def _exploration_gate() -> dict:
         status = result["status"]
         error = result.get("evidence_error")
     except Exception as exc:  # noqa: BLE001
-        status = "direct_mode_evidence_unreadable"
+        status = "exploration_report_error"
         error = f"{type(exc).__name__}: {exc}"
-    suspect = status == "direct_mode_evidence_unreadable"
+    suspect = status in {"direct_mode_evidence_unreadable", "exploration_report_error"}
     return {
         "status": status,
         "suspect": suspect,
         "evidence_error": error,
-        "drainable": "repair the Brain read" if suspect else None,
+        "drainable": (
+            "repair the Brain read"
+            if status == "direct_mode_evidence_unreadable"
+            else (
+                "repair exploration report generation"
+                if status == "exploration_report_error"
+                else None
+            )
+        ),
     }
 
 

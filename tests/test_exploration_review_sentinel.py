@@ -48,3 +48,15 @@ def test_db_error_is_named_not_zero(tmp_path, monkeypatch):
     assert sweep["exploration_gate"]["suspect"] is True
     assert sweep["exploration_gate"]["status"] == "direct_mode_evidence_unreadable"
     assert "SUSPECT — direct_mode_evidence_unreadable" in switch_review.format_report(sweep)
+
+
+def test_unexpected_exploration_report_error_has_distinct_remediation(monkeypatch):
+    def fail_report(**_kwargs):
+        raise RuntimeError("unexpected report failure")
+
+    monkeypatch.setattr(exploration_review, "build_report", fail_report)
+    gate = switch_review._exploration_gate()
+    assert gate["status"] == "exploration_report_error"
+    assert gate["suspect"] is True
+    assert gate["evidence_error"] == "RuntimeError: unexpected report failure"
+    assert gate["drainable"] == "repair exploration report generation"
