@@ -186,45 +186,58 @@ def _cooldown_seconds(category: str) -> int | None:
 
 
 def ensure_shed(
-    agent: str, *, category: str, incident_id: str, expires_at: int | None = None
+    agent: str,
+    *,
+    category: str,
+    incident_id: str,
+    expires_at: int | None = None,
+    reset_at: int | None = None,
 ) -> bool:
-    """Write one JSON marker; it intentionally never records another incident."""
+    """Write or extend one JSON marker without shortening an active shed."""
     _ensure_paths()
     marker = SHED_DIR / agent
-    if marker.exists():
-        try:
-            existing = json.loads(marker.read_text(encoding="utf-8"))
+    lock_fd = _acquire_lock()
+    temporary: Path | None = None
+    try:
+        if marker.exists():
+            try:
+                existing = json.loads(marker.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                # Legacy empty or malformed markers remain manual, authoritative sheds.
+                return True
             existing_expiry = existing.get("expires_at") if isinstance(existing, dict) else None
             if (
                 isinstance(existing_expiry, bool)
                 or not isinstance(existing_expiry, (int, float))
                 or not math.isfinite(existing_expiry)
-                or existing_expiry > time.time()
             ):
                 return True
-            marker.unlink()
-        except (OSError, json.JSONDecodeError):
-            # Legacy empty or malformed markers remain manual, authoritative sheds.
-            return True
-    payload = {"created_at": int(time.time()), "category": category, "incident_id": incident_id}
-    if expires_at is not None:
-        payload["expires_at"] = expires_at
-    try:
-        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        return True
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-    except Exception:
+            if existing_expiry > time.time() and (
+                expires_at is None or expires_at <= existing_expiry
+            ):
+                return True
+        payload = {"created_at": int(time.time()), "category": category, "incident_id": incident_id}
+        if expires_at is not None:
+            payload["expires_at"] = expires_at
+        if reset_at is not None:
+            payload["reset_at"] = reset_at
         try:
-            marker.unlink()
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=SHED_DIR, prefix=f".{agent}.", delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(payload, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, marker)
+            temporary = None
+            return True
         except OSError:
-            pass
-        return False
-    return True
+            return False
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        _release_lock(lock_fd)
 
 
 def record_incident(
@@ -297,12 +310,16 @@ def record_incident(
     finally:
         _release_lock(lock_fd)
     cooldown = _cooldown_seconds(category)
+    expires_at = timestamp + cooldown if cooldown is not None else None
+    if reset_at is not None and expires_at is not None:
+        expires_at = max(expires_at, reset_at)
     shed_created = (
         ensure_shed(
             agent,
             category=category,
             incident_id=incident_id,
-            expires_at=(timestamp + cooldown if cooldown is not None else None),
+            expires_at=expires_at,
+            reset_at=reset_at,
         )
         if shed
         else False
