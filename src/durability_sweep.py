@@ -24,6 +24,7 @@ from urllib.parse import quote
 import feedback
 import outcomes
 import provision
+import verifier_evidence
 
 GRACE_DAYS = 7
 REVERT_WINDOW_DAYS = (
@@ -51,6 +52,52 @@ def _pending_merged_runs() -> list[dict]:
         {"run_id": rid, "target": target, "mode": mode, "pr_number": prn, "notes": notes}
         for rid, target, mode, prn, notes in rows
     ]
+
+
+def _missing_verifier_runs() -> list[tuple[str, str, int]]:
+    """Include already-durable keepalive rows: verification often arrives after merge."""
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT r.run_id,r.target,r.source,COALESCE(o.notes,'') "
+            "FROM runs r JOIN outcomes o ON r.run_id=o.run_id "
+            "WHERE o.merged=1 AND o.verifier_verdict IS NULL ORDER BY r.ts ASC"
+        ).fetchall()
+    found = []
+    for run_id, target, source, notes in rows:
+        repo, number = provision.parse_target(str(target or ""))
+        if not repo:
+            continue
+        if source != "keepalive":
+            explicit = _explicit_merged_pr_target(str(target or ""), notes)
+            if not explicit:
+                continue
+            repo, number = provision.parse_target(explicit)
+        if number is not None:
+            found.append((str(run_id), repo, int(number)))
+    return found
+
+
+def refresh_verifier_verdicts(*, dry_run: bool = False, _fetch_fn=None) -> dict:
+    """Patch exact-merge verifier evidence without changing durability state."""
+    fetch = _fetch_fn or verifier_evidence.fetch_decisions
+    rows = _missing_verifier_runs()
+    by_repo: dict[str, set[int]] = {}
+    for _run_id, repo, number in rows:
+        by_repo.setdefault(repo, set()).add(number)
+    decisions = {
+        (repo, number): decision
+        for repo, numbers in by_repo.items()
+        for number, decision in fetch(repo, sorted(numbers)).items()
+    }
+    recorded = 0
+    for run_id, repo, number in rows:
+        decision = decisions.get((repo, number))
+        if not isinstance(decision, dict) or decision.get("verdict") not in {"PASS", "NON_PASS"}:
+            continue
+        if not dry_run:
+            feedback.record_outcome(run_id, verifier_verdict=decision["verdict"])
+        recorded += 1
+    return {"verifier_checked": len(rows), "verifier_recorded": recorded}
 
 
 def _explicit_merged_pr_target(target: str, notes: str | None) -> str | None:
@@ -550,6 +597,7 @@ def sweep_durability(
     _state_fn=None,
     _revert_fn=None,
     _now: int | None = None,
+    _verifier_fetch_fn=None,
 ) -> dict:
     """Patch old merged+pending outcomes when their durability can be resolved with confidence."""
     # Every class classify_durability() can return starts at ZERO here, so the summary always prints
@@ -569,6 +617,10 @@ def sweep_durability(
         "skipped": 0,
         "details": [],
     }
+    # Existing injected PR-state tests are offline; production and explicit verifier tests
+    # refresh the verdict independently of durability's grace-period selection.
+    if _state_fn is None or _verifier_fetch_fn is not None:
+        summary.update(refresh_verifier_verdicts(dry_run=dry_run, _fetch_fn=_verifier_fetch_fn))
     revert_cache: dict = {}  # repo -> cached revert search, so a bulk sweep does 1 search/repo
     fix_cache: dict = {}  # repo -> cached fix search, same reason: 1 search/repo, matched locally
     for run in _pending_merged_runs():
