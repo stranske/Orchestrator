@@ -4534,7 +4534,7 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     score,
                     f"k={PRIOR_STRENGTH} n={s['n']} succ={s['succ']} cps_src={cps_src} "
                     f"cost_scale={COST_SCALE} {s['cost_cov']}"
-                    + (f" {s['telemetry']}" if s.get("telemetry") else ""),
+                    + (f" telemetry={s['telemetry']}" if s.get("telemetry") else ""),
                     since,
                     now,
                 ),
