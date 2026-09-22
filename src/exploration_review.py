@@ -224,6 +224,7 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
     router_decision_runs = 0
     exploration_runs = 0
     outcome_exploration_runs = 0
+    evidence_error = None
     try:
         with feedback._conn() as c:
             rows = c.execute(
@@ -233,8 +234,9 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
                 "WHERE r.routing_metadata IS NOT NULL AND r.ts>=?",
                 (since,),
             ).fetchall()
-    except Exception:
+    except Exception as exc:
         rows = []
+        evidence_error = f"{type(exc).__name__}: {exc}"
     for run_id, task_type, agent, raw_metadata, durability, adjudicated, verifier in rows:
         metadata = _decode_metadata(raw_metadata)
         if not metadata:
@@ -300,7 +302,10 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
     else:
         ready = True
         reason = "direct instrumented exploration outcome volume is ready for mode comparison"
-    return {
+    if evidence_error is not None:
+        ready = False
+        reason = f"Brain read failed: {evidence_error}; repair the Brain read"
+    evidence = {
         "window_days": window_days,
         "instrumented_runs": instrumented_runs,
         "router_decision_runs": router_decision_runs,
@@ -311,6 +316,9 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
         "ready_for_direct_comparison": ready,
         "reason": reason,
     }
+    if evidence_error is not None:
+        evidence["evidence_error"] = evidence_error
+    return evidence
 
 
 def build_report(
@@ -331,7 +339,11 @@ def build_report(
     zero_cell_rate = (zero_cells / total_cells) if total_cells else 1.0
     recorded_evidence = _recorded_exploration_evidence()
 
-    if not tasks or version == 0:
+    if recorded_evidence.get("evidence_error"):
+        status = "direct_mode_evidence_unreadable"
+        recommendation = "keep_epsilon_greedy"
+        reason = f"Brain read failed: {recorded_evidence['evidence_error']}"
+    elif not tasks or version == 0:
         status = "no_route_weight_evidence"
         recommendation = "keep_epsilon_greedy"
         reason = "no route_weights are available yet"
@@ -389,7 +401,7 @@ def build_report(
                 "simulated challenger quality and direct exploration outcomes"
             )
 
-    return {
+    report = {
         "generated_at": int(time.time()),
         "read_only": True,
         "route_weights_version": version,
@@ -413,6 +425,10 @@ def build_report(
         "recorded_exploration_evidence": recorded_evidence,
         "tasks": tasks,
     }
+    if recorded_evidence.get("evidence_error"):
+        report["evidence_error"] = recorded_evidence["evidence_error"]
+        report["drainable"] = "repair the Brain read"
+    return report
 
 
 def format_human(report: dict) -> str:
@@ -435,6 +451,8 @@ def format_human(report: dict) -> str:
             f"ready={report['recorded_exploration_evidence']['ready_for_direct_comparison']}"
         ),
     ]
+    if report.get("drainable"):
+        lines.append(f"drainable: {report['drainable']}")
     for task in report["tasks"]:
         lines.append(
             f"  {task['task_type']}: obs={task['total_observations']} "
