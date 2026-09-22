@@ -1476,8 +1476,33 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
 # missing edges. Thin on purpose: the advisor already writes `match`.
 
 
+def _fleet_deliverable(value: str) -> str:
+    """Normalize an explicit fleet PR key without inferring one from evidence prose."""
+    value = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*", value):
+        raise ValueError("--deliverable for trigger/useful must be owner/repo#positive-PR-number")
+    return value.lower()
+
+
+def _fleet_metadata(capability_id: str, deliverable: str, path) -> dict:
+    if not deliverable:
+        return {}
+    version = str(
+        (capabilities.load(path or capabilities.REG, create=False).get(capability_id) or {}).get(
+            "capability_version_id"
+        )
+        or ""
+    )
+    return {"deliverable": _fleet_deliverable(deliverable), "capability_version_id": version}
+
+
 def record_trigger(
-    capability_id: str, experiment_id: str, *, path=None, metadata: dict | None = None
+    capability_id: str,
+    experiment_id: str,
+    *,
+    deliverable: str = "",
+    path=None,
+    metadata: dict | None = None,
 ) -> bool:
     """This candidate was actually triggered. Idempotent per (capability, experiment)."""
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
@@ -1488,7 +1513,11 @@ def record_trigger(
         ref=experiment_id,
         path=path or capabilities.REG,
         idempotency_key=f"trigger:{capability_id}:{experiment_id}",
-        metadata={"source": "capability_propensity", **(metadata or {})},
+        metadata={
+            "source": "capability_propensity",
+            **(metadata or {}),
+            **_fleet_metadata(capability_id, deliverable, path),
+        },
     )
 
 
@@ -1501,6 +1530,7 @@ def record_usefulness(
     provenance: str = PROVENANCE_UNSTATED,
     judge: str = "",
     corroboration: str = "",
+    deliverable: str = "",
     path=None,
     timestamp: int | None = None,
     metadata: dict | None = None,
@@ -1578,6 +1608,7 @@ def record_usefulness(
             "evidence": _capped(evidence),
             **extra,
             **(metadata or {}),
+            **_fleet_metadata(capability_id, deliverable, path),
         },
     )
 
@@ -6754,9 +6785,8 @@ def main(argv: list[str]) -> int:
         "--deliverable",
         default="",
         help=(
-            "kebab-case slug naming WHICH deliverable of a batch trial this outcome belongs to; "
-            "each (trial, deliverable) holds one late-outcome attachment, so a 5-issue batch can "
-            "bank each landed fix instead of only its first"
+            "trigger/useful: explicit owner/repo#PR for a fleet delivery; late-outcome and "
+            "consult-outcome: kebab-case batch slot"
         ),
     )
     ap.add_argument(
@@ -7128,7 +7158,12 @@ def main(argv: list[str]) -> int:
             )
             return 0
         if args.command == "trigger":
-            ok = record_trigger(args.capability, args.experiment, path=ledger)
+            try:
+                ok = record_trigger(
+                    args.capability, args.experiment, deliverable=args.deliverable, path=ledger
+                )
+            except ValueError as exc:
+                ap.error(str(exc))
         else:
             if not args.evidence.strip():
                 ap.error(
@@ -7147,6 +7182,7 @@ def main(argv: list[str]) -> int:
                     provenance=args.provenance,
                     judge=args.judge,
                     corroboration=args.corroboration,
+                    deliverable=args.deliverable,
                     path=ledger,
                 )
             except ValueError as exc:
@@ -7158,6 +7194,8 @@ def main(argv: list[str]) -> int:
             "capability": args.capability,
             "experiment": args.experiment,
         }
+        if args.deliverable:
+            out["deliverable"] = _fleet_deliverable(args.deliverable)
         if args.command == "useful":
             # SAY WHAT THIS VERDICT IS WORTH, at the moment it is recorded. A caller that thinks
             # it just added a full observation has been misled -- and a self-report from an

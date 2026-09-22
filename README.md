@@ -160,6 +160,14 @@ safety switch, not dead code.
   into ledger outcome heartbeats, so a capability records not just that it RAN but how the work
   turned out. Its `run_tagged` resolver was dead code until 2026-08-21 (it read a column that does
   not exist), and its edge repairs now run before the heartbeat pass rather than a cycle behind it.
+- **Lane verdicts can name the fleet PR they influenced.** When an opener or closer records a
+  `capability_propensity.py trigger` or `useful` verdict for a PR, pass
+  `--deliverable owner/repo#N`. The verdict stores that exact PR key and the capability version at
+  recording time. The outcome bridge joins only positive, structured `useful:` verdicts to
+  `source='keepalive'` runs with the same target, then writes one versioned influence edge per
+  capability/version/run. Prose mentions, negative verdicts, missing versions and runs without a
+  completion event produce no edge. Historical prose remains unjoined. `capabilities.py usage`
+  shows `fleet_edges` as an all-time edge count; it is not a count of independent successes.
 - **The tick consults the front door, and records whether a capability helped**
   (`capability_propensity.py tick-evidence`, every tick, below `ORCH-ANCHOR: heartbeat-export` and
   below the four steps it grades). `capability_advisor.advise()` and the `invocation`/`outcome`
