@@ -4337,7 +4337,7 @@ def _is_success(durability: str, adjudicated: str | None, verifier: str | None =
     return (adjudicated or "").upper() == "PASS"
 
 
-def relearn(task_type_priors: dict, window_days: int = 90) -> int:
+def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> int:
     """Re-estimate per-(task_type, agent) weights from retained outcomes+costs and write a NEW
     versioned route_weights row set. Beta-Binomial: posterior_success = (k*prior + successes)/(k+n);
     score = posterior_success / effective_cost_per_success. Low n -> prior dominates.

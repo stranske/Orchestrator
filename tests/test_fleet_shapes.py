@@ -96,11 +96,12 @@ def test_shapes_apply_the_detection_floor(brain):
 
 
 def test_report_window_matches_quality_learner_default(monkeypatch, capsys):
+    selection_default = inspect.signature(feedback.relearn).parameters["window_days"].default
     quality_default = inspect.signature(feedback.relearn_quality).parameters["window_days"].default
     report_default = (
         inspect.signature(relearn_report.build_report).parameters["window_days"].default
     )
-    assert quality_default == report_default == feedback.RELEARN_WINDOW_DAYS
+    assert selection_default == quality_default == report_default == feedback.RELEARN_WINDOW_DAYS
 
     observed = []
 
