@@ -54,6 +54,25 @@ def test_usage_limit_tail_sheds_the_agent(tmp_path, monkeypatch):
     assert len(rate_incidents.INCIDENT_FILE.read_text().splitlines()) == 1
 
 
+def test_full_month_reset_and_cli_surface_reach_incident(tmp_path, monkeypatch):
+    _paths(tmp_path, monkeypatch)
+    now = int(time.time())
+    future = (datetime.fromtimestamp(now) + timedelta(hours=30)).replace(second=0, microsecond=0)
+    tail = tmp_path / "tail.txt"
+    tail.write_text(f"You've hit your usage limit. Try again at {future:%B %d, %Y %I:%M %p}\n")
+
+    assert rate_incidents.main(
+        [
+            "record-lane-round", "--agent", "codex", "--surface", "another-relay",
+            "--lane", "closer", "--exit", "1", "--output-file", str(tail),
+            "--ts", str(now),
+        ]
+    ) == 0
+    incident = json.loads(rate_incidents.INCIDENT_FILE.read_text().splitlines()[0])
+    assert incident["surface"] == "another-relay"
+    assert incident["reset_at"] == int(future.timestamp())
+
+
 def test_round_lands_in_routing_decisions_v2(tmp_path, monkeypatch):
     _paths(tmp_path, monkeypatch)
     decision_id = feedback.record_lane_round(

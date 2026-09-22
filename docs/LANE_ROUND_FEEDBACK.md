@@ -28,9 +28,10 @@ credit or rate-limit error. Other failures record `error_class=unknown` and do
 not shed. The CLI prints the decision ID, error class, incident ID if any, and
 whether a shed marker was written. Invalid or absent output files fail closed.
 
-For a `try again at Sep 19th, 2026 3:11 AM` message without a timezone, the
+The `--surface` value is recorded on authoritative capacity incidents; the
+relay uses `handoff-relay`. For a `try again at Sep 19th, 2026 3:11 AM` message without a timezone, the
 clock is interpreted in the relay host's local timezone. UTC and numeric UTC
-offset suffixes are accepted. If the time is missing, malformed or in the
+offset suffixes and full month names are accepted. If the time is missing, malformed or in the
 past, the existing six-hour cooldown applies. A later valid reset time extends
 the shed marker through that time. Operators should configure the relay host's
 timezone to match the provider display timezone.

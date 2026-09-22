@@ -112,7 +112,11 @@ def parse_relay_reset_at(text: str, *, now: int | None = None) -> int | None:
         return None
     month, day, year, clock, meridiem, zone = match.groups()
     try:
-        parsed = datetime.strptime(f"{month} {day} {year} {clock} {meridiem}", "%b %d %Y %I:%M %p")
+        month_format = "%b" if len(month) == 3 else "%B"
+        parsed = datetime.strptime(
+            f"{month} {day} {year} {clock} {meridiem}",
+            f"{month_format} %d %Y %I:%M %p",
+        )
         if zone and zone.upper() in {"UTC", "GMT", "Z"}:
             parsed = parsed.replace(tzinfo=timezone.utc)
         elif zone:
@@ -127,6 +131,7 @@ def parse_relay_reset_at(text: str, *, now: int | None = None) -> int | None:
 def record_lane_round(
     *,
     agent: str,
+    surface: str = "handoff-relay",
     lane: str,
     receiver_reason: str | None,
     exit_status: int,
@@ -138,6 +143,8 @@ def record_lane_round(
 
     if agent not in {"codex", "claude"}:
         raise ValueError("agent must be codex or claude")
+    if not surface.strip():
+        raise ValueError("surface must be nonempty")
     if not output_file.is_file() or output_file.stat().st_size > 128 * 1024:
         raise ValueError("output-file must be a readable tail of at most 128 KiB")
     evidence = "\n".join(output_file.read_text(errors="replace").splitlines()[-40:])
@@ -152,7 +159,7 @@ def record_lane_round(
     if authoritative:
         incident = record_incident(
             agent=agent,
-            surface="handoff-relay",
+            surface=surface,
             category=category,
             run_id=decision_id,
             evidence=evidence,
@@ -490,7 +497,7 @@ def main(argv: list[str]) -> int:
         "record-lane-round", help="record a detached handoff relay round"
     )
     lane_parser.add_argument("--agent", choices=("codex", "claude"), required=True)
-    lane_parser.add_argument("--surface", choices=("handoff-relay",), required=True)
+    lane_parser.add_argument("--surface", required=True)
     lane_parser.add_argument("--lane", choices=("opener", "closer"), required=True)
     lane_parser.add_argument("--receiver-reason")
     lane_parser.add_argument("--exit", dest="exit_status", type=int, required=True)
@@ -535,6 +542,7 @@ def main(argv: list[str]) -> int:
         try:
             result = record_lane_round(
                 agent=args.agent,
+                surface=args.surface,
                 lane=args.lane,
                 receiver_reason=args.receiver_reason,
                 exit_status=args.exit_status,
