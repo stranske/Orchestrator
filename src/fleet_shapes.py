@@ -333,15 +333,20 @@ def load_facts(state_dir: Path) -> dict[str, dict[str, Any]]:
 
 
 def time_to_merge_summary(
-    state_dir: Path, window_days: int, *, now: int | None = None
+    state_dir: Path,
+    window_days: int,
+    *,
+    now: int | None = None,
+    facts: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Summarize merged agent PRs using the cached GitHub open and merge times."""
-    if not (state_dir / "fleet-shapes-facts.json").is_file():
+    if facts is None and not (state_dir / "fleet-shapes-facts.json").is_file():
         return {
             "value": None,
             "unmeasured": "the Brain records no merge timestamp (runs.ts is the PR's creation/ingest time, outcomes hold no mergedAt) and the shape facts cache is absent",
         }
-    facts = load_facts(state_dir)
+    if facts is None:
+        facts = load_facts(state_dir)
     cells: dict[str, dict[str, Any]] = {}
     seen: set[tuple[str, str]] = set()
     for pr in merged_agent_prs(window_days=window_days, now=now):

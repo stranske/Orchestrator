@@ -473,14 +473,19 @@ def _fleet_six_summary(now: int | None = None) -> dict:
             }
             out["windows"][str(days)] = w
         state_dir = fleet_shapes.default_state_dir()
-        ttm7 = fleet_shapes.time_to_merge_summary(state_dir, 7, now=now)
+        facts = (
+            fleet_shapes.load_facts(state_dir)
+            if (state_dir / "fleet-shapes-facts.json").is_file()
+            else None
+        )
+        ttm7 = fleet_shapes.time_to_merge_summary(state_dir, 7, now=now, facts=facts)
         if "unmeasured" in ttm7:
             out["time_to_merge"] = ttm7
         else:
             out["time_to_merge"] = {
                 "windows": {
                     "7": ttm7,
-                    "28": fleet_shapes.time_to_merge_summary(state_dir, 28, now=now),
+                    "28": fleet_shapes.time_to_merge_summary(state_dir, 28, now=now, facts=facts),
                 }
             }
     return out
@@ -528,6 +533,8 @@ def render_fleet_six(section: dict) -> list[str]:
 
     def merge_time(days: str) -> str:
         by_agent = ttm.get("windows", {}).get(days, {})
+        if "unmeasured" in by_agent:
+            return f"unmeasured ({by_agent['unmeasured']})"
         if not by_agent:
             return "unmeasured (no merged agent PRs)"
         parts = []
