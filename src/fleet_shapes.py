@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import statistics
@@ -329,6 +330,54 @@ def load_facts(state_dir: Path) -> dict[str, dict[str, Any]]:
         return {}
     facts = payload.get("facts") if isinstance(payload, dict) else None
     return {str(k): v for k, v in (facts or {}).items() if isinstance(v, dict)}
+
+
+def time_to_merge_summary(
+    state_dir: Path, window_days: int, *, now: int | None = None
+) -> dict[str, Any]:
+    """Summarize merged agent PRs using the cached GitHub open and merge times."""
+    if not (state_dir / "fleet-shapes-facts.json").is_file():
+        return {
+            "value": None,
+            "unmeasured": "the Brain records no merge timestamp (runs.ts is the PR's creation/ingest time, outcomes hold no mergedAt) and the shape facts cache is absent",
+        }
+    facts = load_facts(state_dir)
+    cells: dict[str, dict[str, Any]] = {}
+    seen: set[tuple[str, str]] = set()
+    for pr in merged_agent_prs(window_days=window_days, now=now):
+        agent, ref = pr["agent"], pr["ref"]
+        if (agent, ref) in seen:
+            continue
+        seen.add((agent, ref))
+        cell = cells.setdefault(agent, {"n_merged": 0, "hours": []})
+        cell["n_merged"] += 1
+        fact = facts.get(ref, {})
+        created, merged = fact.get("created_ts"), fact.get("merged_ts")
+        if (
+            isinstance(created, (int, float))
+            and not isinstance(created, bool)
+            and isinstance(merged, (int, float))
+            and not isinstance(merged, bool)
+            and math.isfinite(created)
+            and math.isfinite(merged)
+            and merged >= created
+        ):
+            cell["hours"].append((merged - created) / 3600)
+    summary: dict[str, Any] = {}
+    for agent, cell in sorted(cells.items()):
+        hours = cell["hours"]
+        p90 = (
+            statistics.quantiles(hours, n=10, method="inclusive")[8]
+            if len(hours) > 1
+            else hours[0] if hours else None
+        )
+        summary[agent] = {
+            "median_hours": round(statistics.median(hours), 2) if hours else None,
+            "p90_hours": round(p90, 2) if p90 is not None else None,
+            "n_with_facts": len(hours),
+            "n_merged": cell["n_merged"],
+        }
+    return summary
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
