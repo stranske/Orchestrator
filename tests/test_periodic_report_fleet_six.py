@@ -8,6 +8,7 @@ import time
 import pytest
 
 import feedback
+import fleet_shapes
 import periodic_report
 
 
@@ -112,3 +113,81 @@ def test_empty_brain_is_named_not_zeroed(brain):
     assert w7["unattributed_share"]["value"] is None
     lines = periodic_report.render_fleet_six(s)
     assert any("unmeasured" in line for line in lines[1:5])
+
+
+def test_time_to_merge_reads_the_shape_facts(brain):
+    now = int(time.time())
+    _run("1", "codex", days_ago=1)
+    _run("2", "codex", days_ago=2)
+    fleet_shapes.save_facts(
+        brain,
+        {
+            "o/r#1": {"created_ts": now - 86400 - 7200, "merged_ts": now - 86400},
+            "o/r#2": {"created_ts": now - 2 * 86400 - 14400, "merged_ts": now - 2 * 86400},
+        },
+        now=now,
+    )
+    summary = periodic_report._fleet_six_summary(now=now)["time_to_merge"]["windows"]["7"]
+    assert summary["codex"] == {
+        "median_hours": 3.0,
+        "p90_hours": 3.8,
+        "n_with_facts": 2,
+        "n_merged": 2,
+    }
+    assert (
+        "codex median 3.0 h, p90 3.8 h (2/2 facts)"
+        in periodic_report.render_fleet_six(periodic_report._fleet_six_summary(now=now))[5]
+    )
+    _run("3", "codex", days_ago=3)
+    partial = periodic_report._fleet_six_summary(now=now)["time_to_merge"]["windows"]["7"]
+    assert partial["codex"]["n_with_facts"] == 2
+    assert partial["codex"]["n_merged"] == 3
+
+
+def test_time_to_merge_names_the_absence_without_a_cache(brain):
+    _run("c1", "codex", days_ago=1)
+    summary = periodic_report._fleet_six_summary()
+    assert "no merge timestamp" in summary["time_to_merge"]["unmeasured"]
+    assert "time-to-merge: unmeasured" in periodic_report.render_fleet_six(summary)[5]
+
+
+def test_time_to_merge_handles_unmeasured_second_window(brain):
+    section = {
+        "windows": {"7": {}, "28": {}},
+        "time_to_merge": {
+            "windows": {
+                "7": {
+                    "codex": {
+                        "median_hours": 2.0,
+                        "p90_hours": 2.0,
+                        "n_with_facts": 1,
+                        "n_merged": 1,
+                    }
+                },
+                "28": {"value": None, "unmeasured": "facts unavailable"},
+            }
+        },
+    }
+    assert "28d unmeasured (facts unavailable)" in periodic_report.render_fleet_six(section)[5]
+
+
+def test_time_to_merge_uses_one_facts_snapshot(brain, monkeypatch):
+    now = int(time.time())
+    _run("4", "codex", days_ago=1)
+    fleet_shapes.save_facts(
+        brain,
+        {"o/r#4": {"created_ts": now - 86400 - 7200, "merged_ts": now - 86400}},
+        now=now,
+    )
+    load = fleet_shapes.load_facts
+    reads = []
+
+    def count_load(state_dir):
+        reads.append(state_dir)
+        return load(state_dir)
+
+    monkeypatch.setattr(fleet_shapes, "load_facts", count_load)
+    summary = periodic_report._fleet_six_summary(now=now)["time_to_merge"]["windows"]
+    assert len(reads) == 1
+    assert summary["7"]["codex"]["median_hours"] == 2.0
+    assert summary["28"]["codex"]["median_hours"] == 2.0

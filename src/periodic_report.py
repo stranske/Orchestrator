@@ -472,12 +472,22 @@ def _fleet_six_summary(now: int | None = None) -> dict:
                 "merged": merged_agent_work,
             }
             out["windows"][str(days)] = w
-        # The Brain records when a run was ingested (runs.ts) and when durability was checked, never
-        # when the PR merged; time-to-merge needs the PR's mergedAt, which the ingest does not store.
-        out["time_to_merge"] = {
-            "value": None,
-            "unmeasured": "the Brain records no merge timestamp (runs.ts is the PR's creation/ingest time, outcomes hold no mergedAt)",
-        }
+        state_dir = fleet_shapes.default_state_dir()
+        facts = (
+            fleet_shapes.load_facts(state_dir)
+            if (state_dir / "fleet-shapes-facts.json").is_file()
+            else None
+        )
+        ttm7 = fleet_shapes.time_to_merge_summary(state_dir, 7, now=now, facts=facts)
+        if "unmeasured" in ttm7:
+            out["time_to_merge"] = ttm7
+        else:
+            out["time_to_merge"] = {
+                "windows": {
+                    "7": ttm7,
+                    "28": fleet_shapes.time_to_merge_summary(state_dir, 28, now=now, facts=facts),
+                }
+            }
     return out
 
 
@@ -520,13 +530,37 @@ def render_fleet_six(section: dict) -> list[str]:
 
     m7, m28 = w7.get("merged_per_day", {}), w28.get("merged_per_day", {})
     ttm = section.get("time_to_merge") or {}
+
+    def merge_time(days: str) -> str:
+        by_agent = ttm.get("windows", {}).get(days, {})
+        if "unmeasured" in by_agent:
+            return f"unmeasured ({by_agent['unmeasured']})"
+        if not by_agent:
+            return "unmeasured (no merged agent PRs)"
+        parts = []
+        for agent, cell in sorted(by_agent.items()):
+            coverage = f"{cell['n_with_facts']}/{cell['n_merged']} facts"
+            if cell["median_hours"] is None:
+                parts.append(f"{agent} unmeasured ({coverage})")
+            else:
+                parts.append(
+                    f"{agent} median {cell['median_hours']:.1f} h, "
+                    f"p90 {cell['p90_hours']:.1f} h ({coverage})"
+                )
+        return ", ".join(parts)
+
+    merge_line = (
+        f"unmeasured ({ttm['unmeasured']})"
+        if "unmeasured" in ttm
+        else f"7d {merge_time('7')} | 28d {merge_time('28')}"
+    )
     return [
         f"FLEET-6 merged/day: {m7.get('value')} over 7d ({m7.get('merged')} merged; {m7.get('merged_including_bots_and_owner')} incl. bots+owner) | 28d {m28.get('value')}",
         f"FLEET-6 verifier pass rate: 7d {rate(w7.get('verifier_pass_rate', {}))} | 28d {rate(w28.get('verifier_pass_rate', {}))}",
         f"FLEET-6 broke-later by agent (merges >=7d old, 28d): {broke(w28.get('broke_later_by_agent', {}))}",
         f"FLEET-6 cost per merged PR by agent (28d): {cost(w28.get('cost_per_merged_by_agent', {}))}",
         f"FLEET-6 unattributed share of merged agent work: 7d {rate(w7.get('unattributed_share', {}))} | 28d {rate(w28.get('unattributed_share', {}))}",
-        f"FLEET-6 time-to-merge: unmeasured ({ttm.get('unmeasured', 'no data')})",
+        f"FLEET-6 time-to-merge: {merge_line}",
     ]
 
 
