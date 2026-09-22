@@ -251,7 +251,7 @@ if [[ "$mode" == "active" ]]; then
   # REMOTE model (owner's design): for each backlog item, choose a keepalive agent (reserve-aware) ->
   # apply agent:<X> -> the GitHub keepalive runs it on REMOTE capacity -> ingest the PR outcome into the
   # feedback loop. Local CLI delegation (router.py + dispatcher.py) remains available for bounded local work.
-  python3 "$ORCH/tick.py" --active   || { echo "  remote tick failed; aborting"; exit 1; }
+  python3 "$ORCH/tick.py" --active --summary   || { echo "  remote tick failed; aborting"; exit 1; }
   # Experiment follow-up (2026-07-08, audit item 12b follow-through): the tick LAUNCHES A/B/C
   # experiments but nothing ever ran collect/evaluate on them — ZERO tick-* evaluation rows existed
   # (all judge evidence came from manual/backfill campaigns), so the research arm burned implementer
@@ -262,7 +262,7 @@ if [[ "$mode" == "active" ]]; then
   python3 "$ORCH/exp_abcd.py" followup >/dev/null 2>&1 || echo "  warn: experiment followup failed (continuing)"
 else
   # SHADOW: print what the remote tick WOULD delegate; applies NO labels, no heartbeat, no ingest writes.
-  python3 "$ORCH/tick.py"
+  python3 "$ORCH/tick.py" --summary
 fi
 # ROUNDS: BOTH QUANTITIES, EVERY TICK. Offload runs bound to a research round are the only offload
 # evidence the learner can compare (dispatcher.offload research_round=); how many of them are SCORED is
