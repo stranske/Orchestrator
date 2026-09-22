@@ -208,7 +208,9 @@ def _task_report(
     }
 
 
-def build_report(window_days: int = 90, *, dry_run: bool = False, route_table=None) -> dict:
+def build_report(
+    window_days: int = feedback.RELEARN_WINDOW_DAYS, *, dry_run: bool = False, route_table=None
+) -> dict:
     route_table = route_table or router.ROUTE_TABLE
     task_type_priors = priors_from_route_table(route_table)
     bt_blended = blend_bt_priors(task_type_priors)
@@ -469,7 +471,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Run feedback relearning and report route weights."
     )
-    parser.add_argument("--window-days", type=_positive_int, default=90)
+    parser.add_argument("--window-days", type=_positive_int, default=feedback.RELEARN_WINDOW_DAYS)
     parser.add_argument("--json", action="store_true", help="print JSON instead of human text")
     parser.add_argument(
         "--dry-run", action="store_true", help="compute priors without writing weights"
