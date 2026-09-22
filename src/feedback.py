@@ -4519,6 +4519,32 @@ def record_profile_decision(envelope: dict) -> str:
     return str(envelope["decision_id"])
 
 
+def record_lane_round(
+    agent: str,
+    lane: str,
+    receiver_reason: str | None,
+    exit_status: int,
+    error_class: str,
+    ts: int,
+) -> str:
+    """Record observed relay facts in the v2 decision plane, without a fake profile."""
+    if agent not in {"codex", "claude"} or not lane or not error_class:
+        raise ValueError("agent, lane and error_class must describe a lane round")
+    facts = [agent, lane, receiver_reason, int(exit_status), error_class, int(ts)]
+    decision_id = (
+        "lane-round:"
+        + hashlib.sha256(json.dumps(facts, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
+    )
+    with _conn() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO routing_decisions_v2 "
+            "(decision_id,ts,record_kind,agent,lane,receiver_reason,exit_status,error_class) "
+            "VALUES (?,?, 'lane_round',?,?,?,?,?)",
+            (decision_id, int(ts), agent, lane, receiver_reason, int(exit_status), error_class),
+        )
+    return decision_id
+
+
 def attach_profile_attempt_to_decision(decision_id: str, attempt_id: str) -> list[str]:
     """Persist the real profile-attempt ID on its replayable route decision."""
     import execution_profiles

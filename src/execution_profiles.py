@@ -242,13 +242,27 @@ CREATE TABLE IF NOT EXISTS execution_profile_pools (
   PRIMARY KEY (registry_version, profile_id, pool_id)
 );
 CREATE TABLE IF NOT EXISTS routing_decisions_v2 (
-  decision_id TEXT PRIMARY KEY, ts INTEGER NOT NULL, task_type TEXT NOT NULL,
-  target TEXT, candidate_profiles_json TEXT NOT NULL, gate_results_json TEXT NOT NULL,
-  scores_json TEXT NOT NULL, selected_profile_id TEXT, exploration INTEGER NOT NULL,
-  exploration_policy TEXT NOT NULL, rng_seed INTEGER NOT NULL,
-  policy_version TEXT NOT NULL, assignment_probability REAL NOT NULL,
-  causal_context_json TEXT, replay_hash TEXT NOT NULL,
-  profile_attempt_ids_json TEXT NOT NULL DEFAULT '[]'
+  decision_id TEXT PRIMARY KEY, ts INTEGER NOT NULL, task_type TEXT,
+  target TEXT, candidate_profiles_json TEXT, gate_results_json TEXT,
+  scores_json TEXT, selected_profile_id TEXT, exploration INTEGER,
+  exploration_policy TEXT, rng_seed INTEGER,
+  policy_version TEXT, assignment_probability REAL,
+  causal_context_json TEXT, replay_hash TEXT,
+  profile_attempt_ids_json TEXT NOT NULL DEFAULT '[]',
+  record_kind TEXT NOT NULL DEFAULT 'profile_selection',
+  agent TEXT, lane TEXT, receiver_reason TEXT, exit_status INTEGER, error_class TEXT,
+  CHECK (record_kind = 'lane_round' OR (
+    record_kind = 'profile_selection' AND task_type IS NOT NULL
+    AND candidate_profiles_json IS NOT NULL AND gate_results_json IS NOT NULL
+    AND scores_json IS NOT NULL AND exploration IS NOT NULL
+    AND exploration_policy IS NOT NULL AND rng_seed IS NOT NULL
+    AND policy_version IS NOT NULL AND assignment_probability IS NOT NULL
+    AND replay_hash IS NOT NULL
+  )),
+  CHECK (record_kind != 'lane_round' OR (
+    agent IS NOT NULL AND lane IS NOT NULL AND exit_status IS NOT NULL
+    AND error_class IS NOT NULL
+  ))
 );
 CREATE TABLE IF NOT EXISTS route_weights_v2 (
   version INTEGER NOT NULL, ts INTEGER NOT NULL, task_type TEXT NOT NULL,
@@ -376,14 +390,41 @@ def profiles_for_agent(agent: str, *, transport: str | None = None) -> list[dict
 
 def ensure_schema(conn: sqlite3.Connection, *, now: int | None = None) -> None:
     conn.executescript(SCHEMA)
-    decision_columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(routing_decisions_v2)").fetchall()
-    }
-    if "profile_attempt_ids_json" not in decision_columns:
-        conn.execute(
-            "ALTER TABLE routing_decisions_v2 ADD COLUMN "
-            "profile_attempt_ids_json TEXT NOT NULL DEFAULT '[]'"
+    decision_info = conn.execute("PRAGMA table_info(routing_decisions_v2)").fetchall()
+    decision_columns = {row[1] for row in decision_info}
+    # The original table required profile-selection fields on every row. A relay
+    # round has no profile, seed, score or propensity. Rebuild once so those
+    # fields can remain NULL without inventing selection evidence.
+    if "record_kind" not in decision_columns or any(
+        row[1] == "task_type" and row[3] for row in decision_info
+    ):
+        start = SCHEMA.index("CREATE TABLE IF NOT EXISTS routing_decisions_v2 (")
+        ddl = SCHEMA[start : SCHEMA.index(";", start) + 1].replace(
+            "routing_decisions_v2", "routing_decisions_v2_migrated", 1
         )
+        conn.execute("SAVEPOINT lane_round_schema")
+        try:
+            conn.execute("DROP TABLE IF EXISTS routing_decisions_v2_migrated")
+            conn.execute(ddl)
+            new_columns = {
+                row[1]
+                for row in conn.execute(
+                    "PRAGMA table_info(routing_decisions_v2_migrated)"
+                ).fetchall()
+            }
+            copied = [row[1] for row in decision_info if row[1] in new_columns]
+            names = ",".join(copied)
+            conn.execute(
+                f"INSERT INTO routing_decisions_v2_migrated ({names}) "
+                f"SELECT {names} FROM routing_decisions_v2"
+            )
+            conn.execute("DROP TABLE routing_decisions_v2")
+            conn.execute("ALTER TABLE routing_decisions_v2_migrated RENAME TO routing_decisions_v2")
+            conn.execute("RELEASE SAVEPOINT lane_round_schema")
+        except Exception:
+            conn.execute("ROLLBACK TO SAVEPOINT lane_round_schema")
+            conn.execute("RELEASE SAVEPOINT lane_round_schema")
+            raise
     weight_columns = {
         row[1] for row in conn.execute("PRAGMA table_info(route_weights_v2)").fetchall()
     }
@@ -543,7 +584,7 @@ def attach_profile_attempt(
     """Attach a real persisted attempt to its immutable routing decision."""
     row = conn.execute(
         "SELECT profile_attempt_ids_json,selected_profile_id FROM routing_decisions_v2 "
-        "WHERE decision_id=?",
+        "WHERE decision_id=? AND record_kind='profile_selection'",
         (decision_id,),
     ).fetchone()
     if not row:
@@ -778,7 +819,8 @@ def report(conn: sqlite3.Connection, *, now: int | None = None) -> dict[str, Any
             }
         )
     decisions, mean_propensity = conn.execute(
-        "SELECT COUNT(*),AVG(assignment_probability) FROM routing_decisions_v2"
+        "SELECT COUNT(*),AVG(assignment_probability) FROM routing_decisions_v2 "
+        "WHERE record_kind='profile_selection'"
     ).fetchone()
     shared_pool_burn = {pool_id: 0 for pool_id in CAPACITY_POOLS}
     for profile in PROFILE_REGISTRY.values():
