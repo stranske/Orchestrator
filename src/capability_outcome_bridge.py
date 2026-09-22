@@ -86,7 +86,7 @@ def _tagged_capability_ids(run_id: str, row: dict) -> list[str]:
 _FLEET_DELIVERABLE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$")
 
 
-def _fleet_deliverable(value: str) -> str:
+def _fleet_deliverable(value: object) -> str:
     value = str(value or "").strip()
     return value.lower() if _FLEET_DELIVERABLE_RE.fullmatch(value) else ""
 
