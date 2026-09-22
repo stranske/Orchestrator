@@ -89,6 +89,12 @@ def fetch_decisions(repo: str, numbers: list[int]) -> dict[int, dict[str, Any]]:
         )
         query = f'query {{repository(owner:"{owner}",name:"{name}"){{{aliases}}}}}'
         try:
+            try:
+                import gh_capacity
+
+                gh_capacity.throttle_if_enabled("graphql")
+            except Exception:
+                pass  # Evidence remains unknown if the optional throttle is unavailable.
             result = subprocess.run(
                 ["gh", "api", "graphql", "-f", f"query={query}"],
                 capture_output=True,
@@ -109,6 +115,8 @@ def fetch_decisions(repo: str, numbers: list[int]) -> dict[int, dict[str, Any]]:
         for pr in data.values():
             if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
                 continue
+            if (pr.get("comments") or {}).get("pageInfo", {}).get("hasPreviousPage"):
+                continue  # A truncated comment history cannot prove an absent or latest marker.
             decision = decision_from_pr(repo, pr)
             if decision:
                 found[pr["number"]] = decision

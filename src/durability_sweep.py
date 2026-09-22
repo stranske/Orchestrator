@@ -54,15 +54,15 @@ def _pending_merged_runs() -> list[dict]:
     ]
 
 
-def _missing_verifier_runs() -> list[tuple[str, str, int]]:
-    """Include already-durable keepalive rows: verification often arrives after merge."""
+def _merged_verifier_candidates() -> dict[tuple[str, int], set[str]]:
+    """Resolve every merged outcome to an explicit PR before attributing evidence."""
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT r.run_id,r.target,r.source,COALESCE(o.notes,'') "
             "FROM runs r JOIN outcomes o ON r.run_id=o.run_id "
-            "WHERE o.merged=1 AND o.verifier_verdict IS NULL ORDER BY r.ts ASC"
+            "WHERE o.merged=1 ORDER BY r.ts ASC"
         ).fetchall()
-    found = []
+    found: dict[tuple[str, int], set[str]] = {}
     for run_id, target, source, notes in rows:
         repo, number = provision.parse_target(str(target or ""))
         if not repo:
@@ -73,8 +73,35 @@ def _missing_verifier_runs() -> list[tuple[str, str, int]]:
                 continue
             repo, number = provision.parse_target(explicit)
         if number is not None:
-            found.append((str(run_id), repo, int(number)))
+            found.setdefault((repo.lower(), int(number)), set()).add(str(run_id))
     return found
+
+
+def verifier_candidate_run_ids(
+    repo: str, number: int, *, prospective_run_id: str | None = None
+) -> set[str]:
+    """A PR marker can credit one run only when its Brain mapping is unique."""
+    candidates = _merged_verifier_candidates().get((repo.lower(), int(number)), set()).copy()
+    if prospective_run_id:
+        candidates.add(prospective_run_id)
+    return candidates
+
+
+def _missing_verifier_runs() -> list[tuple[str, str, int]]:
+    """Include already-durable rows: verification often arrives after merge."""
+    candidates = _merged_verifier_candidates()
+    with feedback._conn() as c:
+        missing = {
+            row[0]
+            for row in c.execute("SELECT run_id FROM outcomes WHERE verifier_verdict IS NULL")
+        }
+    return [
+        (run_id, repo, number)
+        for (repo, number), run_ids in candidates.items()
+        if len(run_ids) == 1
+        for run_id in run_ids
+        if run_id in missing
+    ]
 
 
 def refresh_verifier_verdicts(*, dry_run: bool = False, _fetch_fn=None) -> dict:

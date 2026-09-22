@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+from types import SimpleNamespace
 
 import durability_sweep
 import feedback
@@ -93,6 +96,28 @@ def test_green_ci_alone_is_not_a_verdict():
     assert verifier_evidence.decision_from_pr("o/r", _evidence_pr()) is None
 
 
+def test_graphql_fetch_throttles_and_skips_truncated_comment_history(monkeypatch):
+    throttled = []
+    monkeypatch.setitem(
+        sys.modules,
+        "gh_capacity",
+        SimpleNamespace(throttle_if_enabled=lambda resource: throttled.append(resource)),
+    )
+    pr = _evidence_pr(_decision())
+    pr["comments"]["pageInfo"] = {"hasPreviousPage": True}
+    monkeypatch.setattr(
+        verifier_evidence.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, json.dumps({"data": {"repository": {"p7": pr}}}), ""
+        ),
+    )
+    assert verifier_evidence.fetch_decisions("o/r", [7]) == {}
+    assert throttled == ["graphql"]
+    pr["comments"]["pageInfo"]["hasPreviousPage"] = False
+    assert verifier_evidence.fetch_decisions("o/r", [7])[7]["verdict"] == "PASS"
+
+
 def test_wrong_identity_spoof_and_provider_mismatch_stay_unknown():
     assert (
         verifier_evidence.decision_from_pr("o/r", _evidence_pr(_decision(), head="c" * 40)) is None
@@ -130,3 +155,37 @@ def test_late_verifier_verdict_updates_already_durable_row(monkeypatch, tmp_path
         row = c.execute("SELECT verifier_verdict,durability FROM outcomes").fetchone()
     assert row == ("NON_PASS", "durable")
     assert not feedback._is_success("durable", "PASS", "NON_PASS")
+
+
+def test_ambiguous_pr_runs_do_not_receive_duplicate_verdicts(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    for run_id, agent in (("run-a", "codex"), ("run-b", "claude")):
+        feedback.record_run(run_id, "o/r#7", "implement", agent, source="keepalive")
+        feedback.record_outcome(run_id, merged=True, durability="durable")
+    marker = _decision()
+    result = durability_sweep.refresh_verifier_verdicts(
+        _fetch_fn=lambda _repo, _numbers: {7: marker}
+    )
+    assert result["verifier_recorded"] == 0
+    with feedback._conn() as c:
+        assert c.execute(
+            "SELECT COUNT(*) FROM outcomes WHERE verifier_verdict IS NOT NULL"
+        ).fetchone() == (0,)
+
+
+def test_existing_pr_run_blocks_prospective_keepalive_attribution(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run("local-run", "o/r#7", "implement", "codex", source="keepalive")
+    feedback.record_outcome("local-run", merged=True, durability="durable")
+    marker = _decision()
+    keepalive_outcomes.ingest_keepalive_outcomes(
+        ["o/r"],
+        _pr_fetch_fn=lambda _repo, _days: [_merged_pr()],
+        _verifier_fetch_fn=lambda _repo, _numbers: {7: marker},
+        _revert_fn=lambda _pr: (False, "not reverted"),
+        _now=1790000000,
+    )
+    with feedback._conn() as c:
+        assert c.execute(
+            "SELECT COUNT(*) FROM outcomes WHERE verifier_verdict IS NOT NULL"
+        ).fetchone() == (0,)

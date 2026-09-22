@@ -888,7 +888,15 @@ def _outcome_for_pr(
     if not oc:
         return None
     decision = pr.get("_verifier_decision")
-    if isinstance(decision, dict) and decision.get("verdict") in {"PASS", "NON_PASS"}:
+    if (
+        isinstance(decision, dict)
+        and decision.get("verdict") in {"PASS", "NON_PASS"}
+        and isinstance(pr.get("number"), int)
+        and durability_sweep.verifier_candidate_run_ids(
+            repo, pr["number"], prospective_run_id=run["run_id"]
+        )
+        == {run["run_id"]}
+    ):
         oc["verifier_verdict"] = decision["verdict"]
     if oc.get("merged"):
         pr_for_durability = dict(pr)
