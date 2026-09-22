@@ -186,6 +186,32 @@ CPS_FLOOR = 0.01
 # Below this median the agent's cells are UNMEASURED and the existing imputation applies; real
 # telemetry arriving raises the median and the rule releases on the next weekly relearn.
 PLAUSIBLE_TOKENS_PER_RUN = 2000
+# ONE COST SCALE (item E, 2026-09-22). Every agent's effort is compared in list-price-equivalent USD,
+# and a number enters that scale only from a source that prices the WHOLE run: ccusage session totals
+# (input, output and cache tokens at the vendor's published API prices, so a $100/month seat and a
+# pay-go key read on the same axis). A LangSmith trace prices one call inside a run and the
+# dispatcher's ledger row carries latency only, so both are PARTIAL -- and a partial number is a
+# wrong number, not a cheap one: it reads as UNMEASURED and the imputation decides. Measured
+# 2026-09-22 in the live Brain: codex 1,133 ccusage rows of 1,632 local runs (mean $0.32, 2.55M
+# tokens/run) against cursor's 76 LangSmith rows of 1,938 (mean $0.04, 9.7k tokens/run); v65 ranked
+# cursor first for implementation on those 76 partial rows while its merged work broke later three
+# times as often. Coverage is the second guard: cost is MEASURED only when at least
+# MIN_COST_COVERAGE of the agent's telemetry-eligible runs in the window carry a complete-source row
+# (every local run, plus a fleet run only if it carries one -- fleet keepalive runs execute on GitHub
+# and normally carry none, so counting them all would dilute an agent for having fleet volume).
+# Below it the cell is UNMEASURED and the rationale names the share. The threshold guards against a
+# handful of rows standing for an agent (cursor's 76 of 1,938 = 4%), not against sampling: at the
+# 120-day preview of 2026-09-22 codex had 479 priced runs of 1,190 eligible (40%) and claude 51%, and
+# a 50% bar would have thrown away codex's 479 measurements and imputed it from claude alone. Both
+# learners consume these names; nothing else defines the scale.
+COST_SCALE = "list_price_usd"
+COMPLETE_COST_SOURCES = frozenset({"ccusage"})
+MIN_COST_COVERAGE = 0.25
+# Token counts that describe the WHOLE run: the complete cost sources, plus the dispatcher's ledger
+# row, which carries the CLI's own usage events (tokens without a price). A LangSmith trace counts
+# one call. Tokens are only ever the effort PROXY -- used when no priced cost exists anywhere to
+# impute from -- because a priced cost already charges each token at the vendor's rate.
+TOKEN_SOURCES = COMPLETE_COST_SOURCES | frozenset({"ledger"})
 # ONE definition of the broke-later detection floor (router.py aliases it). An outcome judged before
 # this date reads "durable" without broke-later detection ever having run on it, so its success is
 # optimistic. The receiver rail (#284) floors its population here; since 2026-09-21 both route-weight
@@ -248,6 +274,74 @@ def _implausible_telemetry(c, agents, since: int) -> dict[str, str]:
                     f"runs < {PLAUSIBLE_TOKENS_PER_RUN}"
                 )
     return implausible
+
+
+def _cost_telemetry(c, agents, since: int) -> dict[str, dict]:
+    """ONE verdict per agent on whether its cost telemetry may enter the cost scale (item E).
+
+    `valid` is False -- the cell is UNMEASURED and the imputation decides -- when (a) the tokens on
+    its costed rows are implausible (`_implausible_telemetry`), (b) no complete-source row exists, or
+    (c) complete-source rows cover less than MIN_COST_COVERAGE of the agent's local runs in the window.
+    `reason` says which, with the numbers, and lands in the rationale; `coverage` is the measured share
+    over telemetry-eligible runs (None when the agent has none). Partial rows (LangSmith, ledger) are counted so the reason
+    can say they were excluded rather than absent. Shared by relearn() and relearn_quality()."""
+    implausible = _implausible_telemetry(c, agents, since)
+    marks = ",".join("?" for _ in COMPLETE_COST_SOURCES)
+    out: dict[str, dict] = {}
+    for agent in agents:
+        # Denominator = runs that COULD carry whole-run telemetry: every local run, plus any fleet
+        # (keepalive) run that does carry a complete-source row. Fleet runs execute on GitHub and
+        # normally carry none, so counting them all would dilute an agent for having fleet volume.
+        runs = int(
+            c.execute(
+                "SELECT COUNT(*) FROM runs r WHERE r.agent=? AND r.ts>=? AND ("
+                "COALESCE(r.source,'')!='keepalive' OR r.run_id IN ("
+                "SELECT run_id FROM costs WHERE cost_usd>0 AND source IN (" + marks + ")))",
+                (agent, since, *sorted(COMPLETE_COST_SOURCES)),
+            ).fetchone()[0]
+        )
+        complete, partial = c.execute(
+            "SELECT SUM(CASE WHEN co.source IN (" + marks + ") THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN co.source IN (" + marks + ") THEN 0 ELSE 1 END) "
+            "FROM runs r JOIN costs co ON co.run_id=r.run_id "
+            "WHERE r.agent=? AND r.ts>=? AND co.cost_usd>0",
+            (*sorted(COMPLETE_COST_SOURCES), *sorted(COMPLETE_COST_SOURCES), agent, since),
+        ).fetchone()
+        complete = int(complete or 0)
+        partial = int(partial or 0)
+        coverage = (complete / runs) if runs else None
+        if agent in implausible:
+            reason: str | None = implausible[agent].removeprefix("telemetry ")
+        elif complete == 0:
+            reason = (
+                f"cost unmeasured: no complete-source rows ({'/'.join(sorted(COMPLETE_COST_SOURCES))})"
+                f" among {runs} telemetry-eligible runs; {partial} partial rows (trace/ledger) excluded"
+            )
+        elif coverage is not None and coverage < MIN_COST_COVERAGE:
+            reason = (
+                f"cost coverage {coverage:.0%} < {MIN_COST_COVERAGE:.0%}: {complete} complete-source"
+                f" rows of {runs} telemetry-eligible runs; {partial} partial rows excluded"
+            )
+        else:
+            reason = None
+        out[agent] = {
+            "valid": reason is None,
+            "tokens_valid": agent
+            not in implausible,  # whole-run tokens may still serve as the proxy
+            "reason": reason,
+            "coverage": coverage,
+            "complete_rows": complete,
+            "partial_rows": partial,
+            "runs": runs,
+        }
+    return out
+
+
+def _cost_coverage_note(t: dict | None) -> str:
+    """`cost_cov=69%` for the rationale, `cost_cov=n/a` when the agent has no local runs."""
+    if not t or t.get("coverage") is None:
+        return "cost_cov=n/a"
+    return f"cost_cov={t['coverage']:.0%}"
 
 
 # Recency half-life (days) for relearn_quality evidence weights — a stale outcome must not vote
@@ -4364,14 +4458,14 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
         # near-empty data.
         # Judged on costed runs that REPORT tokens: a ledger cost with no token telemetry at all says
         # nothing about plausibility either way and stays measured, exactly as before this rule.
-        implausible = _implausible_telemetry(
+        telemetry = _cost_telemetry(
             c, {a for priors in task_type_priors.values() for a in priors}, since
         )
         cells: dict[tuple[str, str], dict] = {}
         for task_type, priors in task_type_priors.items():
             for agent, prior in priors.items():
                 rows = c.execute(
-                    "SELECT o.durability, o.adjudicated_verdict, o.verifier_verdict, co.cost_usd "
+                    "SELECT o.durability, o.adjudicated_verdict, o.verifier_verdict, co.cost_usd, co.source "
                     "FROM runs r JOIN outcomes o ON r.run_id=o.run_id LEFT JOIN costs co ON r.run_id=co.run_id "
                     "WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
                     f"AND {_learning_assignment_sql()} "
@@ -4380,9 +4474,15 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     (task_type, agent, since, DURABILITY_DETECTION_SINCE),
                 ).fetchall()
                 n = len(rows)
-                succ = sum(1 for d, a, v, _ in rows if _is_success(d, a, v))
-                measured = [cu for d, a, v, cu in rows if _is_success(d, a, v) and cu and cu > 0]
-                if agent in implausible:
+                succ = sum(1 for d, a, v, _cu, _src in rows if _is_success(d, a, v))
+                # ONE cost scale: only complete-source rows are measured (COMPLETE_COST_SOURCES);
+                # a partial trace or a ledger estimate is a wrong number, so it never enters.
+                measured = [
+                    cu
+                    for d, a, v, cu, src in rows
+                    if _is_success(d, a, v) and cu and cu > 0 and src in COMPLETE_COST_SOURCES
+                ]
+                if not telemetry[agent]["valid"]:
                     measured = []  # the cell is UNMEASURED; imputation below decides its cps
                 cells[(task_type, agent)] = {
                     "prior": prior,
@@ -4390,7 +4490,8 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     "succ": succ,
                     "m_cost": sum(measured),
                     "m_succ": len(measured),
-                    "telemetry": implausible.get(agent),
+                    "telemetry": telemetry[agent]["reason"],
+                    "cost_cov": _cost_coverage_note(telemetry.get(agent)),
                 }
         # Imputation pools: the agent's own measured cps (mean over its measured cells), then the
         # global median of measured cell cps.
@@ -4431,7 +4532,8 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     (s["succ"] / s["n"]) if s["n"] else None,
                     cps,
                     score,
-                    f"k={PRIOR_STRENGTH} n={s['n']} succ={s['succ']} cps_src={cps_src}"
+                    f"k={PRIOR_STRENGTH} n={s['n']} succ={s['succ']} cps_src={cps_src} "
+                    f"cost_scale={COST_SCALE} {s['cost_cov']}"
                     + (f" {s['telemetry']}" if s.get("telemetry") else ""),
                     since,
                     now,
@@ -4825,7 +4927,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
     with _conn() as c:
         ver = (c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]) + 1
         # Pass 1: per-cell quality evidence + MEASURED-only effort telemetry.
-        implausible = _implausible_telemetry(
+        telemetry = _cost_telemetry(
             c, {a for priors in task_type_priors.values() for a in priors}, since
         )
         cells: dict[tuple[str, str], dict] = {}
@@ -4947,15 +5049,20 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     placeholders = ",".join("?" for _ in evidence_run_ids)
                     # NULLIF: average only MEASURED metrics — $0/0-token/0-latency rows are the
                     # killed-completion class (audit F2), not evidence of free effort.
+                    # ONE cost scale: cost and tokens average only complete-source rows
+                    # (COMPLETE_COST_SOURCES); latency is the ledger's own wall clock and stays.
+                    source_marks = ",".join("?" for _ in COMPLETE_COST_SOURCES)
+                    token_marks = ",".join("?" for _ in TOKEN_SOURCES)
                     costrow = c.execute(
-                        "SELECT AVG(NULLIF(cost_usd,0)), AVG(NULLIF(tokens_in + tokens_out,0)), "
+                        f"SELECT AVG(CASE WHEN source IN ({source_marks}) THEN NULLIF(cost_usd,0) END), "
+                        f"AVG(CASE WHEN source IN ({token_marks}) THEN NULLIF(tokens_in + tokens_out,0) END), "
                         "AVG(NULLIF(latency_s,0)) "
                         f"FROM costs WHERE run_id IN ({placeholders})",
-                        evidence_run_ids,
+                        (*sorted(COMPLETE_COST_SOURCES), *sorted(TOKEN_SOURCES), *evidence_run_ids),
                     ).fetchone()
                 else:
                     costrow = None
-                telemetry_ok = agent not in implausible
+                telemetry_ok = telemetry[agent]["valid"]
                 cells[(task_type, agent)] = {
                     "prior": prior,
                     "post": post,
@@ -4971,9 +5078,14 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                     # Near-empty telemetry is UNMEASURED effort, not cheap effort: cost and tokens
                     # fall to the imputation below; latency is not a token quantity and stays.
                     "cost": (costrow[0] if costrow else None) if telemetry_ok else None,
-                    "tokens": (costrow[1] if costrow else None) if telemetry_ok else None,
+                    "tokens": (
+                        (costrow[1] if costrow else None)
+                        if telemetry[agent]["tokens_valid"]
+                        else None
+                    ),
                     "latency": costrow[2] if costrow else None,
-                    "telemetry": "ok" if telemetry_ok else "implausible",
+                    "telemetry": "ok" if telemetry_ok else telemetry[agent]["reason"],
+                    "cost_cov": _cost_coverage_note(telemetry.get(agent)),
                 }
         # Imputation pools per metric (2026-07-03 audit F1): an agent with NO measured effort must
         # not earn the best multiplier by silence. Effective effort = measured, else the agent's own
@@ -4992,6 +5104,12 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
             m: (sorted(global_pool[m])[len(global_pool[m]) // 2] if global_pool[m] else None)
             for m in metrics
         }
+        row_pool: dict[str, dict[str, list[float]]] = {m: {} for m in metrics}
+        for (pool_task, _pool_agent), s in cells.items():
+            for m in metrics:
+                if s[m]:
+                    row_pool[m].setdefault(pool_task, []).append(float(s[m]))
+        row_mean = {m: {tt: sum(v) / len(v) for tt, v in row_pool[m].items()} for m in metrics}
 
         def _effective(cell_agent: str, s: dict, m: str) -> tuple[float, str]:
             """Every branch returns a real number — the `0.0` fallback is the point of the last one.
@@ -5006,6 +5124,11 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                 return float(s[m]), "m"
             if cell_agent in agent_mean[m]:
                 return float(agent_mean[m][cell_agent]), "a"
+            # Row mean: the measured cells of THIS task type. An agent measured nowhere must sit
+            # among its peers on this row, not inherit another row's price -- with one measured
+            # agent the global median was that agent's implement cost applied to every review cell.
+            if row_mean[m].get(task_type) is not None:
+                return float(row_mean[m][task_type]), "r"
             median = global_median[m]
             if median is not None:
                 return float(median), "g"
@@ -5016,9 +5139,25 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
             cost, cost_src = _effective(agent, s, "cost")
             mean_tokens, tokens_src = _effective(agent, s, "tokens")
             mean_latency_s, latency_src = _effective(agent, s, "latency")
+            # A priced cost already charges every token at the vendor's rate (cache reads cheaper
+            # than fresh input), so the flat token term would count the same tokens twice, and at
+            # one rate. It stays only as the PROXY when no cost exists anywhere to impute from.
+            tokens_term = "proxy" if cost_src == "0" else "subsumed"
+            # The cost term is charged in ROW UNITS -- dollars divided by the row's mean MEASURED
+            # cost -- so LAMBDA_COST keeps the meaning it was tuned with when the scale's currency
+            # changes. It was tuned on $0.04-$0.30 cells; the first honest list-price preview
+            # (2026-09-22) read codex implement at $18.64 a run, and exp(-0.15 * 18.64) = 0.06
+            # would have let a unit change, not evidence, take codex from first to last. Ranking
+            # within a row is unchanged by the unit; only the penalty's magnitude is anchored.
+            cost_unit = row_mean["cost"].get(task_type) or global_median["cost"]
+            cost_units = (cost / cost_unit) if cost_unit else cost
             effort_penalty = (
-                LAMBDA_COST * cost
-                + LAMBDA_TOKEN_MTOK * (mean_tokens / 1_000_000.0)
+                LAMBDA_COST * cost_units
+                + (
+                    LAMBDA_TOKEN_MTOK * (mean_tokens / 1_000_000.0)
+                    if tokens_term == "proxy"
+                    else 0.0
+                )
                 + LAMBDA_LATENCY_MIN * (mean_latency_s / 60.0)
             )
             score = s["post"] * math.exp(-effort_penalty)
@@ -5045,7 +5184,9 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                         f"mean_latency_s={mean_latency_s:.1f} effort_penalty={effort_penalty:.4f} "
                         f"effort_src={cost_src}{tokens_src}{latency_src} half_life_d={half_life:g} "
                         f"population={_learning_population()} fleet_rows={s['fleet_n']} "
-                        f"pre_detection_skipped={s['pre_detection_n']} telemetry={s['telemetry']}"
+                        f"pre_detection_skipped={s['pre_detection_n']} telemetry={s['telemetry']} "
+                        f"cost_scale={COST_SCALE} {s['cost_cov']} tokens_term={tokens_term} "
+                        f"cost_units={cost_units:.2f} cost_unit_usd={cost_unit if cost_unit else 0:.4f}"
                     ),
                     since,
                     now,
@@ -5145,10 +5286,10 @@ def _selftest():
             record_run(rid, f"o/r#{i}", "implement", "cursor" if i % 2 else "claude")
             if i % 2:  # cursor: durable success, cheap
                 record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
-                record_cost(rid, cost_usd=1.0)
+                record_cost(rid, cost_usd=1.0, source="ccusage")
             else:  # claude: merged but reverted later (durability catches the verdict-miss)
                 record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="reverted")
-                record_cost(rid, cost_usd=5.0)
+                record_cost(rid, cost_usd=5.0, source="ccusage")
         v1 = relearn(priors)
         w1 = {x["agent"]: x for x in current_weights("implement", v1)}
         # cursor's posterior should rise toward its durable-success; claude's should fall (reverts).
@@ -5169,7 +5310,7 @@ def _selftest():
                 record_run(rid, f"o/imp#{imp_agent}{i}", "imputetest", imp_agent)
                 record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
                 if imp_agent == "paid":
-                    record_cost(rid, cost_usd=2.0)
+                    record_cost(rid, cost_usd=2.0, source="ccusage")
         vi = relearn({"imputetest": {"paid": 0.5, "dark": 0.5}})
         wi = {x["agent"]: x for x in current_weights("imputetest", vi)}
         assert abs(wi["paid"]["score"] - wi["dark"]["score"]) < 1e-9, wi
@@ -5484,7 +5625,13 @@ def _selftest():
             "mean_tokens=20000000" in heavy_reason and "mean_latency_s=600.0" in heavy_reason
         ), heavy_reason
         record_run("telemetry_only", "o/r#telemetry", "coldtelemetry", "agent_t")
-        record_cost("telemetry_only", tokens_in=50_000_000, latency_s=3600.0, cost_usd=10.0)
+        record_cost(
+            "telemetry_only",
+            tokens_in=50_000_000,
+            latency_s=3600.0,
+            cost_usd=10.0,
+            source="ccusage",
+        )
         cold_v = relearn_quality({"coldtelemetry": {"agent_t": 0.5}})
         cold_w = current_weights("coldtelemetry", cold_v)[0]
         assert (
@@ -5497,7 +5644,9 @@ def _selftest():
         for qa in ("qpaid", "qdark"):
             record_run(f"qi_{qa}", "o/r#qi", "qimpute", qa, experiment_id=f"QI-{qa}")
             record_evaluation(f"QI-{qa}", qa, "judge", 8.0)
-        record_cost("qi_qpaid", cost_usd=3.0, tokens_in=1_000_000, latency_s=120.0)
+        record_cost(
+            "qi_qpaid", cost_usd=3.0, tokens_in=1_000_000, latency_s=120.0, source="ccusage"
+        )
         qi_v = relearn_quality({"qimpute": {"qpaid": 0.5, "qdark": 0.5}})
         qi_w = {x["agent"]: x for x in current_weights("qimpute", qi_v)}
         assert abs(qi_w["qpaid"]["score"] - qi_w["qdark"]["score"]) < 1e-9, qi_w
@@ -5509,7 +5658,8 @@ def _selftest():
                 ).fetchall()
             )
         assert "effort_src=mmm" in qi_srcs["qpaid"], qi_srcs
-        assert "effort_src=ggg" in qi_srcs["qdark"], qi_srcs
+        # imputed from the measured cells of its OWN row (r), the nearest pool (2026-09-22)
+        assert "effort_src=rrr" in qi_srcs["qdark"], qi_srcs
 
         # 16a recency-decay regression: identical outcome COUNTS, opposite ORDER — the agent whose
         # success is FRESH must out-rank the one whose success is STALE; with decay disabled
@@ -5709,7 +5859,7 @@ def _selftest():
                 assignment="assigned",
             )
             record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
-            record_cost(rid, cost_usd=99.0)
+            record_cost(rid, cost_usd=99.0, source="ccusage")
         assign_v1 = relearn_quality(assign_priors)
         assign_w1 = {x["agent"]: x for x in current_weights("assignlearn", assign_v1)}
         assert assign_w1["agentX"]["posterior"] == assign_w0["agentX"]["posterior"], assign_w1
@@ -5746,7 +5896,7 @@ def _selftest():
                 work_type="renovate",
             )
             record_outcome(rid, adjudicated_verdict="PASS", merged=True, durability="durable")
-            record_cost(rid, cost_usd=77.0)
+            record_cost(rid, cost_usd=77.0, source="ccusage")
         assign_v2 = relearn_quality(assign_priors)
         assign_w2 = {x["agent"]: x for x in current_weights("assignlearn", assign_v2)}
         assert assign_w2["agentX"]["posterior"] == assign_w0["agentX"]["posterior"], assign_w2

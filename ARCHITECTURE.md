@@ -141,7 +141,11 @@ that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`no
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail
 already applies, and imputes rather than reads an agent's near-empty cost telemetry; every rationale
 records `population=`, `fleet_rows=`, `pre_detection_skipped=` and `telemetry=`
-(`ORCH_RELEARN_FLEET_ROWS=0` restores the experimental-only population).
+(`ORCH_RELEARN_FLEET_ROWS=0` restores the experimental-only population). Since 2026-09-22 cost has ONE
+scale (`feedback.COST_SCALE`, list-price USD): only whole-run sources (`COMPLETE_COST_SOURCES`) with
+coverage of at least `MIN_COST_COVERAGE` of an agent's telemetry-eligible runs are measured; partial
+traces read as UNMEASURED and are imputed from the agent's own task-type row; a priced cost subsumes
+the token term and is charged in row units so the tuned penalty survives the change of currency.
 
 A third, coarser feedback surface re-keys pattern mining to the fleet rather than to this tool's own
 completion events (which require a research-subject identity the fleet's work never carries, so the

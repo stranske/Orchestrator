@@ -277,6 +277,15 @@ safety switch, not dead code.
 - **relearn_report.py** (weekly) re-estimates versioned route weights: Beta-Binomial posteriors
   with recency decay, cost/effort imputation (missing telemetry never reads as free — the cost
   plane is repaired), and **Bradley-Terry warm-starts** blended from the A/B/C duel data. Since
+  2026-09-22 every agent's cost sits on **one scale** (`feedback.COST_SCALE`, list-price USD): a cost
+  is MEASURED only from a source that prices the whole run (`COMPLETE_COST_SOURCES`, ccusage session
+  totals) and only when such rows cover at least `MIN_COST_COVERAGE` of the agent's telemetry-eligible
+  runs; a LangSmith trace (one call) or a ledger row (latency only) is a partial number and reads as
+  UNMEASURED, imputed from the measured cells of its own task-type row. A priced cost subsumes the
+  flat token term, and the cost penalty is charged in row units (dollars over the row's mean measured
+  cost) so the tuned `LAMBDA_COST` keeps its meaning when the currency changes — the first honest
+  preview read codex implement at $18.64 a run against v65's $0.32. The rationale carries
+  `cost_scale= cost_cov= tokens_term= cost_units=` and the weekly report prints each agent's verdict. Since
   2026-09-21 the learners read the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as
   well as the tool's own `experimental` rows, under the broke-later detection floor of 2026-08-29
   the receiver rail already uses; an agent whose costed runs report implausibly few tokens has its
