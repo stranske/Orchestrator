@@ -716,6 +716,34 @@ def fleet_gates(
     }
 
 
+def _exploration_gate() -> dict:
+    """Keep an unreadable direct-mode evidence gate visible in the recurring review."""
+    try:
+        import exploration_review
+
+        result = exploration_review.build_report(trials=20)
+        status = result["status"]
+        error = result.get("evidence_error")
+    except Exception as exc:  # noqa: BLE001
+        status = "exploration_report_error"
+        error = f"{type(exc).__name__}: {exc}"
+    suspect = status in {"direct_mode_evidence_unreadable", "exploration_report_error"}
+    return {
+        "status": status,
+        "suspect": suspect,
+        "evidence_error": error,
+        "drainable": (
+            "repair the Brain read"
+            if status == "direct_mode_evidence_unreadable"
+            else (
+                "repair exploration report generation"
+                if status == "exploration_report_error"
+                else None
+            )
+        ),
+    }
+
+
 def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path=None) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why."""
     import capability_recurrence_check as rc
@@ -789,6 +817,7 @@ def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path
         # landed, so both belong in this sweep rather than in a second auditor.
         "mirror_drift": mirror_drift(),
         "fleet_gates": fleet_gates(now=now),
+        "exploration_gate": _exploration_gate(),
         "raise_count": len(due) + len(quiet),
     }
 
@@ -947,11 +976,21 @@ def format_report(rep: dict) -> str:
             if fleet.get("clear_paths"):
                 lines.append(f"      {fleet['clear_paths']}")
         lines.append("")
+    exploration_gate = rep.get("exploration_gate") or {}
+    if exploration_gate.get("suspect"):
+        lines += [
+            "## Exploration evidence gate",
+            "",
+            f"  SUSPECT — {exploration_gate['status']}: {exploration_gate['evidence_error']}",
+            f"  drainable: {exploration_gate['drainable']}",
+            "",
+        ]
     if (
         not rep["raise_count"]
         and not rep.get("stale_runners")
         and (rep.get("mirror_drift") or {}).get("status") == "ok"
         and not (rep.get("fleet_gates") or {}).get("suspect")
+        and not exploration_gate.get("suspect")
     ):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
