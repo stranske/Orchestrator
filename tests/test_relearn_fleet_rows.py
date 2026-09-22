@@ -65,7 +65,9 @@ def test_fleet_outcomes_move_the_weights_and_are_named_in_the_rationale(brain):
     assert codex["n_obs"] == 10 and cursor["n_obs"] == 10
     assert codex["posterior"] > 0.5 > cursor["posterior"], (codex, cursor)
     assert "population=fleet" in codex["rationale"] and "fleet_rows=10" in codex["rationale"]
-    assert "pre_detection_skipped=0" in codex["rationale"] and "telemetry=ok" in codex["rationale"]
+    assert "pre_detection_skipped=0" in codex["rationale"]
+    # no run here carries whole-run cost telemetry, so the cell says so instead of reading as free
+    assert "cost unmeasured: no complete-source rows" in codex["rationale"]
     assert feedback.current_weights("implement", v)[0]["agent"] == "codex"
 
 
@@ -105,11 +107,19 @@ def test_near_empty_cost_telemetry_is_imputed_not_read_as_cheap(brain):
     for i in range(10):
         _fleet_run(f"keepalive:o/r#t{i:02d}:codex", "codex", durable=True)
         feedback.record_cost(
-            f"keepalive:o/r#t{i:02d}:codex", tokens_in=200_000, tokens_out=20_000, cost_usd=0.9
+            f"keepalive:o/r#t{i:02d}:codex",
+            tokens_in=200_000,
+            tokens_out=20_000,
+            cost_usd=0.9,
+            source="ccusage",
         )
         _fleet_run(f"keepalive:o/r#s{i:02d}:cursor", "cursor", durable=True)
         feedback.record_cost(
-            f"keepalive:o/r#s{i:02d}:cursor", tokens_in=150, tokens_out=50, cost_usd=0.05
+            f"keepalive:o/r#s{i:02d}:cursor",
+            tokens_in=150,
+            tokens_out=50,
+            cost_usd=0.05,
+            source="ccusage",
         )
     v = feedback.relearn_quality(PRIORS)
     codex, cursor = _cell(v, "codex"), _cell(v, "cursor")

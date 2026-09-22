@@ -208,11 +208,53 @@ def _task_report(
     }
 
 
+def cost_telemetry_summary(task_type_priors: dict, window_days: int) -> dict:
+    """Per agent: does its cost telemetry enter the one cost scale (feedback.COST_SCALE), and why not.
+
+    Read-only; the same `feedback._cost_telemetry` verdict both learners apply, so the weekly report
+    shows the population the version was priced on. `coverage` is the share of telemetry-eligible
+    runs carrying a complete-source row; `reason` is None when the agent is measured."""
+    agents = {a for priors in task_type_priors.values() for a in priors}
+    since = int(time.time()) - window_days * 86400
+    try:
+        with feedback._conn() as c:
+            verdicts = feedback._cost_telemetry(c, agents, since)
+    except Exception as exc:  # noqa: BLE001 -- the report must still render
+        return {"error": f"{type(exc).__name__}: {exc}"[:200]}
+    return {
+        agent: {
+            "measured": bool(v["valid"]),
+            "coverage": v.get("coverage"),
+            "complete_rows": v.get("complete_rows"),
+            "partial_rows": v.get("partial_rows"),
+            "reason": v.get("reason"),
+        }
+        for agent, v in sorted(verdicts.items())
+    }
+
+
+def _fmt_cost_telemetry(summary: dict) -> str:
+    if "error" in summary:
+        return f"cost telemetry: UNREADABLE ({summary['error']})"
+    parts = []
+    for agent, v in summary.items():
+        cov = "n/a" if v["coverage"] is None else f"{v['coverage']:.0%}"
+        parts.append(
+            f"{agent} measured cov={cov}" if v["measured"] else f"{agent} UNMEASURED cov={cov}"
+        )
+    return (
+        f"cost telemetry ({feedback.COST_SCALE}; complete sources "
+        f"{'/'.join(sorted(feedback.COMPLETE_COST_SOURCES))}, coverage>={feedback.MIN_COST_COVERAGE:.0%}): "
+        + "; ".join(parts)
+    )
+
+
 def build_report(
     window_days: int = feedback.RELEARN_WINDOW_DAYS, *, dry_run: bool = False, route_table=None
 ) -> dict:
     route_table = route_table or router.ROUTE_TABLE
     task_type_priors = priors_from_route_table(route_table)
+    cost_telemetry = cost_telemetry_summary(task_type_priors, window_days)
     bt_blended = blend_bt_priors(task_type_priors)
     learner_name, learn, learner_note = _learner()
     before_version = _max_version()
@@ -243,6 +285,7 @@ def build_report(
             "would_write_version": would_write_version,
             "new_version": None,
             "previous_version": previous_version,
+            "cost_telemetry": cost_telemetry,
             "tasks": tasks,
         }
 
@@ -258,6 +301,7 @@ def build_report(
         "bt_blended": bt_blended,  # 16(g): task_types whose priors were duel-warm-started
         "new_version": new_version,
         "previous_version": previous_version,
+        "cost_telemetry": cost_telemetry,
         "tasks": [
             _task_report(task_type, priors, new_version, previous_version)
             for task_type, priors in task_type_priors.items()
@@ -289,6 +333,7 @@ def format_human(report: dict) -> str:
             f"would_write_version={report['would_write_version']}"
         )
         lines.append(report["learner_note"])
+        lines.append(_fmt_cost_telemetry(report.get("cost_telemetry") or {}))
         lines.append("No route_weights version was written.")
         lines.append("")
         for task in report["tasks"]:
@@ -304,6 +349,7 @@ def format_human(report: dict) -> str:
         f"wrote_version={report['new_version']} previous_version={report['previous_version'] or 'none'}"
     )
     lines.append(report["learner_note"])
+    lines.append(_fmt_cost_telemetry(report.get("cost_telemetry") or {}))
     lines.append(
         "Rank deltas are learned_rank minus comparison_rank; negative means the agent rose."
     )

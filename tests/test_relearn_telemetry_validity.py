@@ -29,7 +29,9 @@ def _seed(tokens_per_run: dict[str, int], cost_per_run: dict[str, float], runs: 
             feedback.record_outcome(
                 rid, adjudicated_verdict="PASS", merged=True, durability="durable"
             )
-            feedback.record_cost(rid, tokens_in=toks, tokens_out=0, cost_usd=cost_per_run[agent])
+            feedback.record_cost(
+                rid, tokens_in=toks, tokens_out=0, cost_usd=cost_per_run[agent], source="ccusage"
+            )  # a complete source: the plausibility rule judges rows that are otherwise measured
 
 
 @pytest.fixture
@@ -56,8 +58,8 @@ def test_implausible_telemetry_is_imputed_not_measured(brain):
     _seed({"codex": 400_000, "cursor": 200}, {"codex": 2.0, "cursor": 0.01})
     feedback.relearn(PRIORS, window_days=30)
     w = _weights()
-    assert "telemetry implausible" in _rationale("cursor") and "median 200" in _rationale("cursor")
-    assert "telemetry implausible" not in _rationale("codex")
+    assert "implausible" in _rationale("cursor") and "median 200" in _rationale("cursor")
+    assert "implausible" not in _rationale("codex")
     # cursor's stored cost_per_success is NULL (nothing fabricated), and its score is computed on the
     # imputed cps — codex's — so equal success rates give equal scores instead of a 200x gap.
     with feedback._conn() as c:
@@ -75,7 +77,7 @@ def test_real_telemetry_is_unchanged(brain):
     _seed({"codex": 400_000, "cursor": 50_000}, {"codex": 2.0, "cursor": 0.5})
     feedback.relearn(PRIORS, window_days=30)
     w = _weights()
-    assert "telemetry implausible" not in _rationale("cursor")
+    assert "implausible" not in _rationale("cursor")
     assert w["cursor"]["score"] > w["codex"]["score"]  # genuinely cheaper, and measured as such
 
 
@@ -85,14 +87,14 @@ def test_deliberate_break_rule_disabled_restores_the_inflated_score(brain, monke
     feedback.relearn(PRIORS, window_days=30)
     w = _weights()
     assert w["cursor"]["score"] > 50 * w["codex"]["score"]
-    assert "telemetry implausible" not in _rationale("cursor")
+    assert "implausible" not in _rationale("cursor")
 
 
 def test_costs_without_token_telemetry_stay_measured(brain):
     """A ledger cost that reports no tokens at all says nothing about plausibility."""
     _seed({"codex": 400_000, "cursor": 0}, {"codex": 2.0, "cursor": 0.5})
     feedback.relearn(PRIORS, window_days=30)
-    assert "telemetry implausible" not in _rationale("cursor")
+    assert "implausible" not in _rationale("cursor")
     with feedback._conn() as c:
         cps = dict(
             c.execute(
