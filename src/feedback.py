@@ -192,6 +192,7 @@ PLAUSIBLE_TOKENS_PER_RUN = 2000
 # learners do too (#293), so the rail and the weights read the same population.
 DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
 DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
+RELEARN_WINDOW_DAYS = 120
 # WHICH RUNS THE ROUTE-WEIGHT LEARNERS READ. `assignment` is 'experimental' for the tool's own
 # dispatches, 'assigned' for fleet keepalive PRs that carried an agent label, 'none' for keepalive PRs
 # with no agent, 'instrumentation' for probes. Until 2026-09-21 both learners kept only 'experimental'
@@ -4793,7 +4794,7 @@ def _has_outcome_evidence(
     }
 
 
-def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
+def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> int:
     """Quality-MAGNITUDE learner (fixes the binary-label + free-agent-cost flaws). Per (task_type, agent):
     reward q is one observation per run: mean(eval_score)/QUALITY_MAX when a run has cross-eval scores,
     otherwise 1.0/0.0 from production outcome+durability when a run has outcome evidence. This lets real

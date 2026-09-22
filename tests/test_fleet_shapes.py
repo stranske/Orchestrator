@@ -4,6 +4,7 @@ unattributed rows never become a shape; a PR gh cannot return is named as missin
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 
@@ -12,6 +13,7 @@ import pytest
 import capability_advisor
 import feedback
 import fleet_shapes
+import relearn_report
 
 
 @pytest.fixture
@@ -22,7 +24,7 @@ def brain(monkeypatch, tmp_path):
     return tmp_path
 
 
-def _merged(rid, repo, number, agent, *, days_ago=5, durability="durable", source=None, usd=None):
+def _merged(rid, repo, number, agent, *, days_ago=10, durability="durable", source=None, usd=None):
     ts = int(time.time()) - days_ago * 86400
     feedback.record_run(
         rid,
@@ -40,6 +42,77 @@ def _merged(rid, repo, number, agent, *, days_ago=5, durability="durable", sourc
     if usd is not None:
         feedback.record_cost(rid, tokens_in=1000, tokens_out=100, cost_usd=usd)
     return ts
+
+
+def test_shapes_apply_the_detection_floor(brain):
+    now = feedback.DURABILITY_DETECTION_SINCE + 30 * 86400
+    numbers = {"before": 1, "atfloor": 2, "young": 3, "atage": 4, "fallback": 5, "pending": 6}
+
+    def add(rid, *, age_seconds, durability, checked_ts):
+        ts = now - age_seconds
+        feedback.record_run(
+            rid, f"o/r0#{numbers[rid]}", "implement", "codex", ts=ts, source="keepalive"
+        )
+        feedback.record_outcome(rid, merged=True, durability=durability)
+        with feedback._conn() as c:
+            c.execute(
+                "UPDATE outcomes SET durability_checked_ts=? WHERE run_id=?", (checked_ts, rid)
+            )
+
+    mature = 10 * 86400
+    add(
+        "before",
+        age_seconds=mature,
+        durability="durable",
+        checked_ts=feedback.DURABILITY_DETECTION_SINCE - 1,
+    )
+    add(
+        "atfloor",
+        age_seconds=mature,
+        durability="durable",
+        checked_ts=feedback.DURABILITY_DETECTION_SINCE,
+    )
+    add("young", age_seconds=7 * 86400 - 1, durability="broke_later", checked_ts=now)
+    add("atage", age_seconds=7 * 86400, durability="broke_later", checked_ts=now)
+    add("fallback", age_seconds=mature, durability="durable", checked_ts=None)
+    add("pending", age_seconds=mature, durability="pending", checked_ts=None)
+
+    prs = fleet_shapes.merged_agent_prs(now=now)
+    by_run = {pr["ref"].split("#", 1)[1]: pr for pr in prs}
+    assert len(prs) == 6
+    assert by_run["1"]["durability"] == "pending"
+    assert by_run["2"]["durability"] == "durable"
+    assert by_run["3"]["durability"] == "pending"
+    assert by_run["4"]["durability"] == "broke_later"
+    assert by_run["5"]["durability"] == "durable"
+    assert by_run["6"]["durability"] == "pending"
+
+    facts = {pr["ref"]: dict(FACT) for pr in prs}
+    shape = fleet_shapes.aggregate(prs, facts, now=now, window_days=60)["shapes"][0]
+    cell = shape["agents"]["codex"]
+    assert shape["prs"] == cell["n"] == 6
+    assert (cell["durable"], cell["bad"], cell["pending"]) == (2, 1, 3)
+    assert cell["broke_later_rate"] == 0.333
+
+
+def test_report_window_matches_quality_learner_default(monkeypatch, capsys):
+    quality_default = inspect.signature(feedback.relearn_quality).parameters["window_days"].default
+    report_default = (
+        inspect.signature(relearn_report.build_report).parameters["window_days"].default
+    )
+    assert quality_default == report_default == feedback.RELEARN_WINDOW_DAYS
+
+    observed = []
+
+    def report(*, window_days, dry_run):
+        observed.append((window_days, dry_run))
+        return {"window_days": window_days}
+
+    monkeypatch.setattr(relearn_report, "build_report", report)
+    assert relearn_report.main(["--dry-run", "--json"]) == 0
+    assert relearn_report.main(["--dry-run", "--json", "--window-days", "37"]) == 0
+    capsys.readouterr()
+    assert observed == [(feedback.RELEARN_WINDOW_DAYS, True), (37, True)]
 
 
 FACT = {

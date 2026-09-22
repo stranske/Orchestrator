@@ -57,6 +57,7 @@ SCHEMA = "orchestrator.fleet-shapes"
 VERSION = 1
 FACTS_SCHEMA = "orchestrator.fleet-shapes-facts"
 DEFAULT_WINDOW_DAYS = 60
+DURABILITY_MIN_AGE_DAYS = 7
 FETCH_LIMIT_DEFAULT = 400
 GRAPHQL_CHUNK = 40
 # A shape RECURS when three or more merged PRs share it across two or more repos, or five in one repo.
@@ -206,25 +207,33 @@ def merged_agent_prs(
     """Merged keepalive rows for agents, inside the window. Bot and owner rows are excluded by their
     attribution_source; unattributed (`agent='none'`) rows are excluded too — a shape with no agent
     cannot be compared by agent, and the ingest resolves them on its own schedule."""
-    now = int(now or time.time())
+    now = int(time.time()) if now is None else int(now)
     since = now - window_days * 86400
     out: list[dict] = []
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT r.run_id, r.target, r.agent, r.ts, r.routing_metadata, o.durability, "
+            "o.durability_checked_ts, "
             "o.verifier_verdict, (SELECT SUM(k.cost_usd) FROM costs k WHERE k.run_id=r.run_id) "
             "FROM runs r JOIN outcomes o ON o.run_id=r.run_id "
             "WHERE o.merged=1 AND r.source='keepalive' AND r.ts>=? AND r.agent NOT IN ('none','') "
             "ORDER BY r.ts",
             (since,),
         ).fetchall()
-    for _run_id, target, agent, ts, metadata_raw, durability, verifier, cost in rows:
+    for _run_id, target, agent, ts, metadata_raw, durability, checked_ts, verifier, cost in rows:
         source = str(feedback._routing_metadata_dict(metadata_raw).get("attribution_source") or "")
         if source.startswith("bot:") or source == "human":
             continue
         repo, _, number = str(target or "").partition("#")
         if not repo or not number.isdigit():
             continue
+        judged_ts = checked_ts if checked_ts is not None else ts
+        # Keep the PR in shape and merge-time counts. A pre-detection or young merged PR has
+        # no trustworthy broke-later observation yet, even if its stored label says durable.
+        durability_ready = (
+            judged_ts >= feedback.DURABILITY_DETECTION_SINCE
+            and ts <= now - DURABILITY_MIN_AGE_DAYS * 86400
+        )
         out.append(
             {
                 "ref": f"{repo}#{number}",
@@ -232,7 +241,7 @@ def merged_agent_prs(
                 "number": int(number),
                 "agent": str(agent),
                 "ts": int(ts),
-                "durability": str(durability or "pending"),
+                "durability": str(durability or "pending") if durability_ready else "pending",
                 "verifier": verifier,
                 "cost_usd": float(cost) if cost is not None else None,
             }
