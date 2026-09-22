@@ -135,7 +135,12 @@ the dispatch seam — the accepted `role_run_id` is stamped onto the dispatch
 lands. `feedback.join_role_to_outcome()` is the manual equivalent for links made after the fact.
 Attribution is to the ACTING run: only an `accepted=1` edge back-propagates, so a role whose proposal was
 rejected records the disagreement and inherits no PASS. This keeps role learning separate from normal
-implement/review weights while still using the same `relearn_quality()` machinery.
+implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
+that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
+tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail
+already applies, and imputes rather than reads an agent's near-empty cost telemetry; every rationale
+records `population=`, `fleet_rows=`, `pre_detection_skipped=` and `telemetry=`
+(`ORCH_RELEARN_FLEET_ROWS=0` restores the experimental-only population).
 
 A third, coarser feedback surface re-keys pattern mining to the fleet rather than to this tool's own
 completion events (which require a research-subject identity the fleet's work never carries, so the

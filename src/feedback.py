@@ -186,6 +186,69 @@ CPS_FLOOR = 0.01
 # Below this median the agent's cells are UNMEASURED and the existing imputation applies; real
 # telemetry arriving raises the median and the rule releases on the next weekly relearn.
 PLAUSIBLE_TOKENS_PER_RUN = 2000
+# ONE definition of the broke-later detection floor (router.py aliases it). An outcome judged before
+# this date reads "durable" without broke-later detection ever having run on it, so its success is
+# optimistic. The receiver rail (#284) floors its population here; since 2026-09-21 both route-weight
+# learners do too (#293), so the rail and the weights read the same population.
+DURABILITY_DETECTION_SINCE = 1787961600  # 2026-08-29T00:00:00Z
+DURABILITY_DETECTION_SINCE_DATE = "2026-08-29"
+# WHICH RUNS THE ROUTE-WEIGHT LEARNERS READ. `assignment` is 'experimental' for the tool's own
+# dispatches, 'assigned' for fleet keepalive PRs that carried an agent label, 'none' for keepalive PRs
+# with no agent, 'instrumentation' for probes. Until 2026-09-21 both learners kept only 'experimental'
+# rows — the causal-purity choice (an assigned agent is confounded with its task) — which left codex's
+# implement cell on 27 outcomes while the Brain held about 1,490 attributed fleet outcomes for it, and
+# published a ranking of local eval panels to the fleet's delegation policy. The owner's decision on
+# 2026-09-21: the fleet's durability-labelled outcomes ARE the evidence this learner exists to read.
+# They enter under the detection floor and are counted separately in every rationale (fleet_rows=)
+# so the mix stays auditable. ORCH_RELEARN_FLEET_ROWS=0 restores the experimental-only population.
+LEARNING_ASSIGNMENTS = ("experimental", "assigned", "none")
+
+
+def _fleet_rows_enabled() -> bool:
+    return os.environ.get("ORCH_RELEARN_FLEET_ROWS", "1") != "0"
+
+
+def _learning_assignment_sql() -> str:
+    """The population clause both learners use — one definition, so they cannot drift apart."""
+    if not _fleet_rows_enabled():
+        return "COALESCE(r.assignment,'experimental')='experimental'"
+    quoted = ",".join(f"'{a}'" for a in LEARNING_ASSIGNMENTS)
+    return f"COALESCE(r.assignment,'experimental') IN ({quoted})"
+
+
+def _learning_population() -> str:
+    return "fleet" if _fleet_rows_enabled() else "experimental"
+
+
+def _implausible_telemetry(c, agents, since: int) -> dict[str, str]:
+    """Agents whose costed runs report implausibly few tokens (median < PLAUSIBLE_TOKENS_PER_RUN):
+    their cost telemetry is near-empty, not cheap work, and every one of their cells is UNMEASURED
+    so the imputation decides. Judged on costed runs that REPORT tokens; a ledger cost with no token
+    telemetry says nothing either way and stays measured. Shared by relearn() and relearn_quality()
+    since 2026-09-21 — the rule had lived only in relearn(), and the weekly path is relearn_quality(),
+    so v61–v64 ranked cursor first for implementation on 58 five-cent rows against codex's measured
+    $15 per success."""
+    implausible: dict[str, str] = {}
+    for agent in agents:
+        tokens = sorted(
+            int(tok)
+            for (tok,) in c.execute(
+                "SELECT COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0) FROM runs r "
+                "JOIN costs co ON r.run_id=co.run_id WHERE r.agent=? AND r.ts>=? AND co.cost_usd>0 "
+                "AND COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)>0",
+                (agent, since),
+            ).fetchall()
+        )
+        if tokens:
+            median = tokens[len(tokens) // 2]
+            if median < PLAUSIBLE_TOKENS_PER_RUN:
+                implausible[agent] = (
+                    f"telemetry implausible: median {median} tokens/run over {len(tokens)} costed "
+                    f"runs < {PLAUSIBLE_TOKENS_PER_RUN}"
+                )
+    return implausible
+
+
 # Recency half-life (days) for relearn_quality evidence weights — a stale outcome must not vote
 # with yesterday's strength (agents get silent model/prompt bumps; without decay an agent keeps
 # winning on old glory — audit item 16a / R3 routing survey). Complements the model-supersession
@@ -4293,24 +4356,9 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
         # near-empty data.
         # Judged on costed runs that REPORT tokens: a ledger cost with no token telemetry at all says
         # nothing about plausibility either way and stays measured, exactly as before this rule.
-        implausible: dict[str, str] = {}
-        for agent in {a for priors in task_type_priors.values() for a in priors}:
-            tokens = sorted(
-                int(tok)
-                for (tok,) in c.execute(
-                    "SELECT COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0) FROM runs r "
-                    "JOIN costs co ON r.run_id=co.run_id WHERE r.agent=? AND r.ts>=? AND co.cost_usd>0 "
-                    "AND COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)>0",
-                    (agent, since),
-                ).fetchall()
-            )
-            if tokens:
-                median = tokens[len(tokens) // 2]
-                if median < PLAUSIBLE_TOKENS_PER_RUN:
-                    implausible[agent] = (
-                        f"telemetry implausible: median {median} tokens/run over {len(tokens)} costed "
-                        f"runs < {PLAUSIBLE_TOKENS_PER_RUN}"
-                    )
+        implausible = _implausible_telemetry(
+            c, {a for priors in task_type_priors.values() for a in priors}, since
+        )
         cells: dict[tuple[str, str], dict] = {}
         for task_type, priors in task_type_priors.items():
             for agent, prior in priors.items():
@@ -4318,9 +4366,10 @@ def relearn(task_type_priors: dict, window_days: int = 90) -> int:
                     "SELECT o.durability, o.adjudicated_verdict, o.verifier_verdict, co.cost_usd "
                     "FROM runs r JOIN outcomes o ON r.run_id=o.run_id LEFT JOIN costs co ON r.run_id=co.run_id "
                     "WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
-                    "AND COALESCE(r.assignment,'experimental')='experimental' "
+                    f"AND {_learning_assignment_sql()} "
+                    "AND COALESCE(o.durability_checked_ts, r.ts)>=? "  # broke-later detection floor (#293)
                     "AND COALESCE(o.failure_class,'') != 'transient_infra'",  # item 9: infra != capability
-                    (task_type, agent, since),
+                    (task_type, agent, since, DURABILITY_DETECTION_SINCE),
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _ in rows if _is_success(d, a, v))
@@ -4742,6 +4791,9 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
     with _conn() as c:
         ver = (c.execute("SELECT COALESCE(MAX(version),0) FROM route_weights").fetchone()[0]) + 1
         # Pass 1: per-cell quality evidence + MEASURED-only effort telemetry.
+        implausible = _implausible_telemetry(
+            c, {a for priors in task_type_priors.values() for a in priors}, since
+        )
         cells: dict[tuple[str, str], dict] = {}
         for task_type, priors in task_type_priors.items():
             try:
@@ -4776,7 +4828,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                 for run_id, experiment_id, raw_metadata, run_model in c.execute(
                     f"SELECT r.run_id,r.experiment_id,r.routing_metadata,{model_expr} "
                     "FROM runs r WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
-                    "AND COALESCE(r.assignment,'experimental')='experimental' "
+                    f"AND {_learning_assignment_sql()} "
                     "AND r.experiment_id IS NOT NULL",
                     (task_type, agent, since),
                 ).fetchall():
@@ -4795,6 +4847,8 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                 weighted_qs = []
                 outcome_n = 0
                 raw_n = 0
+                fleet_n = 0
+                pre_detection_n = 0
                 subject_n_eff = 0.0
                 superseded_n = 0
                 evidence_run_ids: list[str] = []
@@ -4806,11 +4860,14 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                     run_model,
                     run_ts,
                     failure_class,
+                    checked_ts,
+                    assignment,
                 ) in c.execute(
-                    f"SELECT r.run_id, o.durability, o.adjudicated_verdict, o.verifier_verdict, {model_expr}, r.ts, o.failure_class "
+                    f"SELECT r.run_id, o.durability, o.adjudicated_verdict, o.verifier_verdict, {model_expr}, r.ts, o.failure_class, "
+                    "o.durability_checked_ts, COALESCE(r.assignment,'experimental') "
                     "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                     "WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
-                    "AND COALESCE(r.assignment,'experimental')='experimental'",
+                    f"AND {_learning_assignment_sql()}",
                     (task_type, agent, since),
                 ).fetchall():
                     if run_id in eval_q_by_run:
@@ -4821,9 +4878,16 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                     elif str(failure_class or "") == "transient_infra":
                         continue  # item 9: infra death is not capability evidence
                     elif _has_outcome_evidence(durability, adjudicated, verifier):
+                        if int(checked_ts or run_ts or 0) < DURABILITY_DETECTION_SINCE:
+                            # Judged before broke-later detection existed: an optimistic label, the
+                            # same row the receiver rail refuses (#293). Counted, never scored.
+                            pre_detection_n += 1
+                            continue
                         q = 1.0 if _is_success(durability, adjudicated, verifier) else 0.0
                         outcome_n += 1
                         raw_n += 1
+                        if str(assignment) != "experimental":
+                            fleet_n += 1
                     else:
                         continue
                     subject_weight = float(subject_weights.get(run_id, 1.0))
@@ -4857,6 +4921,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                     ).fetchone()
                 else:
                     costrow = None
+                telemetry_ok = agent not in implausible
                 cells[(task_type, agent)] = {
                     "prior": prior,
                     "post": post,
@@ -4866,10 +4931,15 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                     "sq": sq,
                     "eval_runs": len(eval_q_by_run),
                     "outcome_n": outcome_n,
+                    "fleet_n": fleet_n,
+                    "pre_detection_n": pre_detection_n,
                     "superseded_n": superseded_n,
-                    "cost": costrow[0] if costrow else None,
-                    "tokens": costrow[1] if costrow else None,
+                    # Near-empty telemetry is UNMEASURED effort, not cheap effort: cost and tokens
+                    # fall to the imputation below; latency is not a token quantity and stays.
+                    "cost": (costrow[0] if costrow else None) if telemetry_ok else None,
+                    "tokens": (costrow[1] if costrow else None) if telemetry_ok else None,
                     "latency": costrow[2] if costrow else None,
+                    "telemetry": "ok" if telemetry_ok else "implausible",
                 }
         # Imputation pools per metric (2026-07-03 audit F1): an agent with NO measured effort must
         # not earn the best multiplier by silence. Effective effort = measured, else the agent's own
@@ -4939,7 +5009,9 @@ def relearn_quality(task_type_priors: dict, window_days: int = 120) -> int:
                         f"superseded_model_runs={s['superseded_n']} meanq={(s['sq']/s['n_eff']) if s['n_eff'] else 0:.2f} "
                         f"mean_cost={cost:.4f} mean_tokens={mean_tokens:.0f} "
                         f"mean_latency_s={mean_latency_s:.1f} effort_penalty={effort_penalty:.4f} "
-                        f"effort_src={cost_src}{tokens_src}{latency_src} half_life_d={half_life:g}"
+                        f"effort_src={cost_src}{tokens_src}{latency_src} half_life_d={half_life:g} "
+                        f"population={_learning_population()} fleet_rows={s['fleet_n']} "
+                        f"pre_detection_skipped={s['pre_detection_n']} telemetry={s['telemetry']}"
                     ),
                     since,
                     now,
@@ -5576,7 +5648,8 @@ def _selftest():
         ), blended_weights
         assert current_weights("prodlearn", blended)[0]["agent"] == "agent_b", blended_weights
 
-        # Assigned keepalive observations are retained but excluded from causal route_weights learning.
+        # Fleet (assigned) keepalive observations COUNT since 2026-09-21, under the detection floor;
+        # ORCH_RELEARN_FLEET_ROWS=0 restores the experimental-only population.
         assign_priors = {"assignlearn": {"agentX": 0.4, "agentY": 0.4}}
         for i in range(4):
             rid = f"assign_exp_x_{i}"
@@ -5607,8 +5680,19 @@ def _selftest():
         assign_w1 = {x["agent"]: x for x in current_weights("assignlearn", assign_v1)}
         assert assign_w1["agentX"]["posterior"] == assign_w0["agentX"]["posterior"], assign_w1
         assert (
-            assign_w1["agentY"]["posterior"] == 0.4 and assign_w1["agentY"]["n_obs"] == 0
+            assign_w1["agentY"]["posterior"] > 0.4 and assign_w1["agentY"]["n_obs"] == 12
         ), assign_w1
+        os.environ["ORCH_RELEARN_FLEET_ROWS"] = "0"
+        try:
+            assign_off = {
+                x["agent"]: x
+                for x in current_weights("assignlearn", relearn_quality(assign_priors))
+            }
+        finally:
+            os.environ.pop("ORCH_RELEARN_FLEET_ROWS", None)
+        assert (
+            assign_off["agentY"]["posterior"] == 0.4 and assign_off["agentY"]["n_obs"] == 0
+        ), assign_off
         with _conn() as c:
             assigned_count = c.execute(
                 "SELECT COUNT(*) FROM runs WHERE task_type='assignlearn' AND assignment='assigned'"
@@ -5632,9 +5716,7 @@ def _selftest():
         assign_v2 = relearn_quality(assign_priors)
         assign_w2 = {x["agent"]: x for x in current_weights("assignlearn", assign_v2)}
         assert assign_w2["agentX"]["posterior"] == assign_w0["agentX"]["posterior"], assign_w2
-        assert (
-            assign_w2["agentY"]["posterior"] == 0.4 and assign_w2["agentY"]["n_obs"] == 0
-        ), assign_w2
+        assert assign_w2["agentY"]["n_obs"] == 12, assign_w2  # agent 'none' rows are not agentY's
         assert "none" not in assign_w2, assign_w2
 
         # Role invocations get their own task_type surface, linked to the downstream run outcome.
