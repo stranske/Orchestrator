@@ -28,6 +28,11 @@ five-round cooldown), but nothing recorded the pair, and the base rate measured 
    one switch. Label rows are written exactly as before, with `source='label'`. A fact cached before
    this read gets the state alone, from the same fetch budget, and its label timeline is never
    re-read. Until a PR's state has been read it counts as UNREAD, never as zero switches.
+   Every timestamp is read as UTC through utc_epoch.from_iso (2026-09-23). The helper before it
+   read DST instants an hour early on the owner's machine. The label, commit, merge and close times
+   it cached are converted on load (a delegation_log entry keeps its raw ISO timestamp and is parsed
+   at derivation, so it needs no conversion), and the Brain rows it keyed are re-keyed once by
+   feedback._rebase_agent_switches.
 2. SAMPLE — RETIRED 2026-09-22. A `sample` step used to add `agent:auto` to a hashed share of open
    fleet PRs that carried exactly one real agent label. The owner then had the opener label EVERY PR it
    creates `agent:auto` at creation, so that the route weights are consumed on auto stalls. That left
@@ -77,6 +82,7 @@ from typing import Any
 
 import feedback
 import keepalive_shadow
+import utc_epoch
 
 SCHEMA = "orchestrator.agent-switches"
 VERSION = 1
@@ -195,13 +201,9 @@ def _gh_json(args: list[str], *, timeout: int = 180) -> object | None:
         return None
 
 
-def _epoch(iso: object) -> int | None:
-    if not isinstance(iso, str) or not iso:
-        return None
-    try:
-        return int(time.mktime(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone)
-    except ValueError:
-        return None
+# ONE parser for GitHub's timestamps, shared with fleet_shapes. The local-time helper it replaced read
+# every instant inside DST an hour early on a DST-zone machine; utc_epoch.py has the arithmetic.
+_epoch = utc_epoch.from_iso
 
 
 def _number(value: object) -> float | None:
@@ -477,13 +479,40 @@ def fetch_states(
     return out
 
 
-def load_facts(state_dir: Path) -> dict[str, dict[str, Any]]:
+def _rebase_fact(fact: dict[str, Any]) -> dict[str, Any]:
+    """A fact cached by the retired local-time helper, its label, commit, merge and close times
+    recovered exactly (utc_epoch.from_legacy). An unavailable entry carries only `attempted_ts`,
+    which was always `time.time()`, so it passes through unchanged."""
+    out = dict(fact)
+    if isinstance(fact.get("label_events"), list):
+        out["label_events"] = [
+            {**e, "ts": utc_epoch.from_legacy(e.get("ts"))} if isinstance(e, dict) else e
+            for e in fact["label_events"]
+        ]
+    if isinstance(fact.get("commit_ts"), list):
+        out["commit_ts"] = [utc_epoch.from_legacy(t) for t in fact["commit_ts"]]
+    for key in ("merged_ts", "closed_ts"):
+        if key in fact:
+            out[key] = utc_epoch.from_legacy(fact[key])
+    return out
+
+
+def _read_facts(state_dir: Path) -> tuple[dict[str, dict[str, Any]], int, int]:
+    """The cached facts on the UTC basis, and how many entries were (rebased, dropped) to get there.
+    An entry the retired helper computed carries no basis mark and is converted in memory; the next
+    save_facts writes it marked. An entry that cannot be converted is dropped, so it is fetched again.
+    """
     try:
         payload = json.loads((state_dir / "agent-switches-facts.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
+        return {}, 0, 0
     facts = payload.get("facts") if isinstance(payload, dict) else None
-    return {str(k): v for k, v in (facts or {}).items() if isinstance(v, dict)}
+    loaded = {str(k): v for k, v in (facts or {}).items() if isinstance(v, dict)}
+    return utc_epoch.rebase_cache(loaded, _rebase_fact)
+
+
+def load_facts(state_dir: Path) -> dict[str, dict[str, Any]]:
+    return _read_facts(state_dir)[0]
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -500,9 +529,16 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def save_facts(state_dir: Path, facts: dict[str, dict[str, Any]], *, now: int) -> None:
+    """Every entry is saved marked as UTC basis: this module reads GitHub only through from_iso, and
+    load_facts has converted anything older."""
     write_json_atomic(
         state_dir / "agent-switches-facts.json",
-        {"schema": FACTS_SCHEMA, "version": VERSION, "updated_at": now, "facts": facts},
+        {
+            "schema": FACTS_SCHEMA,
+            "version": VERSION,
+            "updated_at": now,
+            "facts": utc_epoch.stamp_cache(facts),
+        },
     )
 
 
@@ -595,11 +631,18 @@ INSERT_SWITCH = (
 
 def _record(pr: dict, derived: dict[str, Any], *, now: int) -> None:
     """Label rows as they always were, with `source='label'`; policy rows beside them. `source` is in
-    the key, so neither kind can replace the other."""
+    the key, so neither kind can replace the other.
+
+    The PR's rows become exactly this derivation: its old rows are deleted in the same transaction.
+    INSERT OR REPLACE alone keeps every row whose key the derivation no longer produces — which is
+    how a switch re-derived at its corrected UTC time would sit beside the hour-early twin the
+    retired helper wrote (utc_epoch.py), and how a row from an older checkout would outlive the fix.
+    feedback._rebase_agent_switches re-keys the rows of PRs this run no longer reaches."""
     rows = [(sw, SOURCE_LABEL, None) for sw in derived["switches"]] + [
         (sw, SOURCE_POLICY, sw["delegation_source"]) for sw in derived.get("policy_switches") or []
     ]
     with feedback._conn() as c:
+        c.execute("DELETE FROM agent_switches WHERE pr_ref=?", (pr["ref"],))
         for sw, source, delegation_source in rows:
             c.execute(
                 INSERT_SWITCH,
@@ -835,7 +878,7 @@ def run(
     now = int(now or time.time())
     state_dir = state_dir or default_state_dir()
     prs = keepalive_prs(window_days=window_days, now=now)
-    facts = load_facts(state_dir)
+    facts, rebased, dropped = _read_facts(state_dir)
     missing_by_repo: dict[str, list[int]] = {}
     for pr in prs:
         if pr["ref"] not in facts:
@@ -860,7 +903,7 @@ def run(
     # What the budget has left reads the keepalive state of facts cached before it was read. New
     # facts go first: they carry their state already, and they are the label measurement.
     backfilled = _backfill_states(prs, facts, budget=budget, fetch=state_fetch_fn or fetch_states)
-    if fetched or unavailable or backfilled:
+    if fetched or unavailable or backfilled or rebased or dropped:
         save_facts(state_dir, facts, now=now)
     payload, recordable = aggregate(prs, facts, now=now, window_days=window_days)
     for pr, derived in recordable:
@@ -868,6 +911,8 @@ def run(
     payload["counts"]["fetched_this_run"] = fetched
     payload["counts"]["unavailable_this_run"] = unavailable
     payload["counts"]["state_backfilled_this_run"] = backfilled
+    payload["counts"]["facts_rebased_this_run"] = rebased
+    payload["counts"]["facts_dropped_this_run"] = dropped
     payload["counts"]["recorded_in_brain"] = sum(
         len(d["switches"]) + len(d["policy_switches"]) for _, d in recordable
     )
@@ -1022,6 +1067,37 @@ def _selftest() -> int:
     check((first["commits_before"], first["commits_after"]) == (2, 2), f"commit split {first}")
     check(derive_switches({"label_events": [], "commit_ts": []})["switches"] == [], "no events")
     check("sample" not in globals(), "the retired sample step stays retired")
+    check(_epoch is utc_epoch.from_iso, "the one shared GitHub timestamp parser")
+    with utc_epoch.zone(utc_epoch.US_CENTRAL, standard_offset=utc_epoch.US_CENTRAL_STANDARD_OFFSET):
+        september = "2026-09-22T10:00:00Z"
+        read = _fact_from_graphql(
+            {
+                "timelineItems": {
+                    "nodes": [
+                        {
+                            "__typename": "LabeledEvent",
+                            "createdAt": september,
+                            "label": {"name": "agent:codex"},
+                        }
+                    ]
+                },
+                "commits": {"nodes": [{"commit": {"committedDate": september}}]},
+                "mergedAt": september,
+            }
+        )
+        check(read["label_events"][0]["ts"] == 1_790_071_200, f"label time {read}")
+        check(read["commit_ts"] == [1_790_071_200] and read["merged_ts"] == 1_790_071_200, "times")
+        hour_early = utc_epoch.legacy_value(1_790_071_200)
+        legacy = {
+            "label_events": [{"ts": hour_early, "kind": "added", "label": "agent:codex"}],
+            "commit_ts": [hour_early],
+            "state": "",
+            "merged_ts": hour_early,
+            "closed_ts": None,
+        }
+        check(
+            _rebase_fact(legacy) == read, f"a cached legacy fact converts: {_rebase_fact(legacy)}"
+        )
     line = render_report_lines({"state": "not yet recorded", "artifact": "x"})[0]
     check(line.startswith("AGENT-SWITCHES: not yet recorded"), "unrecorded line")
 
@@ -1077,9 +1153,11 @@ def _selftest() -> int:
         return 1
     print(
         "agent_switches.py selftest: OK (switch derivation ignores auto/rate-limited and collapses "
-        "repeats, commits split at the arriving label, unrecorded line named, sample step retired; "
-        "policy switches read from the latest TRUSTED state marker with per-entry delegation_source, "
-        "untrusted and type-spoofed markers ignored, truncated and pre-read states never read as 0)"
+        "repeats, commits split at the arriving label, a September label reads true UTC in US "
+        "Central and a cached hour-early fact converts back, unrecorded line named, sample step "
+        "retired; policy switches read from the latest TRUSTED state marker with per-entry "
+        "delegation_source, untrusted and type-spoofed markers ignored, truncated and pre-read "
+        "states never read as 0)"
     )
     return 0
 
