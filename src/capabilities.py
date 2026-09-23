@@ -78,6 +78,13 @@ TRANSITIONS = {
     "superseded": set(),
 }
 
+# The lifecycle states in which a ledger row is NOT a live capability. Nothing is expected to fire,
+# so the row owes no reachability, heartbeat or admission obligation and the advisor never offers
+# it. ONE definition: the activation audit decides which rows it audits from this, and the
+# admission report reads that audit's rows for exactly the same live set, so the two filters are
+# one decision and must not be two literals that can drift apart.
+NOT_LIVE_STATES = frozenset({"retired", "superseded"})
+
 REQUIRED_FIELDS = (
     "schema_version",
     "capability_id",

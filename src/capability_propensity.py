@@ -2424,7 +2424,11 @@ TICK_FINDING_FIELDS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "capability-activation-audit": {
         "by_defect": (),  # {defect class: [capability ids]}
-        "reachable_ids": (),
+        # NOT `reachable_ids`. That list is the HEALTHY ROSTER: it moves only when a row is
+        # registered or retired, which is the ledger changing, not the audit finding anything. So
+        # grading it credited the audit for other sessions' registrations, and every "identical"
+        # verdict counted the healthy rows as findings. A capability moving blocked -> reachable
+        # already leaves `by_defect`, so no real change is lost.
     },
     # DELIBERATELY EMPTY, and a verdict rather than an omission: this module IS the grader, so
     # grading it on its own report is the circular-measurement failure mode (FM7). Its usefulness
@@ -2536,6 +2540,26 @@ def project_findings(capability_id: str, report) -> dict[str, list[str]] | None:
 
 def finding_fingerprint(findings: dict[str, list[str]]) -> str:
     return hashlib.sha1(json.dumps(findings, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _projection_signature(capability_id: str) -> str | None:
+    """Fingerprint the declared projection, not the report currently read through it."""
+    spec = TICK_FINDING_FIELDS.get(capability_id)
+    if spec is None:
+        return None
+    return finding_fingerprint({key: list(fields) for key, fields in spec.items()})
+
+
+def _projection_drift(capability_id: str, prior: dict, findings: dict) -> str | None:
+    """Say why the prior observation cannot be compared to this projection."""
+    prior_signature = prior.get("projection")
+    if prior_signature is not None and prior_signature != _projection_signature(capability_id):
+        return "the declared finding projection changed since the last observation"
+    before = set(prior.get("findings") or {})
+    after = set(findings)
+    if before != after:
+        return f"the report's finding keys changed ({sorted(before)} -> {sorted(after)})"
+    return None
 
 
 def _finding_delta(now: dict[str, list[str]], before: dict[str, list[str]]) -> list[str]:
@@ -2808,6 +2832,11 @@ def tick_evidence(
             "finding_count": sum(len(v) for v in (findings or {}).values()),
         }
         reason = _tick_ungradable_reason(cap_id, cap_row, findings)
+        drift = (
+            _projection_drift(cap_id, plan["prior"], findings or {})
+            if plan["action"] == "evaluate" and not reason
+            else None
+        )
         if plan["action"] == "baseline":
             # FIRST SIGHT ESTABLISHES THE BASELINE AND RECORDS NO VERDICT. There is nothing to
             # compare against, and inventing a verdict from a single observation is the manufactured
@@ -2822,6 +2851,14 @@ def tick_evidence(
                     "reason": reason,
                     "detail": TICK_SKIP_REASONS.get(reason, reason),
                 }
+            )
+        elif drift:
+            # A CHANGED PROJECTION IS A NEW FIRST OBSERVATION, so it gets the rule above: a baseline
+            # and no verdict. Its declared fields changed, or the report stopped emitting a declared
+            # key, so this finding set and the last one are not comparable. Grading them would let
+            # the edit itself mint a verdict: dropping a key reads as a finding "resolved".
+            baselined.append(
+                {**entry, "reason": "re-baselined, no verdict: " + drift, "rebaselined": True}
             )
         else:
             previous = plan["prior"].get("findings") or {}
@@ -2892,6 +2929,7 @@ def tick_evidence(
             "artifact_mtime": plan["mtime"],
             "fingerprint": fingerprint,
             "findings": findings or {},
+            "projection": _projection_signature(cap_id),
             "evaluated_at": now,
             "day": day,
             "experiment_id": experiment,
