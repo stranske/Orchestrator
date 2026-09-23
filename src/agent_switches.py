@@ -1066,6 +1066,7 @@ def _selftest() -> int:
     )
     check((first["commits_before"], first["commits_after"]) == (2, 2), f"commit split {first}")
     check(derive_switches({"label_events": [], "commit_ts": []})["switches"] == [], "no events")
+    check("sample" not in globals(), "the retired sample step stays retired")
     check(_epoch is utc_epoch.from_iso, "the one shared GitHub timestamp parser")
     with utc_epoch.zone(utc_epoch.US_CENTRAL, standard_offset=utc_epoch.US_CENTRAL_STANDARD_OFFSET):
         september = "2026-09-22T10:00:00Z"
