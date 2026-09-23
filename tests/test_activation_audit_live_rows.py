@@ -9,6 +9,10 @@ NAMED in the report rather than silently dropped.
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 import capabilities
 import capability_activation_audit as audit
 
@@ -82,3 +86,89 @@ def test_the_audit_declares_the_population_it_audits(tmp_path, monkeypatch):
 def test_not_live_states_are_canonical_lifecycle_states():
     assert capabilities.NOT_LIVE_STATES
     assert capabilities.NOT_LIVE_STATES <= set(capabilities.CANONICAL_STATES)
+
+
+# --------------------------------------------------------------------------- progress
+# `progress()` compares `reachable_ids` with the last snapshot's. A not-live row is excluded from
+# `reachable_ids`, so a row that was reachable and has since been RETIRED left the set through a
+# lifecycle action -- it did not regress. And that reading is only sound against a snapshot drawn
+# from the same live-row population, which a snapshot now records.
+
+
+def _history(tmp_path, snapshot: dict):
+    path = tmp_path / "history.json"
+    path.write_text(json.dumps({"snapshots": [snapshot]}), encoding="utf-8")
+    return path
+
+
+def _was_reachable(rep: dict, ids: list[str]) -> dict:
+    """The report as it would have read when `ids` were live and reachable."""
+    return dict(
+        rep, generated_at=rep["generated_at"] - 86400, reachable=len(ids), reachable_ids=ids
+    )
+
+
+def test_a_row_retired_since_the_last_snapshot_is_not_a_regression(tmp_path, monkeypatch):
+    rep = _report(tmp_path, monkeypatch)
+    path = tmp_path / "history.json"
+    then = ["live-silent", "retired-silent", "superseded-silent"]
+    assert audit.record_snapshot(_was_reachable(rep, then), path=path)["recorded"]
+    prog = audit.progress(rep, path=path)
+    assert prog["baseline"] == rep["generated_at"] - 86400, prog
+    # The live row that lost reachability is still a regression, reported beside the others.
+    assert prog["regressed"] == ["live-silent"], prog
+    assert prog["retired_since"] == {
+        "retired": ["retired-silent"],
+        "superseded": ["superseded-silent"],
+    }, prog
+    assert prog["gained"] == [], prog
+
+
+def test_the_snapshot_records_its_population_so_the_next_run_is_comparable(tmp_path, monkeypatch):
+    rep = _report(tmp_path, monkeypatch)
+    path = tmp_path / "history.json"
+    assert audit.record_snapshot(rep, path=path)["recorded"]
+    (last,) = audit.load_history(path)
+    key = capabilities.FINDING_POPULATION_KEY
+    assert last[key] == rep[key] == capabilities.live_finding_population(), last
+    # FULLY DRAINED reads as a comparison with nothing in it, not as an unknown baseline.
+    prog = audit.progress(rep, path=path)
+    assert prog["baseline"] == rep["generated_at"], prog
+    assert (prog["gained"], prog["regressed"], prog["retired_since"]) == ([], [], {}), prog
+
+
+@pytest.mark.parametrize(
+    "population",
+    [None, {"excluded_statuses": ["retired"]}],
+    ids=["predates-population-recording", "different-population"],
+)
+def test_a_snapshot_from_another_population_is_an_unknown_baseline(
+    tmp_path, monkeypatch, population
+):
+    rep = _report(tmp_path, monkeypatch)
+    snapshot = {
+        "generated_at": rep["generated_at"] - 86400,
+        "total": 3,
+        "reachable": 2,
+        "blocked": 1,
+        "reachable_ids": ["live-silent", "retired-silent"],
+        "by_defect": {},
+    }
+    if population is not None:
+        snapshot[capabilities.FINDING_POPULATION_KEY] = population
+    prog = audit.progress(rep, path=_history(tmp_path, snapshot))
+    assert prog["baseline"] is None, prog
+    assert prog["baseline_unknown"]["snapshot_at"] == snapshot["generated_at"], prog
+    # Nothing is compared against it: no guessed regression, no guessed retirement.
+    assert not {"gained", "regressed", "retired_since"} & set(prog), prog
+    assert "unknown baseline" in audit.format_scorecard(rep, prog)
+
+
+def test_the_scorecard_says_retired_since_not_regressed(tmp_path, monkeypatch):
+    rep = _report(tmp_path, monkeypatch)
+    path = tmp_path / "history.json"
+    audit.record_snapshot(_was_reachable(rep, ["retired-silent"]), path=path)
+    text = audit.format_scorecard(rep, audit.progress(rep, path=path))
+    retired = next(line for line in text.splitlines() if "RETIRED SINCE" in line)
+    assert "retired-silent" in retired, retired
+    assert not any("REGRESSED" in line for line in text.splitlines()), text
