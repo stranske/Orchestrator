@@ -54,7 +54,7 @@ def test_every_capability_has_a_recurrence_fixture():
     ledger = {
         cid
         for cid, cap in capabilities.load_declared(capabilities.REG).items()
-        if cap.get("status") not in ("retired", "superseded")
+        if cap.get("status") not in capabilities.NOT_LIVE_STATES
     }
     covered = _fixture_capabilities()
     missing = sorted(ledger - covered - set(FIXTURE_EXEMPT))
@@ -296,7 +296,7 @@ def test_no_fixture_names_an_unknown_capability():
     ledger = {
         cid
         for cid, cap in capabilities.load_declared(capabilities.REG).items()
-        if cap.get("status") not in ("retired", "superseded")
+        if cap.get("status") not in capabilities.NOT_LIVE_STATES
     }
     unknown = sorted(_fixture_capabilities() - ledger)
     assert not unknown, f"fixtures name capabilities absent from the ledger: {unknown}"
@@ -356,7 +356,7 @@ def test_exemptions_carry_reasons_and_exist():
     ledger = {
         cid
         for cid, cap in capabilities.load_declared(capabilities.REG).items()
-        if cap.get("status") not in ("retired", "superseded")
+        if cap.get("status") not in capabilities.NOT_LIVE_STATES
     }
     for cap_id, reason in FIXTURE_EXEMPT.items():
         assert cap_id in ledger, f"FIXTURE_EXEMPT names unknown capability {cap_id!r}"

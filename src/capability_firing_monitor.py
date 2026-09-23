@@ -29,6 +29,15 @@ outcomes. Judging them on delivery is the category error that had 8 capabilities
 promised nothing, so calling it "overdue" would be noise. Those are reported as `no_cadence_declared`
 — a documentation gap, not an alarm. This is the same reason `switch_review` refuses to nag about a
 switch with no recorded switch-on criterion.
+
+**Only a live row is judged.** A retired or superseded row (`capabilities.NOT_LIVE_STATES`) is not
+expected to fire, so "does it fire?" does not apply to it. A row retired on 2026-09-03, the day it was
+registered, was listed `never_fired` on every run from then on, and each of those listings was a
+false positive. Such a row is still NAMED, under `not_monitored` beside `ledger_total`, so the report
+accounts for every ledger row; it is kept out of every finding list and every count. The report also
+declares that rule as `finding_population`, because a finding that disappears when the rule changes
+was not resolved by anything: the tick's output-change grader re-baselines on a changed population
+instead of crediting the monitor with the edit.
 """
 
 from __future__ import annotations
@@ -80,6 +89,11 @@ ONDEMAND_RE = re.compile(
 # the same category error as judging an observer on deliveries.
 SUITE_OR_CLI_MATCHERS = frozenset({"test_gate"})
 SUITE_CADENCE_RE = re.compile(r"every suite run|every run|supervised CLI|CLI", re.IGNORECASE)
+
+NOT_MONITORED_REASON = (
+    "a retired or superseded row is not a live capability: nothing is expected to fire, so "
+    "'does it fire?' does not apply and it is not monitored"
+)
 
 
 def heartbeat_observable(cap: dict[str, Any]) -> bool:
@@ -136,6 +150,7 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
     previous = {row["capability_id"]: row for row in (history[-1]["rows"] if history else [])}
 
     rows, overdue, regressed, no_cadence = [], [], [], []
+    not_monitored: dict[str, list[str]] = {}
     for cap_id in sorted(ledger):
         cap = ledger[cap_id]
         last = int(cap.get("last_invocation") or 0)
@@ -144,6 +159,7 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
         tolerance = expected_interval_days(cap)
         liveness = capabilities.classify_liveness(cap, now=now)
         observable = heartbeat_observable(cap)
+        monitored = cap.get("status") not in capabilities.NOT_LIVE_STATES
         row = {
             "capability_id": cap_id,
             "status": cap.get("status"),
@@ -154,8 +170,16 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
             "liveness": liveness,
             "ever_fired": bool(last),
             "tick_observable": observable,
+            "monitored": monitored,
         }
         rows.append(row)
+        if not monitored:
+            # LIVE ROWS ONLY. The row stays in `rows`, and so in the history snapshot, which keeps
+            # the ledger accounted for and lets a row revived out of `retired` be compared against
+            # its past; it reaches no finding list and no count.
+            row["not_monitored_because"] = f"status {cap.get('status')!r}: {NOT_MONITORED_REASON}"
+            not_monitored.setdefault(str(cap.get("status")), []).append(cap_id)
+            continue
         if not observable:
             # Its caller is the suite or a CLI; tick heartbeats cannot see it either way.
             continue
@@ -196,15 +220,22 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
                     }
                 )
 
+    live = [r for r in rows if r["monitored"]]
     return {
         "generated_at": now,
-        "total": len(rows),
-        "fired_ever": sum(1 for r in rows if r["ever_fired"]),
+        # `total` is the LIVE denominator every count below shares; `ledger_total` is every row, so
+        # `ledger_total == total + not_monitored_count` and nothing leaves the report unnamed.
+        "total": len(live),
+        "ledger_total": len(rows),
+        "not_monitored": {status: sorted(ids) for status, ids in sorted(not_monitored.items())},
+        "not_monitored_count": sum(len(ids) for ids in not_monitored.values()),
+        capabilities.FINDING_POPULATION_KEY: capabilities.live_finding_population(),
+        "fired_ever": sum(1 for r in live if r["ever_fired"]),
         "never_fired": [
-            r["capability_id"] for r in rows if not r["ever_fired"] and r["tick_observable"]
+            r["capability_id"] for r in live if not r["ever_fired"] and r["tick_observable"]
         ],
-        "not_tick_observable": [r["capability_id"] for r in rows if not r["tick_observable"]],
-        "observers": sum(1 for r in rows if r["observer"]),
+        "not_tick_observable": [r["capability_id"] for r in live if not r["tick_observable"]],
+        "observers": sum(1 for r in live if r["observer"]),
         "overdue": overdue,
         "regressed": regressed,
         "no_cadence_declared": no_cadence,
@@ -262,10 +293,21 @@ def format_report(rep: dict) -> str:
     out = [
         "# Capability firing monitor",
         "",
-        f"  {rep['fired_ever']} of {rep['total']} capabilities have ever fired "
+        f"  {rep['fired_ever']} of {rep['total']} live capabilities have ever fired "
         f"({rep['observers']} are observers, judged on running rather than delivering)",
-        f"  history: {rep['snapshots_stored']} prior snapshot(s)",
     ]
+    not_monitored_count = rep.get("not_monitored_count", 0)
+    if not_monitored_count:
+        statuses = "; ".join(
+            f"{status}: {', '.join(ids)}" for status, ids in rep.get("not_monitored", {}).items()
+        )
+        ledger_total = rep.get("ledger_total", rep["total"] + not_monitored_count)
+        out += [
+            f"  not live: {not_monitored_count} (not monitored — {statuses})",
+            f"  ledger rows: {ledger_total} = {rep['total']} monitored + "
+            f"{not_monitored_count} not live",
+        ]
+    out.append(f"  history: {rep['snapshots_stored']} prior snapshot(s)")
     if rep["snapshots_stored"] == 0:
         out.append(
             "  NOTE: no prior snapshot, so regressions cannot be computed yet — this run "
@@ -416,6 +458,27 @@ def _selftest() -> None:
                 "matcher": {"kind": "transport", "name": "t"},
             }
         )
+        # NOT LIVE. Each is shaped so that, judged as live, it would land in every finding list:
+        # the retired one never fired and declares no cadence (`never_fired`, `no_cadence_declared`),
+        # the superseded one is a month past a daily cadence (`overdue`, and a regression once there
+        # is history). So each list below is proven to exclude them, not merely not to contain them.
+        retired = capabilities._blank_capability("cap-retired")
+        retired.update(
+            {
+                "status": "retired",
+                "last_invocation": None,
+                "matcher": {"kind": "transport", "name": "t"},
+            }
+        )
+        superseded = capabilities._blank_capability("cap-superseded")
+        superseded.update(
+            {
+                "status": "superseded",
+                "last_invocation": now - 30 * 86400,
+                "trigger_cadence": "daily",
+                "matcher": {"kind": "transport", "name": "t"},
+            }
+        )
         capabilities.save(
             {
                 "cap-fresh": fresh,
@@ -423,6 +486,8 @@ def _selftest() -> None:
                 "cap-never": silent,
                 "cap-nocadence": nocadence,
                 "cap-monthly": monthly,
+                "cap-retired": retired,
+                "cap-superseded": superseded,
             },
             reg,
         )
@@ -433,16 +498,40 @@ def _selftest() -> None:
             # Scope every assertion to the fixtures. `capabilities.load` reconciles DECLARED gated
             # capabilities into the ledger, so a temp file with three rows loads as ~17 — asserting
             # on totals would be asserting about the ambient ledger, not about this mechanism.
-            mine = {"cap-fresh", "cap-stale", "cap-never", "cap-nocadence", "cap-monthly"}
+            mine = {
+                "cap-fresh",
+                "cap-stale",
+                "cap-never",
+                "cap-nocadence",
+                "cap-monthly",
+                "cap-retired",
+                "cap-superseded",
+            }
             rep = review(now=now, path=reg)
             rows = {r["capability_id"]: r for r in rep["rows"] if r["capability_id"] in mine}
-            assert set(rows) == mine, rows
+            assert set(rows) == mine, f"a not-live row must stay in `rows`, accounted for: {rows}"
             assert rows["cap-fresh"]["ever_fired"] and rows["cap-stale"]["ever_fired"]
             assert "cap-nocadence" in rep["no_cadence_declared"], rep["no_cadence_declared"]
             assert not rows["cap-never"]["ever_fired"]
             assert "cap-never" in rep["never_fired"], rep["never_fired"]
             ov = {r["capability_id"] for r in rep["overdue"]} & mine
             assert ov == {"cap-stale"}, f"only the stale daily capability is overdue: {ov}"
+            # LIVE ROWS ONLY: named with the reason, and in no finding list.
+            for cap_id in ("cap-retired", "cap-superseded"):
+                assert rows[cap_id]["monitored"] is False, rows[cap_id]
+                assert rows[cap_id]["status"] in rows[cap_id]["not_monitored_because"]
+                for key in ("never_fired", "no_cadence_declared"):
+                    assert cap_id not in rep[key], (key, rep[key])
+            assert rows["cap-never"]["monitored"] is True
+            named = {s: sorted(set(ids) & mine) for s, ids in rep["not_monitored"].items()}
+            assert {s: ids for s, ids in named.items() if ids} == {
+                "retired": ["cap-retired"],
+                "superseded": ["cap-superseded"],
+            }, rep["not_monitored"]
+            assert rep["ledger_total"] == rep["total"] + rep["not_monitored_count"], rep
+            assert rep[capabilities.FINDING_POPULATION_KEY] == {
+                "excluded_statuses": ["retired", "superseded"]
+            }, "the report must declare the rule it applied, or the tick cannot see it change"
             # No history yet, so no regression can be claimed. Claiming one would be fabrication.
             assert rep["regressed"] == [], rep
             assert rep["snapshots_stored"] == 0, rep
@@ -467,6 +556,11 @@ def _selftest() -> None:
             assert (
                 "cap-monthly" not in reg_ids
             ), f"8d of silence is inside a monthly tolerance: {rep2['regressed']}"
+            # Fired before the snapshot and unchanged 8d later against a daily cadence: exactly a
+            # regression, if it were live. A superseded row cannot go quiet; it was replaced.
+            assert (
+                "cap-superseded" not in reg_ids
+            ), f"a superseded row is not monitored, so it cannot regress: {rep2['regressed']}"
 
             # The kill switch must stop writes, not just reads.
             globals()["DISABLED"] = True
@@ -479,7 +573,8 @@ def _selftest() -> None:
 
     print(
         "capability_firing_monitor.py selftest: OK (cadence parsing incl. on-demand refusal, "
-        "observers judged on running, regression needs history, kill switch blocks writes)"
+        "observers judged on running, regression needs history, only live rows judged and "
+        "not-live rows named, kill switch blocks writes)"
     )
 
 

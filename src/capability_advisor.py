@@ -519,7 +519,7 @@ def advise(
         live = [
             (cid, why)
             for cid, why in sorted(declared.items())
-            if cid in caps and caps[cid].get("status") not in {"retired", "superseded"}
+            if cid in caps and caps[cid].get("status") not in capabilities.NOT_LIVE_STATES
         ]
         if live:
             entries = [
@@ -678,7 +678,7 @@ def advise(
             if value not in (None, ""):
                 trigger[field] = value
         for cap_id, cap in sorted(caps.items()):
-            if cap.get("status") in {"retired", "superseded"}:
+            if cap.get("status") in capabilities.NOT_LIVE_STATES:
                 continue
             ok, reasons = capabilities._matches_trigger(cap, trigger)
             if not ok:
@@ -720,7 +720,7 @@ def advise(
         present = {m["capability_id"] for m in matched}
         for cap_id, reason in bound.items():
             bound_cap: dict[str, Any] | None = caps.get(cap_id)
-            if bound_cap is None or bound_cap.get("status") in {"retired", "superseded"}:
+            if bound_cap is None or bound_cap.get("status") in capabilities.NOT_LIVE_STATES:
                 continue
             if cap_id not in present:
                 matched.append(
@@ -3726,7 +3726,7 @@ def _selftest_reach() -> None:
         live = {
             cid
             for cid, cap in capabilities.load_declared(ledger).items()
-            if cap.get("status") not in {"retired", "superseded"}
+            if cap.get("status") not in capabilities.NOT_LIVE_STATES
         }
         assert live <= (ids | set(na)), f"unaccounted: {sorted(live - (ids | set(na)))}"
         assert plain["coverage"]["ledger_count"] >= 3, plain["coverage"]

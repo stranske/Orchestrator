@@ -510,7 +510,7 @@ def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
         cid
         for cid, cap in ledger.items()
         if cap.get("findability_category") == admission.EXERCISE_CATEGORY
-        and cap.get("status") not in ("retired", "superseded")
+        and cap.get("status") not in capabilities.NOT_LIVE_STATES
     } - exercise_bound
     assert not stray, f"ledger declares exercise_bound for undeclared capabilities: {stray}"
 
