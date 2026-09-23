@@ -438,23 +438,67 @@ def _fleet_six_summary(now: int | None = None) -> dict:
             w["broke_later_by_agent"] = by_agent or {
                 "unmeasured": "no merged run at least 7 days old has a resolved durability"
             }
+            # ONE COST SCALE (2026-09-22), the same one feedback.py's learners already use since
+            # PR #320: only a `costs.source` in `feedback.COMPLETE_COST_SOURCES` (ccusage) prices a
+            # WHOLE run at the vendor's rate. A LangSmith trace prices one call inside a run
+            # (~$0.04) and a bare ledger row carries latency only — both PARTIAL, and summing a
+            # partial number into a whole-run total is a wrong number, not a cheap one. Unfiltered,
+            # three merged runs (two $1.00 ccusage rows, one $0.04 langsmith row) read as
+            # $0.68/merged; filtered, they read as $1.00/merged over the two rows this scale can
+            # actually price — a second, undeclared scale living beside feedback's, which is exactly
+            # what CLAUDE.md's learning-loop rules forbid. Import the names, never redefine them.
+            marks = ",".join("?" for _ in feedback.COMPLETE_COST_SOURCES)
             cost: dict = {}
-            for agent, merged, usd, toks in c.execute(
+            for agent, merged, complete_usd, complete_rows, toks in c.execute(
                 "SELECT r.agent, SUM(CASE WHEN o.merged=1 THEN 1 ELSE 0 END), "
-                "SUM(COALESCE(co.cost_usd,0)), SUM(COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)) "
+                "SUM(CASE WHEN co.source IN ("
+                + marks
+                + ") AND o.merged=1 AND co.cost_usd>0 THEN co.cost_usd ELSE 0 END), "
+                "SUM(CASE WHEN co.source IN ("
+                + marks
+                + ") AND o.merged=1 AND co.cost_usd>0 THEN 1 ELSE 0 END), "
+                "SUM(COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)) "
                 "FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id LEFT JOIN costs co ON co.run_id=r.run_id "
                 "WHERE r.ts>=? AND COALESCE(r.role_name,'')='' AND NOT "
                 + _NOT_AGENT_WORK
                 + " GROUP BY r.agent",
-                (since,),
+                (
+                    *sorted(feedback.COMPLETE_COST_SOURCES),
+                    *sorted(feedback.COMPLETE_COST_SOURCES),
+                    since,
+                ),
             ).fetchall():
                 merged = int(merged or 0)
+                complete_rows = int(complete_rows or 0)
+                # THE DRAINABLE QUANTITY BESIDE THE GATE: coverage is complete-source rows over
+                # merged runs, printed even when it clears the floor, so "be patient" and "already
+                # measured" never look the same.
+                coverage = round(complete_rows / merged, 4) if merged else None
+                below_floor = coverage is not None and coverage < feedback.MIN_COST_COVERAGE
                 cell = {
+                    "cost_scale": feedback.COST_SCALE,
                     "merged": merged,
-                    "usd": round(float(usd or 0), 2),
+                    "complete_rows": complete_rows,
+                    "coverage": coverage,
                     "tokens": int(toks or 0),
-                    "usd_per_merged": round(float(usd or 0) / merged, 2) if merged else None,
+                    "usd": round(float(complete_usd or 0), 2) if complete_rows else None,
+                    "usd_per_merged": (
+                        round(float(complete_usd or 0) / complete_rows, 2)
+                        if complete_rows and not below_floor
+                        else None
+                    ),
                 }
+                if not complete_rows:
+                    cell["unmeasured"] = (
+                        "no complete-source rows "
+                        f"({'/'.join(sorted(feedback.COMPLETE_COST_SOURCES))}) among {merged} "
+                        "merged runs"
+                    )
+                elif below_floor:
+                    cell["unmeasured"] = (
+                        f"coverage {coverage:.0%} < {feedback.MIN_COST_COVERAGE:.0%}: "
+                        f"{complete_rows} complete-source rows of {merged} merged runs"
+                    )
                 if agent in out["implausible_telemetry"]:
                     cell["telemetry"] = "implausible: " + out["implausible_telemetry"][agent]
                 cost[agent] = cell
@@ -517,13 +561,26 @@ def render_fleet_six(section: dict) -> list[str]:
         )
 
     def cost(d: dict) -> str:
-        return (
-            ", ".join(
-                f"{a} ${v['usd_per_merged']:.2f}/merged ({v['merged']} merged"
+        # THE FIGURE NEVER APPEARS WITHOUT ITS COVERAGE (2026-09-22): a $/merged number with no
+        # coverage beside it reads as fully measured even when it rests on one priced row out of
+        # twenty. An agent below feedback.MIN_COST_COVERAGE prints `unmeasured (...)` in its place
+        # rather than vanishing from the line — silently dropping it would look identical to "this
+        # agent merged nothing", which is a different, unrelated fact.
+        def cell(a: str, v: dict) -> str:
+            if v.get("unmeasured"):
+                return f"{a} unmeasured ({v['unmeasured']})"
+            return (
+                f"{a} ${v['usd_per_merged']:.2f}/merged ({v['merged']} merged, "
+                f"coverage {v['coverage']:.0%}"
                 + (", " + v["telemetry"] if v.get("telemetry") else "")
                 + ")"
+            )
+
+        return (
+            ", ".join(
+                cell(a, v)
                 for a, v in sorted(d.items(), key=lambda kv: -kv[1]["merged"])
-                if v.get("usd_per_merged") is not None
+                if v.get("merged")  # merged==0: the metric does not apply, not "unmeasured"
             )
             or "unmeasured (no costed merged run)"
         )

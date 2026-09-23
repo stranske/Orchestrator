@@ -644,3 +644,85 @@ def test_no_tick_producer_runs_above_the_heartbeat_export():
         f"{audit.HEARTBEAT_ENV_FLAG} export, so they record nothing: "
         f"{gate['suppressed_by_driver']}"
     )
+
+
+def test_usage_and_propensity_headlines_carry_both_accountings(tmp_path, monkeypatch):
+    """Two accountings of "did this capability pay off", printed side by side (2026-09-22).
+
+    `capabilities.py usage` prints capabilities with versioned Brain-to-keepalive edges (all time);
+    `capability_propensity.report()` separately counts capabilities with a usefulness
+    VERDICT (useful/not_useful on a ranked row, over its own 90-day window). Before this test
+    neither headline named the OTHER axis, so a reader saw one number and could easily read it as
+    the whole picture. Fixture: two capabilities, both scored useful, only one of which also
+    carries a Brain outcome edge — the "scored-but-unlinked" case a merged single number would
+    hide. Both headlines must show verdicts=2/2 and outcome-links=1/2, never collapsed together.
+    """
+    import capability_outcome_bridge
+    import capability_propensity
+    import feedback
+
+    ledger = tmp_path / "capabilities.json"
+    rows = {}
+    for cid in ("linked", "unlinked"):
+        cap = capabilities._blank_capability(cid)
+        cap["status"] = "generated"
+        cap["capability_version_id"] = f"capability-version:{cid * 16}"[:51]
+        cap["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
+        rows[cid] = cap
+    capabilities.save(rows, ledger)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run("keepalive:o/r#1:codex", "o/r#1", "implement", "codex", source="keepalive")
+    feedback.record_outcome(
+        "keepalive:o/r#1:codex", adjudicated_verdict="PASS", merged=True, durability="durable"
+    )
+
+    exp = "advice:accountings0001"
+    for cid in ("linked", "unlinked"):
+        capabilities.heartbeat(cid, "match", ref=exp, path=ledger, idempotency_key=f"m:{cid}")
+        deliverable = "o/r#1" if cid == "linked" else None
+        capability_propensity.record_trigger(cid, exp, deliverable=deliverable, path=ledger)
+        capability_propensity.record_usefulness(
+            cid,
+            exp,
+            useful=True,
+            evidence="scored for this fixture",
+            provenance=capability_propensity.PROVENANCE_DEFAULT,
+            deliverable=deliverable,
+            path=ledger,
+        )
+    index = capability_outcome_bridge._fleet_verdict_index(capabilities.load(ledger, create=False))
+
+    # create=False: a bare `summary()` would auto-register every KNOWN_GATES capability into this
+    # fixture ledger (load()'s documented conservative-registration behaviour), which would make
+    # this module's "total" drift from capability_propensity's — that module always reads via
+    # `load_declared` (the create=False view). Matching it here keeps both denominators equal, as
+    # a real ledger's would be once that one-time registration has already run.
+    with feedback._conn() as conn:
+        assert (
+            capability_outcome_bridge.attribute_fleet_deliverable_edges(
+                verdict_index=index, conn=conn
+            )["attributed"]
+            == 1
+        )
+        report = capabilities.summary(ledger, create=False)
+        usage = capabilities.usage_report(report, conn=conn)
+        assert usage["capabilities_with_verdict"] == 2, usage
+        assert usage["capabilities_with_outcome_link"] == 1, usage
+        usage_text = capabilities.format_usage_report(usage)
+        assert "verdicts: 2 of 2 capabilities carry a usefulness verdict (ledger)" in usage_text
+        assert "outcome links: 1 of 2 carry a Brain outcome edge (lifecycle)" in usage_text
+
+        override = tmp_path / "override-capabilities.json"
+        override_rows = {"linked": capabilities.load(ledger, create=False)["linked"]}
+        capabilities.save(override_rows, override)
+        assert (
+            capabilities.usage_report(report, conn=conn, path=override)["capabilities_with_verdict"]
+            == 1
+        )
+
+        prop_report = capability_propensity.report(path=ledger, conn=conn)
+        assert prop_report["capabilities_with_evidence"] == 2, prop_report
+        assert prop_report["capabilities_with_outcome_link"] == 1, prop_report
+        prop_text = capability_propensity._fmt(prop_report)
+        assert "verdicts: 2 of 2 capabilities carry a usefulness verdict (ledger)" in prop_text
+        assert "outcome links: 1 of 2 carry a Brain outcome edge (lifecycle)" in prop_text

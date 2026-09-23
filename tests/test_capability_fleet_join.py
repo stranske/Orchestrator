@@ -193,6 +193,29 @@ def test_usage_report_marks_fleet_edges_unavailable_when_brain_unreadable(tmp_pa
     assert "unavailable" in capabilities.format_usage_report(usage)
 
 
+def test_propensity_report_marks_outcome_links_unavailable_when_brain_unreadable(
+    tmp_path, monkeypatch
+):
+    """The propensity formatter's `_fmt` has the same unreadable-Brain branch as
+    `capabilities.format_usage_report` (both read `capabilities_with_outcome_link`, sourced from
+    the same `_fleet_edge_counts` helper) — see test_usage_report_marks_fleet_edges_unavailable_
+    when_brain_unreadable above for the sibling formatter. Only the readable-Brain path had
+    coverage here before this test (CodeRabbit, PR #329); an unreadable Brain must render
+    "unavailable (Brain unreadable)" rather than a measured zero on this formatter too, and the
+    module's `verdict events` line (renamed 2026-09-22, distinct from the `verdicts` line above
+    it) must actually appear.
+    """
+    ledger = _ledger(tmp_path)
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **kwargs: None)
+    with feedback._conn() as conn:
+        rep = propensity.report(path=ledger, conn=conn)
+    assert rep["capabilities_with_outcome_link"] is None
+    text = propensity._fmt(rep)
+    assert "unavailable (Brain unreadable)" in text
+    assert "verdict events:" in text
+
+
 def test_cli_verdict_is_visible_across_processes_and_requires_a_target_event(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     _keepalive(monkeypatch, tmp_path)

@@ -2668,9 +2668,12 @@ def _fleet_edge_counts(*, conn=None) -> dict[str, int] | None:
             c.close()
 
 
-def usage_report(report: dict[str, Any], *, now: int | None = None, conn=None) -> dict[str, Any]:
+def usage_report(
+    report: dict[str, Any], *, now: int | None = None, conn=None, path: Path | None = None
+) -> dict[str, Any]:
     """Per-capability usage + debt + next action, plus the roll-ups a digest needs."""
     current = _now() if now is None else now
+    verdict_path = Path(path) if path is not None else Path(report.get("path", REG))
     fleet_counts = _fleet_edge_counts(conn=conn)
     rows = []
     for name, cap in sorted(report["capabilities"].items()):
@@ -2687,10 +2690,31 @@ def usage_report(report: dict[str, Any], *, now: int | None = None, conn=None) -
                 "fleet_edges": None if fleet_counts is None else fleet_counts.get(name, 0),
             }
         )
+    # TWO ACCOUNTINGS OF "DID THIS CAPABILITY PAY OFF", NEVER MERGED (2026-09-22). The per-row
+    # Outcomes figure counts capabilities with a versioned influence edge to an actual keepalive
+    # run -- the same all-time Brain population as `fleet_edges` above. The ledger's generic
+    # `outcome_links` field cannot prove that: verdict recording also writes `advice:` refs there.
+    # `capability_propensity`'s ledger separately answers a DIFFERENT question, over its own
+    # 90-day window: does a ranked row carry a usefulness VERDICT (`useful`/`not_useful`, from a
+    # human or judge arm)? A capability is routinely judged useful by a reviewer before, or without,
+    # any Brain-linked run closing the loop underneath it. Collapsing the two into one figure would
+    # silently pick one axis and hide the other, so both are carried through and printed side by side
+    # in format_usage_report, each labelled with what it actually measures.
+    import capability_propensity  # lazy: that module imports THIS one at load time
+
+    verdict_stats = capability_propensity.usefulness(path=verdict_path, now=current)
+    capabilities_with_verdict = sum(1 for row in verdict_stats["rows"].values() if row["resolved"])
+    capabilities_with_outcome_link = (
+        None
+        if fleet_counts is None
+        else sum(1 for name in report["capabilities"] if fleet_counts.get(name, 0) > 0)
+    )
     return {
         "generated_at": current,
         "fleet_edges_scope": "all_time_versioned_edges_to_keepalive_runs",
         "total": len(rows),
+        "capabilities_with_verdict": capabilities_with_verdict,
+        "capabilities_with_outcome_link": capabilities_with_outcome_link,
         "ready_to_lift": [
             r["capability_id"] for r in rows if r["unblock"]["action"].startswith("READY TO LIFT")
         ],
@@ -2733,11 +2757,25 @@ def usage_report(report: dict[str, Any], *, now: int | None = None, conn=None) -
 
 def format_usage_report(usage: dict[str, Any]) -> str:
     """Digest-shaped rendering: the roll-ups first, because those are the only actionable lines."""
+    outcome_link_count = usage["capabilities_with_outcome_link"]
+    outcome_link_text = (
+        "unavailable (Brain unreadable)"
+        if outcome_link_count is None
+        else f"{outcome_link_count} of {usage['total']}"
+    )
     lines = [
         "# Orchestrator capability usage",
         "",
         f"{usage['total']} capabilities · {len(usage['active_last_28d'])} used in the last 28d · "
         f"{len(usage['never_invoked'])} never invoked",
+        "",
+        # TWO ACCOUNTINGS, SIDE BY SIDE, NEVER MERGED — see usage_report()'s comment. A verdict is
+        # capability_propensity's own 90-day-windowed ledger read; an outcome link is an all-time,
+        # versioned Brain edge to a keepalive run. Different sources, different windows, both real;
+        # do not average them.
+        f"verdicts: {usage['capabilities_with_verdict']} of {usage['total']} capabilities carry a "
+        f"usefulness verdict (ledger)",
+        f"outcome links: {outcome_link_text} carry a Brain outcome edge (lifecycle)",
         "",
     ]
     # READY TO LIFT has a DENOMINATOR. Reported bare it is a permanently-zero number that reads as

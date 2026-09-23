@@ -1348,7 +1348,7 @@ def _capability_heartbeat(event_type: str, ref: str) -> None:
         pass
 
 
-def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None) -> dict:
+def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None, conn=None) -> dict:
     """The whole denominator, ranked, with the unresolved population named rather than dropped."""
     stats = usefulness(path=path, window_days=window_days, now=now)
     trials = experiments(path=path, window_days=window_days, now=now)
@@ -1365,6 +1365,7 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         )
     ranked.sort(key=lambda r: (-r["propensity"], -r["resolved"], r["capability_id"]))
     resolved_caps = [r["capability_id"] for r in ranked if r["resolved"]]
+    fleet_counts = capabilities._fleet_edge_counts(conn=conn)
     # THE PROVENANCE MIX OF THE WHOLE CORPUS, in the headline. This is the number that makes the
     # arithmetic honest: on 2026-08-23 it was 12 verdicts, 12 of them self_reported, 0 outcome-
     # derived, from 1 judge arm per capability — a fact the old headline could not express, so
@@ -1388,6 +1389,18 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # dashboard that looks informative while reporting nothing.
         "capabilities_with_evidence": len(resolved_caps),
         "capabilities_without_evidence": stats["capability_count"] - len(resolved_caps),
+        # THE OTHER AXIS, reported beside the verdict count rather than folded into it
+        # (2026-09-22). `capabilities_with_evidence` above is THIS module's own accounting: a
+        # ranked row with a resolved useful/not_useful verdict, inside `window_days`. capabilities.py
+        # separately tracks an all-time, versioned Brain edge to an actual keepalive run. The two
+        # need not agree — a capability can earn a reviewer's verdict long before, or without, any
+        # Brain-linked run ever closing the loop underneath it — so this uses the same keepalive-edge
+        # definition as capabilities.usage_report without redefining either axis.
+        "capabilities_with_outcome_link": (
+            None
+            if fleet_counts is None
+            else sum(1 for cap_id in stats["rows"] if fleet_counts.get(cap_id, 0) > 0)
+        ),
         # THE PROVENANCE MIX. Never omit this beside a usefulness rate: the two together are the
         # only honest reading, and the first without the second is what this axis exists to stop.
         "verdict_count": verdict_total,
@@ -6765,14 +6778,28 @@ def _selftest() -> None:
 
 
 def _fmt(rep: dict) -> str:
+    outcome_link_count = rep["capabilities_with_outcome_link"]
+    outcome_link_text = (
+        "unavailable (Brain unreadable)"
+        if outcome_link_count is None
+        else f"{outcome_link_count} of {rep['capability_count']}"
+    )
     lines = [
         f"capability propensity — {rep['window_days']}d window",
         f"  experiments: {rep['experiment_count']} "
         f"({rep['resolved_experiment_count']} resolved)",
-        f"  capabilities with usefulness evidence: {rep['capabilities_with_evidence']} "
-        f"of {rep['capability_count']}",
-        # THE PROVENANCE MIX, never printed apart from the rate it qualifies.
-        f"  verdicts: {rep['verdict_count']} — {rep['verdicts_by_provenance'] or '(none)'}; "
+        # TWO ACCOUNTINGS, SIDE BY SIDE, NEVER MERGED — see report()'s comment. A verdict is this
+        # module's own 90-day-windowed ledger read; an outcome link is an all-time, versioned Brain
+        # edge to a keepalive run. Different sources, different windows, both real; do not average.
+        f"  verdicts: {rep['capabilities_with_evidence']} of {rep['capability_count']} "
+        f"capabilities carry a usefulness verdict (ledger)",
+        f"  outcome links: {outcome_link_text} carry a Brain outcome edge (lifecycle)",
+        # THE PROVENANCE MIX, never printed apart from the rate it qualifies. Labelled "verdict
+        # events" rather than "verdicts" (2026-09-22): the line above already claims that word for
+        # a DIFFERENT count — capabilities carrying at least one verdict, not the raw event total —
+        # and one word meaning two numbers on adjacent lines is exactly the ambiguity this change
+        # exists to remove.
+        f"  verdict events: {rep['verdict_count']} — {rep['verdicts_by_provenance'] or '(none)'}; "
         f"{rep['verdicts_outcome_derived']} outcome-derived, {rep['verdicts_self_reported']} "
         f"self-reported"
         + (
