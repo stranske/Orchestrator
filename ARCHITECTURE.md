@@ -227,6 +227,19 @@ committed table is the seed (tool); instance promotions live in the ledger (evid
 bound set and flagged `bound: false`. A concealed capability could never be selected, so it could
 never earn the evidence that would bind it — the gate would starve its own drain.
 
+**The reported bound set is the OFFERED one, and the rest of the declaration is named (2026-09-23).**
+`bound_count` and `bound_capabilities` describe what the answer offers. A declared binding whose row
+is not live (`capabilities.NOT_LIVE_STATES`) or has no ledger row on this machine is never offered,
+so it is not counted either: it is named beside the count, `bound_not_live` by status and
+`bound_unregistered`, so the three always partition what `binding_for` returns. Until then the
+classified path inserted live rows only while reporting the raw binding, so a retired bound row read
+as bound and never appeared, and the classification-miss path filtered the same rows with its own copy
+of the rule; one live map now serves insertion, annotation, the bound-first partition and the report
+on every branch. Direct entry follows the same rule: the dispatcher-derived map knows nothing about
+the ledger, so a retired target is not offered as `entered_directly`. Latent when fixed (the ledger's
+one not-live row was bound nowhere), but a clean runner has 31 bound ids with no ledger row, which the
+classified path had been counting as bound.
+
 **And a binding is only half of layer 1: `CONSULT_SITES` is the other half, and nothing declared it
 until 2026-08-23.** `SURFACE_BINDINGS` says which capabilities a surface should be offered; nothing
 said which surfaces are ever ASKED, and the two are independent — from a capability's point of view,
@@ -736,6 +749,17 @@ production is judged by the rule it was produced under, and a report that declar
 A row retired LATER still leaves the monitor's findings and is still graded: that finding was
 answered by a lifecycle action, where this one was answered by an edit to the monitor.
 
+**The activation audit's own history applies the same rule (2026-09-23).** `progress()` diffs
+`reachable_ids` against the last snapshot, and a not-live row is kept out of that set, so a capability
+that was reachable and was then retired read as REGRESSED in the scorecard. It is now named under
+`retired_since`, by status, from the report's `not_audited`, and `regressed` keeps only the rest. That
+reading holds only against a snapshot drawn from the same population, so each snapshot records the
+population the report declares, and a snapshot that predates the record, or was drawn from another
+population, is an UNKNOWN BASELINE: nothing is compared against it rather than guessing which of its
+rows were live. The drain is the tick's daily `--snapshot`, which records unconditionally, so the state
+lasts one run. It is deliberately not re-baselined on every retirement: that would blank the
+comparison on the day of a lifecycle action and hide any real regression in the same window.
+
 ### A DECLARED BINDING WITH NO CALLER IS THE SAME DEFECT AS NO BINDING
 
 Layer 1 is offered to a surface *by that surface's own consult*. So a surface nothing consults is a
@@ -744,14 +768,15 @@ starving its own drain, one level down from the concealment rule above. Measured
 43 capabilities were bound to NO surface at all**, and two whole surfaces (`ci`, and every phase of
 the tick) had bindings with no caller.
 
-Three callers close that, and the last two are the same mechanism as the first — `advise()` plus the
-`match` heartbeat, never a second one:
+Two callers close that, and the second is the same mechanism as the first — `advise()` plus the
+`match` heartbeat, never a second one. (A third row named a `ci` caller, `verify.py`'s
+`ci_consult_line()`; it was never committed, and `ci` is declared `NO_BINDING` because nothing
+consults it. Corrected 2026-09-23.)
 
 | Surface | Caller | What bounds it |
 |---|---|---|
 | `tick` (4 capabilities) | `capability_propensity.tick_evidence` (PR #37) | one verdict per capability per UTC day, gated on artifact regeneration → ~1.3/day |
 | `tick:<phase>` (14 capabilities) | `capability_advisor.py --consult-tick-phases`, at `ORCH-ANCHOR: tick-phase-consult` | consult text stable per (surface, UTC day); the match heartbeat is idempotent on its digest → 34 events on the first tick of a day, 0 on the other 23. **No verdicts at all**, so #37's ceiling is untouched |
-| `ci` (3 capabilities) | `verify.py`'s `ci_consult_line()` — it runs on every PR and already executes the admission gate | `record=False`: a verifier must not write to the ledger its own gates read |
 
 **The tick is sub-surfaced for exactly the reason `repo-audit` is.** 18 of the 43 capabilities live
 on the tick; binding all 18 to `tick` would rebuild the too-many-tools condition inside the tick.
@@ -772,8 +797,7 @@ surface-wide observers for the same reason `repo-audit` declares `offload` surfa
 **And a capability no surface may offer says so.** `local-model-profile-trial` is the one ledger row
 that is deliberately unbound — the quarantine-only trial transport — and it is declared with
 `NO_BINDING` and its reason rather than left absent, because silent absence and deliberate emptiness
-must not look alike. The `ci` consult line reports the pair on every PR: rows bound to some surface,
-beside rows bound to none.
+must not look alike.
 
 **Demotion is the drain.** Bindings that could only grow end with every surface holding all 43 —
 the exact condition binding prevents. Two rules propose removal, and they read **disjoint
