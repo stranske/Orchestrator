@@ -85,6 +85,18 @@ TRANSITIONS = {
 # one decision and must not be two literals that can drift apart.
 NOT_LIVE_STATES = frozenset({"retired", "superseded"})
 
+# The report key under which an observer DECLARES the population its findings are drawn from. ONE
+# name for producer and grader: `capability_propensity.tick_evidence` reads it from each report it
+# grades and re-baselines when it changes, because a finding that disappears when the rule changes
+# was not resolved by anything, and grading it would credit the observer with the edit.
+FINDING_POPULATION_KEY = "finding_population"
+
+
+def live_finding_population() -> dict[str, list[str]]:
+    """The population a report declares when its findings name live rows only."""
+    return {"excluded_statuses": sorted(NOT_LIVE_STATES)}
+
+
 REQUIRED_FIELDS = (
     "schema_version",
     "capability_id",
@@ -1222,11 +1234,7 @@ def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[
     retired: list[str] = []
     for name, cap in capabilities.items():
         expiry = cap.get("expiry")
-        if (
-            cap.get("status") not in {"retired", "superseded"}
-            and expiry is not None
-            and now >= int(expiry)
-        ):
+        if cap.get("status") not in NOT_LIVE_STATES and expiry is not None and now >= int(expiry):
             previous = cap["status"]
             cap["status"] = "retired"
             cap["next_transition"] = None
@@ -1453,7 +1461,7 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
         declared_status = gate.get("status")
         if (
             declared_status
-            and cap.get("status") not in {"active", "retired", "superseded"}
+            and cap.get("status") not in {"active", *NOT_LIVE_STATES}
             and cap.get("status") != declared_status
         ):
             previous = cap.get("status")
@@ -1625,7 +1633,7 @@ def validate_capability(cap: dict[str, Any], *, now: int | None = None) -> None:
             f"({sorted(GATE_BOUND_KEYS)} and/or 'requires'), got {type(criteria).__name__}; "
             f"put prose in gate_criteria_prose"
         )
-    if cap.get("gate_reason") and status not in {"retired", "superseded"}:
+    if cap.get("gate_reason") and status not in NOT_LIVE_STATES:
         for field in ("gate_evidence", "evidence_threshold", "expiry", "next_transition"):
             if not cap.get(field):
                 raise AssertionError(f"gated capability missing {field}")
@@ -1980,7 +1988,7 @@ def link_successor(
         successor = records.get(successor_capability_id)
         if not retired or retired.get("status") != "retired":
             raise ValueError("successor link requires a retired predecessor version")
-        if not successor or successor.get("status") in {"retired", "superseded"}:
+        if not successor or successor.get("status") in NOT_LIVE_STATES:
             raise ValueError("successor link requires a live successor version")
         if retired.get("successor") not in {None, successor_capability_id}:
             raise ValueError("retired capability already has a different successor")
@@ -2069,7 +2077,7 @@ def classify_liveness(
 ) -> str:
     """Classify one capability from its own lifecycle evidence."""
     status = cap.get("status")
-    if status in {"retired", "superseded"}:
+    if status in NOT_LIVE_STATES:
         return status
     last_match = cap.get("last_match")
     last_invocation = cap.get("last_invocation")
@@ -2415,7 +2423,7 @@ def unblock(
     age = rate["age_days"]
     stale_enough = age is not None and age >= RETIRE_CANDIDATE_DAYS
 
-    if live in {"retired", "superseded"}:
+    if live in NOT_LIVE_STATES:
         return {
             "blocker": live,
             "action": "none",

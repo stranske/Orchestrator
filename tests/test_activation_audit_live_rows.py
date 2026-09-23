@@ -73,6 +73,12 @@ def test_the_scorecard_names_not_live_rows_without_calling_them_blocked(tmp_path
     assert "retired-silent" not in blocked
 
 
+def test_the_audit_declares_the_population_it_audits(tmp_path, monkeypatch):
+    """The tick re-baselines when this changes, so a change to NOT_LIVE_STATES mints no verdict."""
+    rep = _report(tmp_path, monkeypatch)
+    assert rep[capabilities.FINDING_POPULATION_KEY] == capabilities.live_finding_population()
+
+
 def test_not_live_states_are_canonical_lifecycle_states():
     assert capabilities.NOT_LIVE_STATES
     assert capabilities.NOT_LIVE_STATES <= set(capabilities.CANONICAL_STATES)

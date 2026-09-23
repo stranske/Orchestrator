@@ -2550,7 +2550,21 @@ def _projection_signature(capability_id: str) -> str | None:
     return finding_fingerprint({key: list(fields) for key, fields in spec.items()})
 
 
-def _projection_drift(capability_id: str, prior: dict, findings: dict) -> str | None:
+def declared_population(report) -> object:
+    """The finding population a report declares, or None when it declares none.
+
+    A report may declare the rule deciding which ledger rows its findings may name, under
+    `capabilities.FINDING_POPULATION_KEY`. A finding that disappears because that rule changed was
+    not resolved by anything, so a changed population makes two observations incomparable exactly as
+    a changed projection does. Read from the REPORT being graded, never from code, so each production
+    is judged by the rule it was produced under. Any report may declare one; none must.
+    """
+    return report.get(capabilities.FINDING_POPULATION_KEY) if isinstance(report, dict) else None
+
+
+def _projection_drift(
+    capability_id: str, prior: dict, findings: dict, population: object = None
+) -> str | None:
     """Say why the prior observation cannot be compared to this projection."""
     prior_signature = prior.get("projection")
     if prior_signature is not None and prior_signature != _projection_signature(capability_id):
@@ -2559,6 +2573,15 @@ def _projection_drift(capability_id: str, prior: dict, findings: dict) -> str | 
     after = set(findings)
     if before != after:
         return f"the report's finding keys changed ({sorted(before)} -> {sorted(after)})"
+    # NO `is not None` GUARD, unlike the projection check above, and deliberately. An entry recorded
+    # before its report declared a population reads None, and a report that now declares one IS the
+    # change being guarded: that first production is exactly the one that would otherwise mint a
+    # verdict for the edit. A report that declares nothing reads None on both sides and never drifts.
+    if prior.get("population") != population:
+        return (
+            "the report's declared finding population changed "
+            f"({prior.get('population')!r} -> {population!r})"
+        )
     return None
 
 
@@ -2799,6 +2822,7 @@ def tick_evidence(
             continue
         findings = project_findings(cap_id, report)
         fingerprint = finding_fingerprint(findings) if findings else None
+        population = declared_population(report)
 
         # IT RAN. Recorded for every fresh production, gradable or not, so the control arm stays
         # honest: a bound capability that really did produce output must not read as "offered and
@@ -2833,7 +2857,7 @@ def tick_evidence(
         }
         reason = _tick_ungradable_reason(cap_id, cap_row, findings)
         drift = (
-            _projection_drift(cap_id, plan["prior"], findings or {})
+            _projection_drift(cap_id, plan["prior"], findings or {}, population)
             if plan["action"] == "evaluate" and not reason
             else None
         )
@@ -2930,6 +2954,7 @@ def tick_evidence(
             "fingerprint": fingerprint,
             "findings": findings or {},
             "projection": _projection_signature(cap_id),
+            "population": population,
             "evaluated_at": now,
             "day": day,
             "experiment_id": experiment,
@@ -3192,6 +3217,19 @@ def _selftest_tick_evidence() -> None:
     for cap_id, spec in TICK_FINDING_FIELDS.items():
         for key, fields in spec.items():
             assert not (set(fields) & moving), (cap_id, key, fields)
+    # A DECLARED POPULATION that changes is incomparable, and one nothing declares never drifts. The
+    # asymmetry with the projection check is the point: "recorded none, now declares one" is the
+    # production that would otherwise mint a verdict for the edit that introduced the rule. No
+    # recorded projection below, so the signature check is never reached and no ledger is needed.
+    keys: dict[str, list[str]] = {"k": []}
+    rule = capabilities.live_finding_population()
+    assert _projection_drift("x", {"findings": keys}, keys) is None
+    assert _projection_drift("x", {"findings": keys, "population": rule}, keys, rule) is None
+    for before_pop, now_pop in ((None, rule), (rule, None), (rule, {"excluded_statuses": []})):
+        drift = _projection_drift("x", {"findings": keys, "population": before_pop}, keys, now_pop)
+        assert drift and "population" in drift, (before_pop, now_pop, drift)
+    assert declared_population({capabilities.FINDING_POPULATION_KEY: rule}) == rule
+    assert declared_population({}) is None and declared_population([rule]) is None
 
     # ---- A CALLER MUST EXIST, and it must sit in the right place. This project's #1 defect class is
     # built-and-forgotten, and the two ways this wiring could become inert are both checkable from

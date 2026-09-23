@@ -723,6 +723,19 @@ declares, or a report that stops emitting a declared key, makes the next observa
 with the last, `tick_evidence` re-baselines that observation and records no verdict — the same rule
 as a first sighting — rather than letting the edit itself mint one.
 
+**And a changed POPULATION is a first observation too (2026-09-22).** The firing monitor listed a row
+retired on 2026-09-03 under `never_fired` on every run. Excluding `capabilities.NOT_LIVE_STATES` rows
+fixed the report and would have minted a "useful" verdict for the fix, because the finding set's
+CONTENT moved while its keys and its projection, the two things the rule above compares, did not. So
+a report DECLARES the rule deciding which ledger rows its findings may name, under
+`capabilities.FINDING_POPULATION_KEY` (the monitor and the activation audit both declare
+`live_finding_population()`), and `tick_evidence` re-baselines whenever the declared population
+differs from the one recorded with the previous observation, including "none recorded, one declared
+now", which is the transition itself. The rule is read from the report being graded, so each
+production is judged by the rule it was produced under, and a report that declares none never drifts.
+A row retired LATER still leaves the monitor's findings and is still graded: that finding was
+answered by a lifecycle action, where this one was answered by an edit to the monitor.
+
 ### A DECLARED BINDING WITH NO CALLER IS THE SAME DEFECT AS NO BINDING
 
 Layer 1 is offered to a surface *by that surface's own consult*. So a surface nothing consults is a

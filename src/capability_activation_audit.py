@@ -1430,6 +1430,7 @@ def audit(*, path=None, use_cache: bool = True) -> dict:
         "ledger_total": len(rows),
         "not_audited": {status: sorted(ids) for status, ids in sorted(not_audited.items())},
         "not_audited_count": sum(len(ids) for ids in not_audited.values()),
+        capabilities.FINDING_POPULATION_KEY: capabilities.live_finding_population(),
         "reachable_ids": reachable,
         "by_entry_class": by_entry,
         "by_defect": {k: sorted(v) for k, v in sorted(by_defect.items())},
