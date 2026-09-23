@@ -145,7 +145,12 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
     """Current firing state for EVERY capability, plus regressions against stored history."""
     _capability_heartbeat()
     now = int(now if now is not None else time.time())
-    ledger = capabilities.load(path or capabilities.REG)
+    # `load_declared`, not `load`: this is a REPORT. The writing loader creates a missing ledger,
+    # seeds declared gate rows, reconciles declarations and expires rows, and writes the result into
+    # the shared ledger, while this step promises to write only its own history (the kill switch
+    # stops that one write). `load_declared` reconciles an in-memory copy and writes nothing. It
+    # seeds and expires nothing, even in memory: until a writer does, the ledger is judged as it is.
+    ledger = capabilities.load_declared(path or capabilities.REG)
     history = _load_history()
     previous = {row["capability_id"]: row for row in (history[-1]["rows"] if history else [])}
 
@@ -494,10 +499,11 @@ def _selftest() -> None:
 
         saved_hist = globals()["HISTORY"]
         globals()["HISTORY"] = pathlib.Path(td) / "hist.json"
+        saved_ledger = reg.read_bytes()
         try:
-            # Scope every assertion to the fixtures. `capabilities.load` reconciles DECLARED gated
-            # capabilities into the ledger, so a temp file with three rows loads as ~17 — asserting
-            # on totals would be asserting about the ambient ledger, not about this mechanism.
+            # Scope every assertion to the fixtures. `capabilities.load_declared` seeds nothing, so
+            # this temp file reads as exactly its rows today; but it reconciles whatever the code
+            # declares, so a total would be an assertion about the declaration tables, not this.
             mine = {
                 "cap-fresh",
                 "cap-stale",
@@ -568,13 +574,16 @@ def _selftest() -> None:
                 assert record(rep2)["recorded"] is False
             finally:
                 globals()["DISABLED"] = False
+            # ...and the history is the ONLY write. This temp ledger lacks every declared gate row,
+            # so the writing loader would have seeded them all into it on the first review.
+            assert reg.read_bytes() == saved_ledger, "review() wrote the capability ledger it reads"
         finally:
             globals()["HISTORY"] = saved_hist
 
     print(
         "capability_firing_monitor.py selftest: OK (cadence parsing incl. on-demand refusal, "
         "observers judged on running, regression needs history, only live rows judged and "
-        "not-live rows named, kill switch blocks writes)"
+        "not-live rows named, kill switch blocks writes, review writes no ledger)"
     )
 
 
