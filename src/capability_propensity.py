@@ -2878,9 +2878,10 @@ def tick_evidence(
             )
         elif drift:
             # A CHANGED PROJECTION IS A NEW FIRST OBSERVATION, so it gets the rule above: a baseline
-            # and no verdict. Its declared fields changed, or the report stopped emitting a declared
-            # key, so this finding set and the last one are not comparable. Grading them would let
-            # the edit itself mint a verdict: dropping a key reads as a finding "resolved".
+            # and no verdict. Its declared fields changed, the report stopped emitting a declared
+            # key, or the report's declared finding population changed, so this finding set and the
+            # last one are not comparable. Grading them would let the edit itself mint a verdict:
+            # dropping a key, or a row the new rule excludes, reads as a finding "resolved".
             baselined.append(
                 {**entry, "reason": "re-baselined, no verdict: " + drift, "rebaselined": True}
             )
