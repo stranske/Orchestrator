@@ -349,7 +349,13 @@ safety switch, not dead code.
   switched). The hashed `sample` step that added `agent:auto` to a share of open PRs was retired on
   2026-09-22: the opener now labels every PR it creates `agent:auto` at creation, so the sample had
   no eligible population and no untreated arm. `auto_label` on each recorded switch still says
-  whether `agent:auto` was applied.
+  whether `agent:auto` was applied. Since 2026-09-23 the same read also takes the latest keepalive
+  state marker from a trusted writer and records each `delegation_log` entry as a `source=policy` row
+  carrying its `delegation_source` (`route_weights` / `static` / `unknown`). The delegation policy
+  never relabels, so before this every recorded switch was a label swap by some other actor and the
+  table could not show whether the route weights were consumed. The report and the tick's SWITCHES
+  line print the label count, the policy count, how many of those used `route_weights`, and how many
+  PRs' state has been read (an unread PR is never counted as zero).
   Artifacts `~/.codex/orchestrator/agent-switches.json`, facts in `agent-switches-facts.json`; kill
   switch `ORCH_DISABLE_STEPS=agent-switches`.
   Deterministic candidates can then be dry-compiled by `capability_compiler.py`; its reference rail

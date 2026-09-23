@@ -485,21 +485,16 @@ fi
 # SAMPLING RETIRED 2026-09-22: the opener now labels every PR it creates agent:auto at creation (owner
 # decision, so the route weights are consumed on auto stalls), which left the hashed sample no eligible
 # population (candidates: 0 on every tick) and no untreated arm to compare against. The `sample` step
-# and ORCH_AUTO_SWITCH_SAMPLE_RATE are gone; `run` below is the measurement and is unchanged.
+# and ORCH_AUTO_SWITCH_SAMPLE_RATE are gone; `run` below is the measurement.
+# POLICY SWITCHES 2026-09-23: the delegation policy never relabels; it records each switch only in the
+# keepalive state marker's delegation_log. The same GraphQL read now also takes the latest marker from
+# a trusted writer, and each entry lands as a source=policy row carrying its delegation_source
+# (route_weights | static | unknown). The SWITCHES line comes from agent_switches.py itself, the same
+# phrase the periodic report prints, so the two cannot disagree about the route-weights count.
 if _cadence_due agent-switches && _attempt_ok agent-switches; then
-  echo "  [cadence] agent switches (daily; paired from->to observations from the label timeline)"
+  echo "  [cadence] agent switches (daily; paired observations from label timelines and keepalive delegation logs)"
   if python3 "$ORCH/agent_switches.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/agent-switches.log" 2>&1; then
-    python3 - "$STAMP_DIR/agent-switches.json" <<'AGENT_SWITCHES' || true
-import json, sys
-try:
-    p = json.load(open(sys.argv[1])) or {}
-except Exception as exc:
-    print(f"  SWITCHES: artifact unreadable ({exc})"); raise SystemExit(0)
-c = p.get("counts") or {}
-print(f"  SWITCHES: {c.get('switched_prs')} of {c.get('with_facts')} keepalive PRs switched agents "
-      f"({c.get('switches')} switches, {c.get('recorded_in_brain')} recorded; {c.get('missing_facts')} facts missing); "
-      f"agent:auto on {c.get('auto_labeled')}, {c.get('auto_and_switched')} of those switched")
-AGENT_SWITCHES
+    python3 "$ORCH/agent_switches.py" tick-line --state-dir "$STAMP_DIR" || true
     _mark_success agent-switches
   else
     _mark_fail agent-switches "see $STAMP_DIR/agent-switches.log"
