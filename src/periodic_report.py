@@ -451,7 +451,9 @@ def _fleet_six_summary(now: int | None = None) -> dict:
             cost: dict = {}
             for agent, merged, complete_usd, complete_rows, toks in c.execute(
                 "SELECT r.agent, SUM(CASE WHEN o.merged=1 THEN 1 ELSE 0 END), "
-                "SUM(CASE WHEN co.source IN (" + marks + ") THEN COALESCE(co.cost_usd,0) ELSE 0 END), "
+                "SUM(CASE WHEN co.source IN ("
+                + marks
+                + ") THEN COALESCE(co.cost_usd,0) ELSE 0 END), "
                 "SUM(CASE WHEN co.source IN (" + marks + ") THEN 1 ELSE 0 END), "
                 "SUM(COALESCE(co.tokens_in,0)+COALESCE(co.tokens_out,0)) "
                 "FROM runs r LEFT JOIN outcomes o ON o.run_id=r.run_id LEFT JOIN costs co ON co.run_id=r.run_id "
