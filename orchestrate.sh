@@ -481,9 +481,11 @@ fi
 # after two rounds without progress; nothing recorded the pair. This reads each keepalive PR's agent
 # label timeline and commit dates (one GraphQL read per 25 PRs, cached per PR), writes every from->to
 # switch to the Brain table agent_switches with commits before/after and the terminal outcome, and
-# reports the base rate. Sampling is OFF unless ORCH_AUTO_SWITCH_SAMPLE_RATE is set above zero: then
-# eligible open fleet PRs are assigned to arms by a stable hash and the auto arm gets agent:auto, so
-# the delegation policy runs on a known sample. Kill switch: ORCH_DISABLE_STEPS=agent-switches.
+# reports the base rate. Kill switch: ORCH_DISABLE_STEPS=agent-switches.
+# SAMPLING RETIRED 2026-09-22: the opener now labels every PR it creates agent:auto at creation (owner
+# decision, so the route weights are consumed on auto stalls), which left the hashed sample no eligible
+# population (candidates: 0 on every tick) and no untreated arm to compare against. The `sample` step
+# and ORCH_AUTO_SWITCH_SAMPLE_RATE are gone; `run` below is the measurement and is unchanged.
 if _cadence_due agent-switches && _attempt_ok agent-switches; then
   echo "  [cadence] agent switches (daily; paired from->to observations from the label timeline)"
   if python3 "$ORCH/agent_switches.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/agent-switches.log" 2>&1; then
@@ -498,14 +500,6 @@ print(f"  SWITCHES: {c.get('switched_prs')} of {c.get('with_facts')} keepalive P
       f"({c.get('switches')} switches, {c.get('recorded_in_brain')} recorded; {c.get('missing_facts')} facts missing); "
       f"agent:auto on {c.get('auto_labeled')}, {c.get('auto_and_switched')} of those switched")
 AGENT_SWITCHES
-    sample_rate="${ORCH_AUTO_SWITCH_SAMPLE_RATE:-0}"
-    if python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) > 0 else 1)" "$sample_rate" 2>/dev/null; then
-      if python3 "$ORCH/agent_switches.py" sample --rate "$sample_rate" --apply --state-dir "$STAMP_DIR" >> "$STAMP_DIR/agent-switches.log" 2>&1; then
-        echo "  SWITCHES-SAMPLE: rate $sample_rate applied — see $STAMP_DIR/agent-switches.log"
-      else
-        echo "  SWITCHES-SAMPLE: sampling failed — see $STAMP_DIR/agent-switches.log"
-      fi
-    fi
     _mark_success agent-switches
   else
     _mark_fail agent-switches "see $STAMP_DIR/agent-switches.log"

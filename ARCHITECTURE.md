@@ -165,9 +165,9 @@ from prose or from a capability merely being offered. `capabilities.py usage` re
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain
 table `agent_switches` from the PR's own label timeline — commits before and after the switch and the
-terminal outcome — and, only when `ORCH_AUTO_SWITCH_SAMPLE_RATE` is set, assigns eligible open PRs to
-arms by a stable hash and labels the auto arm. The policy still picks the replacement; this surface
-only makes the pair observable and the sample known.
+terminal outcome. It applies no labels: the hashed sample that once labelled an auto arm was retired
+on 2026-09-22, when the opener began labelling every PR it creates `agent:auto`. The policy still
+picks the replacement; this surface only makes the pair observable.
 
 ## The capability layer — what the tool can do, and how a surface finds it
 

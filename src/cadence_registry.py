@@ -59,10 +59,8 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "cadence_days": 1,
         "artifact": "agent-switches.json",
         "log": "agent-switches.log",
-        "gate": "keepalive PRs in the window whose label timeline gh can return; sampling only with "
-        "ORCH_AUTO_SWITCH_SAMPLE_RATE > 0",
-        "next_transition": "retry after backoff; a PR gh cannot return stays counted as missing; "
-        "arms are recorded only when agent:auto was actually applied",
+        "gate": "keepalive PRs in the window whose label timeline gh can return",
+        "next_transition": "retry after backoff; a PR gh cannot return stays counted as missing",
     },
     {
         "key": "evidence-acquisition",
