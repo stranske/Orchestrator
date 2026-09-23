@@ -25,6 +25,9 @@ rows carry attribution_source `bot:*` / `human` and are excluded, and `agent='no
 unattributed remainder, also excluded. GitHub: ONE GraphQL read per 40 PRs for title, labels, files,
 createdAt, mergedAt and commit count, cached in `<state>/fleet-shapes-facts.json` so a PR is fetched
 once; a PR gh cannot return is recorded as unavailable and counted as missing, never as a shape.
+Timestamps are read as UTC through utc_epoch.from_iso (2026-09-23); facts cached by the local-time
+helper before it are converted on load, so a DST-spanning PR's hours to merge are no longer off by
+one.
 
 OUTPUTS. `<state>/fleet-shapes.json` (machine) and `<state>/fleet-shapes.md` (human). This module
 never creates a review queue, dispatches anything, or writes to the Brain. Kill switch:
@@ -52,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 import feedback
+import utc_epoch
 
 SCHEMA = "orchestrator.fleet-shapes"
 VERSION = 1
@@ -265,13 +269,9 @@ def _gh_json(args: list[str], *, timeout: int = 120) -> object | None:
         return None
 
 
-def _epoch(iso: object) -> int | None:
-    if not isinstance(iso, str) or not iso:
-        return None
-    try:
-        return int(time.mktime(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone)
-    except ValueError:
-        return None
+# ONE parser for GitHub's timestamps, shared with agent_switches. The local-time helper it replaced
+# read every instant inside DST an hour early on a DST-zone machine; utc_epoch.py has the arithmetic.
+_epoch = utc_epoch.from_iso
 
 
 def _fact_from_graphql(pr: dict[str, Any]) -> dict[str, Any]:
@@ -331,14 +331,34 @@ def fetch_facts(
     return out
 
 
-def load_facts(state_dir: Path) -> dict[str, dict[str, Any]]:
+def _rebase_fact(fact: dict[str, Any]) -> dict[str, Any]:
+    """A fact cached by the retired local-time helper, its open and merge times recovered exactly
+    (utc_epoch.from_legacy). An unavailable entry carries only `attempted_ts`, which was always
+    `time.time()`, so it passes through unchanged."""
+    out = dict(fact)
+    for key in ("created_ts", "merged_ts"):
+        if key in fact:
+            out[key] = utc_epoch.from_legacy(fact[key])
+    return out
+
+
+def _read_facts(state_dir: Path) -> tuple[dict[str, dict[str, Any]], int, int]:
+    """The cached facts on the UTC basis, and how many entries were (rebased, dropped) to get there.
+    An entry the retired helper computed carries no basis mark and is converted in memory; the next
+    save_facts writes it marked. An entry that cannot be converted is dropped, so it is fetched again.
+    """
     path = state_dir / "fleet-shapes-facts.json"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
+        return {}, 0, 0
     facts = payload.get("facts") if isinstance(payload, dict) else None
-    return {str(k): v for k, v in (facts or {}).items() if isinstance(v, dict)}
+    loaded = {str(k): v for k, v in (facts or {}).items() if isinstance(v, dict)}
+    return utc_epoch.rebase_cache(loaded, _rebase_fact)
+
+
+def load_facts(state_dir: Path) -> dict[str, dict[str, Any]]:
+    return _read_facts(state_dir)[0]
 
 
 def time_to_merge_summary(
@@ -408,9 +428,16 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def save_facts(state_dir: Path, facts: dict[str, dict[str, Any]], *, now: int) -> None:
+    """Every entry is saved marked as UTC basis: this module reads GitHub only through from_iso, and
+    load_facts has converted anything older."""
     write_json_atomic(
         state_dir / "fleet-shapes-facts.json",
-        {"schema": FACTS_SCHEMA, "version": VERSION, "updated_at": now, "facts": facts},
+        {
+            "schema": FACTS_SCHEMA,
+            "version": VERSION,
+            "updated_at": now,
+            "facts": utc_epoch.stamp_cache(facts),
+        },
     )
 
 
@@ -558,7 +585,7 @@ def run(
     now = int(now or time.time())
     state_dir = state_dir or default_state_dir()
     prs = merged_agent_prs(window_days=window_days, now=now)
-    facts = load_facts(state_dir)
+    facts, rebased, dropped = _read_facts(state_dir)
     missing_by_repo: dict[str, list[int]] = {}
     for pr in prs:
         if pr["ref"] not in facts:
@@ -581,11 +608,13 @@ def run(
                 # Recorded so the same deleted PR is not asked for on every run; never a shape.
                 facts[f"{repo}#{number}"] = {"unavailable": True, "attempted_ts": now}
                 unavailable += 1
-    if fetched or unavailable:
+    if fetched or unavailable or rebased or dropped:
         save_facts(state_dir, facts, now=now)
     payload = aggregate(prs, facts, now=now, window_days=window_days)
     payload["counts"]["fetched_this_run"] = fetched
     payload["counts"]["unavailable_this_run"] = unavailable
+    payload["counts"]["facts_rebased_this_run"] = rebased
+    payload["counts"]["facts_dropped_this_run"] = dropped
     write_json_atomic(state_dir / "fleet-shapes.json", payload)
     (state_dir / "fleet-shapes.md").write_text(render_md(payload), encoding="utf-8")
     _LOOKUP_CACHE.pop(str(state_dir / "fleet-shapes.json"), None)
@@ -731,6 +760,25 @@ def _selftest() -> int:
     check(sig["path_classes"] == ["code", "docs", "tests"], f"path classes {sig['path_classes']!r}")
     check(sig["key"] == "fix|area:api,bug|code+docs+tests", f"key {sig['key']!r}")
     check(commit_type("Docs: tidy") == "docs" and commit_type("Random title") == "other", "aliases")
+    check(_epoch is utc_epoch.from_iso, "the one shared GitHub timestamp parser")
+    with utc_epoch.zone(utc_epoch.US_CENTRAL, standard_offset=utc_epoch.US_CENTRAL_STANDARD_OFFSET):
+        # Opened inside DST, merged after the 2026-11-01 fall-back: exactly 48 hours in UTC. The
+        # retired helper read the open an hour early and the merge on time, so it said 49.
+        span = _fact_from_graphql(
+            {"createdAt": "2026-10-31T20:00:00Z", "mergedAt": "2026-11-02T20:00:00Z"}
+        )
+        check((span["merged_ts"] - span["created_ts"]) / 3600 == 48.0, f"DST-spanning PR {span}")
+        legacy = {
+            "created_ts": utc_epoch.legacy_value(span["created_ts"]),
+            "merged_ts": utc_epoch.legacy_value(span["merged_ts"]),
+        }
+        check((legacy["merged_ts"] - legacy["created_ts"]) / 3600 == 49.0, "the retired reading")
+        rebased = _rebase_fact(legacy)
+        check(
+            (rebased["created_ts"], rebased["merged_ts"])
+            == (span["created_ts"], span["merged_ts"]),
+            "cached legacy times convert back",
+        )
     now = 1_800_000_000
     prs: list[dict[str, Any]] = [
         {
@@ -803,7 +851,8 @@ def _selftest() -> int:
         print("fleet_shapes.py selftest: FAIL — " + "; ".join(failures))
         return 1
     print(
-        "fleet_shapes.py selftest: OK (path classes, signature with dropped queue labels, cross-repo "
+        "fleet_shapes.py selftest: OK (path classes, signature with dropped queue labels, a "
+        "DST-spanning PR's hours read in UTC and cached legacy times convert back, cross-repo "
         "recurrence, per-agent broke-later/hours/cost/commits, missing facts named, render lines)"
     )
     return 0

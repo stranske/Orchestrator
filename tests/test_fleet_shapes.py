@@ -168,6 +168,8 @@ def test_run_groups_agent_prs_flags_recurrence_and_excludes_bots(brain):
         "recurring": 1,
         "fetched_this_run": 4,
         "unavailable_this_run": 1,
+        "facts_rebased_this_run": 0,
+        "facts_dropped_this_run": 0,
     }
     assert payload["missing_facts"] == ["o/r1#404"]
     shape = payload["shapes"][0]

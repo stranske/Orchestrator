@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import execution_profiles
+import utc_epoch
 
 ORCH = Path(__file__).resolve().parent
 # The live SQLite store stays on LOCAL disk — Dropbox can corrupt a DB written mid-sync. The CODE lives
@@ -802,6 +803,7 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
         switch_cols = {row[1] for row in c.execute("PRAGMA table_info(agent_switches)").fetchall()}
         if "source" not in switch_cols:
             _widen_agent_switches(c)
+        _rebase_agent_switches(c)
     c.execute(
         "UPDATE runs SET assignment = CASE WHEN source='keepalive' THEN 'assigned' "
         "ELSE 'experimental' END WHERE assignment IS NULL"
@@ -849,6 +851,100 @@ def _widen_agent_switches(c: sqlite3.Connection) -> None:
         if own_transaction and c.in_transaction:
             c.execute("ROLLBACK")
         raise
+
+
+# A one-time DATA migration is recorded here, by name, in the transaction that performs it, so it can
+# neither run twice nor be skipped. (Schema migrations above guard on the schema's own shape instead.)
+DATA_MIGRATIONS_TABLE = (
+    "CREATE TABLE IF NOT EXISTS data_migrations "
+    "(name TEXT PRIMARY KEY, applied_ts INTEGER NOT NULL, detail TEXT)"
+)
+AGENT_SWITCHES_UTC_MIGRATION = "agent_switches.switched_ts-utc-2026-09-23"
+
+
+def _rebase_agent_switches(c: sqlite3.Connection) -> None:
+    """Re-key every `agent_switches` row written before 2026-09-23 onto the true UTC epoch, once.
+
+    Until then `switched_ts` came from a helper that read GitHub's UTC timestamps as LOCAL time, so
+    on a machine in a DST zone every switch inside DST was stored an hour early (utc_epoch.py has the
+    arithmetic) — label rows from the timeline and policy rows from delegation_log alike. The key is
+    (pr_ref, switched_ts, source) and the daily run writes by INSERT OR REPLACE, so the corrected
+    helper alone would write each switch AGAIN beside its hour-early twin. Each row moves to the
+    instant `utc_epoch.from_legacy` recovers in this process's zone — the Brain is machine-local, and
+    its rows were written by this machine's tick. agent_switches._record also rewrites every PR the
+    daily run still reaches; this is what reaches the ones it no longer does.
+
+    It runs after _widen_agent_switches, so the table always has `source`. The fast path is one
+    indexed read. Otherwise the work runs under BEGIN IMMEDIATE with the marker re-read inside it,
+    because every process that opens the Brain runs this and two must not shift the same rows twice;
+    the marker row is written in the same transaction as the moves. A row whose instant cannot be
+    recovered (the spring-forward hour) keeps its key; two rows that land on one key are one switch
+    recorded twice, and the later-recorded survives. The counts are the marker's `detail`."""
+    c.execute(DATA_MIGRATIONS_TABLE)
+    done = "SELECT 1 FROM data_migrations WHERE name=?"
+    if c.execute(done, (AGENT_SWITCHES_UTC_MIGRATION,)).fetchone():
+        return
+    own_transaction = not c.in_transaction
+    if own_transaction:
+        c.execute("BEGIN IMMEDIATE")
+    try:
+        if not c.execute(done, (AGENT_SWITCHES_UTC_MIGRATION,)).fetchone():
+            detail = _rebase_agent_switch_rows(c)
+            c.execute(
+                "INSERT INTO data_migrations (name, applied_ts, detail) VALUES (?,?,?)",
+                (
+                    AGENT_SWITCHES_UTC_MIGRATION,
+                    int(time.time()),
+                    json.dumps(detail, sort_keys=True),
+                ),
+            )
+        if own_transaction:
+            c.execute("COMMIT")
+    except BaseException:
+        if own_transaction and c.in_transaction:
+            c.execute("ROLLBACK")
+        raise
+
+
+def _rebase_agent_switch_rows(c: sqlite3.Connection) -> dict[str, Any]:
+    rows = c.execute(
+        "SELECT rowid, pr_ref, switched_ts, source, recorded_ts FROM agent_switches"
+    ).fetchall()
+    unconvertible = 0
+    target: dict[int, tuple[str, int, str, int, int]] = {}
+    for rowid, pr_ref, ts, src, recorded in rows:
+        try:
+            new_ts = utc_epoch.from_legacy(int(ts))
+        except utc_epoch.Unconvertible:
+            new_ts = None
+        if new_ts is None:
+            unconvertible += 1
+            new_ts = int(ts)
+        target[rowid] = (str(pr_ref), new_ts, str(src), int(recorded or 0), int(ts))
+    survivor: dict[tuple[str, int, str], int] = {}
+    for rowid, (pr_ref, new_ts, src, _, _) in sorted(
+        target.items(), key=lambda kv: (kv[1][3], kv[0])
+    ):
+        survivor[(pr_ref, new_ts, src)] = rowid  # the later-recorded row wins its key
+    kept = set(survivor.values())
+    duplicates = [rowid for rowid in target if rowid not in kept]
+    for rowid in duplicates:
+        c.execute("DELETE FROM agent_switches WHERE rowid=?", (rowid,))
+    moves = [(rowid, target[rowid][1]) for rowid in kept if target[rowid][1] != target[rowid][4]]
+    # Through negative temporaries: a row moved onto a key another row still holds would violate the
+    # primary key before that row itself moves (two switches an hour apart on one PR, both in DST).
+    for rowid, new_ts in moves:
+        c.execute("UPDATE agent_switches SET switched_ts=? WHERE rowid=?", (-new_ts, rowid))
+    for rowid, new_ts in moves:
+        c.execute("UPDATE agent_switches SET switched_ts=? WHERE rowid=?", (new_ts, rowid))
+    return {
+        "examined": len(rows),
+        "rebased": len(moves),
+        "unconvertible": unconvertible,
+        "deduplicated": len(duplicates),
+        "zone": list(time.tzname),
+        "standard_offset": time.timezone,
+    }
 
 
 def _derive_source(run_id: str, mode: str | None, source: str | None = None) -> str | None:
@@ -5255,6 +5351,62 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
         return ver
 
 
+def _selftest_agent_switches_utc() -> None:
+    """The one-time re-key in US Central, from both key shapes a Brain can arrive with (the narrow
+    one is widened first): September rows move an hour later, a January row stays, two switches an
+    hour apart on one PR move without a key collision, and the marker stops a second open from
+    shifting anything again."""
+    true_september, january = 1_790_071_200, 1_768_471_200
+    columns = (
+        "pr_ref TEXT NOT NULL, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, "
+        "switched_ts INTEGER NOT NULL, auto_label INTEGER NOT NULL DEFAULT 0, "
+        "commits_before INTEGER, commits_after INTEGER, merged INTEGER, durability TEXT, "
+        "recorded_ts INTEGER NOT NULL"
+    )
+    widened = ", source TEXT NOT NULL DEFAULT 'label', delegation_source TEXT"
+    read = "SELECT pr_ref, switched_ts FROM agent_switches ORDER BY pr_ref, switched_ts"
+    with utc_epoch.zone(utc_epoch.US_CENTRAL, standard_offset=utc_epoch.US_CENTRAL_STANDARD_OFFSET):
+        early = utc_epoch.legacy_value
+        stored = [
+            ("o/r#1", "cursor", "codex", early(true_september)),
+            ("o/r#1", "codex", "claude", early(true_september + 3600)),
+            ("o/r#2", "claude", "codex", early(january)),
+        ]
+        # The fixture must really hold the collision: the first row's true key is the second
+        # row's stored one, so moving rows one at a time in place would violate the key.
+        assert stored[1][3] == true_september and stored[2][3] == january, stored
+        for extra, key in (("", "pr_ref, switched_ts"), (widened, "pr_ref, switched_ts, source")):
+            conn = sqlite3.connect(":memory:")
+            try:
+                conn.execute("CREATE TABLE runs (run_id TEXT PRIMARY KEY, ts INTEGER, source TEXT)")
+                conn.execute(f"CREATE TABLE agent_switches ({columns}{extra}, PRIMARY KEY ({key}))")
+                conn.executemany(
+                    "INSERT INTO agent_switches (pr_ref, from_agent, to_agent, switched_ts, "
+                    "recorded_ts) VALUES (?,?,?,?,1)",
+                    stored,
+                )
+                _migrate_schema(conn)
+                got = conn.execute(read).fetchall()
+                assert got == [
+                    ("o/r#1", true_september),
+                    ("o/r#1", true_september + 3600),
+                    ("o/r#2", january),
+                ], (key, got)
+                (raw,) = conn.execute(
+                    "SELECT detail FROM data_migrations WHERE name=?",
+                    (AGENT_SWITCHES_UTC_MIGRATION,),
+                ).fetchone()
+                detail = json.loads(raw)
+                counts = tuple(
+                    detail[k] for k in ("examined", "rebased", "unconvertible", "deduplicated")
+                )
+                assert counts == (3, 2, 0, 0), (key, detail)
+                _migrate_schema(conn)
+                assert conn.execute(read).fetchall() == got, "a second open shifted rows again"
+            finally:
+                conn.close()
+
+
 def _selftest():
     import tempfile
 
@@ -5333,6 +5485,7 @@ def _selftest():
             )
         finally:
             legacy.close()
+        _selftest_agent_switches_utc()
 
         priors = {"implement": {"claude": 0.7, "cursor": 0.5}}
         # No data yet -> relearn yields the PRIOR (posterior == prior).
@@ -6468,6 +6621,7 @@ def _selftest():
             "feedback.py selftest: OK (prior→posterior learning, durability/verifier-as-success, late updates, "
             "versioned weights, eval matrix, human calibration, evidence-gap growth+prune+approval, "
             "trace retention, test_evaluator_trace_cannot_resolve_worker_model, conservative legacy migration, "
+            "one-time agent_switches UTC re-key, "
             "quality-magnitude/outcome learner + effort reward, safe completion lineage + "
             "rejected-edge non-inheritance, named verification gate, json snapshot)"
             + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
