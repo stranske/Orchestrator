@@ -98,6 +98,11 @@ DEFECT_CLASSES = {
     "front door with nothing reporting it",
 }
 
+NOT_LIVE_REASON = (
+    "a retired or superseded row is not a live capability: nothing is expected to fire, so "
+    "'can it fire?' does not apply and it is not audited"
+)
+
 # Code-side label vocabularies that gate behaviour, and the capability each one gates. A fleet label
 # sharing a namespace prefix but absent from the set is a NEAR MISS -- the exact shape of the
 # `risk:major` defect: adversarial.HIGH_STAKES_LABELS accepts `risk:critical` and `risk:high`, the
@@ -1095,7 +1100,7 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
             "lane": ADVISOR_REACH_PROBE_LANE,
         }
         for cap_id, cap in sorted(caps.items()):
-            if cap.get("status") in {"retired", "superseded"}:
+            if cap.get("status") in capabilities.NOT_LIVE_STATES:
                 continue
             ok, _reasons = capabilities._matches_trigger(cap, trigger)
             if ok:
@@ -1189,6 +1194,22 @@ def label_coverage(task_type: str, index: dict) -> dict:
 # --------------------------------------------------------------------------- the audit
 
 
+def not_audited_row(cap_id: str, cap: dict) -> dict:
+    """Account for a non-live ledger row without calling it blocked."""
+    return {
+        "capability_id": cap_id,
+        "status": cap.get("status"),
+        "entry_class": entry_class(cap),
+        "matcher": cap.get("matcher"),
+        "entrypoint": cap.get("entrypoint"),
+        "audited": False,
+        "not_audited_because": f"status {cap.get('status')!r}: {NOT_LIVE_REASON}",
+        "defects": [],
+        "notes": [],
+        "reachable": None,
+    }
+
+
 def audit_capability(
     cap_id: str,
     cap: dict,
@@ -1210,6 +1231,7 @@ def audit_capability(
         "entry_class": entry,
         "matcher": cap.get("matcher"),
         "entrypoint": cap.get("entrypoint"),
+        "audited": True,
     }
 
     if entry == ENTRY_TASK_ROUTED:
@@ -1358,39 +1380,56 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
 
 def audit(*, path=None, use_cache: bool = True) -> dict:
     _capability_heartbeat()
-    caps = capabilities.load(path or capabilities.REG)
+    # `load_declared`, not `load`: this is a REPORT. The writing loader seeds missing gate rows,
+    # reconciles declarations and can expire rows into the shared ledger as a side effect, which a
+    # read-only audit must not do (its own kill switch says it writes only its history).
+    caps = capabilities.load_declared(path or capabilities.REG)
     emittable = emittable_task_types()
     templates = _prompt_templates()
     index = _fleet_label_index(use_cache=use_cache)
     vgaps = vocabulary_gaps(index)
     env_gate = heartbeat_env_gate()
     reach = advisor_reach(caps)
-    rows = [
-        audit_capability(
-            cid,
-            cap,
-            emittable=emittable,
-            templates=templates,
-            label_index=index,
-            vocab_gaps=vgaps,
-            env_gate=env_gate,
-            reach=reach,
+    rows = []
+    not_audited: dict[str, list[str]] = {}
+    # LIVE ROWS ONLY. A row retired on 2026-09-03 was reported blocked (`no_heartbeat`) every day
+    # for 19 days, and it was this audit's ONLY finding: a retired or superseded row is not expected
+    # to fire, so "can it fire?" does not apply to it. It stays in `rows`, marked not audited with
+    # the reason, so the report still accounts for every ledger row; it is kept out of every count.
+    for cid, cap in sorted(caps.items()):
+        if cap.get("status") in capabilities.NOT_LIVE_STATES:
+            rows.append(not_audited_row(cid, cap))
+            not_audited.setdefault(str(cap.get("status")), []).append(cid)
+            continue
+        rows.append(
+            audit_capability(
+                cid,
+                cap,
+                emittable=emittable,
+                templates=templates,
+                label_index=index,
+                vocab_gaps=vgaps,
+                env_gate=env_gate,
+                reach=reach,
+            )
         )
-        for cid, cap in sorted(caps.items())
-    ]
+    audited_rows = [row for row in rows if row.get("audited", True)]
     by_defect: dict[str, list[str]] = {}
-    for row in rows:
+    for row in audited_rows:
         for defect in row["defects"]:
             by_defect.setdefault(defect, []).append(row["capability_id"])
     by_entry: dict[str, int] = {}
-    for row in rows:
+    for row in audited_rows:
         by_entry[row["entry_class"]] = by_entry.get(row["entry_class"], 0) + 1
-    reachable = [r["capability_id"] for r in rows if r["reachable"]]
+    reachable = [r["capability_id"] for r in audited_rows if r["reachable"]]
     return {
         "generated_at": int(time.time()),
-        "total": len(rows),
+        "total": len(audited_rows),
         "reachable": len(reachable),
-        "blocked": len(rows) - len(reachable),
+        "blocked": len(audited_rows) - len(reachable),
+        "ledger_total": len(rows),
+        "not_audited": {status: sorted(ids) for status, ids in sorted(not_audited.items())},
+        "not_audited_count": sum(len(ids) for ids in not_audited.values()),
         "reachable_ids": reachable,
         "by_entry_class": by_entry,
         "by_defect": {k: sorted(v) for k, v in sorted(by_defect.items())},
@@ -1426,6 +1465,7 @@ def record_snapshot(rep: dict, *, path: Path | None = None) -> dict:
         "total": rep["total"],
         "reachable": rep["reachable"],
         "blocked": rep["blocked"],
+        "not_audited": rep.get("not_audited_count", 0),
         "reachable_ids": sorted(rep["reachable_ids"]),
         "by_defect": {k: len(v) for k, v in rep["by_defect"].items()},
     }
@@ -1468,17 +1508,31 @@ def progress(rep: dict, *, path: Path | None = None) -> dict:
 
 
 def format_scorecard(rep: dict, prog: dict | None = None) -> str:
-    pct = 100 * rep["reachable"] / rep["total"] if rep["total"] else 0
+    reachable = rep.get("reachable", 0)
+    total = rep.get("total", 0)
+    blocked = rep.get("blocked", 0)
+    not_audited_count = rep.get("not_audited_count", 0)
+    pct = 100 * reachable / total if total else 0
     lines = [
         "# Capability activation scorecard",
         "",
-        f"  CAN FIRE:  {rep['reachable']:>3} of {rep['total']}  ({pct:.0f}%)",
-        f"  BLOCKED:   {rep['blocked']:>3}",
+        f"  CAN FIRE:  {reachable:>3} of {total} live  ({pct:.0f}%)",
+        f"  BLOCKED:   {blocked:>3}",
         "",
         "  entry classes: "
         + ", ".join(f"{k}={v}" for k, v in sorted(rep["by_entry_class"].items())),
         "",
     ]
+    if not_audited_count:
+        statuses = "; ".join(
+            f"{status}: {', '.join(ids)}" for status, ids in rep.get("not_audited", {}).items()
+        )
+        ledger_total = rep.get("ledger_total", total + not_audited_count)
+        lines += [
+            f"  NOT LIVE:  {not_audited_count}  (not audited — {statuses})",
+            f"  ledger rows: {ledger_total} = {total} audited + {not_audited_count} not live",
+            "",
+        ]
     if prog and prog.get("baseline"):
         age = (rep["generated_at"] - int(prog["baseline"])) / 86400
         lines += [
@@ -1506,7 +1560,7 @@ def format_scorecard(rep: dict, prog: dict | None = None) -> str:
             lines.append(f"      - {cap_id}")
         lines.append("")
     if not rep["by_defect"]:
-        lines += ["  none — every capability can fire", ""]
+        lines += ["  none — every live capability can fire", ""]
     lines += [
         "## Per capability",
         "",
@@ -1514,9 +1568,12 @@ def format_scorecard(rep: dict, prog: dict | None = None) -> str:
         "|---|---|---|---|",
     ]
     for row in rep["rows"]:
+        if row.get("audited") is False:
+            can = f"not live ({row.get('status')})"
+        else:
+            can = "yes" if row["reachable"] else "NO"
         lines.append(
-            f"| {row['capability_id']} | {row['entry_class']} | "
-            f"{'yes' if row['reachable'] else 'NO'} | "
+            f"| {row['capability_id']} | {row['entry_class']} | {can} | "
             f"{', '.join(row['defects']) or '—'} |"
         )
     return "\n".join(lines) + "\n"
@@ -1537,6 +1594,13 @@ def _selftest() -> None:
     assert entry_class({"matcher": {"kind": "env", "name": "ORCH_X"}}) == ENTRY_GATED
     assert entry_class({"matcher": {}, "gate_reason": "held"}) == ENTRY_GATED
     assert entry_class({}) == ENTRY_UNKNOWN
+    not_live = not_audited_row(
+        "x", {"status": "retired", "matcher": {"kind": "tick_phase", "name": "x"}}
+    )
+    assert not_live["audited"] is False
+    assert not_live["reachable"] is None
+    assert not_live["defects"] == []
+    assert "retired" in not_live["not_audited_because"]
 
     # PROMPT-SCHEMA CREDITING is narrow and driven by the dispatcher's own mapping. It exists
     # because a lane SCHEMA never executes -- its `main()` heartbeat has nowhere to move to -- while

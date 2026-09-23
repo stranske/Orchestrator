@@ -323,8 +323,20 @@ def test_every_capability_appears_in_the_activation_audit():
 def test_unreachable_capabilities_state_a_reason():
     """ "Cannot fire" is allowed. "Cannot fire, unexplained" is not."""
     rep = audit.audit(use_cache=True)
-    silent = [r["capability_id"] for r in rep["rows"] if not r["reachable"] and not r["defects"]]
-    assert not silent, f"capabilities blocked with no named defect: {silent}"
+    silent = [
+        r["capability_id"]
+        for r in rep["rows"]
+        if r.get("audited", True) and not r["reachable"] and not r["defects"]
+    ]
+    not_audited_without_reason = [
+        r["capability_id"]
+        for r in rep["rows"]
+        if not r.get("audited", True) and not r.get("not_audited_because")
+    ]
+    assert not silent, f"audited capabilities blocked with no named defect: {silent}"
+    assert (
+        not not_audited_without_reason
+    ), f"not-audited capabilities without a named reason: {not_audited_without_reason}"
 
 
 def test_every_defect_is_a_known_class():
@@ -404,7 +416,11 @@ def roster() -> str:
     for cap_id in sorted(ledger):
         row = rows.get(cap_id) or {}
         fx = "yes" if cap_id in covered else ("EXEMPT" if cap_id in FIXTURE_EXEMPT else "**NO**")
-        can = "yes" if row.get("reachable") else "NO"
+        can = (
+            f"not live ({row.get('status')})"
+            if row.get("audited") is False
+            else ("yes" if row.get("reachable") else "NO")
+        )
         verdict = fired.get(cap_id)
         fire = "—" if verdict is None else ("fires" if verdict else "miss")
         out.append(
@@ -412,7 +428,11 @@ def roster() -> str:
             f"{', '.join(row.get('defects') or []) or '—'} |"
         )
     uncovered = sorted(set(ledger) - covered - set(FIXTURE_EXEMPT))
-    blocked = sorted(c for c in ledger if not (rows.get(c) or {}).get("reachable"))
+    blocked = sorted(
+        c
+        for c in ledger
+        if (rows.get(c) or {}).get("audited", True) and not (rows.get(c) or {}).get("reachable")
+    )
     out += [
         "",
         f"  fixtures: {len(covered)}/{len(ledger)}   "

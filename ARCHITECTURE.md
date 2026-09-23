@@ -705,6 +705,17 @@ finding projection keeps identity and verdict fields only, because `overdue`'s `
 daily on its own and hashing a row whole would score the monitor useful on every run it will ever
 make.
 
+**A projection grades FINDINGS, never the roster, and a changed projection is a first observation
+(2026-09-22).** The activation audit's projection carried `reachable_ids` beside `by_defect`, and
+`reachable_ids` is the list of HEALTHY capabilities: it moves only when a row is registered or
+retired, which is the ledger changing rather than the audit finding anything. Three of its first four
+"useful" verdicts were other sessions' registrations or its own false positive appearing, and every
+"not useful" verdict counted the healthy rows as findings. Its graded set is now `by_defect` alone; a
+capability moving blocked → reachable already leaves it. And because an edit to what a projection
+declares, or a report that stops emitting a declared key, makes the next observation incomparable
+with the last, `tick_evidence` re-baselines that observation and records no verdict — the same rule
+as a first sighting — rather than letting the edit itself mint one.
+
 ### A DECLARED BINDING WITH NO CALLER IS THE SAME DEFECT AS NO BINDING
 
 Layer 1 is offered to a surface *by that surface's own consult*. So a surface nothing consults is a

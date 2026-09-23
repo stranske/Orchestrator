@@ -810,7 +810,9 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
     # heartbeat it, so it is not admitted, not enforced and not debt. Retiring a stray row on
     # 2026-09-03 made this report red on every tree until this line existed.
     live = [
-        cid for cid in sorted(ledger) if ledger[cid].get("status") not in ("retired", "superseded")
+        cid
+        for cid in sorted(ledger)
+        if ledger[cid].get("status") not in capabilities.NOT_LIVE_STATES
     ]
     rows = [admit(cid, path=path, ctx=ctx) for cid in live]
     enforced = [r for r in rows if r["enforced"]]
