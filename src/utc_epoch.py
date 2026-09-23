@@ -183,7 +183,7 @@ def _selftest() -> int:
                 continue
             check(back == instant, f"round trip {instant} -> {back}")
         check(refused == ["03-08T02", "03-08T03"], f"refused {refused}")
-        facts = {
+        facts: dict[str, dict[str, Any]] = {
             "old": {"merged_ts": 1_790_067_600},
             "new": {"merged_ts": true_september, BASIS_KEY: UTC},
             "gap": {"merged_ts": legacy_value(calendar.timegm((2026, 3, 8, 2, 30, 0, 0, 0, 0)))},
