@@ -299,6 +299,13 @@ def test_the_latest_trusted_marker_yields_its_two_delegation_entries():
         },
     ]
     assert agent_switches.derive_switches(fact)["switches"] == [], "no label moved"
+    unreadable = {**state, "delegation_log": [*state["delegation_log"], {"chosen_agent": "codex"}]}
+    malformed = agent_switches.derive_policy_switches({**fact, "keepalive_state": unreadable})
+    assert malformed["malformed"] == 1 and len(malformed["switches"]) == 2, "counted, not recorded"
+    pr = {"ref": "o/r#1", "repo": "o/r", "number": 1, "merged": True}
+    capped = {**fact, "keepalive_state": {**state, "switch_count": 12}}
+    payload, _ = agent_switches.aggregate([pr], {"o/r#1": capped}, now=T0, window_days=60)
+    assert payload["counts"]["policy_log_truncated"] == 1, "12 switches, 2 entries kept"
 
 
 def test_a_marker_from_an_untrusted_author_is_ignored():
@@ -374,6 +381,8 @@ def test_run_records_policy_rows_beside_unchanged_label_rows(brain):
     assert c["untrusted_markers_ignored"] == 4
     assert (c["recorded_in_brain"], c["recorded_policy"]) == (3, 2)
     assert payload["policy_transitions"]["codex->claude"]["route_weights"] == 1
+    printed = agent_switches.policy_phrase(agent_switches.summary_for_report(brain))
+    assert printed.endswith("(0 unread); 4 markers from untrusted authors ignored"), printed
     with feedback._conn() as conn:
         rows = conn.execute(
             "SELECT pr_ref, from_agent, to_agent, switched_ts, auto_label, commits_before, "
@@ -567,6 +576,16 @@ def test_report_and_tick_line_carry_label_policy_and_route_weights_counts(brain)
         and policy in tick
     )
     assert "3 recorded" in tick
+    caveats = {
+        "untrusted_markers_ignored": 4,
+        "policy_entries_malformed": 1,
+        "policy_log_truncated": 2,
+    }
+    worse = {**summary, "counts": {**summary["counts"], **caveats}}
+    assert agent_switches.policy_phrase(worse) == policy + (
+        "; 4 markers from untrusted authors ignored; 1 malformed log entries; "
+        "2 logs past keepalive's 10-entry cap"
+    )
     script = (paths.REPO_ROOT / "orchestrate.sh").read_text(encoding="utf-8")
     assert script.count("agent_switches.py" + '" tick-line') == 1, "the tick prints the shared line"
     assert script.count("SWITCHES" + ": {") == 0, "and holds no second rendering of its own"

@@ -702,10 +702,9 @@ def aggregate(
             untrusted += int(state.get("untrusted_markers") or 0)
             count = state.get("switch_count")
             logged = len(state.get("delegation_log") or [])
+            # keepalive keeps only the last 10 entries, so a PR past that has switches no log holds
             if read == "marker" and isinstance(count, int) and count > logged:
-                log_truncated += (
-                    1  # keepalive keeps the last 10 entries; the rest are named, not lost
-                )
+                log_truncated += 1
         policy_malformed += policy["malformed"]
         if policy["switches"]:
             policy_switched_prs += 1
@@ -928,12 +927,24 @@ def policy_phrase(summary: dict[str, Any]) -> str:
     reasons = ", ".join(
         f"{why} {n}" for why, n in sorted((summary.get("state_unread_reasons") or {}).items()) if n
     )
+    # Each of these makes the policy count an UNDERCOUNT, so each is printed whenever it is not zero.
+    # Untrusted markers most of all: a new keepalive writer missing from TRUSTED_STATE_* would have
+    # its markers ignored here, and the line would otherwise read as a quiet zero.
+    caveats = [
+        f"{c[key]} {what}"
+        for key, what in (
+            ("untrusted_markers_ignored", "markers from untrusted authors ignored"),
+            ("policy_entries_malformed", "malformed log entries"),
+            ("policy_log_truncated", "logs past keepalive's 10-entry cap"),
+        )
+        if c.get(key)
+    ]
     return (
         f"policy switches {c.get('policy_switches')} on {c.get('policy_switched_prs')} PRs, "
         f"{c.get('policy_route_weights')} via route_weights ({c.get('policy_static')} static, "
         f"{c.get('policy_source_unknown')} unknown), from the keepalive state of "
         f"{c.get('state_read')} PRs ({c.get('state_unread')} unread"
-        f"{': ' + reasons if reasons else ''})"
+        f"{': ' + reasons if reasons else ''})" + "".join(f"; {caveat}" for caveat in caveats)
     )
 
 
