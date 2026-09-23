@@ -242,3 +242,22 @@ def test_cost_per_merged_below_coverage_floor_is_unmeasured(brain):
     lines = periodic_report.render_fleet_six(s)
     cost_line = next(line for line in lines if line.startswith("FLEET-6 cost per merged"))
     assert "codex unmeasured (coverage 20% < 25%" in cost_line, cost_line
+
+
+def test_cost_per_merged_excludes_invalid_prices_and_unmerged_runs(brain):
+    """Coverage and dollars use the same positive-price, merged-run cohort."""
+    _run("m1", "codex", days_ago=1, usd=1.0, cost_source="ccusage")
+    _run("m2", "codex", days_ago=1, usd=None, cost_source="ccusage")
+    _run("m3", "codex", days_ago=1, usd=0.0, cost_source="ccusage")
+    _run("m4", "codex", days_ago=1, usd=-1.0, cost_source="ccusage")
+    _run("u1", "codex", days_ago=1, merged=False, usd=100.0, cost_source="ccusage")
+
+    cell = periodic_report._fleet_six_summary()["windows"]["28"]["cost_per_merged_by_agent"][
+        "codex"
+    ]
+    assert cell["merged"] == 4, cell
+    assert cell["complete_rows"] == 1, cell
+    assert cell["coverage"] == 0.25, cell
+    assert cell["usd"] == 1.0, cell
+    assert cell["usd_per_merged"] == 1.0, cell
+    assert "unmeasured" not in cell, cell
