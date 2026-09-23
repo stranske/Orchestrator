@@ -44,7 +44,22 @@ ORCH = Path(__file__).resolve().parent
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
 DB_PATH = Path(os.environ.get("ORCH_FEEDBACK_DB", LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
 
-SCHEMA = """
+# `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
+# `agent:*` label timeline, `source='policy'` rows from the keepalive state marker's delegation_log
+# (the delegation policy never relabels, so its switches are invisible to the timeline) and carry the
+# entry's `delegation_source`. The two can share a second on one PR, so `source` is part of the key.
+# ONE definition, consumed by SCHEMA for a new Brain and by _widen_agent_switches for an existing
+# one, so the migrated table and the fresh table cannot drift apart.
+AGENT_SWITCHES_COLUMNS = """
+  pr_ref TEXT NOT NULL, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, switched_ts INTEGER NOT NULL,
+  auto_label INTEGER NOT NULL DEFAULT 0, commits_before INTEGER, commits_after INTEGER,
+  merged INTEGER, durability TEXT, recorded_ts INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'label', delegation_source TEXT,
+  PRIMARY KEY (pr_ref, switched_ts, source)
+"""
+
+SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, ts INTEGER, target TEXT, task_type TEXT,
   agent TEXT, mode TEXT, reasoning_level TEXT, model TEXT,
@@ -102,12 +117,9 @@ CREATE TABLE IF NOT EXISTS influence_edges (
   created_ts INTEGER NOT NULL, propagated_ts INTEGER,
   metadata_hash TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS agent_switches (
-  pr_ref TEXT NOT NULL, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, switched_ts INTEGER NOT NULL,
-  auto_label INTEGER NOT NULL DEFAULT 0, commits_before INTEGER, commits_after INTEGER,
-  merged INTEGER, durability TEXT, recorded_ts INTEGER NOT NULL,
-  PRIMARY KEY (pr_ref, switched_ts)
-);
+"""
+    + f"CREATE TABLE IF NOT EXISTS agent_switches ({AGENT_SWITCHES_COLUMNS});"
+    + """
 CREATE TABLE IF NOT EXISTS route_weights (
   version INTEGER, ts INTEGER, task_type TEXT, agent TEXT,
   prior REAL, posterior REAL, n_obs INTEGER, success_rate REAL,
@@ -161,6 +173,7 @@ CREATE TABLE IF NOT EXISTS owner_questions (
   answer TEXT, answered_ts INTEGER
 );
 """
+)
 
 # Effort sensitivity for the quality-weighted score. Multipliers are exponential so zero cost/tokens/latency
 # remain the best case (1.0) and sparse telemetry degrades gracefully. Dollar cost is stored separately in
@@ -785,10 +798,57 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_influence_edges_capability "
             "ON influence_edges(capability_id,capability_version_id,target_run_id,accepted)"
         )
+    if "agent_switches" in tables:
+        switch_cols = {row[1] for row in c.execute("PRAGMA table_info(agent_switches)").fetchall()}
+        if "source" not in switch_cols:
+            _widen_agent_switches(c)
     c.execute(
         "UPDATE runs SET assignment = CASE WHEN source='keepalive' THEN 'assigned' "
         "ELSE 'experimental' END WHERE assignment IS NULL"
     )
+
+
+def _widen_agent_switches(c: sqlite3.Connection) -> None:
+    """Add `source` and `delegation_source` to a pre-2026-09-23 `agent_switches` table and widen its
+    key to (pr_ref, switched_ts, source). SQLite cannot alter a primary key, so the table is rebuilt:
+    every existing row is a label-derived switch and is copied unchanged with `source='label'`.
+
+    With the old key, a policy row landing on the same second as a label row on one PR would be
+    silently DELETED by the INSERT OR REPLACE that writes the other. The rebuild runs under BEGIN
+    IMMEDIATE and re-reads the columns inside it, because every process opening the Brain runs this
+    migration and two of them must not rebuild the same table at once; like the evaluations_v2
+    rebuild above it refuses row loss rather than dropping a table it failed to copy."""
+    own_transaction = not c.in_transaction
+    if own_transaction:
+        c.execute("BEGIN IMMEDIATE")
+    try:
+        cols = {row[1] for row in c.execute("PRAGMA table_info(agent_switches)").fetchall()}
+        if "source" not in cols:
+            carried = (
+                "pr_ref, from_agent, to_agent, switched_ts, auto_label, commits_before, "
+                "commits_after, merged, durability, recorded_ts"
+            )
+            c.execute("DROP TABLE IF EXISTS agent_switches_rebuild")
+            c.execute(f"CREATE TABLE agent_switches_rebuild ({AGENT_SWITCHES_COLUMNS})")
+            old_count = c.execute("SELECT COUNT(*) FROM agent_switches").fetchone()[0]
+            c.execute(
+                f"INSERT INTO agent_switches_rebuild ({carried}, source, delegation_source) "
+                f"SELECT {carried}, 'label', NULL FROM agent_switches"
+            )
+            new_count = c.execute("SELECT COUNT(*) FROM agent_switches_rebuild").fetchone()[0]
+            if new_count != old_count:
+                raise RuntimeError(
+                    "agent_switches migration refused row loss: "
+                    f"before={old_count} after={new_count}"
+                )
+            c.execute("DROP TABLE agent_switches")
+            c.execute("ALTER TABLE agent_switches_rebuild RENAME TO agent_switches")
+        if own_transaction:
+            c.execute("COMMIT")
+    except BaseException:
+        if own_transaction and c.in_transaction:
+            c.execute("ROLLBACK")
+        raise
 
 
 def _derive_source(run_id: str, mode: str | None, source: str | None = None) -> str | None:

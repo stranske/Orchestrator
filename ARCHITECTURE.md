@@ -164,10 +164,17 @@ from prose or from a capability merely being offered. `capabilities.py usage` re
 
 The one place two LLMs touch the same task is an `agent:auto` switch, where the keepalive delegation
 policy replaces a stalled agent. `agent_switches.py` (rail, daily) records each such pair in the Brain
-table `agent_switches` from the PR's own label timeline — commits before and after the switch and the
-terminal outcome. It applies no labels: the hashed sample that once labelled an auto arm was retired
-on 2026-09-22, when the opener began labelling every PR it creates `agent:auto`. The policy still
-picks the replacement; this surface only makes the pair observable.
+table `agent_switches` — commits before and after the switch and the terminal outcome — from two
+sources, distinguished by the row's `source`. `label` rows come from the PR's own label timeline.
+`policy` rows (2026-09-23) come from the `delegation_log` in the latest keepalive state marker a
+trusted writer left on the PR, read in the same GraphQL request as the timeline, because the policy
+never relabels: every switch it makes is recorded only there, so a label timeline could never show
+one. Each policy row carries that entry's `delegation_source` (`route_weights`, `static` or
+`unknown`), which is how the Brain answers whether the exported route weights are consumed at all. A
+PR whose state has not been read is reported as unread, never as zero switches. It applies no labels:
+the hashed sample that once labelled an auto arm was retired on 2026-09-22, when the opener began
+labelling every PR it creates `agent:auto`. The policy still picks the replacement; this surface only
+makes the pair observable. (It is not drawn in the loop diagram, which is unchanged.)
 
 ## The capability layer — what the tool can do, and how a surface finds it
 
