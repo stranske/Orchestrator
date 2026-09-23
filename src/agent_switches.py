@@ -14,22 +14,25 @@ five-round cooldown), but nothing recorded the pair, and the base rate measured 
    `<state>/agent-switches-facts.json`), derives the consecutive distinct agents that were applied, and
    writes each from→to pair to the Brain table `agent_switches` with commits before and after the
    switch and the PR's terminal outcome. Bot and owner rows are excluded by attribution_source.
-2. SAMPLE, default OFF. `sample --rate R --apply` assigns eligible open fleet PRs (exactly one real
-   agent label, no `agent:auto`, no `agent:rate-limited`) to the `auto` arm by a stable hash of the PR
-   reference and adds `agent:auto` to that arm; the rest are the control arm. Assignments are recorded
-   only when the label is actually applied, so the arms in the record are the arms that ran. The tick
-   runs this only when `ORCH_AUTO_SWITCH_SAMPLE_RATE` is set above zero.
+2. SAMPLE — RETIRED 2026-09-22. A `sample` step used to add `agent:auto` to a hashed share of open
+   fleet PRs that carried exactly one real agent label. The owner then had the opener label EVERY PR it
+   creates `agent:auto` at creation, so that the route weights are consumed on auto stalls. That left
+   the sample with no eligible population (it reported `candidates: 0` on every tick) and no untreated
+   arm: the only unlabelled agent PRs left come from other origins, so comparing them with opener PRs
+   measures origin, not the label. `derive_switches` still records whether `agent:auto` was ever
+   applied (`auto_label`), which is the adoption signal the sample was meant to create. The two arms
+   assigned before retirement stay in `agent-switches.json` as history; nothing reads the old
+   `ORCH_AUTO_SWITCH_SAMPLE_RATE` any more.
 
 DEDUP (2026-09-17). Searched the tree for agent:auto (the ingest excludes it from attribution and the
 closer adds it to capacity-stuck PRs), agent_switch / paired (absent), the Brain (no table holds label
 history or switches) and the improvement log (no item). Not present; built.
 
-This module never removes a label, never picks the replacement agent (the delegation policy does, from
-the exported route weights), never writes a review queue, and applies nothing unless `--apply` is
-given with a positive rate. Kill switch for the record half: `ORCH_DISABLE_STEPS=agent-switches`.
+This module never adds or removes a label, never picks the replacement agent (the delegation policy
+does, from the exported route weights), and never writes a review queue. Kill switch:
+`ORCH_DISABLE_STEPS=agent-switches`.
 
     python3 agent_switches.py run [--window-days 60] [--state-dir DIR] [--fetch-limit 300] [--json]
-    python3 agent_switches.py sample --rate 0.25 [--apply] [--state-dir DIR] [--json]
     python3 agent_switches.py show [--state-dir DIR]
     python3 agent_switches.py --selftest
 """
@@ -37,7 +40,6 @@ given with a positive rate. Kill switch for the record half: `ORCH_DISABLE_STEPS
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import statistics
@@ -57,9 +59,9 @@ FACTS_SCHEMA = "orchestrator.agent-switches-facts"
 DEFAULT_WINDOW_DAYS = 60
 FETCH_LIMIT_DEFAULT = 300
 GRAPHQL_CHUNK = 25
-# Eligibility reaches back a month: a PR that has sat open for weeks is exactly where a stall lives.
-SAMPLE_MAX_AGE_DAYS = 30
-SAMPLE_RATE_ENV = "ORCH_AUTO_SWITCH_SAMPLE_RATE"
+# The hashed `sample` step was retired on 2026-09-22 (see the module docstring); this is the date the
+# report line names.
+SAMPLE_RETIRED = "2026-09-22"
 AGENT_LABELS = (
     "agent:codex",
     "agent:claude",
@@ -119,10 +121,6 @@ def keepalive_prs(*, window_days: int = DEFAULT_WINDOW_DAYS, now: int | None = N
             }
         )
     return out
-
-
-def fleet_repos(prs: list[dict]) -> list[str]:
-    return sorted({pr["repo"] for pr in prs})
 
 
 # ---------------------------------------------------------------- github facts -------------------
@@ -449,139 +447,6 @@ def load_state(state_dir: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-# ---------------------------------------------------------------- sample -------------------------
-
-
-def arm_for(ref: str, rate: float) -> str:
-    """Stable assignment: the same PR lands in the same arm on every run, at the given rate."""
-    if rate <= 0:
-        return "control"
-    bucket = int(hashlib.sha1(ref.encode("utf-8")).hexdigest(), 16) % 10_000
-    return "auto" if bucket < int(round(rate * 10_000)) else "control"
-
-
-def eligible_open_prs(
-    repos: list[str],
-    *,
-    now: int,
-    max_age_days: int = SAMPLE_MAX_AGE_DAYS,
-    gh_json: Callable[[list[str]], object | None] = _gh_json,
-) -> list[dict[str, Any]]:
-    """Open fleet PRs carrying exactly one real agent label and neither agent:auto nor
-    agent:rate-limited, opened within max_age_days. One search per agent label."""
-    out: dict[str, dict[str, Any]] = {}
-    wanted = set(repos)
-    for label in AGENT_LABELS:
-        query = (
-            f'search(query:"org:stranske is:pr is:open archived:false label:\\"{label}\\"", '
-            "type:ISSUE, first:100){ nodes { ... on PullRequest { number createdAt "
-            "repository{nameWithOwner} labels(first:30){nodes{name}} } } }"
-        )
-        data = gh_json(["gh", "api", "graphql", "-f", f"query=query {{ {query} }}"])
-        payload = data.get("data") if isinstance(data, dict) else None
-        search = payload.get("search") if isinstance(payload, dict) else None
-        for node in (search or {}).get("nodes") or []:
-            if not isinstance(node, dict) or node.get("number") is None:
-                continue
-            repo = str((node.get("repository") or {}).get("nameWithOwner") or "")
-            if repo not in wanted:
-                continue
-            labels = [
-                str(n.get("name"))
-                for n in ((node.get("labels") or {}).get("nodes") or [])
-                if isinstance(n, dict) and n.get("name")
-            ]
-            real = [lab for lab in labels if lab in AGENT_LABELS]
-            created = _epoch(node.get("createdAt")) or 0
-            if len(real) != 1 or AUTO_LABEL in labels or RATE_LIMITED_LABEL in labels:
-                continue
-            if now - created > max_age_days * 86400:
-                continue
-            ref = f"{repo}#{int(node['number'])}"
-            out[ref] = {"ref": ref, "repo": repo, "number": int(node["number"]), "agent": real[0]}
-    return [out[k] for k in sorted(out)]
-
-
-def _apply_auto_label(ref: str) -> bool:
-    repo, _, number = ref.partition("#")
-    try:
-        proc = subprocess.run(
-            ["gh", "pr", "edit", number, "-R", repo, "--add-label", AUTO_LABEL],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    return proc.returncode == 0
-
-
-def sample(
-    *,
-    rate: float,
-    apply: bool = False,
-    state_dir: Path | None = None,
-    now: int | None = None,
-    candidates: list[dict[str, Any]] | None = None,
-    apply_fn: Callable[[str], bool] | None = None,
-) -> dict[str, Any]:
-    """Assign eligible open PRs to arms and, with apply=True and a positive rate, add agent:auto to
-    the auto arm. Dry runs report what would happen and persist nothing: an arm is recorded only when
-    its label was actually applied, so the recorded arms are the arms that ran."""
-    now = int(now or time.time())
-    state_dir = state_dir or default_state_dir()
-    state = load_state(state_dir)
-    sample_state = state.get("sample") or {}
-    assignments: dict[str, dict[str, Any]] = dict(sample_state.get("assignments") or {})
-    if candidates is None:
-        repos = fleet_repos(keepalive_prs(window_days=DEFAULT_WINDOW_DAYS, now=now))
-        candidates = eligible_open_prs(repos, now=now)
-    applier = apply_fn or _apply_auto_label
-    would_auto = would_control = applied = failed = already = 0
-    for pr in candidates:
-        ref = pr["ref"]
-        if ref in assignments:
-            already += 1
-            continue
-        arm = arm_for(ref, rate)
-        if arm == "auto":
-            would_auto += 1
-        else:
-            would_control += 1
-        if not apply or rate <= 0:
-            continue
-        if arm == "auto":
-            if not applier(ref):
-                failed += 1
-                continue
-            applied += 1
-        assignments[ref] = {
-            "arm": arm,
-            "agent": pr.get("agent"),
-            "assigned_ts": now,
-            "applied": arm == "auto",
-        }
-    summary = {
-        "rate": rate,
-        "apply": bool(apply),
-        "candidates": len(candidates),
-        "already_assigned": already,
-        "would_auto": would_auto,
-        "would_control": would_control,
-        "applied_now": applied,
-        "apply_failed": failed,
-        "assigned_total": len(assignments),
-        "auto_total": sum(1 for a in assignments.values() if a.get("arm") == "auto"),
-        "control_total": sum(1 for a in assignments.values() if a.get("arm") == "control"),
-    }
-    if apply and rate > 0:
-        state["sample"] = {"rate": rate, "updated_at": now, "assignments": assignments}
-        state.setdefault("schema", SCHEMA)
-        state.setdefault("version", VERSION)
-        write_json_atomic(state_dir / "agent-switches.json", state)
-    return summary
-
-
 # ---------------------------------------------------------------- report -------------------------
 
 
@@ -590,8 +455,6 @@ def summary_for_report(state_dir: Path | None = None) -> dict[str, Any]:
     payload = load_state(state_dir or default_state_dir())
     if not payload or "counts" not in payload:
         return {"state": "not yet recorded", "artifact": str(path)}
-    sample_state = payload.get("sample") or {}
-    assignments = sample_state.get("assignments") or {}
     return {
         "state": "recorded",
         "generated_at": payload.get("generated_at"),
@@ -601,11 +464,7 @@ def summary_for_report(state_dir: Path | None = None) -> dict[str, Any]:
             k: {"n": v.get("n"), "merged": v.get("merged"), "bad": v.get("bad")}
             for k, v in (payload.get("transitions") or {}).items()
         },
-        "sample": {
-            "rate": sample_state.get("rate", 0),
-            "auto": sum(1 for a in assignments.values() if a.get("arm") == "auto"),
-            "control": sum(1 for a in assignments.values() if a.get("arm") == "control"),
-        },
+        "sample": {"retired": SAMPLE_RETIRED},
     }
 
 
@@ -615,13 +474,12 @@ def render_report_lines(summary: dict[str, Any]) -> list[str]:
             f"AGENT-SWITCHES: {summary.get('state', 'unknown')} ({summary.get('artifact', '')})"
         ]
     c = summary.get("counts") or {}
-    s = summary.get("sample") or {}
     lines = [
         f"AGENT-SWITCHES ({summary.get('window_days')}d): {c.get('switched_prs')} of "
         f"{c.get('with_facts')} keepalive PRs with facts switched agents ({c.get('switches')} "
         f"switches; {c.get('missing_facts')} facts missing); agent:auto on {c.get('auto_labeled')}, "
-        f"of which {c.get('auto_and_switched')} switched; sampling rate {s.get('rate', 0)} "
-        f"(auto arm {s.get('auto', 0)}, control {s.get('control', 0)})"
+        f"of which {c.get('auto_and_switched')} switched; sampling retired {SAMPLE_RETIRED} "
+        "(the opener labels agent:auto at creation)"
     ]
     for key, cell in (summary.get("transitions") or {}).items():
         lines.append(
@@ -663,12 +521,7 @@ def _selftest() -> int:
     )
     check((first["commits_before"], first["commits_after"]) == (2, 2), f"commit split {first}")
     check(derive_switches({"label_events": [], "commit_ts": []})["switches"] == [], "no events")
-    arms = {arm_for(f"o/r#{i}", 0.25) for i in range(200)}
-    check(arms == {"auto", "control"}, "both arms occur at 25%")
-    share = sum(1 for i in range(2000) if arm_for(f"o/r#{i}", 0.25) == "auto") / 2000
-    check(0.20 < share < 0.30, f"auto share {share}")
-    check(arm_for("o/r#1", 0.25) == arm_for("o/r#1", 0.25), "assignment is stable")
-    check(all(arm_for(f"o/r#{i}", 0) == "control" for i in range(50)), "rate 0 is all control")
+    check("sample" not in globals(), "the retired sample step stays retired")
     line = render_report_lines({"state": "not yet recorded", "artifact": "x"})[0]
     check(line.startswith("AGENT-SWITCHES: not yet recorded"), "unrecorded line")
     if failures:
@@ -676,8 +529,7 @@ def _selftest() -> int:
         return 1
     print(
         "agent_switches.py selftest: OK (switch derivation ignores auto/rate-limited and collapses "
-        "repeats, commits split at the arriving label, stable hashed arms at the given rate, "
-        "unrecorded line named)"
+        "repeats, commits split at the arriving label, unrecorded line named, sample step retired)"
     )
     return 0
 
@@ -693,13 +545,6 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--state-dir", type=Path, default=None)
     run_p.add_argument("--fetch-limit", type=int, default=FETCH_LIMIT_DEFAULT)
     run_p.add_argument("--json", action="store_true")
-    sample_p = sub.add_parser(
-        "sample", help="assign eligible open PRs to arms (dry run by default)"
-    )
-    sample_p.add_argument("--rate", type=float, required=True)
-    sample_p.add_argument("--apply", action="store_true")
-    sample_p.add_argument("--state-dir", type=Path, default=None)
-    sample_p.add_argument("--json", action="store_true")
     show_p = sub.add_parser("show", help="print the current summary")
     show_p.add_argument("--state-dir", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -711,10 +556,6 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({k: v for k, v in payload.items() if k != "sample"}, indent=1))
         else:
             print("\n".join(render_report_lines(summary_for_report(args.state_dir))))
-        return 0
-    if args.command == "sample":
-        summary = sample(rate=args.rate, apply=args.apply, state_dir=args.state_dir)
-        print(json.dumps(summary, indent=1) if args.json else json.dumps(summary))
         return 0
     print("\n".join(render_report_lines(summary_for_report(args.state_dir))))
     return 0

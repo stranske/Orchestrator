@@ -1,7 +1,7 @@
 """Paired agent-switch observations: every from→to switch a PR's label timeline shows lands in the
 Brain with commits before/after and the outcome; bots and the owner are excluded; a PR gh cannot
-return is named as missing; sampling assigns arms by a stable hash and records an arm only when the
-label was actually applied."""
+return is named as missing. The hashed `sample` step was retired on 2026-09-22, when the opener
+began labelling every PR it creates `agent:auto`; the tick still runs the measurement."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import pytest
 
 import agent_switches
 import feedback
+import paths
 
 
 @pytest.fixture
@@ -132,43 +133,22 @@ def test_run_records_pairs_in_the_brain_and_excludes_bots(brain):
         assert conn.execute("SELECT COUNT(*) FROM agent_switches").fetchone()[0] == 2
 
 
-def test_sample_assigns_stable_arms_and_records_only_applied_labels(brain):
-    candidates = [
-        {"ref": f"o/r0#{i}", "repo": "o/r0", "number": i, "agent": "agent:codex"} for i in range(40)
+def test_the_tick_runs_the_measurement_and_no_longer_samples():
+    """Retired 2026-09-22: once the opener labels every PR it creates `agent:auto`, the hashed sample
+    had no eligible population (it reported `candidates: 0` every tick) and no untreated arm. The tick
+    must still run the measurement exactly once, and no executable line may read the old rate."""
+    script = (paths.REPO_ROOT / "orchestrate.sh").read_text(encoding="utf-8")
+    assert script.count("agent_switches.py" + '" run') == 1, "the measurement must run exactly once"
+    assert script.count("agent_switches.py" + '" sample') == 0
+    live = [
+        line
+        for line in script.splitlines()
+        if "ORCH_AUTO_SWITCH_SAMPLE_RATE" in line and not line.lstrip().startswith("#")
     ]
-    applied: list = []
-    dry = agent_switches.sample(rate=0.5, apply=False, state_dir=brain, candidates=candidates)
-    assert dry["candidates"] == 40 and dry["would_auto"] + dry["would_control"] == 40
-    assert 8 <= dry["would_auto"] <= 32, "a stable hash at 50% lands well inside both arms"
-    assert dry["assigned_total"] == 0 and not (brain / "agent-switches.json").exists()
-    live = agent_switches.sample(
-        rate=0.5,
-        apply=True,
-        state_dir=brain,
-        candidates=candidates,
-        apply_fn=lambda ref: applied.append(ref) or True,
-    )
-    assert live["applied_now"] == dry["would_auto"] == len(applied)
-    assert live["assigned_total"] == 40 and live["auto_total"] + live["control_total"] == 40
-    state = json.loads((brain / "agent-switches.json").read_text())["sample"]
-    assert state["rate"] == 0.5
-    auto_refs = sorted(r for r, a in state["assignments"].items() if a["arm"] == "auto")
-    assert auto_refs == sorted(applied)
-    assert all(a["applied"] is (a["arm"] == "auto") for a in state["assignments"].values())
-    rerun = agent_switches.sample(
-        rate=0.5, apply=True, state_dir=brain, candidates=candidates, apply_fn=lambda ref: False
-    )
-    assert rerun["already_assigned"] == 40 and rerun["applied_now"] == 0, "assignments are sticky"
-    failing = agent_switches.sample(
-        rate=1.0,
-        apply=True,
-        state_dir=brain,
-        candidates=[{"ref": "o/r0#99", "repo": "o/r0", "number": 99, "agent": "agent:codex"}],
-        apply_fn=lambda ref: False,
-    )
-    assert (
-        failing["apply_failed"] == 1 and failing["assigned_total"] == 40
-    ), "a label that could not be applied records no arm"
+    assert live == [], live
+    assert not hasattr(agent_switches, "sample")
+    with pytest.raises(SystemExit):
+        agent_switches.main(["sample", "--rate", "0.5"])
 
 
 def test_report_lines_name_the_unrecorded_state_and_the_base_rate(brain):
@@ -182,5 +162,5 @@ def test_report_lines_name_the_unrecorded_state_and_the_base_rate(brain):
     )
     lines = agent_switches.render_report_lines(agent_switches.summary_for_report(brain))
     assert lines[0].startswith("AGENT-SWITCHES (60d): 1 of 2 keepalive PRs")
-    assert "sampling rate 0" in lines[0]
+    assert "sampling retired 2026-09-22" in lines[0]
     assert lines[1].strip() == "cursor->codex: 1 (merged 1, bad 0)"

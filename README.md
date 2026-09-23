@@ -346,9 +346,10 @@ safety switch, not dead code.
   PRs per query, cached), every from→to switch lands in the Brain table `agent_switches` with commits
   before and after and the terminal outcome, and the report carries the base rate (measured
   2026-09-17: 7 switches in 986 merged agent PRs over 60 days; `agent:auto` on 14, none of which
-  switched). Sampling is OFF by default: `ORCH_AUTO_SWITCH_SAMPLE_RATE=0.25` makes the tick assign
-  eligible open fleet PRs to arms by a stable hash and add `agent:auto` to the auto arm, so the
-  delegation policy runs on a known sample; arms are recorded only when the label was applied.
+  switched). The hashed `sample` step that added `agent:auto` to a share of open PRs was retired on
+  2026-09-22: the opener now labels every PR it creates `agent:auto` at creation, so the sample had
+  no eligible population and no untreated arm. `auto_label` on each recorded switch still says
+  whether `agent:auto` was applied.
   Artifacts `~/.codex/orchestrator/agent-switches.json`, facts in `agent-switches-facts.json`; kill
   switch `ORCH_DISABLE_STEPS=agent-switches`.
   Deterministic candidates can then be dry-compiled by `capability_compiler.py`; its reference rail
