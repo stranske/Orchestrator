@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-09-22T01:54:10Z",
+  "generated_at": "2026-09-23T05:47:39Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
       {
         "agent": "claude",
-        "n_obs": 309,
-        "posterior": 0.7705207617353931,
-        "success_rate": 0.7805085377607858
+        "n_obs": 313,
+        "posterior": 0.7769038824290896,
+        "success_rate": 0.787090102785547
       }
     ],
     "review": [
       {
         "agent": "claude",
         "n_obs": 153,
-        "posterior": 0.5613546204912474,
-        "success_rate": 0.571099239109906
+        "posterior": 0.5611703005132679,
+        "success_rate": 0.5710239621642846
       }
     ]
   },
   "schema": "orchestrator.route-weights/v1",
-  "source_version": 65,
+  "source_version": 66,
   "task_types": {
     "codemod": {
       "evidence_ok": false,
@@ -35,27 +35,27 @@
       "ranking": [
         {
           "agent": "codex",
-          "n_obs": 781,
-          "posterior": 0.8731028175352229,
-          "success_rate": 0.8775136086590515
+          "n_obs": 802,
+          "posterior": 0.8789975262021466,
+          "success_rate": 0.8833595631483424
         },
         {
           "agent": "cursor",
-          "n_obs": 353,
-          "posterior": 0.8482062812478743,
-          "success_rate": 0.8648542888462863
+          "n_obs": 360,
+          "posterior": 0.8564279595713677,
+          "success_rate": 0.8728500510293952
         },
         {
           "agent": "vibe",
           "n_obs": 131,
-          "posterior": 0.6724437316016326,
-          "success_rate": 0.7119892137628233
+          "posterior": 0.671999581775999,
+          "success_rate": 0.7119889325137208
         },
         {
           "agent": "gemini",
           "n_obs": 100,
-          "posterior": 0.5456822603467684,
-          "success_rate": 0.5342348360952253
+          "posterior": 0.5449279946185824,
+          "success_rate": 0.533004280727599
         }
       ]
     },
@@ -69,26 +69,26 @@
         {
           "agent": "cursor",
           "n_obs": 327,
-          "posterior": 0.7649539280456065,
-          "success_rate": 0.7693623701351773
+          "posterior": 0.7632259244674043,
+          "success_rate": 0.7675681172432345
         },
         {
           "agent": "codex",
           "n_obs": 283,
-          "posterior": 0.7188151465064581,
-          "success_rate": 0.7282880311098777
+          "posterior": 0.7188731064632314,
+          "success_rate": 0.7284722795715165
         },
         {
           "agent": "vibe",
           "n_obs": 140,
-          "posterior": 0.6404524848218207,
-          "success_rate": 0.6429461734498225
+          "posterior": 0.640445382454929,
+          "success_rate": 0.6429651780173135
         },
         {
           "agent": "gemini",
           "n_obs": 120,
-          "posterior": 0.5768932506392916,
-          "success_rate": 0.5773688647779804
+          "posterior": 0.5771988747324673,
+          "success_rate": 0.5777578035008449
         }
       ]
     },
@@ -98,8 +98,8 @@
         {
           "agent": "codex",
           "n_obs": 38,
-          "posterior": 0.7063941055800136,
-          "success_rate": 0.7316747070628661
+          "posterior": 0.7060914765470598,
+          "success_rate": 0.7315172042102849
         }
       ]
     }
