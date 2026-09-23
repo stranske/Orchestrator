@@ -30,6 +30,7 @@ def _run(
     tokens=50_000,
     usd=1.0,
     source=None,
+    cost_source="ledger",
 ):
     ts = int(time.time()) - days_ago * 86400
     feedback.record_run(
@@ -49,7 +50,10 @@ def _run(
         merged=merged,
         durability=durability,
     )
-    feedback.record_cost(rid, tokens_in=tokens, tokens_out=0, cost_usd=usd)
+    # `cost_source` is the `costs.source` tag (ccusage/langsmith/ledger) — unrelated to `source`
+    # above, which is routing-metadata attribution (bot/human). Default "ledger" matches
+    # `record_cost`'s own default, so every pre-existing call site here is unaffected.
+    feedback.record_cost(rid, tokens_in=tokens, tokens_out=0, cost_usd=usd, source=cost_source)
 
 
 def test_fleet_six_numbers_and_exclusions(brain):
@@ -191,3 +195,50 @@ def test_time_to_merge_uses_one_facts_snapshot(brain, monkeypatch):
     assert len(reads) == 1
     assert summary["7"]["codex"]["median_hours"] == 2.0
     assert summary["28"]["codex"]["median_hours"] == 2.0
+
+
+def test_cost_per_merged_uses_one_cost_scale(brain):
+    """$/merged must rest on feedback.COMPLETE_COST_SOURCES alone (2026-09-22) — the same scale
+    the route-weight learners use since PR #320 — never a blend with a LangSmith per-call trace
+    or a bare ledger row. Unfiltered, 3 merged codex runs (two $1.00 ccusage rows, one $0.04
+    langsmith row) sum to $2.04 over 3 merges = $0.68/merged: a real number, but priced on two
+    different scales at once. Filtered to the two ccusage rows alone: $2.00/2 = $1.00/merged,
+    with coverage (2 complete rows of 3 merged runs = 67%) printed beside it, never folded in.
+    """
+    _run("s1", "codex", days_ago=1, usd=1.0, cost_source="ccusage")
+    _run("s2", "codex", days_ago=1, usd=1.0, cost_source="ccusage")
+    _run("s3", "codex", days_ago=1, usd=0.04, cost_source="langsmith")
+    s = periodic_report._fleet_six_summary()
+    cell = s["windows"]["28"]["cost_per_merged_by_agent"]["codex"]
+    assert cell["merged"] == 3, cell
+    assert cell["complete_rows"] == 2, cell
+    assert cell["coverage"] == round(2 / 3, 4), cell
+    assert cell["usd_per_merged"] == 1.00, cell
+    assert "unmeasured" not in cell, cell
+
+    lines = periodic_report.render_fleet_six(s)
+    cost_line = next(line for line in lines if line.startswith("FLEET-6 cost per merged"))
+    assert "codex $1.00/merged (3 merged, coverage 67%)" in cost_line, cost_line
+    assert "0.68" not in cost_line, cost_line
+
+
+def test_cost_per_merged_below_coverage_floor_is_unmeasured(brain):
+    """feedback.MIN_COST_COVERAGE is 0.25. One ccusage row of 5 merged runs is 20% coverage —
+    genuinely under the floor (not the 1-of-4 = 25% boundary, which would equal it rather than
+    fall short) — so the report must print `unmeasured` naming the shortfall instead of a dollar
+    figure computed from a single priced row standing in for four unpriced ones."""
+    _run("u1", "codex", days_ago=1, usd=2.0, cost_source="ccusage")
+    for rid in ("u2", "u3", "u4", "u5"):
+        _run(rid, "codex", days_ago=1)  # cost_source defaults to "ledger" — partial, excluded
+
+    s = periodic_report._fleet_six_summary()
+    cell = s["windows"]["28"]["cost_per_merged_by_agent"]["codex"]
+    assert cell["merged"] == 5, cell
+    assert cell["complete_rows"] == 1, cell
+    assert cell["coverage"] == round(1 / 5, 4), cell
+    assert cell["usd_per_merged"] is None, cell
+    assert "coverage 20% < 25%" in cell["unmeasured"], cell
+
+    lines = periodic_report.render_fleet_six(s)
+    cost_line = next(line for line in lines if line.startswith("FLEET-6 cost per merged"))
+    assert "codex unmeasured (coverage 20% < 25%" in cost_line, cost_line

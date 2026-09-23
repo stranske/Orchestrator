@@ -1388,6 +1388,19 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None)
         # dashboard that looks informative while reporting nothing.
         "capabilities_with_evidence": len(resolved_caps),
         "capabilities_without_evidence": stats["capability_count"] - len(resolved_caps),
+        # THE OTHER AXIS, reported beside the verdict count rather than folded into it
+        # (2026-09-22). `capabilities_with_evidence` above is THIS module's own accounting: a
+        # ranked row with a resolved useful/not_useful verdict, inside `window_days`. capabilities.py
+        # separately tracks an all-time, un-windowed Brain outcome edge per capability
+        # (`outcome_links`, written by `heartbeat(..., "outcome", ...)`). The two need not agree — a
+        # capability can earn a reviewer's verdict long before, or without, any Brain-linked run ever
+        # closing the loop underneath it — so this reads the SAME declared population `usefulness()`
+        # already loaded and counts the other axis without redefining either one.
+        "capabilities_with_outcome_link": sum(
+            1
+            for cap in capabilities.load_declared(path or capabilities.REG).values()
+            if cap.get("outcome_links")
+        ),
         # THE PROVENANCE MIX. Never omit this beside a usefulness rate: the two together are the
         # only honest reading, and the first without the second is what this axis exists to stop.
         "verdict_count": verdict_total,
@@ -6769,8 +6782,13 @@ def _fmt(rep: dict) -> str:
         f"capability propensity — {rep['window_days']}d window",
         f"  experiments: {rep['experiment_count']} "
         f"({rep['resolved_experiment_count']} resolved)",
-        f"  capabilities with usefulness evidence: {rep['capabilities_with_evidence']} "
-        f"of {rep['capability_count']}",
+        # TWO ACCOUNTINGS, SIDE BY SIDE, NEVER MERGED — see report()'s comment. A verdict is this
+        # module's own 90-day-windowed ledger read; an outcome link is capabilities.py's all-time
+        # Brain edge. Different sources, different windows, both real; do not average them.
+        f"  verdicts: {rep['capabilities_with_evidence']} of {rep['capability_count']} "
+        f"capabilities carry a usefulness verdict (ledger)",
+        f"  outcome links: {rep['capabilities_with_outcome_link']} of {rep['capability_count']} "
+        f"carry a Brain outcome edge (lifecycle)",
         # THE PROVENANCE MIX, never printed apart from the rate it qualifies.
         f"  verdicts: {rep['verdict_count']} — {rep['verdicts_by_provenance'] or '(none)'}; "
         f"{rep['verdicts_outcome_derived']} outcome-derived, {rep['verdicts_self_reported']} "

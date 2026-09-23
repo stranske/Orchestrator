@@ -2668,7 +2668,9 @@ def _fleet_edge_counts(*, conn=None) -> dict[str, int] | None:
             c.close()
 
 
-def usage_report(report: dict[str, Any], *, now: int | None = None, conn=None) -> dict[str, Any]:
+def usage_report(
+    report: dict[str, Any], *, now: int | None = None, conn=None, path: Path = REG
+) -> dict[str, Any]:
     """Per-capability usage + debt + next action, plus the roll-ups a digest needs."""
     current = _now() if now is None else now
     fleet_counts = _fleet_edge_counts(conn=conn)
@@ -2687,10 +2689,30 @@ def usage_report(report: dict[str, Any], *, now: int | None = None, conn=None) -
                 "fleet_edges": None if fleet_counts is None else fleet_counts.get(name, 0),
             }
         )
+    # TWO ACCOUNTINGS OF "DID THIS CAPABILITY PAY OFF", NEVER MERGED (2026-09-22). The per-row
+    # Outcomes figure (format_inventory, and fleet_edges above) counts each capability's own
+    # `outcome_links` -- an all-time Brain lifecycle edge, written by `heartbeat(..., "outcome",
+    # ...)`. `capability_propensity`'s ledger separately answers a DIFFERENT question, over its own
+    # 90-day window: does a ranked row carry a usefulness VERDICT (`useful`/`not_useful`, from a
+    # human or judge arm)? Measured 2026-09-22: 47 of 48 capabilities carry a verdict while only 29
+    # of those 48 carry an outcome link -- a capability is routinely judged useful by a reviewer well
+    # before, or without, any Brain-linked run ever closing the loop underneath it. Collapsing the
+    # two into one figure would silently pick one axis and hide the other, so both are carried
+    # through and printed side by side in format_usage_report, each labelled with what it actually
+    # measures.
+    import capability_propensity  # lazy: that module imports THIS one at load time
+
+    verdict_stats = capability_propensity.usefulness(path=path, now=current)
+    capabilities_with_verdict = sum(1 for row in verdict_stats["rows"].values() if row["resolved"])
+    capabilities_with_outcome_link = sum(
+        1 for cap in report["capabilities"].values() if cap.get("outcome_links")
+    )
     return {
         "generated_at": current,
         "fleet_edges_scope": "all_time_versioned_edges_to_keepalive_runs",
         "total": len(rows),
+        "capabilities_with_verdict": capabilities_with_verdict,
+        "capabilities_with_outcome_link": capabilities_with_outcome_link,
         "ready_to_lift": [
             r["capability_id"] for r in rows if r["unblock"]["action"].startswith("READY TO LIFT")
         ],
@@ -2738,6 +2760,14 @@ def format_usage_report(usage: dict[str, Any]) -> str:
         "",
         f"{usage['total']} capabilities · {len(usage['active_last_28d'])} used in the last 28d · "
         f"{len(usage['never_invoked'])} never invoked",
+        "",
+        # TWO ACCOUNTINGS, SIDE BY SIDE, NEVER MERGED — see usage_report()'s comment. A verdict is
+        # capability_propensity's own 90-day-windowed ledger read; an outcome link is this ledger's
+        # all-time Brain edge. Different sources, different windows, both real; do not average them.
+        f"verdicts: {usage['capabilities_with_verdict']} of {usage['total']} capabilities carry a "
+        f"usefulness verdict (ledger)",
+        f"outcome links: {usage['capabilities_with_outcome_link']} of {usage['total']} carry a "
+        f"Brain outcome edge (lifecycle)",
         "",
     ]
     # READY TO LIFT has a DENOMINATOR. Reported bare it is a permanently-zero number that reads as
