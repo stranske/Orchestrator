@@ -6789,8 +6789,12 @@ def _fmt(rep: dict) -> str:
         f"capabilities carry a usefulness verdict (ledger)",
         f"  outcome links: {rep['capabilities_with_outcome_link']} of {rep['capability_count']} "
         f"carry a Brain outcome edge (lifecycle)",
-        # THE PROVENANCE MIX, never printed apart from the rate it qualifies.
-        f"  verdicts: {rep['verdict_count']} — {rep['verdicts_by_provenance'] or '(none)'}; "
+        # THE PROVENANCE MIX, never printed apart from the rate it qualifies. Labelled "verdict
+        # events" rather than "verdicts" (2026-09-22): the line above already claims that word for
+        # a DIFFERENT count — capabilities carrying at least one verdict, not the raw event total —
+        # and one word meaning two numbers on adjacent lines is exactly the ambiguity this change
+        # exists to remove.
+        f"  verdict events: {rep['verdict_count']} — {rep['verdicts_by_provenance'] or '(none)'}; "
         f"{rep['verdicts_outcome_derived']} outcome-derived, {rep['verdicts_self_reported']} "
         f"self-reported"
         + (
