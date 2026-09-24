@@ -125,7 +125,7 @@ jobs:
           github.event_name == 'pull_request_target' &&
           steps.eligibility.outputs.should-run == 'true' &&
           steps.api_client_base.outputs.available != 'true'
-        uses: "stranske/Workflows/.github/actions/setup-api-client@864b6e3053ce5135e8bc56cfac308edd56fa0108" # v1.35.2
+        uses: "stranske/Workflows/.github/actions/setup-api-client@887d5908495907fee45c144085fec5d56fe39e82" # v1.36.0
         with:
           # named inputs, not the whole secrets context (see #3185)
           github_token: ${{ github.token }}
@@ -222,7 +222,7 @@ jobs:
           steps.eligibility.outputs.should-run == 'true' &&
           github.event_name == 'pull_request' &&
           steps.api_client_head.outputs.available != 'true'
-        uses: "stranske/Workflows/.github/actions/setup-api-client@864b6e3053ce5135e8bc56cfac308edd56fa0108" # v1.35.2
+        uses: "stranske/Workflows/.github/actions/setup-api-client@887d5908495907fee45c144085fec5d56fe39e82" # v1.36.0
         with:
           # named inputs, not the whole secrets context (see #3185)
           github_token: ${{ github.token }}
