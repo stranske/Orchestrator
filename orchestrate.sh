@@ -395,7 +395,7 @@ fi
 # lesson of the pattern-miner outage. `feedable 0` is expected today: every capability short of its
 # threshold is held by a documented default-off switch, which unblock() refuses to feed.
 if _cadence_due evidence-acquisition && _attempt_ok evidence-acquisition; then
-  echo "  [cadence] evidence acquisition (Layer 3; shadow unless ORCH_EVIDENCE_ACQUISITION=1)"
+  echo "  [cadence] evidence acquisition (daily; Layer 3; shadow unless ORCH_EVIDENCE_ACQUISITION=1)"
   if python3 "$ORCH/evidence_acquisition.py" --json \
        --write "$STAMP_DIR/evidence-acquisition-plan.json" \
        > "$STAMP_DIR/evidence-acquisition.log" 2>&1; then
