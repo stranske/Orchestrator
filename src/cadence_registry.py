@@ -182,8 +182,9 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "cadence_days": 6,
         "artifact": "capability-firing-monitor.json",
         "log": "capability-firing-monitor.log",
-        "gate": "none; read-only apart from its own history file. "
-        "ORCH_FIRING_MONITOR_DISABLED=1 stops the write",
+        "gate": "none; read-only apart from its own history file and, in a live tick, its "
+        "invocation heartbeat. ORCH_FIRING_MONITOR_DISABLED=1 stops the history write; "
+        "ORCH_DISABLE_STEPS=capability-firing-monitor skips the step, so nothing is written",
         "next_transition": "the regression alarm needs two snapshots, so the first run only "
         "establishes a baseline; from the second it reports any capability that "
         "used to fire and stopped",

@@ -616,8 +616,10 @@ fi
 # Weekly: DOES each capability fire, and did one stop? The can-fire audit and `capabilities usage`
 # are both snapshots; nothing stored firing history, so a capability that fired last week and went
 # quiet this week looked identical to a healthy one. switch_review covers exactly that silence but
-# only for the five gated switches. Read-only apart from its own history file; the regression alarm
-# needs at least two snapshots, so the first run only establishes a baseline.
+# only for the five gated switches. Read-only apart from its own history file and its invocation
+# heartbeat: ORCH_FIRING_MONITOR_DISABLED=1 stops the history write, and ORCH_DISABLE_STEPS skips
+# the step, so nothing is written. The regression alarm needs at least two snapshots, so the first
+# run only establishes a baseline.
 if _cadence_due capability-firing-monitor && _attempt_ok capability-firing-monitor; then
   echo "  [cadence] capability firing monitor (weekly; regressions + overdue against declared cadence)"
   if python3 "$ORCH/capability_firing_monitor.py" --record --json \

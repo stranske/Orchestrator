@@ -3,7 +3,7 @@
 `review()` read the ledger with `capabilities.load`, the WRITING loader. On a ledger it finds out of
 date, `load()` creates the file, seeds declared gate rows that are missing, reconciles
 declaration-owned fields and retires rows past their expiry, and writes the result back. So a weekly
-report whose cadence row says "read-only apart from its own history file" could rewrite the ledger
+report whose cadence row said "read-only apart from its own history file" could rewrite the ledger
 every capability reads, and its kill switch, `ORCH_FIRING_MONITOR_DISABLED=1`, stopped only the
 history write. PR #328 fixed the same defect in `capability_activation_audit.audit()` by reading
 with `capabilities.load_declared`, which reconciles an in-memory copy and writes nothing; these
@@ -131,8 +131,10 @@ def test_the_kill_switch_leaves_nothing_written_on_the_ticks_own_command(
     isolated, monkeypatch, capsys
 ):
     # orchestrate.sh runs `capability_firing_monitor.py --record --json`, and the cadence registry
-    # says ORCH_FIRING_MONITOR_DISABLED=1 stops the write. Before this fix it stopped the history
-    # write only; review() could still rewrite the ledger it reads.
+    # said ORCH_FIRING_MONITOR_DISABLED=1 stops the write. Before this fix it stopped the history
+    # write only; review() could still rewrite the ledger it reads. `isolated` switches heartbeats
+    # off: in a live tick the monitor also records its own invocation heartbeat, which this switch
+    # does not gate (ORCH_DISABLE_STEPS skips the step instead).
     ledger = _ledger(isolated, "reconcile")
     monkeypatch.setattr(capabilities, "REG", ledger)
     monkeypatch.setattr(monitor, "DISABLED", True)  # what ORCH_FIRING_MONITOR_DISABLED=1 sets
