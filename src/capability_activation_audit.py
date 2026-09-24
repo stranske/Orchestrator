@@ -1063,12 +1063,39 @@ ADVISOR_REACH_PROBE_REPO = "stranske/Ready"
 ADVISOR_REACH_PROBE_LANE = "opener"
 
 
+def _not_live_by_status(
+    caps: dict[str, dict], ids: set[str] | frozenset[str]
+) -> dict[str, list[str]]:
+    """The ids among `ids` whose ledger row is not live, by status: the shape of `not_audited`.
+
+    An id with no ledger row is not listed. Absence is not a lifecycle state, so each caller says
+    what it means for its own quantity rather than this helper deciding for all of them.
+    """
+    by_status: dict[str, list[str]] = {}
+    for cap_id in sorted(ids):
+        status = (caps.get(cap_id) or {}).get("status")
+        if status in capabilities.NOT_LIVE_STATES:
+            by_status.setdefault(str(status), []).append(cap_id)
+    return dict(sorted(by_status.items()))
+
+
 def advisor_reach(caps: dict[str, dict]) -> dict:
     """Which capabilities can a free-text task NAME through their declared matcher? PURE.
 
     Pure over an already-loaded ledger dict on purpose: no second `capabilities.load`, so this can
     never take a writing load of the live ledger, and the selftest can drive it with three rows.
+
+    EVERY BASELINE ID LANDS IN EXACTLY ONE of `reachable`, `regressed` and `baseline_not_live`. The
+    probe skips a row that is not live (`capabilities.NOT_LIVE_STATES`), so the baseline minus
+    `reachable` used to list a RETIREMENT as a regression. That row left the front door through a
+    lifecycle action, so it is named by status instead and cannot raise `advisor_reach_regression`.
+    A baseline id with no ledger row at all stays `regressed`: nothing recorded a decision, and
+    silence must never read as a pass.
     """
+    # Read from the ledger before the advisor is consulted, so BOTH returns carve the same rows and
+    # an unreadable advisor cannot relabel a retirement either.
+    baseline_not_live = _not_live_by_status(caps, ADVISOR_REACH_BASELINE)
+    not_live_baseline = {cap_id for ids in baseline_not_live.values() for cap_id in ids}
     try:
         import capability_advisor
 
@@ -1079,9 +1106,11 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
             "reachable": [],
             "by_capability": {},
             "task_types": [],
-            "regressed": sorted(ADVISOR_REACH_BASELINE),
+            "regressed": sorted(ADVISOR_REACH_BASELINE - not_live_baseline),
+            "baseline_not_live": baseline_not_live,
             "direct_entry": {},
             "direct_entry_targets": [],
+            "direct_entry_not_live": {},
             "direct_entry_only": [],
             "direct_entry_baseline": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
             "direct_entry_regressed": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
@@ -1094,6 +1123,16 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
     except Exception:  # noqa: BLE001
         direct = {}
     direct_targets = {str(v) for v in direct.values() if v}
+    # THE DIRECT HALF MEASURES THE MAP, and a not-live target is NAMED BESIDE it. Its baseline
+    # exists to catch a dispatcher edit that narrows reach, a property of CODE, so
+    # `direct_entry_targets` and `direct_entry_regressed` never read the machine-local ledger: a
+    # retirement must neither mask a map edit nor read as one. But the advisor offers a target
+    # only while its row is live, and most declared-baseline ids are map targets too, so the two
+    # fields that claim REACH -- `direct_entry_only` and `total_reachable_count` -- count live
+    # targets only, as `reachable` already does. Otherwise a retired `testgen-lane` left
+    # `reachable` and came straight back through the map: one report disagreeing with itself.
+    direct_not_live = _not_live_by_status(caps, direct_targets)
+    live_targets = direct_targets - {cap_id for ids in direct_not_live.values() for cap_id in ids}
     by_capability: dict[str, list[str]] = {}
     for task_type in task_types:
         trigger = {
@@ -1116,16 +1155,19 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
         "reachable_count": len(reachable),
         "capability_count": len(caps),
         "baseline": sorted(ADVISOR_REACH_BASELINE),
-        "regressed": sorted(ADVISOR_REACH_BASELINE - set(reachable)),
+        # `reachable` never holds a not-live row, so these three partition the baseline.
+        "regressed": sorted(ADVISOR_REACH_BASELINE - set(reachable) - not_live_baseline),
+        "baseline_not_live": baseline_not_live,
         # THE DERIVED HALF. Reported next to the declared half because "5 reachable" and
         # "7 reachable" are both true of different populations, and two disagreeing reach numbers in
         # two modules is how a parallel inventory starts.
         "direct_entry": dict(sorted(direct.items())),
         "direct_entry_targets": sorted(direct_targets),
-        "direct_entry_only": sorted(direct_targets - set(reachable)),
+        "direct_entry_not_live": direct_not_live,
+        "direct_entry_only": sorted(live_targets - set(reachable)),
         "direct_entry_baseline": sorted(ADVISOR_DIRECT_ENTRY_BASELINE),
         "direct_entry_regressed": sorted(ADVISOR_DIRECT_ENTRY_BASELINE - direct_targets),
-        "total_reachable_count": len(set(reachable) | direct_targets),
+        "total_reachable_count": len(set(reachable) | live_targets),
     }
 
 
@@ -1896,8 +1938,9 @@ def _selftest() -> None:
     import capability_advisor
 
     assert reach["direct_entry"] == dict(sorted(capability_advisor.direct_entry().items())), reach
+    not_live_targets = {c for ids in reach["direct_entry_not_live"].values() for c in ids}
     assert reach["total_reachable_count"] == len(
-        set(reach["reachable"]) | set(reach["direct_entry_targets"])
+        set(reach["reachable"]) | (set(reach["direct_entry_targets"]) - not_live_targets)
     ), reach
     # A derived direct-entry map CAN shrink with no diff in either module (drop an entry from
     # dispatcher.TASK_TYPE_CAPABILITY and the front door narrows in silence), which is why the
@@ -1949,6 +1992,40 @@ def _selftest() -> None:
     # An unreadable advisor must report the whole baseline as regressed rather than an empty,
     # reassuring result — silence must never read as a pass.
     assert advisor_reach({})["regressed"] == sorted(ADVISOR_REACH_BASELINE)
+    # ...but a baseline row that is NOT LIVE left the front door by a lifecycle action. It is named
+    # by status on both returns, never listed as regressed, and a not-live map target is named
+    # beside the map while the map itself, and so `direct_entry_regressed`, stays as it was.
+    retired = {
+        victim: {
+            "capability_id": victim,
+            "status": "retired",
+            "matcher": {"field": "task_type", "operator": "in", "value": ["testgen"]},
+        },
+        "offload": {"capability_id": "offload", "status": "superseded", "matcher": {}},
+    }
+    carved = advisor_reach(retired)
+    assert carved["baseline_not_live"] == {"retired": [victim]}, carved
+    assert carved["regressed"] == sorted(ADVISOR_REACH_BASELINE - {victim}), carved
+    assert carved["direct_entry_not_live"]["superseded"] == ["offload"], carved
+    assert "offload" in carved["direct_entry_targets"], carved
+    assert "offload" not in carved["direct_entry_only"] + carved["direct_entry_regressed"], carved
+    # Nothing in `retired` is live, so the only reach is the map's LIVE targets. (`victim` is
+    # subtracted too because it may be a map target; subtracting a non-target is a no-op.)
+    assert carved["reachable"] == [], carved
+    assert carved["total_reachable_count"] == len(
+        set(carved["direct_entry_targets"]) - {"offload", victim}
+    ), carved
+    # A retirement must not MASK a map edit: the emptied map regresses the whole direct baseline
+    # with `offload` superseded exactly as it does with `offload` live.
+    with _mock.patch.object(capability_advisor, "direct_entry", dict):
+        shrunk_retired = advisor_reach(retired)
+    assert shrunk_retired["direct_entry_regressed"] == sorted(
+        ADVISOR_DIRECT_ENTRY_BASELINE
+    ), shrunk_retired
+    with _mock.patch.dict(sys.modules, {"capability_advisor": None}):
+        blind = advisor_reach(retired)
+    assert "unreadable" in blind and blind["baseline_not_live"] == {"retired": [victim]}, blind
+    assert blind["regressed"] == carved["regressed"], blind
 
     # EXTERNAL CALLER. `entrypoint_external` is a blocker only while the cross-repo change is
     # OUTSTANDING. Once the caller lands, continuing to report "blocked" would be the same

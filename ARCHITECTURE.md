@@ -764,6 +764,22 @@ the drain is the tick's daily `--snapshot`, which records unconditionally, so th
 It is deliberately not re-baselined on every retirement: that would blank the comparison on the day of
 a lifecycle action and hide any real regression in the same window.
 
+**The audit's advisor-reach sub-report applies the same rule (2026-09-24).** `advisor_reach` probes
+live rows only but computed `regressed` as the baseline minus what it reached, so a RETIRED baseline
+capability would have read as a reach regression in the artifact's `advisor_reach` block. Every
+baseline id now lands in exactly one of `reachable`, `regressed` and `baseline_not_live` (by status),
+on the unreadable-advisor return too; an id with no ledger row stays `regressed`, because silence must
+never read as a pass. The direct-entry half still measures the dispatcher-derived MAP:
+`direct_entry_targets` and `direct_entry_regressed` never read the machine-local ledger, because that
+baseline exists to catch a dispatcher edit that narrows reach, and a retirement must neither mask the
+edit nor read as one. A not-live map target is named beside the map as `direct_entry_not_live`, and
+the two fields that claim reach, `direct_entry_only` and `total_reachable_count`, count live targets
+only: four of the five declared-baseline ids are map targets as well, so a retired one left
+`reachable` and came straight back through the map. None of it reaches the graded projection:
+`advisor_reach_regression` attaches only to live rows, whose membership in `regressed` is unchanged,
+so `by_defect` is identical for every input and no verdict is minted. Latent when fixed: the ledger's
+one not-live row was in neither baseline.
+
 ### A DECLARED BINDING WITH NO CALLER IS THE SAME DEFECT AS NO BINDING
 
 Layer 1 is offered to a surface *by that surface's own consult*. So a surface nothing consults is a
