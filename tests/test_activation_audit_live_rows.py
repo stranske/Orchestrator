@@ -164,6 +164,33 @@ def test_a_snapshot_from_another_population_is_an_unknown_baseline(
     assert "unknown baseline" in audit.format_scorecard(rep, prog)
 
 
+@pytest.mark.parametrize(
+    "snapshot_declares", [False, True], ids=["neither-declares", "only-the-snapshot-declares"]
+)
+def test_a_report_that_declares_no_population_is_never_compared(
+    tmp_path, monkeypatch, snapshot_declares
+):
+    # An undeclared population never MATCHES, not even another undeclared one: assuming it does is
+    # the same guess as comparing against a snapshot that predates the record.
+    key = capabilities.FINDING_POPULATION_KEY
+    rep = {k: v for k, v in _report(tmp_path, monkeypatch).items() if k != key}
+    snapshot = {
+        "generated_at": rep["generated_at"] - 86400,
+        "total": 1,
+        "reachable": 1,
+        "blocked": 0,
+        "reachable_ids": ["live-silent"],
+        "by_defect": {},
+    }
+    if snapshot_declares:
+        snapshot[key] = capabilities.live_finding_population()
+    prog = audit.progress(rep, path=_history(tmp_path, snapshot))
+    assert prog["baseline"] is None, prog
+    assert not {"gained", "regressed", "retired_since"} & set(prog), prog
+    # It names the missing declaration, rather than promising a next snapshot that cannot help.
+    assert "declares no population" in prog["detail"], prog["detail"]
+
+
 def test_the_scorecard_says_retired_since_not_regressed(tmp_path, monkeypatch):
     rep = _report(tmp_path, monkeypatch)
     path = tmp_path / "history.json"

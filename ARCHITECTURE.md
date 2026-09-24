@@ -756,9 +756,13 @@ that was reachable and was then retired read as REGRESSED in the scorecard. It i
 reading holds only against a snapshot drawn from the same population, so each snapshot records the
 population the report declares, and a snapshot that predates the record, or was drawn from another
 population, is an UNKNOWN BASELINE: nothing is compared against it rather than guessing which of its
-rows were live. The drain is the tick's daily `--snapshot`, which records unconditionally, so the state
-lasts one run. It is deliberately not re-baselined on every retirement: that would blank the
-comparison on the day of a lifecycle action and hide any real regression in the same window.
+rows were live. An undeclared population matches nothing, not even another undeclared one. That is
+the opposite of `tick_evidence`, where most graded reports declare no population and must stay
+comparable; the audit always declares, so an absence here can only be a missing record. A report that
+declares none says so and names the fix, because no snapshot of it could clear the state. Otherwise
+the drain is the tick's daily `--snapshot`, which records unconditionally, so the state lasts one run.
+It is deliberately not re-baselined on every retirement: that would blank the comparison on the day of
+a lifecycle action and hide any real regression in the same window.
 
 ### A DECLARED BINDING WITH NO CALLER IS THE SAME DEFECT AS NO BINDING
 

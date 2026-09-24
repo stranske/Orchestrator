@@ -1497,31 +1497,41 @@ def progress(rep: dict, *, path: Path | None = None) -> dict:
     report's, so each snapshot records the population it was drawn from. One that predates the
     record, or was drawn from another, is an UNKNOWN BASELINE: nothing is compared against it rather
     than guessing which of its rows were live. The tick's daily `--snapshot` records a comparable
-    one, so that state clears on the next run.
+    one, so that state clears on the next run. An undeclared population matches nothing, not even
+    another undeclared one, and a report that declares none says so, because no snapshot of it
+    could ever clear that.
     """
     history = load_history(path)
     if not history:
         return {"baseline": None, "detail": "no snapshots yet — run --snapshot to start tracking"}
     prev = history[-1]
     key = capabilities.FINDING_POPULATION_KEY
-    if prev.get(key) != rep.get(key):
-        why = (
-            "predates population recording"
-            if prev.get(key) is None
-            else "was drawn from a different population"
-        )
+    then, now = prev.get(key), rep.get(key)
+    # AN UNDECLARED POPULATION NEVER MATCHES, not even another undeclared one: assuming it does is
+    # the same guess as comparing against a snapshot that predates the record.
+    if now is None or then is None or then != now:
+        if now is None:
+            # Checked first because it is the cause no snapshot can clear: every snapshot of this
+            # report would record the same absence.
+            why = "this report declares no population, so no snapshot is comparable with it"
+            remedy = f"declare `{key}` in the report, as audit() does"
+        elif then is None:
+            why = "the last snapshot predates population recording"
+            remedy = "the next --snapshot records a comparable one"
+        else:
+            why = "the last snapshot was drawn from a different population"
+            remedy = "the next --snapshot records a comparable one"
         return {
             "baseline": None,
             "snapshots": len(history),
             "baseline_unknown": {
                 "snapshot_at": prev.get("generated_at"),
-                "snapshot_population": prev.get(key),
-                "report_population": rep.get(key),
+                "snapshot_population": then,
+                "report_population": now,
             },
             "detail": (
-                f"unknown baseline — the last snapshot {why}, so which of its rows were live is "
-                f"unknown and nothing is compared against it; the next --snapshot records a "
-                f"comparable one"
+                f"unknown baseline — {why}; which of its rows were live is unknown, so nothing is "
+                f"compared against it; {remedy}"
             ),
         }
     prev_ids = set(prev.get("reachable_ids") or [])
@@ -2195,10 +2205,13 @@ def _selftest() -> None:
         finally:
             globals()["HERE"] = saved
 
-    # PROGRESS: snapshots must show movement, and a regression must be visible as such.
+    # PROGRESS: snapshots must show movement, and a regression must be visible as such. Every
+    # comparable report DECLARES its population: an undeclared one is never compared.
+    pop = {capabilities.FINDING_POPULATION_KEY: capabilities.live_finding_population()}
     with tempfile.TemporaryDirectory(prefix="cap-hist-") as td:
         hp = Path(td) / "h.json"
         r1 = {
+            **pop,
             "generated_at": 1000,
             "total": 3,
             "reachable": 1,
@@ -2208,6 +2221,7 @@ def _selftest() -> None:
         }
         assert record_snapshot(r1, path=hp)["recorded"]
         r2 = {
+            **pop,
             "generated_at": 2000,
             "total": 3,
             "reachable": 2,
@@ -2235,13 +2249,15 @@ def _selftest() -> None:
         r4 = dict(r3, generated_at=4000, not_audited={"retired": ["b"]})
         p4 = progress(r4, path=hp)
         assert p4["regressed"] == [] and p4["retired_since"] == {"retired": ["b"]}, p4
-        # A snapshot drawn from another population is an UNKNOWN baseline, never compared: r2 was
-        # recorded declaring none, and r5 declares the live-row population.
-        r5 = dict(
-            r4, **{capabilities.FINDING_POPULATION_KEY: capabilities.live_finding_population()}
-        )
+        # A snapshot drawn from another population is an UNKNOWN baseline, never compared.
+        r5 = dict(r4, **{capabilities.FINDING_POPULATION_KEY: {"excluded_statuses": ["retired"]}})
         p5 = progress(r5, path=hp)
         assert p5["baseline"] is None and "regressed" not in p5, p5
+        # ...and so is an UNDECLARED one, even against a report that declares none either.
+        bare = {k: v for k, v in r4.items() if k != capabilities.FINDING_POPULATION_KEY}
+        record_snapshot(bare, path=Path(td) / "bare.json")
+        p6 = progress(bare, path=Path(td) / "bare.json")
+        assert p6["baseline"] is None and "declares no population" in p6["detail"], p6
         assert progress(r2, path=Path(td) / "absent.json")["baseline"] is None
 
     print(
