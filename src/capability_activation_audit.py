@@ -26,7 +26,9 @@ and an entrypoint with no caller. A hand-found defect that this audit cannot see
 audit, and that is the standard to hold it to.
 
 IT PERSISTS SNAPSHOTS so progress is measurable rather than asserted. `--progress` diffs the
-current audit against history: what moved to reachable, what regressed, what is unchanged.
+current audit against history: what moved to reachable, what regressed, what left the live
+population (`retired_since`, never a regression), what is unchanged. A snapshot drawn from a
+different population is an unknown baseline and is not compared at all.
 
     python3 capability_activation_audit.py              # scorecard
     python3 capability_activation_audit.py --json
@@ -1467,6 +1469,9 @@ def record_snapshot(rep: dict, *, path: Path | None = None) -> dict:
         "reachable": rep["reachable"],
         "blocked": rep["blocked"],
         "not_audited": rep.get("not_audited_count", 0),
+        # THE POPULATION `reachable_ids` WAS DRAWN FROM, copied from the report's own declaration,
+        # because `progress()` may compare this snapshot only with a report drawn the same way.
+        capabilities.FINDING_POPULATION_KEY: rep.get(capabilities.FINDING_POPULATION_KEY),
         "reachable_ids": sorted(rep["reachable_ids"]),
         "by_defect": {k: len(v) for k, v in rep["by_defect"].items()},
     }
@@ -1481,13 +1486,63 @@ def record_snapshot(rep: dict, *, path: Path | None = None) -> dict:
 
 
 def progress(rep: dict, *, path: Path | None = None) -> dict:
-    """Movement since the last snapshot: gained, regressed, still blocked."""
+    """Movement since the last snapshot: gained, regressed, retired since, still blocked.
+
+    A row reachable at the last snapshot and NOT LIVE now left the audited population through a
+    lifecycle action; it did not regress. `audit()` keeps not-live rows out of `reachable_ids`, so a
+    retirement used to read as a regression in the scorecard. `retired_since` names such rows by
+    status, from the report's own `not_audited`, and `regressed` keeps only the rest.
+
+    That reading needs the snapshot's `reachable_ids` drawn from the same population as the
+    report's, so each snapshot records the population it was drawn from. One that predates the
+    record, or was drawn from another, is an UNKNOWN BASELINE: nothing is compared against it rather
+    than guessing which of its rows were live. The tick's daily `--snapshot` records a comparable
+    one, so that state clears on the next run. An undeclared population matches nothing, not even
+    another undeclared one, and a report that declares none says so, because no snapshot of it
+    could ever clear that.
+    """
     history = load_history(path)
     if not history:
         return {"baseline": None, "detail": "no snapshots yet — run --snapshot to start tracking"}
     prev = history[-1]
+    key = capabilities.FINDING_POPULATION_KEY
+    then, now = prev.get(key), rep.get(key)
+    # AN UNDECLARED POPULATION NEVER MATCHES, not even another undeclared one: assuming it does is
+    # the same guess as comparing against a snapshot that predates the record.
+    if now is None or then is None or then != now:
+        if now is None:
+            # Checked first because it is the cause no snapshot can clear: every snapshot of this
+            # report would record the same absence.
+            why = "this report declares no population, so no snapshot is comparable with it"
+            remedy = f"declare `{key}` in the report, as audit() does"
+        elif then is None:
+            why = "the last snapshot predates population recording"
+            remedy = "the next --snapshot records a comparable one"
+        else:
+            why = "the last snapshot was drawn from a different population"
+            remedy = "the next --snapshot records a comparable one"
+        return {
+            "baseline": None,
+            "snapshots": len(history),
+            "baseline_unknown": {
+                "snapshot_at": prev.get("generated_at"),
+                "snapshot_population": then,
+                "report_population": now,
+            },
+            "detail": (
+                f"unknown baseline — {why}; which of its rows were live is unknown, so nothing is "
+                f"compared against it; {remedy}"
+            ),
+        }
     prev_ids = set(prev.get("reachable_ids") or [])
     now_ids = set(rep["reachable_ids"])
+    not_live_now = {
+        cap_id: status for status, ids in (rep.get("not_audited") or {}).items() for cap_id in ids
+    }
+    lost = prev_ids - now_ids
+    retired_since: dict[str, list[str]] = {}
+    for cap_id in sorted(lost & set(not_live_now)):
+        retired_since.setdefault(not_live_now[cap_id], []).append(cap_id)
     prev_def = prev.get("by_defect") or {}
     now_def = {k: len(v) for k, v in rep["by_defect"].items()}
     return {
@@ -1496,7 +1551,8 @@ def progress(rep: dict, *, path: Path | None = None) -> dict:
         "reachable_then": prev.get("reachable"),
         "reachable_now": rep["reachable"],
         "gained": sorted(now_ids - prev_ids),
-        "regressed": sorted(prev_ids - now_ids),
+        "regressed": sorted(lost - set(not_live_now)),
+        "retired_since": dict(sorted(retired_since.items())),
         "defect_delta": {
             k: now_def.get(k, 0) - prev_def.get(k, 0)
             for k in sorted(set(now_def) | set(prev_def))
@@ -1544,6 +1600,14 @@ def format_scorecard(rep: dict, prog: dict | None = None) -> str:
             lines.append(f"    GAINED:    {', '.join(prog['gained'])}")
         if prog["regressed"]:
             lines.append(f"    REGRESSED: {', '.join(prog['regressed'])}")
+        retired_since = prog.get("retired_since") or {}
+        if retired_since:
+            # Printed beside REGRESSED because both explain the same drop in the count above.
+            lines.append(
+                "    RETIRED SINCE: "
+                + "; ".join(f"{status}: {', '.join(ids)}" for status, ids in retired_since.items())
+                + "  (left the live population; not a regression)"
+            )
         if prog["defect_delta"]:
             lines.append(
                 "    defect delta: "
@@ -2141,10 +2205,13 @@ def _selftest() -> None:
         finally:
             globals()["HERE"] = saved
 
-    # PROGRESS: snapshots must show movement, and a regression must be visible as such.
+    # PROGRESS: snapshots must show movement, and a regression must be visible as such. Every
+    # comparable report DECLARES its population: an undeclared one is never compared.
+    pop = {capabilities.FINDING_POPULATION_KEY: capabilities.live_finding_population()}
     with tempfile.TemporaryDirectory(prefix="cap-hist-") as td:
         hp = Path(td) / "h.json"
         r1 = {
+            **pop,
             "generated_at": 1000,
             "total": 3,
             "reachable": 1,
@@ -2154,6 +2221,7 @@ def _selftest() -> None:
         }
         assert record_snapshot(r1, path=hp)["recorded"]
         r2 = {
+            **pop,
             "generated_at": 2000,
             "total": 3,
             "reachable": 2,
@@ -2176,12 +2244,27 @@ def _selftest() -> None:
         p3 = progress(r3, path=hp)
         assert p3["regressed"] == ["b"], p3
         assert p3["defect_delta"] == {"no_heartbeat": 1}, p3
+        # ...but the same drop by a row that LEFT THE LIVE POPULATION is a retirement, named from
+        # the report's own `not_audited` rather than reported as a regression.
+        r4 = dict(r3, generated_at=4000, not_audited={"retired": ["b"]})
+        p4 = progress(r4, path=hp)
+        assert p4["regressed"] == [] and p4["retired_since"] == {"retired": ["b"]}, p4
+        # A snapshot drawn from another population is an UNKNOWN baseline, never compared.
+        r5 = dict(r4, **{capabilities.FINDING_POPULATION_KEY: {"excluded_statuses": ["retired"]}})
+        p5 = progress(r5, path=hp)
+        assert p5["baseline"] is None and "regressed" not in p5, p5
+        # ...and so is an UNDECLARED one, even against a report that declares none either.
+        bare = {k: v for k, v in r4.items() if k != capabilities.FINDING_POPULATION_KEY}
+        record_snapshot(bare, path=Path(td) / "bare.json")
+        p6 = progress(bare, path=Path(td) / "bare.json")
+        assert p6["baseline"] is None and "declares no population" in p6["detail"], p6
         assert progress(r2, path=Path(td) / "absent.json")["baseline"] is None
 
     print(
         "capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
         "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
-        "directions, advisor reach + narrowing, progress + regression tracking, "
+        "directions, advisor reach + narrowing, progress + regression tracking with "
+        "retired-since kept apart and an unknown baseline never compared, "
         "entrypoint absent-here vs present vs external-repo vs undeclared with the "
         "create/delete flip and a diagnostic that cannot suppress a failure)"
     )

@@ -425,6 +425,34 @@ def guidance_summary(entries: list[dict]) -> dict:
     }
 
 
+def _live_binding(declared: dict[str, str], caps: dict[str, dict]) -> dict:
+    """Split a surface's declared binding into the rows this answer may OFFER and the rest, NAMED.
+
+    ONE map for insertion, annotation and reporting. The classified path used to insert only live
+    bound rows while REPORTING the raw binding, so a retired bound row was counted in `bound_count`
+    and listed in `bound_capabilities` while it could never be offered, and the classification-miss
+    path filtered the same rows again with its own copy of the rule. The rows left out are named,
+    never dropped: `not_live` by status (`capabilities.NOT_LIVE_STATES`), and `unregistered` for a
+    binding with no ledger row, so `bound` + `not_live` + `unregistered` is always the declared set.
+    """
+    bound: dict[str, str] = {}
+    not_live: dict[str, list[str]] = {}
+    unregistered: list[str] = []
+    for cap_id, reason in declared.items():
+        cap = caps.get(cap_id)
+        if cap is None:
+            unregistered.append(cap_id)
+        elif cap.get("status") in capabilities.NOT_LIVE_STATES:
+            not_live.setdefault(str(cap.get("status")), []).append(cap_id)
+        else:
+            bound[cap_id] = reason
+    return {
+        "bound": bound,
+        "not_live": {status: sorted(ids) for status, ids in sorted(not_live.items())},
+        "unregistered": sorted(unregistered),
+    }
+
+
 def advise(
     text: str,
     *,
@@ -493,6 +521,8 @@ def advise(
             "dispatch_ready_count": 0,
             "bound_count": 0,
             "bound_capabilities": [],
+            "bound_not_live": {},
+            "bound_unregistered": [],
             "not_applicable": [],
             "coverage": {
                 "ledger_count": len(caps),
@@ -508,6 +538,13 @@ def advise(
             "reason": f"surface {surface!r} deliberately takes no capabilities: {suppressed}",
         }
 
+    # THE LIVE BINDING, derived once and read by every branch below: the bound-only insertion, the
+    # `bound` annotation, the bound-first partition and the reported `bound_count` /
+    # `bound_capabilities`. The rows it cannot offer travel beside it as `bound_not_live` and
+    # `bound_unregistered`, so the declared set is accounted for on every answer.
+    binding = _live_binding(binding_for(surface or skill, path=path), caps)
+    bound = binding["bound"]
+
     candidates = classify_task(text)
     if not candidates:
         # A DECLARED BINDING MUST SURVIVE A CLASSIFICATION MISS. This early return used to drop
@@ -515,12 +552,7 @@ def advise(
         # whenever its own words did not hit the keyword vocabulary -- the binding depending on the
         # classifier, which is the single thing it exists not to do. Free text that classifies badly
         # is the common case, not the edge case.
-        declared = binding_for(surface or skill, path=path)
-        live = [
-            (cid, why)
-            for cid, why in sorted(declared.items())
-            if cid in caps and caps[cid].get("status") not in capabilities.NOT_LIVE_STATES
-        ]
+        live = sorted(bound.items())
         if live:
             entries = [
                 {
@@ -566,6 +598,8 @@ def advise(
                 "dispatch_ready_count": sum(1 for e in entries if e["dispatch_ready"]),
                 "bound_count": len(live),
                 "bound_capabilities": sorted(c for c, _ in live),
+                "bound_not_live": binding["not_live"],
+                "bound_unregistered": binding["unregistered"],
                 "not_applicable": [],
                 "precondition": precondition,
                 "guidance": guidance_summary(entries),
@@ -623,6 +657,10 @@ def advise(
             "surface": (surface or skill) or None,
             "bound_count": 0,
             "bound_capabilities": [],
+            # Named here too: a surface whose every bound row is retired or unregistered lands on
+            # this branch, and "nothing is bound" must not read like "everything bound is gone".
+            "bound_not_live": binding["not_live"],
+            "bound_unregistered": binding["unregistered"],
             "precondition": _annotate_preconditions(
                 [], repository, repo_path, pr_facts=pr_facts, pr=pr
             ),
@@ -659,7 +697,15 @@ def advise(
     unmatched: dict[str, dict] = {}
     for candidate in candidates:
         direct = DIRECT_ENTRY.get(candidate["task_type"])
-        if direct and direct in caps and not any(m["capability_id"] == direct for m in matched):
+        # LIVE TARGETS ONLY, the rule the trigger loop below already applied. The map is derived
+        # from the dispatcher and knows nothing about the ledger, so without this check a retired
+        # `offload` or `runtime-ac-checks` would still be offered as `entered_directly`.
+        if (
+            direct
+            and direct in caps
+            and caps[direct].get("status") not in capabilities.NOT_LIVE_STATES
+            and not any(m["capability_id"] == direct for m in matched)
+        ):
             cap = caps[direct]
             matched.append(
                 {
@@ -714,15 +760,13 @@ def advise(
     # DECLARED BINDING FIRST. A bound capability is added even if the keyword classifier missed it --
     # that is the whole point: the binding must not depend on classification working. Unbound matches
     # are kept and ranked after, never dropped, or the binding becomes a gate that starves its own
-    # promotion path.
-    bound = binding_for(surface or skill, path=path)
+    # promotion path. `bound` is the LIVE map derived above, so every row it holds exists and can be
+    # offered; the ones it left out are reported beside it, never counted in it.
     if bound:
         present = {m["capability_id"] for m in matched}
-        for cap_id, reason in bound.items():
-            bound_cap: dict[str, Any] | None = caps.get(cap_id)
-            if bound_cap is None or bound_cap.get("status") in capabilities.NOT_LIVE_STATES:
-                continue
+        for cap_id in bound:
             if cap_id not in present:
+                bound_cap = caps[cap_id]
                 matched.append(
                     {
                         "capability_id": cap_id,
@@ -791,6 +835,8 @@ def advise(
         "contraindicated": warned,
         "bound_count": len(bound),
         "bound_capabilities": sorted(bound),
+        "bound_not_live": binding["not_live"],
+        "bound_unregistered": binding["unregistered"],
         "not_applicable": not_applicable,
         # THE AXIS, reported rather than acted on. `unmet` names what was offered anyway and can now
         # be dismissed in one line instead of investigated — the cost three audit rounds actually
@@ -3339,6 +3385,20 @@ def format_advice(a: dict) -> str:
             f"preconditions — guidance is stamped on every entry unconditionally.",
             "",
         ]
+    not_live = a.get("bound_not_live") or {}
+    unregistered = a.get("bound_unregistered") or []
+    if not_live or unregistered:
+        # THE REST OF THE DECLARED SET, printed only when there is one. Such a row used to be
+        # counted as bound while never offered; now it is named, so a reader comparing the surface's
+        # declaration with the list below can see where the difference went.
+        parts = [f"{status}: {', '.join(ids)}" for status, ids in not_live.items()]
+        if unregistered:
+            parts.append(f"no ledger row here: {', '.join(unregistered)}")
+        lines += [
+            f"-- bound to this surface but not offered — {'; '.join(parts)}. A binding is offered "
+            f"only while its row is registered and live.",
+            "",
+        ]
     if a["task_types"]:
         lines.append(f"classified as: {', '.join(a['task_types'])} (confidence: {a['confidence']})")
         for tt, hits in (a.get("classification_evidence") or {}).items():
@@ -4014,8 +4074,9 @@ def _selftest_bindings() -> None:
             assert miss["confidence"] == "binding_only", miss["confidence"]
             assert miss["bound_count"] == 2, miss
             assert all(m["binding_reason"] for m in miss["capabilities"]), miss["capabilities"]
-            # A retired capability must never be bound in.
+            # A retired capability must never be bound in -- and is NAMED, not dropped.
             assert "gone" not in ids, ids
+            assert miss["bound_not_live"] == {"retired": ["gone"]}, miss["bound_not_live"]
             # ...and with NO surface the same text still answers nothing, so the binding is what
             # made the difference rather than a loosened classifier.
             bare = advise("xyzzy plugh frobnicate", path=ledger, record=False)
@@ -4102,6 +4163,12 @@ def _selftest_bindings() -> None:
             assert not any(
                 hit["capabilities"][i].get("bound") for i in range(first_unbound, len(hid))
             ), hid
+            # 2b. THE CLASSIFIED PATH REPORTS WHAT IT OFFERS. It inserted live rows only while
+            # counting the raw binding, so `gone` read as bound here and was never offered; only
+            # the miss path above was ever checked, which is how that went unseen.
+            assert hit["bound_count"] == 2, hit["bound_count"]
+            assert hit["bound_capabilities"] == ["bound-a", "bound-b"], hit["bound_capabilities"]
+            assert hit["bound_not_live"] == {"retired": ["gone"]}, hit["bound_not_live"]
 
             # 3. SIZE, on the RESOLVED set. Asserting on the table entries would miss the case that
             # matters: a phase key merges with its surface, so the context a caller actually sees can

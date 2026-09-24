@@ -243,14 +243,11 @@ safety switch, not dead code.
   the match heartbeat is idempotent on its digest, which bounds the whole addition to 34 events on
   the first tick of each day and zero on the other 23. Fails open per phase, always exits 0. Kill
   switch: `ORCH_DISABLE_STEPS=tick-phase-consult`.
-- **`verify.py` is the `ci` surface and now consults as one.** Three capabilities were declared for
-  a `ci` surface no caller ever reached — the same defect as no binding at all. `verify.py` runs on
-  every PR and already executes the admission gate, so it consults with `surface: "ci"` and prints
-  one summary line carrying both quantities: what the table DECLARES (identical on every machine)
-  beside what this machine's ledger could OFFER, plus the findability pair (rows bound to some
-  surface / rows bound to none). Read-only (`record=False` — a verifier must not write to the
-  ledger its own gates read), never a skip, and it can never enter `problems`, so exit semantics and
-  every reported count are untouched.
+- **The `ci` surface binds nothing, deliberately.** Three capabilities were declared for a `ci`
+  surface no caller ever reached — the same defect as no binding at all. This entry used to say
+  `verify.py` now consults as that surface; that consult was never committed (corrected
+  2026-09-23). `ci` is declared `NO_BINDING` in `capability_advisor.SURFACE_BINDINGS`, whose
+  entry records why and is the one to restore if a CI-side consult is ever added.
 - **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
   the code path that would produce an outcome (Thompson never chooses while the mode is
   epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label
