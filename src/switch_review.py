@@ -744,11 +744,22 @@ def _exploration_gate() -> dict:
     }
 
 
-def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path=None) -> dict:
-    """Which held-or-idle switches are due for an owner decision, and why."""
-    import capability_recurrence_check as rc
+def switch_states(
+    *, now: int | None = None, env: Mapping[str, str] | None = None, path=None
+) -> dict:
+    """The switch rows alone: each `SWITCH_CAPABILITY` flag that is held off or on but idle.
 
-    _capability_heartbeat()
+    `review()` is a SWEEP. Beside these rows it runs `fleet_gates` (live `gh` calls: one PR listing
+    per consumer repo, one GraphQL review-thread query per open canary), `mirror_drift` (git),
+    `stale_runners` (ps), the exploration gate (a Brain read) and a heartbeat. A consumer
+    that needs only which flag holds which capability must not pay for any of that, and must not be
+    able to reach GitHub: `capability_propensity.declared_facts` called `review()` twice per lookup
+    to echo a gate, so one `offer-improvements` pass ran the whole sweep twice for every bound
+    capability, and the propensity selftest ran it against real GitHub. This is the part of the
+    review such a consumer needs, and it lives HERE so the flag -> capability mapping, and the
+    on/off/idle reading of it, still have exactly one owner.
+    """
+    import capability_recurrence_check as rc
 
     now = int(now if now is not None else time.time())
     env = os.environ if env is None else env
@@ -797,6 +808,16 @@ def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path
                     ),
                 }
             )
+    return {"held_off": due, "on_but_idle": quiet}
+
+
+def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path=None) -> dict:
+    """Which held-or-idle switches are due for an owner decision, and why."""
+    _capability_heartbeat()
+
+    now = int(now if now is not None else time.time())
+    states = switch_states(now=now, env=env, path=path)
+    due, quiet = states["held_off"], states["on_but_idle"]
 
     # NOT `now=now`: `stale_runners` derives a process start from `now - etime` and compares it to
     # the mirror's real mtime, so an injected review clock (the selftest uses 2023) puts every start
@@ -1225,11 +1246,34 @@ def _selftest_fleet_gates() -> None:
 
 
 def _selftest() -> None:
+    global _GH_CALL_RUNNER
+    _selftest_stale_runners()
+    _selftest_fleet_gates()
+    # NO NETWORK. `review()` runs `fleet_gates` with the real `gh` unless a runner is injected, and
+    # nothing in `_selftest_review` asserts on the fleet gates (`_selftest_fleet_gates` owns those,
+    # with its own fakes), so every `review()` there was a live sweep of the consumer fleet.
+    gh_calls: list = []
+
+    def no_network(args, *, timeout_s=GH_TIMEOUT_S):
+        gh_calls.append(args)
+        return False, "", "unmeasured: the selftest has no network"
+
+    saved_runner, _GH_CALL_RUNNER = _GH_CALL_RUNNER, no_network
+    try:
+        _selftest_review(gh_calls)
+    finally:
+        _GH_CALL_RUNNER = saved_runner
+    print(
+        "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
+        "recently-triggering stays silent, '0' is off, dry-run inert, fleet_gates SUSPECT rule, "
+        "switch_states is the review's rows without the sweep)"
+    )
+
+
+def _selftest_review(gh_calls: list) -> None:
     import tempfile
     from pathlib import Path
 
-    _selftest_stale_runners()
-    _selftest_fleet_gates()
     now = 1_700_000_000
     with tempfile.TemporaryDirectory(prefix="switch-review-") as td:
         reg = Path(td) / "capabilities.json"
@@ -1295,10 +1339,30 @@ def _selftest() -> None:
         assert "ORCH_RANGE_LANE_ROLLOUT" in out["raised"], out
         assert len(out["raised"]) == len(rep4["held_off"]) + len(rep4["on_but_idle"]), out
 
-    print(
-        "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
-        "recently-triggering stays silent, '0' is off, dry-run inert, fleet_gates SUSPECT rule)"
-    )
+        # THE ROWS WITHOUT THE SWEEP. `switch_states` is what a consumer reads instead of `review()`
+        # (`capability_propensity.declared_facts`), so it must return exactly the review's rows —
+        # one owner, one reading — and nothing else: no gh call, and no heartbeat, because reading
+        # the rows is not a switch review and must not be credited as one.
+        beats: list = []
+        real_beat = globals()["_capability_heartbeat"]
+        globals()["_capability_heartbeat"] = lambda *a, **k: beats.append(a)
+        try:
+            calls_before = len(gh_calls)
+            swept = review(now=now, env=env, path=reg)
+            # POSITIVE CONTROL: the injected runner IS the seam the sweep uses, and the heartbeat
+            # stub IS the one it calls, or the two "none" assertions below would be vacuous.
+            assert len(gh_calls) > calls_before, "the injected runner is not the sweep's gh seam"
+            assert beats, "the heartbeat stub is not the one review() calls"
+            calls_before, beats_before = len(gh_calls), len(beats)
+            rows = switch_states(now=now, env=env, path=reg)
+            assert len(gh_calls) == calls_before, "switch_states reached gh: it is not the sweep"
+            assert (
+                len(beats) == beats_before
+            ), "switch_states heartbeated: a consumer's read is not a review"
+        finally:
+            globals()["_capability_heartbeat"] = real_beat
+        assert rows == {"held_off": swept["held_off"], "on_but_idle": swept["on_but_idle"]}, rows
+        assert rows["held_off"] and rows["on_but_idle"], "both lists populated, or equality is weak"
 
 
 def main(argv: list[str]) -> int:
