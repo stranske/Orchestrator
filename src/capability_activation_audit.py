@@ -1132,7 +1132,10 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
     # targets only, as `reachable` already does. Otherwise a retired `testgen-lane` left
     # `reachable` and came straight back through the map: one report disagreeing with itself.
     direct_not_live = _not_live_by_status(caps, direct_targets)
-    live_targets = direct_targets - {cap_id for ids in direct_not_live.values() for cap_id in ids}
+    registered_targets = direct_targets & set(caps)
+    live_targets = registered_targets - {
+        cap_id for ids in direct_not_live.values() for cap_id in ids
+    }
     by_capability: dict[str, list[str]] = {}
     for task_type in task_types:
         trigger = {
@@ -1938,9 +1941,14 @@ def _selftest() -> None:
     import capability_advisor
 
     assert reach["direct_entry"] == dict(sorted(capability_advisor.direct_entry().items())), reach
-    not_live_targets = {c for ids in reach["direct_entry_not_live"].values() for c in ids}
+    registered_live_targets = {
+        cap_id
+        for cap_id in reach["direct_entry_targets"]
+        if cap_id in synthetic
+        and synthetic[cap_id].get("status") not in capabilities.NOT_LIVE_STATES
+    }
     assert reach["total_reachable_count"] == len(
-        set(reach["reachable"]) | (set(reach["direct_entry_targets"]) - not_live_targets)
+        set(reach["reachable"]) | registered_live_targets
     ), reach
     # A derived direct-entry map CAN shrink with no diff in either module (drop an entry from
     # dispatcher.TASK_TYPE_CAPABILITY and the front door narrows in silence), which is why the
@@ -2009,12 +2017,13 @@ def _selftest() -> None:
     assert carved["direct_entry_not_live"]["superseded"] == ["offload"], carved
     assert "offload" in carved["direct_entry_targets"], carved
     assert "offload" not in carved["direct_entry_only"] + carved["direct_entry_regressed"], carved
-    # Nothing in `retired` is live, so the only reach is the map's LIVE targets. (`victim` is
-    # subtracted too because it may be a map target; subtracting a non-target is a no-op.)
+    # Nothing in `retired` is live, and an unregistered map target is not something the advisor can
+    # offer. The map stays visible for code-regression accounting, but neither category is reach.
     assert carved["reachable"] == [], carved
-    assert carved["total_reachable_count"] == len(
-        set(carved["direct_entry_targets"]) - {"offload", victim}
-    ), carved
+    absent_targets = set(carved["direct_entry_targets"]) - set(retired)
+    assert absent_targets, carved
+    assert not absent_targets.intersection(carved["direct_entry_only"]), carved
+    assert carved["total_reachable_count"] == 0, carved
     # A retirement must not MASK a map edit: the emptied map regresses the whole direct baseline
     # with `offload` superseded exactly as it does with `offload` live.
     with _mock.patch.object(capability_advisor, "direct_entry", dict):

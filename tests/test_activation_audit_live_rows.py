@@ -296,6 +296,18 @@ def test_a_not_live_map_target_is_named_beside_the_map_and_never_counted_as_reac
     assert reach["total_reachable_count"] == 1, reach
 
 
+def test_an_unregistered_map_target_is_not_counted_as_reach(monkeypatch):
+    monkeypatch.setattr(capability_advisor, "direct_entry", lambda: dict(DIRECT_MAP))
+    reach = audit.advisor_reach({"runtime-ac-checks": _row("runtime-ac-checks", matcher=GATE_ONLY)})
+    # The code-derived map remains complete so a dispatcher edit still reads as a regression.
+    assert reach["direct_entry_targets"] == ["offload", "runtime-ac-checks", "testgen-lane"]
+    assert reach["direct_entry_regressed"] == [], reach
+    assert reach["direct_entry_not_live"] == {}, reach
+    # But absent ledger rows are not offerable and therefore cannot inflate either reach field.
+    assert reach["direct_entry_only"] == ["runtime-ac-checks"], reach
+    assert reach["total_reachable_count"] == 1, reach
+
+
 @pytest.mark.parametrize("status", ["wired", "retired"])
 def test_a_map_edit_regresses_the_direct_baseline_whatever_the_ledger_says(monkeypatch, status):
     """Unchanged by the not-live rule, pinned so it stays so: the map is code, the ledger is not."""

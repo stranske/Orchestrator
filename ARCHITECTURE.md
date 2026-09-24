@@ -773,9 +773,11 @@ never read as a pass. The direct-entry half still measures the dispatcher-derive
 `direct_entry_targets` and `direct_entry_regressed` never read the machine-local ledger, because that
 baseline exists to catch a dispatcher edit that narrows reach, and a retirement must neither mask the
 edit nor read as one. A not-live map target is named beside the map as `direct_entry_not_live`, and
-the two fields that claim reach, `direct_entry_only` and `total_reachable_count`, count live targets
-only: four of the five declared-baseline ids are map targets as well, so a retired one left
-`reachable` and came straight back through the map. None of it reaches the graded projection:
+the two fields that claim reach, `direct_entry_only` and `total_reachable_count`, count only targets
+with registered, live ledger rows. An unregistered target remains in the code-derived map but is not
+offerable, so it is not reach. Four of the five declared-baseline ids are map targets as well, so a
+retired one left `reachable` and came straight back through the map. None of it reaches the graded
+projection:
 `advisor_reach_regression` attaches only to live rows, whose membership in `regressed` is unchanged,
 so `by_defect` is identical for every input and no verdict is minted. Latent when fixed: the ledger's
 one not-live row was in neither baseline.
