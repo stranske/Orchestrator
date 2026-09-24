@@ -18,6 +18,7 @@ const { detectConflicts } = require('./conflict_detector');
 const { parseTimeoutConfig } = require('./timeout_config');
 const { ensureRateLimitWrapped } = require('./github-rate-limited-wrapper');
 const { verifyAuthorityChallengeClaim } = require('./keepalive_challenge_due');
+const { beginChallenge, confirmChallenge, reopenUnconfirmedChallenge, requester } = require('./keepalive_authority_state');
 
 // Token load balancer for rate limit management
 let tokenLoadBalancer = null;
@@ -2644,7 +2645,7 @@ async function evaluateKeepaliveLoop({ github: rawGithub, context, core, payload
       }
     }
     const hasHighPrivilege = labels.includes('agent-high-privilege');
-    const keepaliveEnabled = config.keepalive_enabled && hasAgentLabel;
+    let keepaliveEnabled = config.keepalive_enabled && hasAgentLabel;
 
     // Operator stop-controls (#2267). The canonical event-driven loop must enforce the
     // documented pause / human-block guardrails itself — previously they lived only on
@@ -2756,6 +2757,14 @@ async function evaluateKeepaliveLoop({ github: rawGithub, context, core, payload
           );
         } else {
           core?.warning?.(`Delegation policy returned no agent: ${decision.reason}`);
+          if (decision.reason === 'multiple-agent-labels') {
+            agentType = '';
+            hasAgentLabel = false;
+            keepaliveEnabled = false;
+            delegationReason = decision.reason;
+            delegationShouldSwitch = false;
+            delegationSource = decision.delegationSource || 'static';
+          }
         }
       } catch (err) {
         core?.warning?.(`Delegation policy failed, keeping ${agentType}: ${err.message}`);
@@ -2936,6 +2945,9 @@ async function evaluateKeepaliveLoop({ github: rawGithub, context, core, payload
     } else if (runnerUnavailable) {
       action = 'skip';
       reason = `no-runner-for-agent:${agentType}`;
+    } else if (delegationReason === 'multiple-agent-labels') {
+      action = 'wait';
+      reason = delegationReason;
     } else if (!hasAgentLabel) {
       action = 'wait';
       reason = 'missing-agent-label';
@@ -3682,6 +3694,10 @@ async function updateKeepaliveLoopSummary({ github: rawGithub, context, core, in
       repository: `${context.repo.owner}/${context.repo.repo}`,
       prNumber,
       boundaryFingerprint: authorityChallengeFingerprint,
+      generation: authorityChallengeClaim.generation,
+      dueAt: authorityChallengeClaim.due_at,
+      expiresAt: authorityChallengeClaim.expires_at,
+      headSha: inputs.head_sha ?? inputs.headSha,
       nonce: authorityChallengeClaim.nonce,
       sweepRunId: authorityChallengeClaim.sweep_run_id,
       sweepRunAttempt: authorityChallengeClaim.sweep_run_attempt,
@@ -3690,7 +3706,11 @@ async function updateKeepaliveLoopSummary({ github: rawGithub, context, core, in
       previousAuthorityChallenge &&
       Boolean(authorityChallengeFingerprint) &&
       authorityChallengeClaimVerified &&
-      authorityChallengeFingerprint === previousAttention.boundary_fingerprint;
+      authorityChallengeFingerprint === previousAttention.boundary_fingerprint &&
+      authorityChallengeClaim.generation === previousAttention.generation &&
+      authorityChallengeClaim.due_at === previousAttention.challenge_due_at &&
+      authorityChallengeClaim.expires_at === previousAttention.expires_at &&
+      authorityChallengeClaim.head_sha === (inputs.head_sha ?? inputs.headSha);
     const authorityEvidence = buildAuthorityChallengeEvidence({
       agentSummary,
       summaryReason,
@@ -3700,18 +3720,30 @@ async function updateKeepaliveLoopSummary({ github: rawGithub, context, core, in
     const escalationRequired =
       ((action === 'run' || action === 'fix') && runResult && runResult !== 'success' && errorCategory !== ERROR_CATEGORIES.transient) ||
       (action === 'stop' && !isSuccessStop && !isNeutralStop && errorCategory !== ERROR_CATEGORIES.transient);
-    const authorityChallengeConfirmed =
+    const authorityChallengeProjection =
       authorityChallengeProvenanceMatches &&
       escalationRequired &&
       errorCategory === ERROR_CATEGORIES.auth &&
+      agentExecutionStarted === true &&
       Boolean(authorityEvidence.fingerprint) &&
       authorityEvidence.actionable &&
       authorityEvidence.fingerprint === authorityChallengeFingerprint;
+    const pendingAuthorityClaim = authorityChallengeProjection ? {
+      generation: authorityChallengeClaim.generation,
+      boundary_fingerprint: authorityChallengeFingerprint,
+      due_at: authorityChallengeClaim.due_at,
+      expires_at: authorityChallengeClaim.expires_at,
+      head_sha: authorityChallengeClaim.head_sha,
+      nonce: authorityChallengeClaim.nonce,
+      sweep_run_id: authorityChallengeClaim.sweep_run_id,
+      sweep_run_attempt: authorityChallengeClaim.sweep_run_attempt,
+    } : null;
+    let authorityChallengeConfirmed = false;
     let escalationDisposition = selectEscalationDisposition({
       required: escalationRequired || stop,
       errorCategory,
       summaryReason,
-      authorityChallengeConfirmed,
+      authorityChallengeConfirmed: authorityChallengeProjection,
     });
     const recoveryLeaseReason = stop
       ? normalise(summaryReason).replace(/-repeat$/, '')
@@ -4485,9 +4517,35 @@ async function updateKeepaliveLoopSummary({ github: rawGithub, context, core, in
       (previousAttention.owner === 'automation' &&
         ['automation-retry', 'challenge-due'].includes(previousAttention.disposition)) ||
       previousAttentionHasLegacyOwnership;
-    const challengeDueAt = escalationDisposition === 'challenge-due'
-      ? new Date().toISOString()
-      : null;
+    let challengeState = null;
+    if (shouldEscalate && escalationDisposition === 'challenge-due' && authorityEvidence.fingerprint) {
+      try {
+        const repository = `${context.repo.owner}/${context.repo.repo}`;
+        const request = requester(github);
+        const repoInfo = await request('GET', `/repos/${repository}`);
+        const dueAt = new Date().toISOString();
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        challengeState = await beginChallenge({
+          request, repository, prNumber,
+          defaultBranch: repoInfo.default_branch,
+          fingerprint: authorityEvidence.fingerprint,
+          headSha: inputs.head_sha ?? inputs.headSha,
+          dueAt, expiresAt,
+          expectedGeneration: previousAuthorityChallenge ? previousAttention.generation || null : null,
+        });
+        if (challengeState.status !== 'available' || Date.parse(challengeState.expires_at) <= Date.now()) {
+          escalationDisposition = 'automation-retry';
+          challengeState = null;
+        }
+      } catch (error) {
+        core?.warning?.(`Authority generation unavailable: ${error.message}`);
+        escalationDisposition = 'automation-retry';
+      }
+    }
+    if (escalationDisposition === 'challenge-due' && !challengeState) {
+      escalationDisposition = 'automation-retry';
+    }
+    const challengeDueAt = challengeState?.due_at || null;
     if (shouldEscalate) {
       const firstSeenAt = priorAttentionKey === attentionKey
         ? previousAttention.first_seen_at || new Date().toISOString()
@@ -4513,6 +4571,8 @@ async function updateKeepaliveLoopSummary({ github: rawGithub, context, core, in
           owner: 'automation',
           first_seen_at: firstSeenAt,
           challenge_due_at: challengeDueAt,
+          generation: challengeState?.generation || '',
+          expires_at: challengeState?.expires_at || '',
           boundary_fingerprint: escalationDisposition === 'challenge-due'
             ? authorityEvidence.fingerprint
             : '',
@@ -4578,16 +4638,22 @@ async function updateKeepaliveLoopSummary({ github: rawGithub, context, core, in
         // First persist a durable automation-owned transition containing the
         // exact action. If either later API call fails, the PR never falls back
         // to an actionless or falsely human-owned state.
+        const pendingAttention = {
+          key: attentionKey,
+          disposition: 'challenge-due',
+          owner: 'automation',
+          first_seen_at: previousAttention.first_seen_at || new Date().toISOString(),
+          challenge_due_at: pendingAuthorityClaim.due_at,
+          generation: pendingAuthorityClaim.generation,
+          expires_at: pendingAuthorityClaim.expires_at,
+          boundary_fingerprint: authorityEvidence.fingerprint,
+          boundary_detail: authorityEvidence.detail,
+          confirmation_pending_label: true,
+          next_action: authorityEvidence.humanAction,
+        };
         const pendingState = {
           ...newState,
-          attention: {
-            ...newState.attention,
-            disposition: 'challenge-due',
-            owner: 'automation',
-            challenge_due_at: new Date().toISOString(),
-            confirmation_pending_label: true,
-            next_action: authorityEvidence.humanAction,
-          },
+          attention: pendingAttention,
         };
         const pendingLines = [
           ...summaryLines,
@@ -4615,7 +4681,60 @@ async function updateKeepaliveLoopSummary({ github: rawGithub, context, core, in
         }
 
         if (hardHumanLabelApplied) {
-          summaryLines.push(
+          if (pendingAuthorityClaim) {
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const confirmation = {
+              request: requester(github), repository, prNumber, claim: pendingAuthorityClaim,
+              ownerAttempt: `${repository.toLowerCase()}:${context.runId || process.env.GITHUB_RUN_ID || ''}:${context.runAttempt || process.env.GITHUB_RUN_ATTEMPT || ''}`,
+              provider: agentType,
+              headSha: inputs.head_sha ?? inputs.headSha,
+            };
+            // Confirmation cannot grant another run: it only settles the same
+            // consumed receipt after needs-human was applied. Retry once for
+            // an ambiguous PR read or conditional ledger write before leaving
+            // the hard label and receipt pending for operator reconciliation.
+            for (let attempt = 0; attempt < 2 && !authorityChallengeConfirmed; attempt++) {
+              try {
+                authorityChallengeConfirmed = await confirmChallenge(confirmation);
+              } catch (error) {
+                core?.warning?.(`Authority receipt confirmation unavailable: ${error.message}`);
+              }
+            }
+            if (!authorityChallengeConfirmed) {
+              const repository = `${context.repo.owner}/${context.repo.repo}`;
+              let recovery = { status: 'uncertain' };
+              try {
+                recovery = await reopenUnconfirmedChallenge({
+                  request: requester(github), repository, prNumber, claim: pendingAuthorityClaim,
+                  ownerAttempt: `${repository.toLowerCase()}:${context.runId || process.env.GITHUB_RUN_ID || ''}:${context.runAttempt || process.env.GITHUB_RUN_ATTEMPT || ''}`,
+                  provider: agentType,
+                  headSha: inputs.head_sha ?? inputs.headSha,
+                });
+              } catch (error) {
+                core?.warning?.(`Authority confirmation reconciliation unavailable: ${error.message}`);
+              }
+              if (recovery.status === 'confirmed') {
+                authorityChallengeConfirmed = true;
+              } else {
+                escalationDisposition = 'challenge-due';
+                newState.attention = {
+                  ...pendingAttention,
+                  generation: recovery.state?.generation || pendingAttention.generation,
+                  challenge_due_at: recovery.state?.due_at || pendingAttention.challenge_due_at,
+                  expires_at: recovery.state?.expires_at || pendingAttention.expires_at,
+                  confirmation_pending_label: true,
+                  next_action: 'Reconcile the unconfirmed authority challenge and workflow-owned needs-human label.',
+                };
+                if (recovery.status === 'reopened') {
+                  // Reopening is allowed only after a fresh same-head read proves
+                  // that needs-human is already absent. Never infer label ownership
+                  // from addLabels success or delete a concurrent human blocker.
+                  newState.attention.confirmation_pending_label = false;
+                }
+              }
+            }
+          }
+          if (authorityChallengeConfirmed) summaryLines.push(
             '',
             '### 🛑 Independent Authority Challenge Confirmed',
             '',
