@@ -157,7 +157,7 @@ def _extract_fallback_test_name(named_line: str) -> str | None:
     if unquoted:
         name = unquoted.group(1)
         tail = named_line[unquoted.end() :]
-        if not tail or tail[0] not in "_A-Za-z0-9":
+        if not tail or not (tail[0].isalnum() or tail[0] == "_"):
             return name
     return None
 
@@ -226,13 +226,13 @@ def _infer_break_file(break_line: str, named_line: str, markdown: str) -> str | 
     for text in (named_line, markdown):
         ordered_paths.extend(_candidate_paths(text))
 
-    workflow_paths = [
-        path
-        for path in ordered_paths
-        if ".github/workflows/" in path or path.endswith((".yml", ".yaml"))
-    ]
-    if workflow_paths:
-        return workflow_paths[0]
+    github_workflow_paths = [path for path in ordered_paths if ".github/workflows/" in path]
+    if github_workflow_paths:
+        return github_workflow_paths[0]
+
+    yaml_paths = [path for path in ordered_paths if path.endswith((".yml", ".yaml"))]
+    if yaml_paths:
+        return yaml_paths[0]
 
     return ordered_paths[0] if ordered_paths else None
 
@@ -249,7 +249,9 @@ def parse_deliberate_break_spec(markdown: str) -> DeliberateBreakSpec | None:
 
 
 def _pytest_command(test_id: str) -> tuple[str, ...]:
-    return (sys.executable, "-m", "pytest", test_id, "-q")
+    # This is a named-test proof, not a whole-suite coverage or plugin invocation.
+    # Keep repository configuration (including pythonpath), but clear addopts.
+    return (sys.executable, "-m", "pytest", test_id, "-o", "addopts=", "-q")
 
 
 def _supported_pyyaml_version(installed_version: str | None) -> bool:
@@ -850,13 +852,14 @@ def _git(
 def _assertion_diff_lines(diff_text: str) -> Iterator[str]:
     """Yield removed assertion lines; adding a new assertion is valid test growth."""
     for line in diff_text.splitlines():
-        if not line.startswith("-") or line.startswith("---"):
-            continue
-        if ASSERTION_DIFF_RE.search(line):
+        if line.startswith("-") and not line.startswith("---") and ASSERTION_DIFF_RE.search(line):
             yield line[:240]
 
 
-def _changed_assertions(base: str, head: str, test_file: str, cwd: Path) -> list[str]:
+def _changed_assertions(
+    base: str, head: str, test_file: str, cwd: Path, pr_body: str | None = None  # noqa: ARG001
+) -> list[str]:
+    """Keep the legacy body argument without letting PR text waive tamper checks."""
     status = _git(["diff", "--name-status", f"{base}...{head}", "--", test_file], cwd)
     if any(line.split("\t", 1)[0] == "A" for line in status.stdout.splitlines()):
         return []
@@ -903,6 +906,7 @@ def verify_spec(
     head: str = "HEAD",
     cwd: Path | None = None,
     enforce_tamper: bool = True,
+    pr_body: str | None = None,
 ) -> dict[str, object]:
     repo = cwd or Path.cwd()
     test_path = repo / spec.test_file
@@ -915,7 +919,7 @@ def verify_spec(
 
     try:
         if enforce_tamper:
-            tampered = _changed_assertions(base, head, spec.test_file, repo)
+            tampered = _changed_assertions(base, head, spec.test_file, repo, pr_body)
             if tampered:
                 return _json_result(
                     VERDICT_BROKEN,
@@ -1095,6 +1099,7 @@ def main(argv: list[str] | None = None) -> int:
         base=args.base,
         head=args.head,
         enforce_tamper=not args.no_tamper_check,
+        pr_body=body,
     )
     _write_github_output(verdict=str(result["verdict"]))
     print(json.dumps(result, sort_keys=True))

@@ -33,7 +33,7 @@ not change the wire shape of this document.
 | `schema_version` | Must be the literal `output-substrate/v1`. |
 | `renderer_profile` | One of `investment_review`, `blackline_bundle`, `mosaic_book`. |
 | `workspace_bundle_ref` | Run-dir-relative POSIX pointer to the view bundle JSON (`path` required; `sha256` and `artifact_id` recommended). Rejects absolute paths, `..` traversal, backslashes, drive-letter roots (`C:`), and UNC paths (`//server/share`). |
-| `manifest_ref` | Reference to the run's [`artifact-manifest/v1`](schemas/artifact-manifest-v1.schema.json) manifest. Named artifacts live there, not inline. |
+| `manifest_ref` | `artifact:manifest.json` or a run-dir-relative POSIX path to the [`artifact-manifest/v1`](schemas/artifact-manifest-v1.schema.json) manifest. Absolute paths, traversal, backslashes, drive roots, leading URI-style prefixes, and empty path segments are rejected. Colons in later path segments are allowed. Named artifacts live there, not inline. |
 | `manifest_csv_exports` | Array (possibly empty) of manifest-gated CSV export specs for Excel refresh. |
 
 Optional `link_profile` selects evidence-link resolution: `local-file` for
@@ -48,6 +48,22 @@ requires `name`, `type` (`string`, `number`, `boolean`, or `date`), and
 `source_path` (JSONPath or consumer-defined pointer into the workspace bundle).
 Producers regenerate CSV files when the workspace bundle changes; Excel workbooks
 refresh from the manifest-listed exports without embedding data in HTML.
+
+## Excel lane
+
+Work-PC Excel refresh uses the manifest-listed CSV exports instead of WASM or
+COM renderers. After a run publishes `output-substrate/v1`:
+
+1. Open the run directory (or synced SharePoint/OneDrive folder) on the work PC.
+2. Read `manifest_csv_exports[]` from the `output_substrate` artifact (or the
+   run's `artifact:manifest.json` entry that points to it).
+3. For each export entry, regenerate or copy `filename` using the declared
+   `encoding` (`utf-8` or `utf-16-le`) and the `columns[]` `source_path`
+   pointers against the workspace bundle at `workspace_bundle_ref.path`.
+4. In Excel, use **Data → Get Data → From File → From Text/CSV**, select the
+   manifest-listed file, confirm delimiter/encoding, and load to a worksheet.
+5. When the workspace bundle or manifest changes, repeat steps 2–4 so linked
+   workbooks refresh from the regenerated CSV files rather than stale HTML.
 
 ## Manifest and delivery
 
