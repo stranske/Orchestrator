@@ -894,6 +894,7 @@ def build_research_plan(
 
 def _selftest():
     import sqlite3
+    import tempfile
 
     cap = {
         "cursor": {"status": "ok", "tier": "free"},
@@ -1058,8 +1059,10 @@ def _selftest():
     )
     assert "vibe" in stale_recruited and len(stale_recruited) == 4, stale_recruited
 
-    # should_test: hypothesis-driven match vs nothing-when-no-capacity
-    hyps = load_hypotheses(Path("/tmp/__hyp_selftest.json"))
+    # should_test: hypothesis-driven match vs nothing-when-no-capacity. The seeded file lives in a
+    # directory private to this run; a fixed /tmp path is shared with every concurrent verify.py.
+    with tempfile.TemporaryDirectory(prefix="research-scheduler-selftest-") as hyp_dir:
+        hyps = load_hypotheses(Path(hyp_dir) / "hypotheses.json")
     plan = should_test({"task_type": "implement"}, hyps, {"cursor": 3, "codex": 3, "claude": 1})
     assert plan and plan["trigger"] == "hypothesis", plan
     assert (
@@ -1280,7 +1283,6 @@ def _selftest():
     assert reserved_plan["blocked_reasons"] == ["no_spare_after_production_reserve"], reserved_plan
 
     freshness_db.close()
-    Path("/tmp/__hyp_selftest.json").unlink(missing_ok=True)
     print(
         "research_scheduler.py selftest: OK (spare-capacity gate, info/cost knapsack intensity, "
         "Top-Two variable-N arm selection, staleness/model-drift acquisition, "

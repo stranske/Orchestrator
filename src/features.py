@@ -280,7 +280,20 @@ def summary(path: Path = REG, *, create: bool = True) -> dict:
 
 
 def _selftest():
-    p = Path("/tmp/__features_selftest.json")
+    """Run the selftest in a directory private to this run.
+
+    verify.py runs from several sessions at once on one machine. With a fixed /tmp path, one run's
+    unlink deleted another run's registry between its record_use and its mark_hardened, and that
+    run went red for a reason unrelated to the tree under test (2026-09-24).
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="features-selftest-") as tmp:
+        _selftest_in(Path(tmp))
+
+
+def _selftest_in(root: Path) -> None:
+    p = root / "__features_selftest.json"
     p.unlink(missing_ok=True)
     reg = load(p)
     assert reg["abcd-experiment"]["maturity"] == "hardened", reg["abcd-experiment"]

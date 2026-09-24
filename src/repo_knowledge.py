@@ -2163,7 +2163,7 @@ def _selftest() -> None:
         assert AGENTS_EXPORT_START in tiny_export and AGENTS_EXPORT_END in tiny_export, tiny_export
         assert "truncated" in tiny_export, tiny_export
 
-        export_root = Path("/tmp/__repo_knowledge_export_repo")
+        export_root = _tmp / "export_repo"
         export_root.mkdir(exist_ok=True)
         (export_root / "docs").mkdir(exist_ok=True)
         (export_root / "docs" / "guide.md").write_text("ok\n")
@@ -2219,7 +2219,7 @@ def _selftest() -> None:
             (export_root / "docs").rmdir()
             export_root.rmdir()
 
-        snap = Path("/tmp/__repo_knowledge_snapshot.json")
+        snap = _tmp / "snapshot.json"
         snap.write_text(
             json.dumps(
                 {
@@ -2344,7 +2344,7 @@ def _selftest() -> None:
         finally:
             snap.unlink(missing_ok=True)
 
-        docs_root = Path("/tmp/__repo_knowledge_docs")
+        docs_root = _tmp / "docs_repo"
         docs_root.mkdir(exist_ok=True)
         (docs_root / "README.md").write_text("This project uses Postgres for production data.\n")
         (docs_root / "CONTRIBUTING.md").write_text(
@@ -2431,7 +2431,7 @@ def _selftest() -> None:
             (docs_root / "README.md").unlink()
             docs_root.rmdir()
 
-        review_json = Path("/tmp/__repo_knowledge_review_comments.json")
+        review_json = _tmp / "review_comments.json"
         review_json.write_text(
             json.dumps(
                 {
