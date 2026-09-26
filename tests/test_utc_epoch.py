@@ -48,14 +48,6 @@ def _utc(*fields: int) -> int:
     return calendar.timegm((*fields, 0, 0, 0))
 
 
-def _is_unconvertible(value: int) -> bool:
-    try:
-        utc_epoch.from_legacy(value)
-    except utc_epoch.Unconvertible:
-        return True
-    return False
-
-
 def test_a_september_timestamp_reads_true_utc_in_us_central(us_central):
     assert utc_epoch.from_iso(SEPTEMBER_ISO) == SEPTEMBER
     assert utc_epoch.from_iso("2026-01-15T10:00:00Z") == JANUARY
@@ -399,23 +391,27 @@ def test_a_row_an_older_checkout_writes_after_the_migration_is_replaced(us_centr
 
 
 def test_a_row_the_helper_never_wrote_keeps_its_key_and_a_twin_landing_on_it_merges(
-    us_central, brain
+    us_central, brain, monkeypatch
 ):
-    # libc versions are allowed to choose either side of the ambiguous fall-back hour when tm_isdst
-    # is unknown. Find the value this runtime's retired helper could not have produced rather than
-    # assuming which side it chose. A row holding that value was written in another zone and cannot
-    # be converted: it keeps its key. Its legacy twin converts ONTO that key, which makes it the same
-    # switch recorded twice, and the later-recorded row survives.
-    candidates = range(_utc(2026, 11, 1, 0, 0, 0), _utc(2026, 11, 1, 10, 0, 0), 3600)
-    utc_written = next(
-        value
-        for value in candidates
-        if _is_unconvertible(value)
-        and utc_epoch.from_legacy(utc_epoch.legacy_value(value)) == value
-    )
+    # The live-libc fall-back behavior is covered minute-by-minute above. Keep this migration test
+    # deterministic: some libc versions change which ambiguous side mktime(tm_isdst=-1) chooses
+    # after another mktime call, so probing for the pair and then replaying it can change the result.
+    # Model the exact contract this test needs: one key the helper could not have written and one
+    # legacy key that converts onto it. The later-recorded row must survive that collision.
+    utc_written = _utc(2026, 11, 1, 1, 0, 0)
+    hour_early = utc_written - 3600
+    real_from_legacy = utc_epoch.from_legacy
+
+    def from_legacy(value):
+        if value == utc_written:
+            raise utc_epoch.Unconvertible("not produced by this helper")
+        if value == hour_early:
+            return utc_written
+        return real_from_legacy(value)
+
+    monkeypatch.setattr(utc_epoch, "from_legacy", from_legacy)
     with pytest.raises(utc_epoch.Unconvertible):
         utc_epoch.from_legacy(utc_written)
-    hour_early = utc_epoch.legacy_value(utc_written)
     assert utc_epoch.from_legacy(hour_early) == utc_written
     _seed_pre_fix_brain(
         feedback.DB_PATH,
