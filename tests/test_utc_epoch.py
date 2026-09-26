@@ -48,6 +48,14 @@ def _utc(*fields: int) -> int:
     return calendar.timegm((*fields, 0, 0, 0))
 
 
+def _is_unconvertible(value: int) -> bool:
+    try:
+        utc_epoch.from_legacy(value)
+    except utc_epoch.Unconvertible:
+        return True
+    return False
+
+
 def test_a_september_timestamp_reads_true_utc_in_us_central(us_central):
     assert utc_epoch.from_iso(SEPTEMBER_ISO) == SEPTEMBER
     assert utc_epoch.from_iso("2026-01-15T10:00:00Z") == JANUARY
@@ -393,11 +401,18 @@ def test_a_row_an_older_checkout_writes_after_the_migration_is_replaced(us_centr
 def test_a_row_the_helper_never_wrote_keeps_its_key_and_a_twin_landing_on_it_merges(
     us_central, brain
 ):
-    # 01:00Z on 2026-11-01 is 01:00 CST, an hour the retired helper never produced here (it read
-    # that wall clock as CDT), so a row holding it was written in another zone and cannot be
-    # converted: it keeps its key. The hour-early row for the same instant converts ONTO that key,
-    # which makes it the same switch recorded twice, and the later-recorded row survives.
-    utc_written = _utc(2026, 11, 1, 1, 0, 0)
+    # libc versions are allowed to choose either side of the ambiguous fall-back hour when tm_isdst
+    # is unknown. Find the value this runtime's retired helper could not have produced rather than
+    # assuming which side it chose. A row holding that value was written in another zone and cannot
+    # be converted: it keeps its key. Its legacy twin converts ONTO that key, which makes it the same
+    # switch recorded twice, and the later-recorded row survives.
+    candidates = range(_utc(2026, 11, 1, 0, 0, 0), _utc(2026, 11, 1, 10, 0, 0), 3600)
+    utc_written = next(
+        value
+        for value in candidates
+        if _is_unconvertible(value)
+        and utc_epoch.from_legacy(utc_epoch.legacy_value(value)) == value
+    )
     with pytest.raises(utc_epoch.Unconvertible):
         utc_epoch.from_legacy(utc_written)
     hour_early = utc_epoch.legacy_value(utc_written)
