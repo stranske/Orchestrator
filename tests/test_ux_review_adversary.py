@@ -32,6 +32,10 @@ def test_2026_09_22_adversary_fixture_survives_aggregation() -> None:
         "missing_help",
         "recovery_failure",
     }
+    assert {finding["failure_mode"] for finding in report["blockers"]} == {
+        "fabricated_output",
+        "false_success",
+    }
     assert report["adversarial"]["parse_error"] is None
     assert report["adversarial"]["worst_case"].startswith("Generate plan")
 
