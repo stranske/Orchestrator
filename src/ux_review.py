@@ -603,6 +603,7 @@ def aggregate_panel(
         "adversarial": {
             "worst_case": (adversarial_result or {}).get("worst_case"),
             "findings": adv_findings,
+            "parse_error": (adversarial_result or {}).get("parse_error"),
         },
         "evidence_gaps": all_gaps,
         "panel": panel,
@@ -614,6 +615,16 @@ def aggregate_panel(
             "unprobed": len(gaps),
         },
     }
+
+
+def parse_adversarial_output(text: str) -> dict | None:
+    """Parse the adversary schema and distinguish malformed output from an empty response."""
+    parsed = _extract_json(text, required_key="findings")
+    if parsed is not None:
+        return parsed
+    if text.strip():
+        return {"parse_error": "nonempty_unparseable_output", "findings": []}
+    return None
 
 
 def resolve_panel_base_sha(bundle: dict) -> str | None:
@@ -812,7 +823,7 @@ def review(
         except Exception:
             pass
     adv_out.close()
-    adversarial_result = _extract_json(adv_out_path.read_text(errors="replace"))
+    adversarial_result = parse_adversarial_output(adv_out_path.read_text(errors="replace"))
 
     agg = aggregate_panel(evaluator_results, adversarial_result, len(evaluators), bundle=bundle)
     # Corroborated-consensus set, computed once: the arm labels below are relative to what the
@@ -967,6 +978,10 @@ def gate_decision(gate1_verdict: dict, gate2_report: dict, min_overall: float = 
     if blockers:
         done = False
         reasons.append("blockers_present")
+
+    if (gate2_report.get("adversarial") or {}).get("parse_error"):
+        done = False
+        reasons.append("adversarial_parse_error")
 
     # A computed surface nobody probed is not a pass. The gate prints the gap by name so "done" can
     # never be reached by leaving the substance block out of the bundle.

@@ -949,9 +949,12 @@ def _gemini_scratch_diff(log: Path, base: str) -> str:
     return ""
 
 
-def _extract_json(text: str) -> dict | None:
-    """Agents are told STRICT JSON but may wrap it in prose/markdown. Find the JSON object that
-    actually contains "scores" — scan every balanced {...} from the end (the final answer).
+def _extract_json(text: str, required_key: str = "scores") -> dict | None:
+    """Return the final balanced JSON object containing ``required_key``.
+
+    Agents are told STRICT JSON but may wrap it in prose/markdown. Evaluator callers retain the
+    historic ``scores`` requirement; callers with a different response schema must name its key
+    explicitly so a valid response is not silently discarded.
     """
     if not text:
         return None
@@ -963,7 +966,7 @@ def _extract_json(text: str) -> dict | None:
             if depth == 0:
                 try:
                     obj = json.loads(text[s : i + 1])
-                    if isinstance(obj, dict) and "scores" in obj:
+                    if isinstance(obj, dict) and required_key in obj:
                         return obj
                 except Exception:
                     pass
