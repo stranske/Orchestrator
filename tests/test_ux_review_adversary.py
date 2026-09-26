@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import ux_review as ur
@@ -66,3 +67,21 @@ def test_adversary_findings_must_be_a_list_of_objects() -> None:
         assert report["adversarial"]["parse_error"] == "invalid_findings_schema"
         assert decision["done"] is False
         assert "adversarial_parse_error" in decision["reasons"]
+
+
+def test_adversary_findings_require_bounded_finite_probability() -> None:
+    for invalid_probability in (None, "bad", float("nan"), float("inf"), -0.1, 1.1, True):
+        parsed = ur.parse_adversarial_output(
+            json.dumps({"findings": [{"stuck_probability": invalid_probability, "severity": 2}]})
+        )
+
+        assert parsed == {"parse_error": "invalid_findings_schema", "findings": []}
+
+
+def test_adversary_findings_require_integer_severity_in_documented_range() -> None:
+    for invalid_severity in (None, "bad", 2.5, -1, 5, True):
+        parsed = ur.parse_adversarial_output(
+            json.dumps({"findings": [{"stuck_probability": 0.5, "severity": invalid_severity}]})
+        )
+
+        assert parsed == {"parse_error": "invalid_findings_schema", "findings": []}

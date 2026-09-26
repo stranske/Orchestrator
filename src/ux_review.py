@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -626,6 +627,20 @@ def parse_adversarial_output(text: str) -> dict | None:
             isinstance(finding, dict) for finding in findings
         ):
             return {"parse_error": "invalid_findings_schema", "findings": []}
+        for finding in findings:
+            stuck_probability = finding.get("stuck_probability")
+            severity = finding.get("severity")
+            probability_is_valid = (
+                isinstance(stuck_probability, (int, float))
+                and not isinstance(stuck_probability, bool)
+                and math.isfinite(float(stuck_probability))
+                and 0 <= stuck_probability <= 1
+            )
+            severity_is_valid = (
+                isinstance(severity, int) and not isinstance(severity, bool) and 0 <= severity <= 4
+            )
+            if not probability_is_valid or not severity_is_valid:
+                return {"parse_error": "invalid_findings_schema", "findings": []}
         return parsed
     if text.strip():
         return {"parse_error": "nonempty_unparseable_output", "findings": []}
