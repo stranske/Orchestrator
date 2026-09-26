@@ -70,7 +70,16 @@ def test_adversary_findings_must_be_a_list_of_objects() -> None:
 
 
 def test_adversary_findings_require_bounded_finite_probability() -> None:
-    for invalid_probability in (None, "bad", float("nan"), float("inf"), -0.1, 1.1, True):
+    for invalid_probability in (
+        None,
+        "bad",
+        float("nan"),
+        float("inf"),
+        -0.1,
+        1.1,
+        10**309,
+        True,
+    ):
         parsed = ur.parse_adversarial_output(
             json.dumps({"findings": [{"stuck_probability": invalid_probability, "severity": 2}]})
         )

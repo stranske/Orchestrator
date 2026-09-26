@@ -633,8 +633,8 @@ def parse_adversarial_output(text: str) -> dict | None:
             probability_is_valid = (
                 isinstance(stuck_probability, (int, float))
                 and not isinstance(stuck_probability, bool)
-                and math.isfinite(float(stuck_probability))
                 and 0 <= stuck_probability <= 1
+                and math.isfinite(float(stuck_probability))
             )
             severity_is_valid = (
                 isinstance(severity, int) and not isinstance(severity, bool) and 0 <= severity <= 4
