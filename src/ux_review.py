@@ -621,6 +621,11 @@ def parse_adversarial_output(text: str) -> dict | None:
     """Parse the adversary schema and distinguish malformed output from an empty response."""
     parsed = _extract_json(text, required_key="findings")
     if parsed is not None:
+        findings = parsed.get("findings")
+        if not isinstance(findings, list) or not all(
+            isinstance(finding, dict) for finding in findings
+        ):
+            return {"parse_error": "invalid_findings_schema", "findings": []}
         return parsed
     if text.strip():
         return {"parse_error": "nonempty_unparseable_output", "findings": []}

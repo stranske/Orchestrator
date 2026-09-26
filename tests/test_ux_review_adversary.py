@@ -22,6 +22,16 @@ def test_2026_09_22_adversary_fixture_survives_aggregation() -> None:
     report = ur.aggregate_panel(_clean_panel(), parsed, 4)
 
     assert len(report["adversarial"]["findings"]) == 6
+    assert len(report["findings"]) == 6
+    assert len(report["blockers"]) == 2
+    assert {finding["failure_mode"] for finding in report["findings"]} == {
+        "confusion",
+        "efficiency_trap",
+        "fabricated_output",
+        "false_success",
+        "missing_help",
+        "recovery_failure",
+    }
     assert report["adversarial"]["parse_error"] is None
     assert report["adversarial"]["worst_case"].startswith("Generate plan")
 
@@ -40,3 +50,15 @@ def test_empty_adversary_output_remains_distinct_from_parse_error() -> None:
     report = ur.aggregate_panel(_clean_panel(), ur.parse_adversarial_output(""), 4)
 
     assert report["adversarial"]["parse_error"] is None
+
+
+def test_adversary_findings_must_be_a_list_of_objects() -> None:
+    for output in ('{"findings": null}', '{"findings": ["not an object"]}'):
+        parsed = ur.parse_adversarial_output(output)
+        report = ur.aggregate_panel(_clean_panel(), parsed, 4)
+        decision = ur.gate_decision({"ok": True}, report)
+
+        assert report["adversarial"]["findings"] == []
+        assert report["adversarial"]["parse_error"] == "invalid_findings_schema"
+        assert decision["done"] is False
+        assert "adversarial_parse_error" in decision["reasons"]
