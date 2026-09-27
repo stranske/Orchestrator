@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -603,6 +604,7 @@ def aggregate_panel(
         "adversarial": {
             "worst_case": (adversarial_result or {}).get("worst_case"),
             "findings": adv_findings,
+            "parse_error": (adversarial_result or {}).get("parse_error"),
         },
         "evidence_gaps": all_gaps,
         "panel": panel,
@@ -614,6 +616,35 @@ def aggregate_panel(
             "unprobed": len(gaps),
         },
     }
+
+
+def parse_adversarial_output(text: str) -> dict | None:
+    """Parse the adversary schema and distinguish malformed output from an empty response."""
+    parsed = _extract_json(text, required_key="findings")
+    if parsed is not None:
+        findings = parsed.get("findings")
+        if not isinstance(findings, list) or not all(
+            isinstance(finding, dict) for finding in findings
+        ):
+            return {"parse_error": "invalid_findings_schema", "findings": []}
+        for finding in findings:
+            stuck_probability = finding.get("stuck_probability")
+            severity = finding.get("severity")
+            probability_is_valid = (
+                isinstance(stuck_probability, (int, float))
+                and not isinstance(stuck_probability, bool)
+                and 0 <= stuck_probability <= 1
+                and math.isfinite(float(stuck_probability))
+            )
+            severity_is_valid = (
+                isinstance(severity, int) and not isinstance(severity, bool) and 0 <= severity <= 4
+            )
+            if not probability_is_valid or not severity_is_valid:
+                return {"parse_error": "invalid_findings_schema", "findings": []}
+        return parsed
+    if text.strip():
+        return {"parse_error": "nonempty_unparseable_output", "findings": []}
+    return None
 
 
 def resolve_panel_base_sha(bundle: dict) -> str | None:
@@ -812,7 +843,7 @@ def review(
         except Exception:
             pass
     adv_out.close()
-    adversarial_result = _extract_json(adv_out_path.read_text(errors="replace"))
+    adversarial_result = parse_adversarial_output(adv_out_path.read_text(errors="replace"))
 
     agg = aggregate_panel(evaluator_results, adversarial_result, len(evaluators), bundle=bundle)
     # Corroborated-consensus set, computed once: the arm labels below are relative to what the
@@ -967,6 +998,10 @@ def gate_decision(gate1_verdict: dict, gate2_report: dict, min_overall: float = 
     if blockers:
         done = False
         reasons.append("blockers_present")
+
+    if (gate2_report.get("adversarial") or {}).get("parse_error"):
+        done = False
+        reasons.append("adversarial_parse_error")
 
     # A computed surface nobody probed is not a pass. The gate prints the gap by name so "done" can
     # never be reached by leaving the substance block out of the bundle.
