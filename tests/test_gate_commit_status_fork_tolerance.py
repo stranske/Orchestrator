@@ -296,6 +296,7 @@ def test_rate_limit_403_keeps_its_own_path(outcomes: dict[str, Any]) -> None:
         assert case["threw"] is None
         assert any("Rate limit" in warning for warning in case["warnings"])
         assert case["summaryWrites"] == 0
+        assert case["failures"] == []
 
 
 @pytest.mark.parametrize("state", ["failure", "error", "pending"])
