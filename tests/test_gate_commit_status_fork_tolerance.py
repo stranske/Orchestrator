@@ -21,6 +21,7 @@ RUNNER_JS = textwrap.dedent("""
     const fs = require('fs');
     const vm = require('vm');
     const src = fs.readFileSync(process.argv[2], 'utf8');
+    const retryScript = require(process.argv[3]);
 
     function makeError(status, message, headers = {}, responseMessage = null) {
       const error = new Error(message);
@@ -59,14 +60,17 @@ RUNNER_JS = textwrap.dedent("""
           },
         },
         console: { log() {} },
-        require: () => ({
-          createTokenAwareRetry: async () => ({
-            withRetry: async (callback) => callback(githubStub),
-          }),
-        }),
+        require: (request) => {
+          if (request === './.github/scripts/github-api-with-retry.js') {
+            return retryScript;
+          }
+          throw new Error(`unexpected require: ${request}`);
+        },
         core: {
           setFailed: (message) => failures.push(String(message)),
           warning: (message) => warnings.push(String(message)),
+          info: () => {},
+          error: () => {},
           summary: summaryStub,
         },
         context: {
@@ -186,6 +190,11 @@ RUNNER_JS = textwrap.dedent("""
           state: 'success',
           error: makeError(500, 'Internal server error'),
         }),
+        fork_permission_404: await runCase({
+          ...FORK,
+          state: 'success',
+          error: makeError(404, 'Resource not accessible by integration'),
+        }),
         happy_path: await runCase({ ...FORK, state: 'success', error: null }),
       };
       process.stdout.write(JSON.stringify(outcomes));
@@ -218,7 +227,12 @@ def outcomes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     runner_path.write_text(RUNNER_JS, encoding="utf-8")
 
     completed = subprocess.run(
-        [node, str(runner_path), str(step_path)],
+        [
+            node,
+            str(runner_path),
+            str(step_path),
+            str(REPO_ROOT / ".github" / "scripts" / "github-api-with-retry.js"),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -311,6 +325,7 @@ def test_rate_limit_403_fails_closed_for_non_success_verdicts(
 
 def test_non_403_errors_still_fail_the_gate(outcomes: dict[str, Any]) -> None:
     assert outcomes["fork_server_error"]["threw"]["status"] == 500
+    assert outcomes["fork_permission_404"]["threw"]["status"] == 404
 
 
 def test_successful_status_write_is_silent(outcomes: dict[str, Any]) -> None:

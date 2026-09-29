@@ -1147,7 +1147,11 @@ jobs:
             const { withRetry } = await createTokenAwareRetry({
               github,
               core,
-              task: 'gate-commit-status',
+              // The legacy `gate-commit-status` task swallows integration permission
+              // errors inside the retry helper. This caller must receive them so it
+              // can distinguish fork read-only tokens from same-repo regressions and
+              // preserve the computed verdict below.
+              task: 'gate-commit-status-strict',
               // `env: {}` PINS THIS CALL TO THE WORKFLOW TOKEN, and it is load-bearing.
               // With the default `env: process.env` the token load balancer collects every App
               // and PAT secret this job exposes and picks by remaining capacity, so which token
