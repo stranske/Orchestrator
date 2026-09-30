@@ -147,9 +147,10 @@ def review(*, now: int | None = None, path: pathlib.Path | None = None) -> dict:
     now = int(now if now is not None else time.time())
     # `load_declared`, not `load`: this is a REPORT. The writing loader creates a missing ledger,
     # seeds declared gate rows, reconciles declarations and expires rows, and writes the result into
-    # the shared ledger, while this step promises to write only its own history (the kill switch
-    # stops that one write). `load_declared` reconciles an in-memory copy and writes nothing. It
-    # seeds and expires nothing, even in memory: until a writer does, the ledger is judged as it is.
+    # the shared ledger, while this step promises to write only its own history and, in a live
+    # tick, the invocation heartbeat above (the kill switch stops the history write). `load_declared`
+    # reconciles an in-memory copy and writes nothing. It seeds and expires nothing, even in memory:
+    # until a writer does, the ledger is judged as it is.
     ledger = capabilities.load_declared(path or capabilities.REG)
     history = _load_history()
     previous = {row["capability_id"]: row for row in (history[-1]["rows"] if history else [])}
