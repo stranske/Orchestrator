@@ -307,9 +307,9 @@ REOFFER_FACTS_KEY = "reoffer_facts"
 # They did not: four `runtime-ac-checks` declines cited THREE different flag names
 # (ORCH_RUNTIME_AC_ALLOW_COMMANDS, ORCH_RUN_RUNTIME_AC, ORCH_RUNTIME_AC_CHECKS) and the third DOES
 # NOT EXIST, while that capability's `how_to_use` named no flag at all. A decline against an
-# invented gate is an information defect, not a structural one, and `switch_review.review()` holds
-# the real flag/state/criterion — a declared fact, exactly what a re-offer may echo. Where no gate
-# is declared the re-offer still refuses, and correctly: that routes to the offer axis.
+# invented gate is an information defect, not a structural one, and `switch_review.switch_states()`
+# holds the real flag/state/criterion — a declared fact, exactly what a re-offer may echo. Where no
+# gate is declared the re-offer still refuses, and correctly: that routes to the offer axis.
 # `status_shadow` joined 2026-08-29 with the kind itself: the echoable fact is the boundary line
 # in `how_to_use` saying shadow permits advisory invocation — precisely the information whose
 # absence produced the measured declines.
@@ -1722,7 +1722,8 @@ def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> 
         except TypeError:
             continue
     bound.discard("__none__")
-    declared_nothing = sorted(c for c in bound if not declared_facts(c))
+    switches = read_switches()
+    declared_nothing = sorted(c for c in bound if not declared_facts(c, switches=switches))
     said_so: dict[str, int] = {}
     held: dict[str, int] = {}
     now = capabilities._now()
@@ -1748,11 +1749,32 @@ def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> 
     }
 
 
-def declared_facts(capability_id: str) -> dict:
+def read_switches() -> dict:
+    """ONE read of which flag holds which capability, for one consumer pass.
+
+    The gate facts `declared_facts` echoes come from `switch_review.switch_states()`, the switch
+    rows alone. NOT `switch_review.review()`: that is the weekly sweep, live `gh` calls and a
+    heartbeat included, and `declared_facts` called it twice per capability — twice per bound
+    capability in one `offer-improvements` pass, and against real GitHub in this module's selftest.
+    A pass reads once and hands the result to every lookup (`switches=`). An unreadable source is
+    still a read: it answers with no rows and says why, so a pass that could not read does not retry
+    once per lookup.
+    """
+    try:
+        import switch_review
+
+        return dict(switch_review.switch_states())
+    except Exception as exc:  # noqa: BLE001
+        return {"held_off": [], "on_but_idle": [], "unreadable": f"{type(exc).__name__}: {exc}"}
+
+
+def declared_facts(capability_id: str, *, switches: dict | None = None) -> dict:
     """Every fact about this capability that is DECLARED somewhere and could be shown to a caller.
 
     The re-offer's entire vocabulary. Nothing may be composed: if it is not in one of these tables
     it cannot be said, which is what keeps a second offer from becoming a second argument.
+
+    `switches` is the pass's one `read_switches()`. Omitted, this lookup makes its own.
     """
     facts: dict = {}
     try:
@@ -1765,12 +1787,9 @@ def declared_facts(capability_id: str) -> dict:
     # THE GATE IS A DECLARED FACT and it was missing from this vocabulary, which is why a re-offer
     # had nothing to answer a `gated_off` decline with. Read from `switch_review`, which already
     # owns the flag -> capability mapping; a second copy here would drift from the switch report.
+    rows = read_switches() if switches is None else switches
     try:
-        import switch_review
-
-        for row in (switch_review.review().get("held_off") or []) + (
-            switch_review.review().get("on_but_idle") or []
-        ):
+        for row in list(rows.get("held_off") or []) + list(rows.get("on_but_idle") or []):
             if row.get("capability") == capability_id and row.get("flag"):
                 facts["gate_flag"] = str(row["flag"])
                 facts["gate_state"] = str(row.get("state") or "unknown")
@@ -1816,7 +1835,11 @@ def _quoted(fact: str, reason: str) -> bool:
 
 
 def undelivered_facts(
-    capability_id: str, delivered: dict | None = None, decline_reason: str = ""
+    capability_id: str,
+    delivered: dict | None = None,
+    decline_reason: str = "",
+    *,
+    switches: dict | None = None,
 ) -> dict:
     """Declared facts the caller did NOT already have. The re-offer's permitted content, exactly.
 
@@ -1826,7 +1849,7 @@ def undelivered_facts(
     quoted `how_to_use` back, adding nothing and consuming the trial's one round. A round spent
     restating what the caller said is a round a useful answer cannot have.
     """
-    have = declared_facts(capability_id)
+    have = declared_facts(capability_id, switches=switches)
     seen = set((delivered or {}).keys())
     return {k: v for k, v in have.items() if k not in seen and not _quoted(str(v), decline_reason)}
 
@@ -1905,8 +1928,10 @@ def record_reoffer(
     reason_text = decline_reason_recorded(
         capability_id, experiment_id, path=path, window_days=window_days, now=now
     )
-    facts = undelivered_facts(capability_id, delivered, reason_text)
-    if not facts and declared_facts(capability_id):
+    # One re-offer is one pass: both lookups below share a single switch read.
+    switches = read_switches()
+    facts = undelivered_facts(capability_id, delivered, reason_text, switches=switches)
+    if not facts and declared_facts(capability_id, switches=switches):
         # THE CALLER ALREADY HAD IT. Distinct from "nothing is declared", and it must NOT consume
         # the trial's one round: a round spent restating the caller's own words is a round the
         # useful answer cannot have. Nothing is written, so a later re-offer with a real fact still
@@ -4681,6 +4706,49 @@ def _selftest_finds() -> None:
     )
 
 
+@contextlib.contextmanager
+def _offline_switch_review(rows: dict | None = None):
+    """Selftest isolation for every path that reaches `declared_facts`: no live switch state, no gh.
+
+    `declared_facts` reads `switch_review`. Its `switch_states()` reads the LIVE capability ledger,
+    and its `review()` is the fleet sweep, live `gh` calls included. A selftest that reaches either
+    is not testing this module; with an authenticated `gh` this one ran the sweep against real
+    GitHub twenty times inside `verify.py`. So for the duration `switch_states` answers from `rows`
+    (none by default, which is what the real table says about every capability these selftests
+    invent) and counts its reads, while `review()` and `switch_review`'s own `gh` seam
+    (`_GH_CALL_RUNNER`, the injection its selftest uses) become tripwires. A tripwire RECORDS rather
+    than raises, because `declared_facts` swallows an exception from the switch read, and the
+    context fails on exit if one fired. Usable as a decorator.
+    """
+    import switch_review
+
+    canned = json.dumps(rows if rows is not None else {"held_off": [], "on_but_idle": []})
+    reads = {"switch_states": 0}
+    reached: list = []
+
+    def states(**_kwargs) -> dict:
+        reads["switch_states"] += 1
+        return json.loads(canned)
+
+    def sweep(**kwargs) -> dict:
+        reached.append(("review", kwargs))
+        return json.loads(canned)
+
+    def gh(args, *, timeout_s=30):
+        reached.append(("gh", args))
+        return False, "", "selftest: a propensity selftest may not reach gh"
+
+    saved = (switch_review.switch_states, switch_review.review, switch_review._GH_CALL_RUNNER)
+    switch_review.switch_states, switch_review.review = states, sweep
+    switch_review._GH_CALL_RUNNER = gh
+    try:
+        yield reads
+    finally:
+        switch_review.switch_states, switch_review.review, switch_review._GH_CALL_RUNNER = saved
+    assert not reached, f"a propensity selftest reached the live switch sweep or gh: {reached[:3]}"
+
+
+@_offline_switch_review()
 def _selftest_declines() -> None:
     """A DECLINE IS A THIRD STATE. It must be visible, attributable, and inert on the posterior.
 
@@ -5547,6 +5615,7 @@ def _selftest_provenance() -> None:
     )
 
 
+@_offline_switch_review()
 def _selftest_reoffer_and_offer_axis() -> None:
     """A SECOND OFFER MAY ONLY ECHO DECLARED FACTS — and the two-round rule must not latch shut.
 
@@ -5579,7 +5648,9 @@ def _selftest_reoffer_and_offer_axis() -> None:
     day = 86400
     with tempfile.TemporaryDirectory(prefix="reoffer-selftest-") as td:
         ledger = Path(td) / "capabilities.json"
-        rows = {c: capabilities._blank_capability(c) for c in ("rich", "bare", "structural")}
+        rows = {
+            c: capabilities._blank_capability(c) for c in ("rich", "bare", "structural", "gated")
+        }
         capabilities.save(rows, ledger)
         import capability_advisor
 
@@ -5784,6 +5855,39 @@ def _selftest_reoffer_and_offer_axis() -> None:
             gres = record_reoffer("rich", gated, decline_kind="gated_off", path=ledger)
             assert gres["reoffered"] is True, gres
             assert "how_to_use" in gres["facts_supplied"], gres["facts_supplied"]
+            # ...AND THE GATE ITSELF IS ECHOED. Section 8 never saw one: no switch holds "rich",
+            # and the rows used to come from the LIVE sweep, so whether a gate reached a re-offer
+            # depended on the machine. Pinned rows make it testable, and they are also what proves
+            # this selftest reads the stub and not the world: a stub nothing consults would pass
+            # the isolation vacuously.
+            held = {
+                "held_off": [
+                    {
+                        "flag": "ORCH_SELFTEST_GATE",
+                        "capability": "gated",
+                        "state": "off",
+                        "criterion": "the selftest's own switch-on criterion",
+                    }
+                ],
+                "on_but_idle": [],
+            }
+            held_exp = "advice:reoffer00010"
+            record_decline(
+                "gated",
+                held_exp,
+                reason="env-gated off behind some flag I could not name",
+                surface="gate-surface",
+                kind="gated_off",
+                path=ledger,
+            )
+            with _offline_switch_review(held):
+                hres = record_reoffer("gated", held_exp, decline_kind="gated_off", path=ledger)
+            assert hres["reoffered"] is True, hres
+            assert hres["facts"] == {
+                "gate_flag": "ORCH_SELFTEST_GATE",
+                "gate_state": "off",
+                "gate_criterion": "the selftest's own switch-on criterion",
+            }, hres["facts"]
 
             # ---- 9. A QUOTED FACT IS ALREADY DELIVERED, and must not consume the round ----------
             # A re-offer that restates the caller's own words spends the trial's ONE round on nothing.
@@ -5800,9 +5904,16 @@ def _selftest_reoffer_and_offer_axis() -> None:
                 kind="wrong_match",
                 path=ledger,
             )
-            qres = record_reoffer("rich", quoted_exp, decline_kind="wrong_match", path=ledger)
+            with _offline_switch_review() as reads:
+                qres = record_reoffer("rich", quoted_exp, decline_kind="wrong_match", path=ledger)
             assert qres["reoffered"] is False, qres
             assert qres.get("caller_already_had_the_facts") is True, qres
+            # This branch makes BOTH declared-fact lookups, so it is the one that can tell a pass
+            # sharing its switch read from two lookups each making their own.
+            assert reads["switch_states"] == 1, (
+                "one re-offer is one pass: its two declared-fact lookups share ONE switch read, "
+                f"got {reads['switch_states']}"
+            )
             # AND THE ROUND SURVIVES: nothing was written, so a later re-offer still lands as the first.
             assert (
                 existing_reoffer("rich", quoted_exp, path=ledger) is None
