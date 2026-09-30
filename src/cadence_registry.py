@@ -15,6 +15,22 @@ import time
 from pathlib import Path
 from typing import Any
 
+# `cadence_days` IS NOT THE PERIOD. It is N in `find STAMP -mtime +N`, which is how `_due()` in
+# orchestrate.sh decides a stamped step is due, and `find` counts WHOLE days since the stamp and
+# discards the remainder: `+N` matches only once the stamp is at least N+1 days old. So 0 is daily,
+# 1 is every other day, and a row writes one less than the period it means. That rule used to live
+# in a comment on the issue-readiness row, and the rows written after it never saw it: pattern-miner,
+# fleet-shapes, agent-switches and evidence-acquisition declared 1 for steps their docs and their own
+# `[cadence] ... (daily ...)` log lines call daily, and ran 48-50h apart (tick log, 2026-09-11..22);
+# coverage-testgen-trigger declared 7 for weekly and ran every eight days. So it is a test now:
+# tests/test_cadence_period.py replays the real `_due` and `_cadence_due` against aged stamps, fails
+# a stamped row whose value is not named below, and fails a row whose `[cadence]` log line names a
+# different period. A genuinely new period is added here, by name, never as a bare number on a row.
+CADENCE_DAYS_FOR: dict[str, int] = {
+    "daily": 0,  # due once the stamp is 24h old; at the hourly tick a daily step runs every ~25h
+    "weekly": 6,  # due once the stamp is 7 days old
+}
+
 CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "rail-exercise",
@@ -37,7 +53,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "pattern-miner",
         "success_stamp": ".last-pattern-miner",
-        "cadence_days": 1,
+        "cadence_days": 0,
         "artifact": "pattern-miner-inventory.json",
         "log": "pattern-miner.log",
         "gate": "accepted redacted completion episodes available",
@@ -46,7 +62,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "fleet-shapes",
         "success_stamp": ".last-fleet-shapes",
-        "cadence_days": 1,
+        "cadence_days": 0,
         "artifact": "fleet-shapes.json",
         "log": "fleet-shapes.log",
         "gate": "merged agent PRs in the window whose facts gh can return",
@@ -56,7 +72,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "agent-switches",
         "success_stamp": ".last-agent-switches",
-        "cadence_days": 1,
+        "cadence_days": 0,
         "artifact": "agent-switches.json",
         "log": "agent-switches.log",
         "gate": "keepalive PRs in the window whose label timeline gh can return",
@@ -65,7 +81,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "evidence-acquisition",
         "success_stamp": ".last-evidence-acquisition",
-        "cadence_days": 1,
+        "cadence_days": 0,
         "artifact": "evidence-acquisition-plan.json",
         "log": "evidence-acquisition.log",
         "gate": "a capability unblock() marks feedable; a documented default-off switch is never fed",
@@ -220,8 +236,6 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "issue-readiness",
         "success_stamp": ".last-issue-readiness",
-        # 0 is this registry's spelling of "daily": _due() uses `find -mtime +N`, so +0 fires once
-        # the stamp is >24h old. Declaring 1 here would fire only after >48h.
         "cadence_days": 0,
         "artifact": "issue-readiness.json",
         "log": "issue-readiness.log",
@@ -368,7 +382,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         # and saying so every cycle is 208 notices a year for four facts already known.
         "key": "coverage-testgen-trigger",
         "success_stamp": ".last-coverage-testgen-trigger",
-        "cadence_days": 7,
+        "cadence_days": 6,
         "artifact": "coverage-testgen-trigger-report.json",
         "log": "coverage-testgen-trigger.log",
         "gate": "ORCH_COVERAGE_TESTGEN and a readable coverage report",
