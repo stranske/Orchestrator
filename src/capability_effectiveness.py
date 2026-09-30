@@ -148,7 +148,9 @@ def _arm_stats(edges: list[dict]) -> dict:
 
 
 def measure(*, path=None, conn=None) -> dict:
-    caps = capabilities.load(path or capabilities.REG)
+    # A report, so `load_declared`: the writing `load` would seed, reconcile and expire rows and
+    # write the result into the shared ledger. This reconciles a copy and writes nothing.
+    caps = capabilities.load_declared(path or capabilities.REG)
     rows = _edge_rows(conn)
     by_cap: dict[str, list[dict]] = {}
     for row in rows:

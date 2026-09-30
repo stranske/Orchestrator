@@ -304,14 +304,13 @@ def reachable_set(*, path=None) -> dict:
     subprocesses it simply cannot see. The COMBINED report put the module at 95.1% with this body
     among the 64 statements left over, which is what made it visible.
 
-    THE TWO COUNTS ARE NOT A RATIO, and reading them as one is why `unreachable_declared` exists.
-    `reachable` comes from `advise`, which loads through `capabilities.load` and therefore sees
-    KNOWN_DECLARATIONS seeds; `declared_count` comes from `load_declared`, which does not write and
-    reports only what the ledger itself declares. So `reachable_count` can exceed `declared_count`
-    -- an empty ledger measures 1 reachable of 0 declared -- and no "fraction reachable" can be
-    computed from them. What IS actionable is the difference in the answerable direction: declared
-    capabilities that no free text reaches. That list is the drainable quantity, reported beside
-    the blocking one rather than left for a reader to derive from two numbers that do not divide.
+    ONE POPULATION, since 2026-09-30. `declared_count` comes from `load_declared`, and so does every
+    ledger read `advise` makes, so each reachable capability is a declared one. Until then `advise`
+    read through the WRITING `capabilities.load`, which seeded declared gate rows into the very
+    ledger this measures: an empty ledger measured 1 reachable of 0 declared, the pair could not be
+    read as a fraction, and the measurement mutated its own input. What is actionable is still the
+    list, not the pair: declared capabilities that no free text reaches. That is the drainable
+    quantity, reported beside the blocking one, because two counts cannot say WHICH capability left.
     """
     declared = capabilities.load_declared(path or capabilities.REG)
     out: dict[str, list[str]] = {}
@@ -477,7 +476,13 @@ def advise(
     nothing could even attempt to check. Absent it, such a precondition reports UNEVALUATED with the
     missing input named. It never guesses, and it never withholds or reorders the offer.
     """
-    caps = capabilities.load(path or capabilities.REG)
+    # `load_declared`, not `load`: reading is not this call's write. The writing loader seeds,
+    # reconciles and expires rows and persists the result into the shared ledger, so `record=False`
+    # was not the pure query this docstring promises, and the front-door selftest, which consults
+    # the live ledger, could write it. What a consult records goes through `heartbeat`, which never
+    # needed it. Seeding and expiry are the tick's lifecycle step (`capabilities.py sweep` +
+    # `validate`).
+    caps = capabilities.load_declared(path or capabilities.REG)
     # THE PR THIS CONSULT IS ABOUT, read once. Absent or unreadable, every PR fact stays UNEVALUATED
     # and nothing below is auto-declined — the failure mode is "offered as before", never "hidden".
     pr = _pr_number_from(text, repository, context)
@@ -2886,7 +2891,7 @@ def learned_associations(*, path=None) -> dict:
     skill wiring would make "the skills are wired now" unfalsifiable. The three counts below
     reconcile by construction: with_skill + without_skill == observations.
     """
-    caps = capabilities.load(path or capabilities.REG)
+    caps = capabilities.load_declared(path or capabilities.REG)  # a report: it writes nothing
     by_skill: dict[str, dict[str, int]] = {}
     by_task_type: dict[str, dict[str, int]] = {}
     total = 0

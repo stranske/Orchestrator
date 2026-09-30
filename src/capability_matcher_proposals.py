@@ -172,7 +172,9 @@ def score(proposal: dict, task_counts: dict) -> int | None:
 
 
 def evaluate(*, path=None, task_counts: dict | None = None) -> dict:
-    caps = capabilities.load(path or capabilities.REG)
+    # A report (the propensity detector reads it every run), so `load_declared`: the writing `load`
+    # would seed, reconcile and expire rows and write the shared ledger. `apply_matchers` writes.
+    caps = capabilities.load_declared(path or capabilities.REG)
     counts = task_counts if task_counts is not None else _task_counts()
     rows = []
     for cap_id, proposal in sorted(PROPOSALS.items()):
@@ -218,6 +220,8 @@ def apply_matchers(
     infrastructure capability matches only when the orchestrator actually reports that phase.
     """
     ledger = path or capabilities.REG
+    # A GENUINE WRITER, so the writing `load` stays: this saves the ledger below. Allowlisted with
+    # this reason in test_verifying_the_system_never_writes_the_live_ledger.
     caps = capabilities.load(ledger)
     written, skipped = [], []
     allowed = {WORK_ROUTED} | ({INFRASTRUCTURE} if include_infrastructure else set())

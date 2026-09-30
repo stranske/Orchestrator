@@ -61,28 +61,32 @@ def test_a_gate_only_capability_is_not_counted_as_reachable(tmp_path):
     assert "gate_only" not in out["reachable"]
 
 
-def test_the_two_counts_are_not_a_ratio(tmp_path):
-    """The second defect this function carried while nothing called it.
+def test_both_counts_read_one_population_and_measuring_writes_nothing(tmp_path):
+    """The second defect this function carried while nothing called it, now closed at its cause.
 
-    `reachable` comes from `advise`, which loads through `capabilities.load` and so sees
-    KNOWN_DECLARATIONS seeds. `declared_count` comes from `load_declared`, which reports only what
-    the ledger itself declares. They count different populations, so `reachable_count /
-    declared_count` is not a fraction — an EMPTY ledger measures reachable 1 of declared 0.
-    Asserted directly, because the two names invite a division that means nothing.
+    `declared_count` comes from `load_declared`. Until 2026-09-30 `advise` read through the WRITING
+    `capabilities.load`, which seeded declared gate rows into the very ledger being measured, so an
+    EMPTY ledger measured reachable 1 of declared 0: two populations, a pair that could not be read
+    as a fraction, and a measurement that mutated its input. `advise` reads with `load_declared`
+    now. So this asserts the property rather than the old symptom: reach is a subset of what the
+    ledger declares, and measuring it leaves the ledger byte-identical.
     """
-    empty = ca.reachable_set(path=_ledger(tmp_path))
-    assert empty["declared_count"] == 0
-    assert empty["reachable_count"] > 0, (
-        "a seeded declaration is reachable with nothing declared — which is exactly why these "
-        "two numbers must never be presented as a fraction"
-    )
+    ledger = _ledger(tmp_path)
+    before = ledger.read_bytes()
+    empty = ca.reachable_set(path=ledger)
+    assert (empty["declared_count"], empty["reachable_count"]) == (0, 0), empty
+    assert ledger.read_bytes() == before, "measuring reach wrote the ledger it measures"
+    some = _ledger(tmp_path / "some", routed_lane=ROUTED, gate_only=GATE_ONLY)
+    out = ca.reachable_set(path=some)
+    assert set(out["reachable"]) <= set(capabilities.load_declared(some)), out["reachable"]
+    assert (out["declared_count"], out["reachable_count"]) == (2, 1), out
 
 
 def test_the_actionable_set_is_reported_not_left_to_be_derived(tmp_path):
     """A declared capability no free text reaches is the drainable quantity, and it is named.
 
-    Two numbers that do not divide cannot say WHICH capability left the front door. The list can,
-    and it is the half a reader can act on.
+    Two counts cannot say WHICH capability left the front door, even now that they divide. The
+    list can, and it is the half a reader can act on.
     """
     out = ca.reachable_set(path=_ledger(tmp_path, routed_lane=ROUTED, gate_only=GATE_ONLY))
     assert "gate_only" in out["unreachable_declared"]

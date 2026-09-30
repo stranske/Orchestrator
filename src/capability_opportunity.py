@@ -160,7 +160,9 @@ def assess(
 
 
 def report(*, path=None, env: Mapping[str, str] | None = None) -> dict:
-    caps = capabilities.load(path or capabilities.REG)
+    # A report, so `load_declared`: the writing `load` would seed, reconcile and expire rows and
+    # write the result into the shared ledger. This reconciles a copy and writes nothing.
+    caps = capabilities.load_declared(path or capabilities.REG)
     task_counts = _task_type_counts()
     role_counts = _role_invocation_counts()
     rows = [

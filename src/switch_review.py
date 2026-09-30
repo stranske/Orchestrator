@@ -90,7 +90,12 @@ SWITCH_CAPABILITY = {
 
 
 def _last_invocation(cap_id: str, *, path=None) -> int:
-    caps = capabilities.load(path or capabilities.REG)
+    # `load_declared`, not `load`: this is a REPORT, and its cadence row promises "writes require
+    # ORCH_SWITCH_REVIEW=1; report-only otherwise". The writing loader creates a missing ledger,
+    # seeds declared gate rows, reconciles declarations and expires rows, and writes the result into
+    # the shared ledger on every review, flag or no flag. `load_declared` writes nothing; the one
+    # field read here is measured state, which reconciliation never touches.
+    caps = capabilities.load_declared(path or capabilities.REG)
     return int((caps.get(cap_id) or {}).get("last_invocation") or 0)
 
 
@@ -1266,7 +1271,7 @@ def _selftest() -> None:
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
         "recently-triggering stays silent, '0' is off, dry-run inert, fleet_gates SUSPECT rule, "
-        "switch_states is the review's rows without the sweep)"
+        "switch_states is the review's rows without the sweep, review writes no ledger)"
     )
 
 
@@ -1283,6 +1288,7 @@ def _selftest_review(gh_calls: list) -> None:
             rec["status"] = "generated"
             caps[cap_id] = rec
         capabilities.save(caps, reg)
+        saved_ledger = reg.read_bytes()
 
         # ALL OFF -> each with a recorded criterion is raised as a pending decision.
         rep = review(now=now, env={}, path=reg)
@@ -1312,6 +1318,9 @@ def _selftest_review(gh_calls: list) -> None:
         assert "ORCH_RANGE_LANE_ROLLOUT" not in {r["flag"] for r in rep2["held_off"]}
         text = format_report(rep2)
         assert "ON but not triggering" in text and "range-lane failure mode" in text
+        # ...and the three reviews above were REPORTS: none wrote the ledger. It lacks every
+        # declared gate row, so the writing loader would have seeded them all into it on the first.
+        assert reg.read_bytes() == saved_ledger, "review() wrote the capability ledger it reads"
 
         # ON and RECENTLY triggering -> silent, no question.
         caps["range-lane-rollout"]["last_invocation"] = now - 2 * 86400

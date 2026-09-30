@@ -132,8 +132,10 @@ RESOLVERS = [
 
 
 def _known_capability_ids(path: Path | None = None) -> set[str]:
+    # A lookup, so `load_declared`. The bridge's writes are its `heartbeat` calls; reached only when
+    # the raw ledger read came back empty, the writing `load` here would have CREATED the ledger.
     try:
-        return set(capabilities.load(path or capabilities.REG))
+        return set(capabilities.load_declared(path or capabilities.REG))
     except Exception:
         return set()
 

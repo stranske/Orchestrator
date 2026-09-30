@@ -1,4 +1,6 @@
+import ast
 import json
+import pathlib
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -561,8 +563,104 @@ def test_non_gate_declarations_are_code_seeded_and_read_only(tmp_path):
             assert written[cid][field] == value, (cid, field)
 
 
+# THE GENUINE WRITERS the scan below can see, each with the reason it may persist. Keyed by module
+# and function, never by line, so a reason survives an edit above it. An entry the scan no longer
+# reaches FAILS: a reason that outlives the code it excuses is a prose cache of a decision.
+_LIVE_LEDGER_WRITERS = {
+    ("capability_matcher_proposals.py", "apply_matchers"): (
+        "`--apply` writes proposed matchers into the ledger and saves it; its writing load comes "
+        "before the save it exists to make"
+    ),
+}
+
+
+def _names_live_ledger(expr: ast.AST, bound: dict, seen: frozenset = frozenset()) -> bool:
+    """Can this path expression be the live ledger, `REG`?
+
+    Directly (`REG`, `capabilities.REG`), as a fallback (`path or capabilities.REG`), or through a
+    local name or a parameter default that the same function binds to such an expression.
+    """
+    for node in ast.walk(expr):
+        if isinstance(node, ast.Name) and node.id == "REG":
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "REG":
+            return True
+        if isinstance(node, ast.Name) and node.id in bound and node.id not in seen:
+            if any(_names_live_ledger(value, bound, seen | {node.id}) for value in bound[node.id]):
+                return True
+    return False
+
+
+def _own_nodes(scope: ast.AST):
+    """Every node of `scope` outside the functions nested in it, which are scopes of their own."""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _writing_live_ledger_loads(source: str) -> list[tuple[int, str]]:
+    """(line, function) of each `capabilities.load(...)` in `source` that can WRITE the live ledger.
+
+    `load()` writes unless `create` is the literal False, and the ledger it writes is the live one
+    when its path is omitted (the default IS `REG`) or reaches `REG` by any route
+    `_names_live_ledger` follows. Parsed, not grepped: a call a formatter splits over three lines is
+    still one call, and a string that merely spells one is not a call at all.
+    """
+    tree = ast.parse(source)
+    scopes = [tree]
+    scopes += [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+    ]
+    found = []
+    for scope in scopes:
+        name = getattr(scope, "name", "<lambda>" if isinstance(scope, ast.Lambda) else "<module>")
+        nodes = list(_own_nodes(scope))
+        bound: dict[str, list] = {}
+        args = getattr(scope, "args", None)
+        if isinstance(args, ast.arguments):
+            positional = [*args.posonlyargs, *args.args]
+            defaulted = positional[len(positional) - len(args.defaults) :]
+            for arg, default in [
+                *zip(defaulted, args.defaults),
+                *zip(args.kwonlyargs, args.kw_defaults),
+            ]:
+                if default is not None:
+                    bound.setdefault(arg.arg, []).append(default)
+        for node in nodes:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        bound.setdefault(target.id, []).append(node.value)
+            elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+                if isinstance(node.target, ast.Name):
+                    bound.setdefault(node.target.id, []).append(node.value)
+        for node in nodes:
+            func = getattr(node, "func", None)
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(func, ast.Attribute)
+                and func.attr == "load"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "capabilities"
+            ):
+                continue
+            create = next((kw.value for kw in node.keywords if kw.arg == "create"), None)
+            if isinstance(create, ast.Constant) and create.value is False:
+                continue  # the raw reader: it writes nothing
+            path = node.args[0] if node.args else None
+            path = next((kw.value for kw in node.keywords if kw.arg == "path"), path)
+            if path is None or _names_live_ledger(path, bound):
+                found.append((node.lineno, name))
+    return sorted(found)
+
+
 def test_verifying_the_system_never_writes_the_live_ledger():
-    """No test or selftest may take a WRITING load of the shared live capability ledger.
+    """No test, selftest or selftest-bearing module may take a WRITING load of the live ledger.
 
     `load()` defaults to `create=True`, which RECONCILES AND PERSISTS. Nine test/selftest call sites
     read the live ledger that way — they only ever read, but the write happened anyway whenever the
@@ -575,33 +673,77 @@ def test_verifying_the_system_never_writes_the_live_ledger():
     code tables still declare, so a row that LEAVES the table keeps whatever was stamped on it. A
     verification run must not be able to do that. `load_declared()` reconciles in memory and writes
     nothing, which is what every one of those readers actually wanted.
+
+    THE SCAN WAS BLIND, and it stayed green while blind, until 2026-09-24. It was a line regex that
+    needed `REG` directly after `load(`, so it could not see `load(path or capabilities.REG)` — ten
+    sites in seven selftest-bearing modules, one of them the admission gate verify.py runs on every
+    PR — nor a bare `load()`, whose default IS the live ledger (two more), nor a call split across
+    lines. And its `test_` branch had matched nothing since the 2026-08-23 move to `src/` +
+    `tests/`, because no test file sits beside the modules in either tree. It now parses the source,
+    follows a path through a local name or a parameter default, and walks the test directory too.
     """
-    import re
-
-    # Built by concatenation so this file's own source cannot match the scan below.
-    forbidden = re.compile(r"capabilities\.load\(" + r"(?:capabilities\.)?REG\b")
-
-    # POSITIVE CONTROL: if the pattern stops matching, the scan is vacuous and this fails first.
-    assert forbidden.search("x = capabilities.load(" + "capabilities.REG)")
-    assert forbidden.search("x = capabilities.load(" + "REG)")
-    assert not forbidden.search("x = capabilities.load_declared(" + "capabilities.REG)")
+    # POSITIVE CONTROLS: every spelling that takes a writing load of the live ledger, including the
+    # four the regex this replaced could not see. If the detector stops matching one of them, the
+    # scan is vacuous for that spelling, and this fails before the scan can report a clean tree.
+    for source in (
+        "capabilities.load(capabilities.REG)",
+        "capabilities.load(REG)",
+        "capabilities.load(path or capabilities.REG)",  # the firing monitor's spelling (#337)
+        "capabilities.load(\n    path or capabilities.REG\n)",  # ...as a formatter splits it
+        "capabilities.load()",  # the default is the live ledger
+        "capabilities.load(create=True)",
+        "capabilities.load(path or capabilities.REG, create=True)",
+        (
+            "def f(path=None):\n    ledger = path or capabilities.REG\n"
+            "    return capabilities.load(ledger)"
+        ),
+        "def f(ledger=capabilities.REG):\n    return capabilities.load(ledger)",
+    ):
+        assert _writing_live_ledger_loads(source), f"the scan cannot see {source!r}"
+    # NEGATIVE CONTROLS: the read-only reader, the raw reader, and a path the caller supplies.
+    for source in (
+        "capabilities.load_declared(capabilities.REG)",
+        "capabilities.load_declared(path or capabilities.REG)",
+        "capabilities.load(path or capabilities.REG, create=False)",
+        "capabilities.load(ledger)",
+        "def f(ledger):\n    return capabilities.load(ledger)",
+        (
+            "def f(tmp_path):\n    ledger = tmp_path / 'capabilities.json'\n"
+            "    return capabilities.load(ledger)"
+        ),
+    ):
+        assert not _writing_live_ledger_loads(source), f"the scan flags a safe call: {source!r}"
 
     import paths
 
-    # MODULE dir: this walks the orchestrator's modules, not the checkout.
-    root = paths.MODULE_DIR
-    offenders = []
-    for path in sorted(root.glob("*.py")):
+    # Every selftest-bearing MODULE, and every file in the TEST directory: production code may
+    # legitimately persist, verification may not. Tests have not lived beside the modules since
+    # 2026-08-23 in either tree, which is why the test directory is named rather than globbed for.
+    files = [
+        path
+        for path in sorted(paths.MODULE_DIR.glob("*.py"))
+        if "_selftest" in path.read_text(encoding="utf-8", errors="replace")
+    ]
+    files += sorted(paths.TESTS_DIR.glob("*.py"))
+    here = pathlib.Path(__file__).resolve()
+    assert here in {path.resolve() for path in files}, "the scan no longer reaches the test files"
+    offenders, excused = [], set()
+    for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
-        if not (path.name.startswith("test_") or "_selftest" in text):
-            continue  # production code may legitimately persist; verification may not.
-        for num, line in enumerate(text.splitlines(), 1):
-            if forbidden.search(line):
-                offenders.append(f"{path.name}:{num}: {line.strip()}")
+        for line, function in _writing_live_ledger_loads(text):
+            if (path.name, function) in _LIVE_LEDGER_WRITERS:
+                excused.add((path.name, function))
+            else:
+                offenders.append(f"{path.name}:{line} in {function}()")
     assert not offenders, (
-        "verification code takes a writing load of the live ledger; use load_declared():\n  "
-        + "\n  ".join(offenders)
+        "verification code takes a writing load of the live ledger. A read uses "
+        "load_declared(); a genuine writer goes in _LIVE_LEDGER_WRITERS with the reason it must "
+        "persist:\n  " + "\n  ".join(offenders)
     )
+    stale = sorted(set(_LIVE_LEDGER_WRITERS) - excused)
+    assert (
+        not stale
+    ), f"a _LIVE_LEDGER_WRITERS entry excuses a load the scan no longer finds: {stale}"
 
 
 def test_no_tick_producer_runs_above_the_heartbeat_export():
