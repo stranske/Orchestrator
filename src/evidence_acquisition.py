@@ -63,9 +63,12 @@ def feedable(ledger: dict[str, Any] | None = None, *, now: int | None = None) ->
     cheaper to finish than one ten away, and finishing gates is the point. Ties break on capability
     id so the same input always produces the same plan (a replayable lane, not a lottery).
     """
-    # `capabilities.load()` returns the capability MAPPING directly; tests inject a
-    # {"capabilities": {...}} wrapper. Accept both rather than making callers know which.
-    source = ledger if ledger is not None else capabilities.load()
+    # The loader returns the capability MAPPING directly; tests inject a {"capabilities": {...}}
+    # wrapper. Accept both rather than making callers know which. `load_declared`, not the writing
+    # `load()`: `plan()` promises "reads the ledger, writes nothing", and a bare `load()` seeds,
+    # reconciles and expires rows and writes them into the shared ledger. `capabilities.REG` is
+    # named so the path is read when this runs, not when `load` was defined.
+    source = ledger if ledger is not None else capabilities.load_declared(capabilities.REG)
     caps = source.get("capabilities", source) if isinstance(source, dict) else {}
     rows = []
     for cap_id, cap in caps.items():

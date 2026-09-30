@@ -1647,7 +1647,10 @@ def _resolve_capability_versions(capability_ids: list[str]) -> list[str]:
     try:
         import capabilities
 
-        ledger = capabilities.load()
+        # A lookup, so `load_declared`: a bare `load()` seeds, reconciles and expires rows and
+        # writes the shared ledger from inside an influence-edge write to the Brain. Version ids
+        # are measured state, so the declared view and the written one agree on every id.
+        ledger = capabilities.load_declared(capabilities.REG)
     except Exception:
         return []
     versions = [

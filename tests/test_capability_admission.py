@@ -325,10 +325,11 @@ def test_findability_distinguishes_its_three_sub_causes():
         # ...and the aggregate a report reader sees carries the causes AND the drain, so a debt
         # count can never read as "be patient indefinitely".
         #
-        # SCOPED TO THE `t-` ROWS ON PURPOSE. `capabilities.load()` seeds every `KNOWN_GATES` row
-        # into any ledger it opens, synthetic ones included (verified: a one-row file comes back
-        # with 15). Asserting on the whole population would therefore be asserting on the committed
-        # gate table, which is a different test and would move whenever that table does.
+        # SCOPED TO THE `t-` ROWS ON PURPOSE. Until 2026-09-24 the gate read with the writing
+        # `capabilities.load()`, which seeds every `KNOWN_GATES` row into any ledger it opens (a
+        # one-row file came back with 15). It reads with `load_declared` now, which seeds nothing,
+        # so this file reads as exactly its rows. The scoping stays: the assertion is about this
+        # mechanism, and a whole-population one would move whenever the gate table does.
         rep = admission.report(path=path, ctx=ctx)
         find = rep["findability"]
         mine = {cap_id for cap_id in find["failing"] if cap_id.startswith("t-")}
@@ -380,11 +381,11 @@ def test_findability_blocks_new_capabilities_and_reports_older_ones_as_debt():
         assert "findable" in old["deferred"], old
         assert "findable" not in old["blocking"], "a pre-cutoff row must not block the suite"
 
-        # AND THE SAME SPLIT IN THE AGGREGATE. Scoped to the `t-` rows because
-        # `capabilities.load()` seeds the committed `KNOWN_GATES` rows into any ledger; and read
-        # from `findability`, not from `enforced_failing`, because these synthetic rows have no
-        # module so `req_heartbeat` fails them too — a row can be blocking for another reason
-        # entirely, and this test is about the ninth requirement's scoping, not about all nine.
+        # AND THE SAME SPLIT IN THE AGGREGATE. Scoped to the `t-` rows for the reason given in the
+        # test above; and read from `findability`, not from `enforced_failing`, because these
+        # synthetic rows have no module so `req_heartbeat` fails them too — a row can be blocking
+        # for another reason entirely, and this test is about the ninth requirement's scoping, not
+        # about all nine.
         rep = admission.report(path=path, ctx=ctx)
         find = rep["findability"]
         assert {c for c in find["blocking"] if c.startswith("t-")} == {

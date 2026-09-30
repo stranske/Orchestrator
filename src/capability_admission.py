@@ -476,7 +476,7 @@ def _context(path: pathlib.Path | None = None) -> dict:
     import capability_activation_audit as audit
 
     rows = {r["capability_id"]: r for r in audit.audit(use_cache=True)["rows"]}
-    ledger = capabilities.load(path or capabilities.REG)
+    ledger = capabilities.load_declared(path or capabilities.REG)  # read-only: see report()
     return {
         "audit_rows": rows,
         "fixtures": coverage._fixture_capabilities(),
@@ -487,7 +487,7 @@ def _context(path: pathlib.Path | None = None) -> dict:
 
 def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict:
     """Does this capability carry everything it needs? Per-requirement, never a single verdict."""
-    ledger = capabilities.load(path or capabilities.REG)
+    ledger = capabilities.load_declared(path or capabilities.REG)  # read-only: see report()
     cap = ledger.get(capability_id)
     if cap is None:
         raise ValueError(f"unknown capability: {capability_id}")
@@ -804,7 +804,13 @@ def findability_report(ledger: dict, ctx: dict, rows: list[dict] | None = None) 
 
 def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict:
     _capability_heartbeat("invocation")
-    ledger = capabilities.load(path or capabilities.REG)
+    # `load_declared`, not `load`, here and in `_context` and `admit`: this gate is VERIFICATION —
+    # verify.py runs it on every PR and the tests beside it read the live ledger. The writing loader
+    # creates a missing ledger, seeds declared gate rows, reconciles declarations and expires rows,
+    # then writes the result into the ledger the tick reads. `load_declared` reconciles an in-memory
+    # copy and writes nothing. It seeds and expires nothing either: the tick's lifecycle step
+    # (`capabilities.py sweep` + `validate`, every active tick) owns those writes.
+    ledger = capabilities.load_declared(path or capabilities.REG)
     ctx = ctx or _context(path)
     # A retired or superseded row owes nothing: the advisor never offers it and no code path will
     # heartbeat it, so it is not admitted, not enforced and not debt. Retiring a stray row on

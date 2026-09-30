@@ -477,7 +477,13 @@ def advise(
     nothing could even attempt to check. Absent it, such a precondition reports UNEVALUATED with the
     missing input named. It never guesses, and it never withholds or reorders the offer.
     """
-    caps = capabilities.load(path or capabilities.REG)
+    # `load_declared`, not `load`: reading is not this call's write. The writing loader seeds,
+    # reconciles and expires rows and persists the result into the shared ledger, so `record=False`
+    # was not the pure query this docstring promises, and the front-door selftest, which consults
+    # the live ledger, could write it. What a consult records goes through `heartbeat`, which never
+    # needed it. Seeding and expiry are the tick's lifecycle step (`capabilities.py sweep` +
+    # `validate`).
+    caps = capabilities.load_declared(path or capabilities.REG)
     # THE PR THIS CONSULT IS ABOUT, read once. Absent or unreadable, every PR fact stays UNEVALUATED
     # and nothing below is auto-declined — the failure mode is "offered as before", never "hidden".
     pr = _pr_number_from(text, repository, context)
@@ -2886,7 +2892,7 @@ def learned_associations(*, path=None) -> dict:
     skill wiring would make "the skills are wired now" unfalsifiable. The three counts below
     reconcile by construction: with_skill + without_skill == observations.
     """
-    caps = capabilities.load(path or capabilities.REG)
+    caps = capabilities.load_declared(path or capabilities.REG)  # a report: it writes nothing
     by_skill: dict[str, dict[str, int]] = {}
     by_task_type: dict[str, dict[str, int]] = {}
     total = 0
