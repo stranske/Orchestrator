@@ -290,14 +290,12 @@ def test_no_fixture_names_an_unknown_capability():
     # that has never run the system the ledger holds only the rows the code declares, and every
     # fixture beyond those would read as a typo. Name the absent rows instead of asserting.
     env_prereq.require(env_prereq.ledger_rows_absent(*sorted(_fixture_capabilities())))
-    # A retired or superseded row carries no obligations: the advisor never offers it and no code
-    # path will ever heartbeat it, so it is skipped here (retiring a stray row on 2026-09-03 turned
-    # every sibling worktree red until this skip existed).
-    ledger = {
-        cid
-        for cid, cap in capabilities.load_declared(capabilities.REG).items()
-        if cap.get("status") not in capabilities.NOT_LIVE_STATES
-    }
+    # EVERY row, retired and superseded included. The fixture check above skips them because a
+    # retired row OWES nothing; this one asks whether a fixture names a capability that EXISTS, and
+    # a retired row still does — it stays in the ledger as the record it is. Filtering it out here
+    # (pasted in beside the fixture check's skip) inverted that skip's intent: every fixture of a
+    # retired capability read as a typo, so a gate row's scheduled expiry alone turned this red.
+    ledger = set(capabilities.load_declared(capabilities.REG))
     unknown = sorted(_fixture_capabilities() - ledger)
     assert not unknown, f"fixtures name capabilities absent from the ledger: {unknown}"
 
@@ -350,14 +348,9 @@ def test_every_defect_is_a_known_class():
 
 def test_exemptions_carry_reasons_and_exist():
     """An exemption must name a real capability and say why — never a bare skip."""
-    # A retired or superseded row carries no obligations: the advisor never offers it and no code
-    # path will ever heartbeat it, so it is skipped here (retiring a stray row on 2026-09-03 turned
-    # every sibling worktree red until this skip existed).
-    ledger = {
-        cid
-        for cid, cap in capabilities.load_declared(capabilities.REG).items()
-        if cap.get("status") not in capabilities.NOT_LIVE_STATES
-    }
+    # EVERY row, for the same reason as `test_no_fixture_names_an_unknown_capability`: a retired
+    # row is still a real capability, so an exemption naming one is not a typo.
+    ledger = set(capabilities.load_declared(capabilities.REG))
     for cap_id, reason in FIXTURE_EXEMPT.items():
         assert cap_id in ledger, f"FIXTURE_EXEMPT names unknown capability {cap_id!r}"
         assert reason and len(reason) > 20, f"FIXTURE_EXEMPT[{cap_id!r}] needs a real reason"

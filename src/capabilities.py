@@ -1259,6 +1259,10 @@ def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[
 # `kill_switch_category` / `control_point` / `kill_switch_rationale` joined on 2026-08-22. They had
 # been applied straight to the running instance's ledger, which made them machine-local: green where
 # someone typed them, absent on a fresh checkout, and invisible to review.
+#
+# `status` is the one field NOT rewritten on every load. It is listed so a KNOWN_DECLARATIONS row may
+# declare one, but a lifecycle state is owned by the ledger: `_reconcile_known_declarations` moves a
+# row to its declared status only when the row is neither `active` nor in NOT_LIVE_STATES.
 DECLARATION_FIELDS: tuple[str, ...] = (
     "status",
     "entrypoint",
@@ -1443,10 +1447,17 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
     gate, or consumer text in place makes a newly wired feature look dormant.
     Reconciliation therefore updates declaration-owned fields and records the
     change. It never invents match/invocation/outcome evidence and never
-    downgrades an active, retired, or superseded capability.
+    moves an active, retired, or superseded capability off that status.
     """
     changed = False
-    declaration_fields = DECLARATION_FIELDS
+    # `status` IS DECLARATION-OWNED BUT LIFECYCLE-GUARDED, so this loop skips it and the block below
+    # owns it: a declared status moves a row only when that row is neither `active` nor in
+    # NOT_LIVE_STATES. PR #207 (2026-09-03) put `status` into DECLARATION_FIELDS so a
+    # KNOWN_DECLARATIONS row could declare one, and from then this loop rewrote the status of every
+    # declared row on every load. A retirement was undone by the next writing load, every
+    # `load_declared` reader saw the retired row as live, an expired row was re-retired in the same
+    # call (two events and a full rewrite per load), and the guard below was dead code.
+    declaration_fields = tuple(field for field in DECLARATION_FIELDS if field != "status")
     # BOTH SOURCES, one loop. KNOWN_GATES carries gate machinery; KNOWN_DECLARATIONS carries only
     # declaration-owned fields for capabilities that are not gates.
     for name, gate in {**KNOWN_GATES, **KNOWN_DECLARATIONS}.items():
