@@ -142,6 +142,41 @@ def ledger_invocation_history_absent(*capability_ids: str) -> str | None:
     )
 
 
+def ledger_rows_not_live(*capability_ids: str) -> str | None:
+    """Reason string when a named row exists but has LEFT the live population on this machine.
+
+    Lifecycle state is machine-local in the same way the row is. A KNOWN_GATES row retires when its
+    GATED_TTL_DAYS window runs out on this machine's clock, and reconciliation never moves it back to
+    its declared status. So a check asking how a LIVE row classifies has no subject once the row is
+    retired or superseded (`classify_liveness` answers with the status by design), and the red it
+    would print was produced by the calendar, not by the code under test. A row with no entry at all
+    is `ledger_rows_absent`'s question, not this one.
+
+    WHAT CLEARS IT, stated because a skip that cannot say so is a latch: the row being live again.
+    A transition alone does not do it for an expired row — `load()` re-retires any live row whose
+    expiry has passed — so the reason names both halves.
+    """
+    try:
+        ledger = _ledger()
+    except Exception as exc:  # noqa: BLE001
+        return f"capability ledger unreadable ({type(exc).__name__}: {exc})"
+    import capabilities
+
+    gone = sorted(
+        f"{c} ({ledger[c]['status']})"
+        for c in capability_ids
+        if (ledger.get(c) or {}).get("status") in capabilities.NOT_LIVE_STATES
+    )
+    if not gone:
+        return None
+    return (
+        f"capability ledger row(s) {', '.join(gone)} are not live on this machine — lifecycle "
+        f"state is machine-local ({capabilities.REG}), so a verdict about how a LIVE row "
+        f"classifies has no subject here until the row is live again, which takes a transition "
+        f"out of that status AND an expiry that has not passed"
+    )
+
+
 def ledger_legacy_rows_absent() -> str | None:
     """Reason string when the ledger holds no capability registered before the admission gate.
 
@@ -523,6 +558,7 @@ def _selftest() -> None:
             "ledger_invocation_history_absent",
             lambda: ledger_invocation_history_absent("definitely-not-a-capability"),
         ),
+        ("ledger_rows_not_live", lambda: ledger_rows_not_live("definitely-not-a-capability")),
         ("ledger_legacy_rows_absent", ledger_legacy_rows_absent),
         ("skill_resource_absent", skill_resource_absent),
         ("codex_profile_binary_absent", codex_profile_binary_absent),
@@ -654,9 +690,41 @@ def _selftest() -> None:
             else:
                 os.environ["VIBE_HOME"] = old
 
+    # ledger_rows_not_live, BOTH directions, against a temporary ledger so the verdict never
+    # depends on what this machine's rows happen to be. A retired or superseded row must be named
+    # WITH its status; a live row and an absent row must not be (absence is ledger_rows_absent's
+    # question). A detector that always answered would skip every live-row check on every machine.
+    import capabilities
+
+    with tempfile.TemporaryDirectory() as td:
+        real_reg = capabilities.REG
+        capabilities.REG = pathlib.Path(td) / "capabilities.json"
+        try:
+            capabilities.save(
+                {
+                    cid: {**capabilities._blank_capability(cid), "status": status}
+                    for cid, status in (
+                        ("row-retired", "retired"),
+                        ("row-superseded", "superseded"),
+                        ("row-live", "shadow"),
+                    )
+                },
+                capabilities.REG,
+            )
+            got = ledger_rows_not_live("row-retired", "row-superseded", "row-live", "row-absent")
+            assert got and "row-retired (retired)" in got, got
+            assert "row-superseded (superseded)" in got, got
+            assert "row-live" not in got and "row-absent" not in got, got
+            # ...and it says what CLEARS it, both halves, or the skip is a latch with no drain.
+            assert "transition" in got and "expiry" in got, got
+            assert ledger_rows_not_live("row-live", "row-absent") is None
+        finally:
+            capabilities.REG = real_reg
+
     print(
         "env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, "
-        "marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks)"
+        "marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, "
+        "not-live rows named with their status)"
     )
 
 

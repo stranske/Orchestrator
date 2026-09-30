@@ -227,6 +227,112 @@ def test_existing_ledger_reconciles_new_code_declarations(tmp_path):
     )
 
 
+# One row from EACH declaration source that declares a `status`, so a fix that held the lifecycle
+# status for only one of the two tables still fails.
+STATUS_DECLARING = ("route-weights-export", "rail-exercise-cadence")
+
+
+def _declaration(cid):
+    return capabilities.KNOWN_GATES.get(cid) or capabilities.KNOWN_DECLARATIONS[cid]
+
+
+def _status_moves(cap):
+    return [
+        e
+        for e in cap["event_history"]
+        if e.get("type") == "declaration_reconciled"
+        and ("to" in e or "status" in (e.get("changed_fields") or []))
+    ]
+
+
+@pytest.mark.parametrize("status", ["retired", "superseded", "active"])
+def test_reconciliation_never_moves_a_lifecycle_status(tmp_path, active_capability_fixture, status):
+    """A retired, superseded or active row keeps its status through EVERY reader.
+
+    `_reconcile_known_declarations` promises never to move a lifecycle status, and its guard block
+    implements that — but `status` is the first entry of DECLARATION_FIELDS, and the generic rewrite
+    loop that runs BEFORE the guard rewrote it unconditionally. So a `transition(..., "retired")`
+    was undone by the next writing `load()` (the tick's `capabilities.py --json validate` takes one
+    every active tick), and every `load_declared` reader — the activation audit, the firing monitor,
+    the advisor, the admission gate — saw the retired row as live. All three views are checked
+    because `load_declared` and `load` reconcile separately, and the file is what the next process
+    reads.
+    """
+    assert status == "active" or status in capabilities.NOT_LIVE_STATES, status
+    rows = {}
+    for cid in STATUS_DECLARING:
+        assert _declaration(cid)["status"] != status, f"{cid}: fixture asks for no move"
+        if status == "active":
+            row = {**json.loads(json.dumps(active_capability_fixture)), "capability_id": cid}
+        else:
+            row = {**capabilities._blank_capability(cid), "status": status}
+        rows[cid] = row
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save(rows, ledger)
+    before = ledger.read_bytes()
+
+    declared = capabilities.load_declared(ledger)
+    assert ledger.read_bytes() == before, "load_declared must not write the ledger"
+    loaded = capabilities.load(ledger)
+    on_disk = json.loads(ledger.read_text())["capabilities"]
+    for cid in STATUS_DECLARING:
+        for view, caps in (("load_declared", declared), ("load", loaded), ("disk", on_disk)):
+            assert caps[cid]["status"] == status, (cid, view, caps[cid]["status"])
+            # The row WAS reconciled: the guard held its status, the row was not simply skipped.
+            assert caps[cid]["entrypoint"] == _declaration(cid)["entrypoint"], (cid, view)
+        assert not _status_moves(on_disk[cid]), (cid, _status_moves(on_disk[cid]))
+
+
+def test_reconciliation_still_moves_a_non_lifecycle_status(tmp_path):
+    """CONTROL for the test above: holding a lifecycle status must not stop status reconciling.
+
+    A row at `wired` whose declaration says `shadow` is a declaration that moved in code, and
+    carrying that move onto the row is what reconciliation is for.
+    """
+    rows = {}
+    for cid in STATUS_DECLARING:
+        assert _declaration(cid)["status"] != "wired", f"{cid}: control asks for no move"
+        rows[cid] = {**capabilities._blank_capability(cid), "status": "wired"}
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save(rows, ledger)
+    before = ledger.read_bytes()
+
+    declared = capabilities.load_declared(ledger)
+    assert ledger.read_bytes() == before, "load_declared must not write the ledger"
+    loaded = capabilities.load(ledger)
+    on_disk = json.loads(ledger.read_text())["capabilities"]
+    for cid in STATUS_DECLARING:
+        want = _declaration(cid)["status"]
+        for view, caps in (("load_declared", declared), ("load", loaded), ("disk", on_disk)):
+            assert caps[cid]["status"] == want, (cid, view, caps[cid]["status"])
+        assert _status_moves(on_disk[cid]), (cid, on_disk[cid]["event_history"])
+
+
+def test_an_expired_gate_row_stays_retired_and_the_ledger_stays_put(tmp_path):
+    """The shape every gate row reaches when its GATED_TTL_DAYS window runs out.
+
+    `_expire_in_place` retires the row on the first writing load. The status rewrite then flipped
+    it back to its declared status on every later load, and `_expire_in_place` re-retired it in the
+    same call: two events and a full-ledger rewrite per load, while `load_declared`, which never
+    expires anything, reported the row as live to every reader.
+    """
+    name = "thompson-hybrid-routing"
+    declared_status = capabilities.KNOWN_GATES[name]["status"]
+    assert declared_status not in capabilities.NOT_LIVE_STATES, "fixture no longer expires a row"
+    ledger = tmp_path / "capabilities.json"
+    row = {**capabilities._blank_capability(name), "status": declared_status, "expiry": 100}
+    capabilities.save({name: row}, ledger)
+    assert capabilities.load(ledger)[name]["status"] == "retired"
+    settled = ledger.read_bytes()
+    events = len(json.loads(settled)["capabilities"][name]["event_history"])
+
+    assert capabilities.load_declared(ledger)[name]["status"] == "retired"
+    assert capabilities.load(ledger)[name]["status"] == "retired"
+    after = json.loads(ledger.read_text())["capabilities"][name]["event_history"]
+    assert len(after) == events, after[events:]
+    assert ledger.read_bytes() == settled, "a load with nothing to change rewrote the ledger"
+
+
 def test_liveness_classifications_use_capability_events():
     base = capabilities._blank_capability("fixture")
 
@@ -341,13 +447,20 @@ def test_gate_blocks_execution_is_opt_in_and_narrow():
     # being asked whether its outcomes link — that must require a visible test change.
     declared = {k for k, v in ledger.items() if v.get("gate_blocks_execution")}
     assert declared == {"thompson-hybrid-routing", "range-lane-rollout"}, declared
-    for cid in declared:
-        assert capabilities.classify_liveness(ledger[cid]) == "deliberately_gated", cid
     # NARROWNESS: `role-triage` is gated too and must not be swept up — it runs constantly and
     # holds real outcome evidence, so this rule must leave it alone.
     triage = ledger["role-triage"]
     assert triage.get("gate_reason") and not triage.get("gate_blocks_execution"), triage
     assert triage.get("outcome_links"), "control case lost its evidence; pick another"
+    # LAST, behind its own prerequisite, because only this half needs the two rows to be LIVE. Both
+    # are KNOWN_GATES rows that retire when their GATED_TTL_DAYS window runs out on this machine's
+    # clock, and a retired row classifies as `retired` by design. Everything above reads
+    # declaration-owned fields and measured evidence, which a retirement does not change.
+    env_prereq.require(
+        env_prereq.ledger_rows_not_live("thompson-hybrid-routing", "range-lane-rollout")
+    )
+    for cid in declared:
+        assert capabilities.classify_liveness(ledger[cid]) == "deliberately_gated", cid
 
 
 def test_evidence_gate_kind_is_not_blanket_observer():
@@ -381,13 +494,18 @@ def test_evidence_gate_kind_is_not_blanket_observer():
     supervisor = ledger["live-keepalive-supervisor"]
     assert supervisor["matcher"]["kind"] == "tick_phase", supervisor["matcher"]
     assert capabilities.is_observer(supervisor)
-    assert capabilities.classify_liveness(supervisor) == "observing", supervisor
 
     # ...and the delivering sibling must still be answerable for an outcome.
     bootstrap = ledger["redirect-apply-bootstrap"]
     assert not capabilities.is_observer(bootstrap), bootstrap["matcher"]
     advice = capabilities.unblock(bootstrap, liveness="invoked_without_outcomes")
     assert "MEASUREMENT gap" in advice["action"], advice
+
+    # LAST, behind its own prerequisite: `observing` is a verdict about a LIVE row, and the
+    # supervisor is a KNOWN_GATES row that retires when its GATED_TTL_DAYS window runs out on this
+    # machine's clock. Its matcher and the sibling's answerability above do not depend on that.
+    env_prereq.require(env_prereq.ledger_rows_not_live("live-keepalive-supervisor"))
+    assert capabilities.classify_liveness(supervisor) == "observing", supervisor
 
 
 def test_matched_not_invoked_yields_to_observers_and_declared_gates():
