@@ -45,7 +45,8 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 # Tier research 2026-08-08 (verified against live CLIs + vendor docs):
 #   codex  — GPT-5.6 ships a genuine 3-tier family: Sol (flagship $5/$30), Terra (workhorse
 #            $2.50/$15, ~GPT-5.5 class), Luna (fastest/cheapest $1/$6). GA 2026-07-09.
-#   claude — Claude 5 family: Opus 5.5 flagship (moved from Opus 5 on 2026-09-22), Sonnet 5 mid,
+#   claude — Claude 5 family: Opus 5.5 flagship (moved from Opus 5 on 2026-09-22), Sonnet 5.5 mid
+#            (moved from Sonnet 5 on 2026-09-30),
 #            Haiku 4.5 cheap.
 #   gemini — agy offers Pro only at 3.1; the 3.5/3.6/3.7 generations are Flash-only. Flash is BOTH
 #            newer and far cheaper on this compute-metered seat, so cheap/mid ride Flash and only
@@ -68,7 +69,7 @@ VIBE_MODEL = "mistral-medium-3.5"
 
 MODEL_TIERS: dict[str, dict[str, str]] = {
     "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
-    "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5", "full": "claude-opus-5-5"},
+    "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5-5", "full": "claude-opus-5-5"},
     "gemini": {
         "cheap": "gemini-3.7-flash-low",
         "mid": "gemini-3.7-flash-high",
@@ -90,7 +91,7 @@ MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the c
 # and keep it purely for orchestration, use the existing 429-shed switch instead of a ceiling:
 #   touch ~/.codex/handoff/capacity-shed/claude     (remove the file to re-enable)
 AGENT_TIER_CEILING: dict[str, str] = {
-    "claude": "mid",  # owner policy 2026-08-09: routine claude work runs Sonnet 5, not Opus 5.5
+    "claude": "mid",  # owner policy 2026-08-09: routine claude work runs Sonnet 5.5, not Opus 5.5
 }
 CURSOR_FRONTIER_DEFAULT = None  # require explicit 'frontier:<model>'; bare 'frontier' is unsafe
 # Owner policy: cursor runs Composer and only Composer. Pinned by id because omitting --model
@@ -1753,15 +1754,15 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     ), forced_sandbox
     os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
     os.environ.pop("CODEX_SANDBOX", None)
-    # Claude 5 family: Haiku 4.5 (cheap) / Sonnet 5 (mid) / Opus 5.5 (full) — but the seat is CAPPED
-    # at mid (scarce weekly), so the `full` lane really dispatches Sonnet 5. Expectations are
+    # Claude 5 family: Haiku 4.5 (cheap) / Sonnet 5.5 (mid) / Opus 5.5 (full) — but the seat is CAPPED
+    # at mid (scarce weekly), so the `full` lane really dispatches Sonnet 5.5. Expectations are
     # written post-ceiling because that is what reaches the CLI.
     assert MODEL_TIERS["claude"]["full"] == "claude-opus-5-5", "frontier option must stay defined"
     assert tier_ceiling("claude") == "mid" and effective_tier("claude", "full") == "mid"
     for tier, expected in (
         ("cheap", "claude-haiku-4-5"),
-        ("mid", "claude-sonnet-5"),
-        ("full", "claude-sonnet-5"),
+        ("mid", "claude-sonnet-5-5"),
+        ("full", "claude-sonnet-5-5"),
     ):
         cl = build_command("claude", "x", mode=tier)
         assert cl[cl.index("--model") + 1] == expected, (tier, cl)
