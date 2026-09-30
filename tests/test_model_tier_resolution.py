@@ -170,7 +170,7 @@ def test_single_model_agents_pin_nothing():
 
 def test_claude_routine_work_is_capped_at_mid():
     """Owner policy: claude's weekly is frequently the binding constraint, so routine
-    'full' work runs Sonnet 5 rather than Opus 5.5."""
+    'full' work runs Sonnet 5.5 rather than Opus 5.5."""
     assert adapters.tier_ceiling("claude") == "mid"
     assert adapters.effective_tier("claude", "full") == "mid"
     argv = adapters.build_command("claude", "x", mode="full")
@@ -274,11 +274,11 @@ def test_build_command_honours_every_tier():
     """The pin must actually reach argv — a tier map nothing dispatches is dead code.
 
     Expectations are stated post-ceiling, because that is what really dispatches: claude is
-    capped at `mid`, so its `full` lane sends Sonnet 5 (see the scarce-seat ceiling tests).
+    capped at `mid`, so its `full` lane sends Sonnet 5.5 (see the scarce-seat ceiling tests).
     """
     expected = {
         "codex": ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"),
-        "claude": ("claude-haiku-4-5", "claude-sonnet-5", "claude-sonnet-5"),
+        "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-sonnet-5-5"),
         "gemini": ("gemini-3.7-flash-low", "gemini-3.7-flash-high", "gemini-3.1-pro-high"),
     }
     for agent, models in expected.items():

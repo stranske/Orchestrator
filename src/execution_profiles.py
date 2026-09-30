@@ -132,9 +132,12 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         # `adapters.model_identity(agent, "full")` reports; `test_registry_models_match_adapters`
         # fails if they drift, because a registry that disagrees with the adapter would request a
         # model the seat never runs.
+        # 2026-09-30: Sonnet 5 -> Sonnet 5.5, replaced rather than kept-and-deprecated for the
+        # same reason as the gemini 3.6 -> 3.7 move below: a lingering active row would give
+        # profile selection a superseded model to pick (and `requested_model` bypasses the ceiling).
         _profile(
-            "claude-sonnet-5-high",
-            "claude-sonnet-5",
+            "claude-sonnet-5-5-high",
+            "claude-sonnet-5-5",
             "high",
             agent="claude",
             provider="anthropic",

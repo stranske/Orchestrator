@@ -2138,7 +2138,7 @@ def _selftest() -> None:
             "stranske/Repo#1"
         ]
         # Tiered since 2026-08-08: claude pins an exact model instead of a generic lane tag. The
-        # seat is capped at `mid` (scarce weekly), so a 'full' assignment records Sonnet 5.
+        # seat is capped at `mid` (scarce weekly), so a 'full' assignment records Sonnet 5.5.
         expected_claude = adapters.MODEL_TIERS["claude"][adapters.effective_tier("claude", "full")]
         assert by_t["stranske/Repo#2"]["model"] == expected_claude, by_t["stranske/Repo#2"]
         assert by_t["stranske/Repo#1"]["routing_metadata"] == {
