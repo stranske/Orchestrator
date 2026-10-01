@@ -1115,15 +1115,54 @@ jobs:
               return;
             }
             const body = fs.readFileSync(commentPath, 'utf8');
-            await upsertAnchoredComment({
-              github,
-              context,
-              core,
-              prNumber: context.payload.pull_request?.number,
-              body,
-              anchorPattern: /<!--\s*gate-summary:([^>]*)-->/i,
-              fallbackMarker: '<!-- gate-summary:',
-            });
+            // This step and the commit-status reporter use the same workflow
+            // token. A fork pull request receives a read-only token, so the
+            // issue-comment write can fail before the status reporter records
+            // the computed verdict. Preserve the verdict in the job summary,
+            // while keeping same-repository and rate-limit failures loud.
+            const pullRequest = context.payload.pull_request;
+            const headRepo = pullRequest?.head?.repo?.full_name;
+            const baseRepo = pullRequest?.base?.repo?.full_name;
+            const isForkPullRequest = Boolean(
+              headRepo && baseRepo && headRepo !== baseRepo,
+            );
+            try {
+              await upsertAnchoredComment({
+                github,
+                context,
+                core,
+                prNumber: context.payload.pull_request?.number,
+                body,
+                anchorPattern: /<!--\s*gate-summary:([^>]*)-->/i,
+                fallbackMarker: '<!-- gate-summary:',
+              });
+            } catch (error) {
+              const responseHeaders = error?.response?.headers || error?.headers || {};
+              const responseMessage = error?.response?.data?.message || '';
+              const hitRateLimit =
+                error?.status === 429 ||
+                (error?.status === 403 &&
+                  (/rate limit|abuse/i.test(error?.message || '') ||
+                    /rate limit|abuse/i.test(responseMessage) ||
+                    String(responseHeaders['x-ratelimit-remaining']) === '0' ||
+                    responseHeaders['retry-after'] != null));
+              const readOnlyForkToken =
+                error?.status === 403 &&
+                isForkPullRequest &&
+                !hitRateLimit;
+              if (!readOnlyForkToken) {
+                throw error;
+              }
+              core.warning(
+                `Fork pull request from ${headRepo}: the workflow token is ` +
+                  'read-only, so the consolidated Gate summary comment could not ' +
+                  `be written (${error.message}). Falling back to the job summary.`,
+              );
+              await core.summary
+                .addHeading('Gate summary (fork pull request)', 3)
+                .addRaw(body)
+                .write();
+            }
 
       - name: Report Gate commit status
         if: ${{ always() }}

@@ -15,6 +15,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-00-gate.yml"
 STEP_NAME = "Report Gate commit status"
+COMMENT_STEP_NAME = "Ensure consolidated summary comment"
 
 RUNNER_JS = textwrap.dedent("""
     const fs = require('fs');
@@ -201,10 +202,10 @@ RUNNER_JS = textwrap.dedent("""
     """).strip()
 
 
-def _extract_status_script() -> str:
+def _extract_step_script(step_name: str = STEP_NAME) -> str:
     lines = GATE_WORKFLOW.read_text(encoding="utf-8").splitlines()
     step_index = next(
-        (index for index, line in enumerate(lines) if line.strip() == f"- name: {STEP_NAME}"),
+        (index for index, line in enumerate(lines) if line.strip() == f"- name: {step_name}"),
         None,
     )
     if step_index is not None:
@@ -222,7 +223,7 @@ def _extract_status_script() -> str:
                 return "\n".join(script_lines)
             if line.strip().startswith("- name:"):
                 break
-    raise AssertionError(f"{GATE_WORKFLOW} no longer defines {STEP_NAME!r}")
+    raise AssertionError(f"{GATE_WORKFLOW} no longer defines {step_name!r}")
 
 
 @pytest.fixture(scope="module")
@@ -236,7 +237,7 @@ def outcomes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
 
     workdir = tmp_path_factory.mktemp("gate-status")
     step_path = workdir / "step.js"
-    step_path.write_text(_extract_status_script(), encoding="utf-8")
+    step_path.write_text(_extract_step_script(), encoding="utf-8")
     runner_path = workdir / "runner.js"
     runner_path.write_text(RUNNER_JS, encoding="utf-8")
 
@@ -293,6 +294,9 @@ def test_fork_read_only_403_fails_closed_for_other_non_success_verdicts(
     assert case["threw"] is None
     assert len(case["failures"]) == 1
     assert f"'{state}'" in case["failures"][0]
+    assert f"'{state}'" in " ".join(case["warnings"])
+    assert case["summaryWrites"] == 1
+    assert f"**{state}**" in " ".join(case["summaryRaw"])
 
 
 def test_deleted_fork_read_only_403_reports_the_verdict(
@@ -360,3 +364,161 @@ def test_successful_status_write_is_silent(outcomes: dict[str, Any]) -> None:
             "target_url": "https://example.invalid/run",
         }
     ]
+
+
+COMMENT_RUNNER_JS = textwrap.dedent("""
+    const nodeFs = require('fs');
+    const vm = require('vm');
+    const src = nodeFs.readFileSync(process.argv[2], 'utf8');
+
+    function makeError(status, message, response = null) {
+      const error = new Error(message);
+      error.status = status;
+      if (response !== null) error.response = response;
+      return error;
+    }
+
+    async function runCase({ headRepo, baseRepo, error }) {
+      const warnings = [];
+      const summaryRaw = [];
+      const summaryStub = {
+        addHeading() { return summaryStub; },
+        addRaw(text) { summaryRaw.push(String(text)); return summaryStub; },
+        async write() { summaryRaw.push('<written>'); },
+      };
+      const sandbox = {
+        console: { log() {} },
+        require: (id) => {
+          if (id === 'path') return { resolve: (path) => '/tmp/' + path };
+          if (id === 'fs') {
+            return {
+              existsSync: () => true,
+              readFileSync: () => 'GATE SUMMARY BODY',
+            };
+          }
+          return {
+            upsertAnchoredComment: async () => { if (error) throw error; },
+          };
+        },
+        core: { warning: (message) => warnings.push(String(message)), summary: summaryStub },
+        context: {
+          payload: {
+            pull_request: {
+              number: 1,
+              head: { repo: { full_name: headRepo } },
+              base: { repo: { full_name: baseRepo } },
+            },
+          },
+        },
+        github: {},
+      };
+      vm.createContext(sandbox);
+      let threw = null;
+      try {
+        await vm.runInContext('(async () => {\\n' + src + '\\n})()', sandbox);
+      } catch (error) {
+        threw = {
+          status: error.status === undefined ? null : error.status,
+          message: String(error.message),
+        };
+      }
+      return { warnings, summaryRaw, threw };
+    }
+
+    const FORK = {
+      headRepo: 'outside-contributor/Orchestrator',
+      baseRepo: 'stranske/Orchestrator',
+    };
+    const SAME = {
+      headRepo: 'stranske/Orchestrator',
+      baseRepo: 'stranske/Orchestrator',
+    };
+
+    (async () => {
+      const outcomes = {
+        fork_read_only: await runCase({
+          ...FORK,
+          error: makeError(403, 'Resource not accessible by integration'),
+        }),
+        same_repo_read_only: await runCase({
+          ...SAME,
+          error: makeError(403, 'Resource not accessible by integration'),
+        }),
+        fork_rate_limit: await runCase({
+          ...FORK,
+          error: makeError(403, 'API rate limit exceeded'),
+        }),
+        fork_server_error: await runCase({
+          ...FORK,
+          error: makeError(500, 'Internal server error'),
+        }),
+        happy_path: await runCase({ ...FORK, error: null }),
+      };
+      process.stdout.write(JSON.stringify(outcomes));
+    })();
+    """).strip()
+
+
+@pytest.fixture(scope="module")
+def comment_outcomes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    node = shutil.which("node")
+    if node is None:  # pragma: no cover - depends on the host
+        message = "node is required to execute the Gate github-script step"
+        if os.environ.get("CI"):
+            pytest.fail(message)
+        pytest.skip(message)
+
+    workdir = tmp_path_factory.mktemp("gate-comment")
+    step_path = workdir / "step.js"
+    step_path.write_text(_extract_step_script(COMMENT_STEP_NAME), encoding="utf-8")
+    runner_path = workdir / "runner.js"
+    runner_path.write_text(COMMENT_RUNNER_JS, encoding="utf-8")
+
+    completed = subprocess.run(
+        [node, str(runner_path), str(step_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return dict(json.loads(completed.stdout))
+
+
+def test_comment_fork_read_only_403_falls_back_to_the_job_summary(
+    comment_outcomes: dict[str, Any],
+) -> None:
+    case = comment_outcomes["fork_read_only"]
+    assert case["threw"] is None
+    assert any("read-only" in warning for warning in case["warnings"])
+    assert "GATE SUMMARY BODY" in " ".join(case["summaryRaw"])
+    assert "<written>" in case["summaryRaw"]
+
+
+def test_comment_same_repo_403_still_fails_the_gate(
+    comment_outcomes: dict[str, Any],
+) -> None:
+    case = comment_outcomes["same_repo_read_only"]
+    assert case["threw"]["status"] == 403
+
+
+def test_comment_rate_limit_403_never_uses_fork_fallback(
+    comment_outcomes: dict[str, Any],
+) -> None:
+    case = comment_outcomes["fork_rate_limit"]
+    assert case["threw"]["status"] == 403
+    assert case["warnings"] == []
+    assert case["summaryRaw"] == []
+
+
+def test_comment_non_403_still_fails_the_gate(
+    comment_outcomes: dict[str, Any],
+) -> None:
+    case = comment_outcomes["fork_server_error"]
+    assert case["threw"]["status"] == 500
+
+
+def test_comment_happy_path_is_silent(comment_outcomes: dict[str, Any]) -> None:
+    case = comment_outcomes["happy_path"]
+    assert case["threw"] is None
+    assert case["warnings"] == []
+    assert case["summaryRaw"] == []
