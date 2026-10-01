@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-00-gate.yml"
@@ -203,11 +202,30 @@ RUNNER_JS = textwrap.dedent("""
 
 
 def _extract_status_script() -> str:
-    document = yaml.safe_load(GATE_WORKFLOW.read_text(encoding="utf-8"))
-    for job in document["jobs"].values():
-        for step in job.get("steps") or []:
-            if step.get("name") == STEP_NAME:
-                return str(step["with"]["script"])
+    lines = GATE_WORKFLOW.read_text(encoding="utf-8").splitlines()
+    step_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == f"- name: {STEP_NAME}"
+        ),
+        None,
+    )
+    if step_index is not None:
+        for index in range(step_index + 1, len(lines)):
+            line = lines[index]
+            if line.strip() == "script: |":
+                script_indent = len(line) - len(line.lstrip())
+                script_lines: list[str] = []
+                for script_line in lines[index + 1 :]:
+                    if script_line.strip():
+                        indent = len(script_line) - len(script_line.lstrip())
+                        if indent <= script_indent:
+                            break
+                    script_lines.append(script_line[script_indent + 2 :])
+                return "\n".join(script_lines)
+            if line.strip().startswith("- name:"):
+                break
     raise AssertionError(f"{GATE_WORKFLOW} no longer defines {STEP_NAME!r}")
 
 
