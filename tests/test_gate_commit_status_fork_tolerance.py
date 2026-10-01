@@ -204,11 +204,7 @@ RUNNER_JS = textwrap.dedent("""
 def _extract_status_script() -> str:
     lines = GATE_WORKFLOW.read_text(encoding="utf-8").splitlines()
     step_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if line.strip() == f"- name: {STEP_NAME}"
-        ),
+        (index for index, line in enumerate(lines) if line.strip() == f"- name: {STEP_NAME}"),
         None,
     )
     if step_index is not None:
