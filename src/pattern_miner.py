@@ -1072,6 +1072,37 @@ def _read_envelopes(path: Path) -> list[dict[str, Any]]:
     return payload
 
 
+def render_tick_lines(status_path: Path) -> list[str]:
+    """The tick's MINING line, and MINING-ACTIONABLE when the health says a fix is needed.
+
+    Rendered from the status artifact `run --status-out` wrote. orchestrate.sh used to print these
+    lines from a here-document fed to `python3 -`. Homebrew bash 5.3 writes a small here-document
+    into a pipe before the reading command starts, so the writer is the reader's own process. This
+    677-byte document is the one the 2026-09-26 tick blocked on: the writer sat in
+    `heredoc_write -> write()` for 141 hours, waiting for a reader that could only start after the
+    write returned. The text is identical to what the here-document printed. One addition: a
+    `mining_health` that is not an object used to end in a traceback and now reads as empty.
+    """
+    try:
+        with open(status_path, encoding="utf-8") as fh:
+            health = (json.load(fh) or {}).get("mining_health") or {}
+    except Exception as exc:  # noqa: BLE001 - the line names every failure and must never raise
+        return [f"  MINING: status unreadable ({exc})"]
+    if not isinstance(health, dict):
+        health = {}
+    state = health.get("state", "unknown")
+    lines = [
+        f"  MINING: {state} — {health.get('summary', 'no summary')}"
+        f" | episodes={health.get('complete_episode_count', '?')}"
+        f" candidates={health.get('candidate_count', '?')}"
+    ]
+    if health.get("actionable"):
+        # Named, not silent: `rejecting` means real defects in the stream, `no_input` means the
+        # exporter produced nothing. Neither is drained by waiting.
+        lines.append(f"  MINING-ACTIONABLE: {health.get('detail', state)}")
+    return lines
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
@@ -1115,7 +1146,15 @@ def main(argv: list[str] | None = None) -> int:
     cadence.add_argument("--inventory-out", type=Path, required=True)
     cadence.add_argument("--now", type=int)
     cadence.add_argument("--ttl-days", type=int, default=DEFAULT_CANDIDATE_TTL_DAYS)
+    tick_line = sub.add_parser(
+        "tick-line",
+        help="print the tick's MINING summary of a status artifact `run` wrote; mines nothing",
+    )
+    tick_line.add_argument("--status", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.command == "tick-line":
+        print("\n".join(render_tick_lines(args.status)))
+        return 0
     miner = PatternMiner(candidate_ttl_days=args.ttl_days)
     if args.state:
         miner.load_state(args.state)
