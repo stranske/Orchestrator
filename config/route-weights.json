@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-09-23T05:47:39Z",
+  "generated_at": "2026-10-02T02:20:09Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
       {
         "agent": "claude",
-        "n_obs": 313,
-        "posterior": 0.7769038824290896,
-        "success_rate": 0.787090102785547
+        "n_obs": 372,
+        "posterior": 0.8019355625605143,
+        "success_rate": 0.8128598475017248
       }
     ],
     "review": [
       {
         "agent": "claude",
         "n_obs": 153,
-        "posterior": 0.5611703005132679,
-        "success_rate": 0.5710239621642846
+        "posterior": 0.5592441146438207,
+        "success_rate": 0.571099239109906
       }
     ]
   },
   "schema": "orchestrator.route-weights/v1",
-  "source_version": 66,
+  "source_version": 67,
   "task_types": {
     "codemod": {
       "evidence_ok": false,
@@ -35,27 +35,27 @@
       "ranking": [
         {
           "agent": "codex",
-          "n_obs": 802,
-          "posterior": 0.8789975262021466,
-          "success_rate": 0.8833595631483424
+          "n_obs": 1018,
+          "posterior": 0.8715400152893418,
+          "success_rate": 0.8750207688922814
         },
         {
           "agent": "cursor",
-          "n_obs": 360,
-          "posterior": 0.8564279595713677,
-          "success_rate": 0.8728500510293952
+          "n_obs": 429,
+          "posterior": 0.8091655228635477,
+          "success_rate": 0.8204028369005112
         },
         {
           "agent": "vibe",
-          "n_obs": 131,
-          "posterior": 0.671999581775999,
-          "success_rate": 0.7119889325137208
+          "n_obs": 135,
+          "posterior": 0.686539828068372,
+          "success_rate": 0.7365472028319061
         },
         {
           "agent": "gemini",
-          "n_obs": 100,
-          "posterior": 0.5449279946185824,
-          "success_rate": 0.533004280727599
+          "n_obs": 101,
+          "posterior": 0.547796643784657,
+          "success_rate": 0.5344879907961575
         }
       ]
     },
@@ -68,27 +68,27 @@
       "ranking": [
         {
           "agent": "cursor",
-          "n_obs": 327,
-          "posterior": 0.7632259244674043,
-          "success_rate": 0.7675681172432345
+          "n_obs": 341,
+          "posterior": 0.7407485914091815,
+          "success_rate": 0.7438623470118501
         },
         {
           "agent": "codex",
-          "n_obs": 283,
-          "posterior": 0.7188731064632314,
-          "success_rate": 0.7284722795715165
+          "n_obs": 285,
+          "posterior": 0.709845109913635,
+          "success_rate": 0.7207651722903166
         },
         {
           "agent": "vibe",
-          "n_obs": 140,
-          "posterior": 0.640445382454929,
-          "success_rate": 0.6429651780173135
+          "n_obs": 141,
+          "posterior": 0.6397383900196101,
+          "success_rate": 0.6427280150753449
         },
         {
           "agent": "gemini",
           "n_obs": 120,
-          "posterior": 0.5771988747324673,
-          "success_rate": 0.5777578035008449
+          "posterior": 0.5767993493757797,
+          "success_rate": 0.5773688647779804
         }
       ]
     },
@@ -97,9 +97,9 @@
       "ranking": [
         {
           "agent": "codex",
-          "n_obs": 38,
-          "posterior": 0.7060914765470598,
-          "success_rate": 0.7315172042102849
+          "n_obs": 40,
+          "posterior": 0.668761837520242,
+          "success_rate": 0.684829047821587
         }
       ]
     }
