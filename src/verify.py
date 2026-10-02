@@ -56,7 +56,9 @@ What makes it honest:
     mirror run was RED on every input including a correct tree, while CLAUDE.md §1 makes that run
     the verdict. Two shapes, two agreements, each measured where it is enforced: the shape is
     detected by `env_prereq.exec_mirror_shape()` (the prerequisite, never `$CI`) and selects the
-    key via `ceiling_limit`. The summary always prints which tree it decided it was in.
+    key via `ceiling_limit`. The summary always prints which tree it decided it was in. Since
+    2026-10-02 the sync ships `.github/` too, so the mirror's only mirror-only skips are the git
+    family and the shape is detected from "flat" and "not a repository" instead.
 """
 
 from __future__ import annotations
@@ -881,7 +883,8 @@ CEILINGS = (
 # does not skip at all. The result was a `verify.py` that was RED FROM THE MIRROR on every input
 # including a correct tree — and CLAUDE.md §1 makes the mirror run the verdict, so the instrument
 # that exists to catch cross-tree divergence was protecting nothing. A gate that is red whatever
-# you do gets ignored, then switched off.
+# you do gets ignored, then switched off. (Since 2026-10-02 the sync ships `.github/`, so the mirror
+# skips only the git family -- 21 -- and env_prereq detects it as the flat copy that is not a repo.)
 #
 # Raising `skipped_max` to 31 would have been the wrong repair: CI runs where 26 is right, and the
 # extra five would have let a runner skip five more checks in silence. So each shape carries its
