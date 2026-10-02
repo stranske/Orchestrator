@@ -240,10 +240,9 @@ def test_a_shell_blocked_with_no_command_drains_by_the_tick_pid(tmp_path: Path) 
 
 
 def test_a_start_time_that_jitters_by_a_second_is_the_same_process(tmp_path: Path) -> None:
-    """Linux procps derives `lstart` from time(NULL) minus /proc/uptime, so consecutive `ps` calls can
-    print one process's start a second apart. Compared as exact strings, the tick looked gone on an
-    early poll, the watcher finalized and left, and a stuck command was never reported -- the first
-    Linux CI run of this module, on both Python versions."""
+    """On Linux `lstart` is computed, not stored, so two readings of one process need not match to
+    the second. Compared as exact strings, a one-second difference would read as the tick having
+    exited, and the watcher would finalize and leave with a stuck command unreported."""
     a = (
         "100 1 S Fri Oct  2 01:36:00 2026 bash orchestrate.sh --active\n"
         "200 100 S Fri Oct  2 01:36:05 2026 python3 hang.py\n"
@@ -253,6 +252,22 @@ def test_a_start_time_that_jitters_by_a_second_is_the_same_process(tmp_path: Pat
     assert rec["status"] == "running", rec  # never read as exited
     # ... and the command's age kept accumulating across the flips, so it crossed its threshold.
     assert "to unblock: kill 200" in out and rec["drain"] == "kill 200", (out, rec)
+
+
+def test_the_process_table_keeps_whole_command_lines() -> None:
+    """Linux procps cuts every line to 80 columns when its output is a pipe, which left the first
+    Linux CI run's record naming the stuck command as `/opt/hostedtoolcache/Python/3.12.1`: the
+    ALERT could not say what was stuck. A command line far wider than any terminal must survive."""
+    tail = "y" * 300
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)  # " + tail], stdin=subprocess.DEVNULL
+    )
+    try:
+        row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+        assert row.command.endswith(tail), f"command truncated to {len(row.command)} chars"
+    finally:
+        child.kill()
+        child.wait(timeout=WAIT_S)
 
 
 def test_a_recycled_tick_pid_reads_as_the_tick_having_exited(tmp_path: Path) -> None:

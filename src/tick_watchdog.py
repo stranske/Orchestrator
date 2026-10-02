@@ -91,13 +91,19 @@ POLL_S = 15.0
 POLL_ENV = "ORCH_TICK_WATCHDOG_POLL_S"
 REFRESH_S = 60.0  # how often the live record is rewritten while nothing is wrong
 
-PS_ARGV = ("ps", "-A", "-o", "pid=,ppid=,stat=,lstart=,command=")
+# `-ww`: unlimited width. Linux procps cuts every line to 80 columns when its output is a pipe,
+# which left ~34 characters of `command` -- the first Linux CI run recorded the stuck command as
+# `/opt/hostedtoolcache/Python/3.12.1` and the tick as `bash /tmp/pytest-of-runner/pytest-`.
+# macOS never truncates a piped `ps`, so the defect could not show here.
+PS_ARGV = ("ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,lstart=,command=")
 PS_TIMEOUT_S = 30
-# How far two readings of one process's start time may differ and still be the same process. Linux
-# procps derives `lstart` from time(NULL) minus /proc/uptime, so consecutive `ps` calls can print one
-# process's start a second apart; compared as exact strings, the tick read as gone on an early poll
-# and the watcher left without a word (the first Linux CI run of this module, both Pythons). A pid
-# recycled within this window of the original's start is not a case worth a false "exited" for.
+# How far two readings of one process's start time may differ and still be the same process. On
+# Linux `lstart` is COMPUTED (start ticks since boot plus the boot time ps derives), not stored, so
+# two readings are not guaranteed identical -- a clock step moves the derived boot time. Compared as
+# exact strings, one such difference would make the tick read as gone and the watcher leave without
+# a word. Defensive: it was suspected, not observed, in this module's first Linux CI failure, which
+# turned out to be the column truncation above. A pid recycled within this window of the original's
+# start is not a case worth a false "exited" for.
 START_TOLERANCE_S = 5
 
 
