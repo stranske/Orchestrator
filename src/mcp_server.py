@@ -25,7 +25,8 @@ from typing import cast
 ORCH = Path(__file__).resolve().parent
 sys.path.insert(0, str(ORCH))
 
-import feedback  # noqa: E402 — resolvable only after the sys.path.insert above
+import cadence_registry  # noqa: E402 — resolvable only after the sys.path.insert above
+import feedback  # noqa: E402
 
 HANDOFF = Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff"))
 STATE_DIR = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
@@ -246,15 +247,26 @@ def _fleet_summary() -> dict:
                 "resume_tokens",
             )
         }
-    stamps = {}
-    for stamp in (
-        "last-relearn",
-        "last-periodic-report",
-        "last-range-rollout",
-        "last-ship-gate",
-        "last-ledger-reconcile",
-    ):
-        p = STATE_DIR / f".{stamp}"
+    # Every success stamp the cadence registry declares, keyed without its leading dot. This was a
+    # hand-copied tuple of five names, which drifted silently as steps were added or renamed.
+    stamp_paths = {
+        row["success_stamp"].removeprefix("."): STATE_DIR / row["success_stamp"]
+        for row in cadence_registry.CADENCE_STEPS
+        if row.get("success_stamp")
+    }
+    # The ship-gate stamp is not a cadence step: exp_abcd writes it under the EXPERIMENTS dir, and
+    # read from STATE_DIR it was None -- "never ran" -- on every call. Its path comes from exp_abcd,
+    # imported lazily like capability_advisor. If that fails the value says so: None would claim
+    # the gate never stamped, when nobody looked.
+    stamps: dict[str, int | str | None] = {}
+    try:
+        import exp_abcd
+
+        gate = exp_abcd.ship_gate_stamp()
+        stamp_paths[gate.name.removeprefix(".")] = gate
+    except Exception as exc:  # noqa: BLE001
+        stamps["last-ship-gate"] = f"unavailable: {type(exc).__name__}: {exc}"[:300]
+    for stamp, p in stamp_paths.items():
         stamps[stamp] = int(p.stat().st_mtime) if p.exists() else None
     # THE TICK ITSELF. `heartbeat_age_s` is the dispatch lane's heartbeat, written only while
     # ORCH_DISPATCH_LANE=1, so with the lane in shadow this tool said nothing about the tick at all
@@ -624,13 +636,22 @@ def _selftest() -> None:
     import subprocess
     import tempfile
 
+    import exp_abcd
+
     tmp = Path(tempfile.mkdtemp(prefix="mcp-selftest-"))
     env = dict(
         os.environ,
         ORCH_FEEDBACK_DB=str(tmp / "t.db"),
         HANDOFF_DIR=str(tmp),
         ORCH_STATE_DIR=str(tmp),
+        ORCH_EXP_DIR=str(tmp / "experiments"),
     )
+    # The server resolves the ship-gate stamp through exp_abcd in ITS OWN process, the way the
+    # registered server runs; only the file name is taken from this one.
+    gate = tmp / "experiments" / exp_abcd.ship_gate_stamp().name
+    gate.parent.mkdir()
+    gate.touch()
+    os.utime(gate, (1_700_000_000, 1_700_000_000))
     requests = [
         {
             "jsonrpc": "2.0",
@@ -661,6 +682,12 @@ def _selftest() -> None:
             "method": "tools/call",
             "params": {"name": "no_such_tool", "arguments": {}},
         },
+        {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {"name": "fleet_summary", "arguments": {}},
+        },
     ]
     payload = "".join(json.dumps(r) + "\n" for r in requests)
     proc = subprocess.run(
@@ -686,12 +713,16 @@ def _selftest() -> None:
     assert '"status": "open"' in by_id[3]["result"]["content"][0]["text"], by_id[3]
     assert "Ship it?" in by_id[4]["result"]["content"][0]["text"], by_id[4]
     assert by_id[5]["result"].get("isError") is True, by_id[5]
+    assert not by_id[6]["result"].get("isError"), by_id[6]
+    stamps = json.loads(by_id[6]["result"]["content"][0]["text"])["cadence_stamps"]
+    assert stamps[gate.name.removeprefix(".")] == 1_700_000_000, stamps
     import shutil
 
     shutil.rmtree(tmp, ignore_errors=True)
     print(
         "mcp_server.py selftest: OK (initialize, tools/list, tools/call round-trip, "
-        "question record/list through the MCP door, unknown-tool isError)"
+        "question record/list through the MCP door, unknown-tool isError, fleet_summary reads "
+        "the ship-gate stamp from the experiments dir)"
     )
 
 
