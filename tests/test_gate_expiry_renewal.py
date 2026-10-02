@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -262,8 +263,11 @@ def test_the_notice_command_is_the_cli_and_its_placeholders_are_refused(tmp_path
     now = int(time.time())
     ledger = _ledger(tmp_path, {"plain": _plain_row("plain", expiry=now + DAY)})
     env = {**os.environ, "ORCH_CAPABILITIES_PATH": str(ledger)}
-    # Pasted unedited, the command must refuse: a placeholder is not evidence.
-    done = subprocess.run(command, shell=True, env=env, capture_output=True, text=True)
+    # Pasted unedited, the command must refuse: a placeholder is not evidence. Run with THIS
+    # interpreter, so the test is about the command's arguments and not about whichever python3
+    # the runner's PATH happens to resolve.
+    pasted = shlex.quote(sys.executable) + command.removeprefix("python3")
+    done = subprocess.run(pasted, shell=True, env=env, capture_output=True, text=True)
     assert done.returncode == 1, done
     assert json.loads(done.stdout)["renewed"] is False
 
