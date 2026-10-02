@@ -218,6 +218,22 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "phase reporting `offered 0` is a broken binding, not a quiet one",
     },
     {
+        # EVERY ACTIVE TICK, FIRST, and stampless: it is an observer armed before any step, not a
+        # step with a period. Registered so `ORCH_DISABLE_STEPS=tick-watchdog` is a control that
+        # works -- the tick then prints, every run, that nothing watches it -- and so the
+        # observability dashboard lists the record it writes.
+        "key": "tick-watchdog",
+        "success_stamp": None,
+        "cadence_days": 0,
+        "artifact": "tick-watchdog.json",
+        "log": None,
+        "gate": "ORCH_DISABLE_STEPS=tick-watchdog stops it arming; report-only, it never signals "
+        "anything",
+        "next_transition": "ALERTs into the tick log when one command passes 90 min or the tick "
+        "3 h of awake time, hourly while stuck, each with the `kill` that frees the "
+        "tick; the next tick's first line says how the previous one ended",
+    },
+    {
         "key": "capability-firing-monitor",
         "success_stamp": ".last-capability-firing-monitor",
         "cadence_days": 6,
@@ -519,6 +535,31 @@ def declared_gate_reason(key: str) -> str:
         f"cadence step {key} is {line}. The tick skips it and prints that on every run "
         f"(cadence_registry `{RETIRED_FIELD}`). When it runs: {row.get('gate')}"
     )
+
+
+def shortest_stale_after_s(registry: tuple[dict[str, Any], ...] | None = None) -> int:
+    """The tightest `stale_after_seconds` over the stamped steps -- 36 h while any step is daily."""
+    stamped = [row for row in registry or CADENCE_STEPS if row.get("success_stamp")]
+    return min((stale_after_seconds(row) for row in stamped), default=stale_after_seconds({}))
+
+
+def newest_outcome(report: dict[str, Any]) -> dict[str, Any] | None:
+    """The most recent outcome ANY step recorded, success stamp or failure marker, in an
+    `inspect_cadence` report; None when no step has recorded one on this machine.
+
+    While ticks reach the cadence block, something lands at least every shortest period, so when
+    nothing has for longer than `shortest_stale_after_s`, ticks are starting and reaching no
+    cadence step at all -- an early abort every tick -- whatever each tick's own output says.
+    Every single stamp being old is the WRONG test for that: a weekly stamp is young for days."""
+    best: dict[str, Any] | None = None
+    for row in report.get("steps") or []:
+        for kind, ts in (
+            ("success", row.get("last_success_ts")),
+            ("failure", row.get("last_failure_ts")),
+        ):
+            if ts is not None and (best is None or ts > best["ts"]):
+                best = {"key": row.get("key"), "kind": kind, "ts": int(ts)}
+    return best
 
 
 def _mtime(path: Path) -> int | None:

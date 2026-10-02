@@ -142,6 +142,66 @@ mode="shadow"; [[ "${1:-}" == "--active" ]] && mode="active"
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] orchestrate tick: $mode"
 STAMP_DIR="${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}"; mkdir -p "$STAMP_DIR" 2>/dev/null || true
 
+# --- Per-step kill switch -------------------------------------------------------------------------
+# ONE mechanism giving every step a real off-lever, instead of a bespoke ORCH_* flag per capability.
+# Added 2026-08-21: the admission gate flagged six capabilities with "nothing can stop it without a
+# code change", and six new single-use flags would be six new untested branches on hot paths -- an
+# untested kill switch is theatre, because it reports a control nobody has proved works.
+#
+#   ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"   # comma or space separated
+#
+# THREE PROPERTIES, each of them the fix for a failure this repo has already paid for:
+#  1. IT ANNOUNCES ITSELF EVERY TICK. A silent disable is the latched-gate pattern exactly -- a thing
+#     that stays off because nothing says it is off. Every skipped step prints a line, so a disable
+#     left in place is visible in the very next log instead of five weeks later.
+#  2. IT TOUCHES NO STAMP. Re-enabling makes the step immediately due; the switch defers work, it
+#     does not fake completion. (A disable that marked success would silently skip a whole cadence.)
+#  3. IT REJECTS UNKNOWN KEYS LOUDLY. `ORCH_DISABLE_STEPS=feature-scanned` would otherwise disable
+#     nothing while the operator believes the step is off -- a control that lies is worse than none.
+#     Unknown names WARN and are ignored, so a typo can never silently leave a step running.
+# Fails toward MOTION: unset, empty or unparseable means nothing is disabled.
+# Defined HERE, above every step, because the tick watchdog just below consults it before the
+# first step runs; `_warn_unknown_disable_steps` needs the cadence registry, so it is CALLED later.
+_step_disabled() {   # $1=step key -> 0 (true) when the operator has disabled it
+  local key="$1" raw entry
+  raw="${ORCH_DISABLE_STEPS:-}"
+  [[ -z "$raw" ]] && return 1
+  for entry in ${raw//,/ }; do
+    [[ "$entry" == "$key" ]] || continue
+    echo "  [disabled] $key skipped by ORCH_DISABLE_STEPS (no stamp touched; re-enable and it runs next tick)"
+    return 0
+  done
+  return 1
+}
+_warn_unknown_disable_steps() {   # a typo must not read as a working switch
+  local raw entry
+  raw="${ORCH_DISABLE_STEPS:-}"
+  [[ -z "$raw" ]] && return 0
+  for entry in ${raw//,/ }; do
+    cadence_known "$entry" 2>/dev/null && continue
+    [[ "$entry" == "redirect-sweep" ]] && continue      # named tick step, not in the cadence registry
+    echo "  WARN: ORCH_DISABLE_STEPS names unknown step '$entry' -- nothing was disabled by it" >&2
+  done
+}
+
+# ORCH-ANCHOR: tick-watchdog ---------------------------------------------------------------------
+# A TICK THAT NEVER ENDS IS A GATE WITH NO DRAIN. launchd starts no tick while one is running, so
+# when the tick of 2026-09-26 04:40Z blocked inside bash's own here-document write, every cadence
+# after it stopped for five days and twenty hours -- and every line that could have said so runs
+# inside the tick. `tick_watchdog.py start` arms an observer OUTSIDE the tick (its own process, its
+# own session) before any step runs. Past 90 min for one command or 3 h for the tick it ALERTs into
+# this log with the stuck command, its age and the exact `kill` that frees the tick, repeats that
+# hourly while it stays stuck, and the next tick's first line says how the previous one ended.
+# REPORT-ONLY by the owner's decision (2026-10-02): it signals nothing. Active ticks only -- a
+# shadow run is attended. Kill switch: ORCH_DISABLE_STEPS=tick-watchdog.
+if [[ "$mode" == "active" ]]; then
+  if _step_disabled tick-watchdog; then
+    echo "  WARN: tick-watchdog disabled -- nothing watches this tick; a stuck step would hold it and every later tick, because launchd starts no tick while one runs"
+  elif ! python3 "$ORCH/tick_watchdog.py" start --state-dir "$STAMP_DIR" --tick-pid "$$"; then
+    echo "  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)"
+  fi
+fi
+
 # --- Log rotation (every tick, cheap, fail-open) -------------------------------------------------
 # This tick's own stdout/stderr go to the handoff cron log via launchd's StandardOutPath, and NOTHING
 # rotated it: measured 2026-08-21 at 59.8 MB / 1,876,027 lines, 5x the 11.8 MB the hygiene item
@@ -280,45 +340,9 @@ python3 "$ORCH/research_subjects.py" rounds-report --headline 2>> "$STAMP_DIR/ro
 # re-estimates the VERSIONED route_weights from accumulated outcomes (the router already reads
 # current_weights). Stamp-gated so the hourly tick runs them at the right cadence; never breaks the tick.
 _due() { [[ ! -f "$1" ]] && return 0; [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]; }   # due if missing or older than $2 days
-# --- Per-step kill switch -------------------------------------------------------------------------
-# ONE mechanism giving every step a real off-lever, instead of a bespoke ORCH_* flag per capability.
-# Added 2026-08-21: the admission gate flagged six capabilities with "nothing can stop it without a
-# code change", and six new single-use flags would be six new untested branches on hot paths -- an
-# untested kill switch is theatre, because it reports a control nobody has proved works.
-#
-#   ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"   # comma or space separated
-#
-# THREE PROPERTIES, each of them the fix for a failure this repo has already paid for:
-#  1. IT ANNOUNCES ITSELF EVERY TICK. A silent disable is the latched-gate pattern exactly -- a thing
-#     that stays off because nothing says it is off. Every skipped step prints a line, so a disable
-#     left in place is visible in the very next log instead of five weeks later.
-#  2. IT TOUCHES NO STAMP. Re-enabling makes the step immediately due; the switch defers work, it
-#     does not fake completion. (A disable that marked success would silently skip a whole cadence.)
-#  3. IT REJECTS UNKNOWN KEYS LOUDLY. `ORCH_DISABLE_STEPS=feature-scanned` would otherwise disable
-#     nothing while the operator believes the step is off -- a control that lies is worse than none.
-#     Unknown names WARN and are ignored, so a typo can never silently leave a step running.
-# Fails toward MOTION: unset, empty or unparseable means nothing is disabled.
-_step_disabled() {   # $1=step key -> 0 (true) when the operator has disabled it
-  local key="$1" raw entry
-  raw="${ORCH_DISABLE_STEPS:-}"
-  [[ -z "$raw" ]] && return 1
-  for entry in ${raw//,/ }; do
-    [[ "$entry" == "$key" ]] || continue
-    echo "  [disabled] $key skipped by ORCH_DISABLE_STEPS (no stamp touched; re-enable and it runs next tick)"
-    return 0
-  done
-  return 1
-}
-_warn_unknown_disable_steps() {   # a typo must not read as a working switch
-  local raw entry
-  raw="${ORCH_DISABLE_STEPS:-}"
-  [[ -z "$raw" ]] && return 0
-  for entry in ${raw//,/ }; do
-    cadence_known "$entry" 2>/dev/null && continue
-    [[ "$entry" == "redirect-sweep" ]] && continue      # named tick step, not in the cadence registry
-    echo "  WARN: ORCH_DISABLE_STEPS names unknown step '$entry' -- nothing was disabled by it" >&2
-  done
-}
+# The per-step kill switch (`_step_disabled`, `_warn_unknown_disable_steps`) is defined near the
+# top, above the tick watchdog that consults it. The check below needs the cadence registry, so it
+# runs here.
 _warn_unknown_disable_steps
 # --- Declared retirement --------------------------------------------------------------------------
 # The OTHER way a step is off: retired by default, declared on its own row in cadence_registry.py
