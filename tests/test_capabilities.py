@@ -828,7 +828,7 @@ def test_non_gate_declarations_are_code_seeded_and_read_only(tmp_path):
 _LIVE_LEDGER_WRITERS = {
     ("capability_matcher_proposals.py", "apply_matchers"): (
         "`--apply` writes proposed matchers into the ledger and saves it; its writing load comes "
-        "before the save it exists to make"
+        "before the save it exists to make, and a dry run reads with load_declared instead"
     ),
 }
 

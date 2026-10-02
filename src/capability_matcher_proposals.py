@@ -220,9 +220,12 @@ def apply_matchers(
     infrastructure capability matches only when the orchestrator actually reports that phase.
     """
     ledger = path or capabilities.REG
-    # A GENUINE WRITER, so the writing `load` stays: this saves the ledger below. Allowlisted with
-    # this reason in test_verifying_the_system_never_writes_the_live_ledger.
-    caps = capabilities.load(ledger)
+    # A GENUINE WRITER, so `--apply` keeps the writing `load` before the save below; allowlisted with
+    # that reason in test_verifying_the_system_never_writes_the_live_ledger. A DRY RUN reads with
+    # `load_declared` and writes nothing: the writing load seeds, reconciles and expires rows and
+    # persists them whether or not a matcher is saved. The one thing a dry run cannot preview is a
+    # declared gate row not yet seeded, which the tick's lifecycle step seeds every active tick.
+    caps = capabilities.load_declared(ledger) if dry_run else capabilities.load(ledger)
     written, skipped = [], []
     allowed = {WORK_ROUTED} | ({INFRASTRUCTURE} if include_infrastructure else set())
     for row in rep["rows"]:
@@ -317,7 +320,11 @@ def _selftest() -> None:
         infra = next(r for r in rep["rows"] if r["capability_id"] == "feedback-store")
         assert infra["should_have_been_used"] is None, "infrastructure is not a should-have gap"
 
+        before = ledger.read_bytes()
         apply_matchers(rep, path=ledger, dry_run=True)
+        # Byte-identical, not merely "no matcher": this ledger lacks every declared gate row, so a
+        # dry run that took the writing load would seed them all into it.
+        assert ledger.read_bytes() == before, "dry-run wrote the ledger"
         assert capabilities.load(ledger)["codemod-campaign"]["matcher"] is None, "dry-run wrote!"
         out = apply_matchers(rep, path=ledger)
         assert out["written"] == ["codemod-campaign"], out

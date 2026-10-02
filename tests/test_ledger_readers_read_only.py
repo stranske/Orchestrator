@@ -168,6 +168,7 @@ def _versions(ledger: Path, monkeypatch) -> object:
 # One entry per read site that took the writing load. `admit` and `report` both reach `admit`'s
 # read and only `report` reaches its own, so each site has a case that fails when only it regresses.
 # `admit` is asked about `fixture-declared` because every ledger but the absent one holds that row.
+# `apply_matchers[dry_run]` is a writer's preview: it must write nothing, while `--apply` still does.
 READERS = {
     "capability_admission._context": lambda ledger, _mp: admission._context(ledger),
     "capability_admission.admit": lambda ledger, _mp: admission.admit(
@@ -185,6 +186,11 @@ READERS = {
     "capability_effectiveness.measure": lambda ledger, _mp: effectiveness.measure(path=ledger),
     "capability_matcher_proposals.evaluate": lambda ledger, _mp: proposals.evaluate(
         path=ledger, task_counts={}
+    ),
+    "capability_matcher_proposals.apply_matchers[dry_run]": lambda ledger, _mp: (
+        proposals.apply_matchers(
+            proposals.evaluate(path=ledger, task_counts={}), path=ledger, dry_run=True
+        )
     ),
     "capability_opportunity.report": lambda ledger, _mp: opportunity.report(path=ledger, env={}),
     "capability_outcome_bridge._known_capability_ids": lambda ledger, _mp: (
