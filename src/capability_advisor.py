@@ -41,6 +41,7 @@ import sys
 import time
 from typing import Any
 
+import cadence_registry
 import capabilities
 import env_prereq
 import fleet_shapes
@@ -3170,11 +3171,17 @@ HOW_TO_USE = {
         "QUERY it: feedback.py completion-events / route-weights, or sqlite over the feedback db "
         "(read-only) "
     ),
+    # The cadence clause is READ from the step's registry row, so this text cannot go on describing
+    # a running cadence after the step is retired, as the hand-written version did from 2026-09-15.
     "issue-readiness": (
         "RAIL — classifies fleet issues auto_ready / not_opener_work and applies the status:ready "
-        "label the opener's backlog._is_ready reads. Invoked by the orchestrate.sh readiness "
-        "cadence (ORCH_ISSUE_AUTOREADY). Never select it: a manual invocation races the cadence. "
-        "To see its verdicts: ~/.codex/orchestrator/issue-readiness.json "
+        "label the opener's backlog._is_ready reads. Never select it: labelling belongs to the "
+        "orchestrate.sh issue-readiness cadence step, which is "
+        + (
+            cadence_registry.retirement_line(cadence_registry.STEP_BY_KEY["issue-readiness"])
+            or "live, daily"
+        )
+        + ". Its verdicts, as of that step's last run: ~/.codex/orchestrator/issue-readiness.json "
     ),
     "live-keepalive-supervisor": (
         "RAIL — the staged planner over already-escalated keepalive PRs; refuses live action "

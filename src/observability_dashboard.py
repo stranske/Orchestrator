@@ -1515,7 +1515,8 @@ def format_markdown(dashboard: dict) -> str:
         f"({score.get('recent_production_runs')} runs / "
         f"{score.get('recent_production_outcomes')} outcomes in 7d)",
         f"- Capacity: ok={score.get('capacity_ok')} warn={score.get('capacity_warn')} shed={score.get('capacity_shed')}",
-        f"- Cadence: steps={cadence.get('step_count')} failed={cadence.get('failed_step_count')} "
+        f"- Cadence: steps={cadence.get('step_count')} stale={cadence.get('stale_step_count')} "
+        f"retired={cadence.get('retired_step_count')} failed={cadence.get('failed_step_count')} "
         f"backoff={cadence.get('backoff_step_count')} ready_to_retry={cadence.get('ready_to_retry_count')}",
         f"- Route weights: v{score.get('route_weight_version') or 'none'}, "
         f"raw_zero={score.get('raw_zero_observation_cells')} "
@@ -1549,8 +1550,11 @@ def format_markdown(dashboard: dict) -> str:
             lines.append(f"- {agent['agent']}: " + ", ".join(bits))
     lines.extend(["", "## Cadence Activation", ""])
     for step in cadence.get("steps") or []:
+        # A retired step says what would bring it back, on the line that says it is not running.
+        retired = step.get("retired") or {}
+        held = f" ({retired.get('line')})" if step.get("success_status") == "retired" else ""
         lines.append(
-            f"- {step['key']}: success={step.get('success_status')} "
+            f"- {step['key']}: success={step.get('success_status')}{held} "
             f"failures={step.get('failure_count')} retry={step.get('retry_state')} "
             f"retry_after_s={step.get('retry_after_s')} reason={step.get('exact_reason')} "
             f"gate={step.get('gate')} next={step.get('next_transition')}"

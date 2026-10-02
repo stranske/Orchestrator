@@ -531,8 +531,8 @@ def test_gate_blocks_execution_is_opt_in_and_narrow():
 
     16 of 39 ledger capabilities carry a `gate_reason`. Simply checking `deliberately_gated` before
     `invoked_without_outcomes` would reclassify all of them, including `issue-readiness`, whose gate
-    covers only its label WRITES while `classify_issue` runs every day and genuinely influences what
-    the opener picks. So the rule is opt-in: absent the declaration, behaviour is unchanged.
+    covered only its label WRITES while `classify_issue` ran every day and influenced what the
+    opener picked. So the rule is opt-in: absent the declaration, behaviour is unchanged.
     """
     base = capabilities._blank_capability("gated-fixture")
     base.update(
@@ -577,11 +577,13 @@ def test_gate_blocks_execution_is_opt_in_and_narrow():
     # The two capabilities whose gate blocks the delivering path, and nothing else.
     #
     # `issue-readiness` is DELIBERATELY NOT in this set, and was removed from the expectation on
-    # 2026-08-22 after it had been failing against the live ledger. capabilities.py's own comment at
-    # the gate_blocks_execution check is explicit about why: its gate "covers only its LABEL WRITES
-    # while the assessment runs every day and really does influence what the opener picks". Marking
-    # it gate-blocking would reclassify a capability that genuinely delivers, which is the opposite
-    # of what the flag is for. The test asserted the mechanism's inverse; the ledger was right.
+    # 2026-08-22 after it had been failing against the live ledger: its gate then covered only its
+    # LABEL WRITES while the assessment ran every day, so marking it gate-blocking would have
+    # reclassified a capability that genuinely delivered. The test asserted the mechanism's inverse;
+    # the ledger was right. Since 2026-09-15 the whole step is retired by default
+    # (cadence_registry `retired`), and it STILL stays out: capabilities.py's comment at the
+    # gate_blocks_execution check says why — `deliberately_gated` would hand a retirement advice
+    # about gate readiness that describes work which does not exist.
     #
     # Membership is pinned on purpose. `gate_blocks_execution` suppresses the
     # `invoked_without_outcomes` measurement question, so a capability acquiring it silently stops
@@ -721,9 +723,9 @@ def test_matched_not_invoked_yields_to_observers_and_declared_gates():
     # An undeclared gate is still unchanged — the reorder must not reclassify by inference.
     undeclared = {**gated, "gate_blocks_execution": None}
     assert capabilities.classify_liveness(undeclared, now=300) == "matched_not_invoked", (
-        "gate_reason ALONE must not win here. 16 of 39 rows carry one, including issue-readiness "
-        "whose gate covers only its label writes while the assessment runs daily — reordering on "
-        "the weaker signal would silently excuse all of them."
+        "gate_reason ALONE must not win here. 16 of 39 rows carry one, and several gate only part "
+        "of what the capability does — reordering on the weaker signal would silently excuse all "
+        "of them."
     )
 
 

@@ -121,8 +121,11 @@ safety switch, not dead code.
    removing the owner from the ready-label queue. Four verdicts (auto_ready / owner_review /
    needs_specification / not_opener_work); only risk-labelled AND actionable issues reach the owner,
    via a non-blocking `feedback.owner_questions` entry that auto-ratifies to *proceed* at expiry so
-   nothing can latch. Read-only assessment by default; label writes are gated behind
-   `ORCH_ISSUE_AUTOREADY`. The report states its own attention cost each run (measured 2026-08-18:
+   nothing can latch. Retired by default since 2026-09-15 with the tick's own dispatch lane: the
+   `retired` field on its `cadence_registry.py` row names the flags that bring it back, and the
+   tick prints a `[retired]` line each run it skips the step. When it runs, the assessment is
+   read-only and label writes are gated behind `ORCH_ISSUE_AUTOREADY`. The report states its own
+   attention cost each run (measured 2026-08-18:
    well under the weekly attention budget (LOCAL_POLICY.md)), so a drift in the issue mix surfaces instead of
    quietly growing.
 9. **redirect_apply.py** — the consumer `redirect_plan.apply_plan` never had. Daily and local (no
@@ -253,10 +256,12 @@ safety switch, not dead code.
   entry records why and is the one to restore if a CI-side consult is ever added.
 - **`gate_blocks_execution`** — an opt-in capability declaration for the case where a switch blocks
   the code path that would produce an outcome (Thompson never chooses while the mode is
-  epsilon-greedy; range-lane's heartbeats sit on the live-apply branch; issue-readiness's label
-  write is gated). Those read `deliberately_gated` instead of accruing a permanent "fix outcome
-  linkage" instruction they cannot act on. Deliberately opt-in: 16 of 39 capabilities carry a
-  `gate_reason`, so reordering the checks for everyone would have hidden real gaps.
+  epsilon-greedy; range-lane's heartbeats sit on the live-apply branch). Those read
+  `deliberately_gated` instead of accruing a permanent "fix outcome linkage" instruction they
+  cannot act on. Deliberately opt-in: 16 of 39 capabilities carry a `gate_reason`, so reordering the
+  checks for everyone would have hidden real gaps. issue-readiness does not declare it, by design:
+  its gate covered only label writes, and now that the whole step is retired by default the
+  `classify_liveness` comment says why it still stays out.
 - **runs / execution_attempts / outcomes / costs / route_weights / evaluations_v2** — decisions,
   causally scoped worker/evaluator/verifier attempts, exact experiment identities, and results.
   Generic trace models and legacy `runs.model` tags never resolve worker identity; unresolved rows

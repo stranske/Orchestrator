@@ -21,7 +21,15 @@ import sys
 import paths
 
 ORCHESTRATE = paths.REPO_ROOT / "orchestrate.sh"
-HELPERS = ("_due", "_step_disabled", "_cadence_due", "_attempt_ok", "_mark_success", "_mark_fail")
+HELPERS = (
+    "_due",
+    "_step_disabled",
+    "_step_retired",
+    "_cadence_due",
+    "_attempt_ok",
+    "_mark_success",
+    "_mark_fail",
+)
 
 
 def _lines() -> list[str]:
