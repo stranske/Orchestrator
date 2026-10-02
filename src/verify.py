@@ -212,8 +212,9 @@ except Exception:  # noqa: BLE001
 # Every child of a run reads the capability LEDGER and many connect to the BRAIN, and until
 # 2026-10-02 they did both on this machine's LIVE files. That cost time, and it was unsafe:
 #
-#   * TIME. `capabilities._locked` takes an exclusive lock even for a read, so every ledger read in
-#     a run queued behind the tick, the MCP server and any other verify run on the machine.
+#   * TIME. `capabilities._locked` took an exclusive lock even for a read (a read has shared it
+#     since 2026-10-02, but still waits for every writer), so every ledger read in a run queued
+#     behind the tick, the MCP server and any other verify run on the machine.
 #     Measured 2026-10-02 with no code change, the admission gate took 275 s on the live ledger and
 #     119 s on a private copy of the same file; the advisor selftest took 352 s and 58 s.
 #   * SAFETY. The writing `load()` reconciles declarations from THE CODE BEING VERIFIED and writes
