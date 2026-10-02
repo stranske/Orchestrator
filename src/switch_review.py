@@ -110,9 +110,9 @@ SWITCH_CAPABILITY = {
     # mapped HERE, so this review never examined it while it authorised nothing for 42 days: 759
     # metered judgements, every one `wait`. Its `invocation` heartbeat fires only on an authorised
     # apply (`redirect_apply.apply_one`), and the idle rule leaves consult trials out, so
-    # ON-but-idle means exactly that. Its row carries the
-    # gate's drain (`SWITCH_DRAIN`). The two tables must name the same switches;
-    # tests/test_switch_review_bootstrap_drain.py fails on a flag that is in one and not the other.
+    # ON-but-idle means exactly that. Its row carries the gate's drain (`SWITCH_DRAIN`). The two
+    # tables must name the same switches; tests/test_switch_review_bootstrap_drain.py fails on a
+    # flag that is in one and not the other.
     "ORCH_REDIRECT_APPLY_BOOTSTRAP": "redirect-apply-bootstrap",
 }
 
@@ -128,7 +128,7 @@ def _age_days(stamp: int, now: int) -> float | None:
 
 
 def _invocation_evidence(cap_id: str, *, now: int, path=None) -> dict:
-    """When this capability last did something with every consult trial left out, and what was.
+    """When this capability last did something, consult trials left out, and what was left out.
 
     A consult trial (`capability_propensity.record_trigger`) writes an `invocation` through the
     ungated `capabilities.heartbeat`, from any session. Read through the `last_invocation` field,
