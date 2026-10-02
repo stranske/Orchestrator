@@ -28,8 +28,8 @@ from pathlib import Path
 
 import pytest
 
-import capability_advisor
 import capabilities
+import capability_advisor
 import capability_matcher_proposals
 import capability_propensity as cp
 import feedback
