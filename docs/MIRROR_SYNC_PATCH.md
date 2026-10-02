@@ -266,18 +266,19 @@ git -C "$SRC" archive --format=tar HEAD tests | { tar -x -C "$MIRROR" && cat >/d
 ```
 
 The `cat` drain is retained so macOS `tar` cannot close the pipe before `git archive` writes its
-padding. Copy the line as it stands: extraction and draining are joined with `&&`, never with `;`
-or a line break inside the braces, because either of those lets `cat`'s exit 0 hide a failed
-extraction (the 2026-10-01 section above). Uncommitted test edits still do not travel: the
-archive is built from `HEAD`, not from the working tree.
+padding. Extraction and draining must be joined with `&&`, never with `;` or a bare newline between
+the commands, because either of those lets `cat`'s exit 0 hide a failed extraction (the 2026-10-01
+section above). Wrapping the line immediately after `&&` preserves the same short-circuit behavior.
+Uncommitted test edits still do not travel: the archive is built from `HEAD`, not from the working
+tree.
 
 The repository guard in `tests/conftest.py` enforces the other half of that contract. It compares
 the tracked files under `tests/` with the files in the actual `git archive HEAD tests` result, then
 fails any test that reads an untracked, ignored, or `export-ignore`d input. Comparing with the
-archive itself also covers an `export-ignore` rule placed on an ancestor directory. Only files
-`HEAD` already holds can be `export-ignore`d: a fixture staged for the next commit is missing
-from `HEAD`'s archive too, but it ships with its commit, and counting it labelled a freshly
-`git add`ed fixture `export-ignore` in a repository with no `.gitattributes` at all.
+archive itself also covers an `export-ignore` rule placed on an ancestor directory. A fixture staged
+for the next commit is absent from `HEAD`'s archive but normally ships with that commit. The guard
+therefore checks staged additions against Git's cached `export-ignore` attributes: an ordinary
+staged fixture is allowed, while one already covered by an export-ignore rule remains watched.
 
 Witness the installed script without touching either live runtime by isolating both `HOME` and the
 mirror while preserving GitHub authentication:

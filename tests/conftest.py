@@ -167,6 +167,29 @@ def arm(tests_dir: Path) -> Guard:
             if proc.returncode != 0:
                 return failed(proc)
             in_head = set(_split(proc.stdout))
+            staged_additions = set(tracked) - in_head
+            if staged_additions:
+                # A staged addition normally ships with the commit that starts reading it, but an
+                # export-ignore rule already present in the index will still omit it. Ask Git's
+                # cached attribute view rather than exempting every path absent from HEAD.
+                proc = git(
+                    "check-attr",
+                    "-z",
+                    "--cached",
+                    "export-ignore",
+                    "--",
+                    *sorted(staged_additions),
+                )
+                if proc.returncode != 0:
+                    return failed(proc)
+                attributes = _split(proc.stdout)
+                if len(attributes) % 3:
+                    return Guard(False, "`git check-attr` returned malformed NUL-delimited output")
+                for rel, attribute, value in zip(
+                    attributes[0::3], attributes[1::3], attributes[2::3], strict=True
+                ):
+                    if attribute == "export-ignore" and value not in {"unspecified", "unset"}:
+                        found[rel] = "export-ignore"
             proc = git("archive", "--format=tar", "HEAD", "--", ".")
             if proc.returncode != 0:
                 return failed(proc)
