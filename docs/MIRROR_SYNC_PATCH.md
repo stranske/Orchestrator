@@ -353,10 +353,11 @@ on the exact tree about to go live.
 3. It hashes the deployment-owned bytes before and after `verify.py`, and also re-checks that `SRC`
    did not change. A verifier write, checkout switch, or concurrent source edit therefore voids the
    verdict instead of silently changing what the wrapper can deploy.
-4. With `--snapshot-out DIR`, it publishes the verified scratch mirror only after every gate is
-   green. The wrapper installs that snapshot with its verified copy of
-   `scripts/install_verified_snapshot.py`; it never re-reads mutable `SRC` or fetches the registry a
-   second time.
+4. With `--snapshot-out DIR --digest-out FILE`, it publishes the verified scratch mirror and the
+   verifier's final payload digest only after every gate is green. The wrapper requires that receipt
+   and passes it to `scripts/install_verified_snapshot.py`; the installer rejects any retained
+   snapshot change before mutating the live mirror. It never re-reads mutable `SRC` or fetches the
+   registry a second time.
 
 Its exit codes are 0 VERIFIED, 1 NOT VERIFIED, 2 nothing verified, and 3 VOID (`SRC` moved). It
 never writes the live mirror, the live registry copy, the live ledger or the live Brain.
@@ -399,11 +400,19 @@ fi
 STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/orch-verified-sync.XXXXXX")"
 trap 'rm -rf "$STAGE_ROOT"' EXIT
 SNAPSHOT="$STAGE_ROOT/mirror"
+DIGEST_RECEIPT="$STAGE_ROOT/verified-payload.sha256"
 echo
 echo "== verdict BEFORE the live copy, from a scratch mirror of $SRC"
-if ! bash "$PRE" --snapshot-out "$SNAPSHOT" "$SRC"; then
+if ! bash "$PRE" --snapshot-out "$SNAPSHOT" --digest-out "$DIGEST_RECEIPT" "$SRC"; then
   echo >&2
   echo "NOT SYNCED: the live mirror still runs the code it ran before this command." >&2
+  print_unverified_override
+  exit 3
+fi
+EXPECTED_DIGEST="$(cat "$DIGEST_RECEIPT" 2>/dev/null || true)"
+if [[ ! "$EXPECTED_DIGEST" =~ ^[0-9a-f]{64}$ ]] ||
+   [[ "$(wc -l < "$DIGEST_RECEIPT" 2>/dev/null | tr -d ' ')" != "1" ]]; then
+  echo "NOT SYNCED: the verified snapshot has no valid one-line digest receipt." >&2
   print_unverified_override
   exit 3
 fi
@@ -416,8 +425,21 @@ fi
 
 echo
 echo "== installing the verified snapshot (SRC is not read again)"
-python3 "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
-  --runtime-registry "$HOME/.codex/orchestrator/repo_review_registry.json"
+if python3 -I "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
+  --expected-digest "$EXPECTED_DIGEST" \
+  --runtime-registry "$HOME/.codex/orchestrator/repo_review_registry.json"; then
+  :
+else
+  install_rc=$?
+  printf 'INSTALL FAILED (exit %s): the live mirror may be partially updated; no rollback was performed.\n' \
+    "$install_rc" >&2
+  printf '  to retry verified installation from a fresh snapshot:' >&2
+  printf ' %q' "$0" >&2
+  [[ "$ALLOW_UNMERGED" == "1" ]] && printf ' %q' --allow-unmerged >&2
+  printf ' %q\n' "$SRC" >&2
+  print_unverified_override
+  exit "$install_rc"
+fi
 echo
 echo "== the exact deployment snapshot above received the verdict; no second run"
 ```
@@ -433,6 +455,7 @@ Also change the `--no-verify` help line to say it is the way to copy after a red
 | Red | It does not copy. The live mirror keeps running the code it already ran, and the last line printed is the one command that copies anyway. A false red (a ledger row registered by a sibling session's unmerged branch, say) therefore costs one command, never a blocked sync. |
 | VOID | It does not copy. Re-run once the clone is settled. |
 | Missing pre-verifier | It fails closed before copying and prints the quoted `--no-verify` override. There is no copy-first fallback. |
+| Installer failure | It preserves the installer's status, warns that the in-place mirror may be partial, and prints both the verified retry and explicit `--no-verify` commands. Atomic publication and rollback remain tracked by #389. |
 
 **How to confirm it.** Run the script on its own first. It writes nothing live:
 
@@ -451,8 +474,10 @@ must open with `tree: EXEC MIRROR — mirror_* ceilings apply`. Then confirm tha
 2. *Can that run while the gate is closed?* Yes. Neither the fix nor the override depends on the
    wrapper having copied.
 3. *Measuring window = draining window?* Yes. The helper hashes the deployment-owned scratch bytes
-   before and after the run, publishes them only on green, and the wrapper installs those same bytes.
-   `SRC` is never read again. A changed source or changed scratch payload returns VOID.
+   before and after the run, publishes them only on green, and writes the final digest through a
+   separate receipt. The installer compares the retained snapshot with that receipt before touching
+   the live mirror, then compares the installed payload again. `SRC` is never read again: a source
+   change during verification returns VOID; a later source change is irrelevant to installation.
 4. *What does it print when drained?* `== verify-before-sync: VERIFIED for <SRC> @ <sha> …`,
    then the install, then `the exact deployment snapshot above received the verdict; no second
    run`. `test_mirror_sync_patch.py` extracts and executes the documented block with stand-ins, so
@@ -471,8 +496,9 @@ must open with `tree: EXEC MIRROR — mirror_* ceilings apply`. Then confirm tha
   - red exits 3 without copying and prints the `--no-verify` command;
   - a source without the script exits 3 without copying;
   - `--no-verify` copies once;
-  - a source or retained deployment snapshot that changes after the verdict is rejected before
-    installation.
+  - a retained deployment snapshot that changes after the verdict is rejected before installation;
+  - an installer failure preserves its status and prints verified-retry and unverified-override
+    recovery commands.
 - The live mirror's `orchestrate.sh` and the live registry copy did not move.
 - The real copy script has not yet been run through the wrapper. The confirmation step above is
   that witness.

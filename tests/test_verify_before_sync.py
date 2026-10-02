@@ -237,10 +237,13 @@ def test_a_red_verdict_exits_one_and_prints_verify_pys_own_code(world):
 
 def test_a_green_verdict_can_publish_the_exact_verified_snapshot(world):
     snapshot = world["tmpdir"] / "verified payload"
+    digest_receipt = world["tmpdir"] / "verified-payload.sha256"
     result, _ = _run(
         world,
         "--snapshot-out",
         str(snapshot),
+        "--digest-out",
+        str(digest_receipt),
         str(world["src"]),
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -252,25 +255,51 @@ def test_a_green_verdict_can_publish_the_exact_verified_snapshot(world):
     (world["src"] / "base.py").write_text("MOVED = True\n")
     mirror = world["tmp"] / "live mirror"
     installed = subprocess.run(
-        ["python3", str(snapshot / "scripts" / INSTALLER.name), str(snapshot), str(mirror)],
+        [
+            "python3",
+            str(snapshot / "scripts" / INSTALLER.name),
+            str(snapshot),
+            str(mirror),
+            "--expected-digest",
+            digest_receipt.read_text().strip(),
+        ],
         capture_output=True,
         text=True,
     )
     assert installed.returncode == 0, installed.stdout + installed.stderr
     assert (mirror / "base.py").read_bytes() == verified
+    assert len(digest_receipt.read_text().strip()) == 64
 
 
 def test_a_red_verdict_never_publishes_a_snapshot(world):
     snapshot = world["tmpdir"] / "must-not-exist"
+    digest_receipt = world["tmpdir"] / "must-not-exist.sha256"
     result, _ = _run(
         world,
         "--snapshot-out",
         str(snapshot),
+        "--digest-out",
+        str(digest_receipt),
         str(world["src"]),
         FAKE_VERIFY_RC="7",
     )
     assert result.returncode == 1, result.stdout + result.stderr
     assert not snapshot.exists()
+    assert not digest_receipt.exists()
+
+
+def test_digest_receipt_requires_snapshot_publication(world):
+    digest_receipt = world["tmpdir"] / "not-allowed.sha256"
+    result, record = _run(
+        world,
+        "--digest-out",
+        str(digest_receipt),
+        str(world["src"]),
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "--digest-out requires --snapshot-out" in result.stderr
+    assert not digest_receipt.exists()
+    assert record == {}
 
 
 def test_existing_snapshot_destination_creates_no_scratch_directory(world):

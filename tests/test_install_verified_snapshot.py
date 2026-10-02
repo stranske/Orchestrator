@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 import paths
 
 INSTALLER = paths.REPO_ROOT / "scripts" / "install_verified_snapshot.py"
@@ -48,6 +50,12 @@ def _run(*args: str | Path) -> subprocess.CompletedProcess:
     )
 
 
+def _digest(snapshot: Path) -> str:
+    result = _run(snapshot, "--digest")
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout.strip()
+
+
 def test_install_uses_only_snapshot_bytes_and_preserves_local_markers(tmp_path):
     snapshot = _snapshot(tmp_path)
     mirror = tmp_path / "live mirror"
@@ -67,7 +75,14 @@ def test_install_uses_only_snapshot_bytes_and_preserves_local_markers(tmp_path):
     (mirror / ".docs-shipped.txt").write_text("docs/old.md\n")
     registry = tmp_path / "runtime" / "repo_review_registry.json"
 
-    result = _run(snapshot, mirror, "--runtime-registry", registry)
+    result = _run(
+        snapshot,
+        mirror,
+        "--expected-digest",
+        _digest(snapshot),
+        "--runtime-registry",
+        registry,
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert (mirror / "module.py").read_text() == "VALUE = 'verified'\n"
     assert not (mirror / "stale.py").exists()
@@ -104,7 +119,7 @@ def test_digest_covers_content_and_permissions_but_not_generated_caches(tmp_path
 
 def test_install_rejects_the_snapshot_as_its_own_destination(tmp_path):
     snapshot = _snapshot(tmp_path)
-    result = _run(snapshot, snapshot)
+    result = _run(snapshot, snapshot, "--expected-digest", _digest(snapshot))
     assert result.returncode == 2
     assert "snapshot and mirror must be separate trees" in result.stderr
 
@@ -117,7 +132,14 @@ def test_install_validates_every_external_output_before_mutating_the_mirror(tmp_
     original.write_text("still live\n")
     (snapshot / "repo_review_registry.json").write_text("not json\n")
 
-    result = _run(snapshot, mirror, "--runtime-registry", tmp_path / "runtime.json")
+    result = _run(
+        snapshot,
+        mirror,
+        "--expected-digest",
+        _digest(snapshot),
+        "--runtime-registry",
+        tmp_path / "runtime.json",
+    )
     assert result.returncode == 2
     assert original.read_text() == "still live\n"
 
@@ -130,7 +152,49 @@ def test_install_rejects_a_snapshot_docs_manifest_that_does_not_match(tmp_path):
     original.write_text("still live\n")
     (snapshot / ".docs-shipped.txt").write_text("docs/guide.md\n")
 
-    result = _run(snapshot, mirror)
+    result = _run(snapshot, mirror, "--expected-digest", _digest(snapshot))
     assert result.returncode == 2
     assert "snapshot docs do not match" in result.stderr
+    assert original.read_text() == "still live\n"
+
+
+def test_install_rejects_changed_snapshot_before_any_live_mutation(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    expected = _digest(snapshot)
+    mirror = tmp_path / "live mirror"
+    mirror.mkdir()
+    original = mirror / "old.py"
+    original.write_text("still live\n")
+    runtime_registry = tmp_path / "runtime" / "repo_review_registry.json"
+
+    (snapshot / "module.py").write_text("VALUE = 'changed after verdict'\n")
+    result = _run(
+        snapshot,
+        mirror,
+        "--expected-digest",
+        expected,
+        "--runtime-registry",
+        runtime_registry,
+    )
+
+    assert result.returncode == 2
+    assert "retained snapshot digest" in result.stderr
+    assert original.read_text() == "still live\n"
+    assert not runtime_registry.exists()
+
+
+@pytest.mark.parametrize("expected", ["", "xyz", "A" * 64, "0" * 63, "0" * 65])
+def test_install_rejects_missing_or_malformed_verifier_digest_before_mutation(tmp_path, expected):
+    snapshot = _snapshot(tmp_path)
+    mirror = tmp_path / "live mirror"
+    mirror.mkdir()
+    original = mirror / "old.py"
+    original.write_text("still live\n")
+    args: list[str | Path] = [snapshot, mirror]
+    if expected:
+        args.extend(("--expected-digest", expected))
+
+    result = _run(*args)
+
+    assert result.returncode == 2
     assert original.read_text() == "still live\n"

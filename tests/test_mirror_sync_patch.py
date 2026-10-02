@@ -34,7 +34,11 @@ def wrapper_world(tmp_path: Path) -> dict[str, Path]:
     fake_installer = staged / "scripts" / "install_verified_snapshot.py"
     fake_installer.write_text(
         "import os, pathlib, shutil, sys\n"
+        "rc = int(os.environ.get('FAKE_INSTALL_RC', '0'))\n"
+        "if rc: sys.exit(rc)\n"
         "snapshot, mirror = map(pathlib.Path, sys.argv[1:3])\n"
+        "assert sys.argv[3] == '--expected-digest'\n"
+        "assert sys.argv[4] == 'a' * 64\n"
         "mirror.mkdir(parents=True, exist_ok=True)\n"
         "shutil.copy2(snapshot / 'payload.txt', mirror / 'payload.txt')\n"
         "pathlib.Path(os.environ['FAKE_RECORD']).open('a').write('install\\n')\n"
@@ -46,9 +50,12 @@ def wrapper_world(tmp_path: Path) -> dict[str, Path]:
         "set -euo pipefail\n"
         '[[ "$1" == --snapshot-out ]]\n'
         'out="$2"\n'
-        'src="$3"\n'
+        '[[ "$3" == --digest-out ]]\n'
+        'receipt="$4"\n'
+        'src="$5"\n'
         '[[ "${FAKE_PRE_RC:-0}" == 0 ]] || exit "$FAKE_PRE_RC"\n'
         'cp -R "$FAKE_SNAPSHOT" "$out"\n'
+        'printf \'%s\\n\' "${FAKE_RECEIPT-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" > "$receipt"\n'
         "printf 'changed after verdict\\n' > \"$src/payload.txt\"\n"
     )
     pre.chmod(0o755)
@@ -134,3 +141,25 @@ def test_no_verify_is_the_only_path_that_invokes_the_ordinary_copier(wrapper_wor
     assert wrapper_world["record"].read_text().splitlines() == ["ordinary-copy"]
     assert (wrapper_world["mirror"] / "payload.txt").read_text() == "mutable source\n"
     assert "copy is NOT a verdict" in result.stdout
+
+
+@pytest.mark.parametrize("receipt", ["", "not-a-digest", "A" * 64, "a" * 64 + "\nextra"])
+def test_missing_or_malformed_digest_receipt_fails_before_install(wrapper_world, receipt):
+    result = _run(wrapper_world, FAKE_RECEIPT=receipt)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "no valid one-line digest receipt" in result.stderr
+    assert not wrapper_world["record"].exists()
+    assert not (wrapper_world["mirror"] / "payload.txt").exists()
+
+
+@pytest.mark.parametrize("installer_rc", ["2", "17"])
+def test_installer_failure_preserves_status_and_prints_both_recovery_paths(
+    wrapper_world, installer_rc
+):
+    result = _run(wrapper_world, FAKE_INSTALL_RC=installer_rc)
+    assert result.returncode == int(installer_rc), result.stdout + result.stderr
+    assert f"INSTALL FAILED (exit {installer_rc})" in result.stderr
+    assert "to retry verified installation from a fresh snapshot:" in result.stderr
+    assert "to copy anyway, unverified:" in result.stderr
+    assert "the exact deployment snapshot above received the verdict" not in result.stdout
+    assert list(wrapper_world["temp"].iterdir()) == []

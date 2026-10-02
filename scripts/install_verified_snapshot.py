@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import struct
@@ -153,15 +154,26 @@ def _shipped_docs(manifest: Path) -> list[Path]:
     return paths
 
 
-def install(snapshot: Path, mirror: Path, runtime_registry: Path | None = None) -> int:
+def install(
+    snapshot: Path,
+    mirror: Path,
+    expected_digest: str,
+    runtime_registry: Path | None = None,
+) -> int:
     snapshot = snapshot.resolve()
     mirror = mirror.expanduser().resolve()
     _validate_snapshot(snapshot)
+    if re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
+        raise ValueError("expected digest must be exactly 64 lowercase hexadecimal characters")
     if snapshot == mirror or snapshot in mirror.parents or mirror in snapshot.parents:
         raise ValueError("snapshot and mirror must be separate trees")
 
     entries = owned_entries(snapshot)
-    expected_digest = snapshot_digest(snapshot)
+    actual_digest = snapshot_digest(snapshot)
+    if actual_digest != expected_digest:
+        raise ValueError(
+            f"retained snapshot digest {actual_digest} != verified payload {expected_digest}"
+        )
     registry = snapshot / "repo_review_registry.json"
     if registry.is_file():
         json.loads(registry.read_text(encoding="utf-8"))
@@ -217,17 +229,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("snapshot", type=Path)
     parser.add_argument("mirror", type=Path, nargs="?")
     parser.add_argument("--digest", action="store_true")
+    parser.add_argument("--expected-digest")
     parser.add_argument("--runtime-registry", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.digest:
-            if args.mirror is not None or args.runtime_registry is not None:
+            if (
+                args.mirror is not None
+                or args.runtime_registry is not None
+                or args.expected_digest is not None
+            ):
                 parser.error("--digest accepts only SNAPSHOT")
             print(snapshot_digest(args.snapshot))
             return 0
         if args.mirror is None:
             parser.error("MIRROR is required unless --digest is used")
-        return install(args.snapshot, args.mirror, args.runtime_registry)
+        if args.expected_digest is None:
+            parser.error("--expected-digest is required when installing")
+        return install(args.snapshot, args.mirror, args.expected_digest, args.runtime_registry)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"install-verified-snapshot: {exc}", file=sys.stderr)
         return 2

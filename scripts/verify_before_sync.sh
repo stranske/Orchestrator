@@ -24,7 +24,7 @@
 # source did not move while verify.py ran. It never touches the live mirror, the live ledger or the
 # live Brain, and never runs the live sync: what to do with the verdict is the caller's decision.
 #
-# Usage: scripts/verify_before_sync.sh [--snapshot-out DIR] [SRC]
+# Usage: scripts/verify_before_sync.sh [--snapshot-out DIR] [--digest-out FILE] [SRC]
 #                                            (SRC defaults to ~/.codex/orchestrator-src)
 #        scripts/verify_before_sync.sh --identity [SRC]
 #        prints a fingerprint of exactly what the copy reads from SRC, the same value a
@@ -57,6 +57,16 @@ if [[ "${1:-}" == "--snapshot-out" ]]; then
   [[ -n "${2:-}" ]] || { printf 'verify-before-sync: --snapshot-out needs a directory\n' >&2; exit 2; }
   snapshot_out="$2"
   shift 2
+fi
+digest_out=""
+if [[ "${1:-}" == "--digest-out" ]]; then
+  [[ -n "${2:-}" ]] || { printf 'verify-before-sync: --digest-out needs a file\n' >&2; exit 2; }
+  digest_out="$2"
+  shift 2
+fi
+if [[ -n "$digest_out" && -z "$snapshot_out" ]]; then
+  printf 'verify-before-sync: --digest-out requires --snapshot-out\n' >&2
+  exit 2
 fi
 [[ "$#" -le 1 ]] || { printf 'verify-before-sync: unexpected arguments\n' >&2; exit 2; }
 src="${1:-$real_home/.codex/orchestrator-src}"
@@ -169,6 +179,10 @@ if ! before="$(source_identity)"; then
 fi
 if [[ -n "$snapshot_out" && ( -e "$snapshot_out" || -L "$snapshot_out" ) ]]; then
   fail "NOTHING VERIFIED: snapshot output already exists: $snapshot_out"
+  exit 2
+fi
+if [[ -n "$digest_out" && ( -e "$digest_out" || -L "$digest_out" ) ]]; then
+  fail "NOTHING VERIFIED: digest output already exists: $digest_out"
   exit 2
 fi
 head_short="$(git -C "$src" rev-parse --short HEAD)"
@@ -291,8 +305,23 @@ say "   the live registry copy, the live ledger and the live Brain were not writ
 if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   say "   verified source identity: $(fingerprint "$before")"
   if [[ -n "$snapshot_out" ]]; then
+    digest_tmp="${digest_out}.tmp.$$"
+    if [[ -n "$digest_out" ]] && {
+      ! mkdir -p "$(dirname "$digest_out")" ||
+      ! printf '%s\n' "$payload_after" > "$digest_tmp"
+    }; then
+      rm -f "$digest_tmp"
+      fail "NOTHING VERIFIED: could not prepare the verified digest receipt at $digest_out"
+      exit 2
+    fi
     if ! mkdir -p "$(dirname "$snapshot_out")" || ! mv "$scratch/mirror" "$snapshot_out"; then
+      rm -f "$digest_tmp"
       fail "NOTHING VERIFIED: could not publish the verified snapshot to $snapshot_out"
+      exit 2
+    fi
+    if [[ -n "$digest_out" ]] && ! mv "$digest_tmp" "$digest_out"; then
+      rm -f "$digest_tmp"
+      fail "NOTHING VERIFIED: could not publish the verified digest receipt to $digest_out"
       exit 2
     fi
     say "   verified deployment snapshot: $snapshot_out"
