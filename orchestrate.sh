@@ -317,8 +317,22 @@ _warn_unknown_disable_steps() {   # a typo must not read as a working switch
   done
 }
 _warn_unknown_disable_steps
+# --- Declared retirement --------------------------------------------------------------------------
+# The OTHER way a step is off: retired by default, declared on its own row in cadence_registry.py
+# (`retired`) and generated into `cadence_retired`, which this reads. The inspector and the
+# capability ledger read the same row, so never guard a call site with a second copy of the
+# condition: the issue-readiness retirement was exactly such a copy, a silent `:` from 2026-09-15,
+# while inspect_cadence went on calling the step stale. The kill switch's three properties, for the
+# same reasons: it announces itself every tick, it touches no stamp, and the row's re-enable flags
+# lift it with the step due at once.
+_step_retired() {   # $1=step key -> 0 (true) when the registry retires it and no re-enable flag holds
+  local why
+  why="$(cadence_retired "$1")" || return 1
+  echo "  [retired] $1 skipped: $why (no stamp touched)"
+  return 0
+}
 
-_cadence_due() { local stamp; stamp="$(cadence_stamp "$1")" || return 2; _step_disabled "$1" && return 1; _due "$STAMP_DIR/$stamp" "$(cadence_days "$1")"; }
+_cadence_due() { local stamp; stamp="$(cadence_stamp "$1")" || return 2; _step_disabled "$1" && return 1; _step_retired "$1" && return 1; _due "$STAMP_DIR/$stamp" "$(cadence_days "$1")"; }
 # item 10 (2026-07-08 audit): a FAILING daily/weekly step used to retry EVERY hourly tick forever
 # (its success stamp never lands, so _due stays true -- observed: 183 hourly langsmith retries
 # burning gh budget and burying real warns). Failures now back off on their own stamp: after a
@@ -780,11 +794,12 @@ else
     echo "  warn: tick phase consult failed (continuing; see $STAMP_DIR/tick-phase-consult.log)"
   fi
 fi   # end: tick-phase-consult
-# The readiness assessment exists for the dispatch lane's backlog and its label writes are gated
-# (ORCH_ISSUE_AUTOREADY); with both off it was 1,350 invocations in eleven days feeding nothing.
-if [[ "${ORCH_DISPATCH_LANE:-0}" != "1" && "${ORCH_ISSUE_AUTOREADY:-}" != "1" ]]; then
-  :  # retired with the dispatch lane (2026-09-15); re-enable either flag to bring it back
-elif _cadence_due issue-readiness && _attempt_ok issue-readiness; then
+# RETIRED BY DEFAULT since 2026-09-15: the assessment exists for the dispatch lane's backlog and its
+# label writes are gated (ORCH_ISSUE_AUTOREADY), so with both off it was 1,350 invocations in eleven
+# days feeding nothing. The retirement is the `retired` field on this step's cadence_registry row;
+# `_cadence_due` honours it and prints a `[retired]` line naming the flags that bring it back.
+# Change the row, never this call site: a second copy of the condition here is what went silent.
+if _cadence_due issue-readiness && _attempt_ok issue-readiness; then
   # Decide which open issues the fleet may work, WITHOUT routing that decision through the owner.
   # `backlog._is_ready` reads a label only a human ever applied, so the ready queue tracked one
   # person's spare time: 94 issues open, backlog at 1. This applies `status: ready` to actionable

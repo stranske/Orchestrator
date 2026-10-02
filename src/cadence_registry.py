@@ -2,8 +2,8 @@
 """Authoritative cadence-step registry shared by orchestrate.sh and reports.
 
 The shell owns execution.  This module owns step identity, success/failure stamp
-names, cadence, evidence artifacts, and safe next transitions so operator reports
-do not have to reverse-engineer shell prose.
+names, cadence, evidence artifacts, whether a step is retired by default, and safe
+next transitions so operator reports do not have to reverse-engineer shell prose.
 """
 
 from __future__ import annotations
@@ -11,7 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shlex
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +33,28 @@ CADENCE_DAYS_FOR: dict[str, int] = {
     "daily": 0,  # due once the stamp is 24h old; at the hourly tick a daily step runs every ~25h
     "weekly": 6,  # due once the stamp is 7 days old
 }
+
+# A STEP CAN BE RETIRED BY DEFAULT, AND THAT IS DECLARED HERE, ONCE, ON ITS ROW. `retired` says the
+# tick skips the step unless one of `re_enable_env` holds in the tick's environment. Three readers
+# take it from the row, and none of them restates it:
+#   * orchestrate.sh's `_cadence_due`, through the generated `cadence_retired` (see
+#     `shell_functions`): it prints a `[retired]` line on every tick that skips the step and touches
+#     no stamp, the same contract as ORCH_DISABLE_STEPS;
+#   * `inspect_cadence`, which reports the step `retired`, with the condition that brings it back,
+#     instead of `stale`;
+#   * `capabilities.KNOWN_DECLARATIONS`, whose `gate_reason` for the step's capability is
+#     `declared_gate_reason`, so the ledger's prose is rewritten from this row on every reconciling
+#     load instead of being typed into the ledger once and left to age.
+# WHY. The issue-readiness retirement (2026-09-15) was a silent `:` in orchestrate.sh behind its own
+# copy of the re-enable condition. The row went on describing a live daily step, so the inspector
+# called it `stale` from then on (340 h on 2026-10-02): a retired step's stamp only ages, so `stale`
+# was the one verdict it could never leave, and a stale count of zero was unreachable. The ledger
+# still said the gate was ARMED and "the assessment and the label write both run".
+RETIRED_FIELD = "retired"
+_RETIRED_KEYS = frozenset({"since", "reason", "re_enable_env"})
+_ENV_NAME_RE = re.compile(r"ORCH_[A-Z0-9_]+")
+_ENV_VALUE_RE = re.compile(r"[A-Za-z0-9._-]+")
+_DATE_RE = re.compile(r"20\d\d-\d\d-\d\d")
 
 CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
@@ -242,6 +267,16 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         "gate": "GitHub search+core capacity; writes require ORCH_ISSUE_AUTOREADY=1",
         "next_transition": "retry readiness assessment after backoff; unreviewed risk issues "
         "auto-ratify to ready at owner-question expiry, so nothing stalls",
+        # Retired with the tool's own dispatch lane (assessment 2026-09-03, item 1): the lanes read
+        # capacity.json and never backlog.json, and the label writes are gated off, so 1,350 runs
+        # in eleven days fed nothing. Either flag brings it back; the label writes still need
+        # ORCH_ISSUE_AUTOREADY=1, as `gate` says.
+        "retired": {
+            "since": "2026-09-15",
+            "reason": "it feeds only this tool's own dispatch lane, which is shadow by default "
+            "(1,350 runs in eleven days fed nothing)",
+            "re_enable_env": {"ORCH_DISPATCH_LANE": "1", "ORCH_ISSUE_AUTOREADY": "1"},
+        },
     },
     {
         "key": "durability-sweep",
@@ -393,6 +428,83 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
 STEP_BY_KEY = {row["key"]: row for row in CADENCE_STEPS}
 
 
+def retirement(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The row's declared retirement, validated and copied; None when it declares none.
+
+    A malformed declaration RAISES. The registry is a code constant, so the only way to reach this
+    with a bad one is an edit, and the suite runs this over every row; at runtime the raise
+    reaches `cadence_registry.py shell`, and orchestrate.sh aborts loudly on an unreadable
+    registry rather than guessing which steps are off.
+    """
+    declared = row.get(RETIRED_FIELD)
+    if declared is None:
+        return None
+    key = row.get("key")
+    if not isinstance(declared, Mapping) or set(declared) != _RETIRED_KEYS:
+        raise ValueError(f"{key}: `retired` must carry exactly {sorted(_RETIRED_KEYS)}")
+    since, reason, env = declared["since"], declared["reason"], declared["re_enable_env"]
+    if not isinstance(since, str) or not _DATE_RE.fullmatch(since):
+        raise ValueError(f"{key}: retired.since must be YYYY-MM-DD, got {since!r}")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError(f"{key}: retired.reason must say why the step is off")
+    # A retirement nothing can lift is a deletion; that is a different change, made by removing the
+    # step. So at least one flag must bring it back, and each must be a plain ORCH_ name and value,
+    # because both are written into generated shell.
+    if not isinstance(env, Mapping) or not env:
+        raise ValueError(f"{key}: retired.re_enable_env must name at least one flag")
+    for name, value in env.items():
+        if not _ENV_NAME_RE.fullmatch(str(name)) or not _ENV_VALUE_RE.fullmatch(str(value)):
+            raise ValueError(f"{key}: retired.re_enable_env has an unusable entry {name}={value}")
+    return {"since": since, "reason": reason, "re_enable_env": dict(env)}
+
+
+def re_enable_when(row: Mapping[str, Any]) -> str | None:
+    """The flags that bring a retired step back, as an operator would set them."""
+    held = retirement(row)
+    if held is None:
+        return None
+    return " or ".join(f"{name}={value}" for name, value in held["re_enable_env"].items())
+
+
+def retirement_lifted_by(row: Mapping[str, Any], environ: Mapping[str, str]) -> str | None:
+    """Which re-enable flag holds in `environ`, as `NAME=value`; None when none does.
+
+    Exact string equality, because that is what the generated shell tests: `ORCH_X=1 ` (with a
+    trailing space) lifts nothing in either place.
+    """
+    held = retirement(row)
+    if held is None:
+        return None
+    for name, value in held["re_enable_env"].items():
+        if environ.get(name) == value:
+            return f"{name}={value}"
+    return None
+
+
+def retirement_line(row: Mapping[str, Any]) -> str | None:
+    """The one sentence the tick prints when it skips a retired step, and the reports quote."""
+    held = retirement(row)
+    if held is None:
+        return None
+    return f"retired {held['since']}: {held['reason']}; runs again with {re_enable_when(row)}"
+
+
+def declared_gate_reason(key: str) -> str:
+    """The capability ledger's `gate_reason` for the step `key`, derived from its row.
+
+    Consumed by `capabilities.KNOWN_DECLARATIONS`, so reconciliation rewrites the ledger from the
+    registry: a retirement lifted here stops being reported there on the next reconciling load.
+    """
+    row = STEP_BY_KEY[key]
+    line = retirement_line(row)
+    if line is None:
+        return str(row.get("gate") or "")
+    return (
+        f"cadence step {key} is {line}. The tick skips it and prints that on every run "
+        f"(cadence_registry `{RETIRED_FIELD}`). When it runs: {row.get('gate')}"
+    )
+
+
 def _mtime(path: Path) -> int | None:
     try:
         return int(path.stat().st_mtime)
@@ -406,11 +518,22 @@ def inspect_cadence(
     now: int | None = None,
     retry_hours: int | None = None,
     registry: tuple[dict[str, Any], ...] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> dict:
+    """Every step's stamp verdict: `fresh`, `stale`, `missing`, `not_applicable` or `retired`.
+
+    `retired` means the row declares a retirement, no re-enable flag holds in `environ` (this
+    process's environment by default), and the stamp is not fresh: the tick skips the step and says
+    so, and the row's `retired.re_enable_when` names what brings it back. A retired step whose stamp
+    IS fresh reads `fresh`: it evidently ran, because the tick's environment lifted the retirement
+    or the retirement is newer than the run, and a recent run outranks an environment this process
+    may not share with the tick.
+    """
     current = int(time.time()) if now is None else int(now)
     retry_h = int(
         os.environ.get("ORCH_CADENCE_RETRY_HOURS", "6") if retry_hours is None else retry_hours
     )
+    env = os.environ if environ is None else environ
     steps = []
     for declared in registry or CADENCE_STEPS:
         row = dict(declared)
@@ -430,6 +553,20 @@ def inspect_cadence(
             # `success_ts is None` was ruled out above, so the age is a real int here; stating it
             # keeps the comparison typed without changing the branch logic.
             success_status = "stale" if int(success_age or 0) > stale_after_s else "fresh"
+        held = retirement(declared)
+        lifted_by = retirement_lifted_by(declared, env) if held else None
+        if held and lifted_by is None and success_status != "fresh":
+            success_status = "retired"
+        row[RETIRED_FIELD] = (
+            None
+            if held is None
+            else {
+                **held,
+                "re_enable_when": re_enable_when(declared),
+                "lifted_by": lifted_by,
+                "line": retirement_line(declared),
+            }
+        )
         try:
             failure_count = int(failure_path.read_text().strip()) if failure_ts is not None else 0
         except (OSError, ValueError):
@@ -461,10 +598,16 @@ def inspect_cadence(
         )
     failed = [row for row in steps if row["failure_count"]]
     durability = next((row for row in steps if row["key"] == "durability-sweep"), {})
+    retired = [row["key"] for row in steps if row["success_status"] == "retired"]
     return {
         "state_dir": str(state_dir),
         "retry_hours": retry_h,
         "step_count": len(steps),
+        # BOTH NUMBERS, ALWAYS. A stale-cadence alarm reads the first; the second is what it must
+        # not count, named, so "stale 0" can be told apart from "stale 0 because a step is off".
+        "stale_step_count": sum(row["success_status"] == "stale" for row in steps),
+        "retired_step_count": len(retired),
+        "retired_steps": retired,
         "failed_step_count": len(failed),
         "backoff_step_count": sum(row["retry_state"] == "backoff" for row in failed),
         "ready_to_retry_count": sum(row["retry_state"] == "ready_to_retry" for row in failed),
@@ -478,17 +621,36 @@ def inspect_cadence(
     }
 
 
-def shell_functions() -> str:
-    """Emit constant-only Bash functions consumed by orchestrate.sh."""
+def shell_functions(registry: tuple[dict[str, Any], ...] | None = None) -> str:
+    """Emit constant-only Bash functions consumed by orchestrate.sh.
+
+    `cadence_retired KEY` succeeds, printing the row's `retirement_line`, when KEY is declared
+    retired and none of its re-enable flags holds; otherwise it fails silently. `_cadence_due` is
+    its only caller, so a retirement is honoured wherever a step's due-check is.
+    """
     stamp_cases = []
     day_cases = []
     known_cases = []
-    for row in CADENCE_STEPS:
+    retired_cases = []
+    for row in registry or CADENCE_STEPS:
         key = row["key"]
         stamp = row.get("success_stamp") or ""
         stamp_cases.append(f"    {key}) printf '%s\\n' '{stamp}' ;;")
         day_cases.append(f"    {key}) printf '%s\\n' '{int(row.get('cadence_days') or 0)}' ;;")
         known_cases.append(f"    {key}) return 0 ;;")
+        held = retirement(row)
+        if held is not None:
+            lifted = " || ".join(
+                f"[[ \"${{{name}:-}}\" == '{value}' ]]"
+                for name, value in held["re_enable_env"].items()
+            )
+            retired_cases.extend(
+                [
+                    f"    {key})",
+                    f"      if {lifted}; then return 1; fi",
+                    f"      printf '%s\\n' {shlex.quote(str(retirement_line(row)))} ;;",
+                ]
+            )
     return "\n".join(
         [
             'cadence_stamp() { case "$1" in',
@@ -502,6 +664,10 @@ def shell_functions() -> str:
             'cadence_known() { case "$1" in',
             *known_cases,
             "    *) return 2 ;;",
+            "  esac; }",
+            'cadence_retired() { case "$1" in',
+            *retired_cases,
+            "    *) return 1 ;;",
             "  esac; }",
         ]
     )

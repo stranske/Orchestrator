@@ -74,6 +74,10 @@ def _replay(state: Path, conditions: dict[str, str]) -> set[str]:
             # The per-step kill switch is not what is under test. Stubbed, so an operator's
             # ORCH_DISABLE_STEPS cannot make a step read as never due.
             "_step_disabled() { return 1; }",
+            # Nor is a declared retirement: a retired step runs at its declared period once it is
+            # re-enabled, which is the only time it runs. tests/test_cadence_retirement.py replays
+            # the real `_step_retired`.
+            "_step_retired() { return 1; }",
             _definition("_due"),
             _definition("_cadence_due"),
             *(
@@ -218,7 +222,10 @@ def test_inspect_cadence_staleness_sits_between_due_and_a_missed_run(tmp_path: P
         for missed, expected in ((0, "fresh"), (1, "stale")):
             age_s = (1 + missed) * period_s + MARGIN_S
             state = _aged(tmp_path / f"{row['key']}-{missed}", {row["success_stamp"]}, age_s)
-            report = cadence_registry.inspect_cadence(state, now=int(time.time()), registry=(row,))
+            # Measured as the step runs when re-enabled: a retired step is never late, it is
+            # `retired`, and tests/test_cadence_retirement.py holds that verdict.
+            live = {**row, cadence_registry.RETIRED_FIELD: None}
+            report = cadence_registry.inspect_cadence(state, now=int(time.time()), registry=(live,))
             status = report["steps"][0]["success_status"]
             if status != expected:
                 wrong.append(f"{row['key']}: {status} at {age_s / 3600:.1f}h, expected {expected}")

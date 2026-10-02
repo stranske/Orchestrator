@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import cadence_registry
 import feedback
 
 ORCH = Path(__file__).resolve().parent
@@ -1650,6 +1651,13 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "status:ready label; agents consume its labels, and a manual invocation would race the "
             "cadence. "
         ),
+        # DERIVED FROM THE CADENCE ROW, never typed. `gate_reason` is declaration-owned, but this
+        # row did not declare it, so reconciliation never touched it: the live ledger kept prose
+        # written into it on 2026-08-21 ("ARMED ... the assessment and the label write both run")
+        # for seventeen days after the step was retired by default. Declared, the next reconciling
+        # load replaces that text, and lifting the retirement in cadence_registry changes it again.
+        # `gate_blocks_execution` is deliberately NOT declared; see `classify_liveness`.
+        "gate_reason": cadence_registry.declared_gate_reason("issue-readiness"),
     },
     "capability:reference-sync-hygiene-test-gate": {
         "findability_category": "exercise_bound",
@@ -2424,9 +2432,13 @@ def classify_liveness(
     #
     # DECLARED, NOT INFERRED, and deliberately opt-in: 16 of 39 ledger capabilities carry a
     # `gate_reason`, and blanket-reordering the two checks would silently reclassify all of them —
-    # including `issue-readiness`, whose gate covers only its LABEL WRITES while the assessment runs
-    # every day and really does influence what the opener picks. So a capability must say so, and
-    # absent the flag the behaviour is unchanged.
+    # including `issue-readiness`, whose gate covered only its LABEL WRITES while the assessment ran
+    # every day and influenced what the opener picked. So a capability must say so, and absent the
+    # flag the behaviour is unchanged. (Since 2026-09-15 that whole step is retired by default,
+    # declared on its cadence_registry row and quoted in its `gate_reason`. It still does not
+    # declare this flag: `matched_not_invoked` already tells it "lift the gate, or accept it is
+    # deliberately off", which is the truth about a retirement, while `deliberately_gated` would
+    # send `unblock` to gate readiness and "wire the missing observation", work that does not exist.)
     if (
         cap.get("gate_blocks_execution")
         and cap.get("gate_reason")
