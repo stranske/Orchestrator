@@ -108,8 +108,8 @@ drain, and everything that could report it runs inside the tick: for 5d20h from 
 symptom was silence. The tick's first lines arm it as a separate process in its own session. It
 reports a command past 90 min or a tick past 3 h with the exact `kill` that frees it, and is
 report-only by the owner's decision. It is deterministic code, so a rail by the definition above,
-but it selects nothing, gates nothing and feeds no learner. (It is not drawn in the loop diagram,
-which is unchanged.)
+but it selects nothing, gates nothing and feeds no learner. The diagram draws it as the rail along
+the right edge: beside every stage rather than inside one, because it runs outside the tick.
 
 ## Agent-roles — judgment, typed contract, swappable backend
 

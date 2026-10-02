@@ -223,11 +223,18 @@ class Verdict:
         command is enough: its step fails through its own error path and the tick goes on. Only a
         tick blocked with no command of its own -- the shell itself waiting -- needs the tick pid.
         """
+        targets = self.drain_targets
+        return "kill " + " ".join(str(t["pid"]) for t in targets) if targets else None
+
+    @property
+    def drain_targets(self) -> list[dict[str, Any]]:
+        """Who the drain signals, each with the start time that makes it THAT process. Persisted
+        beside the drain so any later reader can re-check it before printing it."""
         if self.over:
-            return "kill " + " ".join(str(p.pid) for p, _ in self.over)
+            return [{"pid": p.pid, "started": p.started} for p, _ in self.over]
         if self.tick_over and self.tick is not None:
-            return f"kill {self.tick.pid}"
-        return None
+            return [{"pid": self.tick.pid, "started": self.tick.started}]
+        return []
 
 
 def assess(watch: Watch, procs: Mapping[int, Proc], now: float) -> Verdict:
@@ -414,6 +421,38 @@ def _is_alive(procs: Mapping[int, Proc], pid: Any, started: Any) -> bool:
     )
 
 
+def live_drain(rec: Mapping[str, Any], procs: Mapping[int, Proc]) -> tuple[str | None, str]:
+    """(the recorded drain if it still applies, else None; why not).
+
+    A record outlives its watcher. When a target has exited and its pid been handed to another
+    process, printing the recorded `kill` hands the reader the command that kills the wrong one, so
+    every reader re-checks the targets against `procs` -- pid AND start time -- before showing it.
+    """
+    drain = rec.get("drain")
+    if not drain:
+        return None, ""
+    targets = [t for t in rec.get("drain_targets") or [] if isinstance(t, Mapping)]
+    if not targets:
+        return None, "the recorded drain names no target identity, so it is not shown"
+    gone = [
+        str(t.get("pid")) for t in targets if not _is_alive(procs, t.get("pid"), t.get("started"))
+    ]
+    if gone:
+        return None, (
+            f"the recorded drain no longer applies: pid {', '.join(gone)} is not the process it "
+            "named any more"
+        )
+    return str(drain), ""
+
+
+def _epoch_of(iso: Any) -> float | None:
+    try:
+        stamp = datetime.strptime(str(iso), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return stamp.timestamp()
+
+
 def _armed_phrase(rec: Mapping[str, Any], now_epoch: float) -> str:
     armed = rec.get("armed_at")
     try:
@@ -465,7 +504,7 @@ def previous_tick_line(
         )
     if status == "running":
         if _is_alive(procs, rec.get("tick_pid"), rec.get("tick_started")):
-            drain = rec.get("drain")
+            drain, _why = live_drain(rec, procs)
             return (
                 f"  WARN: tick-watchdog: another tick (pid {rec.get('tick_pid')}, {armed}) is "
                 f"still running, so two ticks now overlap"
@@ -489,11 +528,28 @@ def previous_tick_line(
 
 
 def cadence_phrase(
-    newest: Mapping[str, Any] | None, bound_s: int, now_epoch: float
+    newest: Mapping[str, Any] | None,
+    bound_s: int,
+    now_epoch: float,
+    watched_since: float | None = None,
 ) -> tuple[str, str | None]:
-    """(suffix for the tick's first line, ALERT line or None) from the newest cadence outcome."""
+    """(suffix for the tick's first line, ALERT line or None) from the newest cadence outcome.
+
+    With NO outcome ever recorded there is nothing to age, so the clock is the first tick this
+    watchdog armed on the machine: ticks that abort before their first step from the day they were
+    deployed would otherwise read "none recorded yet" forever."""
     if newest is None:
-        return ("no cadence outcome recorded on this machine yet", None)
+        watched = None if watched_since is None else now_epoch - watched_since
+        if watched is None or watched <= bound_s:
+            return ("no cadence outcome recorded on this machine yet", None)
+        return (
+            "no cadence outcome recorded on this machine",
+            f"  ALERT: tick-watchdog: no cadence step has recorded an outcome in the "
+            f"{fmt_duration(watched)} this machine's ticks have been watched (since "
+            f"{_iso(watched_since)}), past the {fmt_duration(bound_s)} a daily step may go — ticks "
+            "are starting and reaching no cadence step; the lines after each tick header say "
+            "where they stop",
+        )
     age = now_epoch - float(newest["ts"])
     what = f"{newest.get('key')} {newest.get('kind')}"
     suffix = f"newest cadence outcome {fmt_duration(age)} ago ({what})"
@@ -508,7 +564,9 @@ def cadence_phrase(
     )
 
 
-def cadence_report(state_dir: Path, now_epoch: float) -> tuple[str, str | None]:
+def cadence_report(
+    state_dir: Path, now_epoch: float, watched_since: float | None = None
+) -> tuple[str, str | None]:
     """`cadence_phrase` over the real stamps, read through the registry's own rules."""
     try:
         import cadence_registry
@@ -518,7 +576,7 @@ def cadence_report(state_dir: Path, now_epoch: float) -> tuple[str, str | None]:
         newest = cadence_registry.newest_outcome(report)
     except Exception as exc:  # the line must still print; "unknown" is not "fresh"
         return (f"newest cadence outcome UNKNOWN ({type(exc).__name__}: {exc})"[:300], None)
-    return cadence_phrase(newest, bound, now_epoch)
+    return cadence_phrase(newest, bound, now_epoch, watched_since)
 
 
 # ---------------------------------------------------------------- start / watch / status --------
@@ -548,7 +606,11 @@ def start(
         print(f"  WARN: tick-watchdog: tick pid {tick_pid} is not running; not armed", file=out)
         return 2
     previous = load_record(state_dir)
-    suffix, cadence_alert = cadence_report(state_dir, time.time())
+    now_epoch = time.time()
+    # Carried from record to record, so "since when has this machine been watched" survives every
+    # tick; an absent or unreadable record starts it again, which can only delay an alert.
+    first_armed = str((previous.record or {}).get("first_armed_at") or _iso(now_epoch))
+    suffix, cadence_alert = cadence_report(state_dir, now_epoch, _epoch_of(first_armed))
     print(f"{previous_tick_line(previous, procs, t)}; {suffix}", file=out)
     if cadence_alert:
         print(cadence_alert, file=out)
@@ -568,7 +630,8 @@ def start(
         "tick_pid": tick_pid,
         "tick_started": tick.started,
         "tick_command": tick.command[:200],
-        "armed_at": _iso(),
+        "armed_at": _iso(now_epoch),
+        "first_armed_at": first_armed,
         "tick_alert_s": t.tick_s,
         "command_alert_s": t.command_s,
         "poll_s": t.poll_s,
@@ -700,6 +763,7 @@ def watch(
                 awake_duration_s=int(v.tick_age_s),
                 wall_duration_s=int(time.time() - wall_armed),
                 drain=None,
+                drain_targets=[],
             )
             record.pop("oldest_command", None)
             save()
@@ -715,6 +779,7 @@ def watch(
         else:
             record.pop("oldest_command", None)
         record["drain"] = v.drain
+        record["drain_targets"] = v.drain_targets
         changed = False
         for proc, age in v.new_over:
             what = describe(proc, v.tick)
@@ -793,6 +858,7 @@ def summary(state_dir: Path, procs: Mapping[int, Proc] | None = None) -> dict[st
     if loaded.error:
         out["error"] = loaded.error
     rec = loaded.record or {}
+    drain, why = live_drain(rec, procs)
     for key in (
         "status",
         "tick_pid",
@@ -803,12 +869,14 @@ def summary(state_dir: Path, procs: Mapping[int, Proc] | None = None) -> dict[st
         "command_alert_s",
         "oldest_command",
         "crossings",
-        "drain",
         "last_poll_at",
         "ended_at",
     ):
         if key in rec:
             out[key] = rec[key]
+    out["drain"] = drain  # only ever a drain that still applies
+    if why:
+        out["drain_note"] = why
     if rec.get("status") == "running":
         out["tick_alive"] = _is_alive(procs, rec.get("tick_pid"), rec.get("tick_started"))
         out["watcher_alive"] = _is_alive(procs, rec.get("watchdog_pid"), None)
@@ -840,7 +908,8 @@ def status_line(loaded: Loaded, procs: Mapping[int, Proc]) -> str:
         if oldest
         else ""
     )
-    drain = f"; STUCK — to unblock: {rec['drain']}" if rec.get("drain") else ""
+    live, why = live_drain(rec, procs)
+    drain = f"; STUCK — to unblock: {live}" if live else (f"; {why}" if why else "")
     return (
         f"tick-watchdog: tick pid {rec.get('tick_pid')} {tick}, armed {rec.get('armed_at')}, "
         f"{fmt_duration(rec.get('awake_age_s'))} of {fmt_duration(rec.get('tick_alert_s'))} "

@@ -454,22 +454,29 @@ def test_the_arming_block_as_written_arms_and_records_the_tick(tmp_path: Path) -
     assert final["watchdog_pid"] and not final["crossings"], final
 
 
+def _stuck_record(target_pid: int, target_started: str) -> dict[str, Any]:
+    return {
+        "status": "running",
+        "tick_pid": 2**22 + 12345,
+        "tick_started": "Fri Oct 2 01:36:00 2026",
+        "armed_at": "2026-10-02T01:36:01Z",
+        "awake_age_s": 7 * 3600,
+        "tick_alert_s": 3 * 3600,
+        "drain": f"kill {target_pid}",
+        "drain_targets": [{"pid": target_pid, "started": target_started}],
+        "crossings": [{"kind": "tick", "pid": 1, "age_s": 3 * 3600}],
+    }
+
+
+def _me() -> tick_watchdog.Proc:
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+
+
 def test_fleet_summary_carries_the_tick_record(tmp_path: Path, monkeypatch) -> None:
     import mcp_server
 
-    tick_watchdog.write_record(
-        tmp_path,
-        {
-            "status": "running",
-            "tick_pid": 2**22 + 12345,
-            "tick_started": "Fri Oct 2 01:36:00 2026",
-            "armed_at": "2026-10-02T01:36:01Z",
-            "awake_age_s": 7 * 3600,
-            "tick_alert_s": 3 * 3600,
-            "drain": "kill 95005",
-            "crossings": [{"kind": "tick", "pid": 1, "age_s": 3 * 3600}],
-        },
-    )
+    me = _me()  # a target that IS still the process the record named
+    tick_watchdog.write_record(tmp_path, _stuck_record(me.pid, me.started))
 
     @contextmanager
     def empty_brain():
@@ -489,8 +496,38 @@ def test_fleet_summary_carries_the_tick_record(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr(mcp_server, "STATE_DIR", tmp_path)
     monkeypatch.setattr(mcp_server.feedback, "_conn", empty_brain)
     tick = mcp_server._fleet_summary()["tick"]
-    assert tick["drain"] == "kill 95005" and tick["status"] == "running", tick
-    assert "STUCK — to unblock: kill 95005" in tick["line"], tick
+    assert tick["drain"] == f"kill {me.pid}" and tick["status"] == "running", tick
+    assert f"STUCK — to unblock: kill {me.pid}" in tick["line"], tick
+
+
+def test_a_drain_whose_target_has_exited_is_never_advertised(tmp_path: Path) -> None:
+    """A record outlives its watcher. If the target exited and its pid was handed to an unrelated
+    process, printing the recorded `kill` would hand a reader the command that kills the wrong
+    process -- so the drain is re-checked against a fresh process table every time it is shown."""
+    tick_watchdog.write_record(tmp_path, _stuck_record(2**22 + 999, "Fri Oct 2 01:40:00 2026"))
+    report = tick_watchdog.summary(tmp_path)
+    assert report["drain"] is None, report
+    assert "kill" not in report["line"] and "no longer applies" in report["line"], report
+    me = _me()  # same pid as a live process, but NOT the start time the record named: recycled
+    tick_watchdog.write_record(tmp_path, _stuck_record(me.pid, "Fri Oct 2 01:40:00 2025"))
+    assert tick_watchdog.summary(tmp_path)["drain"] is None
+
+
+def test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming(tmp_path: Path) -> None:
+    """A machine that has NEVER recorded a cadence outcome has no newest outcome to age, so the
+    alert needs a baseline: the first tick the watchdog armed here."""
+    state = tmp_path / "state"
+    two_days_ago = tick_watchdog._iso(time.time() - 2 * 86400)
+    tick_watchdog.write_record(
+        state, {"status": "exited", "armed_at": two_days_ago, "first_armed_at": two_days_ago}
+    )
+    lines = _start(state)
+    assert len(lines) == 2 and lines[1].startswith(
+        "  ALERT: tick-watchdog: no cadence step has recorded an outcome in the 2d00h"
+    ), lines
+    assert tick_watchdog.load_record(state).record["first_armed_at"] == two_days_ago  # carried
+    fresh = tmp_path / "fresh"
+    assert len(_start(fresh)) == 1  # the first arming starts the clock and alerts nothing
 
 
 @pytest.mark.parametrize("seconds,text", [(842, "14m02s"), (5400, "1h30m"), (504000, "5d20h")])
