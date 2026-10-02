@@ -1099,9 +1099,36 @@ jobs:
           retention-days: 7
           overwrite: true
 
+      - name: Classify pull request origin
+        id: pr_origin
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            // THE ONE DEFINITION of "this pull request comes from a fork", which both writers
+            // below read as PR_FROM_FORK. A fork's workflow token is read-only by design, so
+            // both of their writes are refused there. A deleted fork has `head.repo === null`;
+            // an event that is not a pull request is not a fork.
+            const pullRequest = context.payload.pull_request;
+            const baseRepo = pullRequest?.base?.repo?.full_name;
+            const headRepo = pullRequest?.head?.repo;
+            const fromFork = Boolean(
+              baseRepo &&
+                (headRepo === null || (headRepo?.full_name && headRepo.full_name !== baseRepo)),
+            );
+            core.setOutput('from_fork', String(fromFork));
+            core.setOutput(
+              'head',
+              headRepo?.full_name ??
+                (pullRequest ? pullRequest.head?.label ?? 'deleted source repository' : ''),
+            );
+
       - name: Ensure consolidated summary comment
         if: always()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_FROM_FORK: ${{ steps.pr_origin.outputs.from_fork }}
+          PR_HEAD: ${{ steps.pr_origin.outputs.head }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -1115,19 +1142,6 @@ jobs:
               return;
             }
             const body = fs.readFileSync(commentPath, 'utf8');
-            // This step and the commit-status reporter use the same workflow
-            // token. A fork pull request receives a read-only token, so the
-            // issue-comment write can fail before the status reporter records
-            // the computed verdict. Preserve the verdict in the job summary,
-            // while keeping same-repository and rate-limit failures loud.
-            const pullRequest = context.payload.pull_request;
-            const headRepoObject = pullRequest?.head?.repo;
-            const headRepo = headRepoObject?.full_name;
-            const baseRepo = pullRequest?.base?.repo?.full_name;
-            const isForkPullRequest = Boolean(
-              baseRepo &&
-                (headRepoObject === null || (headRepo && headRepo !== baseRepo)),
-            );
             try {
               await upsertAnchoredComment({
                 github,
@@ -1139,26 +1153,17 @@ jobs:
                 fallbackMarker: '<!-- gate-summary:',
               });
             } catch (error) {
-              const responseHeaders = error?.response?.headers || error?.headers || {};
-              const responseMessage = error?.response?.data?.message || '';
-              const hitRateLimit =
-                error?.status === 429 ||
-                (error?.status === 403 &&
-                  (/rate limit|abuse/i.test(error?.message || '') ||
-                    /rate limit|abuse/i.test(responseMessage) ||
-                    String(responseHeaders['x-ratelimit-remaining']) === '0' ||
-                    responseHeaders['retry-after'] != null));
-              const readOnlyForkToken =
-                error?.status === 403 &&
-                isForkPullRequest &&
-                !hitRateLimit;
-              if (!readOnlyForkToken) {
+              // A fork's read-only token makes this write fail with a 403 after the Gate has
+              // already decided, so the summary goes to the job summary instead. Anything else
+              // stays loud. Rate limits never reach this catch: upsertAnchoredComment logs and
+              // skips them itself (error_classifier.isRateLimitError).
+              if (!(error?.status === 403 && process.env.PR_FROM_FORK === 'true')) {
                 throw error;
               }
               core.warning(
-                `Fork pull request from ${headRepo}: the workflow token is ` +
-                  'read-only, so the consolidated Gate summary comment could not ' +
-                  `be written (${error.message}). Falling back to the job summary.`,
+                `Fork pull request from ${process.env.PR_HEAD}: the workflow token is read-only, ` +
+                  `so the consolidated Gate summary comment could not be written (${error.message}). ` +
+                  'Falling back to the job summary.',
               );
               await core.summary
                 .addHeading('Gate summary (fork pull request)', 3)
@@ -1180,19 +1185,21 @@ jobs:
             }}
           TARGET_URL: >-
             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PR_FROM_FORK: ${{ steps.pr_origin.outputs.from_fork }}
+          PR_HEAD: ${{ steps.pr_origin.outputs.head }}
         with:
           script: |
             // # best-effort: this ancillary API failure is logged; reconciliation or the primary workflow result remains authoritative.
             const retryScript = './.github/scripts/github-api-with-retry.js';
-            const { createTokenAwareRetry } = require(retryScript);
+            const {
+              createTokenAwareRetry,
+              isRateLimitError,
+              isSecondaryRateLimitError,
+            } = require(retryScript);
             const { withRetry } = await createTokenAwareRetry({
               github,
               core,
-              // The legacy `gate-commit-status` task swallows integration permission
-              // errors inside the retry helper. This caller must receive them so it
-              // can distinguish fork read-only tokens from same-repo regressions and
-              // preserve the computed verdict below.
-              task: 'gate-commit-status-strict',
+              task: 'gate-commit-status',
               // `env: {}` PINS THIS CALL TO THE WORKFLOW TOKEN, and it is load-bearing.
               // With the default `env: process.env` the token load balancer collects every App
               // and PAT secret this job exposes and picks by remaining capacity, so which token
@@ -1222,8 +1229,9 @@ jobs:
               : rawDescription;
             const targetUrl = process.env.TARGET_URL;
 
+            let response;
             try {
-              await withRetry((client) => client.rest.repos.createCommitStatus({
+              response = await withRetry((client) => client.rest.repos.createCommitStatus({
                 owner,
                 repo,
                 sha,
@@ -1233,61 +1241,44 @@ jobs:
                 target_url: targetUrl,
               }));
             } catch (error) {
-              const responseHeaders = error?.response?.headers || {};
-              const hitRateLimit =
-                error?.status === 403 &&
-                (/rate limit|abuse/i.test(error?.message || '') ||
-                  /rate limit|abuse/i.test(error?.response?.data?.message || '') ||
-                  String(responseHeaders['x-ratelimit-remaining']) === '0' ||
-                  responseHeaders['retry-after'] != null);
-              // Pull requests opened from forks receive a read-only token, so the
-              // status write is refused even after Gate has computed its verdict.
-              // Keep same-repository permission failures loud and preserve the
-              // existing rate-limit path.
-              const pullRequest = context.payload.pull_request;
-              const headRepoObject = pullRequest?.head?.repo;
-              const headRepo = headRepoObject?.full_name;
-              const baseRepo = pullRequest?.base?.repo?.full_name;
-              const isForkPullRequest = Boolean(
-                baseRepo &&
-                  (headRepoObject === null || (headRepo && headRepo !== baseRepo)),
-              );
-              const readOnlyForkToken =
-                error?.status === 403 && isForkPullRequest && !hitRateLimit;
-              if (hitRateLimit) {
-                core.warning(
-                  'Rate limit prevented Gate from updating the commit status; ' +
-                    'leaving existing status untouched.',
-                );
-                if (state !== 'success') {
-                  core.setFailed(
-                    `Gate verdict for ${sha} is '${state}': ${description}`,
-                  );
-                }
-              } else if (readOnlyForkToken) {
-                core.warning(
-                  'Fork pull request from ' +
-                    `${headRepo ?? pullRequest?.head?.label ?? 'deleted source repository'}: ` +
-                    'the workflow token is ' +
-                    "read-only, so the 'Gate / gate' commit status could not be " +
-                    `written (${error.message}). Gate verdict for ${sha} is ` +
-                    `'${state}': ${description}.`,
-                );
-                await core.summary
-                  .addHeading('Gate verdict (fork pull request)', 3)
-                  .addRaw(
-                    'The `Gate / gate` commit status could not be written for ' +
-                      `\`${sha}\` because a pull request from a fork receives a ` +
-                      `read-only token. Gate verdict: **${state}** — ${description}`,
-                  )
-                  .write();
-                if (state !== 'success') {
-                  core.setFailed(
-                    `Gate verdict for ${sha} is '${state}': ${description}`,
-                  );
-                }
-              } else {
+              // Rate limiting as the retry helper itself defines it, so this step and the
+              // helper's retry decision cannot disagree. A rate-limited post leaves the existing
+              // status in place, so a verdict other than `success` must fail here: no status
+              // will carry it.
+              if (!(isRateLimitError(error) || isSecondaryRateLimitError(error))) {
                 throw error;
+              }
+              core.warning(
+                'Rate limit prevented Gate from updating the commit status; ' +
+                  'leaving existing status untouched.',
+              );
+              if (state !== 'success') {
+                core.setFailed(`Gate verdict for ${sha} is '${state}': ${description}`);
+              }
+              return;
+            }
+            // Under `gate-commit-status` the helper SWALLOWS a permission refusal: it warns,
+            // names the refusing token and returns null, because a status post must not fail
+            // the Gate. On a same-repo pull request that warning is the whole response (see the
+            // `env: {}` note above). A fork's token is read-only by design, so no status can be
+            // written for it at all: record the verdict in the job summary, and fail a verdict
+            // other than `success` here, because 'Enforce Gate success' acts on `failure` only.
+            if (response === null && process.env.PR_FROM_FORK === 'true') {
+              core.warning(
+                `Fork pull request from ${process.env.PR_HEAD}: the workflow token is read-only, ` +
+                  "so the 'Gate / gate' commit status could not be written. " +
+                  `Gate verdict for ${sha} is '${state}': ${description}.`,
+              );
+              await core.summary
+                .addHeading('Gate verdict (fork pull request)', 3)
+                .addRaw(
+                  'The `Gate / gate` commit status could not be written for ' +
+                    `\`${sha}\` because a pull request from a fork receives a ` +
+                    `read-only token. Gate verdict: **${state}** — ${description}`,
+                )
+                .write();
+              if (state !== 'success') {
+                core.setFailed(`Gate verdict for ${sha} is '${state}': ${description}`);
               }
             }
 

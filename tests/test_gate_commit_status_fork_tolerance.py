@@ -1,10 +1,29 @@
-"""Exercise the Gate commit-status script against fork token failures."""
+"""The Gate workflow's fork handling, exercised by running its real github-script steps under Node.
+
+A pull request from a fork gets a read-only workflow token, so both of the Gate's writes -- the
+consolidated summary comment and the `Gate / gate` commit status -- are refused there after the
+Gate has already decided. Three steps of `.github/workflows/pr-00-gate.yml` handle that:
+
+* `Classify pull request origin` is the ONE definition of "from a fork" (a deleted fork counts),
+  handed to both writers as `PR_FROM_FORK`, so the two cannot disagree about it;
+* `Ensure consolidated summary comment` falls back to the job summary when a fork's comment write
+  is refused, and stays loud otherwise;
+* `Report Gate commit status` keeps the retry helper's `gate-commit-status` task, under which the
+  helper swallows a permission refusal, warns with the refusing token's name and returns null: the
+  documented rule that a status post must not fail the Gate. On a same-repo pull request that
+  warning is the whole response. For a fork, where no status can ever be written, the step records
+  the verdict in the job summary and fails a verdict other than `success`.
+
+Each script is extracted from the workflow and run against the REAL `.github/scripts` helpers it
+requires; only the GitHub client and `core` are stubs. The checks need the workflow, those helpers
+and a Node runtime, and skip by name where any is absent -- the exec mirror carries no `.github/`,
+because GitHub, not launchd, runs this workflow, and CI checks it on every pull request.
+"""
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -12,347 +31,420 @@ from typing import Any
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-GATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-00-gate.yml"
-STEP_NAME = "Report Gate commit status"
-COMMENT_STEP_NAME = "Ensure consolidated summary comment"
+import env_prereq
+import paths
 
-RUNNER_JS = textwrap.dedent("""
-    const fs = require('fs');
-    const vm = require('vm');
-    const src = fs.readFileSync(process.argv[2], 'utf8');
-    const retryScript = require(process.argv[3]);
+WORKFLOW = ".github/workflows/pr-00-gate.yml"
+RETRY_HELPER = ".github/scripts/github-api-with-retry.js"
+COMMENT_HELPER = ".github/scripts/comment-dedupe.js"
+ORIGIN_STEP = "Classify pull request origin"
+COMMENT_STEP = "Ensure consolidated summary comment"
+STATUS_STEP = "Report Gate commit status"
 
-    function makeError(status, message, headers = {}, responseMessage = null) {
-      const error = new Error(message);
-      error.status = status;
-      error.response = { headers, data: { message: responseMessage } };
-      return error;
-    }
-
-    async function runCase({ headRepo, baseRepo, error, state }) {
-      const failures = [];
-      const statusRequests = [];
-      const warnings = [];
-      const summaryWrites = [];
-      const summaryRaw = [];
-      const githubStub = {
-        rest: {
-          repos: {
-            createCommitStatus: async (request) => {
-              statusRequests.push(request);
-              if (error) throw error;
-            },
-          },
-        },
-      };
-      const summaryStub = {
-        addHeading() { return summaryStub; },
-        addRaw(text) { summaryRaw.push(String(text)); return summaryStub; },
-        async write() { summaryWrites.push('write'); },
-      };
-      const sandbox = {
-        process: {
-          env: {
-            STATE: state,
-            DESCRIPTION: 'all checks passed',
-            TARGET_URL: 'https://example.invalid/run',
-          },
-        },
-        console: { log() {} },
-        require: (request) => {
-          if (request === './.github/scripts/github-api-with-retry.js') {
-            return retryScript;
-          }
-          throw new Error(`unexpected require: ${request}`);
-        },
-        core: {
-          setFailed: (message) => failures.push(String(message)),
-          warning: (message) => warnings.push(String(message)),
-          info: () => {},
-          error: () => {},
-          summary: summaryStub,
-        },
-        context: {
-          repo: { owner: 'stranske', repo: 'Orchestrator' },
-          sha: 'basesha',
-          payload: {
-            pull_request: {
-              head: {
-                sha: 'headsha',
-                repo: headRepo === null ? null : { full_name: headRepo },
-              },
-              base: { repo: { full_name: baseRepo } },
-            },
-          },
-        },
-        github: githubStub,
-      };
-      vm.createContext(sandbox);
-      let threw = null;
-      try {
-        await vm.runInContext('(async () => {\\n' + src + '\\n})()', sandbox);
-      } catch (error) {
-        threw = {
-          status: error.status === undefined ? null : error.status,
-          message: String(error.message),
-        };
-      }
-      return {
-        failures,
-        warnings,
-        summaryWrites: summaryWrites.length,
-        summaryRaw,
-        statusRequests,
-        threw,
-      };
-    }
-
-    const FORK = {
-      headRepo: 'outside-contributor/Orchestrator',
-      baseRepo: 'stranske/Orchestrator',
-    };
-    const SAME = {
-      headRepo: 'stranske/Orchestrator',
-      baseRepo: 'stranske/Orchestrator',
-    };
-
-    (async () => {
-      const outcomes = {
-        fork_read_only: await runCase({
-          ...FORK,
-          state: 'success',
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        fork_read_only_failure: await runCase({
-          ...FORK,
-          state: 'failure',
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        fork_read_only_error: await runCase({
-          ...FORK,
-          state: 'error',
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        fork_read_only_pending: await runCase({
-          ...FORK,
-          state: 'pending',
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        deleted_fork_read_only: await runCase({
-          headRepo: null,
-          baseRepo: 'stranske/Orchestrator',
-          state: 'success',
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        same_repo_read_only: await runCase({
-          ...SAME,
-          state: 'success',
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        fork_rate_limit: await runCase({
-          ...FORK,
-          state: 'success',
-          error: makeError(403, 'API rate limit exceeded'),
-        }),
-        fork_rate_limit_failure: await runCase({
-          ...FORK,
-          state: 'failure',
-          error: makeError(403, 'API rate limit exceeded'),
-        }),
-        fork_rate_limit_error: await runCase({
-          ...FORK,
-          state: 'error',
-          error: makeError(403, 'API rate limit exceeded'),
-        }),
-        fork_rate_limit_pending: await runCase({
-          ...FORK,
-          state: 'pending',
-          error: makeError(403, 'API rate limit exceeded'),
-        }),
-        fork_rate_limit_response_message: await runCase({
-          ...FORK,
-          state: 'success',
-          error: makeError(403, 'Forbidden', {}, 'secondary rate limit exceeded'),
-        }),
-        fork_primary_rate_limit_header: await runCase({
-          ...FORK,
-          state: 'success',
-          error: makeError(403, 'Forbidden', { 'x-ratelimit-remaining': '0' }),
-        }),
-        fork_secondary_rate_limit_header: await runCase({
-          ...FORK,
-          state: 'success',
-          error: makeError(403, 'Forbidden', { 'retry-after': '60' }),
-        }),
-        fork_server_error: await runCase({
-          ...FORK,
-          state: 'success',
-          error: makeError(500, 'Internal server error'),
-        }),
-        fork_permission_404: await runCase({
-          ...FORK,
-          state: 'success',
-          error: makeError(404, 'Resource not accessible by integration'),
-        }),
-        happy_path: await runCase({ ...FORK, state: 'success', error: null }),
-      };
-      process.stdout.write(JSON.stringify(outcomes));
-    })();
-    """).strip()
+FORK = {"fromFork": "true", "head": "outside-contributor/Orchestrator"}
+DELETED_FORK = {"fromFork": "true", "head": "deleted source repository"}
+SAME_REPO = {"fromFork": "false", "head": "stranske/Orchestrator"}
+REFUSED = {"status": 403, "message": "Resource not accessible by integration"}
+RATE_LIMITED = {"status": 403, "message": "API rate limit exceeded for installation"}
 
 
-def _extract_step_script(step_name: str = STEP_NAME) -> str:
-    lines = GATE_WORKFLOW.read_text(encoding="utf-8").splitlines()
-    step_index = next(
-        (index for index, line in enumerate(lines) if line.strip() == f"- name: {step_name}"),
-        None,
+def _need_workflow() -> None:
+    env_prereq.require(env_prereq.repo_files_absent(WORKFLOW))
+
+
+def _need_harness() -> None:
+    env_prereq.require(
+        env_prereq.repo_files_absent(WORKFLOW, RETRY_HELPER, COMMENT_HELPER),
+        env_prereq.node_absent(),
     )
-    if step_index is not None:
-        for index in range(step_index + 1, len(lines)):
-            line = lines[index]
-            if line.strip() == "script: |":
-                script_indent = len(line) - len(line.lstrip())
-                script_lines: list[str] = []
-                for script_line in lines[index + 1 :]:
-                    if script_line.strip():
-                        indent = len(script_line) - len(script_line.lstrip())
-                        if indent <= script_indent:
-                            break
-                    script_lines.append(script_line[script_indent + 2 :])
-                return "\n".join(script_lines)
-            if line.strip().startswith("- name:"):
-                break
-    raise AssertionError(f"{GATE_WORKFLOW} no longer defines {step_name!r}")
 
 
-@pytest.fixture(scope="module")
-def outcomes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    node = shutil.which("node")
-    if node is None:  # pragma: no cover - depends on the host
-        message = "node is required to execute the Gate github-script step"
-        if os.environ.get("CI"):
-            pytest.fail(message)
-        pytest.skip(message)
+def _workflow_lines() -> list[str]:
+    return (paths.REPO_ROOT / WORKFLOW).read_text(encoding="utf-8").splitlines()
 
-    workdir = tmp_path_factory.mktemp("gate-status")
-    step_path = workdir / "step.js"
-    step_path.write_text(_extract_step_script(), encoding="utf-8")
-    runner_path = workdir / "runner.js"
-    runner_path.write_text(RUNNER_JS, encoding="utf-8")
 
+def _step_lines(step_name: str) -> list[str]:
+    """One step's lines, from its `- name:` up to the next step at the same indent."""
+    lines = _workflow_lines()
+    starts = [i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}"]
+    assert len(starts) == 1, f"{WORKFLOW} defines {step_name!r} {len(starts)} times"
+    start = starts[0]
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    end = start + 1
+    while end < len(lines):
+        line = lines[end]
+        depth = len(line) - len(line.lstrip())
+        if line.strip() and depth <= indent:
+            break
+        end += 1
+    return lines[start:end]
+
+
+def _step_script(step_name: str) -> str:
+    """The step's `script: |` block, dedented. Standard library only: PyYAML is not a dependency."""
+    block = _step_lines(step_name)
+    marks = [i for i, line in enumerate(block) if line.strip() == "script: |"]
+    assert len(marks) == 1, f"{step_name!r} has {len(marks)} script blocks"
+    return textwrap.dedent("\n".join(block[marks[0] + 1 :])).rstrip() + "\n"
+
+
+def _run(tmp: Path, runner: str, step_name: str, cases: list[dict[str, Any]]) -> dict[str, Any]:
+    """Run a harness under Node from a scratch directory with a minimal environment.
+
+    Both are deliberate. On CI (`GITHUB_ACTIONS=true`) the retry helper records each rate-limit
+    incident to `artifacts/rate-limit-incidents.ndjson` relative to the WORKING DIRECTORY, so a
+    harness started in the checkout writes into it; and an inherited token would let the helpers
+    build a real client. Results go to a file, not stdout, which a helper may also print to.
+    """
+    (tmp / "step.js").write_text(_step_script(step_name), encoding="utf-8")
+    (tmp / "runner.js").write_text(runner, encoding="utf-8")
+    (tmp / "cases.json").write_text(json.dumps(cases), encoding="utf-8")
     completed = subprocess.run(
-        [
-            node,
-            str(runner_path),
-            str(step_path),
-            str(REPO_ROOT / ".github" / "scripts" / "github-api-with-retry.js"),
-        ],
+        ["node", "runner.js", str(paths.REPO_ROOT), "step.js", "cases.json", "out.json"],
+        cwd=tmp,
+        env={"PATH": os.environ.get("PATH", "")},
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     assert completed.returncode == 0, completed.stderr
-    return dict(json.loads(completed.stdout))
+    return dict(json.loads((tmp / "out.json").read_text(encoding="utf-8")))
 
 
-def test_fork_read_only_403_does_not_fail_the_gate(outcomes: dict[str, Any]) -> None:
-    assert outcomes["fork_read_only"]["threw"] is None
-    assert outcomes["fork_read_only"]["failures"] == []
+HARNESS_PRELUDE = textwrap.dedent("""
+    const fs = require('fs');
+    const path = require('path');
+    const vm = require('vm');
+    const [repoRoot, stepPath, casesPath, outPath] = process.argv.slice(2);
+    const src = fs.readFileSync(stepPath, 'utf8');
+    const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
+
+    function makeError(spec) {
+      if (!spec) return null;
+      const error = new Error(spec.message);
+      error.status = spec.status;
+      error.response = {
+        status: spec.status,
+        headers: spec.headers || {},
+        data: { message: spec.message },
+      };
+      return error;
+    }
+
+    function makeCore(record) {
+      const summary = {
+        addHeading() { return summary; },
+        addRaw(text) { record.summaryRaw.push(String(text)); return summary; },
+        async write() { record.summaryWrites += 1; },
+      };
+      return {
+        setFailed: (message) => record.failures.push(String(message)),
+        setOutput: (name, value) => { record.outputs[name] = String(value); },
+        warning: (message) => record.warnings.push(String(message)),
+        info() {}, debug() {}, notice() {}, error() {},
+        summary,
+      };
+    }
+
+    function newRecord() {
+      return { failures: [], warnings: [], summaryRaw: [], summaryWrites: 0, outputs: {}, threw: null };
+    }
+
+    async function runScript(sandbox, record) {
+      vm.createContext(sandbox);
+      try {
+        await vm.runInContext('(async () => {\\n' + src + '\\n})()', sandbox);
+      } catch (error) {
+        record.threw = { status: error.status === undefined ? null : error.status, message: String(error.message) };
+      }
+      return record;
+    }
+
+    async function main(runCase) {
+      const outcomes = {};
+      for (const spec of cases) outcomes[spec.name] = await runCase(spec);
+      fs.writeFileSync(outPath, JSON.stringify(outcomes));
+    }
+""").strip()
 
 
-def test_fork_read_only_403_reports_the_real_verdict(outcomes: dict[str, Any]) -> None:
-    case = outcomes["fork_read_only"]
-    warning = " ".join(case["warnings"])
+STATUS_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
+
+    const retryHelper = require(path.join(repoRoot, '.github/scripts/github-api-with-retry.js'));
+
+    main(async (spec) => {
+      const record = newRecord();
+      record.statusRequests = [];
+      const error = makeError(spec.error);
+      const github = {
+        rest: {
+          repos: {
+            createCommitStatus: async (request) => {
+              record.statusRequests.push(request);
+              if (error) throw error;
+              return { status: 201, data: {} };
+            },
+          },
+        },
+      };
+      return runScript({
+        process: {
+          env: {
+            STATE: spec.state,
+            DESCRIPTION: 'all checks passed',
+            TARGET_URL: 'https://example.invalid/run',
+            PR_FROM_FORK: spec.fromFork,
+            PR_HEAD: spec.head,
+          },
+        },
+        console: { log() {} },
+        require: (id) => {
+          if (id === './.github/scripts/github-api-with-retry.js') return retryHelper;
+          throw new Error(`unexpected require: ${id}`);
+        },
+        core: makeCore(record),
+        context: {
+          repo: { owner: 'stranske', repo: 'Orchestrator' },
+          sha: 'basesha',
+          payload: { pull_request: { head: { sha: 'headsha' } } },
+        },
+        github,
+      }, record);
+    });
+""")
+
+
+COMMENT_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
+
+    const dedupe = require(path.join(repoRoot, '.github/scripts/comment-dedupe.js'));
+    fs.writeFileSync('gate-summary.md', 'GATE SUMMARY BODY\\n<!-- gate-summary: pr=1 -->\\n');
+
+    main(async (spec) => {
+      const record = newRecord();
+      record.created = 0;
+      const error = makeError(spec.error);
+      const listComments = async () => ({ data: [] });
+      // `__testMock` is the marker the rate-limit wrapper honours, so the REAL comment-dedupe.js
+      // drives this stub client directly.
+      const github = {
+        __testMock: true,
+        rest: {
+          issues: {
+            listComments,
+            createComment: async () => {
+              record.created += 1;
+              if (error) throw error;
+              return { status: 201, data: { id: 1 } };
+            },
+          },
+        },
+        paginate: async (method) => {
+          if (method === listComments) return [];
+          throw new Error('unexpected paginate');
+        },
+      };
+      return runScript({
+        process: { env: { PR_FROM_FORK: spec.fromFork, PR_HEAD: spec.head } },
+        console: { log() {} },
+        require: (id) => {
+          if (id === 'path') return path;
+          if (id === 'fs') return fs;
+          if (id === './.github/scripts/comment-dedupe.js') return dedupe;
+          throw new Error(`unexpected require: ${id}`);
+        },
+        core: makeCore(record),
+        context: { repo: { owner: 'stranske', repo: 'Orchestrator' }, payload: { pull_request: { number: 1 } } },
+        github,
+      }, record);
+    });
+""")
+
+
+ORIGIN_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
+
+    main(async (spec) => {
+      const record = newRecord();
+      return runScript({
+        console: { log() {} },
+        core: makeCore(record),
+        context: { payload: spec.payload },
+      }, record);
+    });
+""")
+
+
+STATUS_CASES: list[dict[str, Any]] = [
+    {"name": "fork_success", **FORK, "state": "success", "error": REFUSED},
+    *(
+        {"name": f"fork_{state}", **FORK, "state": state, "error": REFUSED}
+        for state in ("failure", "error", "pending")
+    ),
+    {"name": "deleted_fork", **DELETED_FORK, "state": "success", "error": REFUSED},
+    *(
+        {"name": f"same_repo_{state}", **SAME_REPO, "state": state, "error": REFUSED}
+        for state in ("success", "failure")
+    ),
+    {"name": "rate_limit_message", **FORK, "state": "success", "error": RATE_LIMITED},
+    {
+        "name": "rate_limit_429",
+        **FORK,
+        "state": "success",
+        "error": {"status": 429, "message": "x"},
+    },
+    {
+        "name": "rate_limit_header",
+        **SAME_REPO,
+        "state": "success",
+        "error": {"status": 403, "message": "Forbidden", "headers": {"x-ratelimit-remaining": "0"}},
+    },
+    *(
+        {"name": f"rate_limit_{state}", **SAME_REPO, "state": state, "error": RATE_LIMITED}
+        for state in ("failure", "error", "pending")
+    ),
+    {
+        "name": "server_error",
+        **FORK,
+        "state": "success",
+        "error": {"status": 500, "message": "Internal error"},
+    },
+    {
+        "name": "not_found",
+        **SAME_REPO,
+        "state": "success",
+        "error": {"status": 404, "message": "Not Found"},
+    },
+    {
+        # A 403 the helper does not count as a rate limit was not retried as one, so the step must
+        # not treat it as one either: the two share the helper's definition.
+        "name": "bare_retry_after",
+        **FORK,
+        "state": "success",
+        "error": {"status": 403, "message": "Forbidden", "headers": {"retry-after": "60"}},
+    },
+    {"name": "written", **FORK, "state": "success", "error": None},
+]
+
+COMMENT_CASES: list[dict[str, Any]] = [
+    {"name": "fork", **FORK, "error": REFUSED},
+    {"name": "deleted_fork", **DELETED_FORK, "error": REFUSED},
+    {"name": "same_repo", **SAME_REPO, "error": REFUSED},
+    {"name": "rate_limit", **FORK, "error": RATE_LIMITED},
+    {"name": "server_error", **FORK, "error": {"status": 500, "message": "Internal error"}},
+    {"name": "written", **FORK, "error": None},
+]
+
+BASE = {"repo": {"full_name": "stranske/Orchestrator"}}
+ORIGIN_CASES: list[dict[str, Any]] = [
+    {
+        "name": "fork",
+        "payload": {"pull_request": {"base": BASE, "head": {"repo": {"full_name": FORK["head"]}}}},
+    },
+    {"name": "deleted_fork", "payload": {"pull_request": {"base": BASE, "head": {"repo": None}}}},
+    {
+        "name": "deleted_fork_with_label",
+        "payload": {
+            "pull_request": {"base": BASE, "head": {"repo": None, "label": "gone:fix-branch"}}
+        },
+    },
+    {
+        "name": "same_repo",
+        "payload": {
+            "pull_request": {"base": BASE, "head": {"repo": {"full_name": SAME_REPO["head"]}}}
+        },
+    },
+    {"name": "not_a_pull_request", "payload": {}},
+]
+
+
+@pytest.fixture(scope="module")
+def status(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    _need_harness()
+    return _run(tmp_path_factory.mktemp("gate-status"), STATUS_RUNNER, STATUS_STEP, STATUS_CASES)
+
+
+@pytest.fixture(scope="module")
+def comment(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    _need_harness()
+    return _run(
+        tmp_path_factory.mktemp("gate-comment"), COMMENT_RUNNER, COMMENT_STEP, COMMENT_CASES
+    )
+
+
+@pytest.fixture(scope="module")
+def origin(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    _need_harness()
+    return _run(tmp_path_factory.mktemp("gate-origin"), ORIGIN_RUNNER, ORIGIN_STEP, ORIGIN_CASES)
+
+
+def _verdict_written_to_summary(case: dict[str, Any], state: str) -> bool:
     summary = " ".join(case["summaryRaw"])
-    assert "read-only" in warning
-    assert "'success'" in warning
-    assert case["summaryWrites"] == 1
-    assert "headsha" in summary
-    assert "success" in summary
-    assert "all checks passed" in summary
+    return case["summaryWrites"] == 1 and "headsha" in summary and f"**{state}**" in summary
 
 
-def test_fork_read_only_403_preserves_failure_verdict(
-    outcomes: dict[str, Any],
-) -> None:
-    case = outcomes["fork_read_only_failure"]
-    warning = " ".join(case["warnings"])
-    summary = " ".join(case["summaryRaw"])
-    assert case["threw"] is None
-    assert "'failure'" in warning
-    assert "failure" in summary
-    assert len(case["failures"]) == 1
-    assert "'failure'" in case["failures"][0]
+# ---- the commit-status writer ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("state", ["error", "pending"])
-def test_fork_read_only_403_fails_closed_for_other_non_success_verdicts(
-    outcomes: dict[str, Any], state: str
-) -> None:
-    case = outcomes[f"fork_read_only_{state}"]
-    assert case["threw"] is None
-    assert len(case["failures"]) == 1
-    assert f"'{state}'" in case["failures"][0]
-    assert f"'{state}'" in " ".join(case["warnings"])
-    assert case["summaryWrites"] == 1
-    assert f"**{state}**" in " ".join(case["summaryRaw"])
-
-
-def test_deleted_fork_read_only_403_reports_the_verdict(
-    outcomes: dict[str, Any],
-) -> None:
-    case = outcomes["deleted_fork_read_only"]
-    warning = " ".join(case["warnings"])
-    assert case["threw"] is None
-    assert "deleted source repository" in warning
-    assert case["summaryWrites"] == 1
-
-
-def test_same_repo_403_still_fails_the_gate(outcomes: dict[str, Any]) -> None:
-    case = outcomes["same_repo_read_only"]
-    assert case["threw"]["status"] == 403
-    assert case["summaryWrites"] == 0
-    assert case["failures"] == []
-    assert not any("read-only" in warning for warning in case["warnings"])
-
-
-def test_rate_limit_403_keeps_its_own_path(outcomes: dict[str, Any]) -> None:
-    for key in (
-        "fork_rate_limit",
-        "fork_rate_limit_response_message",
-        "fork_primary_rate_limit_header",
-        "fork_secondary_rate_limit_header",
-    ):
-        case = outcomes[key]
-        assert case["threw"] is None
-        assert any("Rate limit" in warning for warning in case["warnings"])
-        assert case["summaryWrites"] == 0
-        assert case["failures"] == []
+def test_a_fork_refusal_records_a_success_verdict_without_failing(status: dict) -> None:
+    case = status["fork_success"]
+    assert case["threw"] is None and case["failures"] == [], case
+    assert _verdict_written_to_summary(case, "success"), case
+    assert "all checks passed" in " ".join(case["summaryRaw"]), case
+    assert any("read-only" in w and "'success'" in w for w in case["warnings"]), case
 
 
 @pytest.mark.parametrize("state", ["failure", "error", "pending"])
-def test_rate_limit_403_fails_closed_for_non_success_verdicts(
-    outcomes: dict[str, Any], state: str
-) -> None:
-    case = outcomes[f"fork_rate_limit_{state}"]
-    assert case["threw"] is None
-    assert len(case["failures"]) == 1
-    assert f"'{state}'" in case["failures"][0]
+def test_a_fork_refusal_fails_closed_for_any_other_verdict(status: dict, state: str) -> None:
+    case = status[f"fork_{state}"]
+    assert case["threw"] is None, case
+    assert len(case["failures"]) == 1 and f"'{state}'" in case["failures"][0], case
+    assert _verdict_written_to_summary(case, state), case
 
 
-def test_non_403_errors_still_fail_the_gate(outcomes: dict[str, Any]) -> None:
-    assert outcomes["fork_server_error"]["threw"]["status"] == 500
-    assert outcomes["fork_permission_404"]["threw"]["status"] == 404
+def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
+    case = status["deleted_fork"]
+    assert case["threw"] is None and case["failures"] == [], case
+    assert any("deleted source repository" in w for w in case["warnings"]), case
+    assert _verdict_written_to_summary(case, "success"), case
 
 
-def test_successful_status_write_is_silent(outcomes: dict[str, Any]) -> None:
-    case = outcomes["happy_path"]
-    assert case["threw"] is None
-    assert case["warnings"] == []
-    assert case["failures"] == []
-    assert case["summaryWrites"] == 0
-    assert case["summaryRaw"] == []
+@pytest.mark.parametrize("state", ["success", "failure"])
+def test_a_same_repo_refusal_only_warns(status: dict, state: str) -> None:
+    """The documented rule, restored: a status post must not fail the Gate. The retry helper warns
+    with the refusing token's name; whether the Gate passes is left to 'Enforce Gate success'."""
+    case = status[f"same_repo_{state}"]
+    assert case["threw"] is None and case["failures"] == [], case
+    assert case["summaryWrites"] == 0, case
+    assert any("blocked by permissions" in w for w in case["warnings"]), case
+
+
+def test_a_rate_limited_post_keeps_its_own_path(status: dict) -> None:
+    for name in ("rate_limit_message", "rate_limit_429", "rate_limit_header"):
+        case = status[name]
+        assert case["threw"] is None and case["failures"] == [], (name, case)
+        assert any("Rate limit" in w for w in case["warnings"]), (name, case)
+        assert case["summaryWrites"] == 0, (name, case)
+
+
+@pytest.mark.parametrize("state", ["failure", "error", "pending"])
+def test_a_rate_limited_post_fails_closed_for_any_other_verdict(status: dict, state: str) -> None:
+    case = status[f"rate_limit_{state}"]
+    assert case["threw"] is None, case
+    assert len(case["failures"]) == 1 and f"'{state}'" in case["failures"][0], case
+
+
+def test_other_post_errors_stay_loud(status: dict) -> None:
+    expected = {"server_error": 500, "not_found": 404, "bare_retry_after": 403}
+    for name, code in expected.items():
+        case = status[name]
+        assert case["threw"] and case["threw"]["status"] == code, (name, case)
+        assert case["summaryWrites"] == 0, (name, case)
+
+
+def test_a_written_status_is_silent(status: dict) -> None:
+    case = status["written"]
+    assert case["threw"] is None and case["failures"] == [] and case["warnings"] == [], case
+    assert case["summaryWrites"] == 0, case
     assert case["statusRequests"] == [
         {
             "owner": "stranske",
@@ -363,177 +455,72 @@ def test_successful_status_write_is_silent(outcomes: dict[str, Any]) -> None:
             "description": "all checks passed",
             "target_url": "https://example.invalid/run",
         }
-    ]
+    ], case
 
 
-COMMENT_RUNNER_JS = textwrap.dedent("""
-    const nodeFs = require('fs');
-    const vm = require('vm');
-    const src = nodeFs.readFileSync(process.argv[2], 'utf8');
+# ---- the summary-comment writer ----------------------------------------------------------------
 
-    function makeError(status, message, response = null) {
-      const error = new Error(message);
-      error.status = status;
-      if (response !== null) error.response = response;
-      return error;
+
+@pytest.mark.parametrize("name", ["fork", "deleted_fork"])
+def test_a_fork_comment_refusal_falls_back_to_the_job_summary(comment: dict, name: str) -> None:
+    case = comment[name]
+    assert case["threw"] is None, case
+    assert case["summaryWrites"] == 1 and "GATE SUMMARY BODY" in " ".join(case["summaryRaw"]), case
+    assert any("read-only" in w for w in case["warnings"]), case
+
+
+def test_a_same_repo_comment_refusal_stays_loud(comment: dict) -> None:
+    case = comment["same_repo"]
+    assert case["threw"] and case["threw"]["status"] == 403, case
+    assert case["summaryWrites"] == 0, case
+
+
+def test_a_rate_limited_comment_is_left_to_the_helper(comment: dict) -> None:
+    """The real comment-dedupe.js logs and skips a rate limit, so it never reaches the fork path."""
+    case = comment["rate_limit"]
+    assert case["threw"] is None and case["summaryWrites"] == 0, case
+    assert any("Rate limit" in w for w in case["warnings"]), case
+    assert not any("read-only" in w for w in case["warnings"]), case
+
+
+def test_other_comment_errors_stay_loud(comment: dict) -> None:
+    case = comment["server_error"]
+    assert case["threw"] and case["threw"]["status"] == 500, case
+
+
+def test_a_written_comment_is_silent(comment: dict) -> None:
+    case = comment["written"]
+    assert case["threw"] is None and case["warnings"] == [] and case["summaryWrites"] == 0, case
+    assert case["created"] == 1, case
+
+
+# ---- the one fork definition -------------------------------------------------------------------
+
+
+def test_the_origin_step_classifies_every_shape(origin: dict) -> None:
+    expected = {
+        "fork": ("true", FORK["head"]),
+        "deleted_fork": ("true", "deleted source repository"),
+        "deleted_fork_with_label": ("true", "gone:fix-branch"),
+        "same_repo": ("false", SAME_REPO["head"]),
+        "not_a_pull_request": ("false", ""),
     }
-
-    async function runCase({ headRepo, baseRepo, error }) {
-      const warnings = [];
-      const summaryRaw = [];
-      const summaryStub = {
-        addHeading() { return summaryStub; },
-        addRaw(text) { summaryRaw.push(String(text)); return summaryStub; },
-        async write() { summaryRaw.push('<written>'); },
-      };
-      const sandbox = {
-        console: { log() {} },
-        require: (id) => {
-          if (id === 'path') return { resolve: (path) => '/tmp/' + path };
-          if (id === 'fs') {
-            return {
-              existsSync: () => true,
-              readFileSync: () => 'GATE SUMMARY BODY',
-            };
-          }
-          return {
-            upsertAnchoredComment: async () => { if (error) throw error; },
-          };
-        },
-        core: { warning: (message) => warnings.push(String(message)), summary: summaryStub },
-        context: {
-          payload: {
-            pull_request: {
-              number: 1,
-              head: { repo: headRepo === null ? null : { full_name: headRepo } },
-              base: { repo: { full_name: baseRepo } },
-            },
-          },
-        },
-        github: {},
-      };
-      vm.createContext(sandbox);
-      let threw = null;
-      try {
-        await vm.runInContext('(async () => {\\n' + src + '\\n})()', sandbox);
-      } catch (error) {
-        threw = {
-          status: error.status === undefined ? null : error.status,
-          message: String(error.message),
-        };
-      }
-      return { warnings, summaryRaw, threw };
-    }
-
-    const FORK = {
-      headRepo: 'outside-contributor/Orchestrator',
-      baseRepo: 'stranske/Orchestrator',
-    };
-    const SAME = {
-      headRepo: 'stranske/Orchestrator',
-      baseRepo: 'stranske/Orchestrator',
-    };
-
-    (async () => {
-      const outcomes = {
-        fork_read_only: await runCase({
-          ...FORK,
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        deleted_fork_read_only: await runCase({
-          headRepo: null,
-          baseRepo: SAME.baseRepo,
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        same_repo_read_only: await runCase({
-          ...SAME,
-          error: makeError(403, 'Resource not accessible by integration'),
-        }),
-        fork_rate_limit: await runCase({
-          ...FORK,
-          error: makeError(403, 'API rate limit exceeded'),
-        }),
-        fork_server_error: await runCase({
-          ...FORK,
-          error: makeError(500, 'Internal server error'),
-        }),
-        happy_path: await runCase({ ...FORK, error: null }),
-      };
-      process.stdout.write(JSON.stringify(outcomes));
-    })();
-    """).strip()
+    for name, (from_fork, head) in expected.items():
+        case = origin[name]
+        assert case["threw"] is None, (name, case)
+        assert case["outputs"] == {"from_fork": from_fork, "head": head}, (name, case)
 
 
-@pytest.fixture(scope="module")
-def comment_outcomes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    node = shutil.which("node")
-    if node is None:  # pragma: no cover - depends on the host
-        message = "node is required to execute the Gate github-script step"
-        if os.environ.get("CI"):
-            pytest.fail(message)
-        pytest.skip(message)
-
-    workdir = tmp_path_factory.mktemp("gate-comment")
-    step_path = workdir / "step.js"
-    step_path.write_text(_extract_step_script(COMMENT_STEP_NAME), encoding="utf-8")
-    runner_path = workdir / "runner.js"
-    runner_path.write_text(COMMENT_RUNNER_JS, encoding="utf-8")
-
-    completed = subprocess.run(
-        [node, str(runner_path), str(step_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr
-    return dict(json.loads(completed.stdout))
-
-
-def test_comment_fork_read_only_403_falls_back_to_the_job_summary(
-    comment_outcomes: dict[str, Any],
-) -> None:
-    case = comment_outcomes["fork_read_only"]
-    assert case["threw"] is None
-    assert any("read-only" in warning for warning in case["warnings"])
-    assert "GATE SUMMARY BODY" in " ".join(case["summaryRaw"])
-    assert "<written>" in case["summaryRaw"]
-
-
-def test_comment_deleted_fork_read_only_403_falls_back_to_the_job_summary(
-    comment_outcomes: dict[str, Any],
-) -> None:
-    case = comment_outcomes["deleted_fork_read_only"]
-    assert case["threw"] is None
-    assert any("read-only" in warning for warning in case["warnings"])
-    assert "GATE SUMMARY BODY" in " ".join(case["summaryRaw"])
-    assert "<written>" in case["summaryRaw"]
-
-
-def test_comment_same_repo_403_still_fails_the_gate(
-    comment_outcomes: dict[str, Any],
-) -> None:
-    case = comment_outcomes["same_repo_read_only"]
-    assert case["threw"]["status"] == 403
-
-
-def test_comment_rate_limit_403_never_uses_fork_fallback(
-    comment_outcomes: dict[str, Any],
-) -> None:
-    case = comment_outcomes["fork_rate_limit"]
-    assert case["threw"]["status"] == 403
-    assert case["warnings"] == []
-    assert case["summaryRaw"] == []
-
-
-def test_comment_non_403_still_fails_the_gate(
-    comment_outcomes: dict[str, Any],
-) -> None:
-    case = comment_outcomes["fork_server_error"]
-    assert case["threw"]["status"] == 500
-
-
-def test_comment_happy_path_is_silent(comment_outcomes: dict[str, Any]) -> None:
-    case = comment_outcomes["happy_path"]
-    assert case["threw"] is None
-    assert case["warnings"] == []
-    assert case["summaryRaw"] == []
+def test_both_writers_read_the_one_fork_definition() -> None:
+    """Fork-ness is decided once. Each writer must read it from the origin step, which must run
+    first, and neither may look at the payload's head repository itself -- two definitions of one
+    fact drift, and #352's two copies had already diverged when they merged."""
+    _need_workflow()
+    names = [line.strip()[len("- name: ") :] for line in _workflow_lines() if "- name: " in line]
+    assert names.index(ORIGIN_STEP) < names.index(COMMENT_STEP) < names.index(STATUS_STEP)
+    assert sum(line.strip() == "id: pr_" + "origin" for line in _workflow_lines()) == 1
+    for step in (COMMENT_STEP, STATUS_STEP):
+        block = "\n".join(_step_lines(step))
+        assert block.count("steps.pr_" + "origin.outputs.from_fork") == 1, step
+        script = _step_script(step)
+        assert script.count("head?.repo") == 0 and script.count("head.repo") == 0, step
