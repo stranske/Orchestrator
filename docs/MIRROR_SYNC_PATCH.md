@@ -128,6 +128,9 @@ elif [[ -d "$SRC/tests/rail_exercises" ]]; then
 fi
 ```
 
+> **Superseded 2026-10-01:** this bare `| tar -x` can abort the whole sync under load. The script
+> now drains the stream — see the last section before copying it.
+
 It finished in 0.4 s against the same checkout. The one semantic change is printed every run:
 uncommitted fixture edits are not shipped. `orchestrate.sh` is also 100755 in git now, and
 `test_orchestrate_sh_is_executable` fails any tree where the bit is missing, so the copy step can
@@ -163,6 +166,9 @@ if git -C "$SRC" rev-parse --verify -q HEAD:scripts >/dev/null 2>&1; then
 fi
 ```
 
+> **Superseded 2026-10-01:** same race as the `tests/rail_exercises` pipeline — see the last
+> section before copying it.
+
 Witnessed in a scratch flat mirror: both contracts pass with correct break demos.
 `env_prereq.repo_files_absent` detects the FILE, so the tests that assert against `scripts/` now
 run on the mirror instead of skipping; the mirror's skip count goes down, never up.
@@ -175,3 +181,31 @@ did not). The 14 paths are removed, and `rail_exercise.unsyncable_paths()` refus
 whose path components carry leading or trailing whitespace, a trailing dot, or one of `<>:"|?*\` —
 enforced by the module selftest, which CI runs; the selftest also plants a `trailing ` directory in
 its tripwire tree and asserts the guard names it.
+
+## Both `git archive | tar -x` pipelines could abort the sync under load (2026-10-01)
+
+macOS `/usr/bin/tar` (bsdtar 3.5.3) stops reading at the end-of-archive marker, but `git archive`
+writes the tar record padding after it (5,120 bytes for `tests/rail_exercises` at `db0a9be`; the
+amount varies with the tree). When tar exits before git's final `write()` has landed, git dies of
+SIGPIPE, `pipefail` makes the pipeline 141, and `set -e` ends the script **without printing
+anything**. By then the modules, the tests and `tests/rail_exercises` are already replaced, while
+`scripts/`, the data snapshots, `.verify-floor.json`, `pyproject.toml`, `CLAUDE.md`,
+`IMPROVEMENT_BACKLOG.md` and the registry are not — so the half-synced mirror surfaces later, as
+layout failures in a mirror `verify.py` (a scratch copy collected `901 tests collected, 1 error`: a
+`FileNotFoundError` for `scripts/check_checks_reported.py`, and no floor file to compare against).
+
+It is a scheduler race, so it hides: 12 of 12 runs aborted at load average ~100–128 on 2026-09-30,
+while the unpatched pipeline passed every run at load ~26–62 on 2026-10-01. A test shim that holds the padding back for one
+second makes it deterministic: the previous script exits 141 with no output, the patched one exits 0
+and its mirror collects exactly the floor. Each reader now drains the rest of the stream, which
+keeps the pipe open until git exits:
+
+```bash
+git -C "$SRC" archive --format=tar HEAD tests/rail_exercises | { tar -x -C "$MIRROR/tests" --strip-components=1 && cat >/dev/null; }
+git -C "$SRC" archive --format=tar HEAD scripts | { tar -x -C "$MIRROR" && cat >/dev/null; }
+```
+
+`&&`, not `;`: with `;` a failed extraction is masked by `cat`'s exit 0. Reverting either drain on
+its own brings the 141 back at that line. The script also gained an `ERR` trap, so an abort now names
+its line and says the mirror is half-synced instead of ending silently. The previous script is kept
+beside it as `orch-sync-mirror.sh.bak-2026-10-01`.
