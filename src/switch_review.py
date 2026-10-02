@@ -25,8 +25,17 @@ auto-ratifying at expiry to a stated default, so an unanswered question can neve
 backlog. The default is always the conservative one — keep the current switch position — because
 flipping a safety switch on silence is precisely what must not happen.
 
+SWITCH VALUES ARE READ AS THE TICK SEES THEM, and each row says where its value came from. Outside
+the tick a switch orchestrate.sh exports ON by default is unset, so reading this process's
+environment alone listed ORCH_REDIRECT_APPLY_BOOTSTRAP as "held off, a decision waiting to be made"
+while every tick had it armed. So the CLI reads each switch from orchestrate.sh's prologue, executed
+with this process's environment inherited (`env_as_the_tick_sees_it`), and the tick, whose
+environment already IS the tick's, says so with `--env process` rather than executing its own
+prologue a second time.
+
     python3 switch_review.py                # what is due for review
     python3 switch_review.py --json
+    python3 switch_review.py --env process  # this process's environment alone (what the tick runs)
     python3 switch_review.py --raise        # record owner questions (needs ORCH_SWITCH_REVIEW=1)
     python3 switch_review.py --selftest
 """
@@ -1003,8 +1012,41 @@ SWITCH_DRAIN: dict[str, Callable[..., dict]] = {
 }
 
 
+def env_as_the_tick_sees_it() -> tuple[dict[str, str], dict[str, str]]:
+    """Each reviewed switch's value as THE TICK sees it, and where each value came from.
+
+    For a reader OUTSIDE the tick. orchestrate.sh exports some switches ON by default, so a process
+    reading only its own environment sees them unset, and so off, while every tick has them on: an
+    interactive run listed ORCH_REDIRECT_APPLY_BOOTSTRAP under "held off, a decision waiting to be
+    made" and a re-offer echoed it as `gate_state: off` while the tick had it armed. This resolves
+    each mapped switch with `capability_recurrence_check.as_the_tick_sees_it`, the one resolver that
+    EXECUTES the prologue, conditionals included, and names every source. A value this process sets
+    meets what it would meet in a real tick: kept when non-empty, replaced by the default when empty,
+    and overridden where a prologue conditional says so.
+
+    It runs bash, so a CLI entry point calls it and `switch_states()` never does: that read must stay
+    cheap, and a library or test caller must never execute orchestrate.sh. The tick does not call it
+    either, because its environment already IS the tick's (`main --env process`).
+
+    Returns `(env, sources)`: the values that are set, and one source per mapped switch.
+    """
+    import capability_recurrence_check as rc
+
+    env: dict[str, str] = {}
+    sources: dict[str, str] = {}
+    for flag in sorted(SWITCH_CAPABILITY):
+        value, sources[flag] = rc.as_the_tick_sees_it(flag)
+        if value is not None:
+            env[flag] = value
+    return env, sources
+
+
 def switch_states(
-    *, now: int | None = None, env: Mapping[str, str] | None = None, path=None
+    *,
+    now: int | None = None,
+    env: Mapping[str, str] | None = None,
+    path=None,
+    sources: Mapping[str, str] | None = None,
 ) -> dict:
     """The switch rows alone: each `SWITCH_CAPABILITY` flag that is held off or on but idle.
 
@@ -1022,10 +1064,19 @@ def switch_states(
     gate behind the idle switch, beside what blocks it. It is read only for a switch already ON and
     idle, from local files and read-only, so still no gh, no heartbeat and no Brain; a consumer whose
     environment holds the switch off pays nothing for it.
+
+    Every row carries the switch's `value` (None when unset) and its `value_source`, in
+    `capability_recurrence_check.as_the_tick_sees_it`'s vocabulary. `sources` supplies them, as
+    `env_as_the_tick_sees_it()` returns them. Without it, a value from a passed `env` is `explicit`,
+    and a read of this process's environment is `ambient` where the switch is set and
+    `tick-unconsulted` where it is not: the tick may well set it, and nothing here asked. That is
+    the label that keeps "unset in this process" from reading as a measured off, and it is all this
+    function does about the tick: resolving it runs bash.
     """
     import capability_recurrence_check as rc
 
     now = int(now if now is not None else time.time())
+    explicit = env is not None
     env = os.environ if env is None else env
     window = REVIEW_DAYS * 86400
     due, quiet = [], []
@@ -1033,24 +1084,40 @@ def switch_states(
     for flag, cap_id in sorted(SWITCH_CAPABILITY.items()):
         value = env.get(flag)
         on = bool(value) and value != "0"
+        if sources is not None and flag in sources:
+            source = str(sources[flag])
+        elif explicit:
+            source = "explicit"
+        else:
+            source = "ambient" if value is not None else rc.TICK_UNCONSULTED
         last = _last_invocation(cap_id, path=path)
         criterion = rc.SWITCH_ON_CRITERIA.get(flag)
 
         if not on:
             # OFF: raise only when a criterion exists, so an unconditioned switch is not nagged
             # about forever. An unconditioned switch is a documentation gap, reported separately.
+            if rc.tick_value_unknown(source):
+                # UNKNOWN IS NOT OFF. Off is this process's reading, and the tick's could differ.
+                reason = (
+                    "reads OFF in this process only: the tick's value is UNKNOWN (its "
+                    "value_source says why), so whether the tick holds it off is not known"
+                )
+            elif criterion:
+                reason = (
+                    "held off; a machine-checkable precondition is recorded, so this is a "
+                    "decision waiting to be made"
+                )
+            else:
+                reason = "held off with NO recorded switch-on criterion"
             due.append(
                 {
                     "flag": flag,
                     "capability": cap_id,
                     "state": "off",
+                    "value": value,
+                    "value_source": source,
                     "criterion": criterion,
-                    "reason": (
-                        "held off; a machine-checkable precondition is recorded, so this is a "
-                        "decision waiting to be made"
-                        if criterion
-                        else "held off with NO recorded switch-on criterion"
-                    ),
+                    "reason": reason,
                     "has_criterion": bool(criterion),
                 }
             )
@@ -1063,6 +1130,8 @@ def switch_states(
                 "flag": flag,
                 "capability": cap_id,
                 "state": "on",
+                "value": value,
+                "value_source": source,
                 "idle_days": None if idle_days is None else round(idle_days, 1),
                 "reason": (
                     f"ON but {cap_id} recorded no invocation in the last {REVIEW_DAYS}d — "
@@ -1077,12 +1146,18 @@ def switch_states(
     return {"held_off": due, "on_but_idle": quiet}
 
 
-def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path=None) -> dict:
+def review(
+    *,
+    now: int | None = None,
+    env: Mapping[str, str] | None = None,
+    path=None,
+    sources: Mapping[str, str] | None = None,
+) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why."""
     _capability_heartbeat()
 
     now = int(now if now is not None else time.time())
-    states = switch_states(now=now, env=env, path=path)
+    states = switch_states(now=now, env=env, path=path, sources=sources)
     due, quiet = states["held_off"], states["on_but_idle"]
 
     # NOT `now=now`: `stale_runners` derives a process start from `now - etime` and compares it to
@@ -1118,12 +1193,25 @@ def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path
 
 
 def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
-    """Record ONE non-blocking, auto-expiring owner question per due switch."""
+    """Record ONE non-blocking, auto-expiring owner question per due switch.
+
+    Never for a row whose tick value is UNKNOWN (`capability_recurrence_check.tick_value_unknown`).
+    Its "off" is one process's reading, so the question could ask the owner to turn on a switch the
+    tick already has on, and its default would ratify that misreading at expiry. Such a row is
+    named under `unknown_tick_value` instead, never dropped without a word. The tick never produces
+    one: it reads its own environment, which IS the tick's.
+    """
+    import capability_recurrence_check as rc
+
     raised: list = []
     deduped: list = []
     errors: list = []
+    unknown: list = []
     for row in rep["held_off"] + rep["on_but_idle"]:
         flag, cap_id, state = row["flag"], row["capability"], row["state"]
+        if rc.tick_value_unknown(str(row.get("value_source") or "")):
+            unknown.append(flag)
+            continue
         if state == "off":
             question = (
                 f"{flag} is off and {cap_id}'s switch-on precondition is recorded. "
@@ -1157,7 +1245,49 @@ def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
             (deduped if res.get("deduped") else raised).append(flag)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{flag}: {str(exc)[:100]}")
-    return {"raised": raised, "already_open": deduped, "errors": errors, "dry_run": dry_run}
+    return {
+        "raised": raised,
+        "already_open": deduped,
+        "errors": errors,
+        "unknown_tick_value": unknown,
+        "dry_run": dry_run,
+    }
+
+
+def value_phrase(row: dict) -> str:
+    """A row's switch value and where it came from, in words.
+
+    Every source has its own sentence, because the readings mean different things and two of them
+    must never print alike: "unset" (nothing sets the switch) and "0" (something set it off) both
+    read OFF. Nor may an UNKNOWN tick value read as either.
+    """
+    import capability_recurrence_check as rc
+
+    value, source = row.get("value"), str(row.get("value_source") or "")
+    shown = "unset" if value is None else repr(str(value))
+    if source == "ambient":
+        return f"{shown} — set in this process's environment"
+    if source == "tick":
+        return (
+            f"{shown} — set by orchestrate.sh's prologue (this process does not set it, or sets "
+            "a value the prologue replaces)"
+        )
+    if source == "explicit":
+        return f"{shown} in the environment passed to this review"
+    if source == "unset":
+        return "unset — neither this process nor orchestrate.sh's prologue sets it"
+    if source.startswith(rc.TICK_UNRESOLVED_PREFIX):
+        reason = source[len(rc.TICK_UNRESOLVED_PREFIX) :]
+        return (
+            f"{shown} in this process, and the tick's value is UNKNOWN: orchestrate.sh's "
+            f"prologue did not evaluate ({reason})"
+        )
+    if source == rc.TICK_UNCONSULTED:
+        return (
+            f"{shown} in this process, and the tick's value is UNKNOWN: nothing asked "
+            "orchestrate.sh's prologue, which may set it"
+        )
+    return f"{shown} — source {source or 'not recorded'}"
 
 
 def format_report(rep: dict) -> str:
@@ -1172,6 +1302,7 @@ def format_report(rep: dict) -> str:
         lines += ["## Held OFF", ""]
         for row in rep["held_off"]:
             lines.append(f"  {row['flag']}  ({row['capability']})")
+            lines.append(f"      value: {value_phrase(row)}")
             lines.append(f"      {row['reason']}")
             if row.get("criterion"):
                 lines.append(f"      switch on when: {row['criterion'][:150]}")
@@ -1180,6 +1311,7 @@ def format_report(rep: dict) -> str:
         lines += ["## ON but not triggering — the range-lane failure mode", ""]
         for row in rep["on_but_idle"]:
             lines.append(f"  {row['flag']}  ({row['capability']})  idle={row['idle_days']}d")
+            lines.append(f"      value: {value_phrase(row)}")
             lines.append(f"      {row['reason']}")
             if row.get("drain"):
                 lines.append(f"      drain: {row['drain']['summary']}")
@@ -1618,7 +1750,8 @@ def _selftest() -> None:
     _selftest_gate_expiry()
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
-        "recently-triggering stays silent, '0' is off, dry-run inert, fleet_gates SUSPECT rule, "
+        "recently-triggering stays silent, '0' is off and prints apart from unset, dry-run inert, "
+        "fleet_gates SUSPECT rule, "
         "switch_states is the review's rows without the sweep, review writes no ledger, an idle "
         "bootstrap row carries its drain read from a sandbox, the expiry notice names soon/lapsed "
         "rows and states its drained and unmeasured states)"
@@ -1747,6 +1880,12 @@ def _selftest_review(gh_calls: list) -> None:
         # "0" counts as off, not on.
         rep5 = review(now=now, env={"ORCH_RANGE_LANE_ROLLOUT": "0"}, path=reg)
         assert "ORCH_RANGE_LANE_ROLLOUT" in {r["flag"] for r in rep5["held_off"]}
+        # ...and does not PRINT as unset: each row names its value and where that came from.
+        by_flag = {r["flag"]: r for r in rep5["held_off"]}
+        zero, unset = by_flag["ORCH_RANGE_LANE_ROLLOUT"], by_flag["ORCH_STRATEGY_EXPERIMENT"]
+        assert (zero["value"], zero["value_source"]) == ("0", "explicit"), zero
+        assert (unset["value"], unset["value_source"]) == (None, "explicit"), unset
+        assert value_phrase(zero) != value_phrase(unset), (value_phrase(zero), value_phrase(unset))
 
         # Dry run never writes, and the default is always conservative.
         # raise_questions covers BOTH lists, so the ON-but-idle switch appears alongside the
@@ -1809,12 +1948,29 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="record owner questions (requires ORCH_SWITCH_REVIEW=1)",
     )
+    ap.add_argument(
+        "--env",
+        choices=("tick", "process"),
+        default="tick",
+        help=(
+            "where switch values come from. tick (the default): as the tick sees them, from "
+            "orchestrate.sh's prologue executed with this process's environment inherited, so a "
+            "value set here is treated as a real tick treats it. process: this process's "
+            "environment alone, a switch it does not set being unset; the tick passes this, "
+            "because its environment IS the tick's"
+        ),
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
         return 0
-    rep = review()
+    if args.env == "process":
+        env = {flag: os.environ[flag] for flag in SWITCH_CAPABILITY if flag in os.environ}
+        sources = {flag: "ambient" if flag in env else "unset" for flag in SWITCH_CAPABILITY}
+    else:
+        env, sources = env_as_the_tick_sees_it()
+    rep = review(env=env, sources=sources)
     if args.do_raise:
         if not APPLY_ENABLED:
             print("refusing to raise: set ORCH_SWITCH_REVIEW=1", file=sys.stderr)

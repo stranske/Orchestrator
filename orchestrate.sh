@@ -611,7 +611,9 @@ if _cadence_due switch-review && _attempt_ok switch-review; then
   # that is ON but whose capability logged no invocation in a week, which is the range-lane failure
   # mode exactly. Questions are non-blocking and auto-ratify to "keep the current position".
   echo "  [cadence] switch review (weekly; held + on-but-idle switches)"
-  switch_args=(--json)
+  # Process mode: this process's environment IS the tick's, exported above. Without it the review
+  # resolves each switch as a reader outside the tick must, by executing this prologue again in bash.
+  switch_args=(--json --env process)
   [ "${ORCH_SWITCH_REVIEW:-}" = "1" ] && switch_args+=(--raise)
   if python3 "$ORCH/switch_review.py" "${switch_args[@]}" \
        > "$STAMP_DIR/switch-review.json" 2>> "$STAMP_DIR/switch-review.log"; then
