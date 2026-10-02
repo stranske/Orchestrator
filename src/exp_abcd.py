@@ -181,6 +181,16 @@ def exp_paths(exp_id: str) -> Path:
     return EXP_DIR / exp_id
 
 
+def ship_gate_stamp() -> Path:
+    """Where `followup` stamps a ship-gate verdict, holding further promotion launches for a day.
+
+    It lives under EXP_DIR, not in the state dir beside the cadence-step stamps, so readers resolve
+    it here. mcp_server's fleet summary used to look in the state dir, where it never exists, and
+    reported it as never stamped on every call. Resolved per call, like `exp_paths`, so a rebound
+    EXP_DIR moves the stamp with it."""
+    return EXP_DIR / ".last-ship-gate"
+
+
 def implement_prompt(spec: str) -> str:
     """Identical for every agent — fairness requires one frozen spec. Commit, but DON'T push or
     open a PR: this is an isolated experiment branch, judged by its diff."""
@@ -1469,7 +1479,7 @@ def followup(
         reverse=True,
     )
     promotion_reconcile = promotion_reconcile_fn or synthesis_promotion.reconcile
-    gate_stamp = EXP_DIR / ".last-ship-gate"
+    gate_stamp = ship_gate_stamp()
     stamp_fresh = gate_stamp.exists() and (now - gate_stamp.stat().st_mtime) < 86400
     launch_available = not stamp_fresh
     promotion_inflight = False
