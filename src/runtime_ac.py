@@ -221,6 +221,8 @@ Rules:
 - If browser launch may be sandbox-blocked, set runtime_context.browser_endpoint or a frontend
   check browser_endpoint to a Chrome/Chromium CDP URL such as http://127.0.0.1:9222.
 - Command checks are review-before-run and must not include destructive git/gh/rm/sudo operations.
+- Command expected may be exit_0, exit_nonzero, contains, regex, or manual_review; use
+  exit_nonzero for a command that must fail by design, without a shell exit-code inverter.
 - Deliberate-break checks must include test_cmd and test_paths for local_verify.py.
 - Manual checks should be reserved for evidence that cannot be automated yet.
 - verdict_policy.required_check_ids may reference only declared check ids.
@@ -1288,6 +1290,7 @@ def _selftest() -> None:
     )
     assert "runtime acceptance-criteria verification lane" in prompt, prompt
     assert '"acceptance_criteria"' in prompt and "frontend_verify.py" in prompt, prompt
+    assert "exit_nonzero" in prompt, prompt
 
     valid = _valid_spec()
     assert validate_spec(valid) == []
