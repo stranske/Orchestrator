@@ -2255,6 +2255,32 @@ def main(argv):
 
 
 def _selftest():
+    """Run the checks against a PRIVATE Brain, so the selftest never writes the live one.
+
+    `feedback._conn()` writes on every open: the schema, the migrations (an `UPDATE runs` among
+    them) and a commit. One check reached it with the live path still in place (`evaluate_prompt`
+    reads the active evidence types through it), so every `--selftest` wrote the shared Brain
+    under sqlite's default 5 s busy timeout. On 2026-10-02 an exec-mirror `verify.py` failed on
+    exactly that write, inside `_migrate_schema`, while other verify runs were live, and the module
+    passed when run alone: a red about the machine, not about the tree under test. The two blocks in
+    `_selftest_checks` that already swap in private stores keep their own; this covers every call
+    outside them, including the next one added. CI runs against an empty runtime, so an empty store
+    changes no assertion. tests/test_exp_abcd_selftest_private_brain.py traces every `_conn()`.
+    """
+    import tempfile
+
+    inherited = feedback.DB_PATH
+    with tempfile.TemporaryDirectory(
+        prefix="exp-abcd-selftest-brain-", ignore_cleanup_errors=True
+    ) as brain:
+        feedback.DB_PATH = Path(brain) / "feedback" / "orchestrator.db"
+        try:
+            _selftest_checks()
+        finally:
+            feedback.DB_PATH = inherited
+
+
+def _selftest_checks():
     global EXP_DIR
     assert exp_branch("e1", "claude") == "exp/e1-claude"
     assert (
