@@ -452,8 +452,14 @@ def routing_hint(cap: dict[str, Any]) -> str | None:
     return None
 
 
+def _held_from(held: list[dict], key: str) -> int:
+    """How many held rows would otherwise be in the silence finding `key`."""
+    return sum(1 for r in held if key in r["held_from"])
+
+
 def _format_held_off(held: list[dict], unevaluated: str | None) -> list[str]:
-    """The held-off section. It always prints, so a drained list says so in words."""
+    """The held-off section. It always prints, so a drained list says so in words, and an
+    UNKNOWN one says that instead: "none held" is good news only when the holds were evaluated."""
     out = [""]
     if unevaluated:
         out.append(
@@ -462,8 +468,11 @@ def _format_held_off(held: list[dict], unevaluated: str | None) -> list[str]:
         )
     if not held:
         out.append(
-            "  held off: none — no live capability's silence is explained by a declared gate or a "
-            "retired cadence step"
+            "  held off: none by a declared gate; whether a retired cadence step holds anything is "
+            "UNKNOWN this run (not evaluated, above), so this is not a drained state"
+            if unevaluated
+            else "  held off: none — no live capability's silence is explained by a declared gate "
+            "or a retired cadence step"
         )
         return out
     out.append(
@@ -523,6 +532,13 @@ def format_report(rep: dict) -> str:
                 f"    {r['capability_id']:<38} unchanged {r['unchanged_for_days']}d "
                 f"(tolerance {r['tolerance_days']}d)"
             )
+    elif _held_from(held, "regressed"):
+        # Empty because every row that went quiet is HELD, which is not the same as nothing having
+        # gone quiet: the drained sentence would contradict the held-off section below.
+        out.append(
+            f"  no judged regressions: {_held_from(held, 'regressed')} capability(ies) that went "
+            "quiet are held off by a declared hold, named below"
+        )
     else:
         out.append("  no regressions: nothing that used to fire has gone quiet")
     if rep["overdue"]:
@@ -532,6 +548,12 @@ def format_report(rep: dict) -> str:
                 f"    {r['capability_id']:<38} silent {r['silent_days']}d "
                 f"(tolerance {r['tolerance_days']}d; cadence {r['cadence']!r})"
             )
+    elif _held_from(held, "overdue"):
+        out += [
+            "",
+            f"  nothing overdue among judged capabilities: {_held_from(held, 'overdue')} silent "
+            "past their cadence are held off by a declared hold, named below",
+        ]
     else:
         out += ["", "  nothing overdue: no judged capability is silent past its declared cadence"]
     out += _format_held_off(held, rep.get("hold_unevaluated"))

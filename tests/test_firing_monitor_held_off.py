@@ -235,6 +235,25 @@ def test_the_drained_report_says_so_in_words(review):
     assert "late" in overdue_section and "gated" not in overdue_section, overdue_section
 
 
+def test_an_empty_list_does_not_read_as_drained_while_held_rows_would_be_in_it(review):
+    # Every silent row is held, so `overdue` and `regressed` are both empty. "Nothing that used to
+    # fire has gone quiet" would then contradict the held-off section a few lines further down.
+    registry = (_step("runner", "step-held"),)
+    rows = [_gate("gated"), _row("step-held")]
+    monitor.record(review(rows, registry=registry))
+    rep = review(rows, registry=registry, now=NOW + 8 * DAY)
+    assert rep["overdue"] == [] and rep["regressed"] == [], rep
+    assert {r["capability_id"]: r["held_from"] for r in rep["held_off"]} == {
+        "gated": ["overdue", "regressed"],
+        "step-held": ["overdue", "regressed"],
+    }, rep["held_off"]
+    text = monitor.format_report(rep)
+    assert "nothing that used to fire has gone quiet" not in text, text
+    assert "no judged capability is silent" not in text, text
+    assert "no judged regressions: 2 capability(ies) that went quiet are held off" in text, text
+    assert "nothing overdue among judged capabilities: 2 silent past their cadence" in text, text
+
+
 def test_an_unreadable_registry_holds_nothing_and_says_so(review):
     # FAIL TOWARD MOTION. A malformed declaration must not hold anything off: the row it would
     # have held stays an alarm, and the report names why it was not evaluated. The declared gate
@@ -245,6 +264,13 @@ def test_an_unreadable_registry_holds_nothing_and_says_so(review):
     assert _ids(rep, "overdue") == ["step-held"], rep["overdue"]
     assert list(_held(rep)) == ["gated"], rep["held_off"]
     assert "RETIREMENT HOLDS NOT EVALUATED" in monitor.format_report(rep)
+    # With nothing held at all, an UNKNOWN must not render as the drained sentence: "no retired
+    # cadence step explains any silence" is a claim nobody evaluated.
+    unknown = review([_row("step-held")], registry=broken)
+    assert unknown["held_off"] == [] and unknown["hold_unevaluated"], unknown
+    text = monitor.format_report(unknown)
+    assert "no live capability's silence is explained" not in text, text
+    assert "UNKNOWN this run (not evaluated, above), so this is not a drained state" in text, text
     # ...and a registry that reads states that it did: None, not an empty string or a falsy flag.
     assert review([_row("step-held")], registry=())["hold_unevaluated"] is None
 
