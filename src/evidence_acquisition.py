@@ -189,6 +189,27 @@ def run(
     return result
 
 
+def render_tick_line(plan_path: Path) -> str:
+    """The tick's one-line EVIDENCE-ACQ summary of a plan that `run(write=...)` wrote.
+
+    orchestrate.sh used to print this line from a here-document fed to `python3 -`. Homebrew bash
+    5.3 writes a small here-document into a pipe before the reading command starts, so the writer
+    is the reader's own process. If the kernel gives that pipe less room than the document, the
+    write blocks forever, and that is how the 2026-09-26 tick hung for 141 hours. The text here is
+    identical to what the here-document printed. One addition: a plan that is valid JSON but not an
+    object used to end in a traceback, and now gets the same "unreadable" line as any other bad plan.
+    """
+    try:
+        with open(plan_path, encoding="utf-8") as fh:
+            plan_obj = json.load(fh)
+    except Exception as exc:  # noqa: BLE001 - the line names every failure and must never raise
+        return f"  EVIDENCE-ACQ: plan unreadable ({exc})"
+    if not isinstance(plan_obj, dict):
+        return f"  EVIDENCE-ACQ: plan unreadable (not a JSON object: {type(plan_obj).__name__})"
+    live = " [LIVE]" if plan_obj.get("live") else " [shadow]"
+    return f"  EVIDENCE-ACQ: {plan_obj.get('state')} — {plan_obj.get('summary')}{live}"
+
+
 def _selftest() -> None:
     now = 1_700_000_000
 
@@ -285,21 +306,44 @@ def _selftest() -> None:
     text = plan(items, ledger={"capabilities": {}}, now=now)["summary"]
     assert "feedable 0" in text and "candidates" in text, text
 
+    # THE TICK LINE, rendered from the written plan by this module, never by a here-document.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        written = Path(td) / "plan.json"
+        shadow_plan = run(items, ledger={"capabilities": {}}, now=now, env={}, write=written)
+        line = render_tick_line(written)
+        assert line == (
+            f"  EVIDENCE-ACQ: {shadow_plan['state']} — {shadow_plan['summary']} [shadow]"
+        ), line
+        assert render_tick_line(Path(td) / "absent.json").startswith(
+            "  EVIDENCE-ACQ: plan unreadable ([Errno 2]"
+        )
+
     print(
         "evidence_acquisition.py selftest: OK (feed obeys unblock, failure-blocked and "
         "default-off never fed, per-cycle cap + per-capability cap, shadow by default, "
-        "distinct empty states)"
+        "distinct empty states, tick line rendered from the written plan)"
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    # `tick-line` prints the tick's summary of an existing plan and computes nothing. With no
+    # command, the module runs the lane, exactly as it always has.
+    ap.add_argument("command", nargs="?", choices=("tick-line",))
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--write", type=Path)
+    ap.add_argument("--plan", type=Path, help="tick-line: the plan file the run wrote")
     args = ap.parse_args(argv)
     if args.selftest:
         _selftest()
+        return 0
+    if args.command == "tick-line":
+        if args.plan is None:
+            ap.error("tick-line needs --plan, the file the run wrote with --write")
+        print(render_tick_line(args.plan))
         return 0
     result = run(write=args.write)
     print(
