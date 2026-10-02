@@ -202,6 +202,10 @@ def test_all_target_kinds_complete_shadow_canary_lifecycle(
         )
         capability_id = registered["capability"]["capability_id"]
         assert registered["status"] == "wired"
+        # Every compiled kind owns its expiry through its manifest lifecycle, `gate` included
+        # (it records no artifact key), so a ledger renewal must refuse each one.
+        blocker = capabilities.renewal_blocker(registered["capability"], now=now)
+        assert blocker and "compile and register" in blocker, (kind, blocker)
         assert (
             registered["binding"]["capability_version_id"]
             == registered["capability"]["capability_version_id"]

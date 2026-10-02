@@ -49,6 +49,9 @@ def test_deterministic_sequence_compiles_to_idempotent_dag(valid_dag: dict, tmp_
         assert event_types.count(event_type) == 1
     assert cap["status"] == "shadow"
     assert cap["expiry"] == valid_dag["expires_at"]
+    # The ledger row's expiry COPIES the artifact's own lifecycle, which the target enforces at
+    # run time, so `capabilities.renew` must refuse it rather than revive an unrunnable row.
+    assert "workflow_plan_id" in capabilities.renewal_blocker(cap, now=cap["expiry"] - 1)
     assert cap["kill_switch"] == valid_dag["kill_switch"]
     assert cap["rollback"]["steps"] == plan_one["rollback_order"]
     assert cap["outcome_links"] == [f"shadow:{first['consumer_receipt']['receipt_id']}"]

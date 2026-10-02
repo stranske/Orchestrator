@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import tempfile
 import time
 from collections.abc import Iterator
@@ -1230,25 +1231,267 @@ def migrate_features_to_capabilities(
     }
 
 
+# What the expiry timeout writes on the transition it makes. `expiry_retirement` reads it back to tell
+# a TIMEOUT from a decision, which is the line `renew` may cross and must never cross the other way.
+# The STRUCTURED `cause` is the discriminator: the reason is prose, and `transition` accepts any prose,
+# so a deliberate retirement worded like the timeout must not read as one. The reason stays the same
+# words for the events the timeout wrote before it carried a `cause`.
+EXPIRY_RETIREMENT_REASON = "expiry reached; safe default"
+EXPIRY_CAUSE = "expiry"
+RENEWAL_EVENT = "renewed"
+
+
 def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[str]:
     retired: list[str] = []
     for name, cap in capabilities.items():
         expiry = cap.get("expiry")
         if cap.get("status") not in NOT_LIVE_STATES and expiry is not None and now >= int(expiry):
-            previous = cap["status"]
+            event = {
+                "timestamp": now,
+                "type": "transition",
+                "from": cap["status"],
+                "to": "retired",
+                "reason": EXPIRY_RETIREMENT_REASON,
+                "cause": EXPIRY_CAUSE,
+            }
+            # The timeout clears `next_transition`; the event keeps what it cleared, so a renewal
+            # can put back exactly what the timeout removed instead of guessing.
+            if cap.get("next_transition"):
+                event["next_transition_was"] = cap["next_transition"]
             cap["status"] = "retired"
             cap["next_transition"] = None
-            cap.setdefault("event_history", []).append(
-                {
-                    "timestamp": now,
-                    "type": "transition",
-                    "from": previous,
-                    "to": "retired",
-                    "reason": "expiry reached; safe default",
-                }
-            )
+            cap.setdefault("event_history", []).append(event)
             retired.append(name)
     return retired
+
+
+# ---------------------------------------------------------------------------
+# RENEWAL: the expiry's drain, and never an automatic one.
+#
+# Every row carrying an `expiry` is retired by the timeout above when it passes, and until this
+# existed nothing could move an expiry once registration had set it. So the expiry had exactly one
+# possible outcome, and it arrived by timeout: `transition(id, "observed")` out of `retired` was
+# re-retired by the next load because the expiry was still in the past, and a gate row could not even
+# get that far, because the timeout clears `next_transition` and a live gated row must carry one. The
+# only way back was hand-editing the ledger JSON. ADDING_CAPABILITIES.md says a bounded window ends by
+# DECISION, not by timeout, and that "hold" is a decision when it is written down; this is how "hold"
+# gets written down. KNOWN_GATES rows seeded by one bootstrap share one timeout, so they reach it on
+# the same day, and until now with no way to say that any of them should stay.
+#
+# A renewal is a recorded decision: it refuses without a reason AND an evidence ref, and it writes a
+# `renewed` event carrying both, the expiry it replaced, and the row's own activity at the time, so a
+# later reader can judge what the hold was based on. It extends to `now + GATED_TTL_DAYS`, never
+# `old + GATED_TTL_DAYS`, so renewals cannot stack: no row may stand more than one TTL past the last
+# time someone looked at it with evidence in hand. Nothing calls it on a schedule; switch_review's
+# weekly sweep only names the rows it could hold, with the command.
+#
+# Latched-gate answers. (1) What decrements the gate (a row's approaching or passed expiry)? `renew`,
+# a named call that moves the expiry. (2) Can it run while the gate is CLOSED? Yes: a row RETIRED by
+# its expiry is renewed back to the status the timeout interrupted. That is the case the drain exists
+# for, since a renewal path that only worked before expiry would close for good the first time
+# nobody looked in time. (3) One population both ways: `renewal_blocker` is the single predicate
+# `renew` enforces and the switch-review notice counts, and `expiry_retirement` the single test for
+# "retired by a timeout" that both read. (4) Drained, the notice prints the next expiry beyond its
+# window, or that no live row carries an expiry, distinctly from a ledger it could not read.
+# ---------------------------------------------------------------------------
+
+# What `renew_command` prints in place of the two values only the renewer can supply. `renew`
+# refuses them verbatim: a notice's command pasted unedited must not become an evidence-free renewal.
+RENEW_REASON_PLACEHOLDER = "<why it still earns its place>"
+RENEW_EVIDENCE_PLACEHOLDER = "<PR, run id, report or ledger event that shows it>"
+
+
+def utc_date(ts: int) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(int(ts)))
+
+
+def _is_expiry_timeout(event: dict[str, Any]) -> bool:
+    if event.get("to") != "retired":
+        return False
+    if "cause" in event:
+        return event["cause"] == EXPIRY_CAUSE
+    # Written before the timeout carried a `cause`, which is every expiry retirement the running
+    # mirror makes until it is synced. Those events are told apart by their SHAPE as well as their
+    # words: the timeout never wrote `evidence_refs`, and every decision path (`transition`,
+    # `_transition_in_place`) always writes that key, so a decision worded like the timeout is still
+    # a decision.
+    return event.get("reason") == EXPIRY_RETIREMENT_REASON and "evidence_refs" not in event
+
+
+def expiry_retirement(cap: dict[str, Any]) -> dict[str, Any] | None:
+    """The event that retired this row, when and only when the retirement was its expiry TIMEOUT.
+
+    The ledger records a timeout and a decision the same way, as a `transition` to `retired`, and
+    `_is_expiry_timeout` tells them apart. The row's LATEST transition is the one that counts,
+    because a timeout later confirmed by a deliberate retirement is a decision now.
+    """
+    if cap.get("status") != "retired":
+        return None
+    for event in reversed(cap.get("event_history") or []):
+        if event.get("type") != "transition":
+            continue
+        return event if _is_expiry_timeout(event) else None
+    return None
+
+
+def artifact_lifecycle(cap: dict[str, Any]) -> str | None:
+    """What owns this row's expiry when the LEDGER does not, or None when the ledger does.
+
+    A compiled or generated artifact (a workflow plan, skill package, generated role, playbook)
+    carries its own `lifecycle.expires_at`, and the ledger row's `expiry` is a copy of it. The
+    artifact enforces that date itself at run time (`roles.run_generated_shadow_role`,
+    `capability_compiler.record_playbook_invocation`), so a ledger renewal would revive a row whose
+    target stays expired. Each such registration names its artifact in `activation_evidence`, the
+    one place a row records anything beside the four activation probes. So any non-probe key there
+    identifies an artifact, and a compiler added later is covered without being listed here. A
+    compiled `target_kind` is the second mark, because a `gate` target records no artifact key.
+    """
+    if cap.get("target_kind") in COMPILE_TARGET_KINDS:
+        return f"compiled {cap['target_kind']} target"
+    keys = sorted(key for key in cap.get("activation_evidence") or {} if key not in ACTIVE_PROBES)
+    return f"artifact {', '.join(keys)}" if keys else None
+
+
+def renewal_blocker(cap: dict[str, Any], *, now: int) -> str | None:
+    """Why `renew` would refuse this row, or None when it would renew it."""
+    expiry = cap.get("expiry")
+    if expiry is None:
+        return "it carries no expiry, so no timeout will retire it and there is nothing to renew"
+    owner = artifact_lifecycle(cap)
+    if owner:
+        return (
+            f"its expiry copies its {owner}'s own lifecycle, which the target enforces at run "
+            "time; renewing the ledger row would leave the target expired, so compile and "
+            "register a new version instead"
+        )
+    status = cap.get("status")
+    if status == "superseded":
+        return "it is superseded, which is terminal"
+    if cap.get("successor"):
+        return f"its successor {cap['successor']} carries its lineage now; renew that row instead"
+    if status == "retired" and expiry_retirement(cap) is None:
+        return (
+            "it was retired by a decision, not by its expiry. A renewal undoes a timeout and never "
+            "a decision; `transition` is the way back from one"
+        )
+    if int(expiry) >= now + GATED_TTL_DAYS * 86400:
+        return (
+            f"it already runs to {utc_date(int(expiry))}, at or past a fresh "
+            f"{GATED_TTL_DAYS}-day window, so a renewal would not extend it"
+        )
+    return None
+
+
+def renew_command(capability_id: str) -> str:
+    """The command that renews one row, resolving this tree's own module path."""
+    return " ".join(
+        [
+            "python3",
+            shlex.quote(str(ORCH / "capabilities.py")),
+            "renew",
+            "--name",
+            shlex.quote(capability_id),
+            "--reason",
+            shlex.quote(RENEW_REASON_PLACEHOLDER),
+            "--evidence-ref",
+            shlex.quote(RENEW_EVIDENCE_PLACEHOLDER),
+        ]
+    )
+
+
+def renew(
+    capability_id: str,
+    *,
+    reason: str,
+    evidence_refs: list[str] | None,
+    path: Path = REG,
+    timestamp: int | None = None,
+) -> dict[str, Any]:
+    """Hold a row past its expiry for one more GATED_TTL_DAYS, as a recorded, evidenced decision.
+
+    Refuses, writing nothing, without a reason and at least one evidence ref, and for any row
+    `renewal_blocker` names. A row retired BY ITS EXPIRY comes back to the status the timeout
+    interrupted, with the `next_transition` the timeout cleared. That bypasses TRANSITIONS
+    (`retired` may otherwise only become `observed`) on purpose: the timeout was not a lifecycle
+    decision, so undoing it restores the state no decision changed, and only a timeout qualifies.
+    """
+    reason = str(reason or "").strip()
+    refs = list(dict.fromkeys(str(ref or "").strip() for ref in evidence_refs or []))
+    refs = [ref for ref in refs if ref]
+    if not reason or reason == RENEW_REASON_PLACEHOLDER:
+        raise ValueError("a renewal needs a reason: why the capability still earns its place")
+    if not refs or RENEW_EVIDENCE_PLACEHOLDER in refs:
+        raise ValueError(
+            "a renewal needs at least one evidence ref (a PR, run id, report or ledger event): "
+            "an extension without evidence is the automatic one the expiry exists to prevent"
+        )
+    ts = _now() if timestamp is None else int(timestamp)
+    with _locked(path):
+        capabilities = _read_ledger_unlocked(path)["capabilities"]
+        cap = capabilities.get(capability_id)
+        if cap is None:
+            raise ValueError(f"unknown capability: {capability_id}")
+        blocker = renewal_blocker(cap, now=ts)
+        if blocker:
+            raise ValueError(f"cannot renew {capability_id}: {blocker}")
+        previous_expiry = int(cap["expiry"])
+        expiry = ts + GATED_TTL_DAYS * 86400
+        event: dict[str, Any] = {
+            "timestamp": ts,
+            "type": RENEWAL_EVENT,
+            "reason": reason,
+            "evidence_refs": refs,
+            "previous_expiry": previous_expiry,
+            "expiry": expiry,
+            "ttl_days": GATED_TTL_DAYS,
+            # The row's own activity when the hold was decided, so the record shows what it rested
+            # on without anyone having to reconstruct it from the history later.
+            "observed": {
+                "last_match": cap.get("last_match"),
+                "last_invocation": cap.get("last_invocation"),
+                "last_success": cap.get("last_success"),
+                "outcome_links": len(cap.get("outcome_links") or []),
+            },
+        }
+        # An activation deadline seeded WITH the expiry moves with it; one set on its own is a
+        # separate commitment, and a renewal is not a decision about that.
+        if cap.get("activation_deadline") == cap["expiry"]:
+            event["previous_activation_deadline"] = cap["activation_deadline"]
+            cap["activation_deadline"] = expiry
+        cap["expiry"] = expiry
+        retirement = expiry_retirement(cap)
+        if retirement is not None:
+            restored = retirement.get("from")
+            if restored not in CANONICAL_STATES or restored in NOT_LIVE_STATES:
+                restored = "observed"
+            cap["status"] = restored
+            # A row with an expiry retires at it unless renewed, so `retired` is a true next
+            # transition whenever the timeout recorded nothing more specific.
+            cap["next_transition"] = retirement.get("next_transition_was") or "retired"
+            event["revived_from"] = "retired"
+            cap.setdefault("event_history", []).append(
+                {
+                    "timestamp": ts,
+                    "type": "transition",
+                    "from": "retired",
+                    "to": restored,
+                    "reason": f"renewed after its expiry retired it: {reason}",
+                    "evidence_refs": refs,
+                }
+            )
+        cap.setdefault("event_history", []).append(event)
+        validate_capability(cap, now=ts)
+        _write_ledger_unlocked(path, capabilities)
+        return {
+            "capability_id": capability_id,
+            "renewed": True,
+            "status": cap["status"],
+            "revived_from": event.get("revived_from"),
+            "previous_expiry": previous_expiry,
+            "expiry": expiry,
+            "expires_on": utc_date(expiry),
+            "evidence_refs": refs,
+        }
 
 
 # The fields a DECLARATION owns. Reconciliation rewrites these from code on every load, so a value
@@ -3582,9 +3825,87 @@ def _selftest() -> None:
         "excluded from alpha/beta and named in the readiness view, one tally_class feeds both "
         "consumers, and the role-id naming convention is pinned)"
     )
+    _selftest_renewal()
     print(
         "capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
         "gate readiness w/ never-pass-on-silence)"
+    )
+
+
+def _selftest_renewal() -> None:
+    """A timeout can be renewed with evidence, and a decision cannot be renewed at all."""
+    with tempfile.TemporaryDirectory(prefix="capabilities-renewal-") as td:
+        ledger = Path(td) / "capabilities.json"
+        name = "role-redirect"  # a KNOWN_GATES row: gated, so a LIVE row must carry next_transition
+        row = {**_blank_capability(name), **json.loads(json.dumps(KNOWN_GATES[name]))}
+        row.update(expiry=1_000, activation_deadline=1_000, next_transition="retired")
+        save({name: row}, ledger)
+        assert sweep(ledger, now=1_000) == [name]
+        # THE GAP: the only way back out of `retired` fails for a gate row before it is even
+        # re-retired, because the timeout cleared the next_transition every live gate must carry.
+        try:
+            transition(name, "observed", reason="by hand", path=ledger, timestamp=1_001)
+        except AssertionError as exc:
+            assert "next_transition" in str(exc), exc
+        else:
+            raise AssertionError("a transition revived an expiry-retired gate row")
+        retired_bytes = ledger.read_bytes()
+        for reason, refs in (
+            ("", ["pr#1"]),
+            ("still runs", []),
+            ("still runs", ["  "]),
+            (RENEW_REASON_PLACEHOLDER, ["pr#1"]),
+            ("still runs", [RENEW_EVIDENCE_PLACEHOLDER]),
+        ):
+            try:
+                renew(name, reason=reason, evidence_refs=refs, path=ledger, timestamp=2_000)
+            except ValueError:
+                continue
+            raise AssertionError(f"renewed without a reason and evidence: {reason!r} {refs!r}")
+        assert ledger.read_bytes() == retired_bytes, "a refused renewal wrote the ledger"
+        out = renew(
+            name,
+            reason="still runs",
+            evidence_refs=["ledger:redirect"],
+            path=ledger,
+            timestamp=2_000,
+        )
+        stored = load(ledger, create=False)[name]
+        assert out["revived_from"] == "retired", out
+        assert stored["status"] == KNOWN_GATES[name]["status"], stored["status"]
+        assert stored["next_transition"] == "retired", stored["next_transition"]
+        fresh = 2_000 + GATED_TTL_DAYS * 86400
+        assert stored["expiry"] == stored["activation_deadline"] == fresh, stored
+        assert stored["event_history"][-1]["type"] == RENEWAL_EVENT, stored["event_history"][-1]
+        assert stored["event_history"][-1]["previous_expiry"] == 1_000
+        # NO STACKING: the same moment again would not extend anything, so it is refused.
+        try:
+            renew(name, reason="again", evidence_refs=["x"], path=ledger, timestamp=2_000)
+        except ValueError as exc:
+            assert "would not extend" in str(exc), exc
+        else:
+            raise AssertionError("a second renewal at the same moment stacked")
+        # A DECISION IS NOT A TIMEOUT, even worded exactly like one: `transition` takes any reason,
+        # so the timeout's own words must not be what makes a retirement renewable.
+        transition(name, "retired", reason=EXPIRY_RETIREMENT_REASON, path=ledger, timestamp=3_000)
+        try:
+            renew(name, reason="undo", evidence_refs=["x"], path=ledger, timestamp=4_000)
+        except ValueError as exc:
+            assert "decision" in str(exc), exc
+        else:
+            raise AssertionError("a renewal undid a deliberate retirement worded like the timeout")
+        # AN ARTIFACT'S EXPIRY IS NOT THE LEDGER'S: the target enforces its own lifecycle date.
+        artifact = {
+            **_blank_capability("generated"),
+            "expiry": 5_000,
+            "activation_evidence": {"role_manifest_hash": "manifest:1"},
+        }
+        blocker = renewal_blocker(artifact, now=4_000)
+        assert blocker and "role_manifest_hash" in blocker, blocker
+    print(
+        "capabilities.py renewal selftest: OK (the old way back fails, evidence required, an "
+        "expiry retirement revives to its prior status, renewals never stack, a decision stays "
+        "even worded like the timeout, an artifact-owned expiry is refused)"
     )
 
 
@@ -3609,6 +3930,11 @@ def main(argv: list[str]) -> int:
     transition_cmd.add_argument("--to", required=True, choices=CANONICAL_STATES)
     transition_cmd.add_argument("--reason", required=True)
     transition_cmd.add_argument("--evidence-ref", action="append", default=[])
+    # Hold a row past its expiry for one more GATED_TTL_DAYS: a recorded decision, never automatic.
+    renew_cmd = sub.add_parser("renew")
+    renew_cmd.add_argument("--name", required=True)
+    renew_cmd.add_argument("--reason", required=True)
+    renew_cmd.add_argument("--evidence-ref", action="append", required=True)
     probe_cmd = sub.add_parser("probe")
     probe_cmd.add_argument("--name", required=True)
     probe_cmd.add_argument("--probe", required=True, choices=ACTIVE_PROBES)
@@ -3661,6 +3987,14 @@ def main(argv: list[str]) -> int:
             evidence_refs=args.evidence_ref,
         )
         return 0
+    if args.command == "renew":
+        try:
+            result = renew(args.name, reason=args.reason, evidence_refs=args.evidence_ref)
+        except (AssertionError, ValueError) as exc:
+            # A refusal is an expected answer, not a crash, and it writes nothing.
+            result = {"capability_id": args.name, "renewed": False, "refused": str(exc)}
+        print(json.dumps(result, indent=2))
+        return 0 if result["renewed"] else 1
     if args.command == "probe":
         record_probe(
             args.name,

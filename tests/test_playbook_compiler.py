@@ -190,6 +190,9 @@ def test_repo_specific_pattern_exports_managed_rule(agents_md_fixture: dict) -> 
     assert status["status"] == "current" and status["current"]
     cap = capabilities.load(agents_md_fixture["ledger"], create=False)[manifest["capability_id"]]
     assert cap["status"] == "canary"
+    # The ledger row's expiry COPIES the artifact's own lifecycle, which the target enforces at
+    # run time, so `capabilities.renew` must refuse it rather than revive an unrunnable row.
+    assert "playbook_manifest_hash" in capabilities.renewal_blocker(cap, now=int(time.time()))
     bundle = json.loads(agents_md_fixture["bundle"].read_text())
     assert bundle["user_content"] == {"keep": True}
     assert manifest["rule_id"] in bundle["orchestrator_repo_playbook_rules"]

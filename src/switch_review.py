@@ -50,6 +50,11 @@ REVIEW_DAYS = 7
 QUESTION_EXPIRY_DAYS = 7.0
 APPLY_ENABLED = os.environ.get("ORCH_SWITCH_REVIEW", "").strip() == "1"
 
+# How far either side of today the expiry notice looks (see `gate_expiry`). DERIVED from the review
+# cadence rather than written as a second literal: the step runs at most every REVIEW_DAYS, so two of
+# them put every expiry in at least one review before it lands, and one after, even with a run missed.
+GATE_EXPIRY_NOTICE_DAYS = 2 * REVIEW_DAYS
+
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
 FLEET_GATE_DAYS = REVIEW_DAYS
@@ -749,6 +754,114 @@ def _exploration_gate() -> dict:
     }
 
 
+def _expiry_row(cap_id: str, cap: dict, *, now: int) -> dict:
+    blocker = capabilities.renewal_blocker(cap, now=now)
+    usage = capabilities.usage_rate(cap, now=now)
+    last = cap.get("last_invocation")
+    return {
+        "capability_id": cap_id,
+        "status": cap.get("status"),
+        "gated": bool(cap.get("gate_reason")),
+        "expiry": int(cap["expiry"]),
+        "expires_on": capabilities.utc_date(int(cap["expiry"])),
+        # The row's own activity, so whoever decides to renew or let it go has the evidence at hand.
+        "recent_invocations": usage["invocations"],
+        "recent_window_days": usage["window_days"],
+        "last_invocation_on": capabilities.utc_date(int(last)) if last else None,
+        "renewals": sum(
+            1
+            for event in cap.get("event_history") or []
+            if event.get("type") == capabilities.RENEWAL_EVENT
+        ),
+        "renewable": blocker is None,
+        "blocker": blocker,
+        "renew": capabilities.renew_command(cap_id),
+    }
+
+
+def gate_expiry(*, now: int | None = None, path=None) -> dict:
+    """FYI: the ledger rows the expiry timeout retires soon, and the ones it has just retired.
+
+    `capabilities` retires every live row whose `expiry` has passed. That retirement is the intended
+    safe default, and the expiry is meant to be the moment someone asks whether the row still earns
+    its place. But nothing announced the moment, and until `capabilities.renew` there was no answer
+    but retirement, so a row's window closed by timeout: the decision-that-never-happened shape this
+    sweep exists for. So this names each live row within GATE_EXPIRY_NOTICE_DAYS of its expiry, and
+    each row its expiry retired within as many days, with the command that holds it.
+
+    FYI ONLY. It renews nothing and raises no owner question. Unread, it changes nothing: the row
+    retires at its expiry exactly as before. Every row leaves the notice on its own once the window
+    passes, so nothing can pile up. `renewable` counts the rows `capabilities.renewal_blocker`
+    accepts, the predicate `renew` itself enforces, so the notice never offers a drain that renew
+    would refuse.
+    """
+    now = int(now if now is not None else time.time())
+    window = GATE_EXPIRY_NOTICE_DAYS * 86400
+    ledger_path = Path(path or capabilities.REG)
+    report: dict = {
+        "status": "ok",
+        "window_days": GATE_EXPIRY_NOTICE_DAYS,
+        "ttl_days": capabilities.GATED_TTL_DAYS,
+        "rows_with_expiry": 0,
+        "expiring": [],
+        "lapsed": [],
+        "renewable": 0,
+        "next_expiry": None,
+    }
+    # UNMEASURED IS NOT ZERO. A ledger that is missing or unreadable must not print the drained
+    # line: "nothing expires" is good news, and "could not look" is not.
+    if not ledger_path.exists():
+        return {
+            **report,
+            "status": "unknown",
+            "measurement": f"unmeasured: no capability ledger at {ledger_path}",
+        }
+    try:
+        later = []
+        for cap_id, cap in sorted(capabilities.load_declared(ledger_path).items()):
+            if not isinstance(cap, dict):
+                continue
+            if cap.get("status") not in capabilities.NOT_LIVE_STATES:
+                if cap.get("expiry") is None:
+                    continue
+                report["rows_with_expiry"] += 1
+                if int(cap["expiry"]) - now > window:
+                    later.append((int(cap["expiry"]), cap_id))
+                    continue
+                row = _expiry_row(cap_id, cap, now=now)
+                row["days_left"] = round((row["expiry"] - now) / 86400, 1)
+                report["expiring"].append(row)
+                continue
+            retirement = capabilities.expiry_retirement(cap)
+            if retirement is None or now - int(retirement.get("timestamp") or 0) > window:
+                continue
+            row = _expiry_row(cap_id, cap, now=now)
+            row["retired_on"] = capabilities.utc_date(int(retirement.get("timestamp") or 0))
+            row["status_before"] = retirement.get("from")
+            report["lapsed"].append(row)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            **report,
+            "status": "unknown",
+            "measurement": f"unmeasured: capability ledger unreadable ({type(exc).__name__}: {exc})",
+            "expiring": [],
+            "lapsed": [],
+            "rows_with_expiry": 0,
+        }
+    report["expiring"].sort(key=lambda row: (row["expiry"], row["capability_id"]))
+    report["renewable"] = sum(
+        1 for row in report["expiring"] + report["lapsed"] if row["renewable"]
+    )
+    if later:
+        expiry, cap_id = min(later)
+        report["next_expiry"] = {
+            "capability_id": cap_id,
+            "expires_on": capabilities.utc_date(expiry),
+            "days_left": round((expiry - now) / 86400, 1),
+        }
+    return report
+
+
 def switch_states(
     *, now: int | None = None, env: Mapping[str, str] | None = None, path=None
 ) -> dict:
@@ -844,6 +957,9 @@ def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path
         "mirror_drift": mirror_drift(),
         "fleet_gates": fleet_gates(now=now),
         "exploration_gate": _exploration_gate(),
+        # Same rule again: a row retired by its expiry with nobody having looked is a decision that
+        # never happened. FYI only, so it is not counted in `raise_count` and raises no question.
+        "gate_expiry": gate_expiry(now=now, path=path),
         "raise_count": len(due) + len(quiet),
     }
 
@@ -1011,15 +1127,87 @@ def format_report(rep: dict) -> str:
             f"  drainable: {exploration_gate['drainable']}",
             "",
         ]
+    expiry = rep.get("gate_expiry")
+    if expiry is not None:
+        lines += format_gate_expiry(expiry)
     if (
         not rep["raise_count"]
         and not rep.get("stale_runners")
         and (rep.get("mirror_drift") or {}).get("status") == "ok"
         and not (rep.get("fleet_gates") or {}).get("suspect")
         and not exploration_gate.get("suspect")
+        and (
+            expiry is None
+            or (expiry.get("status") == "ok" and not expiry["expiring"] and not expiry["lapsed"])
+        )
     ):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
+
+
+def format_gate_expiry(section: dict) -> list[str]:
+    """The notice in words. It ALWAYS prints, because the drained state is a statement too."""
+    lines = ["## Gate expiry (FYI only; nothing here renews anything)", ""]
+    if section.get("status") != "ok":
+        return lines + [f"  NOT MEASURED — {section.get('measurement', 'no reason recorded')}", ""]
+    window = section["window_days"]
+    expiring, lapsed = section["expiring"], section["lapsed"]
+    if not expiring and not lapsed:
+        upcoming = section.get("next_expiry")
+        if upcoming:
+            lines.append(
+                f"  nothing expires within {window}d and nothing was retired by its expiry in the "
+                f"last {window}d. {section['rows_with_expiry']} live row(s) carry an expiry; the "
+                f"next is {upcoming['capability_id']} on {upcoming['expires_on']} "
+                f"(in {upcoming['days_left']}d)"
+            )
+        else:
+            lines.append(
+                "  no live ledger row carries an expiry, and none was retired by one in the last "
+                f"{window}d, so the timeout has nothing to retire"
+            )
+        return lines + [""]
+    lines.append(
+        f"  {len(expiring)} live row(s) expire within {window}d and {len(lapsed)} were retired by "
+        f"their expiry in the last {window}d; renewable {section['renewable']}"
+    )
+
+    def activity(row: dict) -> str:
+        # Two different measurements, both labelled: the count is invocation EVENTS in the usage
+        # window, while `last_invocation` may also be advanced by causal reconciliation from the Brain.
+        last = row["last_invocation_on"] or "never"
+        return (
+            f"{row['recent_invocations']} invocation event(s) in {row['recent_window_days']}d, "
+            f"last invocation {last}; renewed {row['renewals']}x before"
+        )
+
+    for row in expiring:
+        when = (
+            f"in {row['days_left']}d"
+            if row["days_left"] >= 0
+            else "already passed; retires at the next writing load"
+        )
+        lines.append(
+            f"    {row['capability_id']}  {row['status']}  expires {row['expires_on']} ({when})  "
+            f"{activity(row)}"
+        )
+        if not row["renewable"]:
+            lines.append(f"        not renewable: {row['blocker']}")
+    for row in lapsed:
+        lines.append(
+            f"    {row['capability_id']}  retired by its expiry {row['retired_on']} (was "
+            f"{row['status_before']})  {activity(row)}"
+        )
+        if not row["renewable"]:
+            lines.append(f"        not renewable: {row['blocker']}")
+    lines += [
+        f"  renew one: {capabilities.renew_command('<id>')}",
+        "  Unrenewed, a row retires at its expiry: the safe default, and it takes no action from "
+        f"anyone. A renewal records why the row should stay and the evidence, and holds it "
+        f"{section['ttl_days']}d from that day.",
+        "",
+    ]
+    return lines
 
 
 def _selftest_stale_runners() -> None:
@@ -1268,11 +1456,71 @@ def _selftest() -> None:
         _selftest_review(gh_calls)
     finally:
         _GH_CALL_RUNNER = saved_runner
+    _selftest_gate_expiry()
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
         "recently-triggering stays silent, '0' is off, dry-run inert, fleet_gates SUSPECT rule, "
-        "switch_states is the review's rows without the sweep, review writes no ledger)"
+        "switch_states is the review's rows without the sweep, review writes no ledger, the "
+        "expiry notice names soon/lapsed rows and states its drained and unmeasured states)"
     )
+
+
+def _selftest_gate_expiry() -> None:
+    import tempfile
+
+    now, day = 1_700_000_000, 86400
+    with tempfile.TemporaryDirectory(prefix="switch-review-expiry-") as td:
+        reg = Path(td) / "capabilities.json"
+
+        def row(cap_id: str, **fields) -> dict:
+            rec = capabilities._blank_capability(cap_id)
+            rec.update({"status": "wired", **fields})
+            return rec
+
+        def expired(cap_id: str, days_ago: int, reason: str) -> dict:
+            event = {"timestamp": now - days_ago * day, "type": "transition", "from": "wired"}
+            return row(
+                cap_id,
+                status="retired",
+                expiry=now - days_ago * day,
+                event_history=[{**event, "to": "retired", "reason": reason}],
+            )
+
+        timeout = capabilities.EXPIRY_RETIREMENT_REASON
+        capabilities.save(
+            {
+                "soon": row("soon", expiry=now + 3 * day),
+                "later": row("later", expiry=now + 40 * day),
+                "lapsed": expired("lapsed", 2, timeout),
+                "decided": expired("decided", 2, "no longer wanted"),
+                "long-gone": expired("long-gone", GATE_EXPIRY_NOTICE_DAYS + 1, timeout),
+                "no-expiry": row("no-expiry"),
+            },
+            reg,
+        )
+        before = reg.read_bytes()
+        got = gate_expiry(now=now, path=reg)
+        assert reg.read_bytes() == before, "the expiry notice wrote the ledger it reads"
+        assert [r["capability_id"] for r in got["expiring"]] == ["soon"], got["expiring"]
+        assert [r["capability_id"] for r in got["lapsed"]] == ["lapsed"], got["lapsed"]
+        assert got["rows_with_expiry"] == 2 and got["renewable"] == 2, got
+        assert got["next_expiry"]["capability_id"] == "later", got["next_expiry"]
+        assert "renew --name soon" in got["expiring"][0]["renew"], got["expiring"][0]
+        text = "\n".join(format_gate_expiry(got))
+        assert "soon" in text and "lapsed" in text and "decided" not in text, text
+
+        # DRAINED is a statement, not silence; UNMEASURED is not drained.
+        capabilities.save({"later": row("later", expiry=now + 40 * day)}, reg)
+        drained = gate_expiry(now=now, path=reg)
+        assert not drained["expiring"] and not drained["lapsed"], drained
+        assert "the next is later on" in "\n".join(format_gate_expiry(drained))
+        capabilities.save({"no-expiry": row("no-expiry")}, reg)
+        none = "\n".join(format_gate_expiry(gate_expiry(now=now, path=reg)))
+        assert "no live ledger row carries an expiry" in none, none
+        missing = gate_expiry(now=now, path=Path(td) / "absent.json")
+        assert missing["status"] == "unknown", missing
+        assert "NOT MEASURED" in "\n".join(format_gate_expiry(missing))
+        assert not (Path(td) / "absent.json").exists(), "the notice created a ledger"
 
 
 def _selftest_review(gh_calls: list) -> None:

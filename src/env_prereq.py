@@ -154,7 +154,8 @@ def ledger_rows_not_live(*capability_ids: str) -> str | None:
 
     WHAT CLEARS IT, stated because a skip that cannot say so is a latch: the row being live again.
     A transition alone does not do it for an expired row — `load()` re-retires any live row whose
-    expiry has passed — so the reason names both halves.
+    expiry has passed — so the reason names both halves, and names `capabilities.py renew` for a
+    row its expiry retired, which does both at once with a recorded reason and evidence.
     """
     try:
         ledger = _ledger()
@@ -163,17 +164,25 @@ def ledger_rows_not_live(*capability_ids: str) -> str | None:
     import capabilities
 
     gone = sorted(
-        f"{c} ({ledger[c]['status']})"
+        c
         for c in capability_ids
         if (ledger.get(c) or {}).get("status") in capabilities.NOT_LIVE_STATES
     )
     if not gone:
         return None
+    named = ", ".join(f"{c} ({ledger[c]['status']})" for c in gone)
+    lapsed = [c for c in gone if capabilities.expiry_retirement(ledger[c]) is not None]
+    renewable = (
+        f"; {', '.join(lapsed)} retired by expiry, which `capabilities.py renew --name <id> "
+        f"--reason ... --evidence-ref ...` reverses with a recorded decision"
+        if lapsed
+        else ""
+    )
     return (
-        f"capability ledger row(s) {', '.join(gone)} are not live on this machine — lifecycle "
+        f"capability ledger row(s) {named} are not live on this machine — lifecycle "
         f"state is machine-local ({capabilities.REG}), so a verdict about how a LIVE row "
         f"classifies has no subject here until the row is live again, which takes a transition "
-        f"out of that status AND an expiry that has not passed"
+        f"out of that status AND an expiry that has not passed{renewable}"
     )
 
 
@@ -700,23 +709,30 @@ def _selftest() -> None:
         real_reg = capabilities.REG
         capabilities.REG = pathlib.Path(td) / "capabilities.json"
         try:
-            capabilities.save(
-                {
-                    cid: {**capabilities._blank_capability(cid), "status": status}
-                    for cid, status in (
-                        ("row-retired", "retired"),
-                        ("row-superseded", "superseded"),
-                        ("row-live", "shadow"),
-                    )
-                },
-                capabilities.REG,
-            )
+            rows = {
+                cid: {**capabilities._blank_capability(cid), "status": status}
+                for cid, status in (
+                    ("row-retired", "retired"),
+                    ("row-superseded", "superseded"),
+                    ("row-live", "shadow"),
+                    ("row-expired", "shadow"),
+                )
+            }
+            rows["row-expired"]["expiry"] = 100
+            capabilities._expire_in_place(rows, 100)  # the timeout's own event, not a copy of it
+            capabilities.save(rows, capabilities.REG)
             got = ledger_rows_not_live("row-retired", "row-superseded", "row-live", "row-absent")
             assert got and "row-retired (retired)" in got, got
             assert "row-superseded (superseded)" in got, got
             assert "row-live" not in got and "row-absent" not in got, got
             # ...and it says what CLEARS it, both halves, or the skip is a latch with no drain.
             assert "transition" in got and "expiry" in got, got
+            # A row its EXPIRY retired has a one-command drain, and the reason names it; a row
+            # retired any other way is not offered that command.
+            assert "renew" not in got, got
+            lapsed = ledger_rows_not_live("row-expired", "row-retired")
+            assert lapsed and "row-expired retired by expiry" in lapsed, lapsed
+            assert "renew --name" in lapsed and "row-retired retired by expiry" not in lapsed
             assert ledger_rows_not_live("row-live", "row-absent") is None
         finally:
             capabilities.REG = real_reg

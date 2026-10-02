@@ -244,6 +244,9 @@ def test_generated_role_shadow_runner_records_accepted_lineage_and_lifecycle(
     cap = capabilities.load(ledger, create=False)[generated_role_manifest["capability_id"]]
     assert cap["status"] == "shadow"
     assert cap["expiry"] == generated_role_manifest["lifecycle"]["expires_at"]
+    # The ledger row's expiry COPIES the artifact's own lifecycle, which the target enforces at
+    # run time, so `capabilities.renew` must refuse it rather than revive an unrunnable row.
+    assert "role_manifest_hash" in capabilities.renewal_blocker(cap, now=int(time.time()))
     assert cap["kill_switch"] == generated_role_manifest["lifecycle"]["kill_switch"]
     assert cap["rollback"] == generated_role_manifest["lifecycle"]["rollback"]
     assert cap["predecessor"] == "role-adjudicator"
