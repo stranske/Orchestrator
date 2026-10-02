@@ -159,12 +159,21 @@ def arm(tests_dir: Path) -> Guard:
             return failed(proc)
         tracked = [rel for rel in _split(proc.stdout) if in_scope(rel)]
         if tracked:
+            # Only a file HEAD already holds can be export-ignored. One staged for the next commit
+            # is missing from the archive because it is not in HEAD yet, and it ships with the
+            # change that reads it; counting it here labelled a freshly `git add`ed fixture
+            # "export-ignore" in a repository with no .gitattributes at all (2026-10-02).
+            proc = git("ls-tree", "-r", "-z", "--name-only", "HEAD", "--", ".")
+            if proc.returncode != 0:
+                return failed(proc)
+            in_head = set(_split(proc.stdout))
             proc = git("archive", "--format=tar", "HEAD", "--", ".")
             if proc.returncode != 0:
                 return failed(proc)
             with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as archive:
-                shipped = {member.name for member in archive.getmembers() if member.isfile()}
-            for rel in set(tracked) - shipped:
+                # Every non-directory entry ships: a symlink is not `isfile()`, yet it travels.
+                shipped = {member.name for member in archive.getmembers() if not member.isdir()}
+            for rel in (set(tracked) & in_head) - shipped:
                 found[rel] = "export-ignore"
     except (OSError, subprocess.SubprocessError) as exc:
         return Guard(False, f"git could not be run in {tests_dir}: {exc}")
