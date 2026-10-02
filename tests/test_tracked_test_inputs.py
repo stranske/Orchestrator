@@ -121,12 +121,16 @@ def build_checkout(root: Path, env: dict[str, str]) -> Path:
 
     tests = root / "tests"
     put(root / ".gitignore", "data/\n")
-    put(root / ".gitattributes", "tests/fixtures/held_back.txt export-ignore\n")
+    put(
+        root / ".gitattributes",
+        "tests/fixtures/held_back.txt export-ignore\ntests/directory_held export-ignore\n",
+    )
     put(tests / "conftest.py", CONFTEST.read_text())
     put(tests / "test_reads.py", READS)
     put(tests / "test_reads_at_import.py", AT_IMPORT)
     put(tests / "fixtures" / "tracked.txt", "tracked\n")
     put(tests / "fixtures" / "held_back.txt", "held\n")
+    put(tests / "directory_held" / "input.txt", "held by directory rule\n")
     put(tests / "junky" / "a.txt", "kept\n")
     put(tests / "data" / "forced.json", "{}\n")
     git("init", "-q", ".")
@@ -240,6 +244,7 @@ def test_arm_watches_exactly_what_git_archive_leaves_out(tmp_path, monkeypatch):
         "fixtures/leftover.txt": "untracked",
         "data/swallowed.json": "ignored",
         "fixtures/held_back.txt": "export-ignore",
+        "directory_held/input.txt": "export-ignore",
     }, (
         "the guard must watch the untracked, the .gitignore'd and the export-ignore'd inputs, and "
         "nothing it can never matter for: a tracked file under an ignored directory ships, and "
@@ -289,13 +294,13 @@ def test_this_session_armed_exactly_where_git_can_answer(tracked_inputs_guard):
     assert guard is not None, "tests/conftest.py never armed: its pytest_configure did not run"
     absent = env_prereq.git_repo_absent()
     if absent is None:
-        assert (
-            guard.armed
-        ), f"git can answer for this tree, yet the guard stood down: {guard.detail}"
+        assert guard.armed, (
+            f"git can answer for this tree, yet the guard stood down: {guard.detail}"
+        )
     else:
-        assert (
-            not guard.armed and not guard.watched
-        ), f"git cannot answer here ({absent}), yet the guard claims to be watching: {guard.detail}"
+        assert not guard.armed and not guard.watched, (
+            f"git cannot answer here ({absent}), yet the guard claims to be watching: {guard.detail}"
+        )
 
 
 def _quiet(text: str) -> str:
@@ -348,6 +353,6 @@ def test_reading_an_input_the_mirror_lacks_fails_that_test(tmp_path):
         "tests/data/swallowed.json: matched by .gitignore",
         "tests/fixtures/held_back.txt: tracked, but .gitattributes marks it export-ignore",
         "AssertionError: its own failure",  # a test that fails anyway keeps its own story
-        "tracked test inputs: armed -- watching 4 file(s)",
+        "tracked test inputs: armed -- watching 5 file(s)",
     ):
         assert why in out, f"missing {why!r}:\n{_quiet(out)}"

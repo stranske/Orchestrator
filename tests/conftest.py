@@ -49,10 +49,12 @@ Design notes:
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -157,14 +159,13 @@ def arm(tests_dir: Path) -> Guard:
             return failed(proc)
         tracked = [rel for rel in _split(proc.stdout) if in_scope(rel)]
         if tracked:
-            listing = b"".join(os.fsencode(rel) + b"\0" for rel in tracked)
-            proc = git("check-attr", "-z", "--stdin", "export-ignore", stdin=listing)
+            proc = git("archive", "--format=tar", "HEAD", "--", ".")
             if proc.returncode != 0:
                 return failed(proc)
-            fields = proc.stdout.split(b"\0")  # path NUL attribute NUL value NUL, per path
-            for i in range(0, len(fields) - 2, 3):
-                if fields[i + 2] == b"set":
-                    found[os.fsdecode(fields[i])] = "export-ignore"
+            with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as archive:
+                shipped = {member.name for member in archive.getmembers() if member.isfile()}
+            for rel in set(tracked) - shipped:
+                found[rel] = "export-ignore"
     except (OSError, subprocess.SubprocessError) as exc:
         return Guard(False, f"git could not be run in {tests_dir}: {exc}")
 
