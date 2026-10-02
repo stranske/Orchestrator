@@ -7,7 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 import capabilities
+import capability_lifecycle
 import env_prereq
+import feedback
 
 
 @pytest.fixture
@@ -331,6 +333,145 @@ def test_an_expired_gate_row_stays_retired_and_the_ledger_stays_put(tmp_path):
     after = json.loads(ledger.read_text())["capabilities"][name]["event_history"]
     assert len(after) == events, after[events:]
     assert ledger.read_bytes() == settled, "a load with nothing to change rewrote the ledger"
+
+
+def _status_moves_since(cap, index):
+    return _status_moves({"event_history": cap["event_history"][index:]})
+
+
+@pytest.mark.parametrize("name", ["role-triage", "role-prompt"])
+def test_a_causal_promotion_past_the_declaration_survives_reconciliation(
+    tmp_path, monkeypatch, name
+):
+    """The daily causal reconcile's promotion must outlive the tick's next writing load.
+
+    `reconcile_causal_lifecycle` promotes a row on a joined terminal outcome (wired -> shadow ->
+    exercised), and the tick's `capabilities.py --json validate` takes a writing `load()` on every
+    active tick. Reconciliation moved every live, non-active row TO its declared status, so the
+    promotion was reset within the hour: `role-triage` (declared `shadow`) went to `exercised` and
+    back 26 times. `role-prompt` (declared `wired`) covers the two-step promotion. The row is built
+    the way the live one was: gate registration by `load()`, module lineage, one real Brain episode.
+    """
+    declared = capabilities.KNOWN_GATES[name]["status"]
+    assert declared in ("wired", "shadow"), f"{name}: no causal promotion passes {declared}"
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save({}, ledger)
+    assert capabilities.load(ledger)[name]["status"] == declared
+    version = capabilities.adopt_module_version(name, path=ledger)["capability_version_id"]
+    run_id = f"work:{name}"
+    feedback.record_run(
+        run_id,
+        f"owner/repo#{name}",
+        "implement",
+        "codex",
+        routing_metadata={"subject_id": f"subject:{name}"},
+    )
+    feedback.record_capability_consumption(
+        capability_id=name,
+        capability_version_id=version,
+        source_run_id=f"capability-output:{name}",
+        target_run_id=run_id,
+        accepted=True,
+        producer="test",
+    )
+    feedback.record_outcome(run_id, adjudicated_verdict="PASS", merged=True, durability="durable")
+
+    # The promotion itself, or everything below proves nothing.
+    assert capabilities.reconcile_causal_lifecycle(name, path=ledger)["status"] == "exercised"
+    promoted = len(json.loads(ledger.read_text())["capabilities"][name]["event_history"])
+    before = ledger.read_bytes()
+
+    declared_view = capabilities.load_declared(ledger)
+    assert ledger.read_bytes() == before, "load_declared must not write the ledger"
+    loaded = capabilities.load(ledger)
+    on_disk = json.loads(ledger.read_text())["capabilities"]
+    for view, caps in (("load_declared", declared_view), ("load", loaded), ("disk", on_disk)):
+        assert caps[name]["status"] == "exercised", (name, view, caps[name]["status"])
+    assert not _status_moves_since(on_disk[name], promoted), on_disk[name]["event_history"][-3:]
+    assert ledger.read_bytes() == before, "a load with nothing to change rewrote the ledger"
+
+    # ...which is what makes the next rung reachable: `start_canary` accepts only `exercised`.
+    capability_lifecycle.start_canary(name, ledger_path=ledger, evidence_ref="test:joined-shadow")
+    assert capabilities.load_declared(ledger)[name]["status"] == "canary"
+    assert capabilities.load(ledger)[name]["status"] == "canary"
+
+
+# How a row came to sit at `shadow`, above a `wired` declaration, and where reconciliation leaves it.
+ABOVE_THE_DECLARATION = {
+    # A lifecycle decision, recorded with its evidence: the row keeps it.
+    "transition": ([{"type": "transition", "from": "wired", "to": "shadow"}], "shadow"),
+    # Seeded by registration under an earlier, higher declaration (live-keepalive-supervisor's
+    # shape when its declaration was corrected to `wired`): the declaration's own placement.
+    "registration": ([{"type": "gate_registered"}], "wired"),
+    # Lifted there by reconciliation to an earlier declaration, since lowered.
+    "reconciliation": (
+        [{"type": "declaration_reconciled", "from": "wired", "to": "shadow"}],
+        "wired",
+    ),
+    # No event explains it: typed into the ledger by hand.
+    "unrecorded": ([], "wired"),
+    # The newest transition went somewhere else, so it does not explain this status either.
+    "stale_transition": ([{"type": "transition", "from": "shadow", "to": "exercised"}], "wired"),
+}
+
+
+@pytest.mark.parametrize("placed_by", sorted(ABOVE_THE_DECLARATION))
+def test_above_its_declaration_a_row_keeps_only_what_a_transition_gave_it(tmp_path, placed_by):
+    """Above the floor, the status belongs to whatever put it there.
+
+    A transition is the lifecycle's decision and stands. Anything else (registration, an earlier
+    declaration, a hand edit) was only ever a declaration's placement, so a lowered declaration
+    takes it down with it, on every reader and on disk.
+    """
+    name = "role-prompt"
+    assert capabilities.KNOWN_GATES[name]["status"] == "wired", "fixture: shadow is no longer above"
+    events, want = ABOVE_THE_DECLARATION[placed_by]
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save({}, ledger)
+    rows = capabilities.load(ledger)
+    rows[name]["status"] = "shadow"
+    rows[name]["event_history"] = [{"timestamp": 100, **event} for event in events]
+    capabilities.save(rows, ledger)
+    before = ledger.read_bytes()
+
+    declared = capabilities.load_declared(ledger)
+    assert ledger.read_bytes() == before, "load_declared must not write the ledger"
+    loaded = capabilities.load(ledger)
+    on_disk = json.loads(ledger.read_text())["capabilities"]
+    for view, caps in (("load_declared", declared), ("load", loaded), ("disk", on_disk)):
+        assert caps[name]["status"] == want, (placed_by, view, caps[name]["status"])
+    moves = _status_moves_since(on_disk[name], len(events))
+    if want == "shadow":
+        assert not moves, moves
+        assert ledger.read_bytes() == before, "a load with nothing to change rewrote the ledger"
+    else:
+        reasons = [move["reason"] for move in moves if "reason" in move]
+        assert reasons == ["placed by a declaration, not a lifecycle transition"], moves
+
+
+def test_a_row_a_transition_left_below_its_declaration_is_lifted_to_it(tmp_path):
+    """The floor half of the rule: below its declaration, a row is lifted whoever put it there.
+
+    Reviving a retired row is a transition to `observed`, below every declaration, and the next
+    load applying the declared status is how a revived row gets back (PR #360). A rule that only
+    asked WHO set the status would leave it at `observed`, where nothing promotes a declared row.
+    """
+    name = "role-triage"
+    declared = capabilities.KNOWN_GATES[name]["status"]
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save({}, ledger)
+    capabilities.load(ledger)
+    capabilities.transition(name, "retired", reason="test: retire", path=ledger)
+    capabilities.transition(name, "observed", reason="test: revive", path=ledger)
+    revived = len(json.loads(ledger.read_text())["capabilities"][name]["event_history"])
+
+    assert capabilities.load_declared(ledger)[name]["status"] == declared
+    assert capabilities.load(ledger)[name]["status"] == declared
+    on_disk = json.loads(ledger.read_text())["capabilities"][name]
+    assert on_disk["status"] == declared, on_disk["status"]
+    reasons = [move["reason"] for move in _status_moves_since(on_disk, revived) if "reason" in move]
+    assert reasons == ["below the declared status"], on_disk["event_history"][revived:]
 
 
 def test_liveness_classifications_use_capability_events():

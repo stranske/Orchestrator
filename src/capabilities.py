@@ -1504,8 +1504,8 @@ def renew(
 # someone typed them, absent on a fresh checkout, and invisible to review.
 #
 # `status` is the one field NOT rewritten on every load. It is listed so a KNOWN_DECLARATIONS row may
-# declare one, but a lifecycle state is owned by the ledger: `_reconcile_known_declarations` moves a
-# row to its declared status only when the row is neither `active` nor in NOT_LIVE_STATES.
+# declare one, but a lifecycle state is owned by the ledger: a declared status is a FLOOR, and
+# `_reconcile_known_declarations` never moves a row that a lifecycle transition carried past it.
 DECLARATION_FIELDS: tuple[str, ...] = (
     "status",
     "entrypoint",
@@ -1683,23 +1683,51 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
 }
 
 
+def _status_set_by_transition(cap: dict[str, Any]) -> bool:
+    """Whether a lifecycle TRANSITION, rather than a declaration, set this row's current status.
+
+    The row's LATEST status-setting event decides. A `transition` is a lifecycle decision recorded
+    with its evidence: the causal reconciler's promotions, `transition()`, `start_canary`, the
+    expiry timeout. Registration (`gate_registered`, `migrated`) and reconciliation moving `status`
+    (`declaration_reconciled`, with `from`/`to` or with `status` among its `changed_fields`) are
+    the declaration's own placements. A status no event explains, typed into the ledger by hand,
+    is nobody's decision, so nothing protects it from the declaration.
+    """
+    for event in reversed(cap.get("event_history") or []):
+        kind = event.get("type")
+        if kind == "transition":
+            return event.get("to") == cap.get("status")
+        if kind in ("gate_registered", "migrated"):
+            return False
+        if kind == "declaration_reconciled" and (
+            "to" in event or "status" in (event.get("changed_fields") or [])
+        ):
+            return False
+    return False
+
+
+def _status_rank(status: Any) -> int:
+    """A status's place on the lifecycle ladder; an unknown status ranks below every real one."""
+    return CANONICAL_STATES.index(status) if status in CANONICAL_STATES else -1
+
+
 def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: int) -> bool:
     """Refresh contract fields when code declarations evolve.
 
     The ledger must preserve accumulated evidence, but leaving old matcher,
     gate, or consumer text in place makes a newly wired feature look dormant.
     Reconciliation therefore updates declaration-owned fields and records the
-    change. It never invents match/invocation/outcome evidence and never
-    moves an active, retired, or superseded capability off that status.
+    change. It never invents match/invocation/outcome evidence, never moves an
+    active, retired, or superseded capability off that status, and never moves
+    a row back from a status a lifecycle transition carried it to.
     """
     changed = False
     # `status` IS DECLARATION-OWNED BUT LIFECYCLE-GUARDED, so this loop skips it and the block below
-    # owns it: a declared status moves a row only when that row is neither `active` nor in
-    # NOT_LIVE_STATES. PR #207 (2026-09-03) put `status` into DECLARATION_FIELDS so a
-    # KNOWN_DECLARATIONS row could declare one, and from then this loop rewrote the status of every
-    # declared row on every load. A retirement was undone by the next writing load, every
-    # `load_declared` reader saw the retired row as live, an expired row was re-retired in the same
-    # call (two events and a full rewrite per load), and the guard below was dead code.
+    # owns it. PR #207 (2026-09-03) put `status` into DECLARATION_FIELDS so a KNOWN_DECLARATIONS row
+    # could declare one, and from then this loop rewrote the status of every declared row on every
+    # load. A retirement was undone by the next writing load, every `load_declared` reader saw the
+    # retired row as live, an expired row was re-retired in the same call (two events and a full
+    # rewrite per load), and the guard below was dead code.
     declaration_fields = tuple(field for field in DECLARATION_FIELDS if field != "status")
     # BOTH SOURCES, one loop. KNOWN_GATES carries gate machinery; KNOWN_DECLARATIONS carries only
     # declaration-owned fields for capabilities that are not gates.
@@ -1712,21 +1740,45 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
             if field in gate and cap.get(field) != gate[field]:
                 cap[field] = json.loads(json.dumps(gate[field]))
                 changed_fields.append(field)
+        # A DECLARED STATUS IS A FLOOR, NOT THE ROW'S STATUS. A live row BELOW it is lifted to it:
+        # registration seeding a row, a declaration raised in code (`redirect-apply-bootstrap`
+        # armed to `canary` on 2026-08-21), a row revived out of `retired`. A row ABOVE it belongs
+        # to whatever put it there. A lifecycle transition is measured or decided evidence, so its
+        # status stands. A status only a declaration placed follows the declaration down, as
+        # `live-keepalive-supervisor` did when its declaration was corrected to `wired` (2026-07-10).
+        #
+        # Until this rule, every live non-active row was moved TO its declared status, and the
+        # causal reconciler's promotions are moves past it. `role-triage` went shadow -> exercised
+        # ("joined consumed outcome observed") 26 times from 2026-09-01 to 09-25 and the next writing
+        # load reset it to `shadow` each time: two events and a full ledger rewrite a day, no
+        # declared row could ever read `exercised`, and `capability_lifecycle.start_canary`, which
+        # accepts only `exercised`, could never be reached from one.
+        #
+        # A transition that takes a row BELOW its declaration is lifted back on the next load. To
+        # hold a row below its declared status, lower the declaration: like every other field here,
+        # it is reviewed in a diff.
         declared_status = gate.get("status")
+        status = cap.get("status")
+        below = _status_rank(status) < _status_rank(declared_status)
         if (
             declared_status
-            and cap.get("status") not in {"active", *NOT_LIVE_STATES}
-            and cap.get("status") != declared_status
+            and status != declared_status
+            and status not in {"active", *NOT_LIVE_STATES}
+            and (below or not _status_set_by_transition(cap))
         ):
-            previous = cap.get("status")
             cap["status"] = declared_status
             changed_fields.append("status")
             cap.setdefault("event_history", []).append(
                 {
                     "timestamp": now,
                     "type": "declaration_reconciled",
-                    "from": previous,
+                    "from": status,
                     "to": declared_status,
+                    "reason": (
+                        "below the declared status"
+                        if below
+                        else "placed by a declaration, not a lifecycle transition"
+                    ),
                     "activation_inferred": False,
                 }
             )
@@ -3149,6 +3201,23 @@ def _selftest() -> None:
         assert stale["status"] == KNOWN_GATES["role-prompt"]["status"]
         assert stale["entrypoint"] == KNOWN_GATES["role-prompt"]["entrypoint"]
         assert stale["flags_defaults"]["ORCH_ROLE_SHADOW"] == "1"
+
+        # A declared status is a FLOOR. Above it (`shadow` over role-prompt's `wired`), a status a
+        # lifecycle transition set stands and one only a declaration placed follows it down; below
+        # it (a row revived to `observed`), the row is lifted whoever put it there.
+        declared_prompt = KNOWN_GATES["role-prompt"]["status"]
+        for status, events, want in (
+            ("shadow", [{"type": "transition", "from": "wired", "to": "shadow"}], "shadow"),
+            ("shadow", [{"type": "gate_registered"}], declared_prompt),
+            (
+                "observed",
+                [{"type": "transition", "from": "retired", "to": "observed"}],
+                declared_prompt,
+            ),
+        ):
+            row = {**_blank_capability("role-prompt"), "status": status, "event_history": events}
+            _reconcile_known_declarations({"role-prompt": row}, 102)
+            assert row["status"] == want, (status, events, row["status"])
 
         # `load_declared` must answer with the RECONCILED view and leave the FILE alone. Both
         # halves are load-bearing: without the reconcile, a reader asserting on a declaration-owned
