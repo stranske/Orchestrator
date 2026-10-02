@@ -63,7 +63,8 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   always states what it did not check. On a machine with all prerequisites nothing skips at all.
   It checks the whole tree it runs in, so a PR's verdict is CI's run on the PR head. This machine's
   verdict on a merged tree is one run per sync, taken before the live mirror changes by
-  `scripts/verify_before_sync.sh` in a scratch mirror (CLAUDE.md §1).
+  `scripts/verify_before_sync.sh` in a scratch mirror; the wrapper then installs that exact verified
+  snapshot instead of re-reading the mutable checkout (CLAUDE.md §1).
   A run judges a PRIVATE COPY of the ledger and the Brain, taken once when it starts, so it never
   queues behind the tick's ledger lock and the code under test cannot write production state. Its
   selftests run eight at a time, and the two gates that are test files report the verdicts pytest
