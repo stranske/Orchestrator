@@ -348,8 +348,13 @@ on the exact tree about to go live.
    even when the verdict then stops the copy. `HOME` stays real, so the installed CLIs and
    skills are seen. A directory over `VERIFY_BEFORE_SYNC_MAX_DIR_MB` (default 50) is skipped and
    named: `agent-runtime`, `frontend-verify`, `repos`, `reviews` and a few smaller ones today.
-3. It re-checks that `SRC` did not change in the meantime. The clone is shared, and another session
-   can switch it during a 10–25 minute run.
+3. It hashes the deployment-owned bytes before and after `verify.py`, and also re-checks that `SRC`
+   did not change. A verifier write, checkout switch, or concurrent source edit therefore voids the
+   verdict instead of silently changing what the wrapper can deploy.
+4. With `--snapshot-out DIR`, it publishes the verified scratch mirror only after every gate is
+   green. The wrapper installs that snapshot with its verified copy of
+   `scripts/install_verified_snapshot.py`; it never re-reads mutable `SRC` or fetches the registry a
+   second time.
 
 Its exit codes are 0 VERIFIED, 1 NOT VERIFIED, 2 nothing verified, and 3 VOID (`SRC` moved). It
 never writes the live mirror, the live registry copy, the live ledger or the live Brain.
@@ -364,51 +369,54 @@ byte- and row-identical afterwards.
 ```bash
 # THE VERDICT COMES BEFORE THE COPY (2026-10-02). verify.py checks the whole tree it runs in, so the
 # one machine-local run a sync needs is on the exact tree about to go live: taken in a scratch mirror
-# built by the same copy script, before launchd can run it, and immune to a sync landing mid-run.
-# A red stops the copy, so the live mirror keeps the code it already runs, and the last line says
-# how to copy anyway. A source with no verify_before_sync.sh cannot be verified first, so it is
-# refused rather than copied and checked afterwards. After the copy the source is fingerprinted
-# again: a source that moved DURING the copy may have put unverified bytes live, and says so.
+# built by the same copy script. The green path installs that exact verified snapshot, never mutable
+# SRC. A red or missing pre-verifier stops before deployment; --no-verify remains the explicit copy.
+print_unverified_override() {
+  printf '  to copy anyway, unverified:' >&2
+  printf ' %q' "$0" --no-verify >&2
+  [[ "$ALLOW_UNMERGED" == "1" ]] && printf ' %q' --allow-unmerged >&2
+  printf ' %q\n' "$SRC" >&2
+}
+
 PRE="$SRC/scripts/verify_before_sync.sh"
-VERIFIED_ID=""
-if [[ "$RUN_VERIFY" == "1" ]]; then
-  if [[ ! -f "$PRE" ]]; then
-    echo >&2
-    echo "NOT SYNCED: $SRC has no scripts/verify_before_sync.sh, so no verdict can be taken" >&2
-    echo "  before the copy. Pull it first, or copy anyway, unverified:  $0 --no-verify $*" >&2
-    exit 3
-  fi
-  echo
-  echo "== verdict BEFORE the live copy, from a scratch mirror of $SRC"
-  PRE_LOG="$(mktemp "${TMPDIR:-/tmp}/orch-mirror-sync.XXXXXX")"
-  trap 'rm -f "$PRE_LOG"' EXIT
-  if ! bash "$PRE" "$SRC" | tee "$PRE_LOG"; then
-    echo >&2
-    echo "NOT SYNCED: the live mirror still runs the code it ran before this command." >&2
-    echo "  to copy anyway, unverified:  $0 --no-verify $*" >&2
-    exit 3
-  fi
-  VERIFIED_ID="$(sed -n 's/^ *verified source identity: //p' "$PRE_LOG" | tail -1)"
-fi
-
-echo
-echo "== syncing"
-"$HOME/.codex/bin/orch-sync-mirror.sh" "$SRC"
-
 if [[ "$RUN_VERIFY" == "0" ]]; then
   echo
-  echo "== skipped the verdict (--no-verify). The copy is NOT a verdict."
+  echo "== syncing without a verdict (--no-verify)"
+  "$HOME/.codex/bin/orch-sync-mirror.sh" "$SRC"
+  echo
+  echo "== skipped the mirror verify (--no-verify). The copy is NOT a verdict."
   exit 0
 fi
-COPIED_ID="$(bash "$PRE" --identity "$SRC" || true)"
-if [[ -z "$VERIFIED_ID" || "$COPIED_ID" != "$VERIFIED_ID" ]]; then
+
+if [[ ! -f "$PRE" ]]; then
+  echo "NOT SYNCED: $SRC has no scripts/verify_before_sync.sh; no pre-copy verdict exists." >&2
+  print_unverified_override
+  exit 3
+fi
+
+STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/orch-verified-sync.XXXXXX")"
+trap 'rm -rf "$STAGE_ROOT"' EXIT
+SNAPSHOT="$STAGE_ROOT/mirror"
+echo
+echo "== verdict BEFORE the live copy, from a scratch mirror of $SRC"
+if ! bash "$PRE" --snapshot-out "$SNAPSHOT" "$SRC"; then
   echo >&2
-  echo "!! $SRC changed during the live copy, or its identity could not be read, so the live" >&2
-  echo "   mirror may hold bytes that were not verified. Re-run this sync once the source is settled." >&2
-  exit 4
+  echo "NOT SYNCED: the live mirror still runs the code it ran before this command." >&2
+  print_unverified_override
+  exit 3
+fi
+INSTALLER="$SNAPSHOT/scripts/install_verified_snapshot.py"
+if [[ ! -f "$INSTALLER" ]]; then
+  echo "NOT SYNCED: the verified snapshot has no installer." >&2
+  print_unverified_override
+  exit 3
 fi
 echo
-echo "== the verdict above was taken on exactly what was copied; no second run"
+echo "== installing the verified snapshot (SRC is not read again)"
+python3 "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
+  --runtime-registry "$HOME/.codex/orchestrator/repo_review_registry.json"
+echo
+echo "== the exact deployment snapshot above received the verdict; no second run"
 ```
 
 Also change the `--no-verify` help line to say it is the way to copy after a red:
@@ -418,11 +426,10 @@ Also change the `--no-verify` help line to say it is the way to copy after a red
 
 | Verdict | What the wrapper does |
 |---|---|
-| Green | It copies once the verdict is in, then fingerprints the source again and confirms it matches what was verified. It does not run `verify.py` a second time. The copy now lands 10–25 minutes after you start the command, not immediately. |
+| Green | It installs the retained deployment snapshot that received the verdict, and does not read `SRC`, refetch the registry, or run `verify.py` a second time. The copy now lands 10–25 minutes after you start the command, not immediately. |
 | Red | It does not copy. The live mirror keeps running the code it already ran, and the last line printed is the one command that copies anyway. A false red (a ledger row registered by a sibling session's unmerged branch, say) therefore costs one command, never a blocked sync. |
 | VOID | It does not copy. Re-run once the clone is settled. |
-| Source without the script | It does not copy (exit 3), and says to pull first or copy anyway with `--no-verify`. The stale Dropbox checkout, the wrapper's default `SRC`, lands here rather than shipping old code with a verdict taken only afterwards. |
-| Source moved during the copy | Exit 4, saying the live mirror may hold unverified bytes. Re-run once the source is settled. This is the window left after the last check inside the script. Detecting it costs one fingerprint; preventing it would mean promoting the scratch mirror itself. |
+| Missing pre-verifier | It fails closed before copying and prints the quoted `--no-verify` override. There is no copy-first fallback. |
 
 **How to confirm it.** Run the script on its own first. It writes nothing live:
 
@@ -440,16 +447,13 @@ must open with `tree: EXEC MIRROR — mirror_* ceilings apply`. Then confirm tha
    override is always available and needs nothing the stop forbids.
 2. *Can that run while the gate is closed?* Yes. Neither the fix nor the override depends on the
    wrapper having copied.
-3. *Measuring window = draining window?* Yes. The verdict is taken on the identity the copy reads:
-   `HEAD` (which carries the `tests/` and `scripts/` archives), the copy's working-tree module glob
-   including ignored files, and its named root files. A source that moved during the run returns
-   VOID, and one that moved during the live copy exits 4, never a stale verdict.
-4. *What does it print when drained?* `== verify-before-sync: VERIFIED for <SRC> @ <sha> …` and
-   `verified source identity: <fingerprint>`, then the copy, then `the verdict above was taken on
-   exactly what was copied; no second run`. The script's lines are produced by
-   `test_a_green_scratch_mirror_is_verified_and_nothing_live_is_touched` and
-   `test_identity_mode_prints_the_fingerprint_a_green_verdict_was_taken_on`. The wrapper's lines
-   live outside this repository; the witness below and the confirmation step above cover them.
+3. *Measuring window = draining window?* Yes. The helper hashes the deployment-owned scratch bytes
+   before and after the run, publishes them only on green, and the wrapper installs those same bytes.
+   `SRC` is never read again. A changed source or changed scratch payload returns VOID.
+4. *What does it print when drained?* `== verify-before-sync: VERIFIED for <SRC> @ <sha> …`,
+   then the install, then `the exact deployment snapshot above received the verdict; no second
+   run`. `test_mirror_sync_patch.py` extracts and executes the documented block with stand-ins, so
+   the live wrapper contract and the documentation cannot silently diverge.
 
 **Applied 2026-10-02, at the owner's request, and re-applied as v2 after review.**
 - `~/.codex/bin/orch-mirror-sync.sh` carries the block above byte for byte, plus the `--no-verify`

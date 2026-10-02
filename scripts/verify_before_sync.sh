@@ -24,10 +24,11 @@
 # source did not move while verify.py ran. It never touches the live mirror, the live ledger or the
 # live Brain, and never runs the live sync: what to do with the verdict is the caller's decision.
 #
-# Usage: scripts/verify_before_sync.sh [SRC]    (SRC defaults to ~/.codex/orchestrator-src)
+# Usage: scripts/verify_before_sync.sh [--snapshot-out DIR] [SRC]
+#                                            (SRC defaults to ~/.codex/orchestrator-src)
 #        scripts/verify_before_sync.sh --identity [SRC]
 #        prints a fingerprint of exactly what the copy reads from SRC, the same value a
-#        VERIFIED run prints, so a caller that copies afterwards can re-check its source
+#        VERIFIED run prints; retained for diagnostics, not as the wrapper's deployment gate
 # Exit:  0 VERIFIED
 #        1 NOT VERIFIED: verify.py failed (its exit code is printed), or passed without judging
 #          the scratch tree as the exec-mirror shape, so the mirror's ceilings were not applied
@@ -51,6 +52,13 @@ if [[ "${1:-}" == "--identity" ]]; then
   mode="identity"
   shift
 fi
+snapshot_out=""
+if [[ "${1:-}" == "--snapshot-out" ]]; then
+  [[ -n "${2:-}" ]] || { printf 'verify-before-sync: --snapshot-out needs a directory\n' >&2; exit 2; }
+  snapshot_out="$2"
+  shift 2
+fi
+[[ "$#" -le 1 ]] || { printf 'verify-before-sync: unexpected arguments\n' >&2; exit 2; }
 src="${1:-$real_home/.codex/orchestrator-src}"
 sync_script="${ORCH_SYNC_SCRIPT:-$real_home/.codex/bin/orch-sync-mirror.sh}"
 python_bin="${PYTHON:-python3}"
@@ -166,6 +174,10 @@ if ! scratch="$(mktemp -d "${TMPDIR:-/tmp}/verify-before-sync.XXXXXX")"; then
   fail "NOTHING VERIFIED: could not create a scratch directory"
   exit 2
 fi
+if [[ -n "$snapshot_out" && ( -e "$snapshot_out" || -L "$snapshot_out" ) ]]; then
+  fail "NOTHING VERIFIED: snapshot output already exists: $snapshot_out"
+  exit 2
+fi
 if [[ "${VERIFY_BEFORE_SYNC_KEEP:-0}" == "1" ]]; then
   say "scratch directory kept: $scratch"
 else
@@ -181,6 +193,15 @@ if ! GH_CONFIG_DIR="$gh_config" GH_NO_UPDATE_NOTIFIER=1 HOME="$scratch/home" \
 fi
 if [[ ! -f "$scratch/mirror/verify.py" ]]; then
   fail "NOTHING VERIFIED: the scratch copy holds no verify.py"
+  exit 2
+fi
+installer="$scratch/mirror/scripts/install_verified_snapshot.py"
+if [[ ! -f "$installer" ]]; then
+  fail "NOTHING VERIFIED: the scratch copy holds no verified-snapshot installer"
+  exit 2
+fi
+if ! payload_before="$("$python_bin" "$installer" "$scratch/mirror" --digest)"; then
+  fail "NOTHING VERIFIED: could not hash the scratch deployment payload"
   exit 2
 fi
 
@@ -216,7 +237,14 @@ say "== verify.py in the scratch mirror, on the state copy (HOME stays real for 
 (cd "$scratch/mirror" && ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
   ORCH_CAPABILITIES_PATH="$ledger_copy" ORCH_FEEDBACK_DB="$brain_copy" \
   "$python_bin" verify.py) 2>&1 | tee "$scratch/verify.log"
-rc=${PIPESTATUS[0]}
+pipe_status=("${PIPESTATUS[@]}")
+rc=${pipe_status[0]}
+tee_rc=${pipe_status[1]}
+
+if [[ "$tee_rc" != "0" ]]; then
+  fail "NOTHING VERIFIED: could not capture complete verify.py evidence (tee exit $tee_rc)"
+  exit 2
+fi
 
 shape_ok=1
 if ! grep -q 'tree: *EXEC MIRROR' "$scratch/verify.log"; then
@@ -227,6 +255,14 @@ fi
 if ! after="$(source_identity)" || [[ "$after" != "$before" ]]; then
   fail "VOID: $src changed while verify.py ran, so this verdict is about a tree the sync would"
   fail "not copy. Re-run once the source is settled."
+  exit 3
+fi
+if ! payload_after="$("$python_bin" "$installer" "$scratch/mirror" --digest)"; then
+  fail "VOID: could not re-hash the scratch deployment payload after verification"
+  exit 3
+fi
+if [[ "$payload_after" != "$payload_before" ]]; then
+  fail "VOID: verification changed deployment-owned bytes in the scratch mirror"
   exit 3
 fi
 
@@ -243,6 +279,13 @@ say "   scratch mirror built by $sync_script, verified on a copy of $runtime_src
 say "   the live registry copy, the live ledger and the live Brain were not written"
 if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   say "   verified source identity: $(fingerprint "$before")"
+  if [[ -n "$snapshot_out" ]]; then
+    if ! mkdir -p "$(dirname "$snapshot_out")" || ! mv "$scratch/mirror" "$snapshot_out"; then
+      fail "NOTHING VERIFIED: could not publish the verified snapshot to $snapshot_out"
+      exit 2
+    fi
+    say "   verified deployment snapshot: $snapshot_out"
+  fi
   exit 0
 fi
 exit 1

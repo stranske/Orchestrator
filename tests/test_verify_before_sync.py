@@ -31,6 +31,7 @@ import pytest
 import paths
 
 SCRIPT = paths.REPO_ROOT / "scripts" / "verify_before_sync.sh"
+INSTALLER = paths.REPO_ROOT / "scripts" / "install_verified_snapshot.py"
 
 # Stands in for orch-sync-mirror.sh. It records the environment it was given, then writes a
 # mirror whose verify.py records ITS environment and prints the summary lines verify.py prints.
@@ -44,6 +45,10 @@ MODSRC="$1/src"
 [[ -d "$MODSRC" ]] || MODSRC="$1"
 cp "$MODSRC"/*.py "$ORCH_MIRROR"/
 cp "$FAKE_VERIFY" "$ORCH_MIRROR/verify.py"
+cp "$1/orchestrate.sh" "$ORCH_MIRROR/orchestrate.sh"
+mkdir -p "$ORCH_MIRROR/scripts"
+cp "$FAKE_INSTALLER" "$ORCH_MIRROR/scripts/install_verified_snapshot.py"
+chmod +x "$ORCH_MIRROR/scripts/install_verified_snapshot.py"
 """
 
 FAKE_VERIFY = r"""import os, pathlib, sqlite3, sys
@@ -78,6 +83,9 @@ brain.close()
 touch = os.environ.get("FAKE_TOUCH_SRC")
 if touch:  # another session moving the clone while verify.py runs
     pathlib.Path(touch).write_text("moved under the run\n")
+touch_mirror = os.environ.get("FAKE_TOUCH_MIRROR")
+if touch_mirror:
+    (pathlib.Path.cwd() / touch_mirror).write_text("changed by verification\n")
 expected = os.environ.get("FAKE_EXPECT_MIRROR_FILE")
 if expected:
     with open(env["FAKE_RECORD"], "a") as fh:
@@ -142,6 +150,7 @@ def _run(world: dict, *args: str, **env: str) -> tuple[subprocess.CompletedProce
         "TMPDIR": str(world["tmpdir"]),
         "ORCH_SYNC_SCRIPT": str(world["tmp"] / "fake-sync.sh"),
         "FAKE_VERIFY": str(world["tmp"] / "fake-verify.py"),
+        "FAKE_INSTALLER": str(INSTALLER),
         "FAKE_RECORD": str(world["record"]),
         "VERIFY_BEFORE_SYNC_MAX_DIR_MB": "1",
     }
@@ -207,6 +216,44 @@ def test_a_red_verdict_exits_one_and_prints_verify_pys_own_code(world):
     result, _ = _run(world, FAKE_VERIFY_RC="7")
     assert result.returncode == 1, result.stdout + result.stderr
     assert "NOT VERIFIED (verify.py exit 7)" in result.stdout, result.stdout
+
+
+def test_a_green_verdict_can_publish_the_exact_verified_snapshot(world):
+    snapshot = world["tmpdir"] / "verified payload"
+    result, _ = _run(
+        world,
+        "--snapshot-out",
+        str(snapshot),
+        str(world["src"]),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"verified deployment snapshot: {snapshot}" in result.stdout
+    verified = (snapshot / "base.py").read_bytes()
+
+    # A later source edit cannot alter the installed bytes: the installer only reads the retained
+    # scratch payload, never SRC.
+    (world["src"] / "base.py").write_text("MOVED = True\n")
+    mirror = world["tmp"] / "live mirror"
+    installed = subprocess.run(
+        ["python3", str(snapshot / "scripts" / INSTALLER.name), str(snapshot), str(mirror)],
+        capture_output=True,
+        text=True,
+    )
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert (mirror / "base.py").read_bytes() == verified
+
+
+def test_a_red_verdict_never_publishes_a_snapshot(world):
+    snapshot = world["tmpdir"] / "must-not-exist"
+    result, _ = _run(
+        world,
+        "--snapshot-out",
+        str(snapshot),
+        str(world["src"]),
+        FAKE_VERIFY_RC="7",
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert not snapshot.exists()
 
 
 def test_a_failed_copy_verifies_nothing(world):
@@ -289,6 +336,39 @@ def test_identity_mode_prints_the_fingerprint_a_green_verdict_was_taken_on(world
     (world["src"] / "base.py").write_text("BASE = False\n")
     moved, _ = _run(world, "--identity", str(world["src"]))
     assert moved.returncode == 0 and moved.stdout.strip() != verified, moved.stdout
+
+
+def test_a_verify_run_that_changes_deployment_bytes_voids_the_snapshot(world):
+    snapshot = world["tmpdir"] / "must-not-exist"
+    result, _ = _run(
+        world,
+        "--snapshot-out",
+        str(snapshot),
+        str(world["src"]),
+        FAKE_TOUCH_MIRROR="base.py",
+    )
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "verification changed deployment-owned bytes" in result.stderr
+    assert not snapshot.exists()
+
+
+def test_incomplete_verify_evidence_never_publishes_a_snapshot(world):
+    fake_bin = world["tmp"] / "fake-bin"
+    fake_bin.mkdir()
+    tee = fake_bin / "tee"
+    tee.write_text("#!/bin/sh\nexit 9\n")
+    tee.chmod(0o755)
+    snapshot = world["tmpdir"] / "must-not-exist"
+    result, _ = _run(
+        world,
+        "--snapshot-out",
+        str(snapshot),
+        str(world["src"]),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "capture complete verify.py evidence" in result.stderr
+    assert not snapshot.exists()
 
 
 def test_keep_leaves_the_scratch_mirror_for_inspection(world):
