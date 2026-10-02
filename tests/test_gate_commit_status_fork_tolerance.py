@@ -7,12 +7,14 @@ import os
 import shutil
 import subprocess
 import textwrap
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+import env_prereq
+import paths
+
+REPO_ROOT = paths.REPO_ROOT
 GATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-00-gate.yml"
 STEP_NAME = "Report Gate commit status"
 COMMENT_STEP_NAME = "Ensure consolidated summary comment"
@@ -226,8 +228,19 @@ def _extract_step_script(step_name: str = STEP_NAME) -> str:
     raise AssertionError(f"{GATE_WORKFLOW} no longer defines {step_name!r}")
 
 
+def require_checkout() -> None:
+    """Skip, naming what is missing, when this tree is the exec mirror rather than a checkout.
+
+    These tests execute a script held in a `.github` workflow, and `orch-sync-mirror.sh` never
+    copies `.github/`. The gate is that directory, never a file the tests read: in a checkout, a
+    missing `pr-00-gate.yml` or retry helper must still fail rather than skip.
+    """
+    env_prereq.require(env_prereq.repo_files_absent(".github/workflows"))
+
+
 @pytest.fixture(scope="module")
 def outcomes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    require_checkout()
     node = shutil.which("node")
     if node is None:  # pragma: no cover - depends on the host
         message = "node is required to execute the Gate github-script step"
@@ -466,6 +479,7 @@ COMMENT_RUNNER_JS = textwrap.dedent("""
 
 @pytest.fixture(scope="module")
 def comment_outcomes(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    require_checkout()
     node = shutil.which("node")
     if node is None:  # pragma: no cover - depends on the host
         message = "node is required to execute the Gate github-script step"
