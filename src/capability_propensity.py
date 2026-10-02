@@ -172,6 +172,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fnmatch
 import hashlib
 import io
 import json
@@ -3212,7 +3213,10 @@ def _selftest_tick_evidence() -> None:
     day = time.strftime("%Y-%m-%d", time.gmtime(now))
 
     # ---- PART 1: THE REAL TABLE, code vs code. Runs on any machine: no ledger, no state dir.
-    real_bound = capability_advisor.binding_for(TICK_SURFACE)
+    # `promoted={}` is what makes "no ledger" true on a DIRECT call: without it `binding_for` merges
+    # the ledger's promotions into the "real table". Under `--selftest` the private ledger is empty,
+    # so there it is redundant, and a deliberate break of it changes no result: kept for direct use.
+    real_bound = capability_advisor.binding_for(TICK_SURFACE, promoted={})
     assert (
         real_bound
     ), "the tick surface must have a declared bound set, or there is nothing to wire"
@@ -4704,6 +4708,176 @@ def _selftest_finds() -> None:
         "outcome evidence, replays do not inflate, and ten finds from one arm are still one "
         "observation)"
     )
+
+
+# Armed `_private_live_state` contexts, innermost last. The audit hook below is installed once per
+# process (an audit hook cannot be removed) and does nothing while this list is empty.
+_LIVE_TRIPWIRES: list[dict] = []
+_LIVE_TRIPWIRE_HOOKED = False
+_LIVE_EVENTS = frozenset({"open", "sqlite3.connect", "os.scandir", "os.listdir", "glob.glob"})
+
+
+def _live_tripwire_hook(event: str, args: tuple) -> None:
+    """Record an open, connect or directory listing under a live root while a context is armed.
+
+    It must never raise: an exception from an audit hook fails the operation being audited.
+    """
+    if not _LIVE_TRIPWIRES or event not in _LIVE_EVENTS or not args:
+        return
+    try:
+        target = args[0]
+        if target is None or isinstance(target, int):
+            return
+        where = os.path.abspath(os.fsdecode(target))
+        for wire in _LIVE_TRIPWIRES:
+            if any(where == root or where.startswith(root + os.sep) for root in wire["roots"]) or (
+                event == "open" and any(fnmatch.fnmatchcase(where, p) for p in wire["patterns"])
+            ):
+                wire["reached"].append(f"{event} {where}")
+    except Exception:  # noqa: BLE001
+        return
+
+
+@contextlib.contextmanager
+def _private_live_state():
+    """Run the selftests against PRIVATE stores, and fail if anything still touches the live ones.
+
+    Measured with an audit hook on 54302cc: these selftests read the live capability ledger from
+    three paths (`capability_advisor.advise()`; `capability_matcher_proposals.evaluate()` through
+    `detect()`; `binding_for()`'s promotion index), connected to the live Brain about twenty times
+    (each connect also runs the schema and its migrations), and read the lane automations' memory
+    files through `detect()`'s surface records. `capabilities._locked` takes an EXCLUSIVE lock even
+    for a read, so each of those ledger reads also queued behind the tick. CI runs this selftest
+    against an empty runtime directory and passes, so empty private stores change no assertion:
+    every machine now runs what CI runs.
+
+    For the duration, `capabilities.REG`, `feedback.DB_PATH`, `SURFACE_RECORD_GLOBS` and any
+    `ORCH_RECORDS_*` override point into a private temporary directory. An audit hook records every
+    open, connect and directory listing under the ORIGINAL state directories, and every open of a
+    file the original record globs name; the context fails on exit naming them. A path that bypasses
+    a default (a captured constant, a hardcoded root) is then a red run rather than a silent live read.
+
+    Two things are NOT redirected by a swap, so they are handled before it, not after. Production
+    heartbeats write through `capabilities.heartbeat`, whose `path=REG` default was bound when the
+    module loaded: an inherited `ORCH_CAPABILITY_HEARTBEATS=1` would append synthetic evidence to
+    the live ledger and the tripwire could only report it afterwards. Verification never emits
+    production evidence, so that flag is cleared for the run. And record globs are watched as
+    PATTERNS, not as their parent directories: an override like `memory-*.md` has `.` for a
+    parent, and watching the whole working directory fails a clean run on unrelated reads. An empty
+    override is "unset" to `surface_records`, so it is not watched at all.
+    """
+    global _LIVE_TRIPWIRE_HOOKED
+    import tempfile
+
+    import feedback
+
+    record_env = {k: v for k, v in os.environ.items() if k.startswith("ORCH_RECORDS_")}
+    heartbeats = os.environ.get("ORCH_CAPABILITY_HEARTBEATS")
+    live = [
+        capabilities.LOCAL_RUNTIME,
+        capabilities.REG.parent,
+        feedback.DB_PATH.parent,
+        pathlib.Path(
+            os.environ.get("ORCH_STATE_DIR") or pathlib.Path.home() / ".codex/orchestrator"
+        ),
+    ]
+    roots = sorted(
+        {os.path.abspath(str(p)) for p in live} | {os.path.realpath(str(p)) for p in live}
+    )
+    patterns: set[str] = set()
+    for glob in [*SURFACE_RECORD_GLOBS.values(), *record_env.values()]:
+        if not glob:
+            continue
+        pattern = os.path.abspath(os.path.expanduser(glob))
+        patterns.add(pattern)
+        head, tail = os.path.split(pattern)
+        patterns.add(os.path.join(os.path.realpath(head), tail))
+    saved = (capabilities.REG, feedback.DB_PATH, dict(SURFACE_RECORD_GLOBS))
+    wire: dict = {"roots": roots, "patterns": sorted(patterns), "reached": []}
+    with tempfile.TemporaryDirectory(prefix="propensity-selftest-") as td:
+        private = pathlib.Path(td)
+        nested = [r for r in roots if os.path.realpath(td).startswith(r + os.sep)]
+        assert not nested, f"the private store {td} sits inside a live root {nested}"
+        # EVERY mutation below is inside the try, so the finally undoes whatever was applied.
+        try:
+            capabilities.REG = private / "capabilities.json"
+            feedback.DB_PATH = private / "feedback" / "orchestrator.db"
+            for surface in SURFACE_RECORD_GLOBS:
+                SURFACE_RECORD_GLOBS[surface] = str(private / "records" / surface / "memory-*.md")
+            for key in record_env:
+                del os.environ[key]
+            os.environ.pop("ORCH_CAPABILITY_HEARTBEATS", None)
+            if not _LIVE_TRIPWIRE_HOOKED:
+                sys.addaudithook(_live_tripwire_hook)
+                _LIVE_TRIPWIRE_HOOKED = True
+            _LIVE_TRIPWIRES.append(wire)
+            yield private
+        finally:
+            if wire in _LIVE_TRIPWIRES:
+                _LIVE_TRIPWIRES.remove(wire)
+            capabilities.REG, feedback.DB_PATH = saved[0], saved[1]
+            SURFACE_RECORD_GLOBS.clear()
+            SURFACE_RECORD_GLOBS.update(saved[2])
+            for key in list(os.environ):
+                if key.startswith("ORCH_RECORDS_") and key not in record_env:
+                    del os.environ[key]
+            os.environ.update(record_env)
+            if heartbeats is None:
+                os.environ.pop("ORCH_CAPABILITY_HEARTBEATS", None)
+            else:
+                os.environ["ORCH_CAPABILITY_HEARTBEATS"] = heartbeats
+    reached = wire["reached"]
+    assert not reached, (
+        f"a propensity selftest touched {len(reached)} live location(s), first {reached[:5]}; give "
+        "that path the private store instead (see _private_live_state)"
+    )
+
+
+def _selftest_private_live_state() -> None:
+    """The isolation is not vacuous: the stores are swapped, a live touch FAILS, and both undo.
+
+    Self-contained, so it is safe inside or outside an armed context: the "live" store it touches
+    is a temporary directory of its own, never this machine's.
+    """
+    import tempfile
+
+    import feedback
+
+    saved = (capabilities.REG, feedback.DB_PATH)
+    with tempfile.TemporaryDirectory(prefix="tripwire-live-") as td:
+        fake_live = pathlib.Path(td)
+        capabilities.REG = fake_live / "capabilities.json"
+        feedback.DB_PATH = fake_live / "feedback" / "orchestrator.db"
+        probe = fake_live / "tripwire-probe"
+        message = ""
+        try:
+            # A CLEAN RUN swaps every store and passes.
+            with _private_live_state() as private:
+                swapped = {
+                    "ledger": capabilities.REG.parent == private,
+                    "brain": feedback.DB_PATH.is_relative_to(private),
+                    "records": all(
+                        pathlib.Path(g).is_relative_to(private)
+                        for g in SURFACE_RECORD_GLOBS.values()
+                    ),
+                }
+            # A TOUCH of what was live when the context opened fails it, naming the place.
+            try:
+                with _private_live_state():
+                    probe.write_text("touched")
+            except AssertionError as exc:
+                message = str(exc)
+        finally:
+            restored = (capabilities.REG, feedback.DB_PATH)
+            capabilities.REG, feedback.DB_PATH = saved
+        assert all(swapped.values()), f"a store was left live inside the context: {swapped}"
+        assert (
+            "live location" in message and str(probe) in message
+        ), f"a touch of a live root must fail the context, naming it; got {message!r}"
+        assert restored == (
+            fake_live / "capabilities.json",
+            fake_live / "feedback" / "orchestrator.db",
+        ), f"the swap must be undone on exit, even a failing one: {restored}"
 
 
 @contextlib.contextmanager
@@ -7125,17 +7299,20 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
-        _selftest()
-        _selftest_provenance()
-        _selftest_second_verdict_is_dropped_not_appended()
-        _selftest_visible_truncation()
-        _selftest_late_outcome()
-        _selftest_reoffer_and_offer_axis()
-        _selftest_finds()
-        _selftest_repair()
-        _selftest_declines()
-        _selftest_detection()
-        _selftest_tick_evidence()
+        # PRIVATE STORES FOR THE WHOLE RUN, and a red run if any path still reaches a live one.
+        with _private_live_state():
+            _selftest_private_live_state()
+            _selftest()
+            _selftest_provenance()
+            _selftest_second_verdict_is_dropped_not_appended()
+            _selftest_visible_truncation()
+            _selftest_late_outcome()
+            _selftest_reoffer_and_offer_axis()
+            _selftest_finds()
+            _selftest_repair()
+            _selftest_declines()
+            _selftest_detection()
+            _selftest_tick_evidence()
         return 0
     if args.command == "tick-evidence":
         # ALWAYS EXIT 0 on a handled failure. The tick calls this every hour and drives real
@@ -7678,12 +7855,16 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
     }
 
 
-def _under_use() -> dict[str, int]:
-    """Capabilities the Brain says work existed for and which never ran. Consumed, not recomputed."""
+def _under_use(*, path=None) -> dict[str, int]:
+    """Capabilities the Brain says work existed for and which never ran. Consumed, not recomputed.
+
+    `path` is the ledger the CALLER is reporting on. It used to be dropped here, so `detect(path=X)`
+    measured under-use against the LIVE ledger while every other signal in the same report read X.
+    """
     try:
         import capability_matcher_proposals as proposals
 
-        rep = proposals.evaluate()
+        rep = proposals.evaluate(path=path)
     except Exception:  # noqa: BLE001
         return {}
     out: dict[str, int] = {}
@@ -7719,7 +7900,7 @@ def missed_selection(
 
     bound = set(capability_advisor.binding_for(surface, path=path))
     hands = hand_work(surface, records)
-    under = _under_use()
+    under = _under_use(path=path)
 
     # Signal 2, reported and never promoting: candidates this surface was offered and skipped.
     control: dict[str, int] = {}
