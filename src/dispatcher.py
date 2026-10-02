@@ -323,7 +323,7 @@ def _offload_ignore(_dir: str, names: list[str]) -> set[str]:
 
 
 def _isolate_offload_cwd(cwd: str | Path) -> Path:
-    src = Path(cwd).expanduser().resolve()
+    src = adapters.workspace_path(cwd)
     if not src.is_dir():
         raise FileNotFoundError(f"offload cwd is not a directory: {src}")
     OFFLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -335,7 +335,10 @@ def _isolate_offload_cwd(cwd: str | Path) -> Path:
         i += 1
         dest = OFFLOAD_DIR / f"{base.name}-{i}"
     shutil.copytree(src, dest, ignore=_offload_ignore)
-    return dest
+    # Canonical like `src`: offload writes this path into gemini's `--add-dir` over the adapter's
+    # own resolved value, so an OFFLOAD_DIR behind a symlink handed agy's guard, the GEMINI
+    # ISOLATED WORKSPACE line and the run's target the unresolved spelling. (2026-10-02)
+    return adapters.workspace_path(dest)
 
 
 _OFFLOAD_PROGRESS_ONLY_PATTERNS = (
@@ -678,6 +681,12 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
             worktree_missing = False
         except Exception as exc:  # clone/worktree/gh failure — skip this assignment
             return {"error": f"provision failed: {exc}", "target": target, "agent": agent}
+    # ONE spelling of the workspace for everything below: the roles, the gemini prompt, the
+    # adapter's argv, the spawn cwd, the claim's `worktree`. The adapter resolves gemini's
+    # `--add-dir`, so the provisioned path, unresolved, named the same directory with a second
+    # string whenever the runtime sat behind a symlink, and the selftest's `--add-dir == cwd`
+    # assertion failed under every macOS scratch runtime. (2026-10-02)
+    cwd = adapters.workspace_path(cwd)
     role_activation = None
     try:
         # Local import avoids making deterministic dispatcher module import-time
@@ -1214,7 +1223,7 @@ def _gemini_workspace_prompt(prompt: str, cwd: str | Path) -> str:
     this instruction keeps the model from intentionally choosing another
     checkout that happens to contain the same repo.
     """
-    workspace = Path(cwd).expanduser().resolve()
+    workspace = adapters.workspace_path(cwd)
     return (
         f"{prompt.rstrip()}\n\n"
         f"GEMINI WORKSPACE: use exactly {workspace} for all file reads, edits, tests, "
@@ -1408,7 +1417,7 @@ def offload(
     # driving seat already owns its heartbeat via orchestrate-seat.sh; a standalone/library offload
     # (e.g. repo-audit) must not silently halt opener+closer. Do not re-add without a fleet-mutation reason.
     try:
-        source_cwd = Path(cwd).expanduser().resolve()
+        source_cwd = adapters.workspace_path(cwd)
         run_cwd = _isolate_offload_cwd(source_cwd) if isolate else source_cwd
     except Exception as exc:
         return {"agent": agent, "exit": 2, "output": "", "error": str(exc)}
