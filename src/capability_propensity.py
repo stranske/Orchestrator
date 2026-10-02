@@ -4798,6 +4798,9 @@ def _private_live_state():
             capabilities.REG, feedback.DB_PATH = saved[0], saved[1]
             SURFACE_RECORD_GLOBS.clear()
             SURFACE_RECORD_GLOBS.update(saved[2])
+            for key in list(os.environ):
+                if key.startswith("ORCH_RECORDS_") and key not in record_env:
+                    del os.environ[key]
             os.environ.update(record_env)
     reached = wire["reached"]
     assert not reached, (

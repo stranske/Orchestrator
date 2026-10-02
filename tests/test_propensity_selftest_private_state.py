@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+import capability_advisor
 import capabilities
 import capability_matcher_proposals
 import capability_propensity as cp
@@ -52,6 +53,20 @@ def test_missed_selection_measures_under_use_against_the_ledger_it_was_given(tmp
     )
 
 
+def test_binding_for_honors_promoted_empty_against_a_private_ledger(tmp_path, monkeypatch):
+    ledger = tmp_path / "capabilities.json"
+    promoted_cap = "fixture-promoted-cap"
+    monkeypatch.setattr(
+        capability_advisor,
+        "_promoted_index",
+        lambda path=None: {cp.TICK_SURFACE: {promoted_cap: "observed in a fixture"}},
+    )
+    with_promotion = capability_advisor.binding_for(cp.TICK_SURFACE, path=ledger)
+    without_promotion = capability_advisor.binding_for(cp.TICK_SURFACE, path=ledger, promoted={})
+    assert promoted_cap in with_promotion
+    assert promoted_cap not in without_promotion
+
+
 def test_the_selftest_touches_no_store_outside_its_own(tmp_path):
     """The external referee. The child is handed live stores this test owns, and must leave them
     exactly as it found them: empty. It does not trust the selftest's own tripwire to say so."""
@@ -70,6 +85,7 @@ def test_the_selftest_touches_no_store_outside_its_own(tmp_path):
         ORCH_STATE_DIR=str(state),
         ORCH_RECORDS_OPENER_LANE=str(lanes / "memory-*.md"),
     )
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     proc = subprocess.run(
         [sys.executable, str(paths.MODULE_DIR / "capability_propensity.py"), "--selftest"],
         cwd=paths.REPO_ROOT,
@@ -115,3 +131,8 @@ def test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores(tmp_
         assert str(live) in str(caught.value), (kind, str(caught.value))
         assert (capabilities.REG, feedback.DB_PATH) == (reg, db), f"not restored after {kind}"
         assert os.environ["ORCH_RECORDS_CLOSER_LANE"] == closer, f"env not restored after {kind}"
+
+    injected = "ORCH_RECORDS_INJECTED_FIXTURE"
+    with cp._private_live_state():
+        os.environ[injected] = str(tmp_path / "leak.md")
+    assert injected not in os.environ
