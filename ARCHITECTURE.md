@@ -774,6 +774,21 @@ lists already is graded. The monitor's declared population names the hold kinds 
 silence findings they exclude a row from, so this edit re-baselined the grader, while a hold declared
 or lifted later moves a graded finding exactly as a retirement does.
 
+**A silence the row's own history contradicts is named as one (2026-10-02).** Only an `invocation`
+event moves `last_invocation`, and two producers broke the reading "silent means it did not run": a
+heartbeat that records a run's `success` or `failure` and no invocation, and a consult trial
+(`capability_propensity.record_trigger`), which writes an invocation through `capabilities.heartbeat`
+outside any tick. Four of the five rows the monitor called overdue that day had never recorded a
+tick invocation: each one's "last invocation" was a 2026-09-03 trial. Three of the four ran at every
+scheduled step with a success-only heartbeat. `stall-watcher` was credited per classified claim, so a
+sweep that found no claims recorded nothing. Those heartbeats now record the invocation on the path
+that runs, and `silence_evidence` puts the contradicting facts under each silent row: the runs
+recorded later than the last invocation's tolerance window, and whether a trial set the field. It
+annotates: every finding list is unchanged when the histories are emptied, and the grader projects
+findings to their ids, so the edit mints no verdict. `redirect-apply-bootstrap` stays silent on
+purpose. Its invocation is an authorised apply, and `switch_review` raises its ON-but-idle drain
+from that field, so a pass that applies nothing must record nothing.
+
 **The activation audit's own history applies the same rule (2026-09-23).** `progress()` diffs
 `reachable_ids` against the last snapshot, and a not-live row is kept out of that set, so a capability
 that was reachable and was then retired read as REGRESSED in the scorecard. It is now named under

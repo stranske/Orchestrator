@@ -14,6 +14,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -271,6 +272,16 @@ def main() -> int:
     if args.selftest:
         _selftest()
         return 0
+    # The run is credited as an INVOCATION before the work, and the `success` below records its
+    # result. A success alone moves `last_success` only, so this daily step exported every day from
+    # 2026-09-04 while the firing monitor read it as silent since its one consult trial. Guarded: a
+    # ledger fault must not stop the export a remote consumer reads.
+    try:
+        capabilities.daily_heartbeat(
+            "route-weights-export", "invocation", ref="route_weights_export.main"
+        )
+    except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
+        print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
     document = build_document(args.feedback_db, args.min_observations)
     target = args.state_dir / "route-weights-export.json"
     changed = write_document(target, document)
