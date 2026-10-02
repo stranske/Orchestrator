@@ -16,7 +16,9 @@ somebody remembering. So this module does two things on a weekly cadence:
   2. **A switch that is ON but NOT TRIGGERING gets raised.** This is the range-lane case exactly:
      enabling a lane that then dispatches nothing is indistinguishable from leaving it off, unless
      something notices. If a switch has been on for >= REVIEW_DAYS and its capability recorded no
-     invocation in that window, the question comes back.
+     invocation in that window, the question comes back. Where the switch's owner can say what
+     would drain its gate (`SWITCH_DRAIN`), the row carries that count beside the idleness, because
+     "ON, idle" reads as patience while "ON, deficits 5/3, drainable 0" is a deadlock.
 
 NON-BLOCKING BY CONSTRUCTION. Everything goes through `feedback.owner_questions`: deduped per scope,
 auto-ratifying at expiry to a stated default, so an unanswered question can never accumulate into a
@@ -91,6 +93,14 @@ SWITCH_CAPABILITY = {
     "ORCH_FRONTEND_VERIFY_START_BROWSER": "frontend-verifier",
     "ORCH_STRATEGY_EXPERIMENT": "strategy-experiments",
     "ORCH_EXPLORATION_MODE": "thompson-hybrid-routing",
+    # ADDED 2026-10-02. orchestrate.sh has exported this =1 by default since 2026-08-21 and its
+    # switch-on criterion sat in `capability_recurrence_check.SWITCH_ON_CRITERIA`, but it was never
+    # mapped HERE, so this review never examined it while it authorised nothing for 42 days: 759
+    # metered judgements, every one `wait`. Its `invocation` heartbeat fires only on an authorised
+    # apply (`redirect_apply.apply_one`), so ON-but-idle means exactly that. Its row carries the
+    # gate's drain (`SWITCH_DRAIN`). The two tables must name the same switches;
+    # tests/test_switch_review_bootstrap_drain.py fails on a flag that is in one and not the other.
+    "ORCH_REDIRECT_APPLY_BOOTSTRAP": "redirect-apply-bootstrap",
 }
 
 
@@ -862,6 +872,137 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
     return report
 
 
+# The gate fields an ON-but-idle bootstrap row carries: what is measured and what is still needed.
+_BOOTSTRAP_GATE_KEYS = (
+    "synced_role_outcomes",
+    "synced_needed",
+    "linked_disagreements",
+    "disagreements_needed",
+    "bootstrap_needed",
+)
+
+
+def _redirect_bootstrap_inputs() -> dict[str, Path]:
+    """The files the bootstrap's drain is read from, each resolved by the module that owns it.
+
+    The three `redirect_apply.status` reads: the redirect corpus (the gate's deficits, and what was
+    already judged or applied), the supervisor's stage-2 plan (its CURRENT candidates, so the
+    drainable population) and its report directory (counted, never judged). Resolved here and passed
+    explicitly, so the row names what it read and a test can point all three at a sandbox.
+    """
+    import keepalive_supervisor
+    import redirect_apply
+    import redirect_shadow
+
+    return {
+        "corpus_path": Path(redirect_shadow.CORPUS_PATH),
+        "plan_path": redirect_apply.default_stage2_plan_path(),
+        "report_dir": Path(keepalive_supervisor.DEFAULT_STAGE2_REPORT_DIR),
+    }
+
+
+def _redirect_bootstrap_drain(env: Mapping[str, str], *, now: int) -> dict:
+    """The bootstrap's Stage-2 deficits beside its drainable count, from `redirect_apply.status`.
+
+    `status()` owns that pair, so nothing is composed here: the deficits are its gate, and the
+    drainable count is its free screen of the supervisor's CURRENT candidates, which runs no role and
+    spends no offload. Every input is explicit and only read: the files from
+    `_redirect_bootstrap_inputs`; the `env` that just read this switch as ON, so status never
+    re-resolves the flag by executing the tick's prologue; and `link_preview=False`, which skips its
+    one Brain read, because that opens a connection that runs the schema script and commits, and this
+    row does not use what it reads.
+
+    `drainable` is an int, and 0 is a measurement; None means the candidate population could not be
+    read, and `reason` says why. A read that fails is REPORTED, never raised: the switch is ON and
+    idle either way, so its row is raised either way, and only the drain goes unmeasured.
+    """
+    drain: dict = {"source": "redirect_apply.status", "inputs": {}}
+    try:
+        import redirect_apply
+
+        inputs = _redirect_bootstrap_inputs()
+        drain["inputs"] = {name: str(value) for name, value in inputs.items()}
+        out = redirect_apply.status(
+            inputs["corpus_path"],
+            env=dict(env),
+            report_dir=inputs["report_dir"],
+            plan_path=inputs["plan_path"],
+            now=now,
+            link_preview=False,
+        )
+        population = out.get("drainable_population") or {}
+        drain.update(
+            gate={key: out["gate"][key] for key in _BOOTSTRAP_GATE_KEYS},
+            drainable=out["drainable"],
+            current_candidates=out["current_candidates"],
+            population=str(population.get("status") or "unknown"),
+            reason=str(population.get("reason") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001
+        drain.update(
+            gate=None,
+            drainable=None,
+            current_candidates=None,
+            population="unmeasured",
+            reason=f"redirect_apply.status raised {type(exc).__name__}: {exc}"[:240],
+        )
+    drain["summary"] = _bootstrap_drain_summary(drain)
+    return drain
+
+
+def _bootstrap_drain_summary(drain: dict) -> str:
+    """The drain in one sentence, which the report and the owner question both print.
+
+    Every state has its own words, because only some of them are good news: a measured zero (the
+    deadlock), a positive count (the apply step could act), an unknown population, a finished gate,
+    and a read that failed. None and 0 must never print alike.
+    """
+    gate = drain.get("gate")
+    if not gate:
+        return f"drain UNMEASURED — {drain.get('reason') or 'no reason recorded'}"
+    if not gate.get("bootstrap_needed"):
+        return (
+            "FINISHED — the Stage-2 deficits are closed (synced_role_outcomes "
+            f"{gate.get('synced_role_outcomes')}, linked_disagreements "
+            f"{gate.get('linked_disagreements')}), so the bootstrap has disarmed itself and idle "
+            "is its end state: the switch can go off"
+        )
+    needed = (gate.get("synced_needed"), gate.get("disagreements_needed"))
+    deficits = (
+        f"Stage-2 deficits {needed[0]}/{needed[1]} (needs {needed[0]} more synced_role_outcomes "
+        f"and {needed[1]} more linked_disagreements)"
+    )
+    drainable = drain.get("drainable")
+    if drainable is None:
+        reason = drain.get("reason") or "the candidate population was not read"
+        return f"{deficits}, drainable UNKNOWN — {reason}"
+    current = drain.get("current_candidates")
+    if drainable == 0:
+        return (
+            f"{deficits}, drainable 0 of {current} current candidate(s) — nothing current can "
+            "drain them: a deadlock, not patience"
+        )
+    # `--screen` in text mode prints only the candidates that FAIL the screen; the JSON lists every
+    # candidate, so it is the one form that names the ones this count is about.
+    return (
+        f"{deficits}, drainable {drainable} of {current} current candidate(s) — they pass the free "
+        "screen and none was authorised; `redirect_apply.py --screen --json` lists them "
+        "(passes_screen: true)"
+    )
+
+
+# flag -> the reader of that switch's DRAINABLE quantity, run only for its ON-but-idle row.
+#
+# "ON, idle" reads as patience; "ON, deficits 5/3, drainable 0" is a deadlock. Only the second is a
+# diagnosis, so a switch whose owner can say what would drain its gate carries that count beside the
+# idleness: the runtime rule, blocking and drainable quantity in one place. A reader must keep
+# `switch_states` as cheap as its docstring promises (local reads only: no gh, no heartbeat, no
+# write) and must report a failure rather than raise it.
+SWITCH_DRAIN: dict[str, Callable[..., dict]] = {
+    "ORCH_REDIRECT_APPLY_BOOTSTRAP": _redirect_bootstrap_drain,
+}
+
+
 def switch_states(
     *, now: int | None = None, env: Mapping[str, str] | None = None, path=None
 ) -> dict:
@@ -876,6 +1017,11 @@ def switch_states(
     capability, and the propensity selftest ran it against real GitHub. This is the part of the
     review such a consumer needs, and it lives HERE so the flag -> capability mapping, and the
     on/off/idle reading of it, still have exactly one owner.
+
+    An ON-but-idle row may also carry its switch's `drain` (`SWITCH_DRAIN`): what could clear the
+    gate behind the idle switch, beside what blocks it. It is read only for a switch already ON and
+    idle, from local files and read-only, so still no gh, no heartbeat and no Brain; a consumer whose
+    environment holds the switch off pays nothing for it.
     """
     import capability_recurrence_check as rc
 
@@ -913,19 +1059,21 @@ def switch_states(
         # ON but silent for the whole window: enabling it changed nothing observable.
         idle_days = (now - last) / 86400 if last else None
         if last == 0 or (now - last) > window:
-            quiet.append(
-                {
-                    "flag": flag,
-                    "capability": cap_id,
-                    "state": "on",
-                    "idle_days": None if idle_days is None else round(idle_days, 1),
-                    "reason": (
-                        f"ON but {cap_id} recorded no invocation in the last {REVIEW_DAYS}d — "
-                        "an enabled switch that dispatches nothing is indistinguishable from "
-                        "one left off"
-                    ),
-                }
-            )
+            row: dict = {
+                "flag": flag,
+                "capability": cap_id,
+                "state": "on",
+                "idle_days": None if idle_days is None else round(idle_days, 1),
+                "reason": (
+                    f"ON but {cap_id} recorded no invocation in the last {REVIEW_DAYS}d — "
+                    "an enabled switch that dispatches nothing is indistinguishable from "
+                    "one left off"
+                ),
+            }
+            reader = SWITCH_DRAIN.get(flag)
+            if reader is not None:
+                row["drain"] = reader(env, now=now)
+            quiet.append(row)
     return {"held_off": due, "on_but_idle": quiet}
 
 
@@ -945,6 +1093,11 @@ def review(*, now: int | None = None, env: Mapping[str, str] | None = None, path
     return {
         "generated_at": now,
         "review_days": REVIEW_DAYS,
+        # The switches this report may name. Declared so that EDITING the map is not graded as a
+        # finding: `capability_propensity.tick_evidence` re-baselines a report whose declared
+        # population changed, where an undeclared one would score a newly mapped switch's first row
+        # as the sweep having found something (`capabilities.FINDING_POPULATION_KEY`).
+        capabilities.FINDING_POPULATION_KEY: {"switches": sorted(SWITCH_CAPABILITY)},
         "held_off": due,
         "on_but_idle": quiet,
         "unconditioned": [d["flag"] for d in due if not d["has_criterion"]],
@@ -982,6 +1135,10 @@ def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
                 f"{flag} is ON but {cap_id} has recorded no invocation in "
                 f"{REVIEW_DAYS}d. Keep it on, turn it off, or fix what feeds it?"
             )
+            if row.get("drain"):
+                # The pair is what makes the question answerable at a glance. Its text changes only
+                # when a number in it moves, so a gate that stays stuck stays ONE deduped question.
+                question += f" Its gate: {row['drain']['summary']}."
             default = "keep the current position; re-ask in a week"
         if dry_run:
             raised.append(flag)
@@ -1024,6 +1181,8 @@ def format_report(rep: dict) -> str:
         for row in rep["on_but_idle"]:
             lines.append(f"  {row['flag']}  ({row['capability']})  idle={row['idle_days']}d")
             lines.append(f"      {row['reason']}")
+            if row.get("drain"):
+                lines.append(f"      drain: {row['drain']['summary']}")
             lines.append("")
     if rep["unconditioned"]:
         lines += [
@@ -1460,8 +1619,9 @@ def _selftest() -> None:
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
         "recently-triggering stays silent, '0' is off, dry-run inert, fleet_gates SUSPECT rule, "
-        "switch_states is the review's rows without the sweep, review writes no ledger, the "
-        "expiry notice names soon/lapsed rows and states its drained and unmeasured states)"
+        "switch_states is the review's rows without the sweep, review writes no ledger, an idle "
+        "bootstrap row carries its drain read from a sandbox, the expiry notice names soon/lapsed "
+        "rows and states its drained and unmeasured states)"
     )
 
 
@@ -1603,23 +1763,41 @@ def _selftest_review(gh_calls: list) -> None:
         beats: list = []
         real_beat = globals()["_capability_heartbeat"]
         globals()["_capability_heartbeat"] = lambda *a, **k: beats.append(a)
+        # The bootstrap is ON as well, so a row that carries a DRAIN is held to the same rules. Its
+        # drain is read from a sandbox (no corpus, a fresh plan with no candidates), never the live
+        # files: `_redirect_bootstrap_inputs` is the one seam all three paths come through.
+        plan = Path(td) / "stage2-plan.json"
+        plan.write_text(json.dumps({"generated_at": now - 60, "plans": []}), encoding="utf-8")
+        sandbox = {
+            "corpus_path": Path(td) / "corpus.jsonl",
+            "plan_path": plan,
+            "report_dir": Path(td) / "reports",
+        }
+        real_inputs = globals()["_redirect_bootstrap_inputs"]
+        globals()["_redirect_bootstrap_inputs"] = lambda: dict(sandbox)
+        both_on = {**env, "ORCH_REDIRECT_APPLY_BOOTSTRAP": "1"}
         try:
             calls_before = len(gh_calls)
-            swept = review(now=now, env=env, path=reg)
+            swept = review(now=now, env=both_on, path=reg)
             # POSITIVE CONTROL: the injected runner IS the seam the sweep uses, and the heartbeat
             # stub IS the one it calls, or the two "none" assertions below would be vacuous.
             assert len(gh_calls) > calls_before, "the injected runner is not the sweep's gh seam"
             assert beats, "the heartbeat stub is not the one review() calls"
             calls_before, beats_before = len(gh_calls), len(beats)
-            rows = switch_states(now=now, env=env, path=reg)
+            rows = switch_states(now=now, env=both_on, path=reg)
             assert len(gh_calls) == calls_before, "switch_states reached gh: it is not the sweep"
             assert (
                 len(beats) == beats_before
             ), "switch_states heartbeated: a consumer's read is not a review"
         finally:
             globals()["_capability_heartbeat"] = real_beat
+            globals()["_redirect_bootstrap_inputs"] = real_inputs
         assert rows == {"held_off": swept["held_off"], "on_but_idle": swept["on_but_idle"]}, rows
         assert rows["held_off"] and rows["on_but_idle"], "both lists populated, or equality is weak"
+        drained = [r for r in rows["on_but_idle"] if r["flag"] == "ORCH_REDIRECT_APPLY_BOOTSTRAP"]
+        assert drained and drained[0]["drain"]["drainable"] == 0, drained
+        assert drained[0]["drain"]["inputs"]["plan_path"] == str(plan), drained[0]["drain"]
+        assert "drainable 0 of 0" in format_report(swept), format_report(swept)
 
 
 def main(argv: list[str]) -> int:

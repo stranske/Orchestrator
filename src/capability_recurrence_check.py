@@ -459,7 +459,10 @@ def _predicate_flag(flag: str, want: str = "1") -> dict:
 
 # A flag that is OFF is not automatically a defect — but "when should it go on?" must be a
 # measurable condition, not a standing judgement call, or it never gets revisited. Each entry names
-# the machine-checkable precondition and why the switch is held.
+# the machine-checkable precondition and why the switch is held. Every flag here must also be mapped
+# in `switch_review.SWITCH_CAPABILITY`, the table the weekly review walks: a criterion nothing
+# re-raises is a decision nobody revisits (ORCH_REDIRECT_APPLY_BOOTSTRAP sat here unmapped for 42
+# days). tests/test_switch_review_bootstrap_drain.py holds the two tables to one set of switches.
 SWITCH_ON_CRITERIA = {
     "ORCH_REDIRECT_APPLY_BOOTSTRAP": "all three hold at once: (a) `redirect_apply.py --status` reports bootstrap_needed=true "
     "(the gate still has a synced_role_outcomes or linked_disagreements deficit); (b) the "
