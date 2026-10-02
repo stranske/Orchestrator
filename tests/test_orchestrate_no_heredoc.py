@@ -35,11 +35,67 @@ import pattern_miner
 ORCHESTRATE = paths.REPO_ROOT / "orchestrate.sh"
 
 
+def _logical_code_lines(text: str) -> list[str]:
+    """Conservatively normalize executable lines before scanning for ``<<``."""
+    normalized: list[str] = []
+    quote: str | None = None
+    only_whitespace = True
+    index = 0
+    while index < len(text):
+        char = text[index]
+
+        if quote is None and only_whitespace and char == "#":
+            # A full-line comment ends at the physical newline. Its trailing backslash is data,
+            # not a continuation, and quotes inside it do not affect the next physical line.
+            newline = text.find("\n", index)
+            if newline == -1:
+                break
+            normalized.append("\n")
+            only_whitespace = True
+            index = newline + 1
+            continue
+
+        if quote is None and char == "\\" and index + 1 < len(text):
+            following = text[index + 1]
+            if following == "\n":
+                # Bash removes an unquoted backslash-newline before tokenization.
+                index += 2
+                continue
+            # Consume an escaped quote as data so it cannot enter quote state.
+            normalized.extend((char, following))
+            only_whitespace = False
+            index += 2
+            continue
+
+        if quote == '"' and char == "\\" and index + 1 < len(text):
+            # Preserve escapes inside double quotes. Quoted text cannot become a redirection
+            # operator, even though Bash removes a quoted backslash-newline before parsing.
+            normalized.extend((char, text[index + 1]))
+            only_whitespace = False
+            index += 2
+            continue
+
+        normalized.append(char)
+        if char == "\n":
+            only_whitespace = True
+        elif quote is None and char in {"'", '"'}:
+            quote = char
+            only_whitespace = False
+        elif char == quote:
+            quote = None
+            only_whitespace = False
+        elif not char.isspace():
+            only_whitespace = False
+        index += 1
+
+    return "".join(normalized).splitlines()
+
+
 def _code_lines() -> list[str]:
-    """Every line of the script except full-line comments, which may describe the old shape."""
+    """Every logical script line except full-line comments, which may describe the old shape."""
     text = ORCHESTRATE.read_text(encoding="utf-8")
     assert text.startswith("#!/usr/bin/env bash"), f"{ORCHESTRATE} is not the tick script"
-    return [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    return _logical_code_lines(text)
 
 
 def _count(needle: str) -> int:
@@ -68,6 +124,40 @@ def test_no_here_document_or_here_string_anywhere() -> None:
         "that only the writing process will read; write the text to a file and redirect from it. "
         f"Sites: {sites}"
     )
+
+
+def test_no_here_document_guard_joins_backslash_newline_spelling() -> None:
+    """Bash removes the continuation before parsing, so a split operator is still prohibited."""
+    needle = "<" + "<"
+    prohibited = (
+        "command <\\\n<EOF\nbody\nEOF\n",
+        "command <\\\n\\\n<-EOF\nbody\nEOF\n",
+        "printf %s 'start\n#'; cat <<EOF\nbody\nEOF\n",
+    )
+    prohibited += (
+        "# explanatory comment " + "\\" + "\ncommand <<EOF\nbody\nEOF\n",
+        "# comment with ' quote " + "\\" + "\ncommand <<<word\n",
+        "true # inline comment " + "\\" + "\ncommand <<EOF\nbody\nEOF\n",
+    )
+    for spelling in prohibited:
+        assert any(needle in line for line in _logical_code_lines(spelling)), spelling
+
+
+def test_no_here_document_guard_preserves_quoted_and_escaped_newlines() -> None:
+    """Continuation normalization must not invent a redirection Bash would keep quoted or split."""
+    needle = "<" + "<"
+    permitted = (
+        "printf %s '<\\\n<'\n",
+        'printf %s "<\\\n<"\n',
+        "command <" + "\\\\" + "\n<EOF\n",
+    )
+    for spelling in permitted:
+        assert all(needle not in line for line in _logical_code_lines(spelling)), spelling
+
+
+def test_no_here_document_guard_keeps_hash_after_continuation_in_the_word() -> None:
+    """A continued word's hash is data rather than a full-line comment."""
+    assert _logical_code_lines("printf %s tag\\\n#value\n") == ["printf %s tag#value"]
 
 
 def test_each_summary_line_comes_from_its_owning_module_exactly_once() -> None:
