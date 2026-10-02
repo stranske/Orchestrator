@@ -1516,14 +1516,15 @@ def binding_suppressed(surface: str) -> str:
     return str(entry.get(NO_BINDING) or "")
 
 
-def _promoted_index(path=None) -> dict[str, dict[str, str]]:
-    """Every promotion this instance has learned, surface -> {capability: reason}. ONE ledger read.
+def _promoted_index(path=None, *, ledger: dict | None = None) -> dict[str, dict[str, str]]:
+    """Every promotion this instance has learned, surface -> {capability: reason}. ONE ledger read,
+    or none when the caller hands over the read it already made as `ledger`.
 
     Split out of `_promoted_bindings` so a sweep over every surface pays the ledger cost once. The
     per-surface function still exists and still answers identically; this is the shared read, not a
     second source.
     """
-    caps = capabilities.load_declared(path or capabilities.REG)
+    caps = capabilities.load_declared(path or capabilities.REG) if ledger is None else ledger
     index: dict[str, dict[str, str]] = {}
     for cap_id, cap in caps.items():
         for event in cap.get("event_history") or []:
@@ -1728,7 +1729,7 @@ def consult_keys() -> set[str]:
     return out
 
 
-def consulting_surfaces() -> dict:
+def consulting_surfaces(*, path=None, ledger: dict | None = None) -> dict:
     """Which surfaces a caller actually NAMES, and which bound surfaces none of them does.
 
     Returns `reached` (the surfaces an offer can travel through), `verified` / `unverified` /
@@ -1762,7 +1763,8 @@ def consulting_surfaces() -> dict:
             drifted.append(
                 {"surface": key, "caller": caller, "why": f"caller no longer names {literal!r}"}
             )
-    promoted = _promoted_index()
+    # `path`/`ledger` as for `_promoted_index`: a caller judging one ledger hands over its read.
+    promoted = _promoted_index(path, ledger=ledger)
     stranded: list[str] = []
     for surface in sorted(SURFACE_BINDINGS):
         if not binding_for(surface, promoted=promoted):
@@ -1784,7 +1786,9 @@ def consulting_surfaces() -> dict:
     }
 
 
-def surfaces_binding(capability_ids, *, path=None) -> dict[str, list[str]]:
+def surfaces_binding(
+    capability_ids, *, path=None, ledger: dict | None = None
+) -> dict[str, list[str]]:
     """The inverse of `binding_for`: which surfaces bind each of these capabilities.
 
     CONSUMES `binding_for`, so prefix inheritance, `NO_BINDING` suppression and this instance's
@@ -1793,7 +1797,7 @@ def surfaces_binding(capability_ids, *, path=None) -> dict[str, list[str]]:
     every resolution.
     """
     wanted = set(capability_ids)
-    promoted = _promoted_index(path)
+    promoted = _promoted_index(path, ledger=ledger)
     out: dict[str, list[str]] = {cap_id: [] for cap_id in wanted}
     for surface in sorted(set(SURFACE_BINDINGS) | consult_keys()):
         for cap_id in binding_for(surface, promoted=promoted):

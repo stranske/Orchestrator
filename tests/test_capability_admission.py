@@ -15,6 +15,7 @@ next mistake, keep the old debt visible.
 from __future__ import annotations
 
 import pathlib
+import sys
 import tempfile
 
 import capabilities
@@ -562,22 +563,28 @@ def test_the_gate_admits_itself():
 
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    # verify.py hands over the verdicts its pytest run just reached on these same checks, so they
+    # are reported rather than executed twice; see env_prereq.recorded_verdicts. Run by hand, with
+    # no verdicts, every check executes here.
+    verdicts = env_prereq.recorded_verdicts(sys.argv, __file__)
+    from_pytest = [fn.__name__ for fn in tests if fn.__name__ in verdicts]
     failures, skipped = [], []
     for fn in tests:
+        via = "  (pytest verdict, this run)" if fn.__name__ in verdicts else ""
         try:
-            fn()
-            print(f"  OK   {fn.__name__}")
+            env_prereq.run_or_replay(fn, verdicts)
+            print(f"  OK   {fn.__name__}{via}")
         # A skip is not a pass and not a failure. Catching it BEFORE AssertionError matters:
         # MissingPrerequisite is a SkipTest, not an AssertionError, so an uncaught one would
         # crash this runner — and printing it as OK would be worse, because the count would
         # then claim coverage this machine cannot provide.
         except env_prereq.MissingPrerequisite as exc:
             skipped.append((fn.__name__, str(exc)))
-            print(f"  SKIP {fn.__name__}")
+            print(f"  SKIP {fn.__name__}{via}")
             print(f"       {env_prereq.PREREQ_ABSENT_MARK} {str(exc)[:400]}")
         except AssertionError as exc:
             failures.append(fn.__name__)
-            print(f"  FAIL {fn.__name__}")
+            print(f"  FAIL {fn.__name__}{via}")
             # 400 chars cut the absent-module diagnostic in half — a truncated explanation of WHY
             # a row looks unimplemented is the same defect as no explanation, so the cap is set
             # above the longest message any check here produces rather than at a round number.
@@ -598,6 +605,11 @@ def main() -> int:
         f"\nall {len(tests)} admission checks passed — "
         f"{rep['enforced_total']} enforced, {len(rep['legacy_debt'])} legacy debt, "
         f"commitments clean"
+        + (
+            f" ({len(from_pytest)} of {len(tests)} verdicts from this run's pytest)"
+            if from_pytest
+            else ""
+        )
     )
     return 0
 

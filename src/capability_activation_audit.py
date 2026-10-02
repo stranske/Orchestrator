@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import json
 import os
 import pathlib
@@ -571,12 +572,30 @@ def absent_entrypoint_note(
 # --------------------------------------------------------------------------- static analysis
 
 
+# BOTH SCANNERS BELOW PARSE A GIVEN SOURCE TEXT ONCE PER PROCESS. `heartbeat_reachable` asks them of
+# a module once for every capability that names it, so one run of the admission gate parsed the
+# same modules 687 times (profiled 2026-10-02; the largest cost after its ledger loads). The memo is
+# keyed by the text read NOW, the rule the ledger read cache follows: an edited file is always
+# re-read, so a cached answer cannot outlive the source that produced it. Each call returns fresh
+# containers, so a caller that mutates its answer cannot change the next caller's.
+_SOURCE_MEMO_SIZE = 256
+
+
 def _heartbeat_functions(path: Path) -> set[str]:
     """Functions in `path` whose body reaches a capability heartbeat call."""
     try:
-        tree = ast.parse(path.read_text(errors="ignore"))
-    except (OSError, SyntaxError):
+        text = path.read_text(errors="ignore")
+    except OSError:
         return set()
+    return set(_heartbeat_functions_in(text))
+
+
+@functools.lru_cache(maxsize=_SOURCE_MEMO_SIZE)
+def _heartbeat_functions_in(text: str) -> frozenset[str]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return frozenset()
     names = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -595,15 +614,24 @@ def _heartbeat_functions(path: Path) -> set[str]:
             ):
                 names.add(node.name)
                 break
-    return names
+    return frozenset(names)
 
 
 def _call_graph(path: Path) -> dict[str, set[str]]:
     """function -> functions it calls WITHIN the same module (bare-name calls only)."""
     try:
-        tree = ast.parse(path.read_text(errors="ignore"))
-    except (OSError, SyntaxError):
+        text = path.read_text(errors="ignore")
+    except OSError:
         return {}
+    return {name: set(called) for name, called in _call_graph_in(text)}
+
+
+@functools.lru_cache(maxsize=_SOURCE_MEMO_SIZE)
+def _call_graph_in(text: str) -> tuple[tuple[str, frozenset[str]], ...]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ()
     local = {
         n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
@@ -618,7 +646,7 @@ def _call_graph(path: Path) -> dict[str, set[str]]:
                 if name in local:
                     called.add(name)
         graph[node.name] = called
-    return graph
+    return tuple((name, frozenset(called)) for name, called in graph.items())
 
 
 def _reaches(start: str, graph: dict[str, set[str]], targets: set[str]) -> bool:
@@ -1425,12 +1453,13 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
         pass
 
 
-def audit(*, path=None, use_cache: bool = True) -> dict:
+def audit(*, path=None, use_cache: bool = True, ledger: dict | None = None) -> dict:
     _capability_heartbeat()
     # `load_declared`, not `load`: this is a REPORT. The writing loader seeds missing gate rows,
     # reconciles declarations and can expire rows into the shared ledger as a side effect, which a
-    # read-only audit must not do (its own kill switch says it writes only its history).
-    caps = capabilities.load_declared(path or capabilities.REG)
+    # read-only audit must not do (its own kill switch says it writes only its history). `ledger` is
+    # a read the caller already made — the admission report's — so that report judges one version.
+    caps = capabilities.load_declared(path or capabilities.REG) if ledger is None else ledger
     emittable = emittable_task_types()
     templates = _prompt_templates()
     index = _fleet_label_index(use_cache=use_cache)
@@ -2346,13 +2375,33 @@ def _selftest() -> None:
         assert p6["baseline"] is None and "declares no population" in p6["detail"], p6
         assert progress(r2, path=Path(td) / "absent.json")["baseline"] is None
 
+    # THE SOURCE MEMO: one parse per distinct text, an edit always re-read, answers never shared.
+    with tempfile.TemporaryDirectory(prefix="audit-memo-") as td:
+        module = Path(td) / "memo_probe.py"
+        module.write_text(
+            f"# {td}\ndef fires():\n    heartbeat('x', 'y')\n\ndef calls():\n    fires()\n"
+        )
+        before = (_heartbeat_functions_in.cache_info().misses, _call_graph_in.cache_info().misses)
+        for _ in range(3):
+            assert _heartbeat_functions(module) == {"fires"}
+            assert _call_graph(module) == {"fires": set(), "calls": {"fires"}}
+        after = (_heartbeat_functions_in.cache_info().misses, _call_graph_in.cache_info().misses)
+        assert after == (before[0] + 1, before[1] + 1), f"three scans parsed {before} -> {after}"
+        _heartbeat_functions(module).add("intruder")
+        _call_graph(module)["calls"].add("intruder")
+        assert _heartbeat_functions(module) == {"fires"}, "a caller changed the cached answer"
+        assert _call_graph(module)["calls"] == {"fires"}, "a caller changed the cached answer"
+        module.write_text(module.read_text() + "\ndef also():\n    heartbeat('x', 'z')\n")
+        assert _heartbeat_functions(module) == {"fires", "also"}, "an edited module was not re-read"
+
     print(
         "capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
         "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
         "directions, advisor reach + narrowing, progress + regression tracking with "
         "retired-since kept apart and an unknown baseline never compared, "
         "entrypoint absent-here vs present vs external-repo vs undeclared with the "
-        "create/delete flip and a diagnostic that cannot suppress a failure)"
+        "create/delete flip and a diagnostic that cannot suppress a failure, and the source "
+        "scanners parse a text once, re-read an edit and never share an answer)"
     )
 
 
