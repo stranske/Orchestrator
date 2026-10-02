@@ -727,12 +727,14 @@ def render_tick_line(state_dir: Path | None = None) -> str:
     path = (state_dir or default_state_dir()) / "fleet-shapes.json"
     try:
         with open(path, encoding="utf-8") as fh:
-            payload = json.load(fh) or {}
+            payload = json.load(fh)
     except Exception as exc:  # noqa: BLE001 - the line names every failure and must never raise
         return f"  SHAPES: artifact unreadable ({exc})"
     if not isinstance(payload, dict):
         return f"  SHAPES: artifact unreadable (not a JSON object: {type(payload).__name__})"
     c = payload.get("counts") or {}
+    if not isinstance(c, dict):
+        return f"  SHAPES: artifact unreadable (counts is not a JSON object: {type(c).__name__})"
     return (
         f"  SHAPES: {c.get('prs')} merged agent PRs in {payload.get('window_days')}d, facts for "
         f"{c.get('with_facts')} ({c.get('missing_facts')} missing, {c.get('fetched_this_run')} "

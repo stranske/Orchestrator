@@ -22,6 +22,7 @@ the rendering tests hold the lines to what the here-documents printed.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -106,6 +107,9 @@ def test_evidence_acquisition_tick_line_is_the_here_documents_line(tmp_path: Pat
     assert evidence_acquisition.render_tick_line(_write(tmp_path / "list.json", [1])) == (
         "  EVIDENCE-ACQ: plan unreadable (not a JSON object: list)"
     )
+    assert evidence_acquisition.render_tick_line(_write(tmp_path / "null.json", None)) == (
+        "  EVIDENCE-ACQ: plan unreadable (not a JSON object: NoneType)"
+    )
 
 
 def test_pattern_miner_tick_lines_are_the_here_documents_lines(tmp_path: Path) -> None:
@@ -129,6 +133,10 @@ def test_pattern_miner_tick_lines_are_the_here_documents_lines(tmp_path: Path) -
     ]
     quiet = _write(tmp_path / "quiet.json", {"other": 1})
     assert pattern_miner.render_tick_lines(quiet) == [
+        "  MINING: unknown — no summary | episodes=? candidates=?"
+    ]
+    non_object = _write(tmp_path / "non-object.json", {"mining_health": [1]})
+    assert pattern_miner.render_tick_lines(non_object) == [
         "  MINING: unknown — no summary | episodes=? candidates=?"
     ]
     bad = tmp_path / "bad.json"
@@ -164,6 +172,52 @@ def test_fleet_shapes_tick_line_is_the_here_documents_line(tmp_path: Path) -> No
         "  SHAPES: artifact unreadable ([Errno 2] No such file or directory: "
         f"'{empty / 'fleet-shapes.json'}')"
     )
+    _write(tmp_path / "fleet-shapes.json", None)
+    assert fleet_shapes.render_tick_line(tmp_path) == (
+        "  SHAPES: artifact unreadable (not a JSON object: NoneType)"
+    )
+    _write(tmp_path / "fleet-shapes.json", {"counts": [1]})
+    assert fleet_shapes.render_tick_line(tmp_path) == (
+        "  SHAPES: artifact unreadable (counts is not a JSON object: list)"
+    )
+
+
+def test_keepalive_shadow_loop_processes_25_prs_without_sharing_stdin(tmp_path: Path) -> None:
+    """Replay the committed loop: each worker sees EOF and cannot consume the remaining PR list."""
+    script = ORCHESTRATE.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^      n=0\n(?P<loop>      while IFS= read -r pr; do\n.*?^      done < \"\$keepalive_shadow_prs\")",
+        script,
+    )
+    assert match, "keepalive shadow loop remains recognizable for the stdin-isolation replay"
+    loop = match.group("loop")
+
+    prs = tmp_path / "prs.txt"
+    prs.write_text("".join(f"stranske/repo#{n}\n" for n in range(1, 31)), encoding="utf-8")
+    captures = tmp_path / "stdin-bytes.txt"
+    replay = "\n".join(
+        [
+            "python3() { bytes=$(wc -c | tr -d ' '); printf '%s\\n' \"$bytes\" >> \"$captures\"; }",
+            "_mark_success() { :; }",
+            "n=0",
+            loop,
+        ]
+    )
+    proc = subprocess.run(
+        ["bash", "-c", replay],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "ORCH": str(tmp_path),
+            "keepalive_shadow_prs": str(prs),
+            "captures": str(captures),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert captures.read_text(encoding="utf-8").splitlines() == ["0"] * 25
 
 
 def test_the_subcommands_print_those_lines(tmp_path: Path) -> None:

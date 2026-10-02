@@ -201,7 +201,7 @@ def render_tick_line(plan_path: Path) -> str:
     """
     try:
         with open(plan_path, encoding="utf-8") as fh:
-            plan_obj = json.load(fh) or {}
+            plan_obj = json.load(fh)
     except Exception as exc:  # noqa: BLE001 - the line names every failure and must never raise
         return f"  EVIDENCE-ACQ: plan unreadable ({exc})"
     if not isinstance(plan_obj, dict):
