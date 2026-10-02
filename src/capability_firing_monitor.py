@@ -58,7 +58,7 @@ report declares this rule as its population (`finding_population`), so the grade
 instead of crediting the edit, and a hold added or lifted LATER is graded like a retirement.
 
 Dedup for that change (2026-10-02): read this module, `switch_review` (whose `held_off` covers the
-five env switches in `SWITCH_CAPABILITY` and raises owner questions, a different concept),
+env switches in `SWITCH_CAPABILITY` and raises owner questions, a different concept),
 `cadence_registry.inspect_cadence` (the step-level `retired` verdict this follows),
 `capabilities.classify_liveness`, `capability_activation_audit` (not-live rows only), the
 improvement log (PR #372's note names this gap as left open), open PRs and recent branches. No
