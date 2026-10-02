@@ -427,6 +427,22 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
 
 STEP_BY_KEY = {row["key"]: row for row in CADENCE_STEPS}
 
+# Grace past one full period before a step's last success reads as STALE: an hourly tick runs a
+# daily step up to an hour late, and a gh-budget skip defers it a tick or two more.
+STALE_GRACE_S = 12 * 3600
+
+
+def stale_after_seconds(row: dict[str, Any]) -> int:
+    """How old a step's last success may be before it no longer describes the present.
+
+    ONE rule, consumed by `inspect_cadence` (which calls the step stale) and by any consumer of a
+    step's ARTIFACT that must decide whether it is still current — `redirect_apply` reads the
+    keepalive supervisor's stage-2 plan as its candidate population, and a plan this rule calls
+    stale is not a population at all. Written twice as a literal in `inspect_cadence` until
+    2026-10-02; a pair of literals is how a report and its consumer come to disagree.
+    """
+    return (int(row.get("cadence_days") or 0) + 1) * 86400 + STALE_GRACE_S
+
 
 def retirement(row: Mapping[str, Any]) -> dict[str, Any] | None:
     """The row's declared retirement, validated and copied; None when it declares none.
@@ -544,7 +560,7 @@ def inspect_cadence(
         failure_ts = _mtime(failure_path)
         success_age = max(0, current - success_ts) if success_ts is not None else None
         failure_age = max(0, current - failure_ts) if failure_ts is not None else None
-        stale_after_s = (int(row.get("cadence_days") or 0) + 1) * 86400 + 12 * 3600
+        stale_after_s = stale_after_seconds(row)
         if success_path is None:
             success_status = "not_applicable"
         elif success_ts is None:
@@ -616,8 +632,7 @@ def inspect_cadence(
         "durability_sweep_stamp": durability.get("success_path"),
         "durability_sweep_stamp_status": durability.get("success_status"),
         "durability_sweep_stamp_age_s": durability.get("success_age_s"),
-        "durability_sweep_stale_after_s": (int(durability.get("cadence_days") or 0) + 1) * 86400
-        + 12 * 3600,
+        "durability_sweep_stale_after_s": stale_after_seconds(durability),
     }
 
 

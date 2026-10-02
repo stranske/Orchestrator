@@ -97,10 +97,13 @@ export ORCH_ROLE_SHADOW="${ORCH_ROLE_SHADOW:-1}"
 # (ready_for_supervised_apply) is a structural deadlock — synced_role_outcomes counts only APPLIED
 # advice, so the gate authorising apply required 10 applied outcomes, and the historical route is
 # exhausted (124 replays). Armed, redirect_apply.py applies at most ONE authorised plan per day and
-# ONLY on an already-dead lane, so no kill ever runs and the apply reduces to release-claim +
-# delegate — what the closer/opener rails already do to a dead stalled lane every hour. It refuses a
-# live process, a foreign claim, an un-stamped plan, a repeat target, and it DISABLES ITSELF the
-# moment the gate deficits close. Kill switch: ORCH_REDIRECT_APPLY_BOOTSTRAP=0.
+# ONLY on a lane shown not live -- a dead pid, or, for a keepalive lane (which has no pid), the
+# supervisor's own report that it is stalled -- so no kill ever runs and the apply reduces to
+# release-claim + delegate, what the closer/opener rails already do to a dead stalled lane every
+# hour. It refuses a live process, a lane of UNKNOWN liveness, a foreign claim, an un-stamped plan, a
+# repeat target, and it DISABLES ITSELF the moment the gate deficits close. Until 2026-10-02 a
+# missing pid read as dead and the population was every report file ever written: 759 offloads
+# judged 30 closed PRs, all "wait". Kill switch: ORCH_REDIRECT_APPLY_BOOTSTRAP=0.
 # Arming criterion (machine-checkable) lives in capability_recurrence_check.SWITCH_ON_CRITERIA.
 export ORCH_REDIRECT_APPLY_BOOTSTRAP="${ORCH_REDIRECT_APPLY_BOOTSTRAP:-1}"
 export ORCH_ROLE_MAX_PER_CYCLE="${ORCH_ROLE_MAX_PER_CYCLE:-1}"
@@ -532,12 +535,16 @@ if [[ "${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}" == "1" ]]; then
 fi
 if python3 "$ORCH/redirect_sweep.py" "${redirect_sweep_args[@]}" >> "$STAMP_DIR/redirect-sweep.log" 2>&1; then :; else echo "  warn: redirect_sweep failed (continuing; see $STAMP_DIR/redirect-sweep.log)"; fi
 fi   # end: _step_disabled redirect-sweep
+# Where the keepalive supervisor's Stage-2 artifacts live, defined ONCE: the plan step below writes
+# them and the redirect apply step reads them, and its candidate population IS this plan. It read
+# the report directory instead until 2026-10-02 -- nothing prunes that directory, so it judged 30
+# closed PRs a day, one metered offload each.
+stage2_plan_json="${ORCH_KEEPALIVE_STAGE2_PLAN_JSON:-$STAMP_DIR/keepalive-supervisor-stage2-plan.json}"
+stage2_report_dir="${ORCH_KEEPALIVE_STAGE2_REPORT_DIR:-$STAMP_DIR/keepalive-supervisor-stage2}"
 if _cadence_due keepalive-stage2-plan && _attempt_ok keepalive-stage2-plan; then
   if _gh_gate search && _gh_gate core; then
     echo "  [cadence] keepalive supervisor Stage 2 live plan (daily; read-only surfacing)"
-    stage2_plan_json="${ORCH_KEEPALIVE_STAGE2_PLAN_JSON:-$STAMP_DIR/keepalive-supervisor-stage2-plan.json}"
     stage2_plan_tmp="$stage2_plan_json.tmp"
-    stage2_report_dir="${ORCH_KEEPALIVE_STAGE2_REPORT_DIR:-$STAMP_DIR/keepalive-supervisor-stage2}"
     stage2_backend="${ORCH_KEEPALIVE_STAGE2_BACKEND:-cursor}"
     mkdir -p "$(dirname "$stage2_plan_json")" "$stage2_report_dir" 2>/dev/null || true
     if python3 "$ORCH/keepalive_supervisor.py" --stage2-plan --stage2-backend "$stage2_backend" --write-report-dir "$stage2_report_dir" --json > "$stage2_plan_tmp"; then
@@ -580,15 +587,20 @@ if _cadence_due redirect-apply-link && _attempt_ok redirect-apply-link; then
   #                    what makes synced_role_outcomes climb without an owner running link-outcome
   #                    by hand (5 links in ~2 months under the manual design).
   #   --apply          self-gated on ORCH_REDIRECT_APPLY_BOOTSTRAP (default 0). With the flag off it
-  #                    returns immediately and spends no offload. Armed, it applies at most one
-  #                    authorised plan per day on an ALREADY-DEAD lane and disarms itself once the
-  #                    Stage-2 deficits close. See SWITCH_ON_CRITERIA in
+  #                    returns immediately and spends no offload. Armed, it screens the
+  #                    supervisor's CURRENT candidates (the stage-2 plan, never the report
+  #                    directory) for free, judges only what passes -- a lane shown not live, not
+  #                    recommended wait/collect, not already judged on identical input -- at most
+  #                    3 role runs, applies at most one authorised plan per day, and disarms itself
+  #                    once the Stage-2 deficits close. Each run prints offloads spent beside the
+  #                    candidates that could still be authorised. See SWITCH_ON_CRITERIA in
   #                    capability_recurrence_check.py for the machine-checkable arming condition.
   echo "  [cadence] redirect apply/link (daily; link applied-redirect outcomes, then self-gated apply)"
   redirect_apply_ok=1
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] redirect apply/link" >> "$STAMP_DIR/redirect-apply.log"
   python3 "$ORCH/redirect_apply.py" --link-outcomes >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
-  python3 "$ORCH/redirect_apply.py" --apply >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
-  python3 "$ORCH/redirect_apply.py" --status >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
+  python3 "$ORCH/redirect_apply.py" --apply --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
+  python3 "$ORCH/redirect_apply.py" --status --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
   if [[ "$redirect_apply_ok" == "1" ]]; then _mark_success redirect-apply-link; else _mark_fail redirect-apply-link "see $STAMP_DIR/redirect-apply.log"; fi
 fi
 if _cadence_due switch-review && _attempt_ok switch-review; then
