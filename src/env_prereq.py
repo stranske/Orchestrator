@@ -47,6 +47,7 @@ admission gate does not bind on it.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -540,6 +541,60 @@ def report_gaps(module: str, gaps: list[str]) -> None:
         print(f"{module} selftest: {PREREQ_ABSENT_MARK} section skipped — {reason}")
 
 
+# --------------------------------------------------------------------------- recorded verdicts
+# Two of verify.py's gates are TEST FILES that pytest has already run in the same verify run, against
+# the same private ledger. Re-running every check made the admission checks execute three times per
+# run (pytest, the module's own selftest, the gate). verify.py now hands those gates pytest's
+# verdicts, and a gate REPORTS a recorded verdict instead of executing the check again. The gate
+# keeps its own line and headline; only the duplicate execution goes.
+
+PYTEST_RESULTS_FLAG = "--pytest-results"
+# What a check can be replayed from. Anything else (an xfail, a verdict this code does not know)
+# is left unrecorded, and an unrecorded check is executed.
+REPLAYABLE_OUTCOMES = ("passed", "failed", "skipped")
+
+
+def recorded_verdicts(argv: list[str], test_file: str) -> dict[str, dict[str, str]]:
+    """This run's pytest verdicts on the checks in `test_file`, keyed by check name.
+
+    Everything unreadable yields {} — no flag, no file, bad JSON, no entry for this file — and the
+    gate then runs its checks itself. A missing verdict may cost time. It must never cost a check.
+    """
+    if PYTEST_RESULTS_FLAG not in argv:
+        return {}
+    at = argv.index(PYTEST_RESULTS_FLAG)
+    try:
+        blob = json.loads(pathlib.Path(argv[at + 1]).read_text(encoding="utf-8"))
+    except (IndexError, OSError, ValueError):
+        return {}
+    mine = blob.get(pathlib.Path(test_file).stem) if isinstance(blob, dict) else None
+    if not isinstance(mine, dict):
+        return {}
+    return {
+        name: verdict
+        for name, verdict in mine.items()
+        if isinstance(verdict, dict) and verdict.get("outcome") in REPLAYABLE_OUTCOMES
+    }
+
+
+def run_or_replay(check, verdicts: dict[str, dict[str, str]]) -> None:
+    """Run `check`, or re-raise pytest's verdict on it exactly as the check itself would have.
+
+    A recorded skip raises `MissingPrerequisite` with pytest's reason, and a recorded failure raises
+    `AssertionError` with pytest's message, so a gate's existing `except` clauses print the same
+    SKIP and FAIL lines either way.
+    """
+    verdict = verdicts.get(check.__name__)
+    if verdict is None:
+        check()
+        return
+    message = verdict.get("message") or ""
+    if verdict["outcome"] == "skipped":
+        raise MissingPrerequisite(message)
+    if verdict["outcome"] == "failed":
+        raise AssertionError(message.removeprefix("AssertionError: ") or "failed under pytest")
+
+
 def _selftest() -> None:
     # The exception must be a skip to every harness that will see it.
     assert issubclass(MissingPrerequisite, unittest.SkipTest)
@@ -737,10 +792,59 @@ def _selftest() -> None:
         finally:
             capabilities.REG = real_reg
 
+    # A RECORDED VERDICT surfaces exactly as the check would have, an unrecorded check executes,
+    # and an unreadable record replays nothing.
+    with tempfile.TemporaryDirectory(prefix="prereq-verdicts-") as td:
+        record = pathlib.Path(td) / "verdicts.json"
+        record.write_text(
+            json.dumps(
+                {
+                    "test_gate": {
+                        "test_ok": {"outcome": "passed"},
+                        "test_skip": {"outcome": "skipped", "message": "widget absent"},
+                        "test_bad": {"outcome": "failed", "message": "AssertionError: 1 != 2"},
+                        "test_odd": {"outcome": "xpassed"},
+                    }
+                }
+            )
+        )
+        argv = ["tests/test_gate.py", PYTEST_RESULTS_FLAG, str(record)]
+        verdicts = recorded_verdicts(argv, "tests/test_gate.py")
+        assert sorted(verdicts) == ["test_bad", "test_ok", "test_skip"], verdicts
+        ran: list[str] = []
+
+        def test_ok() -> None:
+            ran.append("test_ok")
+
+        def test_unrecorded() -> None:
+            ran.append("test_unrecorded")
+
+        run_or_replay(test_ok, verdicts)
+        run_or_replay(test_unrecorded, verdicts)
+        assert ran == ["test_unrecorded"], ran
+        for name, kind, text in (
+            ("test_skip", MissingPrerequisite, "widget absent"),
+            ("test_bad", AssertionError, "1 != 2"),
+        ):
+
+            def check() -> None:
+                raise RuntimeError("a recorded verdict must not execute the check")
+
+            check.__name__ = name
+            try:
+                run_or_replay(check, verdicts)
+            except kind as exc:
+                assert str(exc) == text, (name, str(exc))
+            else:
+                raise AssertionError(f"{name}: a recorded {kind.__name__} was swallowed")
+        record.write_text("{truncated")
+        assert recorded_verdicts(argv, "tests/test_gate.py") == {}
+
     print(
         "env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, "
         "marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, "
-        "not-live rows named with their status)"
+        "not-live rows named with their status, a recorded pytest verdict replays as the check "
+        "would have and an unreadable record replays nothing)"
     )
 
 

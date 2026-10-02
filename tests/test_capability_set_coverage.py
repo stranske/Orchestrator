@@ -439,22 +439,27 @@ def main() -> int:
         print(roster(), end="")
         return 0
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    # Verdicts from verify.py's pytest run on these same checks: reported, not executed twice. See
+    # env_prereq.recorded_verdicts; run by hand, every check executes here.
+    verdicts = env_prereq.recorded_verdicts(sys.argv, __file__)
+    from_pytest = [fn.__name__ for fn in tests if fn.__name__ in verdicts]
     failures, skipped = [], []
     for fn in tests:
+        via = "  (pytest verdict, this run)" if fn.__name__ in verdicts else ""
         try:
-            fn()
-            print(f"  OK   {fn.__name__}")
+            env_prereq.run_or_replay(fn, verdicts)
+            print(f"  OK   {fn.__name__}{via}")
         # MissingPrerequisite is a SkipTest, not an AssertionError — caught first so it neither
         # crashes this runner nor gets counted as a pass. "5 of 6 passed, 1 skipped because X"
         # is the honest line; "all 6 passed" over a set the machine cannot see is the lie this
         # whole file exists to prevent.
         except env_prereq.MissingPrerequisite as exc:
             skipped.append((fn.__name__, str(exc)))
-            print(f"  SKIP {fn.__name__}")
+            print(f"  SKIP {fn.__name__}{via}")
             print(f"       {env_prereq.PREREQ_ABSENT_MARK} {str(exc)[:400]}")
         except AssertionError as exc:
             failures.append((fn.__name__, str(exc)))
-            print(f"  FAIL {fn.__name__}")
+            print(f"  FAIL {fn.__name__}{via}")
             # 400 chars cut the absent-module diagnostic in half, and a half-explanation of why a
             # row looks uncovered is as misleading as none. Capped above the longest message any
             # check here produces rather than at a round number.
@@ -474,6 +479,11 @@ def main() -> int:
         f"\nall {len(tests)} capability-set coverage checks passed "
         f"over ALL {len(ledger)} ledger capabilities "
         f"(--roster for the per-capability table)"
+        + (
+            f"; {len(from_pytest)} of {len(tests)} verdicts from this run's pytest"
+            if from_pytest
+            else ""
+        )
     )
     return 0
 

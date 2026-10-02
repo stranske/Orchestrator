@@ -13,11 +13,13 @@ import argparse
 import fcntl
 import hashlib
 import json
+import marshal
 import os
 import re
 import shlex
 import tempfile
 import time
+from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,7 +30,10 @@ import feedback
 
 ORCH = Path(__file__).resolve().parent
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
-REG = Path(os.environ.get("ORCH_CAPABILITIES_PATH", LOCAL_RUNTIME / "capabilities.json"))
+# Named once: verify.py points its children at a private copy through this variable, and a sandbox
+# that moves ORCH_LOCAL_RUNTIME must drop it, because an explicit path wins over that default.
+LEDGER_PATH_ENV = "ORCH_CAPABILITIES_PATH"
+REG = Path(os.environ.get(LEDGER_PATH_ENV, LOCAL_RUNTIME / "capabilities.json"))
 FEATURES_REG = Path(os.environ.get("ORCH_FEATURES_PATH", ORCH / "experiments" / "features.json"))
 SCHEMA_VERSION = 1
 GATED_TTL_DAYS = 90
@@ -1148,11 +1153,48 @@ def _locked(path: Path) -> Iterator[None]:
 
 
 def _read_ledger_unlocked(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text())
+    return _checked_ledger(json.loads(path.read_text()))
+
+
+def _checked_ledger(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"unsupported capability ledger schema: {payload.get('schema_version')}")
     if not isinstance(payload.get("capabilities"), dict):
         raise ValueError("capability ledger missing capabilities object")
+    return payload
+
+
+# A READ CACHE FOR `load`, KEYED BY CONTENT. Measured 2026-10-02 inside one verify run: the
+# admission gate loaded the ledger 307 times and the advisor selftest 578 times, and every load
+# parsed the same 18 MB file and then copied the result through a second JSON round trip. That is
+# about 0.2 s a load, and the file did not change once. This cache keeps, per path, the bytes it
+# last parsed and a marshal image of the result.
+#
+# A HIT IS EQUAL BYTES, never an equal mtime, size or inode. All three can repeat across an atomic
+# replace: Linux reuses a freed inode, a coarse filesystem clock gives two rewrites the same mtime,
+# and a rewrite that changes one timestamp digit keeps the size. Equal bytes parse to an equal
+# value by construction, so the cache cannot serve a stale ledger. Reading the bytes costs ~2 ms.
+#
+# EVERY CALLER STILL GETS ITS OWN COPY, so a caller that mutates its result reaches neither the
+# cache nor any other caller. marshal stores exactly the JSON value types and is the fastest
+# stdlib copy: 11 ms to store and 29 ms to copy out an 18 MB ledger, against 77 ms to parse it and
+# 128 ms for the round trip `load` used to make. The schema check runs on every return.
+_READ_CACHE: OrderedDict[str, tuple[bytes, bytes]] = OrderedDict()
+_READ_CACHE_PATHS = 4
+
+
+def _parse_ledger_cached(path: Path, raw: bytes) -> dict[str, Any]:
+    """`raw` (the bytes just read from `path`) as a fresh, private ledger payload."""
+    key = os.path.abspath(path)
+    hit = _READ_CACHE.get(key)
+    if hit is not None and hit[0] == raw:
+        _READ_CACHE.move_to_end(key)
+        return _checked_ledger(marshal.loads(hit[1]))
+    payload = _checked_ledger(json.loads(raw))
+    _READ_CACHE[key] = (raw, marshal.dumps(payload))
+    _READ_CACHE.move_to_end(key)
+    while len(_READ_CACHE) > _READ_CACHE_PATHS:
+        _READ_CACHE.popitem(last=False)
     return payload
 
 
@@ -1804,10 +1846,24 @@ def _reconcile_known_declarations(capabilities: dict[str, dict[str, Any]], now: 
 
 
 def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
+    if not create:
+        # RAW rows, exactly as they sit on disk: declaration-owned fields (matcher, status,
+        # gate_reason, gate_blocks_execution, flags_defaults, ...) are NOT reconciled here.
+        # If you are about to assert on OR REPORT one of those, use `load_declared` instead —
+        # see the 2026-08-21 incidents recorded in its docstring (a test) and at `summary` (a
+        # report; the same race, and there it decides a dry_seam_audit gate).
+        #
+        # The lock covers the READ only. A writer replaces the file atomically, so the bytes
+        # read here are one complete ledger whichever side of a write they land on, and parsing
+        # them needs no lock. Parsing inside it held every other reader and writer for the whole
+        # parse, which is how a reader came to queue behind the tick for seconds at a time.
+        with _locked(path):
+            raw = path.read_bytes() if path.exists() else None
+        if raw is None:
+            return {}
+        return _parse_ledger_cached(path, raw)["capabilities"]
     with _locked(path):
         if not path.exists():
-            if not create:
-                return {}
             features: dict[str, Any] = {}
             if FEATURES_REG.exists():
                 features = json.loads(FEATURES_REG.read_text())
@@ -1841,15 +1897,8 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
                     {"timestamp": now, "type": "gate_registered", "activation_inferred": False}
                 )
             _write_ledger_unlocked(path, capabilities)
-        ledger = _read_ledger_unlocked(path)
+        ledger = _parse_ledger_cached(path, path.read_bytes())
         capabilities = ledger["capabilities"]
-        if not create:
-            # RAW rows, exactly as they sit on disk: declaration-owned fields (matcher, status,
-            # gate_reason, gate_blocks_execution, flags_defaults, ...) are NOT reconciled here.
-            # If you are about to assert on OR REPORT one of those, use `load_declared` instead —
-            # see the 2026-08-21 incidents recorded in its docstring (a test) and at `summary` (a
-            # report; the same race, and there it decides a dry_seam_audit gate).
-            return json.loads(json.dumps(capabilities))
         now = _now()
         declarations_added = False
         # Code upgrades may introduce a capability after the local ledger already
@@ -3907,9 +3956,52 @@ def _selftest() -> None:
         "consumers, and the role-id naming convention is pinned)"
     )
     _selftest_renewal()
+    _selftest_read_cache()
     print(
         "capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
         "gate readiness w/ never-pass-on-silence)"
+    )
+
+
+def _selftest_read_cache() -> None:
+    """An unchanged ledger is parsed once, every rewrite is seen, and no caller shares a copy."""
+    real_json = json
+
+    class _Counting:
+        parses = 0
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(real_json, name)
+
+        def loads(self, *args: Any, **kwargs: Any) -> Any:
+            type(self).parses += 1
+            return real_json.loads(*args, **kwargs)
+
+    with tempfile.TemporaryDirectory(prefix="capabilities-cache-") as td:
+        path = Path(td) / "capabilities.json"
+        row = _blank_capability("cache-row")
+        row["notes"] = "aaaa"
+        save({"cache-row": row}, path)
+        globals()["json"] = _Counting()
+        try:
+            first = load(path, create=False)
+            for _ in range(4):
+                assert load(path, create=False) == first
+            assert _Counting.parses == 1, f"an unchanged ledger was parsed {_Counting.parses} times"
+            first["cache-row"]["notes"] = "mutated"
+            assert load(path, create=False)["cache-row"]["notes"] == "aaaa", "a copy was shared"
+            # Same length, written in place, mtime put back: the case a stat-keyed cache misses.
+            before = path.stat()
+            raw = path.read_bytes()
+            with path.open("r+b") as handle:
+                handle.write(raw.replace(b'"aaaa"', b'"bbbb"'))
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert load(path, create=False)["cache-row"]["notes"] == "bbbb", "a stale ledger"
+        finally:
+            globals()["json"] = real_json
+    print(
+        "capabilities.py read-cache selftest: OK (an unchanged ledger is parsed once, a mutated "
+        "result is never shared, and a same-size rewrite with its mtime restored is still seen)"
     )
 
 

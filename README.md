@@ -61,6 +61,11 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   missing thing named — see `env_prereq.py` — and the floor file caps how many such skips are
   allowed, so quietly checking less is a red. Every skip and its reason is printed, so a green run
   always states what it did not check. On a machine with all prerequisites nothing skips at all.
+  A run judges a PRIVATE COPY of the ledger and the Brain, taken once when it starts, so it never
+  queues behind the tick's ledger lock and the code under test cannot write production state. Its
+  selftests run eight at a time, and the two gates that are test files report the verdicts pytest
+  reached in the same run instead of re-running them. The summary's `state:` and `time:` lines say
+  what the run used; `ORCH_VERIFY_LIVE_STATE=1` and `ORCH_VERIFY_JOBS=1` restore the old behaviour.
 - **The remote Gate checks three of four python-ci legs, and says so.** `pr-00-gate.yml` calls the
   fleet's shared Python CI. Ruff lint, Black format, coverage and the pytest matrix are ON and
   green; `typecheck-mypy` is OFF, annotated at the single place the toggles are computed with its

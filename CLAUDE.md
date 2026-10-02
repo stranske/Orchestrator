@@ -313,6 +313,14 @@ Do not create a second event log, model registry, or capability inventory.
   and the Brain. Pointing only the first at an empty directory and concluding "the suite is
   state-independent" is exactly the mistake that made the first CI run red — the ledger never
   moved. Set both when testing a fresh-machine claim.
+- **`verify.py` judges a PRIVATE COPY of the ledger and the Brain** (2026-10-02). It copies both
+  when the run starts and points every child at the copy through `ORCH_CAPABILITIES_PATH` and
+  `ORCH_FEEDBACK_DB`, so no read queues behind the tick's lock and a branch's declarations and
+  migrations cannot reach production. The copy is of the live files at the START, so a row another
+  session registered earlier is still seen, and the next bullet still applies. **A sandbox that
+  moves `ORCH_LOCAL_RUNTIME` must also drop those two variables**, because an explicit path wins
+  over that default and an inherited one leads back out of the sandbox
+  (`rail_exercise.sandbox_overrides()`). `ORCH_VERIFY_LIVE_STATE=1` runs against the live files.
 - **The LEDGER is shared per MACHINE; CODE is branch-isolated per WORKTREE — so a row can outrun
   its module.** A capability registered by another session sits in `$ORCH_LOCAL_RUNTIME` for every
   worktree, while its module exists only on that session's branch. `verify.py` then goes red HERE

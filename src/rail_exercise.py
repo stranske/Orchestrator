@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import capabilities
+import feedback
 import paths
 
 # The CHECKOUT root, by the detected rule — never `parents[1]`. This module's first run from the
@@ -176,6 +177,11 @@ def _break_ok(case: dict[str, Any], result: list[dict], check: list[dict]) -> tu
     return any(item["rc"] != 0 for item in result), "nonzero break run required"
 
 
+def sandbox_overrides() -> tuple[str, ...]:
+    """Variables that would point a sandboxed contract at a ledger or Brain OUTSIDE its sandbox."""
+    return (capabilities.LEDGER_PATH_ENV, feedback.DB_PATH_ENV)
+
+
 def run_contract(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
     capability_id = str(contract.get("capability_id") or path.parent.name)
     base = path.parent
@@ -242,6 +248,11 @@ def run_contract(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
             "HANDOFF_DIR": str(handoff),
         }
         env.pop("ORCH_CAPABILITY_HEARTBEATS", None)
+        # The ledger and the Brain DEFAULT under ORCH_LOCAL_RUNTIME, but an explicit path to either
+        # wins over that default, so an inherited one would carry the contract straight back out of
+        # this sandbox. verify.py exports both, for its private copy of the machine's state.
+        for key in sandbox_overrides():
+            env.pop(key, None)
         setup = _run(contract.get("setup"), contract_dir=contract_dir, fixture_dir=copied, env=env)
         run = _run(contract.get("run"), contract_dir=contract_dir, fixture_dir=copied, env=env)
         passed = _run(

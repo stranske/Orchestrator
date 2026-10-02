@@ -485,9 +485,19 @@ def _context(path: pathlib.Path | None = None) -> dict:
     }
 
 
-def admit(capability_id: str, *, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict:
-    """Does this capability carry everything it needs? Per-requirement, never a single verdict."""
-    ledger = capabilities.load_declared(path or capabilities.REG)  # read-only: see report()
+def admit(
+    capability_id: str,
+    *,
+    path: pathlib.Path | None = None,
+    ctx: dict | None = None,
+    ledger: dict | None = None,
+) -> dict:
+    """Does this capability carry everything it needs? Per-requirement, never a single verdict.
+
+    `ledger` is the read `report()` already made. Without it this reads the ledger itself.
+    """
+    if ledger is None:
+        ledger = capabilities.load_declared(path or capabilities.REG)  # read-only: see report()
     cap = ledger.get(capability_id)
     if cap is None:
         raise ValueError(f"unknown capability: {capability_id}")
@@ -820,7 +830,10 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
         for cid in sorted(ledger)
         if ledger[cid].get("status") not in capabilities.NOT_LIVE_STATES
     ]
-    rows = [admit(cid, path=path, ctx=ctx) for cid in live]
+    # ONE READ FOR THE WHOLE REPORT. Each row used to reload the ledger, which cost a full read of
+    # the file per live row, and it let the rows and the findability totals below come from
+    # different reads if the ledger changed mid-report. A report is one snapshot.
+    rows = [admit(cid, path=path, ctx=ctx, ledger=ledger) for cid in live]
     enforced = [r for r in rows if r["enforced"]]
     return {
         "total": len(rows),
@@ -1203,12 +1216,46 @@ def _selftest() -> None:
     pf2 = preflight({"capability_id": "capability:bare"})
     assert not pf2["ready_to_build"] and "kill_switch" in pf2["declarable_missing"], pf2
 
+    # ONE LEDGER READ PER REPORT: the rows are judged against the read the report made, never a
+    # fresh read per row. Counted on a private ledger with a thin context, so `_context` (which
+    # reads the ledger for itself) is not what is measured.
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="admission-reads-") as td:
+        one_read = pathlib.Path(td) / "capabilities.json"
+        rows = {}
+        for cap_id in ("t-read-one", "t-read-two"):
+            rows[cap_id] = {**capabilities._blank_capability(cap_id), "status": "wired"}
+        capabilities.save(rows, one_read)
+        reads: list[pathlib.Path] = []
+        real_load_declared = capabilities.load_declared
+
+        def counted(where: pathlib.Path = capabilities.REG) -> dict:
+            reads.append(pathlib.Path(where))
+            return real_load_declared(where)
+
+        thin: dict[str, Any] = {
+            "audit_rows": {},
+            "fixtures": set(),
+            "known_controls": set(),
+            "bound_surfaces": {},
+            "reached_surfaces": set(),
+            "consult_reach": {},
+        }
+        capabilities.load_declared = counted  # type: ignore[assignment]
+        try:
+            counted_rep = report(path=one_read, ctx=thin)
+        finally:
+            capabilities.load_declared = real_load_declared  # type: ignore[assignment]
+        assert counted_rep["total"] == 2, counted_rep["total"]
+        assert reads == [one_read], f"one report read the ledger {len(reads)} times"
+
     env_prereq.report_gaps("capability_admission.py", gaps)
     print(
         "capability_admission.py selftest: OK (every requirement can fail and can pass, "
         "grandfathering visible, per-requirement cutoffs are in the past, findability is "
         "declarable pre-build, waivers expire, dangling + overdue commitments detected, "
-        "live-tree scan proven non-vacuous and correctly attributed)"
+        "live-tree scan proven non-vacuous and correctly attributed, one ledger read per report)"
         + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
     )
 

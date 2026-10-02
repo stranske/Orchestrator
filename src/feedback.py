@@ -43,7 +43,9 @@ ORCH = Path(__file__).resolve().parent
 # The live SQLite store stays on LOCAL disk — Dropbox can corrupt a DB written mid-sync. The CODE lives
 # in Code/Orchestrator (Dropbox); snapshot_json() writes a reviewable copy of the dataset INTO the project.
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
-DB_PATH = Path(os.environ.get("ORCH_FEEDBACK_DB", LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
+# Named once, for the same two consumers as `capabilities.LEDGER_PATH_ENV`.
+DB_PATH_ENV = "ORCH_FEEDBACK_DB"
+DB_PATH = Path(os.environ.get(DB_PATH_ENV, LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
 
 # `agent_switches` holds two kinds of switch (2026-09-23): `source='label'` rows come from a PR's
 # `agent:*` label timeline, `source='policy'` rows from the keepalive state marker's delegation_log

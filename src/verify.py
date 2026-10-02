@@ -18,8 +18,14 @@ the collected/passed COUNTS out of pytest and compares them against a recorded f
 What it runs:
   1. pytest over the whole directory — the only thing that executes the pytest-only files.
   2. every module exposing `--selftest`, discovered rather than hardcoded, so a new module with a
-     selftest is picked up without anyone remembering to add it here.
-  3. the capability gates: activation audit, recurrence replay, set coverage, admission.
+     selftest is picked up without anyone remembering to add it here. They run several at a time
+     (`ORCH_VERIFY_JOBS`, default up to 8) and are reported in discovery order at any width.
+  3. the capability gates: activation audit, recurrence replay, set coverage, admission. The two
+     that are test files report the verdicts pytest just reached on the same checks instead of
+     executing them a second time, and execute any check pytest left no verdict for.
+All of it runs against ONE private copy of the capability ledger and the Brain, taken when the run
+starts and deleted when it ends (see `private_state`): no read waits on the tick's lock, and nothing
+the code under test writes can reach production state. `ORCH_VERIFY_LIVE_STATE=1` turns that off.
 
 What makes it honest:
   * a **floor** (`.verify-floor.json`) on tests collected and passed. A silent collection drop — an
@@ -56,14 +62,21 @@ What makes it honest:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import os
 import pathlib
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
+import xml.etree.ElementTree as ET
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 # TWO ROOTS, and verify.py is the module that most needs them separated: it DISCOVERS modules
 # (beside itself) and it READS repo files — the floor, the coverage artifacts — and RUNS pytest,
@@ -195,12 +208,154 @@ except Exception:  # noqa: BLE001
         return None
 
 
+# --- PRIVATE STATE: the ledger and the Brain, copied once per run ------------------------------
+# Every child of a run reads the capability LEDGER and many connect to the BRAIN, and until
+# 2026-10-02 they did both on this machine's LIVE files. That cost time, and it was unsafe:
+#
+#   * TIME. `capabilities._locked` takes an exclusive lock even for a read, so every ledger read in
+#     a run queued behind the tick, the MCP server and any other verify run on the machine.
+#     Measured 2026-10-02 with no code change, the admission gate took 275 s on the live ledger and
+#     119 s on a private copy of the same file; the advisor selftest took 352 s and 58 s.
+#   * SAFETY. The writing `load()` reconciles declarations from THE CODE BEING VERIFIED and writes
+#     the result back, and every Brain connection applies that code's migrations. So a run on an
+#     unmerged branch could rewrite production state before anything merged, and every later tick
+#     would read it. `capabilities.load_declared`'s docstring records one such mid-suite rewrite.
+#
+# So a run copies both into a private directory first and points every child at the copies,
+# through the variables the modules already read (named once: `capabilities.LEDGER_PATH_ENV`,
+# `feedback.DB_PATH_ENV`). The copy is taken ONCE, so every check in the run judges the same
+# ledger, and it is deleted when the run ends. A file absent at the source stays absent and
+# bootstraps privately, as it would have bootstrapped live. A copy that fails leaves THAT file live
+# and says so. `ORCH_VERIFY_LIVE_STATE=1` restores the old behaviour; the summary always says which.
+#
+# A SANDBOX THAT MOVES `ORCH_LOCAL_RUNTIME` MUST DROP BOTH VARIABLES, because an explicit path wins
+# over that default and an inherited one would carry the sandbox back out to this copy.
+# `rail_exercise.sandbox_overrides()` is that rule for the rail contracts.
+LIVE_STATE_ENV = "ORCH_VERIFY_LIVE_STATE"
+
+
+def _state_sources() -> tuple[str, pathlib.Path, str, pathlib.Path]:
+    """(variable, live path) for the ledger and the Brain, ASKED of the modules that read them.
+
+    Never re-derived here. A second copy of the default-path rule would be a pair of literals free
+    to drift, and a drifted copy would snapshot the wrong file while every child read the copy.
+    """
+    import capabilities
+    import feedback
+
+    return (
+        capabilities.LEDGER_PATH_ENV,
+        pathlib.Path(capabilities.REG),
+        feedback.DB_PATH_ENV,
+        pathlib.Path(feedback.DB_PATH),
+    )
+
+
+def _megabytes(path: pathlib.Path) -> str:
+    return f"{path.stat().st_size / 1e6:.1f} MB"
+
+
+def snapshot_state(ledger: pathlib.Path, brain: pathlib.Path, root: pathlib.Path) -> dict:
+    """Copy the ledger and the Brain under `root`, never writing either source.
+
+    Returns each private path, or None where the copy FAILED (that file then stays live), and the
+    line the summary prints.
+    """
+    out: dict = {
+        "ledger": root / "capabilities.json",
+        "brain": root / "feedback" / "orchestrator.db",
+    }
+    said: list[str] = []
+    try:
+        if ledger.is_file():
+            # Every writer replaces the ledger atomically, so one read of the path is one whole
+            # ledger whichever side of a write it lands on, and the copy needs no lock.
+            shutil.copy2(ledger, out["ledger"])
+            said.append(f"ledger {_megabytes(out['ledger'])}")
+        else:
+            said.append("ledger absent at the source, so it bootstraps privately")
+    except OSError as exc:
+        out["ledger"] = None
+        said.append(f"ledger LIVE, because the copy failed ({type(exc).__name__}: {exc})")
+    try:
+        out["brain"].parent.mkdir(parents=True, exist_ok=True)
+        if brain.is_file():
+            # SQLite's own backup reads ONE consistent snapshot even while the tick writes, and the
+            # source is opened READ-ONLY: a copy that applied this tree's migrations to the live
+            # file would be the very write this exists to prevent.
+            source = sqlite3.connect(f"{brain.resolve().as_uri()}?mode=ro", uri=True, timeout=30)
+            try:
+                target = sqlite3.connect(str(out["brain"]))
+                try:
+                    source.backup(target)
+                finally:
+                    target.close()
+            finally:
+                source.close()
+            said.append(f"Brain {_megabytes(out['brain'])}")
+        else:
+            said.append("Brain absent at the source, so it bootstraps privately")
+    except (OSError, sqlite3.Error) as exc:
+        out["brain"] = None
+        said.append(f"Brain LIVE, because the copy failed ({type(exc).__name__}: {exc})")
+    out["line"] = "private copy, deleted after the run — " + "; ".join(said)
+    return out
+
+
+@contextlib.contextmanager
+def private_state(
+    sources: tuple[str, pathlib.Path, str, pathlib.Path] | None = None,
+) -> Iterator[dict]:
+    """For the length of the block, every child of this process reads a private copy of the state.
+
+    Yields {"line": what the summary prints, "ledger": the ledger path the children read, or None
+    when it is the live one}. The two variables are restored on exit and the copies deleted.
+    """
+    if os.environ.get(LIVE_STATE_ENV) == "1":
+        yield {
+            "line": f"LIVE — {LIVE_STATE_ENV}=1, so this run reads and writes the machine's own "
+            "ledger and Brain",
+            "ledger": None,
+        }
+        return
+    unresolved = None
+    try:
+        ledger_env, ledger, brain_env, brain = sources or _state_sources()
+    except Exception as exc:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
+        unresolved = f"{type(exc).__name__}: {exc}"
+    if unresolved:
+        yield {
+            "line": f"LIVE — the ledger and Brain paths did not resolve ({unresolved})",
+            "ledger": None,
+        }
+        return
+    saved = {key: os.environ.get(key) for key in (ledger_env, brain_env)}
+    with tempfile.TemporaryDirectory(prefix="verify-state-") as td:
+        snap = snapshot_state(ledger, brain, pathlib.Path(td))
+        try:
+            for key, private in ((ledger_env, snap["ledger"]), (brain_env, snap["brain"])):
+                if private is not None:
+                    os.environ[key] = str(private)
+            yield {"line": snap["line"], "ledger": snap["ledger"]}
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
 # pytest's terse summary line, e.g. "182 passed, 3 skipped in 41.20s"
 COUNT_RE = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed)")
 
 
-def run_pytest(*, extra: list[str] | None = None) -> dict:
-    """Execute the suite and read the COUNTS, not the exit code."""
+def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = None) -> dict:
+    """Execute the suite and read the COUNTS, not the exit code.
+
+    With `junit`, pytest also writes its per-test XML there, and the verdicts in it come back as
+    `verdicts` — which is how the two gates that are test files report them instead of executing
+    every check a second time (see `run_gates`). The counts never come from that file.
+    """
     # `-rfEs`: failures, errors AND skip reasons in the short summary. Skip reasons are why this
     # flag is here at all — a skip count with no story is the shape a silent narrowing hides in.
     # But `f` and `E` are NOT optional additions: pytest's default is `-rfE`, so passing a bare
@@ -211,6 +366,8 @@ def run_pytest(*, extra: list[str] | None = None) -> dict:
     cmd = child_argv(
         [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "--no-header"]
     )
+    if junit is not None:
+        cmd.append(f"--junitxml={junit}")
     cmd += extra or []
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     tail = (proc.stdout or "") + (proc.stderr or "")
@@ -245,7 +402,50 @@ def run_pytest(*, extra: list[str] | None = None) -> dict:
         "failures": failures,
         "skips": skips,
         "tail": lines[-12:],
+        "verdicts": read_junit(junit) if junit is not None else {},
     }
+
+
+# Per test, the most severe verdict wins: pytest writes a second <testcase> for a teardown error.
+_VERDICT_RANK = {"passed": 0, "skipped": 1, "failed": 2}
+
+
+def read_junit(path: pathlib.Path) -> dict[str, dict[str, dict[str, str]]]:
+    """pytest's verdict on each test: {module stem: {test name: {"outcome", "message"}}}.
+
+    Kept only where a check can be REPLAYED from it — passed, failed (a failure or an error in any
+    phase) and skipped. An xfail is left out, and so is everything in an absent or unreadable file:
+    a gate handed no verdict for a check runs that check itself, so a gap here costs time and never
+    a check. Keyed by the LAST part of pytest's classname, the module's stem, because that is the
+    one name a gate script knows about itself in both tree shapes (`tests.test_x` in a checkout,
+    `test_x` in the flat mirror). A test inside a class keys under the class name, which no gate asks.
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return {}
+    out: dict[str, dict[str, dict[str, str]]] = {}
+    unreplayable: set[tuple[str, str]] = set()
+    for case in root.iter("testcase"):
+        module = (case.get("classname") or "").rsplit(".", 1)[-1]
+        name = case.get("name") or ""
+        if not module or not name:
+            continue
+        verdict = {"outcome": "passed", "message": ""}
+        for child in case:
+            if child.tag in ("failure", "error"):
+                verdict = {"outcome": "failed", "message": child.get("message") or child.tag}
+                break
+            if child.tag == "skipped":
+                if child.get("type") == "pytest.xfail":
+                    unreplayable.add((module, name))
+                verdict = {"outcome": "skipped", "message": child.get("message") or ""}
+        prior = out.setdefault(module, {}).get(name)
+        if prior is None or _VERDICT_RANK[verdict["outcome"]] > _VERDICT_RANK[prior["outcome"]]:
+            out[module][name] = verdict
+    for module, name in unreplayable:
+        out[module].pop(name, None)
+    return out
 
 
 def selftest_modules() -> list[str]:
@@ -263,7 +463,38 @@ def selftest_modules() -> list[str]:
     return found
 
 
-def run_selftests(modules: list[str]) -> dict:
+# SELFTESTS RUN SEVERAL AT A TIME. Each is its own process with its own temporary state, and one
+# after another they were the longest phase of a run. `ORCH_VERIFY_JOBS` sets how many run at once,
+# and 1 restores the serial run. Results are classified in DISCOVERY order, whatever order they
+# finish in, so the summary, the failure list and the skip list read identically at any width.
+JOBS_ENV = "ORCH_VERIFY_JOBS"
+DEFAULT_JOBS = 8
+
+
+def selftest_jobs() -> tuple[int, str]:
+    """How many selftests run at once, and the phrase the summary prints for it."""
+    default = max(1, min(DEFAULT_JOBS, os.cpu_count() or 1))
+    raw = os.environ.get(JOBS_ENV, "").strip()
+    if not raw:
+        return default, f"{default} at a time"
+    try:
+        jobs = int(raw)
+    except ValueError:
+        jobs = 0
+    if jobs < 1:
+        # Named, never silently replaced: a setting the run ignored has to say so.
+        return default, f"{default} at a time ({JOBS_ENV}={raw!r} is not a positive integer)"
+    return jobs, f"{jobs} at a time ({JOBS_ENV}={jobs})"
+
+
+def _source_size(mod: str) -> int:
+    try:
+        return (MODULES / f"{mod}.py").stat().st_size
+    except OSError:
+        return 0
+
+
+def run_selftests(modules: list[str], *, jobs: int = 1) -> dict:
     """Run each `--selftest` and sort it into ran / skipped-with-a-reason / failed.
 
     THREE outcomes, not two. A selftest that exits 0 having executed nothing was already caught
@@ -272,15 +503,27 @@ def run_selftests(modules: list[str]) -> dict:
     cannot run here prints the shared `PREREQUISITE ABSENT:` mark with the missing thing named,
     and lands in `skipped`, which is counted, printed, and ceilinged. `ok` therefore means "ran",
     and the number after it is trustworthy again.
+
+    `jobs` selftests run at once (see `selftest_jobs`). The classification below is the same at any
+    width: it walks `modules` in the order given, never the order the processes finished.
     """
-    ok, bad, skipped = [], {}, {}
-    for mod in modules:
-        proc = subprocess.run(
+
+    def run_one(mod: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
             child_argv([sys.executable, str(MODULES / f"{mod}.py"), "--selftest"]),
             cwd=ROOT,
             capture_output=True,
             text=True,
         )
+
+    # Largest source first. The phase ends when its slowest selftest does, so the long ones start
+    # at once and the short ones fill in behind them. Size is the proxy because it needs no history.
+    order = sorted(dict.fromkeys(modules), key=_source_size, reverse=True)
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        finished = dict(zip(order, pool.map(run_one, order)))
+    ok, bad, skipped = [], {}, {}
+    for mod in modules:
+        proc = finished[mod]
         out = (proc.stdout or "") + (proc.stderr or "")
         # A selftest must both exit 0 AND say something. A silent zero-exit is the very failure
         # this module exists to catch.
@@ -339,9 +582,32 @@ def _child_env() -> dict:
     return env
 
 
-def run_gates() -> dict:
+def _results_flag() -> str | None:
+    """The flag a test-file gate reads its recorded verdicts from, or None.
+
+    No copy of the literal here: a gate script that cannot import env_prereq cannot read the flag
+    either, so with None every gate simply runs its checks itself.
+    """
+    try:
+        from env_prereq import PYTEST_RESULTS_FLAG
+    except Exception:  # noqa: BLE001
+        return None
+    return PYTEST_RESULTS_FLAG
+
+
+def run_gates(*, pytest_results: pathlib.Path | None = None) -> dict:
+    """Run every gate. The two that are TEST FILES get this run's pytest verdicts when there are some.
+
+    pytest has just run those files against the same private ledger, so re-executing each check
+    was the same work twice; with `pytest_results` they REPORT the recorded verdicts instead, and
+    execute only a check pytest left no verdict for (see `env_prereq.recorded_verdicts`). Each gate
+    still prints its own line and headline here.
+    """
     out = {}
+    flag = _results_flag() if pytest_results is not None else None
     for name, argv in GATES:
+        if flag and argv[0].startswith("test_"):
+            argv = [*argv, flag, str(pytest_results)]
         proc = subprocess.run(
             child_argv([sys.executable, _gate_script(argv[0]), *argv[1:]]),
             cwd=ROOT,
@@ -377,7 +643,7 @@ def _headline(name: str, text: str) -> str:
     return (text.strip().splitlines() or ["(no output)"])[-1][:100]
 
 
-def absent_entrypoint_line() -> str | None:
+def absent_entrypoint_line(ledger: pathlib.Path | None = None) -> str | None:
     """One line naming ledger rows whose declared module is NOT in this tree, or None.
 
     WHY IT IS IN THE SUMMARY. The capability ledger is shared per MACHINE while code is
@@ -396,8 +662,10 @@ def absent_entrypoint_line() -> str | None:
         import capabilities
         import capability_activation_audit as audit
 
-        # load_declared: read-only. verify.py must not mutate the ledger it is reporting on.
-        rep = audit.absent_entrypoint_report(sorted(capabilities.load_declared(capabilities.REG)))
+        # load_declared: read-only. verify.py must not mutate the ledger it is reporting on. Given
+        # the run's private copy, this reads the same ledger every other check in the run judged.
+        rows = capabilities.load_declared(ledger or capabilities.REG)
+        rep = audit.absent_entrypoint_report(sorted(rows))
     except Exception as exc:  # noqa: BLE001
         return f"  entrypoints: NOT CHECKED ({type(exc).__name__}: {exc})"
     return _format_absent_line(rep)
@@ -906,11 +1174,25 @@ def verify(
     forgive_healed_drift: bool = False,
     floor_may_lag: bool = False,
 ) -> tuple[int, str]:
-    py = run_pytest()
-    floor = load_floor()
-    mods = selftest_modules()
-    st = run_selftests(mods)
-    gates = run_gates()
+    jobs, jobs_said = selftest_jobs()
+    took: dict[str, float] = {}
+    # Every child below runs inside ONE private copy of the ledger and the Brain; see
+    # `private_state`. The run directory holds pytest's XML and the verdicts handed to the gates.
+    with private_state() as run_state, tempfile.TemporaryDirectory(prefix="verify-run-") as run_dir:
+        started = time.monotonic()
+        py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
+        took["pytest"] = time.monotonic() - started
+        floor = load_floor()
+        mods = selftest_modules()
+        started = time.monotonic()
+        st = run_selftests(mods, jobs=jobs)
+        took["selftests"] = time.monotonic() - started
+        verdicts = pathlib.Path(run_dir) / "pytest-verdicts.json"
+        verdicts.write_text(json.dumps(py["verdicts"]), encoding="utf-8")
+        started = time.monotonic()
+        gates = run_gates(pytest_results=verdicts if py["verdicts"] else None)
+        took["gates"] = time.monotonic() - started
+        entrypoints = absent_entrypoint_line(run_state["ledger"])
 
     problems = []
     if py["usage_error"]:
@@ -992,6 +1274,12 @@ def verify(
         f"  tree:       {'EXEC MIRROR — mirror_* ceilings apply' if mirror_reason else 'checkout'}"
         + (f"\n              {mirror_reason}" if mirror_reason else "")
     )
+    # ALWAYS printed, like `tree:`. Which state the run judged is never something to infer.
+    lines.append(f"  state:      {run_state['line']}")
+    lines.append(
+        f"  time:       pytest {_duration(took['pytest'])}, selftests "
+        f"{_duration(took['selftests'])} ({jobs_said}), gates {_duration(took['gates'])}"
+    )
     lines.append(
         f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
         f"{_cap('skipped_max')} skipped "
@@ -1009,7 +1297,6 @@ def verify(
 
     # Printed under a GREEN verdict as much as a red one: a row registered by another checkout can
     # be present while every check still passes, and the reader wants to know before the next merge.
-    entrypoints = absent_entrypoint_line()
     if entrypoints:
         lines.append(entrypoints)
     # ALWAYS printed: a drained ratchet is news, and a ratchet that stopped being counted is
@@ -1103,6 +1390,11 @@ def verify(
     return (1 if failing else 0), "\n".join(lines) + "\n"
 
 
+def _duration(seconds: float) -> str:
+    whole = int(round(seconds))
+    return f"{whole // 60}m{whole % 60:02d}s" if whole >= 60 else f"{whole}s"
+
+
 def _selftest() -> None:
     # Count parsing must survive the real shapes pytest emits.
     for text, expect_collected, expect_passed in (
@@ -1150,8 +1442,11 @@ def _selftest() -> None:
         try:
             globals()["HERE"] = globals()["MODULES"] = pathlib.Path(td)
             got = run_selftests(["silent_mod", "loud_mod", "skipping_mod"])
+            # The same three at once must classify identically: the width is never a verdict.
+            wide = run_selftests(["silent_mod", "loud_mod", "skipping_mod"], jobs=3)
         finally:
             globals()["HERE"], globals()["MODULES"] = saved, saved_mods
+    assert wide == got, f"running selftests at once changed the result: {got} vs {wide}"
     assert "silent_mod" in got["failed"], f"a silent zero-exit must FAIL: {got}"
     assert "did it run?" in got["failed"]["silent_mod"], got
     assert got["ok"] == ["loud_mod"], f"a skipped selftest must not be counted as ok: {got}"
@@ -1611,6 +1906,54 @@ def _selftest() -> None:
     finally:
         globals()["FLOOR"] = _saved_floor
 
+    # ---- ONE PRIVATE COPY OF THE STATE PER RUN. Children read the copy through the two
+    # variables, neither source is written, and the variables and the copy are gone on exit.
+    # Variable names of its own, so this cannot disturb a real setting.
+    with tempfile.TemporaryDirectory(prefix="verify-state-selftest-") as _td:
+        _src_ledger, _src_brain = (
+            pathlib.Path(_td) / "capabilities.json",
+            pathlib.Path(_td) / "b.db",
+        )
+        _src_ledger.write_text('{"schema_version": 1, "capabilities": {}}\n', encoding="utf-8")
+        _conn = sqlite3.connect(_src_brain)
+        _conn.execute("CREATE TABLE probe (n INTEGER)")
+        _conn.commit()
+        _conn.close()
+        _before = (_src_ledger.read_bytes(), _src_brain.read_bytes())
+        _names = ("VERIFY_SELFTEST_LEDGER", "VERIFY_SELFTEST_BRAIN")
+        with private_state((_names[0], _src_ledger, _names[1], _src_brain)) as _state:
+            _copy = pathlib.Path(os.environ[_names[0]])
+            assert _copy != _src_ledger and _copy.read_bytes() == _before[0], _state
+            assert pathlib.Path(os.environ[_names[1]]).is_file(), _state
+        assert not any(k in os.environ for k in _names), "the variables outlived the run"
+        assert not _copy.exists(), "the private copy outlived the run"
+        assert (_src_ledger.read_bytes(), _src_brain.read_bytes()) == _before, "a source changed"
+
+    # ---- PYTEST'S VERDICTS, as the two test-file gates replay them: only what a check can be
+    # replayed from, the most severe of a duplicate, and nothing at all from an unreadable file.
+    with tempfile.TemporaryDirectory(prefix="verify-junit-") as _td:
+        _xml = pathlib.Path(_td) / "pytest.xml"
+        _xml.write_text(
+            "<testsuites><testsuite>"
+            '<testcase classname="tests.test_g" name="test_ok"/>'
+            '<testcase classname="tests.test_g" name="test_skip"><skipped message="why"/></testcase>'
+            '<testcase classname="tests.test_g" name="test_td"/>'
+            '<testcase classname="tests.test_g" name="test_td"><error message="down"/></testcase>'
+            '<testcase classname="tests.test_g" name="test_xf">'
+            '<skipped type="pytest.xfail" message="x"/></testcase>'
+            "</testsuite></testsuites>",
+            encoding="utf-8",
+        )
+        assert read_junit(_xml) == {
+            "test_g": {
+                "test_ok": {"outcome": "passed", "message": ""},
+                "test_skip": {"outcome": "skipped", "message": "why"},
+                "test_td": {"outcome": "failed", "message": "down"},
+            }
+        }, read_junit(_xml)
+        _xml.write_text("<testsuites><testcase", encoding="utf-8")
+        assert read_junit(_xml) == {}, "a truncated file must yield no verdicts, never a guess"
+
     print(
         "verify.py selftest: OK (count parsing, selftest discovery, silent-zero-exit is a "
         "FAILURE, a loud skip is not a pass, skip ceiling fails when exceeded and holds when "
@@ -1621,7 +1964,9 @@ def _selftest() -> None:
         "--reconcile-floor forgives ONLY a drift it "
         "healed and never an unwritten one, absent-module line is silent when clean and is "
         "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail, "
-        "two tree shapes carry two agreed ceilings and the exec mirror can go GREEN)"
+        "two tree shapes carry two agreed ceilings and the exec mirror can go GREEN, "
+        "selftests classify identically at any width, a run reads one private copy of the "
+        "state and writes neither source, and only a replayable pytest verdict is kept)"
     )
 
 
