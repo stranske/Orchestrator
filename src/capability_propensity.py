@@ -4770,8 +4770,8 @@ def _private_live_state():
     three paths (`capability_advisor.advise()`; `capability_matcher_proposals.evaluate()` through
     `detect()`; `binding_for()`'s promotion index), connected to the live Brain about twenty times
     (each connect also runs the schema and its migrations), and read the lane automations' memory
-    files through `detect()`'s surface records. `capabilities._locked` takes an EXCLUSIVE lock even
-    for a read, so each of those ledger reads also queued behind the tick. CI runs this selftest
+    files through `detect()`'s surface records. `capabilities._locked` took an EXCLUSIVE lock even
+    for a read (shared since 2026-10-02), so each of those ledger reads also queued behind the tick. CI runs this selftest
     against an empty runtime directory and passes, so empty private stores change no assertion:
     every machine now runs what CI runs.
 

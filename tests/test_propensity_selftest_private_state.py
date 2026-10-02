@@ -4,8 +4,8 @@ Measured with an audit hook on 54302cc, `capability_propensity --selftest` reach
 on whatever machine ran it: the capability ledger (from `capability_advisor.advise()`,
 `capability_matcher_proposals.evaluate()` through `detect()`, and `binding_for()`'s promotion
 index), the Brain (about twenty connects, each running the schema and migrations), and the lane
-automations' memory files (through `detect()`'s surface records). `capabilities._locked` takes an
-exclusive lock even for a read, so on a busy machine the selftest spent most of its wall time
+automations' memory files (through `detect()`'s surface records). `capabilities._locked` took an
+exclusive lock even for a read (shared since 2026-10-02), so on a busy machine the selftest spent most of its wall time
 queued behind the tick: 72 s wall for 6 s of CPU with eight `verify.py` runs going.
 
 Part of it was a production defect rather than a test one. `missed_selection(path=X)` called

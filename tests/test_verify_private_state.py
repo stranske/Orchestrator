@@ -1,7 +1,8 @@
 """verify.py runs every child against ONE private copy of the ledger and the Brain.
 
 Until 2026-10-02 every child of a verify run read and wrote this machine's LIVE ledger and Brain.
-That was slow — `capabilities._locked` takes an exclusive lock even for a read, so every read queued
+That was slow — `capabilities._locked` took an exclusive lock even for a read (it has taken a shared
+one since 2026-10-02, which still waits for every writer), so every read queued
 behind the tick and any other verify run (the admission gate took 275 s live and 119 s on a copy of
 the same file) — and it was unsafe, because the writing loader reconciles declarations from the code
 under test and every Brain connection applies that code's migrations: a run on an unmerged branch
