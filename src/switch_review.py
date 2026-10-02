@@ -28,9 +28,10 @@ flipping a safety switch on silence is precisely what must not happen.
 SWITCH VALUES ARE READ AS THE TICK SEES THEM, and each row says where its value came from. Outside
 the tick a switch orchestrate.sh exports ON by default is unset, so reading this process's
 environment alone listed ORCH_REDIRECT_APPLY_BOOTSTRAP as "held off, a decision waiting to be made"
-while every tick had it armed. So the CLI resolves each switch this process does not set from
-orchestrate.sh's prologue (`env_as_the_tick_sees_it`), and the tick, whose environment already IS
-the tick's, says so with `--env process` rather than executing its own prologue a second time.
+while every tick had it armed. So the CLI reads each switch from orchestrate.sh's prologue, executed
+with this process's environment inherited (`env_as_the_tick_sees_it`), and the tick, whose
+environment already IS the tick's, says so with `--env process` rather than executing its own
+prologue a second time.
 
     python3 switch_review.py                # what is due for review
     python3 switch_review.py --json
@@ -1020,7 +1021,8 @@ def env_as_the_tick_sees_it() -> tuple[dict[str, str], dict[str, str]]:
     made" and a re-offer echoed it as `gate_state: off` while the tick had it armed. This resolves
     each mapped switch with `capability_recurrence_check.as_the_tick_sees_it`, the one resolver that
     EXECUTES the prologue, conditionals included, and names every source. A value this process sets
-    still wins, as `${X:-default}` means it does in a real tick.
+    meets what it would meet in a real tick: kept when non-empty, replaced by the default when empty,
+    and overridden where a prologue conditional says so.
 
     It runs bash, so a CLI entry point calls it and `switch_states()` never does: that read must stay
     cheap, and a library or test caller must never execute orchestrate.sh. The tick does not call it
@@ -1266,7 +1268,10 @@ def value_phrase(row: dict) -> str:
     if source == "ambient":
         return f"{shown} — set in this process's environment"
     if source == "tick":
-        return f"{shown} — set by orchestrate.sh's prologue (this process does not set it)"
+        return (
+            f"{shown} — set by orchestrate.sh's prologue (this process does not set it, or sets "
+            "a value the prologue replaces)"
+        )
     if source == "explicit":
         return f"{shown} in the environment passed to this review"
     if source == "unset":
@@ -1948,10 +1953,11 @@ def main(argv: list[str]) -> int:
         choices=("tick", "process"),
         default="tick",
         help=(
-            "where switch values come from. tick (the default): as the tick sees them, which is "
-            "this process's value where it sets one and orchestrate.sh's prologue, executed, where "
-            "it does not. process: this process's environment alone, a switch it does not set "
-            "being unset; the tick passes this, because its environment IS the tick's"
+            "where switch values come from. tick (the default): as the tick sees them, from "
+            "orchestrate.sh's prologue executed with this process's environment inherited, so a "
+            "value set here is treated as a real tick treats it. process: this process's "
+            "environment alone, a switch it does not set being unset; the tick passes this, "
+            "because its environment IS the tick's"
         ),
     )
     ap.add_argument("--selftest", action="store_true")

@@ -163,6 +163,32 @@ def test_an_interactive_review_reads_a_tick_exported_switch_as_the_tick_does(fix
     assert "'1' — set by orchestrate.sh's prologue" in on, on
 
 
+def test_a_value_set_here_reaches_the_tick_as_the_prologue_treats_it(fixture_prologue, monkeypatch):
+    """A value set in this process is NOT simply the tick's: `${X:-default}` replaces an EMPTY one,
+    and a conditional can override a set one. So the prologue is evaluated first and its answer is
+    the value, and the source says whether that answer is this process's own. An ambient
+    short-circuit read both cases below wrong (the review of #385)."""
+    monkeypatch.setenv(FLAG, "")  # empty: the prologue's default replaces it
+    monkeypatch.setenv("ORCH_RANGE_LANE_ROLLOUT", "1")  # set: the conditional forces it to 0
+    monkeypatch.setenv("ORCH_FRONTEND_VERIFY_START_BROWSER", "1")  # set: `${X:-0}` keeps it
+    env, sources = switch_review.env_as_the_tick_sees_it()
+    got = {flag: (env.get(flag), sources[flag]) for flag in sources}
+    assert got[FLAG] == ("1", "tick"), got
+    assert got["ORCH_RANGE_LANE_ROLLOUT"] == ("0", "tick"), got
+    assert got["ORCH_FRONTEND_VERIFY_START_BROWSER"] == ("1", "ambient"), got
+    assert got["ORCH_RUNTIME_AC_ALLOW_COMMANDS"] == (None, "unset"), got
+    # With no prologue to apply, a NON-EMPTY value set here is still this process's (only a
+    # conditional could change it), and an EMPTY one is UNKNOWN: its default is what failed.
+    script = fixture_prologue.with_name("aborts.sh")
+    script.write_text("set -euo pipefail\ncat /no/such/credential\n_gh_gate() { :; }\n")
+    monkeypatch.setattr(rc, "ORCHESTRATE", script)
+    monkeypatch.setattr(rc, "_TICK_ENV", None)
+    monkeypatch.setattr(rc, "_TICK_ENV_DIAG", None)
+    env, sources = switch_review.env_as_the_tick_sees_it()
+    assert (env.get(FLAG), sources[FLAG]) == ("", rc.TICK_UNRESOLVED_PREFIX + "nonzero_exit")
+    assert (env["ORCH_RANGE_LANE_ROLLOUT"], sources["ORCH_RANGE_LANE_ROLLOUT"]) == ("1", "ambient")
+
+
 def test_the_review_agrees_with_the_real_tick_prologue_whatever_its_defaults(sandbox):
     """The same reader against the REAL orchestrate.sh, held to whatever it exports today, so the
     test pins agreement with the tick rather than any one default."""

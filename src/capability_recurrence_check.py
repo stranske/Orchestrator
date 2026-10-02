@@ -443,28 +443,36 @@ def tick_value_unknown(source: str) -> bool:
 def as_the_tick_sees_it(flag: str) -> tuple[str | None, str]:
     """One flag's value as THE TICK would see it, and where that value came from.
 
-    The one place the source vocabulary is decided, for every reader that reports it:
-      * `ambient` — this process sets it, and it wins, exactly as `${X:-default}` means it does;
-      * `tick` — this process does not set it, and orchestrate.sh's prologue does;
-      * `unset` — neither does. A measurement: the prologue evaluated and does not export it;
-      * `tick-unresolved:<reason>` — this process does not set it, and the prologue did not
-        evaluate, so the tick's value is UNKNOWN. Reported as such and never as `unset`.
+    The prologue is evaluated FIRST (`tick_env()`, cached per process) and its answer is the value.
+    It runs with this process's environment inherited, so it applies what a value set here meets in
+    a real tick, and an ambient short-circuit would not: `${X:-default}` replaces an EMPTY value
+    with the default (an empty ORCH_REDIRECT_APPLY_BOOTSTRAP is 1 in the tick), and a conditional
+    can override a set one (the range-lane revert turns ORCH_RANGE_LANE_ROLLOUT=1 into 0).
 
-    It runs the prologue (`tick_env()`, cached per process) only when this process does not set the
-    flag, so it costs nothing for a flag this process already decides.
+    The one place the source vocabulary is decided, for every reader that reports it:
+      * `ambient` — the tick's value is the one this process sets;
+      * `tick` — the prologue's value, which this process does not set, or sets to something the
+        prologue replaces;
+      * `unset` — neither sets it. A measurement: the prologue evaluated and does not export it;
+      * `tick-unresolved:<reason>` — the prologue did not evaluate, so the tick's value is UNKNOWN,
+        and it is reported as such, never as `unset`. A NON-EMPTY value set here is still reported
+        as `ambient`, since `${X:-default}` keeps it and only a conditional could change it; an
+        empty one is unknown, because the default it would get is exactly what failed to evaluate.
     """
-    ambient = os.environ.get(flag)
-    if ambient is not None:
-        return ambient, "ambient"
     resolved = tick_env()
-    if flag in resolved:
-        return resolved[flag], "tick"
-    # An UNRESOLVED tick and a genuinely-unset flag are not the same claim. Name the reason, so a
-    # degraded run is visible in the row instead of reading as a real "unset".
+    ambient = os.environ.get(flag)
     _diag = _TICK_ENV_DIAG or {}
     if _diag.get("outcome") in (None, "ok"):
+        if flag in resolved:
+            value = resolved[flag]
+            return value, "ambient" if value == ambient else "tick"
         return None, "unset"
-    return None, f"{TICK_UNRESOLVED_PREFIX}{_diag.get('reason')}"
+    # An UNRESOLVED tick and a genuinely-unset flag are not the same claim. Name the reason, so a
+    # degraded run is visible in the row instead of reading as a real "unset". The value stays this
+    # process's own (None, or the empty string), so the row still says what was read here.
+    if ambient:
+        return ambient, "ambient"
+    return ambient, f"{TICK_UNRESOLVED_PREFIX}{_diag.get('reason')}"
 
 
 def _predicate_flag(flag: str, want: str = "1") -> dict:
