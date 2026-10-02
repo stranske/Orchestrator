@@ -167,15 +167,15 @@ if ! before="$(source_identity)"; then
   fail "NOTHING VERIFIED: could not read the state of $src"
   exit 2
 fi
+if [[ -n "$snapshot_out" && ( -e "$snapshot_out" || -L "$snapshot_out" ) ]]; then
+  fail "NOTHING VERIFIED: snapshot output already exists: $snapshot_out"
+  exit 2
+fi
 head_short="$(git -C "$src" rev-parse --short HEAD)"
 dirty="$(git -C "$src" status --porcelain | wc -l | tr -d ' ')"
 
 if ! scratch="$(mktemp -d "${TMPDIR:-/tmp}/verify-before-sync.XXXXXX")"; then
   fail "NOTHING VERIFIED: could not create a scratch directory"
-  exit 2
-fi
-if [[ -n "$snapshot_out" && ( -e "$snapshot_out" || -L "$snapshot_out" ) ]]; then
-  fail "NOTHING VERIFIED: snapshot output already exists: $snapshot_out"
   exit 2
 fi
 if [[ "${VERIFY_BEFORE_SYNC_KEEP:-0}" == "1" ]]; then

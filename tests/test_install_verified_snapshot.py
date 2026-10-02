@@ -16,6 +16,8 @@ def _snapshot(tmp_path: Path) -> Path:
     (snapshot / "experiments").mkdir()
     (snapshot / "data").mkdir()
     (snapshot / "config").mkdir()
+    (snapshot / ".github" / "workflows").mkdir(parents=True)
+    (snapshot / "docs" / "briefs").mkdir(parents=True)
     (snapshot / "orchestrate.sh").write_text("#!/bin/sh\necho exact\n")
     (snapshot / "orchestrate.sh").chmod(0o751)
     (snapshot / "module.py").write_text("VALUE = 'verified'\n")
@@ -27,6 +29,12 @@ def _snapshot(tmp_path: Path) -> Path:
     (snapshot / "tests" / "fixtures" / "input.txt").write_text("fixture\n")
     (snapshot / "experiments" / "hypotheses.json").write_text("{}\n")
     (snapshot / "repo_review_registry.json").write_text('{"repos": []}\n')
+    (snapshot / ".github" / "workflows" / "ci.yml").write_text("name: ci\n")
+    (snapshot / ".gitignore").write_text(".coverage\n")
+    (snapshot / "ruff.toml").write_text("line-length = 100\n")
+    (snapshot / "docs" / "guide.md").write_text("new guide\n")
+    (snapshot / "docs" / "briefs" / "one.md").write_text("one\n")
+    (snapshot / ".docs-shipped.txt").write_text("docs/briefs/one.md\ndocs/guide.md\n")
     (snapshot / "__pycache__").mkdir()
     (snapshot / "__pycache__" / "module.pyc").write_bytes(b"generated")
     return snapshot
@@ -51,6 +59,12 @@ def test_install_uses_only_snapshot_bytes_and_preserves_local_markers(tmp_path):
     (mirror / "experiments" / ".last-ship-gate").write_text("keep\n")
     (mirror / "experiments" / "hypotheses.json").write_text("old\n")
     (mirror / "stale.py").write_text("stale\n")
+    (mirror / ".github").mkdir()
+    (mirror / ".github" / "stale.yml").write_text("stale\n")
+    (mirror / "docs" / "reports").mkdir(parents=True)
+    (mirror / "docs" / "old.md").write_text("old\n")
+    (mirror / "docs" / "reports" / "runtime.md").write_text("keep\n")
+    (mirror / ".docs-shipped.txt").write_text("docs/old.md\n")
     registry = tmp_path / "runtime" / "repo_review_registry.json"
 
     result = _run(snapshot, mirror, "--runtime-registry", registry)
@@ -59,6 +73,13 @@ def test_install_uses_only_snapshot_bytes_and_preserves_local_markers(tmp_path):
     assert not (mirror / "stale.py").exists()
     assert not (mirror / "tests" / "stale.py").exists()
     assert not (mirror / "scripts" / "stale.sh").exists()
+    assert not (mirror / ".github" / "stale.yml").exists()
+    assert (mirror / ".github" / "workflows" / "ci.yml").is_file()
+    assert not (mirror / "docs" / "old.md").exists()
+    assert (mirror / "docs" / "reports" / "runtime.md").read_text() == "keep\n"
+    assert (mirror / "docs" / "guide.md").read_text() == "new guide\n"
+    assert (mirror / ".gitignore").read_text() == ".coverage\n"
+    assert (mirror / "ruff.toml").read_text() == "line-length = 100\n"
     assert (mirror / "tests" / "fixtures" / "input.txt").read_text() == "fixture\n"
     assert (mirror / "experiments" / ".last-ship-gate").read_text() == "keep\n"
     assert (mirror / "experiments" / "hypotheses.json").read_text() == "{}\n"
@@ -86,3 +107,30 @@ def test_install_rejects_the_snapshot_as_its_own_destination(tmp_path):
     result = _run(snapshot, snapshot)
     assert result.returncode == 2
     assert "snapshot and mirror must be separate trees" in result.stderr
+
+
+def test_install_validates_every_external_output_before_mutating_the_mirror(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    mirror = tmp_path / "live mirror"
+    mirror.mkdir()
+    original = mirror / "old.py"
+    original.write_text("still live\n")
+    (snapshot / "repo_review_registry.json").write_text("not json\n")
+
+    result = _run(snapshot, mirror, "--runtime-registry", tmp_path / "runtime.json")
+    assert result.returncode == 2
+    assert original.read_text() == "still live\n"
+
+
+def test_install_rejects_a_snapshot_docs_manifest_that_does_not_match(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    mirror = tmp_path / "live mirror"
+    mirror.mkdir()
+    original = mirror / "old.py"
+    original.write_text("still live\n")
+    (snapshot / ".docs-shipped.txt").write_text("docs/guide.md\n")
+
+    result = _run(snapshot, mirror)
+    assert result.returncode == 2
+    assert "snapshot docs do not match" in result.stderr
+    assert original.read_text() == "still live\n"

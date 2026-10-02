@@ -18,11 +18,15 @@ import struct
 import sys
 from pathlib import Path
 
-OWNED_TREES = ("tests", "scripts")
+REPLACED_TREES = ("tests", "scripts", ".github")
+MERGED_TREES = ("docs",)
 OWNED_FILES = (
+    ".docs-shipped.txt",
+    ".gitignore",
     ".verify-floor.json",
     ".coveragerc",
     "pyproject.toml",
+    "ruff.toml",
     "CLAUDE.md",
     "IMPROVEMENT_BACKLOG.md",
     "repo_review_registry.json",
@@ -63,12 +67,19 @@ def owned_entries(snapshot: Path) -> list[Path]:
     entries: set[Path] = set()
     for pattern in ("*.py", "*.sh"):
         entries.update(path.relative_to(snapshot) for path in snapshot.glob(pattern))
-    for tree in OWNED_TREES:
+    for tree in REPLACED_TREES:
         entries.update(_tree_entries(snapshot, tree))
-    for relative in OWNED_FILES:
-        path = snapshot / relative
+    for tree in MERGED_TREES:
+        for relative in _shipped_docs(snapshot / f".{tree}-shipped.txt"):
+            entries.add(relative)
+            parent = relative.parent
+            while parent != Path("."):
+                entries.add(parent)
+                parent = parent.parent
+    for owned_file in OWNED_FILES:
+        path = snapshot / owned_file
         if path.exists() or path.is_symlink():
-            entries.add(Path(relative))
+            entries.add(Path(owned_file))
     return sorted(entries, key=lambda path: (len(path.parts), os.fsencode(str(path))))
 
 
@@ -128,6 +139,20 @@ def _copy_entry(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination, follow_symlinks=False)
 
 
+def _shipped_docs(manifest: Path) -> list[Path]:
+    """Read the copier's prior docs manifest without permitting path traversal."""
+
+    if not manifest.is_file():
+        return []
+    paths: list[Path] = []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        relative = Path(line)
+        if not line.startswith("docs/") or relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"unsafe shipped-doc path in {manifest}: {line!r}")
+        paths.append(relative)
+    return paths
+
+
 def install(snapshot: Path, mirror: Path, runtime_registry: Path | None = None) -> int:
     snapshot = snapshot.resolve()
     mirror = mirror.expanduser().resolve()
@@ -137,6 +162,16 @@ def install(snapshot: Path, mirror: Path, runtime_registry: Path | None = None) 
 
     entries = owned_entries(snapshot)
     expected_digest = snapshot_digest(snapshot)
+    registry = snapshot / "repo_review_registry.json"
+    if registry.is_file():
+        json.loads(registry.read_text(encoding="utf-8"))
+    snapshot_docs = _shipped_docs(snapshot / ".docs-shipped.txt")
+    if set(snapshot_docs) != {
+        path.relative_to(snapshot)
+        for path in (snapshot / "docs").rglob("*")
+        if path.is_file() or path.is_symlink()
+    }:
+        raise ValueError("snapshot docs do not match .docs-shipped.txt")
     mirror.mkdir(parents=True, exist_ok=True)
 
     # Match the legacy copy contract: root modules/scripts and both committed trees are wholly
@@ -145,8 +180,10 @@ def install(snapshot: Path, mirror: Path, runtime_registry: Path | None = None) 
     for pattern in ("*.py", "*.sh"):
         for path in mirror.glob(pattern):
             _remove(path)
-    for tree in OWNED_TREES:
+    for tree in REPLACED_TREES:
         _remove(mirror / tree)
+    for relative_path in _shipped_docs(mirror / ".docs-shipped.txt"):
+        _remove(mirror / relative_path)
     for owned_file in OWNED_FILES:
         _remove(mirror / owned_file)
 
@@ -159,9 +196,7 @@ def install(snapshot: Path, mirror: Path, runtime_registry: Path | None = None) 
             f"installed payload digest {installed_digest} != verified snapshot {expected_digest}"
         )
 
-    registry = snapshot / "repo_review_registry.json"
     if runtime_registry is not None and registry.is_file():
-        json.loads(registry.read_text(encoding="utf-8"))
         runtime_registry = runtime_registry.expanduser()
         runtime_registry.parent.mkdir(parents=True, exist_ok=True)
         temporary = runtime_registry.with_name(runtime_registry.name + ".tmp")

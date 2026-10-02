@@ -256,6 +256,16 @@ def test_a_red_verdict_never_publishes_a_snapshot(world):
     assert not snapshot.exists()
 
 
+def test_existing_snapshot_destination_creates_no_scratch_directory(world):
+    snapshot = world["tmpdir"] / "already-there"
+    snapshot.mkdir()
+    result, record = _run(world, "--snapshot-out", str(snapshot), str(world["src"]))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "snapshot output already exists" in result.stderr
+    assert list(world["tmpdir"].iterdir()) == [snapshot]
+    assert record == {}
+
+
 def test_a_failed_copy_verifies_nothing(world):
     result, record = _run(world, FAKE_SYNC_RC="5")
     assert result.returncode == 2, result.stdout + result.stderr

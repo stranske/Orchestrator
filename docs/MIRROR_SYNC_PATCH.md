@@ -328,8 +328,9 @@ That ordering has two defects:
 
 - **The verdict arrived after launchd could already run the code.** A red told you about a tree
   that was live from the moment the copy finished.
-- **A run in the live mirror can read a torn tree.** A second sync landing while it runs leaves it
-  reading a mix of old and new files.
+- **A run in the live mirror can read a torn tree.** The pre-copy verdict avoids taking the verdict
+  on that moving tree; it does not yet make the legacy in-place publication atomic for other live
+  readers. That separate generation-switch design must also preserve mirror-local runtime output.
 
 `verify.py` checks the WHOLE tree it runs in, never one session's work, so on any one tree only the
 latest run counts. CI already runs the same suite on every PR head and on main. The one run a sync
@@ -469,7 +470,8 @@ must open with `tree: EXEC MIRROR — mirror_* ceilings apply`. Then confirm tha
   - red exits 3 without copying and prints the `--no-verify` command;
   - a source without the script exits 3 without copying;
   - `--no-verify` copies once;
-  - a source that changes during the live copy exits 4.
+  - a source or retained deployment snapshot that changes after the verdict is rejected before
+    installation.
 - The live mirror's `orchestrate.sh` and the live registry copy did not move.
 - The real copy script has not yet been run through the wrapper. The confirmation step above is
   that witness.
