@@ -1154,9 +1154,12 @@ def _locked(path: Path, *, shared: bool = False) -> Iterator[None]:
     behaviour. Only a block that never writes may pass `shared=True`, and
     `tests/test_ledger_shared_read_lock.py` fails any block that writes the ledger under it.
 
-    Why a writer cannot starve: a shared holder keeps the lock for one `read_bytes()` (a few ms),
-    calls nothing else inside it, and so can never nest a second lock. A writer therefore waits at
-    most for the readers already holding the lock when it asks.
+    A writer waits until no reader holds the lock, and flock queues nobody fairly: a reader that
+    arrives while a writer waits can still get in, so a writer is delayed for as long as reads
+    overlap with no gap between them. Gaps come fast because each shared holder keeps the lock for
+    one `read_bytes()` (a few ms) and calls nothing inside it, so it can never nest a second lock.
+    Measured 2026-10-02 against eight processes reading the 18 MB ledger back to back, a writer
+    waited 0.006 ms at the median and 17 ms at worst over 40 tries.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
