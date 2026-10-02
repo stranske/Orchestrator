@@ -1304,6 +1304,19 @@ def cli_reported_model(
     return {**blank, "reason": f"no_cli_identity_reader_for_agent:{agent}"}
 
 
+def workspace_path(cwd: str | Path | None) -> Path:
+    """The ONE spelling of an agent's workspace: user-expanded, absolute, symlinks resolved.
+
+    gemini's `--add-dir` is agy's write-isolation guard, and the dispatcher names the same
+    directory again in the GEMINI WORKSPACE prompt line, the spawn cwd and the claim's `worktree`.
+    Each site used to normalise on its own and `plan_dispatch` did not, so under a runtime reached
+    through a symlink (macOS `/var` -> `/private/var`, which every mktemp scratch runtime is) one
+    dispatch named its workspace with two strings. Every one of those sites takes it from here.
+    (2026-10-02)
+    """
+    return Path(cwd or ".").expanduser().resolve()
+
+
 def build_command(
     agent: str,
     prompt: str,
@@ -1464,7 +1477,7 @@ def build_command(
             "ORCH_GEMINI_LOG_FILE",
             str(AGENT_RUNTIME / "gemini" / "logs" / "agy.log"),
         )
-        workspace = Path(cwd or ".").expanduser().resolve()
+        workspace = workspace_path(cwd)
         # Tier-aware since 2026-08-08: cheap/mid ride 3.7 Flash (newer generation AND far fewer
         # compute units on this metered seat); only `full` pays for 3.1 Pro. Non-tier modes keep
         # the full Pro seat, because agy print mode REQUIRES an explicit model (see above).
