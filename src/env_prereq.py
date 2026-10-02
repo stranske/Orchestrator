@@ -322,6 +322,22 @@ def git_repo_absent() -> str | None:
     return None
 
 
+def node_absent() -> str | None:
+    """Reason string when there is no `node` on PATH, so a workflow's JavaScript cannot be run.
+
+    The Gate's `actions/github-script` steps are JavaScript, and the checks that exercise them run
+    the real script under Node rather than a stand-in for it. A GitHub runner ships Node. Detects
+    the binary, never the context — no `$CI` — so a machine without it skips those checks by name,
+    and the skip ceiling bounds how many may.
+    """
+    if shutil.which("node") is None:
+        return (
+            "node is not on PATH — these checks execute the Gate workflow's github-script steps "
+            "under Node, so without a runtime there is nothing real to run"
+        )
+    return None
+
+
 def exec_mirror_shape() -> str | None:
     """Name what makes THIS tree the exec mirror rather than a checkout, or None for a checkout.
 
@@ -653,6 +669,7 @@ def _selftest() -> None:
         ("credential_file_absent", lambda: credential_file_absent("vibe")),
         ("seat_has_no_free_signal", seat_has_no_free_signal),
         ("repo_files_absent", lambda: repo_files_absent("definitely-not-a-file-here")),
+        ("node_absent", node_absent),
     ]
     for name, fn in detectors:
         got = fn()
