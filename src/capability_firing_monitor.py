@@ -64,6 +64,22 @@ env switches in `SWITCH_CAPABILITY` and raises owner questions, a different conc
 improvement log (PR #372's note names this gap as left open), open PRs and recent branches. No
 capability-level hold existed and nothing declared a capability-to-step link, so this module was
 extended and the link declared on the cadence row; nothing new was registered.
+
+**A silence that the row's own history contradicts says so.** Only an `invocation` event moves
+`last_invocation`, and two things are not ticks: a `success`/`failure` heartbeat moves
+`last_success` alone, and a consult trial writes an invocation from any session. On 2026-10-02 four
+of the five overdue rows read "silent since 2026-09-03" because their only invocations were consult
+trials that day, and three of them had recorded a `success` on every run since. `silence_evidence`
+names both under each silent row, from `event_history` alone: the runs recorded later than the last
+invocation's tolerance window, and whether a trial set the field. It annotates; no finding list,
+count or population depends on it, and the tick's grader projects the findings to their ids.
+
+Dedup for that change: read this module, `capability_activation_audit.heartbeat_reachable` and
+`capability_admission.req_heartbeat` (both accept a heartbeat of any event type, which is how the
+success-only modules were admitted), `capabilities.usage_rate` (it counts invocation EVENTS, so the
+ledger cannot infer the field from a success without the two disagreeing), `switch_review` (it reads
+`last_invocation` for `on_but_idle`), the improvement log and open PRs. Nothing reported a run
+recorded without an invocation.
 """
 
 from __future__ import annotations
@@ -110,12 +126,24 @@ ONDEMAND_RE = re.compile(
 # orchestrate.sh sets, at `ORCH-ANCHOR: heartbeat-export`, inside an active tick. (That said "line
 # ~152" until 2026-08-22, by which point the export was at 190 — hence the anchor. Everything
 # invoked ABOVE that anchor records nothing at all; `capability_activation_audit.heartbeat_env_gate`
-# is what watches for that, and it caught two live cases.) So the firing record measures TICK activity
-# and nothing else. A capability whose caller is the test suite or a hand-run CLI will therefore read
-# "never fired" forever while working perfectly — an artifact of where heartbeats are enabled, not a
-# fact about the capability. Reporting those in the same column as a genuinely dormant lane would be
-# the same category error as judging an observer on deliveries.
+# is what watches for that, and it caught two live cases.) So a production heartbeat records TICK
+# activity and nothing else. A capability whose caller is the test suite or a hand-run CLI will
+# therefore read "never fired" forever while working perfectly — an artifact of where heartbeats are
+# enabled, not a fact about the capability. Reporting those in the same column as a genuinely dormant
+# lane would be the same category error as judging an observer on deliveries.
+#
+# BUT `last_invocation` IS NOT ONLY TICK ACTIVITY. A consult trial (`capability_propensity.
+# record_trigger`) writes an `invocation` with an `advice:` ref through `capabilities.heartbeat`,
+# which no env gate holds, so a trial moves the field from any session at any time. Measured
+# 2026-10-02: four rows read "silent since 2026-09-03" when their only invocations were consult
+# trials that day, and three of them had recorded a `success` on every run since, which moves
+# `last_success` and never `last_invocation`. `silence_evidence` names both from the row's own
+# history beside every silence finding; it annotates and changes no finding.
 SUITE_OR_CLI_MATCHERS = frozenset({"test_gate"})
+# The ref every consult trial carries: the writer's own constant, never a copy of its spelling.
+TRIAL_REF_PREFIX = capabilities.ADVICE_REF_PREFIX
+# The event types a heartbeat records at the END of a run, so each is evidence that the run happened.
+RUN_RESULT_EVENTS = ("success", "failure")
 SUITE_CADENCE_RE = re.compile(r"every suite run|every run|supervised CLI|CLI", re.IGNORECASE)
 
 NOT_MONITORED_REASON = (
@@ -224,6 +252,68 @@ def expected_interval_days(cap: dict[str, Any]) -> float | None:
     return None
 
 
+def silence_evidence(cap: dict[str, Any], tolerance_days: float | None, now: int) -> dict[str, Any]:
+    """What a silent row's OWN history says about the silence `last_invocation` reports.
+
+    Read from `event_history` alone, never from a field a reconciliation can set:
+
+      * `runs_after_last_invocation` — `success`/`failure` events that cannot be the result of the
+        last invocation, because they landed more than the row's own tolerance after it (any of
+        them, for a row with no invocation at all). The window is the one that makes the row
+        overdue, so a result seconds behind its invocation never counts, while a later run that
+        recorded no invocation of its own does: a recording defect in the module.
+      * `ran_within_tolerance` — whether the newest of those runs is inside the tolerance NOW. Only
+        then is the row not silent at all; a recorder that ran without invocations and then
+        stopped is both a recording defect and a silence. Three-valued: None when there is no such
+        run, or no tolerance to judge it against.
+      * `last_invocation_from` — whether the newest invocation EVENT set `last_invocation`, and what
+        it was: `consult_trial`, `non_trial`, or `no_event` when the field moved without one. A
+        non-trial invocation is not proof of a tick (the external-CI bridge writes them too); a row
+        whose every invocation is a trial has never fired in a tick.
+
+    Every count is always present and zero-able, so "measured, none" never looks like "not measured".
+    """
+    last = int(cap.get("last_invocation") or 0)
+    after = last + (tolerance_days or 0) * 86400 if last else 0
+    invocations = trials = 0
+    newest: tuple[int, bool] | None = None
+    runs: list[tuple[int, str]] = []
+    for event in cap.get("event_history") or []:
+        kind = event.get("type")
+        stamp = int(event.get("timestamp") or 0)
+        if kind == "invocation":
+            trial = str(event.get("ref") or "").startswith(TRIAL_REF_PREFIX)
+            invocations += 1
+            trials += 1 if trial else 0
+            if newest is None or stamp >= newest[0]:
+                newest = (stamp, trial)
+        elif kind in RUN_RESULT_EVENTS and stamp > after:
+            runs.append((stamp, str(kind)))
+    if not last:
+        source = None
+    elif newest is None or newest[0] < last:
+        source = "no_event"
+    else:
+        source = "consult_trial" if newest[1] else "non_trial"
+    latest_run = max(runs, default=None)
+    age = None if latest_run is None else round((now - latest_run[0]) / 86400, 1)
+    return {
+        "non_trial_invocations": invocations - trials,
+        "trial_invocations": trials,
+        "last_invocation_from": source,
+        "runs_after_last_invocation": len(runs),
+        "last_run": (
+            None
+            if latest_run is None
+            else {"timestamp": latest_run[0], "type": latest_run[1], "age_days": age}
+        ),
+        "ran_within_tolerance": (
+            None if age is None or tolerance_days is None else age <= tolerance_days
+        ),
+        "tolerance_days": tolerance_days,
+    }
+
+
 def _load_history() -> list[dict]:
     if not HISTORY.exists():
         return []
@@ -287,6 +377,7 @@ def review(
     no_cadence: list[str] = []
     held_off: list[dict[str, Any]] = []
     found: dict[str, list[Any]] = {key: [] for key in SILENCE_FINDINGS}
+    evidence: dict[str, dict[str, Any]] = {}
     not_monitored: dict[str, list[str]] = {}
     for cap_id in sorted(ledger):
         cap = ledger[cap_id]
@@ -377,6 +468,8 @@ def review(
         for key in SILENCE_FINDINGS:
             if key in silence:
                 found[key].append(silence[key])
+        if silence:
+            evidence[cap_id] = silence_evidence(cap, tolerance, now)
 
     live = [r for r in rows if r["monitored"]]
     return {
@@ -402,6 +495,9 @@ def review(
         "held_off": held_off,
         "held_off_count": len(held_off),
         "hold_unevaluated": hold_unevaluated,
+        # Keyed by every row in a silence finding above, and only those: what its own history says
+        # the silence is. An annotation, so no finding list and no count depends on it.
+        "silence_evidence": evidence,
         "snapshots_stored": len(history),
         "rows": rows,
     }
@@ -495,6 +591,37 @@ def _format_held_off(held: list[dict], unevaluated: str | None) -> list[str]:
     return out
 
 
+def _evidence_lines(found: dict[str, Any] | None) -> list[str]:
+    """What a silent row's own history says, one line per fact, under that row's finding."""
+    if not found:
+        return []
+    out = []
+    runs, last_run = found["runs_after_last_invocation"], found["last_run"]
+    if runs and last_run:
+        within, tolerance = found["ran_within_tolerance"], found["tolerance_days"]
+        when = f"the latest a {last_run['type']} {last_run['age_days']}d ago"
+        if within is not None:
+            when += f", {'inside' if within else 'past'} its {tolerance}d tolerance"
+        # Three-valued on purpose: only a run inside the tolerance rules the silence out.
+        verdict = {
+            True: "a recording defect, not a silence",
+            False: "a recording defect, and silent since",
+        }.get(within, "a recording defect")
+        out.append(
+            f"      RAN {runs}x with no invocation of its own, {when}: its heartbeat records the "
+            f"result and no invocation, {verdict}"
+        )
+    if found["last_invocation_from"] == "consult_trial":
+        others = found["non_trial_invocations"]
+        out.append(
+            "      its only invocations are consult trials, so it has never fired in a tick"
+            if not others
+            else f"      its last invocation is a consult trial; its {others} non-trial "
+            "invocation(s) are older still"
+        )
+    return out
+
+
 def format_report(rep: dict) -> str:
     out = [
         "# Capability firing monitor",
@@ -525,6 +652,16 @@ def format_report(rep: dict) -> str:
             "establishes the baseline"
         )
     out.append("")
+    evidence = rep.get("silence_evidence") or {}
+    shown: set[str] = set()
+
+    def contradicted(cap_id: str) -> list[str]:
+        # A row can sit in two silence lists; its history is printed under the first one only.
+        if cap_id in shown:
+            return []
+        shown.add(cap_id)
+        return _evidence_lines(evidence.get(cap_id))
+
     if rep["regressed"]:
         out.append("  REGRESSED (fired before, unchanged since the last snapshot):")
         for r in rep["regressed"]:
@@ -532,6 +669,7 @@ def format_report(rep: dict) -> str:
                 f"    {r['capability_id']:<38} unchanged {r['unchanged_for_days']}d "
                 f"(tolerance {r['tolerance_days']}d)"
             )
+            out += contradicted(r["capability_id"])
     elif _held_from(held, "regressed"):
         # Empty because every row that went quiet is HELD, which is not the same as nothing having
         # gone quiet: the drained sentence would contradict the held-off section below.
@@ -548,6 +686,7 @@ def format_report(rep: dict) -> str:
                 f"    {r['capability_id']:<38} silent {r['silent_days']}d "
                 f"(tolerance {r['tolerance_days']}d; cadence {r['cadence']!r})"
             )
+            out += contradicted(r["capability_id"])
     elif _held_from(held, "overdue"):
         out += [
             "",
@@ -572,6 +711,7 @@ def format_report(rep: dict) -> str:
         ]
         for cap_id in rep["never_fired"]:
             out.append(f"    {cap_id}")
+            out += contradicted(cap_id)
     if rep["no_cadence_declared"]:
         out += [
             "",
@@ -632,6 +772,69 @@ def _selftest() -> None:
     }
     assert capabilities.is_observer(observer)
     assert capabilities.classify_liveness(observer, now=now) == "observing"
+
+    # SILENCE EVIDENCE. A result seconds behind its own invocation is THAT invocation's result; a
+    # result past the tolerance window is a later run that recorded no invocation, which is NOT a
+    # silence only while that run is itself inside the tolerance; a field set by a trial is not a
+    # tick; and a field set with no event at all (a reconciliation) is neither.
+    month = now - 30 * 86400
+
+    def history(*events: tuple[str, int, str]) -> list[dict]:
+        return [{"type": kind, "timestamp": stamp, "ref": ref} for kind, stamp, ref in events]
+
+    paired = silence_evidence(
+        {
+            "last_invocation": month,
+            "event_history": history(("invocation", month, "x.main"), ("success", month + 5, "x")),
+        },
+        2.0,
+        now,
+    )
+    assert paired["runs_after_last_invocation"] == 0, paired
+    assert paired["last_invocation_from"] == "non_trial", paired
+    unpaired = silence_evidence(
+        {
+            "last_invocation": month,
+            "event_history": history(
+                ("invocation", month, TRIAL_REF_PREFIX + "abc"),
+                ("success", now - 86400, "x"),
+                ("failure", now - 2 * 86400, "x"),
+            ),
+        },
+        2.0,
+        now,
+    )
+    assert unpaired["runs_after_last_invocation"] == 2, unpaired
+    assert unpaired["last_run"] == {"timestamp": now - 86400, "type": "success", "age_days": 1.0}
+    assert unpaired["ran_within_tolerance"] is True, unpaired
+    assert unpaired["last_invocation_from"] == "consult_trial", unpaired
+    assert unpaired["non_trial_invocations"] == 0 and unpaired["trial_invocations"] == 1
+    # A success-only recorder that then STOPPED: invoked 30 days ago, last result 25 days ago. Both
+    # a recording defect and a silence, and the line must not call it "not a silence".
+    stopped = silence_evidence(
+        {
+            "last_invocation": month,
+            "event_history": history(
+                ("invocation", month, "x.main"), ("success", now - 25 * 86400, "x")
+            ),
+        },
+        2.0,
+        now,
+    )
+    assert stopped["runs_after_last_invocation"] == 1, stopped
+    assert stopped["ran_within_tolerance"] is False, stopped
+    (stopped_line,) = _evidence_lines(stopped)
+    assert "silent since" in stopped_line and "not a silence" not in stopped_line, stopped_line
+    reconciled = silence_evidence({"last_invocation": month, "event_history": []}, 2.0, now)
+    assert reconciled["last_invocation_from"] == "no_event", reconciled
+    never = silence_evidence(
+        {"last_invocation": None, "event_history": history(("success", month, "x"))}, None, now
+    )
+    assert never["runs_after_last_invocation"] == 1 and never["last_invocation_from"] is None
+    assert never["ran_within_tolerance"] is None, "no tolerance means no verdict, never False"
+    assert not _evidence_lines(paired), "a healthy history must print nothing"
+    assert len(_evidence_lines(unpaired)) == 2, _evidence_lines(unpaired)
+    assert "not a silence" in _evidence_lines(unpaired)[0], _evidence_lines(unpaired)
 
     import tempfile
 
@@ -880,7 +1083,8 @@ def _selftest() -> None:
         "capability_firing_monitor.py selftest: OK (cadence parsing incl. on-demand refusal, "
         "observers judged on running, regression needs history, only live rows judged and "
         "not-live rows named, kill switch blocks writes, review writes no ledger, a declared "
-        "gate or retired step holds a silent row off and a gate_reason alone does not)"
+        "gate or retired step holds a silent row off and a gate_reason alone does not, a silent "
+        "row's own history names a run without an invocation and a trial that is not a tick)"
     )
 
 

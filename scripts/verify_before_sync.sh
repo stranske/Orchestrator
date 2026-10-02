@@ -178,6 +178,17 @@ if ! scratch="$(mktemp -d "${TMPDIR:-/tmp}/verify-before-sync.XXXXXX")"; then
   fail "NOTHING VERIFIED: could not create a scratch directory"
   exit 2
 fi
+# CANONICAL, because the live run's paths are. macOS's TMPDIR is /var/folders/..., a symlink to
+# /private/var/..., and mktemp keeps TMPDIR's trailing slash as `//`. Handed to verify.py that way,
+# the dispatcher selftest compares a resolved worktree path with an unresolved one and fails on
+# every input (measured 2026-10-02, twice, on a tree that passes everywhere else). The live state,
+# ~/.codex/orchestrator, is no symlink, so a scratch path that resolves differently is not the
+# environment being vouched for.
+if ! scratch_real="$(cd "$scratch" && pwd -P)" || [[ -z "$scratch_real" ]]; then
+  fail "NOTHING VERIFIED: could not resolve the scratch directory $scratch"
+  exit 2
+fi
+scratch="$scratch_real"
 if [[ "${VERIFY_BEFORE_SYNC_KEEP:-0}" == "1" ]]; then
   say "scratch directory kept: $scratch"
 else

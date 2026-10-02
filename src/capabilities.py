@@ -166,6 +166,13 @@ EVENT_FIELDS = {
     "offer_amendment": None,
 }
 
+# The ref of every consult-trial event: `capability_propensity` writes an `invocation` under it when
+# an advised candidate is triggered, and the firing monitor reads it to tell a trial from a tick.
+# Defined ONCE, here, because the writer and the reader live in different modules: a reader holding
+# its own copy of the literal would count every trial as a tick firing, silently, the day the two
+# spellings parted.
+ADVICE_REF_PREFIX = "advice:"
+
 KNOWN_GATES: dict[str, dict[str, Any]] = {
     "route-weights-export": {
         "findability_category": "exercise_bound",
@@ -1141,11 +1148,30 @@ def reconcile_causal_lifecycle(
 
 
 @contextmanager
-def _locked(path: Path) -> Iterator[None]:
+def _locked(path: Path, *, shared: bool = False) -> Iterator[None]:
+    """Hold the ledger's lock: EXCLUSIVE for anything that writes, SHARED for a pure read.
+
+    Writers read, modify and replace the file under the exclusive lock, so no two writers interleave
+    and no reader sees the ledger while a write is in progress. A reader that writes nothing takes
+    the SHARED lock: it still waits for a writer to finish, and a writer waits for it, but readers no
+    longer wait for one another. Until 2026-10-02 every read took the exclusive lock, so each
+    reader on the machine queued behind every other reader as well as behind the tick.
+
+    Exclusive is the DEFAULT on purpose: a call site that forgets the flag gets the old, safe
+    behaviour. Only a block that never writes may pass `shared=True`, and
+    `tests/test_ledger_shared_read_lock.py` fails any block that writes the ledger under it.
+
+    A writer waits until no reader holds the lock, and flock queues nobody fairly: a reader that
+    arrives while a writer waits can still get in, so a writer is delayed for as long as reads
+    overlap with no gap between them. Gaps come fast because each shared holder keeps the lock for
+    one `read_bytes()` (a few ms) and calls nothing inside it, so it can never nest a second lock.
+    Measured 2026-10-02 against eight processes reading the 18 MB ledger back to back, a writer
+    waited 0.006 ms at the median and 17 ms at worst over 40 tries.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
     with lock_path.open("a+") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         try:
             yield
         finally:
@@ -1857,7 +1883,10 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
         # read here are one complete ledger whichever side of a write they land on, and parsing
         # them needs no lock. Parsing inside it held every other reader and writer for the whole
         # parse, which is how a reader came to queue behind the tick for seconds at a time.
-        with _locked(path):
+        # The lock is SHARED: readers no longer wait for one another, only for a writer. It is
+        # kept at all so a read that arrives mid-write waits for the result rather than reading
+        # the version that write is about to replace (see `_locked`).
+        with _locked(path, shared=True):
             raw = path.read_bytes() if path.exists() else None
         if raw is None:
             return {}
@@ -3957,6 +3986,7 @@ def _selftest() -> None:
     )
     _selftest_renewal()
     _selftest_read_cache()
+    _selftest_shared_read_lock()
     print(
         "capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
         "gate readiness w/ never-pass-on-silence)"
@@ -4002,6 +4032,54 @@ def _selftest_read_cache() -> None:
     print(
         "capabilities.py read-cache selftest: OK (an unchanged ledger is parsed once, a mutated "
         "result is never shared, and a same-size rewrite with its mtime restored is still seen)"
+    )
+
+
+def _selftest_shared_read_lock() -> None:
+    """A read shares the lock with other readers and keeps writers out; a write keeps out both."""
+
+    def probe(lock: Path) -> tuple[bool, bool]:
+        """(could another reader take it, could a writer take it) — never blocking."""
+        out = []
+        for op in (fcntl.LOCK_SH, fcntl.LOCK_EX):
+            with lock.open("a+") as handle:
+                try:
+                    fcntl.flock(handle.fileno(), op | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    out.append(False)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    out.append(True)
+        return out[0], out[1]
+
+    with tempfile.TemporaryDirectory(prefix="capabilities-lock-") as td:
+        path = Path(td) / "capabilities.json"
+        lock = path.with_name(path.name + ".lock")
+        save({"lock-row": _blank_capability("lock-row")}, path)
+        seen: list[tuple[str, tuple[bool, bool]]] = []
+        real_read, real_write = Path.read_bytes, globals()["_write_ledger_unlocked"]
+
+        def probing_read(self: Path) -> bytes:
+            if self == path:
+                seen.append(("read", probe(lock)))
+            return real_read(self)
+
+        def probing_write(where: Path, caps: dict[str, dict[str, Any]]) -> None:
+            seen.append(("write", probe(lock)))
+            real_write(where, caps)
+
+        Path.read_bytes = probing_read  # type: ignore[method-assign]
+        globals()["_write_ledger_unlocked"] = probing_write
+        try:
+            load(path, create=False)
+            save({"lock-row": _blank_capability("lock-row")}, path)
+        finally:
+            Path.read_bytes = real_read  # type: ignore[method-assign]
+            globals()["_write_ledger_unlocked"] = real_write
+    assert seen == [("read", (True, False)), ("write", (False, False))], seen
+    print(
+        "capabilities.py shared-lock selftest: OK (a read lets another reader in and keeps a writer "
+        "out; a write keeps out both)"
     )
 
 

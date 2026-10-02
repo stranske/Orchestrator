@@ -201,7 +201,8 @@ EXPLORATION_FLOOR = 0.05
 PRIOR_USEFUL, PRIOR_TOTAL = 1.0, 2.0
 # An outcome heartbeat carries the verdict in metadata under this key.
 USEFUL_KEY = "useful"
-ADVICE_REF_PREFIX = "advice:"
+# One definition, in `capabilities`, because the firing monitor reads it too.
+ADVICE_REF_PREFIX = capabilities.ADVICE_REF_PREFIX
 # A DECLINE rides on a `match` event, tagged by source. `match` is the honest carrier: the capability
 # genuinely WAS offered, which is the only claim the event type itself makes. Everything that
 # distinguishes a decline lives in metadata, and no reader of `outcome` events can see it -- which is
@@ -4770,8 +4771,8 @@ def _private_live_state():
     three paths (`capability_advisor.advise()`; `capability_matcher_proposals.evaluate()` through
     `detect()`; `binding_for()`'s promotion index), connected to the live Brain about twenty times
     (each connect also runs the schema and its migrations), and read the lane automations' memory
-    files through `detect()`'s surface records. `capabilities._locked` takes an EXCLUSIVE lock even
-    for a read, so each of those ledger reads also queued behind the tick. CI runs this selftest
+    files through `detect()`'s surface records. `capabilities._locked` took an EXCLUSIVE lock even
+    for a read (shared since 2026-10-02), so each of those ledger reads also queued behind the tick. CI runs this selftest
     against an empty runtime directory and passes, so empty private stores change no assertion:
     every machine now runs what CI runs.
 

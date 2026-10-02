@@ -88,7 +88,8 @@ A mirror run was therefore RED on every input, correct trees included, which mad
 this doc points you at worthless. The shape is detected by `env_prereq.exec_mirror_shape()`, never
 from `$CI`, and the summary's first line says which tree it decided it was in. If you ever teach
 the sync to copy `.github/`, 12 of those skips become real checks and `mirror_skipped_max` must
-come down to 19 in the same change.
+come down to 19 in the same change. (Done on 2026-10-02, and it came down to 21: see the last
+section, which also explains why the mirror's two marks had to change with it.)
 
 ## The cadence's contracts (2026-09-04)
 
@@ -475,3 +476,92 @@ must open with `tree: EXEC MIRROR — mirror_* ceilings apply`. Then confirm tha
 - The live mirror's `orchestrate.sh` and the live registry copy did not move.
 - The real copy script has not yet been run through the wrapper. The confirmation step above is
   that witness.
+
+## `.github/`, `docs/`, `.gitignore` and `ruff.toml` travel, and the mirror's marks changed (2026-10-02)
+
+**The red.** PR #352 added `tests/test_gate_commit_status_fork_tolerance.py`, which opens
+`.github/workflows/pr-00-gate.yml` with no env_prereq guard. The mirror had no `.github/`, so the
+owner's sync of `36f00bc` ended `998 passed, 40 skipped, 19 errors` (every error that
+`FileNotFoundError`) while CI and every checkout were green. Guarding those 19 would have taken the
+mirror to 59 skips against a ceiling of 40, so the files they read travel instead, and the 19
+`.github/workflows` skips become real checks with them. `mirror_skipped_max` comes down 40 → 21 in
+the same change: a drain, measured where it is enforced.
+
+**Shipping `.github/` alone would have traded that red for one only the LIVE mirror shows.**
+`tests/test_ci_gate_config.py` skips unless `.github/workflows`, `docs` and `scripts` all exist. The
+live mirror has a `docs/`, because something writes `docs/reports/issue_completion_*` there at run
+time (untracked in this repository), so with `.github/` present those tests ran and five failed on
+the absent `ruff.toml` and `docs/CI_LINT_BASELINE.md`. A fresh scratch mirror has no `docs/` at all
+and stayed green. While `docs/` did not ship, a scratch mirror could stand for the live one only
+with that run-time output planted in it. Shipping `docs/` closes the gap, because both trees now
+carry the tracked docs, which is what lets the pre-sync scratch verdict in the section above stand
+for the live mirror again. The rows below were still taken with the output planted.
+
+**`docs/` is merged, never replaced**, for the same reason: a delete-then-extract would destroy that
+run-time output. The paths the previous sync shipped are recorded in `.docs-shipped.txt` at the
+mirror root, only those are removed before the new tree lands (so a doc deleted from the repository
+does not linger), and each entry is re-checked against `docs/` and `..` before anything is removed.
+
+The block, after the `scripts/` block of `~/.codex/bin/orch-sync-mirror.sh` (previous script kept as
+`orch-sync-mirror.sh.bak-2026-10-02b`):
+
+```bash
+rm -rf "$MIRROR/.github"
+rm -f "$MIRROR/.gitignore" "$MIRROR/ruff.toml"
+if git -C "$SRC" rev-parse --verify -q HEAD:.github >/dev/null 2>&1; then
+  config_paths=(.github)
+  for root_file in .gitignore ruff.toml; do
+    if git -C "$SRC" rev-parse --verify -q "HEAD:$root_file" >/dev/null 2>&1; then
+      config_paths+=("$root_file")
+    fi
+  done
+  git -C "$SRC" archive --format=tar HEAD "${config_paths[@]}" | { tar -x -C "$MIRROR" && cat >/dev/null; }
+elif [[ -d "$SRC/.github" ]]; then
+  rsync -a --delete --exclude '*conflicted copy*' "$SRC/.github/" "$MIRROR/.github/"
+  # ...and the two root files, copied from the working tree
+fi
+if git -C "$SRC" rev-parse --verify -q HEAD:docs >/dev/null 2>&1; then
+  if [[ -f "$MIRROR/.docs-shipped.txt" ]]; then
+    while IFS= read -r shipped; do
+      case "$shipped" in
+        docs/*) [[ "$shipped" == *..* ]] || rm -f "$MIRROR/$shipped" ;;
+      esac
+    done < "$MIRROR/.docs-shipped.txt"
+  fi
+  git -C "$SRC" -c core.quotePath=false ls-tree -r --name-only HEAD docs > "$MIRROR/.docs-shipped.txt"
+  git -C "$SRC" archive --format=tar HEAD docs | { tar -x -C "$MIRROR" && cat >/dev/null; }
+fi
+```
+
+Both pipelines keep the `&& cat >/dev/null` drain from the 2026-10-01 section. Nothing shipped here
+runs; they are inert files that tests read.
+
+**The mirror's marks had to change with it.** `env_prereq.exec_mirror_shape()` required "no
+`.github/`" AND "not a git repository", so the shipped mirror would have read as a CHECKOUT, taken
+the runner's ceiling and printed `tree: checkout` — a mark that stops being true of the tree it
+names mislabels it silently. The marks are now the shape this script builds on purpose (modules
+FLAT at the root, by `paths.checkout_root`'s own rule) AND "not a git repository" (the absence that
+still produces the mirror's only mirror-only skips). The AND keeps a git-less checkout or a
+`git archive` export, both of which keep `src/`, on the base agreement.
+`tests/test_exec_mirror_shape.py` asks the real function about real synthetic trees in all six
+combinations of layout, `.github/` and git.
+
+**Order of installation matters, in one direction only.** The lowered ceiling is valid only with
+this script installed. A repository synced through the OLD script ships no `.github/`, skips 40
+against 21 and goes red loudly — the strict direction. The patched script with an older repository
+is merely mislabelled (`tree: checkout`, the runner's ceiling) until the repository change lands.
+
+Witnessed on 2026-10-02 in scratch mirrors (`HOME` and `ORCH_MIRROR` both scratch, live mirror and
+live registry untouched), each built by the script named from the source named:
+
+| source | sync script | result |
+|---|---|---|
+| `ba5dfce` (main) | installed | RED, reproduced: PR #352's file `19 errors` |
+| `ba5dfce` | `.github/` + `.gitignore` only, live-like `docs/reports` planted | 5 of `test_ci_gate_config.py` FAILED (`ruff.toml`, `docs/CI_LINT_BASELINE.md`) |
+| `eb7e7c4` (this branch) | patched, live-like `docs/reports` planted | pytest `1058 passed, 21 skipped, 0 failed`; every skip the git family |
+
+Merge behaviour, on a scratch mirror shaped like the live one: run-time `docs/reports` output
+survived; a doc listed in the previous manifest was removed; manifest entries pointing outside
+`docs/` were ignored. Deliberate break on a copy of the patched script: with the path guard removed,
+a manifest entry `../outside/victim.txt` DELETED that file outside the mirror; with the guard it
+survived; the copy was reverted to `cmp`-identical bytes.

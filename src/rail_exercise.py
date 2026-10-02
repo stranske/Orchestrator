@@ -516,6 +516,16 @@ def main() -> int:
     if args.selftest:
         selftest()
         return 0
+    # THE RUN FIRST, THE VERDICT AFTER. Only an `invocation` event moves `last_invocation`, which is
+    # what the firing monitor, `classify_liveness` and `switch_review` read; `success` moves
+    # `last_success` alone. This step recorded only its verdict, so it ran weekly from 2026-09-14
+    # and read as silent since its one consult trial on 2026-09-03.
+    try:
+        capabilities.daily_heartbeat(
+            "rail-exercise-cadence", "invocation", ref="rail_exercise.main"
+        )
+    except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
+        print(f"rail_exercise: capability heartbeat failed: {exc}", file=sys.stderr)
     result = report(args.only, args.record)
     # Credit the CADENCE on its executed path. orchestrate.sh runs this module as a script, so
     # main() IS the path (capability_activation_audit.heartbeat_reachable credits the declared
