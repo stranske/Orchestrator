@@ -162,6 +162,15 @@ def record_merge_outcome(
         return {"recorded": False, "error": str(exc)}
 
 
+def _preflight_block_reason(preflight: Any) -> str | None:
+    if not isinstance(preflight, dict) or not isinstance(preflight.get("blocked"), bool):
+        return "exact-head preflight returned a malformed result"
+    if preflight["blocked"]:
+        reason = preflight.get("reason")
+        return reason if isinstance(reason, str) and reason else "exact-head preflight blocked"
+    return None
+
+
 def guarded_merge(
     target: str,
     *,
@@ -191,12 +200,13 @@ def guarded_merge(
     preflight = None
     if expected_head:
         preflight = preflight_fn(target, expected_head=expected_head)
-        if preflight.get("blocked"):
+        preflight_reason = _preflight_block_reason(preflight)
+        if preflight_reason is not None:
             return {
                 "target": target,
                 "dry_run": dry_run,
                 "blocked": True,
-                "reason": preflight.get("reason"),
+                "reason": preflight_reason,
                 "preflight": preflight,
                 "merge_executed": False,
             }
@@ -225,9 +235,10 @@ def guarded_merge(
 
     final_preflight = preflight_fn(target, expected_head=expected_head)
     result["final_preflight"] = final_preflight
-    if final_preflight.get("blocked"):
+    final_preflight_reason = _preflight_block_reason(final_preflight)
+    if final_preflight_reason is not None:
         result["blocked"] = True
-        result["reason"] = final_preflight.get("reason")
+        result["reason"] = final_preflight_reason
         return result
 
     merge = merge_fn(cmd, capture_output=True, text=True)

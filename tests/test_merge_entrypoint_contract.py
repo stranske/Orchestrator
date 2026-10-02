@@ -49,7 +49,22 @@ def test_final_preflight_blocks_mutation_when_head_or_threads_change() -> None:
 
     assert result["blocked"] is True
     assert result["merge_executed"] is False
+    assert "active non-outdated review thread" in result["reason"]
     assert merge_calls == []
+
+
+def test_malformed_initial_preflight_cannot_authorize_merge() -> None:
+    result = merge_guard.guarded_merge(
+        "o/r#5",
+        expected_head="abc123",
+        confirm_merge=True,
+        metadata_fn=_open_meta,
+        preflight_fn=lambda target, expected_head: {"head": expected_head},
+    )
+
+    assert result["blocked"] is True
+    assert result["merge_executed"] is False
+    assert result["reason"] == "exact-head preflight returned a malformed result"
 
 
 def test_terminal_merge_contract_is_repo_wide() -> None:
