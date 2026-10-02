@@ -446,6 +446,17 @@ safety switch, not dead code.
   is explained and never enforced: the offer keeps its place in the list.
 - **Cadence resilience** — failing daily/weekly steps back off (`.fail-<step>` stamps,
   `ORCH_CADENCE_RETRY_HOURS`) and ALERT after N consecutive failures instead of retrying hourly.
+- **Tick watchdog** — `tick_watchdog.py start` arms at the top of every `--active` tick, before any
+  step, as a separate process in its own session. launchd starts no tick while one runs, so a tick
+  that never ends silences every cadence: 2026-09-26..10-02, 5d20h, a bash here-document blocked
+  writing into its own pipe. Past 90 min for one command or 3 h for the tick (awake time) it ALERTs
+  into the tick log with the stuck command and the exact `kill` that frees the tick, and repeats
+  hourly while stuck. The next tick's first line reports how the previous one ended and when ANY
+  cadence step last recorded an outcome; past 36 h that is an ALERT, which catches ticks that abort
+  before reaching a cadence. REPORT-ONLY by the owner's decision: it signals nothing. Live state:
+  `python3 src/tick_watchdog.py status`, `$ORCH_STATE_DIR/tick-watchdog.json`, and the `tick` field
+  of the `fleet_summary` MCP tool. Thresholds `ORCH_TICK_ALERT_S` / `ORCH_TICK_COMMAND_ALERT_S`;
+  kill switch `ORCH_DISABLE_STEPS=tick-watchdog`.
 - **Per-step kill switch** — `ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"` (comma or space
   separated) skips named steps. One mechanism instead of a flag per capability. It ANNOUNCES every
   skip (a silent disable is the latched-gate pattern), touches NO stamp (re-enabling makes the step

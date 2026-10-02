@@ -102,6 +102,15 @@ Determinism here is load-bearing: the claims/capacity/provision rails are what t
 delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An
 LLM verifier (a review panel) is a *supplement* to a gate, never a replacement for it.
 
+**The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
+2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
+drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
+symptom was silence. The tick's first lines arm it as a separate process in its own session. It
+reports a command past 90 min or a tick past 3 h with the exact `kill` that frees it, and is
+report-only by the owner's decision. It is deterministic code, so a rail by the definition above,
+but it selects nothing, gates nothing and feeds no learner. (It is not drawn in the loop diagram,
+which is unchanged.)
+
 ## Agent-roles — judgment, typed contract, swappable backend
 
 A role is defined in `roles.py` as `Role(name, route_as, eligible_backends, mode, build_prompt,
