@@ -60,6 +60,14 @@ def test_force_added():
     (HERE / "data" / "forced.json").read_text()
 
 
+def test_staged_for_the_next_commit():
+    (HERE / "fixtures" / "staged.txt").read_text()
+
+
+def test_staged_but_export_ignored():
+    (HERE / "fixtures" / "staged_blocked.txt").read_text()
+
+
 def test_forgotten():
     (HERE / "fixtures" / "forgotten.txt").read_text()
 
@@ -123,7 +131,9 @@ def build_checkout(root: Path, env: dict[str, str]) -> Path:
     put(root / ".gitignore", "data/\n")
     put(
         root / ".gitattributes",
-        "tests/fixtures/held_back.txt export-ignore\ntests/directory_held export-ignore\n",
+        "tests/fixtures/held_back.txt export-ignore\n"
+        "tests/fixtures/staged_blocked.txt export-ignore\n"
+        "tests/directory_held export-ignore\n",
     )
     put(tests / "conftest.py", CONFTEST.read_text())
     put(tests / "test_reads.py", READS)
@@ -133,10 +143,17 @@ def build_checkout(root: Path, env: dict[str, str]) -> Path:
     put(tests / "directory_held" / "input.txt", "held by directory rule\n")
     put(tests / "junky" / "a.txt", "kept\n")
     put(tests / "data" / "forced.json", "{}\n")
+    (tests / "fixtures" / "link.txt").symlink_to("tracked.txt")  # a tracked symlink ships too
     git("init", "-q", ".")
     git("add", "-A")
     git("add", "-f", "tests/data/forced.json")  # under an ignored directory, yet tracked
     git("commit", "-q", "-m", "init")
+    # Staged for the next commit: absent from HEAD, so absent from the archive, yet it ships with
+    # the change that reads it. Not export-ignore, and not to be watched.
+    put(tests / "fixtures" / "staged.txt", "staged\n")
+    # This staged addition is already covered by an export-ignore rule and must still be watched.
+    put(tests / "fixtures" / "staged_blocked.txt", "staged but held back\n")
+    git("add", "tests/fixtures/staged.txt", "tests/fixtures/staged_blocked.txt")
     # On disk, never committed:
     put(tests / "fixtures" / "forgotten.txt", "forgotten\n")
     put(tests / "fixtures" / "leftover.txt", "stale\n")
@@ -244,6 +261,7 @@ def test_arm_watches_exactly_what_git_archive_leaves_out(tmp_path, monkeypatch):
         "fixtures/leftover.txt": "untracked",
         "data/swallowed.json": "ignored",
         "fixtures/held_back.txt": "export-ignore",
+        "fixtures/staged_blocked.txt": "export-ignore",
         "directory_held/input.txt": "export-ignore",
     }, (
         "the guard must watch the untracked, the .gitignore'd and the export-ignore'd inputs, and "
@@ -256,11 +274,14 @@ def test_arm_watches_exactly_what_git_archive_leaves_out(tmp_path, monkeypatch):
         check=True,
     ).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-        shipped = {m.name.removeprefix("tests/") for m in tar.getmembers() if m.isfile()}
+        shipped = {m.name.removeprefix("tests/") for m in tar.getmembers() if not m.isdir()}
     on_disk = {p.relative_to(tests).as_posix() for p in tests.rglob("*") if p.is_file()}
-    assert set(watched) == {rel for rel in on_disk - shipped if guard_mod.in_scope(rel)}, (
+    staged = {"fixtures/staged.txt"}  # in the index, not yet in HEAD: it ships with its commit
+    expected = {rel for rel in on_disk - shipped - staged if guard_mod.in_scope(rel)}
+    assert set(watched) == expected, (
         "the guard and orch-sync-mirror.sh must answer ONE question: what `git archive HEAD tests` "
-        f"leaves out. Archive shipped {sorted(shipped)}; the guard watched {sorted(watched)}"
+        "leaves out, less a file staged for the next commit. "
+        f"Archive shipped {sorted(shipped)}; the guard watched {sorted(watched)}"
     )
 
 
@@ -340,6 +361,8 @@ def test_reading_an_input_the_mirror_lacks_fails_that_test(tmp_path):
     assert outcomes == {
         reads + "test_tracked": "PASSED",
         reads + "test_force_added": "PASSED",
+        reads + "test_staged_for_the_next_commit": "PASSED",
+        reads + "test_staged_but_export_ignored": "FAILED",
         reads + "test_copytree_over_junk": "PASSED",
         reads + "test_own_output": "PASSED",
         reads + "test_forgotten": "FAILED",
@@ -353,6 +376,6 @@ def test_reading_an_input_the_mirror_lacks_fails_that_test(tmp_path):
         "tests/data/swallowed.json: matched by .gitignore",
         "tests/fixtures/held_back.txt: tracked, but .gitattributes marks it export-ignore",
         "AssertionError: its own failure",  # a test that fails anyway keeps its own story
-        "tracked test inputs: armed -- watching 5 file(s)",
+        "tracked test inputs: armed -- watching 6 file(s)",
     ):
         assert why in out, f"missing {why!r}:\n{_quiet(out)}"
