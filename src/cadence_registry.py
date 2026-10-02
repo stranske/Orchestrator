@@ -2,8 +2,9 @@
 """Authoritative cadence-step registry shared by orchestrate.sh and reports.
 
 The shell owns execution.  This module owns step identity, success/failure stamp
-names, cadence, evidence artifacts, whether a step is retired by default, and safe
-next transitions so operator reports do not have to reverse-engineer shell prose.
+names, cadence, evidence artifacts, whether a step is retired by default, which
+capabilities a step runs (where a row declares it), and safe next transitions so
+operator reports do not have to reverse-engineer shell prose.
 """
 
 from __future__ import annotations
@@ -52,6 +53,17 @@ CADENCE_DAYS_FOR: dict[str, int] = {
 # still said the gate was ARMED and "the assessment and the label write both run".
 RETIRED_FIELD = "retired"
 _RETIRED_KEYS = frozenset({"since", "reason", "re_enable_env"})
+
+# A STEP DECLARES THE CAPABILITIES IT RUNS, by ledger id, under `capabilities`. That is the one link
+# from a capability to the step the tick invokes it through, and it is DECLARED, never inferred:
+# step keys and capability ids coincide for some steps and not others (`range-rollout` runs
+# `range-lane-rollout`, `rail-exercise` runs `rail-exercise-cadence`), so a match on names is right
+# only by accident. Its reader is `retirement_holds`, through which `capability_firing_monitor`
+# reports a retired step's capabilities as HELD OFF, with the retirement and what lifts it, instead
+# of as overdue: the same contract as `inspect_cadence` reporting the step `retired` instead of
+# `stale`. A retired row must declare it, empty if it runs none; tests/test_cadence_retirement.py
+# holds that, so a retirement cannot leave a capability alarming because nobody wrote the link.
+CAPABILITIES_FIELD = "capabilities"
 _ENV_NAME_RE = re.compile(r"ORCH_[A-Z0-9_]+")
 _ENV_VALUE_RE = re.compile(r"[A-Za-z0-9._-]+")
 _DATE_RE = re.compile(r"20\d\d-\d\d-\d\d")
@@ -287,6 +299,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         # capacity.json and never backlog.json, and the label writes are gated off, so 1,350 runs
         # in eleven days fed nothing. Either flag brings it back; the label writes still need
         # ORCH_ISSUE_AUTOREADY=1, as `gate` says.
+        "capabilities": ("issue-readiness",),
         "retired": {
             "since": "2026-09-15",
             "reason": "it feeds only this tool's own dispatch lane, which is shadow by default "
@@ -535,6 +548,66 @@ def declared_gate_reason(key: str) -> str:
         f"cadence step {key} is {line}. The tick skips it and prints that on every run "
         f"(cadence_registry `{RETIRED_FIELD}`). When it runs: {row.get('gate')}"
     )
+
+
+def carried_capabilities(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """The capability ids the row declares it runs; () when it declares none.
+
+    A malformed declaration RAISES, for the reason `retirement` gives: the registry is a code
+    constant, so only an edit can reach this with a bad one, and the suite runs it over every row.
+    """
+    declared = row.get(CAPABILITIES_FIELD)
+    if declared is None:
+        return ()
+    key = row.get("key")
+    if isinstance(declared, (str, bytes)) or not isinstance(declared, (tuple, list)):
+        raise ValueError(f"{key}: `{CAPABILITIES_FIELD}` must be a tuple of capability ids")
+    ids = tuple(declared)
+    for cap_id in ids:
+        if not isinstance(cap_id, str) or not cap_id or cap_id != cap_id.strip():
+            raise ValueError(f"{key}: `{CAPABILITIES_FIELD}` has an unusable id {cap_id!r}")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{key}: `{CAPABILITIES_FIELD}` names a capability twice: {ids}")
+    return ids
+
+
+def retirement_holds(
+    environ: Mapping[str, str] | None = None,
+    registry: tuple[dict[str, Any], ...] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """{capability id: the retired steps holding it off}, for every capability a retirement holds.
+
+    A capability is held off when at least one step declares it under `capabilities` and EVERY step
+    declaring it is retired with no re-enable flag holding in `environ` (this process's environment
+    by default, as for `inspect_cadence`). One live carrier means the tick still runs it, so its
+    silence is still a finding and nothing here holds it. Each hold carries the retirement and the
+    flags that lift it, so whoever reads it is told what would end it. Raises on a malformed row,
+    as `retirement` and `carried_capabilities` do. `registry=None` is `CADENCE_STEPS`; an empty
+    registry is empty, never the live one.
+    """
+    env = os.environ if environ is None else environ
+    carriers: dict[str, list[dict[str, Any]]] = {}
+    for row in CADENCE_STEPS if registry is None else registry:
+        for cap_id in carried_capabilities(row):
+            carriers.setdefault(cap_id, []).append(row)
+    holds: dict[str, list[dict[str, Any]]] = {}
+    for cap_id, rows in sorted(carriers.items()):
+        held = []
+        for row in rows:
+            declared = retirement(row)
+            if declared is None or retirement_lifted_by(row, env) is not None:
+                break
+            held.append(
+                {
+                    "step": row["key"],
+                    **declared,
+                    "re_enable_when": re_enable_when(row),
+                    "line": retirement_line(row),
+                }
+            )
+        else:
+            holds[cap_id] = held
+    return holds
 
 
 def shortest_stale_after_s(registry: tuple[dict[str, Any], ...] | None = None) -> int:

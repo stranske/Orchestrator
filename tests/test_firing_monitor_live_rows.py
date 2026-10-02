@@ -108,9 +108,17 @@ def test_the_rendered_report_names_not_live_rows_without_calling_them_findings(
 
 def test_the_report_declares_its_population_under_the_graders_key(tmp_path, monkeypatch):
     rep = _review(tmp_path, monkeypatch)
-    assert cp.declared_population(rep) == capabilities.live_finding_population()
-    assert cp.declared_population(rep) == {
-        "excluded_statuses": sorted(capabilities.NOT_LIVE_STATES)
+    declared = cp.declared_population(rep)
+    assert declared == monitor.finding_population()
+    # The live-row rule is still the shared one, and the held-off rule is stated beside it, so a
+    # change to either reaches the grader as a changed population.
+    assert {k: declared[k] for k in capabilities.live_finding_population()} == (
+        capabilities.live_finding_population()
+    )
+    assert declared == {
+        "excluded_statuses": sorted(capabilities.NOT_LIVE_STATES),
+        "held_off_kinds": list(monitor.HOLD_KINDS),
+        "held_off_excluded_from": list(monitor.SILENCE_FINDINGS),
     }
 
 

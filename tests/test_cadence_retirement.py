@@ -18,7 +18,9 @@ hold each reader to that row, and hold that no second copy of the condition exis
 3. no call site restates the condition in its if/elif chain (the shape that went silent);
 4. `inspect_cadence` reports `retired`, with the condition, instead of `stale`, and its stale count
    reaches zero and says so;
-5. the ledger's `gate_reason` is derived from the row, and reconciliation replaces the frozen prose.
+5. the ledger's `gate_reason` is derived from the row, and reconciliation replaces the frozen prose;
+6. a retired row declares the capabilities it runs, which is the only link through which
+   `capability_firing_monitor` reports them held off rather than overdue.
 """
 
 from __future__ import annotations
@@ -289,3 +291,39 @@ def test_the_ledger_gate_reason_is_derived_from_the_row(tmp_path: Path, monkeypa
 def test_the_advisor_quotes_the_row_too() -> None:
     how = capability_advisor.HOW_TO_USE[STEP]
     assert cadence_registry.retirement_line(ROW) in how, how
+
+
+def test_every_retired_step_declares_the_capabilities_it_runs() -> None:
+    """The firing monitor holds a capability off only through this declared link, so a retirement
+    without it would leave the capability alarming as overdue. Explicit on every retired row, an
+    empty tuple when the step runs no capability; well-formed on every row that has it."""
+    assert _retired_rows(), "no step declares a retirement -- nothing was checked"
+    for row in _retired_rows():
+        assert cadence_registry.CAPABILITIES_FIELD in row, (
+            f"{row['key']} is retired and does not declare `{cadence_registry.CAPABILITIES_FIELD}`"
+            ", so the monitor cannot tell which capability it holds off"
+        )
+    for row in cadence_registry.CADENCE_STEPS:
+        cadence_registry.carried_capabilities(row)  # raises on a malformed declaration
+    assert cadence_registry.carried_capabilities(ROW) == (STEP,)
+
+
+def test_a_malformed_capabilities_declaration_raises() -> None:
+    base = {"key": "fixture"}
+    assert cadence_registry.carried_capabilities(base) == ()
+    assert cadence_registry.carried_capabilities({**base, "capabilities": ()}) == ()
+    assert cadence_registry.carried_capabilities({**base, "capabilities": ["a", "b"]}) == ("a", "b")
+    for broken in ("issue-readiness", ("a", "a"), ("",), (" a",), (1,), {"a": 1}):
+        with pytest.raises(ValueError):
+            cadence_registry.carried_capabilities({**base, "capabilities": broken})
+
+
+def test_the_live_retirement_holds_its_capability_until_a_flag_lifts_it() -> None:
+    held = cadence_registry.retirement_holds(environ={})
+    assert [hold["step"] for hold in held[STEP]] == [STEP], held
+    assert held[STEP][0]["line"] == cadence_registry.retirement_line(ROW)
+    assert held[STEP][0]["re_enable_when"] == cadence_registry.re_enable_when(ROW)
+    for name, value in ROW["retired"]["re_enable_env"].items():
+        assert STEP not in cadence_registry.retirement_holds(environ={name: value}), name
+    # An empty registry is empty: it must never fall back to the live one.
+    assert cadence_registry.retirement_holds(environ={}, registry=()) == {}

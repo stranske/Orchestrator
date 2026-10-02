@@ -3307,8 +3307,11 @@ HOW_TO_USE = {
     "capability-firing-monitor": (
         "capability_firing_monitor.py --json — the does-fire counterpart: it PERSISTS per-capability "
         "firing history, so one that fired last week and went silent this week stops looking "
-        "identical to one that has been healthy throughout. BOUNDARY: it detects the silence and "
-        "cannot say why; capability-activation-audit answers whether it still could fire"
+        "identical to one that has been healthy throughout. A silence a declared hold explains (a "
+        "gate declared to block execution, or a retired cadence step that declares the capability) "
+        "is listed under held_off with the hold and what lifts it, never as overdue. BOUNDARY: any "
+        "other silence it detects and cannot explain; capability-activation-audit answers whether "
+        "it still could fire"
     ),
     "capability-propensity": (
         "capability_propensity.py report --json for the standing picture; `useful` / `not-useful` / "
