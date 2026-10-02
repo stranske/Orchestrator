@@ -16,9 +16,12 @@ somebody remembering. So this module does two things on a weekly cadence:
   2. **A switch that is ON but NOT TRIGGERING gets raised.** This is the range-lane case exactly:
      enabling a lane that then dispatches nothing is indistinguishable from leaving it off, unless
      something notices. If a switch has been on for >= REVIEW_DAYS and its capability recorded no
-     invocation in that window, the question comes back. Where the switch's owner can say what
-     would drain its gate (`SWITCH_DRAIN`), the row carries that count beside the idleness, because
-     "ON, idle" reads as patience while "ON, deficits 5/3, drainable 0" is a deadlock.
+     invocation in that window, the question comes back. A consult trial is not an invocation of
+     the switch's capability for this purpose: a trial from any session moved the field this read,
+     so the row counts non-trial invocation events and names every trial it left out. Where the
+     switch's owner can say what would drain its gate (`SWITCH_DRAIN`), the row carries that count
+     beside the idleness, because "ON, idle" reads as patience while "ON, deficits 5/3, drainable
+     0" is a deadlock.
 
 NON-BLOCKING BY CONSTRUCTION. Everything goes through `feedback.owner_questions`: deduped per scope,
 auto-ratifying at expiry to a stated default, so an unanswered question can never accumulate into a
@@ -106,21 +109,59 @@ SWITCH_CAPABILITY = {
     # switch-on criterion sat in `capability_recurrence_check.SWITCH_ON_CRITERIA`, but it was never
     # mapped HERE, so this review never examined it while it authorised nothing for 42 days: 759
     # metered judgements, every one `wait`. Its `invocation` heartbeat fires only on an authorised
-    # apply (`redirect_apply.apply_one`), so ON-but-idle means exactly that. Its row carries the
+    # apply (`redirect_apply.apply_one`), and the idle rule leaves consult trials out, so
+    # ON-but-idle means exactly that. Its row carries the
     # gate's drain (`SWITCH_DRAIN`). The two tables must name the same switches;
     # tests/test_switch_review_bootstrap_drain.py fails on a flag that is in one and not the other.
     "ORCH_REDIRECT_APPLY_BOOTSTRAP": "redirect-apply-bootstrap",
 }
 
 
-def _last_invocation(cap_id: str, *, path=None) -> int:
+# The evidence the ON-but-idle rule counts, declared in `review()`'s finding population. A rule that
+# counts different evidence names different switches idle, and that EDIT must re-baseline the tick's
+# grader rather than be scored as the sweep finding something (`capabilities.FINDING_POPULATION_KEY`).
+IDLE_EVIDENCE = "non-trial invocation events"
+
+
+def _age_days(stamp: int, now: int) -> float | None:
+    return round((now - stamp) / 86400, 1) if stamp else None
+
+
+def _invocation_evidence(cap_id: str, *, now: int, path=None) -> dict:
+    """When this capability last did something with every consult trial left out, and what was.
+
+    A consult trial (`capability_propensity.record_trigger`) writes an `invocation` through the
+    ungated `capabilities.heartbeat`, from any session. Read through the `last_invocation` field,
+    one rail-exercise round on a switch-mapped capability made an idle ON switch read active for
+    REVIEW_DAYS and hid its drain. A trial triggers an advised candidate; it is not the switch's own
+    path running. So only the row's non-trial invocation EVENTS count
+    (`capabilities.split_invocations`, the split the firing monitor reads), and the field counts for
+    nothing on its own: a causal reconciliation sets it with no event, from influence edges the
+    outcome bridge draws from lane consult trials' verdicts, which is a trial through a second door.
+
+    `last` is the newest counted invocation, 0 when none ever counted. What was left out and is newer
+    than it is reported, so "idle, one trial ignored" never reads like plain idleness:
+    `trials_excluded`, those trials (every trial, when nothing counted), with the newest one's age in
+    `newest_trial_days`; and `no_event_days`, the age of a `last_invocation` no trial explains, which
+    moved with no invocation event. Each age is None when there is nothing to report.
+    """
     # `load_declared`, not `load`: this is a REPORT, and its cadence row promises "writes require
     # ORCH_SWITCH_REVIEW=1; report-only otherwise". The writing loader creates a missing ledger,
     # seeds declared gate rows, reconciles declarations and expires rows, and writes the result into
-    # the shared ledger on every review, flag or no flag. `load_declared` writes nothing; the one
-    # field read here is measured state, which reconciliation never touches.
-    caps = capabilities.load_declared(path or capabilities.REG)
-    return int((caps.get(cap_id) or {}).get("last_invocation") or 0)
+    # the shared ledger on every review, flag or no flag. `load_declared` writes nothing; what is
+    # read here is measured state, which reconciliation never touches.
+    cap = capabilities.load_declared(path or capabilities.REG).get(cap_id) or {}
+    split = capabilities.split_invocations(cap)
+    last = max(split["other"], default=0)
+    excluded = [stamp for stamp in split["trial"] if stamp > last]
+    field = int(cap.get("last_invocation") or 0)
+    eventless = field > last and field not in split["trial"]
+    return {
+        "last": last,
+        "trials_excluded": len(excluded),
+        "newest_trial_days": _age_days(max(excluded, default=0), now),
+        "no_event_days": _age_days(field, now) if eventless else None,
+    }
 
 
 def _capability_heartbeat(event_type: str = "invocation") -> None:
@@ -1090,7 +1131,6 @@ def switch_states(
             source = "explicit"
         else:
             source = "ambient" if value is not None else rc.TICK_UNCONSULTED
-        last = _last_invocation(cap_id, path=path)
         criterion = rc.SWITCH_ON_CRITERIA.get(flag)
 
         if not on:
@@ -1123,8 +1163,10 @@ def switch_states(
             )
             continue
 
-        # ON but silent for the whole window: enabling it changed nothing observable.
-        idle_days = (now - last) / 86400 if last else None
+        # ON but silent for the whole window: enabling it changed nothing observable. A consult
+        # trial is not the switch's capability doing anything (`_invocation_evidence`).
+        evidence = _invocation_evidence(cap_id, now=now, path=path)
+        last = evidence["last"]
         if last == 0 or (now - last) > window:
             row: dict = {
                 "flag": flag,
@@ -1132,11 +1174,14 @@ def switch_states(
                 "state": "on",
                 "value": value,
                 "value_source": source,
-                "idle_days": None if idle_days is None else round(idle_days, 1),
+                "idle_days": _age_days(last, now),
+                "trials_excluded": evidence["trials_excluded"],
+                "newest_trial_days": evidence["newest_trial_days"],
+                "no_event_days": evidence["no_event_days"],
                 "reason": (
-                    f"ON but {cap_id} recorded no invocation in the last {REVIEW_DAYS}d — "
-                    "an enabled switch that dispatches nothing is indistinguishable from "
-                    "one left off"
+                    f"ON but {cap_id} recorded no invocation outside consult trials in the last "
+                    f"{REVIEW_DAYS}d — an enabled switch that dispatches nothing is "
+                    "indistinguishable from one left off"
                 ),
             }
             reader = SWITCH_DRAIN.get(flag)
@@ -1168,11 +1213,15 @@ def review(
     return {
         "generated_at": now,
         "review_days": REVIEW_DAYS,
-        # The switches this report may name. Declared so that EDITING the map is not graded as a
-        # finding: `capability_propensity.tick_evidence` re-baselines a report whose declared
-        # population changed, where an undeclared one would score a newly mapped switch's first row
-        # as the sweep having found something (`capabilities.FINDING_POPULATION_KEY`).
-        capabilities.FINDING_POPULATION_KEY: {"switches": sorted(SWITCH_CAPABILITY)},
+        # The switches this report may name, and the evidence its idle rule counts. Declared so that
+        # EDITING either is not graded as a finding: `capability_propensity.tick_evidence`
+        # re-baselines a report whose declared population changed, where an undeclared one would
+        # score a newly mapped switch's first row, or a row a new rule names idle, as the sweep
+        # having found something (`capabilities.FINDING_POPULATION_KEY`).
+        capabilities.FINDING_POPULATION_KEY: {
+            "switches": sorted(SWITCH_CAPABILITY),
+            "idle_evidence": IDLE_EVIDENCE,
+        },
         "held_off": due,
         "on_but_idle": quiet,
         "unconditioned": [d["flag"] for d in due if not d["has_criterion"]],
@@ -1290,6 +1339,36 @@ def value_phrase(row: dict) -> str:
     return f"{shown} — source {source or 'not recorded'}"
 
 
+def idle_phrase(row: dict) -> str:
+    """An ON-but-idle row's idleness: a number of days, or never, which is not a number of days."""
+    days = row.get("idle_days")
+    return "never invoked" if days is None else f"{days}d"
+
+
+def not_counted_phrase(row: dict) -> str:
+    """What the idle rule left out of an ON-but-idle row, in words; empty when nothing was.
+
+    Empty is plain idleness. Anything else is "idle, a trial ignored", which must never read alike:
+    the ledger's `last_invocation` can look recent while the row says idle.
+    """
+    parts = []
+    trials = int(row.get("trials_excluded") or 0)
+    if trials:
+        newest = row.get("newest_trial_days")
+        inside = newest is not None and newest <= REVIEW_DAYS
+        parts.append(
+            f"{trials} consult trial{'' if trials == 1 else 's'}, the newest {newest}d ago"
+            + (f", inside the {REVIEW_DAYS}d window" if inside else "")
+            + " (a trial triggers an advised candidate; it is not the switch's own path running)"
+        )
+    if row.get("no_event_days") is not None:
+        parts.append(
+            f"a last_invocation {row['no_event_days']}d ago that no invocation event recorded "
+            "(a causal reconciliation sets it, from edges a consult trial's verdict can make)"
+        )
+    return "; ".join(parts)
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -1310,9 +1389,12 @@ def format_report(rep: dict) -> str:
     if rep["on_but_idle"]:
         lines += ["## ON but not triggering — the range-lane failure mode", ""]
         for row in rep["on_but_idle"]:
-            lines.append(f"  {row['flag']}  ({row['capability']})  idle={row['idle_days']}d")
+            lines.append(f"  {row['flag']}  ({row['capability']})  idle={idle_phrase(row)}")
             lines.append(f"      value: {value_phrase(row)}")
             lines.append(f"      {row['reason']}")
+            uncounted = not_counted_phrase(row)
+            if uncounted:
+                lines.append(f"      not counted: {uncounted}")
             if row.get("drain"):
                 lines.append(f"      drain: {row['drain']['summary']}")
             lines.append("")
@@ -1863,19 +1945,40 @@ def _selftest_review(gh_calls: list) -> None:
         # declared gate row, so the writing loader would have seeded them all into it on the first.
         assert reg.read_bytes() == saved_ledger, "review() wrote the capability ledger it reads"
 
+        def invoked(*events: tuple[int, str]) -> None:
+            # As heartbeats record them: each invocation event, and the field the newest moves.
+            row = caps["range-lane-rollout"]
+            row["event_history"] = [
+                {"timestamp": stamp, "type": "invocation", "ref": ref} for stamp, ref in events
+            ]
+            row["last_invocation"] = max(stamp for stamp, _ in events)
+            capabilities.save(caps, reg)
+
         # ON and RECENTLY triggering -> silent, no question.
-        caps["range-lane-rollout"]["last_invocation"] = now - 2 * 86400
-        capabilities.save(caps, reg)
+        invoked((now - 2 * 86400, "routing-decision.json"))
         rep3 = review(now=now, env=env, path=reg)
         assert not rep3["on_but_idle"], rep3["on_but_idle"]
 
         # ON but last invocation just past the window -> raised again. This is the component that
         # makes "turned it on and forgot" impossible.
-        caps["range-lane-rollout"]["last_invocation"] = now - (REVIEW_DAYS + 1) * 86400
-        capabilities.save(caps, reg)
+        invoked((now - (REVIEW_DAYS + 1) * 86400, "routing-decision.json"))
         rep4 = review(now=now, env=env, path=reg)
         assert {r["flag"] for r in rep4["on_but_idle"]} == {"ORCH_RANGE_LANE_ROLLOUT"}, rep4
         assert rep4["on_but_idle"][0]["idle_days"] == REVIEW_DAYS + 1
+        assert rep4["on_but_idle"][0]["trials_excluded"] == 0, "plain idleness, measured"
+        assert "not counted" not in format_report(rep4), format_report(rep4)
+
+        # ...and a CONSULT TRIAL since then is not the switch doing anything: still idle, from the
+        # same invocation, with the trial named beside the idleness rather than hidden in it.
+        invoked(
+            (now - (REVIEW_DAYS + 1) * 86400, "routing-decision.json"),
+            (now - 86400, capabilities.ADVICE_REF_PREFIX + "0123456789ab"),
+        )
+        trialled = review(now=now, env=env, path=reg)["on_but_idle"]
+        assert [r["flag"] for r in trialled] == ["ORCH_RANGE_LANE_ROLLOUT"], trialled
+        assert trialled[0]["idle_days"] == REVIEW_DAYS + 1, trialled[0]
+        assert (trialled[0]["trials_excluded"], trialled[0]["newest_trial_days"]) == (1, 1.0)
+        assert "1 consult trial, the newest 1.0d ago, inside the" in not_counted_phrase(trialled[0])
 
         # "0" counts as off, not on.
         rep5 = review(now=now, env={"ORCH_RANGE_LANE_ROLLOUT": "0"}, path=reg)

@@ -74,11 +74,17 @@ def _save_ledger(path: Path, *, bootstrap_last_invocation: int) -> None:
     """A private ledger holding every reviewed switch's capability, the bootstrap's invocation set.
 
     The bootstrap's row is added by its OWN module's name, not taken from the map under test, so a
-    map that lost the switch fails the tests' assertions rather than this fixture.
+    map that lost the switch fails the tests' assertions rather than this fixture. Its invocation is
+    recorded as an authorised apply's heartbeat records one, the event and the field it moves:
+    the idle rule counts invocation events, never the field alone.
     """
     ids = set(switch_review.SWITCH_CAPABILITY.values()) | {redirect_apply.CAPABILITY_ID}
     rows = {c: capabilities._blank_capability(c) for c in sorted(ids)}
-    rows[redirect_apply.CAPABILITY_ID]["last_invocation"] = bootstrap_last_invocation
+    row = rows[redirect_apply.CAPABILITY_ID]
+    row["last_invocation"] = bootstrap_last_invocation
+    row["event_history"] = [
+        {"timestamp": bootstrap_last_invocation, "type": "invocation", "ref": STALLED["target"]}
+    ]
     capabilities.save(rows, path)
 
 
@@ -275,6 +281,28 @@ def test_the_drain_is_read_only_for_a_switch_already_on_and_idle(sandbox, monkey
     assert len(reads) == 1, reads
 
 
+def test_a_consult_trial_does_not_hide_the_bootstraps_drain(sandbox, monkeypatch):
+    """The live hazard: a rail-exercise round triggers the bootstrap as a consult trial. Read
+    through the `last_invocation` field, that made the switch read active for a week, and its row,
+    the only place the gate's drain is shown, vanished. The trial is named instead."""
+    _plan(sandbox.plan, [])
+    with monkeypatch.context() as clock:
+        clock.setattr(capabilities, "_now", lambda: NOW - DAY)
+        experiment = capability_propensity.ADVICE_REF_PREFIX + "0123456789ab"
+        assert capability_propensity.record_trigger(
+            redirect_apply.CAPABILITY_ID, experiment, path=sandbox.ledger
+        )
+    row = capabilities.load(sandbox.ledger, create=False)[redirect_apply.CAPABILITY_ID]
+    assert row["last_invocation"] == NOW - DAY, "the trial must move the field the old rule read"
+
+    rows = switch_review.switch_states(now=NOW, env={FLAG: "1"}, path=sandbox.ledger)
+    idle = [r for r in rows["on_but_idle"] if r["flag"] == FLAG]
+    assert idle, "a consult trial hid the bootstrap's idle row and the drain it carries"
+    assert idle[0]["drain"]["drainable"] == 0, idle[0]["drain"]
+    assert (idle[0]["idle_days"], idle[0]["trials_excluded"]) == (30.0, 1), idle[0]
+    assert sandbox.reached == NOTHING_REACHED, sandbox.reached
+
+
 def test_the_question_carries_the_pair_and_keeps_the_conservative_default(sandbox, monkeypatch):
     """The owner question, if one is ever raised, is answerable at a glance and asks nothing of
     silence: it auto-ratifies to the current position after the same seven days as every other."""
@@ -308,7 +336,10 @@ def test_review_declares_its_switches_so_a_map_edit_rebaselines(sandbox, monkeyp
     _plan(sandbox.plan, [])
     rep = switch_review.review(now=NOW, env={FLAG: "1"}, path=sandbox.ledger)
     population = capability_propensity.declared_population(rep)
-    assert population == {"switches": sorted(switch_review.SWITCH_CAPABILITY)}, population
+    assert population == {
+        "switches": sorted(switch_review.SWITCH_CAPABILITY),
+        "idle_evidence": switch_review.IDLE_EVIDENCE,
+    }, population
     assert FLAG in population["switches"], population
     findings = capability_propensity.project_findings("switch-review", rep)
     # The row is graded by identity alone, so the drain's numbers can never mint a verdict by moving.

@@ -173,6 +173,35 @@ EVENT_FIELDS = {
 # spellings parted.
 ADVICE_REF_PREFIX = "advice:"
 
+
+def split_invocations(cap: dict[str, Any]) -> dict[str, Any]:
+    """A row's `invocation` events, split into consult trials and every other invocation.
+
+    ONE split for every reader that must tell the two apart (`switch_review`'s ON-but-idle rule and
+    `capability_firing_monitor.silence_evidence`), so no two readers can disagree about which
+    invocation was a trial. A trial is an invocation under `ADVICE_REF_PREFIX`: an advised candidate
+    was triggered, from any session, through the ungated `heartbeat`. The rest are NOT "ticks": the
+    outcome bridge credits external CI runs the same way.
+
+    Returns `trial` and `other`, the timestamps of each class in history order, and `newest`, the
+    newest invocation event as `(timestamp, is_trial)`, the later-recorded on a tie, or None when the
+    row has none. Read from `event_history` alone: a causal reconciliation sets `last_invocation`
+    without any event, so the field cannot say which class moved it.
+    """
+    trial: list[int] = []
+    other: list[int] = []
+    newest: tuple[int, bool] | None = None
+    for event in cap.get("event_history") or []:
+        if event.get("type") != "invocation":
+            continue
+        stamp = int(event.get("timestamp") or 0)
+        is_trial = str(event.get("ref") or "").startswith(ADVICE_REF_PREFIX)
+        (trial if is_trial else other).append(stamp)
+        if newest is None or stamp >= newest[0]:
+            newest = (stamp, is_trial)
+    return {"trial": trial, "other": other, "newest": newest}
+
+
 KNOWN_GATES: dict[str, dict[str, Any]] = {
     "route-weights-export": {
         "findability_category": "exercise_bound",

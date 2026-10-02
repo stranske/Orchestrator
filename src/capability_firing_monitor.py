@@ -272,22 +272,18 @@ def silence_evidence(cap: dict[str, Any], tolerance_days: float | None, now: int
         whose every invocation is a trial has never fired in a tick.
 
     Every count is always present and zero-able, so "measured, none" never looks like "not measured".
+    Trials are told from the rest by `capabilities.split_invocations`, the split `switch_review`'s
+    idle rule reads too.
     """
     last = int(cap.get("last_invocation") or 0)
     after = last + (tolerance_days or 0) * 86400 if last else 0
-    invocations = trials = 0
-    newest: tuple[int, bool] | None = None
+    split = capabilities.split_invocations(cap)
+    newest = split["newest"]
     runs: list[tuple[int, str]] = []
     for event in cap.get("event_history") or []:
         kind = event.get("type")
         stamp = int(event.get("timestamp") or 0)
-        if kind == "invocation":
-            trial = str(event.get("ref") or "").startswith(TRIAL_REF_PREFIX)
-            invocations += 1
-            trials += 1 if trial else 0
-            if newest is None or stamp >= newest[0]:
-                newest = (stamp, trial)
-        elif kind in RUN_RESULT_EVENTS and stamp > after:
+        if kind in RUN_RESULT_EVENTS and stamp > after:
             runs.append((stamp, str(kind)))
     if not last:
         source = None
@@ -298,8 +294,8 @@ def silence_evidence(cap: dict[str, Any], tolerance_days: float | None, now: int
     latest_run = max(runs, default=None)
     age = None if latest_run is None else round((now - latest_run[0]) / 86400, 1)
     return {
-        "non_trial_invocations": invocations - trials,
-        "trial_invocations": trials,
+        "non_trial_invocations": len(split["other"]),
+        "trial_invocations": len(split["trial"]),
         "last_invocation_from": source,
         "runs_after_last_invocation": len(runs),
         "last_run": (
