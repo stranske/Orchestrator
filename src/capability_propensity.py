@@ -172,6 +172,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fnmatch
 import hashlib
 import io
 import json
@@ -4729,7 +4730,9 @@ def _live_tripwire_hook(event: str, args: tuple) -> None:
             return
         where = os.path.abspath(os.fsdecode(target))
         for wire in _LIVE_TRIPWIRES:
-            if any(where == root or where.startswith(root + os.sep) for root in wire["roots"]):
+            if any(where == root or where.startswith(root + os.sep) for root in wire["roots"]) or (
+                event == "open" and any(fnmatch.fnmatchcase(where, p) for p in wire["patterns"])
+            ):
                 wire["reached"].append(f"{event} {where}")
     except Exception:  # noqa: BLE001
         return
@@ -4750,9 +4753,18 @@ def _private_live_state():
 
     For the duration, `capabilities.REG`, `feedback.DB_PATH`, `SURFACE_RECORD_GLOBS` and any
     `ORCH_RECORDS_*` override point into a private temporary directory. An audit hook records every
-    open, connect and directory listing under the ORIGINAL locations, and the context fails on exit
-    naming them. A path that bypasses a default (a captured constant, a hardcoded root) is then a
-    red run rather than a silent live read.
+    open, connect and directory listing under the ORIGINAL state directories, and every open of a
+    file the original record globs name; the context fails on exit naming them. A path that bypasses
+    a default (a captured constant, a hardcoded root) is then a red run rather than a silent live read.
+
+    Two things are NOT redirected by a swap, so they are handled before it, not after. Production
+    heartbeats write through `capabilities.heartbeat`, whose `path=REG` default was bound when the
+    module loaded: an inherited `ORCH_CAPABILITY_HEARTBEATS=1` would append synthetic evidence to
+    the live ledger and the tripwire could only report it afterwards. Verification never emits
+    production evidence, so that flag is cleared for the run. And record globs are watched as
+    PATTERNS, not as their parent directories: an override like `memory-*.md` has `.` for a
+    parent, and watching the whole working directory fails a clean run on unrelated reads. An empty
+    override is "unset" to `surface_records`, so it is not watched at all.
     """
     global _LIVE_TRIPWIRE_HOOKED
     import tempfile
@@ -4760,6 +4772,7 @@ def _private_live_state():
     import feedback
 
     record_env = {k: v for k, v in os.environ.items() if k.startswith("ORCH_RECORDS_")}
+    heartbeats = os.environ.get("ORCH_CAPABILITY_HEARTBEATS")
     live = [
         capabilities.LOCAL_RUNTIME,
         capabilities.REG.parent,
@@ -4767,34 +4780,41 @@ def _private_live_state():
         pathlib.Path(
             os.environ.get("ORCH_STATE_DIR") or pathlib.Path.home() / ".codex/orchestrator"
         ),
-        *(
-            pathlib.Path(glob).expanduser().parent
-            for glob in [*SURFACE_RECORD_GLOBS.values(), *record_env.values()]
-        ),
     ]
     roots = sorted(
         {os.path.abspath(str(p)) for p in live} | {os.path.realpath(str(p)) for p in live}
     )
+    patterns: set[str] = set()
+    for glob in [*SURFACE_RECORD_GLOBS.values(), *record_env.values()]:
+        if not glob:
+            continue
+        pattern = os.path.abspath(os.path.expanduser(glob))
+        patterns.add(pattern)
+        head, tail = os.path.split(pattern)
+        patterns.add(os.path.join(os.path.realpath(head), tail))
     saved = (capabilities.REG, feedback.DB_PATH, dict(SURFACE_RECORD_GLOBS))
-    wire: dict = {"roots": roots, "reached": []}
+    wire: dict = {"roots": roots, "patterns": sorted(patterns), "reached": []}
     with tempfile.TemporaryDirectory(prefix="propensity-selftest-") as td:
         private = pathlib.Path(td)
         nested = [r for r in roots if os.path.realpath(td).startswith(r + os.sep)]
         assert not nested, f"the private store {td} sits inside a live root {nested}"
-        capabilities.REG = private / "capabilities.json"
-        feedback.DB_PATH = private / "feedback" / "orchestrator.db"
-        for surface in SURFACE_RECORD_GLOBS:
-            SURFACE_RECORD_GLOBS[surface] = str(private / "records" / surface / "memory-*.md")
-        for key in record_env:
-            del os.environ[key]
-        if not _LIVE_TRIPWIRE_HOOKED:
-            sys.addaudithook(_live_tripwire_hook)
-            _LIVE_TRIPWIRE_HOOKED = True
-        _LIVE_TRIPWIRES.append(wire)
+        # EVERY mutation below is inside the try, so the finally undoes whatever was applied.
         try:
+            capabilities.REG = private / "capabilities.json"
+            feedback.DB_PATH = private / "feedback" / "orchestrator.db"
+            for surface in SURFACE_RECORD_GLOBS:
+                SURFACE_RECORD_GLOBS[surface] = str(private / "records" / surface / "memory-*.md")
+            for key in record_env:
+                del os.environ[key]
+            os.environ.pop("ORCH_CAPABILITY_HEARTBEATS", None)
+            if not _LIVE_TRIPWIRE_HOOKED:
+                sys.addaudithook(_live_tripwire_hook)
+                _LIVE_TRIPWIRE_HOOKED = True
+            _LIVE_TRIPWIRES.append(wire)
             yield private
         finally:
-            _LIVE_TRIPWIRES.remove(wire)
+            if wire in _LIVE_TRIPWIRES:
+                _LIVE_TRIPWIRES.remove(wire)
             capabilities.REG, feedback.DB_PATH = saved[0], saved[1]
             SURFACE_RECORD_GLOBS.clear()
             SURFACE_RECORD_GLOBS.update(saved[2])
@@ -4802,6 +4822,10 @@ def _private_live_state():
                 if key.startswith("ORCH_RECORDS_") and key not in record_env:
                     del os.environ[key]
             os.environ.update(record_env)
+            if heartbeats is None:
+                os.environ.pop("ORCH_CAPABILITY_HEARTBEATS", None)
+            else:
+                os.environ["ORCH_CAPABILITY_HEARTBEATS"] = heartbeats
     reached = wire["reached"]
     assert not reached, (
         f"a propensity selftest touched {len(reached)} live location(s), first {reached[:5]}; give "
