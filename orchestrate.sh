@@ -435,20 +435,21 @@ fi
 # feedable count so "nothing happened" is a stated number rather than an absent line -- the whole
 # lesson of the pattern-miner outage. `feedable 0` is expected today: every capability short of its
 # threshold is held by a documented default-off switch, which unblock() refuses to feed.
+#
+# NO HERE-DOCUMENTS IN THIS SCRIPT. Each summary line below comes from a `tick-line` subcommand of
+# the module that owns the artifact, the same shape agent-switches already had. Homebrew bash 5.3
+# writes a small here-document (up to 64 KiB) into a pipe, in one call, BEFORE the reading command
+# starts, so the writer is the reader's own process. macOS starts a pipe at 512 bytes and grows it
+# only while system-wide pipe memory is below its limit. When it cannot grow, any document over 512
+# bytes blocks its writer forever. That happened to the 677-byte pattern-miner summary on
+# 2026-09-26 04:40Z, and the tick held for 141 hours with no step failing and no ALERT.
+# tests/test_orchestrate_no_heredoc.py fails on any here-document or here-string here.
 if _cadence_due evidence-acquisition && _attempt_ok evidence-acquisition; then
   echo "  [cadence] evidence acquisition (daily; Layer 3; shadow unless ORCH_EVIDENCE_ACQUISITION=1)"
   if python3 "$ORCH/evidence_acquisition.py" --json \
        --write "$STAMP_DIR/evidence-acquisition-plan.json" \
        > "$STAMP_DIR/evidence-acquisition.log" 2>&1; then
-    python3 - "$STAMP_DIR/evidence-acquisition-plan.json" <<'EVIDENCE_ACQ' || true
-import json, sys
-try:
-    p = json.load(open(sys.argv[1])) or {}
-except Exception as exc:
-    print(f"  EVIDENCE-ACQ: plan unreadable ({exc})"); raise SystemExit(0)
-print(f"  EVIDENCE-ACQ: {p.get('state')} — {p.get('summary')}"
-      f"{' [LIVE]' if p.get('live') else ' [shadow]'}")
-EVIDENCE_ACQ
+    python3 "$ORCH/evidence_acquisition.py" tick-line --plan "$STAMP_DIR/evidence-acquisition-plan.json" || true
     _mark_success evidence-acquisition
   else
     _mark_fail evidence-acquisition "see $STAMP_DIR/evidence-acquisition.log"
@@ -472,21 +473,7 @@ if _cadence_due pattern-miner && _attempt_ok pattern-miner; then
     # it RAN -- conflating "the miner is broken" with "the input carries no research subject" is
     # the same mistake in the other direction -- but the line now carries the numbers, so the log
     # is a diagnosis instead of a checkmark. Blocking and drainable quantity in one place.
-    python3 - "$pattern_status" <<'MINING_HEALTH' || true
-import json, sys
-try:
-    health = (json.load(open(sys.argv[1])) or {}).get("mining_health") or {}
-except Exception as exc:
-    print(f"  MINING: status unreadable ({exc})"); raise SystemExit(0)
-state = health.get("state", "unknown")
-print(f"  MINING: {state} — {health.get('summary', 'no summary')}"
-      f" | episodes={health.get('complete_episode_count', '?')}"
-      f" candidates={health.get('candidate_count', '?')}")
-if health.get("actionable"):
-    # Named, not silent: `rejecting` means real defects in the stream, `no_input` means the
-    # exporter produced nothing. Neither is drained by waiting.
-    print(f"  MINING-ACTIONABLE: {health.get('detail', state)}")
-MINING_HEALTH
+    python3 "$ORCH/pattern_miner.py" tick-line --status "$pattern_status" || true
     _mark_success pattern-miner
   else
     rm -f "$pattern_events_tmp"
@@ -502,17 +489,7 @@ fi
 if _cadence_due fleet-shapes && _attempt_ok fleet-shapes; then
   echo "  [cadence] fleet work shapes (daily; merged agent PRs by commit type, labels, path classes)"
   if python3 "$ORCH/fleet_shapes.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/fleet-shapes.log" 2>&1; then
-    python3 - "$STAMP_DIR/fleet-shapes.json" <<'FLEET_SHAPES' || true
-import json, sys
-try:
-    p = json.load(open(sys.argv[1])) or {}
-except Exception as exc:
-    print(f"  SHAPES: artifact unreadable ({exc})"); raise SystemExit(0)
-c = p.get("counts") or {}
-print(f"  SHAPES: {c.get('prs')} merged agent PRs in {p.get('window_days')}d, facts for {c.get('with_facts')}"
-      f" ({c.get('missing_facts')} missing, {c.get('fetched_this_run')} fetched now), "
-      f"{c.get('shapes')} shapes, {c.get('recurring')} recurring")
-FLEET_SHAPES
+    python3 "$ORCH/fleet_shapes.py" tick-line --state-dir "$STAMP_DIR" || true
     _mark_success fleet-shapes
   else
     _mark_fail fleet-shapes "see $STAMP_DIR/fleet-shapes.log"
@@ -991,14 +968,21 @@ fi
 if _cadence_due keepalive-shadow && _attempt_ok keepalive-shadow; then
   if _gh_gate search; then
     echo "  [cadence] keepalive shadow corpus (daily; shadow-only, no live action)"
-    if prs="$(gh search prs --owner stranske --label "agents:keepalive" --state open \
-                --json repository,number --jq '.[] | "\(.repository.nameWithOwner)#\(.number)"' 2>/dev/null)"; then
+    # The PR list goes through a FILE, never a here-string. bash 5.3 pipes a here-string exactly as
+    # it pipes a here-document: the shell writes the whole list into a pipe that only it will read,
+    # before the loop starts. At about 34 bytes a line, more than fifteen open PRs overflow the 512
+    # bytes a starved pipe gets. The loop's python3 reads /dev/null, so it cannot consume the list
+    # it runs inside.
+    keepalive_shadow_prs="$STAMP_DIR/keepalive-shadow-prs.txt"
+    if gh search prs --owner stranske --label "agents:keepalive" --state open \
+         --json repository,number --jq '.[] | "\(.repository.nameWithOwner)#\(.number)"' \
+         > "$keepalive_shadow_prs" 2>/dev/null; then
       n=0
       while IFS= read -r pr; do
         [[ -z "$pr" ]] && continue
-        python3 "$ORCH/keepalive_shadow.py" --shadow "$pr" >/dev/null 2>&1 || echo "    warn: shadow $pr failed (continuing)"
+        python3 "$ORCH/keepalive_shadow.py" --shadow "$pr" < /dev/null >/dev/null 2>&1 || echo "    warn: shadow $pr failed (continuing)"
         n=$((n+1)); [[ "$n" -ge 25 ]] && break
-      done <<< "$prs"
+      done < "$keepalive_shadow_prs"
       echo "    shadowed $n keepalive PR(s)"
       _mark_success keepalive-shadow
     else

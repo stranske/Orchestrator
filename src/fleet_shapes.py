@@ -714,6 +714,32 @@ def summary_for_report(state_dir: Path | None = None, *, top: int = 5) -> dict[s
     }
 
 
+def render_tick_line(state_dir: Path | None = None) -> str:
+    """The tick's one-line SHAPES summary of the artifact `run` wrote.
+
+    orchestrate.sh used to print this line from a here-document fed to `python3 -`. Homebrew bash
+    5.3 writes a small here-document into a pipe before the reading command starts, so the writer
+    is the reader's own process, and a pipe with less room than the document blocks forever. That
+    is the 2026-09-26 hang. This reads the artifact itself rather than `summary_for_report`, so the
+    text stays identical to the here-document's, including its "unreadable" line with the reason.
+    One addition: an artifact that is valid JSON but not an object used to end in a traceback.
+    """
+    path = (state_dir or default_state_dir()) / "fleet-shapes.json"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            payload = json.load(fh) or {}
+    except Exception as exc:  # noqa: BLE001 - the line names every failure and must never raise
+        return f"  SHAPES: artifact unreadable ({exc})"
+    if not isinstance(payload, dict):
+        return f"  SHAPES: artifact unreadable (not a JSON object: {type(payload).__name__})"
+    c = payload.get("counts") or {}
+    return (
+        f"  SHAPES: {c.get('prs')} merged agent PRs in {payload.get('window_days')}d, facts for "
+        f"{c.get('with_facts')} ({c.get('missing_facts')} missing, {c.get('fetched_this_run')} "
+        f"fetched now), {c.get('shapes')} shapes, {c.get('recurring')} recurring"
+    )
+
+
 def render_report_lines(summary: dict[str, Any]) -> list[str]:
     if summary.get("state") != "mined":
         return [f"FLEET-SHAPES: {summary.get('state', 'unknown')} ({summary.get('artifact', '')})"]
@@ -847,13 +873,32 @@ def _selftest() -> int:
         ),
         "unmined line",
     )
+    # The tick's SHAPES line, from the artifact this module wrote, never from a here-document.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        write_json_atomic(Path(td) / "fleet-shapes.json", payload)
+        line = render_tick_line(Path(td))
+        check(
+            line
+            == "  SHAPES: 5 merged agent PRs in 60d, facts for 4 (1 missing, None fetched now), "
+            "1 shapes, 1 recurring",
+            f"tick line {line!r}",
+        )
+        check(
+            render_tick_line(Path(td) / "absent").startswith(
+                "  SHAPES: artifact unreadable ([Errno 2]"
+            ),
+            "unreadable tick line names the error",
+        )
     if failures:
         print("fleet_shapes.py selftest: FAIL — " + "; ".join(failures))
         return 1
     print(
         "fleet_shapes.py selftest: OK (path classes, signature with dropped queue labels, a "
         "DST-spanning PR's hours read in UTC and cached legacy times convert back, cross-repo "
-        "recurrence, per-agent broke-later/hours/cost/commits, missing facts named, render lines)"
+        "recurrence, per-agent broke-later/hours/cost/commits, missing facts named, render lines, "
+        "tick line from the artifact)"
     )
     return 0
 
@@ -872,7 +917,12 @@ def main(argv: list[str] | None = None) -> int:
     show_p = sub.add_parser("show", help="print the current shapes")
     show_p.add_argument("--top", type=int, default=10)
     show_p.add_argument("--state-dir", type=Path, default=None)
+    tick_p = sub.add_parser("tick-line", help="print the tick's one-line SHAPES summary")
+    tick_p.add_argument("--state-dir", type=Path, default=None)
     args = parser.parse_args(argv)
+    if args.command == "tick-line":
+        print(render_tick_line(args.state_dir))
+        return 0
     if args.command == "run":
         payload = run(
             window_days=args.window_days, state_dir=args.state_dir, fetch_limit=args.fetch_limit
