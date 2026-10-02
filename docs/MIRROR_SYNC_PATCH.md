@@ -294,3 +294,27 @@ The witness is complete only when the sync exits zero, identifies the exec-mirro
 exactly the recorded floor, stays within the mirror skip ceiling, and passes every selftest and
 capability gate. The earlier fixture-inline and two-pipeline sections remain incident history;
 this section is the current procedure their supersession notes reference.
+
+Witnessed that way on 2026-10-02. Each row is a fresh scratch mirror built by the script named, with
+`HOME` and `ORCH_MIRROR` both scratch; the live mirror and the live registry moved only with the
+owner's own syncs:
+
+| source | sync script | scratch-mirror `verify.py` |
+|---|---|---|
+| `db0a9be` (the fixture still a file) | previous (`orch-sync-mirror.sh.bak-2026-10-02`) | RED: 866 passed, 1 failed (`FileNotFoundError`), 40/40, the shape observed live |
+| `db0a9be` | current | 867 passed, 0 failed, 40/40, 907 of floor 907, 97/97 selftests, 5/5 gates |
+| `db5a65f` (#371 merged) | current | 970 passed, 0 failed, 40/40, 1010 of floor 1010, 98/98 selftests, 5/5 gates |
+
+Two deliberate breaks, made on a byte-identical copy of the installed script and reverted to
+`cmp`-identical bytes:
+
+* **Leaving one unnamed directory out of the archive** (`':(exclude)tests/fixtures'`, sourced from
+  `db0a9be`) brought the `FileNotFoundError` back: 1 failed, 5 passed. After the revert, 6 passed.
+* **Dropping the drain from the `tests/` line alone** made the sync abort at that line with rc 141
+  and the half-synced trap message, under a test shim that holds back `git archive`'s 512 bytes of
+  record padding for one second. After the revert it exited 0 under the same shim.
+
+The guard was also run against the incident's own file. A repository rebuilt from
+`git archive db0a9be` with the fixture never added failed exactly
+`test_2026_09_22_adversary_fixture_survives_aggregation` in the checkout ("not tracked by git:
+`git add` it"). With the fixture committed, the guard was silent and 6 passed.
