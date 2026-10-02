@@ -438,6 +438,17 @@ def record_shadow_candidates(
     return result
 
 
+def _capability_heartbeat(event_type: str = "invocation") -> None:
+    """Credit `stall-watcher` for one sweep. Lazy import, never raises, and inert outside an active
+    tick (ORCH_CAPABILITY_HEARTBEATS), like `watch._capability_heartbeat`."""
+    try:
+        import capabilities
+
+        capabilities.production_heartbeat("stall-watcher", event_type, ref="redirect_sweep.sweep")
+    except Exception:
+        pass
+
+
 def sweep(
     *,
     stale_seconds: int = watch.DEFAULT_STALE_SECONDS,
@@ -446,6 +457,11 @@ def sweep(
     now: float | None = None,
 ) -> dict:
     """Classify active claims and return an advisory report. No side effects."""
+    # ONE CREDIT PER SWEEP, whatever it finds. `stall-watcher` promises "every tick", and the only
+    # credit was the one `watch.classify_lane` records per claim, so a sweep with no claims recorded
+    # nothing: from 2026-09-14 every tick swept 0 claims and the capability read as silent while it
+    # ran about 23 times a day. `classify_lane` keeps its own credit for its other callers.
+    _capability_heartbeat()
     active = claims.active_claims(ttl=ttl, include_meta=True)
     reports: list[dict] = []
     unwatchable: list[dict] = []
