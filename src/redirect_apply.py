@@ -86,9 +86,11 @@ authorised. Three defects, each a relationship rather than a number:
     it changes (`judged_inputs`).
 `screen_report()` applies all of it before any offload, through the SAME `_lane_blocks` that
 `authorize()` applies after one, so the free screen and the authorisation cannot disagree about a
-lane. Every run reports what it spent beside what could still be authorised: a gate that reports
-only its blocking quantity cannot be told apart from a deadlock, and the deficits here stood at 5
-and 3 for 42 days while the drainable count, never printed, was 0.
+lane. The keepalive supervisor's planner asks the lane half (`lane_refusals`) before it counts a
+candidate as needing a Stage-2 recording, so its dashboard warn never asks anyone to buy the
+judgement this screen refuses. Every run reports what it spent beside what could still be
+authorised: a gate that reports only its blocking quantity cannot be told apart from a deadlock,
+and the deficits here stood at 5 and 3 for 42 days while the drainable count, never printed, was 0.
 
 SELF-LIMITING BY CONSTRUCTION. The bootstrap stops as soon as the gate's own deficits reach zero —
 there is no date to expire unnoticed (FM3) and no latch whose clear path it blocks (FM2). Bounds:
@@ -324,6 +326,54 @@ def lane_liveness(report: dict, *, pid_checker=None) -> bool | None:
     return bool((pid_checker or redirect_plan._pid_alive)(pid_number))
 
 
+def lane_facts(report: dict, *, pid_checker=None) -> dict[str, Any]:
+    """The three lane facts a report states, keyed as `authorize()` takes them.
+
+    The one reading of a report: the free screen, `apply_one` and the keepalive supervisor's
+    planner all call this, so none of them can read a different lane from the same report.
+    """
+    return {
+        "pid_alive": lane_liveness(report, pid_checker=pid_checker),
+        "lane_state": report.get("state"),
+        "recommended_action": report.get("recommended_action"),
+    }
+
+
+def _report_lane_blocks(
+    *, pid_alive: bool | None, lane_state: str | None, recommended_action: str | None
+) -> list[str]:
+    """The refusals that are facts about the lane as its REPORT describes it: liveness and the
+    monitor's recommendation. No corpus, claim or gate is read, so a caller that holds only a
+    report gets the same answer the screen would give."""
+    state = str(lane_state or "")
+    blocks: list[str] = []
+    if pid_alive:
+        blocks.append(LIVE_PID_BLOCK)
+    elif state in REPORTED_LIVE_STATES:
+        blocks.append(
+            f"the supervisor reports the lane {state!r} — a live lane is never redirected"
+        )
+    elif pid_alive is None and state not in REPORTED_NOT_LIVE_STATES:
+        blocks.append(
+            f"lane liveness is UNKNOWN: no pid, and the report calls it {state or 'nothing'!r} — "
+            "apply acts only on a lane shown stalled or dead"
+        )
+    if recommended_action in NO_REDIRECT_RECOMMENDATIONS:
+        blocks.append(
+            f"the supervisor recommends {recommended_action!r}, which no redirect improves on"
+        )
+    return blocks
+
+
+def lane_refusals(report: dict, *, pid_checker=None) -> list[str]:
+    """Why the screen refuses this report's lane before it pays a judge; empty means it doesn't.
+
+    For a caller that holds only a report. The keepalive supervisor's planner asks this before it
+    counts a candidate as needing a Stage-2 recording, so it counts the lanes the screen admits.
+    """
+    return _report_lane_blocks(**lane_facts(report, pid_checker=pid_checker))
+
+
 def _lane_blocks(
     *,
     target: str,
@@ -343,24 +393,11 @@ def _lane_blocks(
     `lane_state` / `recommended_action` of None mean the caller has no report to read them from and
     add nothing; a `pid_alive` of None is UNKNOWN and is refused unless the report says the lane is
     stalled or exited — the only two states in which its own monitor says it is not progressing.
+    The lane half is `_report_lane_blocks`, which the planner reaches through `lane_refusals`.
     """
-    state = str(lane_state or "")
-    blocks: list[str] = []
-    if pid_alive:
-        blocks.append(LIVE_PID_BLOCK)
-    elif state in REPORTED_LIVE_STATES:
-        blocks.append(
-            f"the supervisor reports the lane {state!r} — a live lane is never redirected"
-        )
-    elif pid_alive is None and state not in REPORTED_NOT_LIVE_STATES:
-        blocks.append(
-            f"lane liveness is UNKNOWN: no pid, and the report calls it {state or 'nothing'!r} — "
-            "apply acts only on a lane shown stalled or dead"
-        )
-    if recommended_action in NO_REDIRECT_RECOMMENDATIONS:
-        blocks.append(
-            f"the supervisor recommends {recommended_action!r}, which no redirect improves on"
-        )
+    blocks = _report_lane_blocks(
+        pid_alive=pid_alive, lane_state=lane_state, recommended_action=recommended_action
+    )
     if claim_holder:
         held_by = str(claim_holder.get("agent") or "")
         if prior_agent and held_by and held_by != prior_agent:
@@ -523,15 +560,13 @@ def apply_one(
         role_run_id=role_run_id,
         decision_source=result.get("decision_source"),
         errors=result.get("errors"),
-        pid_alive=lane_liveness(report, pid_checker=pid_alive_fn),
         claim_holder=claims.holder(str(report.get("target") or "")),
         prior_agent=report.get("agent"),
         gate=gate,
         applied_targets=applied_targets,
         applies_today=applies_today,
         flag_on=flag_enabled(env),
-        lane_state=report.get("state"),
-        recommended_action=report.get("recommended_action"),
+        **lane_facts(report, pid_checker=pid_alive_fn),
     )
     apply_result = None
     if authorization["would_mutate"]:
@@ -719,9 +754,7 @@ def screen_report(
     target = str(report.get("target") or "")
     blocks = _lane_blocks(
         target=target,
-        pid_alive=lane_liveness(report, pid_checker=pid_checker),
-        lane_state=report.get("state"),
-        recommended_action=report.get("recommended_action"),
+        **lane_facts(report, pid_checker=pid_checker),
         claim_holder=claims.holder(target) if target else None,
         prior_agent=report.get("agent"),
         gate=gate,

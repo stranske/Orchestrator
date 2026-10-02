@@ -181,8 +181,10 @@ cursor-agent live outside the default PATH):
   `python3 src/keepalive_supervisor.py --stage2-plan [--stage2-backend cursor] [--historical-backend cursor]
   [--json]` for the Stage 2 acquisition loop: it writes runnable local report artifacts, de-dupes
   already-recorded **valid** live Stage 2 targets, emits live record commands when unrecorded
-  post-escalation targets exist, otherwise emits a bounded `redirect_shadow.py collect-historical
-  --dispatch` command, and falls back to
+  post-escalation targets exist whose lane the redirect bootstrap's screen admits (a lane it refuses
+  — reported running or progress, recommended wait or collect, or of unknown liveness — is listed
+  under `lane_refused_live_candidates` with the screen's reasons and asks for nothing), otherwise
+  emits a bounded `redirect_shadow.py collect-historical --dispatch` command, and falls back to
   `--include-calibration` only when strict historical candidates are exhausted but disagreement evidence is
   still thin. Use `--stage2-backend` when live evidence collection should avoid normal epsilon routing
   (for example while Gemini/AGY is unhealthy). Invalid live dispatches remain retryable and keep bounded
