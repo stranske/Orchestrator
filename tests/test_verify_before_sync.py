@@ -203,6 +203,23 @@ def test_verify_py_reads_and_writes_only_a_copy_of_the_live_state(world):
     assert "not copied, over 1 MB" in result.stdout and "agent-runtime (2 MB)" in result.stdout
 
 
+def test_a_symlinked_tmpdir_hands_verify_py_canonical_paths(world):
+    """macOS's TMPDIR is /var/folders/..., a symlink to /private/var/..., and mktemp keeps its
+    trailing slash as `//`. Handed that spelling, the dispatcher selftest compared a resolved
+    worktree path with an unresolved one and failed on every input (2026-10-02, twice), while the
+    live state is no symlink. So every path the copy and verify.py see must be canonical."""
+    real = world["tmp"] / "real-tmp"
+    real.mkdir()
+    link = world["tmp"] / "linked-tmp"
+    link.symlink_to(real, target_is_directory=True)
+    result, record = _run(world, TMPDIR=f"{link}/")
+    assert result.returncode == 0, result.stdout + result.stderr
+    for key in ("sync_mirror", "sync_home", "verify_cwd", "verify_runtime", "verify_ledger"):
+        path = record[key]
+        assert "//" not in path and path == os.path.realpath(path), (key, path)
+        assert real.resolve() in Path(path).parents, (key, path)
+
+
 def test_a_red_verdict_exits_one_and_prints_verify_pys_own_code(world):
     result, _ = _run(world, FAKE_VERIFY_RC="7")
     assert result.returncode == 1, result.stdout + result.stderr
