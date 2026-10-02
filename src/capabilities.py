@@ -4016,9 +4016,31 @@ def _selftest() -> None:
     _selftest_renewal()
     _selftest_read_cache()
     _selftest_shared_read_lock()
+    _selftest_split_invocations()
     print(
         "capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
         "gate readiness w/ never-pass-on-silence)"
+    )
+
+
+def _selftest_split_invocations() -> None:
+    """A trial is told apart by its ref alone, from the history alone, and a tie goes to the later."""
+    history = [
+        {"type": "invocation", "timestamp": 100, "ref": "x.main"},
+        {"type": "invocation", "timestamp": 300, "ref": ADVICE_REF_PREFIX + "0123456789ab"},
+        {"type": "success", "timestamp": 400, "ref": "x.main"},
+        {"type": "invocation", "timestamp": 300},  # no ref is not a trial
+        {"type": "match", "timestamp": 500, "ref": ADVICE_REF_PREFIX + "0123456789ab"},
+    ]
+    split = split_invocations({"last_invocation": 900, "event_history": history})
+    assert split == {"trial": [300], "other": [100, 300], "newest": (300, False)}, split
+    tied_trial = split_invocations({"event_history": history[:2] + history[3:4] + history[1:2]})
+    assert tied_trial["newest"] == (300, True), "a tie goes to the later-recorded event"
+    empty = split_invocations({"last_invocation": 900})
+    assert empty == {"trial": [], "other": [], "newest": None}, "the field is never an event"
+    print(
+        "capabilities.py split-invocations selftest: OK (an advice: ref is a trial and nothing "
+        "else is, only invocation events count, a tie goes to the later event, the field is unread)"
     )
 
 

@@ -1832,7 +1832,8 @@ def _selftest() -> None:
     _selftest_gate_expiry()
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
-        "recently-triggering stays silent, '0' is off and prints apart from unset, dry-run inert, "
+        "recently-triggering stays silent, a consult trial is named and not counted, "
+        "'0' is off and prints apart from unset, dry-run inert, "
         "fleet_gates SUSPECT rule, "
         "switch_states is the review's rows without the sweep, review writes no ledger, an idle "
         "bootstrap row carries its drain read from a sandbox, the expiry notice names soon/lapsed "

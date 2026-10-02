@@ -100,7 +100,7 @@ def test_a_row_with_only_trials_outside_the_window_is_idle_as_before(ledger, mon
     assert row is not None, "trials older than the window left an ON switch active"
     # Idle as before, and now with the right age: the field said 29 days, but nothing the switch's
     # own path did was ever recorded, and the row says which two events it did not count.
-    assert row["idle_days"] is None, row
+    assert row["idle_days"] is None, f"the idle age was measured from a consult trial: {row}"
     assert (row["trials_excluded"], row["newest_trial_days"]) == (2, 29.0), row
     phrase = switch_review.not_counted_phrase(row)
     assert phrase.startswith("2 consult trials, the newest 29.0d ago (a trial"), phrase
@@ -146,6 +146,7 @@ def test_the_review_and_the_firing_monitor_read_one_split(ledger, monkeypatch):
     row = _idle_row(ledger)
     found = monitor.silence_evidence(stored, 2.0, NOW)
     assert seen == [CAP, CAP], f"each reader must take its split from the one helper: {seen}"
-    assert row is not None and row["trials_excluded"] == 1 and row["idle_days"] == 10.0, row
+    assert row is not None, "the review counted an invocation the firing monitor calls a trial"
+    assert (row["trials_excluded"], row["idle_days"]) == (1, 10.0), row
     assert (found["trial_invocations"], found["non_trial_invocations"]) == (1, 1), found
     assert found["last_invocation_from"] == "consult_trial", found

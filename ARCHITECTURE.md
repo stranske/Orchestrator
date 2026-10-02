@@ -787,7 +787,19 @@ recorded later than the last invocation's tolerance window, and whether a trial 
 annotates: every finding list is unchanged when the histories are emptied, and the grader projects
 findings to their ids, so the edit mints no verdict. `redirect-apply-bootstrap` stays silent on
 purpose. Its invocation is an authorised apply, and `switch_review` raises its ON-but-idle drain
-from that field, so a pass that applies nothing must record nothing.
+from its invocations, so a pass that applies nothing must record nothing.
+
+**And a consult trial is not a switch doing anything (2026-10-02).** The switch review's idle rule
+read `last_invocation`, which a trial moves from any session, so one rail-exercise round on a
+switch-mapped capability made an idle ON switch read active for `REVIEW_DAYS` and hid the drain its
+row carries. It now counts non-trial invocation EVENTS through `capabilities.split_invocations`, the
+one split `silence_evidence` reads too, and a `last_invocation` no event recorded counts for
+nothing: a causal reconciliation sets it from the influence edges the outcome bridge draws from lane
+consult trials' verdicts, which is a trial through a second door. Each idle row names what it left
+out beside `idle_days` (`trials_excluded`, `newest_trial_days`, `no_event_days`), and the review
+declares the evidence it counts in its finding population, so the edit re-baselines the grader
+rather than minting a verdict. Latent when fixed: four of the six switch-mapped capabilities had
+only trial invocations, all older than the window.
 
 **The activation audit's own history applies the same rule (2026-09-23).** `progress()` diffs
 `reachable_ids` against the last snapshot, and a not-live row is kept out of that set, so a capability
