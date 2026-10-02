@@ -61,6 +61,9 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   missing thing named — see `env_prereq.py` — and the floor file caps how many such skips are
   allowed, so quietly checking less is a red. Every skip and its reason is printed, so a green run
   always states what it did not check. On a machine with all prerequisites nothing skips at all.
+  It checks the whole tree it runs in, so a PR's verdict is CI's run on the PR head. This machine's
+  verdict on a merged tree is one run per sync, taken before the live mirror changes by
+  `scripts/verify_before_sync.sh` in a scratch mirror (CLAUDE.md §1).
   A run judges a PRIVATE COPY of the ledger and the Brain, taken once when it starts, so it never
   queues behind the tick's ledger lock and the code under test cannot write production state. Its
   selftests run eight at a time, and the two gates that are test files report the verdicts pytest

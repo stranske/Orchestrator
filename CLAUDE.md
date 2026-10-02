@@ -202,8 +202,10 @@ Do not create a second event log, model registry, or capability inventory.
   `~/.codex/orchestrator-mirror`, which launchd actually RUNS — run `orch-sync-mirror.sh` after
   every edit and confirm with `cmp`, because unsynced edits do nothing; (3) `$ORCH_STATE_DIR`
   (default `~/.codex/orchestrator`), the machine-local state, which is never committed.
-  `cmp`-clean is not agreement: re-run the verdict FROM THE MIRROR, since a path resolved relative
-  to a module's own directory is right in one tree and wrong in the other.
+  `cmp`-clean is not agreement: take the verdict in the MIRROR'S SHAPE, since a path resolved
+  relative to a module's own directory is right in one tree and wrong in the other. Take it BEFORE
+  the live mirror changes: `scripts/verify_before_sync.sh` verifies a scratch mirror built by the
+  copy script itself (see "which verify runs are needed" below).
 - **The modules live in `src/`, the tests in `tests/`, and the CHECKOUT ROOT IS NOT THE MODULE
   DIRECTORY.** Those were the same directory until 2026-08-23, and every path in the tree was
   derived from that accident. Two questions with two answers now: sibling modules resolve from
@@ -267,6 +269,28 @@ Do not create a second event log, model registry, or capability inventory.
   real pytest, reads the COUNTS rather than the exit status, enforces a collection floor so tests
   silently ceasing to run cannot look like tests passing, treats a silent zero-exit selftest as a
   failure, and runs the five capability gates. CI runs the same command on a clean machine.
+- **Which verify runs are needed (the owner's decision, 2026-10-02).** `verify.py` checks the WHOLE
+  tree it runs in, never one session's work. So on any one tree only the latest run counts, and a
+  session's full run re-checks all of main to cover its own small change.
+  - **A session's PR verdict is CI's `verify.py` on the PR head.** CI runs the same suite on a clean
+    machine in about two minutes and cancels runs a newer push supersedes. Locally, run the tests
+    and `--selftest`s of the modules you touched.
+  - **Run the full local `verify.py` only for what CI cannot check.** That means a change to the
+    capability ledger, lifecycle, admission or binding code, or to anything CI's verify summary
+    lists under `SKIPPED`. CI's ledger is bootstrapped (16 rows against the ~48 live ones), and its
+    run skips 26 tests, 7 selftest sections and parts of two gates, so a red there is invisible to
+    it.
+  - **This machine's verdict on the merged tree is ONE run per sync, taken before the live mirror
+    changes.** `scripts/verify_before_sync.sh SRC` builds a throwaway mirror from the sync's own
+    source with the real copy script, isolated as `docs/MIRROR_SYNC_PATCH.md` prescribes. It
+    verifies that mirror on a scratch COPY of the live state, because `verify.py`'s `ledger
+    validate` gate is a writing load and must not write the live ledger before the copy. It then
+    re-checks that the source did not move meanwhile, and prints the verdict.
+    The sync wrapper `~/.codex/bin/orch-mirror-sync.sh` runs it before copying, and a red stops
+    the copy with the one command that copies anyway (that doc's patch, applied 2026-10-02).
+  - Measured when this was decided: a contended local run took 25 minutes for 7 minutes of CPU,
+    and about half the time of its slowest checks was spent blocked on the machine-wide ledger
+    lock. CI ran the same suite in 1m40s.
 - **The collection floor is an EQUALITY, so adding tests means bumping it in the same PR.**
   `collected` in `.verify-floor.json` must EQUAL what pytest collects: too few fails (tests
   stopped running), and since 2026-08-23 too many fails as well. A floor BEHIND reality is
