@@ -294,13 +294,13 @@ def test_this_session_armed_exactly_where_git_can_answer(tracked_inputs_guard):
     assert guard is not None, "tests/conftest.py never armed: its pytest_configure did not run"
     absent = env_prereq.git_repo_absent()
     if absent is None:
-        assert guard.armed, (
-            f"git can answer for this tree, yet the guard stood down: {guard.detail}"
-        )
+        assert (
+            guard.armed
+        ), f"git can answer for this tree, yet the guard stood down: {guard.detail}"
     else:
-        assert not guard.armed and not guard.watched, (
-            f"git cannot answer here ({absent}), yet the guard claims to be watching: {guard.detail}"
-        )
+        assert (
+            not guard.armed and not guard.watched
+        ), f"git cannot answer here ({absent}), yet the guard claims to be watching: {guard.detail}"
 
 
 def _quiet(text: str) -> str:
