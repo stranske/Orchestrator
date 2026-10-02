@@ -317,7 +317,8 @@ Do not create a second event log, model registry, or capability inventory.
   when the run starts and points every child at the copy through `ORCH_CAPABILITIES_PATH` and
   `ORCH_FEEDBACK_DB`, so no read queues behind the tick's lock and a branch's declarations and
   migrations cannot reach production. The copy is of the live files at the START, so a row another
-  session registered earlier is still seen, and the next bullet still applies. **A sandbox that
+  session registered earlier is still seen, and the next bullet still applies. A copy that FAILS
+  stops the run before any child starts; it never falls back to the live files. **A sandbox that
   moves `ORCH_LOCAL_RUNTIME` must also drop those two variables**, because an explicit path wins
   over that default and an inherited one leads back out of the sandbox
   (`rail_exercise.sandbox_overrides()`). `ORCH_VERIFY_LIVE_STATE=1` runs against the live files.

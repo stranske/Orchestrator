@@ -225,8 +225,10 @@ except Exception:  # noqa: BLE001
 # through the variables the modules already read (named once: `capabilities.LEDGER_PATH_ENV`,
 # `feedback.DB_PATH_ENV`). The copy is taken ONCE, so every check in the run judges the same
 # ledger, and it is deleted when the run ends. A file absent at the source stays absent and
-# bootstraps privately, as it would have bootstrapped live. A copy that fails leaves THAT file live
-# and says so. `ORCH_VERIFY_LIVE_STATE=1` restores the old behaviour; the summary always says which.
+# bootstraps privately, as it would have bootstrapped live. A copy that FAILS stops the run before
+# any child starts: falling back to the live file would hand the code under test the very write
+# this exists to prevent. `ORCH_VERIFY_LIVE_STATE=1` is the deliberate way to run against the live
+# files, and the summary's `state:` line always says which state the run used.
 #
 # A SANDBOX THAT MOVES `ORCH_LOCAL_RUNTIME` MUST DROP BOTH VARIABLES, because an explicit path wins
 # over that default and an inherited one would carry the sandbox back out to this copy.
@@ -258,14 +260,16 @@ def _megabytes(path: pathlib.Path) -> str:
 def snapshot_state(ledger: pathlib.Path, brain: pathlib.Path, root: pathlib.Path) -> dict:
     """Copy the ledger and the Brain under `root`, never writing either source.
 
-    Returns each private path, or None where the copy FAILED (that file then stays live), and the
-    line the summary prints.
+    Returns both private paths, the line the summary prints, and `failed`: what could not be copied.
+    A failed file's private path is left ABSENT, never partial, so even a caller that ignored
+    `failed` would bootstrap an empty private file rather than read a torn copy or the live one.
     """
     out: dict = {
         "ledger": root / "capabilities.json",
         "brain": root / "feedback" / "orchestrator.db",
     }
     said: list[str] = []
+    failed: list[str] = []
     try:
         if ledger.is_file():
             # Every writer replaces the ledger atomically, so one read of the path is one whole
@@ -275,8 +279,8 @@ def snapshot_state(ledger: pathlib.Path, brain: pathlib.Path, root: pathlib.Path
         else:
             said.append("ledger absent at the source, so it bootstraps privately")
     except OSError as exc:
-        out["ledger"] = None
-        said.append(f"ledger LIVE, because the copy failed ({type(exc).__name__}: {exc})")
+        failed.append(f"the ledger copy failed ({type(exc).__name__}: {exc})")
+        out["ledger"].unlink(missing_ok=True)
     try:
         out["brain"].parent.mkdir(parents=True, exist_ok=True)
         if brain.is_file():
@@ -296,9 +300,14 @@ def snapshot_state(ledger: pathlib.Path, brain: pathlib.Path, root: pathlib.Path
         else:
             said.append("Brain absent at the source, so it bootstraps privately")
     except (OSError, sqlite3.Error) as exc:
-        out["brain"] = None
-        said.append(f"Brain LIVE, because the copy failed ({type(exc).__name__}: {exc})")
-    out["line"] = "private copy, deleted after the run — " + "; ".join(said)
+        failed.append(f"the Brain copy failed ({type(exc).__name__}: {exc})")
+        out["brain"].unlink(missing_ok=True)
+    out["failed"] = failed
+    out["line"] = (
+        "NOT RUN — " + "; ".join(failed)
+        if failed
+        else "private copy, deleted after the run — " + "; ".join(said)
+    )
     return out
 
 
@@ -309,7 +318,8 @@ def private_state(
     """For the length of the block, every child of this process reads a private copy of the state.
 
     Yields {"line": what the summary prints, "ledger": the ledger path the children read, or None
-    when it is the live one}. The two variables are restored on exit and the copies deleted.
+    when it is the live one}, plus "refused" naming why when NO child may run: a copy failed, or the
+    paths could not be resolved at all. The two variables are restored on exit and the copies deleted.
     """
     if os.environ.get(LIVE_STATE_ENV) == "1":
         yield {
@@ -324,19 +334,21 @@ def private_state(
     except Exception as exc:  # noqa: BLE001 — verify.py must run even if a sibling module is broken
         unresolved = f"{type(exc).__name__}: {exc}"
     if unresolved:
-        yield {
-            "line": f"LIVE — the ledger and Brain paths did not resolve ({unresolved})",
-            "ledger": None,
-        }
+        why = f"the ledger and Brain paths did not resolve ({unresolved})"
+        yield {"line": f"NOT RUN — {why}", "ledger": None, "refused": why}
         return
     saved = {key: os.environ.get(key) for key in (ledger_env, brain_env)}
     with tempfile.TemporaryDirectory(prefix="verify-state-") as td:
         snap = snapshot_state(ledger, brain, pathlib.Path(td))
         try:
+            # BOTH, always, even when a copy failed: a failed file's private path is absent, so a
+            # child that ran anyway would bootstrap an empty private file, never touch the live one.
             for key, private in ((ledger_env, snap["ledger"]), (brain_env, snap["brain"])):
-                if private is not None:
-                    os.environ[key] = str(private)
-            yield {"line": snap["line"], "ledger": snap["ledger"]}
+                os.environ[key] = str(private)
+            state = {"line": snap["line"], "ledger": snap["ledger"]}
+            if snap["failed"]:
+                state["refused"] = "; ".join(snap["failed"])
+            yield state
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -1179,6 +1191,8 @@ def verify(
     # Every child below runs inside ONE private copy of the ledger and the Brain; see
     # `private_state`. The run directory holds pytest's XML and the verdicts handed to the gates.
     with private_state() as run_state, tempfile.TemporaryDirectory(prefix="verify-run-") as run_dir:
+        if run_state.get("refused"):
+            return 1, _not_run_summary(run_state)
         started = time.monotonic()
         py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
         took["pytest"] = time.monotonic() - started
@@ -1388,6 +1402,23 @@ def verify(
         floor_may_lag=floor_may_lag,
     )
     return (1 if failing else 0), "\n".join(lines) + "\n"
+
+
+def _not_run_summary(run_state: dict) -> str:
+    """The whole summary of a run that refused to start: why, and both ways forward.
+
+    A failure, never a skip: nothing was checked, and a red that names its own drain is the honest
+    report of that. The drain needs nothing this refusal withholds.
+    """
+    return (
+        "# verify.py\n\n"
+        f"  state:      {run_state['line']}\n\n"
+        "  PROBLEMS:\n"
+        "    - no check ran. Without a private copy the children would read and write this "
+        "machine's live ledger and Brain, which is the write the copy exists to prevent. Fix the "
+        f"cause on the state: line and run again, or set {LIVE_STATE_ENV}=1 to run against the "
+        "live files deliberately.\n"
+    )
 
 
 def _duration(seconds: float) -> str:
@@ -1928,6 +1959,12 @@ def _selftest() -> None:
         assert not any(k in os.environ for k in _names), "the variables outlived the run"
         assert not _copy.exists(), "the private copy outlived the run"
         assert (_src_ledger.read_bytes(), _src_brain.read_bytes()) == _before, "a source changed"
+        # A copy that FAILS refuses the run, and still points nothing at the source.
+        _src_brain.write_bytes(b"not a database" * 64)
+        with private_state((_names[0], _src_ledger, _names[1], _src_brain)) as _state:
+            assert "the Brain copy failed" in _state.get("refused", ""), _state
+            assert pathlib.Path(os.environ[_names[1]]) != _src_brain, "the run would read live"
+        assert not any(k in os.environ for k in _names), "the variables outlived a refusal"
 
     # ---- PYTEST'S VERDICTS, as the two test-file gates replay them: only what a check can be
     # replayed from, the most severe of a duplicate, and nothing at all from an unreadable file.
@@ -1966,7 +2003,8 @@ def _selftest() -> None:
         "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail, "
         "two tree shapes carry two agreed ceilings and the exec mirror can go GREEN, "
         "selftests classify identically at any width, a run reads one private copy of the "
-        "state and writes neither source, and only a replayable pytest verdict is kept)"
+        "state and writes neither source, a failed copy refuses the run, and only a replayable "
+        "pytest verdict is kept)"
     )
 
 

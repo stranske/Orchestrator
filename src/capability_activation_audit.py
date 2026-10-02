@@ -1453,12 +1453,13 @@ def _capability_heartbeat(event_type: str = "invocation") -> None:
         pass
 
 
-def audit(*, path=None, use_cache: bool = True) -> dict:
+def audit(*, path=None, use_cache: bool = True, ledger: dict | None = None) -> dict:
     _capability_heartbeat()
     # `load_declared`, not `load`: this is a REPORT. The writing loader seeds missing gate rows,
     # reconciles declarations and can expire rows into the shared ledger as a side effect, which a
-    # read-only audit must not do (its own kill switch says it writes only its history).
-    caps = capabilities.load_declared(path or capabilities.REG)
+    # read-only audit must not do (its own kill switch says it writes only its history). `ledger` is
+    # a read the caller already made — the admission report's — so that report judges one version.
+    caps = capabilities.load_declared(path or capabilities.REG) if ledger is None else ledger
     emittable = emittable_task_types()
     templates = _prompt_templates()
     index = _fleet_label_index(use_cache=use_cache)

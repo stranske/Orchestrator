@@ -12,8 +12,9 @@ What is pinned here, by behaviour:
     its migrations reach the live file;
   * a child of the run resolves BOTH paths into the copy, through the variables the modules read;
   * the variables are restored and the copy deleted when the run ends, even when it fails;
-  * a source that is absent stays absent and bootstraps privately, a copy that FAILS leaves that
-    one file live and says so, and `ORCH_VERIFY_LIVE_STATE=1` changes nothing at all;
+  * a source that is absent stays absent and bootstraps privately, while a copy that FAILS — or
+    paths that will not resolve — stops the run before any child starts, with both variables still
+    pointing at private paths; `ORCH_VERIFY_LIVE_STATE=1` changes nothing at all;
   * a rail-exercise sandbox, which moves `ORCH_LOCAL_RUNTIME`, does not inherit the two variables —
     an explicit path wins over that default, so an inherited one would lead out of the sandbox.
 
@@ -24,7 +25,11 @@ byte-identical file that ran green again:
   * the restore loop in `private_state`'s `finally` replaced by `pass`:
     `test_the_variables_are_restored_and_the_copy_deleted_even_on_failure` failed;
   * `rail_exercise` popping no variables:
-    `test_a_rail_sandbox_does_not_inherit_the_private_state_variables` failed.
+    `test_a_rail_sandbox_does_not_inherit_the_private_state_variables` failed;
+  * `verify()` no longer checking for a refusal: `test_a_refused_run_starts_no_child_and_fails`
+    failed (a child was started);
+  * `private_state` no longer flagging a failed copy: that test and
+    `test_a_failed_copy_refuses_the_run_and_points_nothing_at_the_live_files` both failed.
 """
 
 from __future__ import annotations
@@ -165,14 +170,49 @@ def test_an_absent_source_bootstraps_privately_and_stays_absent(tmp_path, unset,
     assert not ledger.exists() and not brain.exists(), "...privately, never at the source"
 
 
-def test_a_failed_copy_leaves_that_file_live_and_says_so(tmp_path, unset):
+def _broken_brain(tmp_path: Path) -> tuple[Path, Path]:
     ledger, _ = _live(tmp_path)
     brain = tmp_path / "live" / "feedback" / "not-a-database.db"
     brain.write_bytes(b"this is not sqlite" * 64)
+    return ledger, brain
+
+
+def test_a_failed_copy_refuses_the_run_and_points_nothing_at_the_live_files(tmp_path, unset):
+    """Falling back to the live file would hand the code under test the write this prevents."""
+    ledger, brain = _broken_brain(tmp_path)
     with verify.private_state(_sources(ledger, brain)) as state:
-        assert "Brain LIVE, because the copy failed" in state["line"], state["line"]
-        assert BRAIN_ENV not in os.environ, "a failed copy must not point the run at a bad file"
-        assert os.environ[LEDGER_ENV] == str(state["ledger"]), "the ledger copy still applies"
+        assert "the Brain copy failed" in state["refused"], state
+        assert state["line"].startswith("NOT RUN"), state["line"]
+        private_brain = Path(os.environ[BRAIN_ENV])
+        assert private_brain != brain and not private_brain.exists(), private_brain
+        assert Path(os.environ[LEDGER_ENV]) == state["ledger"] != ledger
+
+
+def test_paths_that_will_not_resolve_refuse_the_run(unset, monkeypatch):
+    def broken():
+        raise ImportError("capabilities will not import")
+
+    monkeypatch.setattr(verify, "_state_sources", broken)
+    before = dict(os.environ)
+    with verify.private_state() as state:
+        assert "did not resolve" in state["refused"] and "will not import" in state["refused"]
+        assert dict(os.environ) == before
+    assert dict(os.environ) == before
+
+
+def test_a_refused_run_starts_no_child_and_fails(tmp_path, unset, monkeypatch):
+    ledger, brain = _broken_brain(tmp_path)
+    monkeypatch.setattr(verify, "_state_sources", lambda: _sources(ledger, brain))
+
+    def never(*_args, **_kwargs):
+        raise AssertionError("a child was started although the private copy failed")
+
+    for runner in ("run_pytest", "run_selftests", "run_gates", "absent_entrypoint_line"):
+        monkeypatch.setattr(verify, runner, never)
+    code, text = verify.verify()
+    assert code == 1, text
+    assert "NOT RUN" in text and "the Brain copy failed" in text, text
+    assert f"{verify.LIVE_STATE_ENV}=1" in text, "the refusal must name the deliberate way past it"
 
 
 def test_the_opt_out_changes_nothing(tmp_path, unset, monkeypatch):

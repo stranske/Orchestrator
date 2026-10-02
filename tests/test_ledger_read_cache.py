@@ -9,7 +9,9 @@ never changed, at about 0.2 s a load.
 The cache keys on the BYTES read, never on mtime, size or inode, so these cases pin what makes that
 safe: a repeated read does not parse, a rewrite that keeps size, mtime AND inode is still seen, no
 caller can reach another caller's copy, and the lock is released before any parsing starts. The
-last case pins the admission report's own share of the reads: one per report, not one per row.
+last cases pin the admission report's own share of the reads: one per report, not one per row,
+and still one when the report builds its own context (the audit, the findability keys and the
+advisor's promotion index each used to read it again).
 
 DELIBERATE BREAK -> REVERT, performed 2026-10-02. Each is an exact-string edit whose anchor matched
 once, then the whole file run, then a revert by string to a byte-identical file that ran green:
@@ -18,7 +20,10 @@ once, then the whole file run, then a revert by string to a byte-identical file 
   * the read path parsed inside the lock again: `test_the_lock_is_released_before_parsing` failed;
   * a cache hit returned one shared object: `test_no_caller_can_reach_another_callers_copy` failed;
   * `report()` stopped handing its ledger to `admit()`:
-    `test_an_admission_report_reads_the_ledger_once` failed.
+    `test_an_admission_report_reads_the_ledger_once` failed;
+  * the context's audit, or its consult reach, given no ledger: each failed
+    `test_a_report_that_builds_its_own_context_still_reads_the_ledger_once`, the second by reading
+    the DEFAULT ledger while the report judged another — two versions in one report.
 """
 
 from __future__ import annotations
@@ -179,3 +184,31 @@ def test_an_admission_report_reads_the_ledger_once(tmp_path, monkeypatch):
     rep = admission.report(path=path, ctx=ctx)
     assert rep["total"] == 3, rep["total"]
     assert reads == [path], f"one report read the ledger {len(reads)} times"
+
+
+def test_a_report_that_builds_its_own_context_still_reads_the_ledger_once(tmp_path, monkeypatch):
+    """No injected context: `_context` runs the activation audit and the findability inputs, and
+    each of those used to read the ledger for itself, one of them from the default path."""
+    import capability_activation_audit as activation_audit
+
+    monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
+    # The audit's fleet vocabulary asks GitHub; nothing here is about labels.
+    monkeypatch.setattr(activation_audit, "_fleet_label_index", lambda **_: {"repos": {}})
+    rows = {}
+    for cap_id in ("t-one", "t-two", "t-three"):
+        row = capabilities._blank_capability(cap_id)
+        row["status"] = "wired"
+        rows[cap_id] = row
+    path = tmp_path / "capabilities.json"
+    capabilities.save(rows, path)
+    reads: list[Path] = []
+    real = capabilities.load_declared
+
+    def counted(where=capabilities.REG):
+        reads.append(Path(where))
+        return real(where)
+
+    monkeypatch.setattr(capabilities, "load_declared", counted)
+    rep = admission.report(path=path)
+    assert rep["total"] == 3, rep["total"]
+    assert reads == [path], f"one report read the ledger {len(reads)} times: {reads}"

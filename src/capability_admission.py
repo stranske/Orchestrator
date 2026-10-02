@@ -435,7 +435,9 @@ def known_controls() -> set[str]:
     return controls
 
 
-def _findability_context(capability_ids, *, path: pathlib.Path | None = None) -> dict:
+def _findability_context(
+    capability_ids, *, path: pathlib.Path | None = None, ledger: dict | None = None
+) -> dict:
     """The two inputs `req_findable` reads, both CONSUMED from `capability_advisor`.
 
     Nothing here re-derives a binding or a reach: `surfaces_binding` inverts `binding_for`, and
@@ -446,9 +448,9 @@ def _findability_context(capability_ids, *, path: pathlib.Path | None = None) ->
     try:
         import capability_advisor as advisor
 
-        reach = advisor.consulting_surfaces()
+        reach = advisor.consulting_surfaces(path=path, ledger=ledger)
         return {
-            "bound_surfaces": advisor.surfaces_binding(capability_ids, path=path),
+            "bound_surfaces": advisor.surfaces_binding(capability_ids, path=path, ledger=ledger),
             "reached_surfaces": set(reach["reached"]),
             "consult_reach": reach,
         }
@@ -460,7 +462,7 @@ def _findability_context(capability_ids, *, path: pathlib.Path | None = None) ->
         }
 
 
-def _context(path: pathlib.Path | None = None) -> dict:
+def _context(path: pathlib.Path | None = None, *, ledger: dict | None = None) -> dict:
     # The recurrence-fixture roster lives with the tests, and this gate genuinely needs it. Since
     # the suite moved to `tests/` that directory is not importable by default, so it is added
     # EXPLICITLY rather than left to a sys.path accident — an accident is how this dependency would
@@ -475,13 +477,17 @@ def _context(path: pathlib.Path | None = None) -> dict:
 
     import capability_activation_audit as audit
 
-    rows = {r["capability_id"]: r for r in audit.audit(use_cache=True)["rows"]}
-    ledger = capabilities.load_declared(path or capabilities.REG)  # read-only: see report()
+    # ONE READ, handed to every consumer below. The audit, these keys and the advisor's promotion
+    # index each read the ledger for themselves, so one report could judge rows, audit rows and
+    # findability against three different versions of it. `ledger` is the read `report()` made.
+    if ledger is None:
+        ledger = capabilities.load_declared(path or capabilities.REG)  # read-only: see report()
+    rows = {r["capability_id"]: r for r in audit.audit(use_cache=True, ledger=ledger)["rows"]}
     return {
         "audit_rows": rows,
         "fixtures": coverage._fixture_capabilities(),
         "known_controls": known_controls(),
-        **_findability_context(sorted(ledger), path=path),
+        **_findability_context(sorted(ledger), path=path, ledger=ledger),
     }
 
 
@@ -501,7 +507,7 @@ def admit(
     cap = ledger.get(capability_id)
     if cap is None:
         raise ValueError(f"unknown capability: {capability_id}")
-    ctx = ctx or _context(path)
+    ctx = ctx or _context(path, ledger=ledger)
     checks: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
     for name, fn in REQUIREMENTS:
@@ -821,7 +827,7 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
     # copy and writes nothing. It seeds and expires nothing either: the tick's lifecycle step
     # (`capabilities.py sweep` + `validate`, every active tick) owns those writes.
     ledger = capabilities.load_declared(path or capabilities.REG)
-    ctx = ctx or _context(path)
+    ctx = ctx or _context(path, ledger=ledger)
     # A retired or superseded row owes nothing: the advisor never offers it and no code path will
     # heartbeat it, so it is not admitted, not enforced and not debt. Retiring a stray row on
     # 2026-09-03 made this report red on every tree until this line existed.
@@ -830,9 +836,10 @@ def report(*, path: pathlib.Path | None = None, ctx: dict | None = None) -> dict
         for cid in sorted(ledger)
         if ledger[cid].get("status") not in capabilities.NOT_LIVE_STATES
     ]
-    # ONE READ FOR THE WHOLE REPORT. Each row used to reload the ledger, which cost a full read of
-    # the file per live row, and it let the rows and the findability totals below come from
-    # different reads if the ledger changed mid-report. A report is one snapshot.
+    # ONE READ FOR THE WHOLE REPORT, handed to `_context` above and to every row here. Each row
+    # used to reload the ledger, a full read of the file per live row, and the context read it
+    # three more times, so the rows, the audit and the findability totals below could come from
+    # different versions if the ledger changed mid-report. A report is one snapshot.
     rows = [admit(cid, path=path, ctx=ctx, ledger=ledger) for cid in live]
     enforced = [r for r in rows if r["enforced"]]
     return {
