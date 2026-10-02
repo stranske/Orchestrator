@@ -119,6 +119,17 @@ def test_renew_refuses_what_it_cannot_honestly_hold(tmp_path):
             "has-successor": _plain_row("has-successor", expiry=now + DAY, successor="v2"),
             "far-future": _plain_row("far-future", expiry=now + TTL + DAY),
             "decided": _plain_row("decided", expiry=now + DAY),
+            # Its expiry is a copy of a generated artifact's own lifecycle, which the artifact
+            # enforces at run time; the probe beside it is ordinary activation evidence.
+            "generated": _plain_row(
+                "generated",
+                expiry=now + DAY,
+                activation_evidence={
+                    "role_manifest_hash": "manifest:1",
+                    "producer_probe": {"passed": True, "checked_at": 1, "ref": "r"},
+                },
+            ),
+            "compiled-gate": _plain_row("compiled-gate", expiry=now + DAY, target_kind="gate"),
         },
     )
     capabilities.transition("decided", "retired", reason="no longer wanted", path=ledger)
@@ -129,6 +140,8 @@ def test_renew_refuses_what_it_cannot_honestly_hold(tmp_path):
         ("has-successor", "successor"),
         ("far-future", "would not extend"),
         ("decided", "retired by a decision"),
+        ("generated", "artifact role_manifest_hash's own lifecycle"),
+        ("compiled-gate", "compiled gate target's own lifecycle"),
         ("absent", "unknown capability"),
     ):
         with pytest.raises(ValueError, match=words):
@@ -136,6 +149,43 @@ def test_renew_refuses_what_it_cannot_honestly_hold(tmp_path):
                 cap_id, reason="hold", evidence_refs=["pr#1"], path=ledger, timestamp=now
             )
     assert ledger.read_bytes() == before
+
+
+def test_the_timeout_is_told_from_a_decision_by_structure_not_wording(tmp_path):
+    """`transition` takes any reason, so the timeout's words alone cannot prove a timeout.
+
+    The timeout stamps `cause`. An event from before that, which is what the running mirror writes
+    until it is synced, still counts as a timeout by its shape: the timeout never wrote
+    `evidence_refs`, and every decision path always does.
+    """
+    timeout = capabilities.EXPIRY_RETIREMENT_REASON
+    legacy = {"timestamp": 100, "type": "transition", "from": "shadow", "to": "retired"}
+    ledger = _ledger(
+        tmp_path,
+        {
+            "worded-like-it": _plain_row("worded-like-it", expiry=200),
+            "legacy-timeout": _plain_row(
+                "legacy-timeout",
+                status="retired",
+                expiry=100,
+                event_history=[{**legacy, "reason": timeout}],
+            ),
+            "stamped-timeout": _plain_row("stamped-timeout", expiry=100),
+        },
+    )
+    capabilities.transition("worded-like-it", "retired", reason=timeout, path=ledger, timestamp=150)
+    capabilities.sweep(ledger, now=100)  # stamps `cause` on the one live row it retires
+    stamped = capabilities.expiry_retirement(_raw(ledger, "stamped-timeout"))
+    assert stamped and stamped["cause"] == capabilities.EXPIRY_CAUSE, stamped
+    with pytest.raises(ValueError, match="retired by a decision"):
+        capabilities.renew(
+            "worded-like-it", reason="undo", evidence_refs=["x"], path=ledger, timestamp=300
+        )
+    for cap_id in ("legacy-timeout", "stamped-timeout"):
+        out = capabilities.renew(
+            cap_id, reason="hold", evidence_refs=["x"], path=ledger, timestamp=300
+        )
+        assert out["revived_from"] == "retired", (cap_id, out)
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +358,11 @@ def _mixed(tmp_path: Path) -> Path:
             "edge": _plain_row("edge", expiry=NOW + window * DAY),
             "later": _plain_row("later", expiry=NOW + (window + 1) * DAY),
             "successor-soon": _plain_row("successor-soon", expiry=NOW + DAY, successor="v2"),
+            "artifact-soon": _plain_row(
+                "artifact-soon",
+                expiry=NOW + 2 * DAY,
+                activation_evidence={"playbook_manifest_hash": "manifest:2"},
+            ),
             "lapsed": _expired("lapsed", 2, timeout),
             "decided": _expired("decided", 2, "no longer wanted"),
             "long-gone": _expired("long-gone", window + 1, timeout),
@@ -322,11 +377,16 @@ def test_the_notice_names_what_the_timeout_will_retire_and_just_retired(tmp_path
     got = switch_review.gate_expiry(now=NOW, path=ledger)
     assert ledger.read_bytes() == before, "the notice wrote the ledger it reads"
     assert got["status"] == "ok"
-    assert [r["capability_id"] for r in got["expiring"]] == ["successor-soon", "soon", "edge"]
+    assert [r["capability_id"] for r in got["expiring"]] == [
+        "successor-soon",
+        "artifact-soon",
+        "soon",
+        "edge",
+    ]
     assert [r["capability_id"] for r in got["lapsed"]] == ["lapsed"]
-    assert got["rows_with_expiry"] == 4, "the whole denominator: every live row with an expiry"
+    assert got["rows_with_expiry"] == 5, "the whole denominator: every live row with an expiry"
     assert got["next_expiry"]["capability_id"] == "later", got["next_expiry"]
-    soon = got["expiring"][1]
+    soon = got["expiring"][2]
     assert soon["days_left"] == 3.0 and soon["last_invocation_on"] == capabilities.utc_date(
         NOW - DAY
     )
@@ -336,6 +396,7 @@ def test_the_notice_names_what_the_timeout_will_retire_and_just_retired(tmp_path
         assert name in text, (name, text)
     assert "decided" not in text and "long-gone" not in text and "later  " not in text, text
     assert "not renewable: its successor v2" in text, text
+    assert "not renewable: its expiry copies its artifact playbook_manifest_hash" in text, text
 
 
 def test_the_notice_and_renew_share_one_predicate(tmp_path):
@@ -363,7 +424,10 @@ def test_the_notice_and_renew_share_one_predicate(tmp_path):
                 )
     # Once renewed, a row leaves the notice: the drain is visible in the very next report.
     after = switch_review.gate_expiry(now=NOW, path=ledger)
-    assert [r["capability_id"] for r in after["expiring"]] == ["successor-soon"], after["expiring"]
+    assert [r["capability_id"] for r in after["expiring"]] == [
+        "successor-soon",
+        "artifact-soon",
+    ], after["expiring"]
     assert after["lapsed"] == []
 
 

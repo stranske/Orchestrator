@@ -215,6 +215,9 @@ def test_shadow_invocation_records_version_artifacts_influence_and_durability(
     cap = capabilities.load(ledger, create=False)[manifest["capability_id"]]
     assert cap["status"] == "shadow"
     assert cap["expiry"] == manifest["lifecycle"]["expires_at"]
+    # The ledger row's expiry COPIES the artifact's own lifecycle, which the target enforces at
+    # run time, so `capabilities.renew` must refuse it rather than revive an unrunnable row.
+    assert "skill_content_hash" in capabilities.renewal_blocker(cap, now=cap["expiry"] - 1)
     assert cap["rollback"] == manifest["lifecycle"]["rollback"]
     assert result["outcome_ref"] in cap["outcome_links"]
     assert all(

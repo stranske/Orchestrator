@@ -1231,11 +1231,13 @@ def migrate_features_to_capabilities(
     }
 
 
-# The reason the expiry timeout writes on the transition it makes, as ONE literal. `expiry_retirement`
-# reads it back to tell a TIMEOUT from a decision, which is the line `renew` may cross and must never
-# cross the other way: a reworded copy in either place would leave every expired row unrenewable
-# without a single error.
+# What the expiry timeout writes on the transition it makes. `expiry_retirement` reads it back to tell
+# a TIMEOUT from a decision, which is the line `renew` may cross and must never cross the other way.
+# The STRUCTURED `cause` is the discriminator: the reason is prose, and `transition` accepts any prose,
+# so a deliberate retirement worded like the timeout must not read as one. The reason stays the same
+# words for the events the timeout wrote before it carried a `cause`.
 EXPIRY_RETIREMENT_REASON = "expiry reached; safe default"
+EXPIRY_CAUSE = "expiry"
 RENEWAL_EVENT = "renewed"
 
 
@@ -1250,6 +1252,7 @@ def _expire_in_place(capabilities: dict[str, dict[str, Any]], now: int) -> list[
                 "from": cap["status"],
                 "to": "retired",
                 "reason": EXPIRY_RETIREMENT_REASON,
+                "cause": EXPIRY_CAUSE,
             }
             # The timeout clears `next_transition`; the event keeps what it cleared, so a renewal
             # can put back exactly what the timeout removed instead of guessing.
@@ -1302,22 +1305,51 @@ def utc_date(ts: int) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(int(ts)))
 
 
+def _is_expiry_timeout(event: dict[str, Any]) -> bool:
+    if event.get("to") != "retired":
+        return False
+    if "cause" in event:
+        return event["cause"] == EXPIRY_CAUSE
+    # Written before the timeout carried a `cause`, which is every expiry retirement the running
+    # mirror makes until it is synced. Those events are told apart by their SHAPE as well as their
+    # words: the timeout never wrote `evidence_refs`, and every decision path (`transition`,
+    # `_transition_in_place`) always writes that key, so a decision worded like the timeout is still
+    # a decision.
+    return event.get("reason") == EXPIRY_RETIREMENT_REASON and "evidence_refs" not in event
+
+
 def expiry_retirement(cap: dict[str, Any]) -> dict[str, Any] | None:
     """The event that retired this row, when and only when the retirement was its expiry TIMEOUT.
 
-    The ledger records a timeout and a decision the same way, as a `transition` to `retired`; the
-    reason is what tells them apart. The row's LATEST transition is the one that counts, because a
-    timeout later confirmed by a deliberate retirement is a decision now.
+    The ledger records a timeout and a decision the same way, as a `transition` to `retired`, and
+    `_is_expiry_timeout` tells them apart. The row's LATEST transition is the one that counts,
+    because a timeout later confirmed by a deliberate retirement is a decision now.
     """
     if cap.get("status") != "retired":
         return None
     for event in reversed(cap.get("event_history") or []):
         if event.get("type") != "transition":
             continue
-        if event.get("to") == "retired" and event.get("reason") == EXPIRY_RETIREMENT_REASON:
-            return event
-        return None
+        return event if _is_expiry_timeout(event) else None
     return None
+
+
+def artifact_lifecycle(cap: dict[str, Any]) -> str | None:
+    """What owns this row's expiry when the LEDGER does not, or None when the ledger does.
+
+    A compiled or generated artifact (a workflow plan, skill package, generated role, playbook)
+    carries its own `lifecycle.expires_at`, and the ledger row's `expiry` is a copy of it. The
+    artifact enforces that date itself at run time (`roles.run_generated_shadow_role`,
+    `capability_compiler.record_playbook_invocation`), so a ledger renewal would revive a row whose
+    target stays expired. Each such registration names its artifact in `activation_evidence`, the
+    one place a row records anything beside the four activation probes. So any non-probe key there
+    identifies an artifact, and a compiler added later is covered without being listed here. A
+    compiled `target_kind` is the second mark, because a `gate` target records no artifact key.
+    """
+    if cap.get("target_kind") in COMPILE_TARGET_KINDS:
+        return f"compiled {cap['target_kind']} target"
+    keys = sorted(key for key in cap.get("activation_evidence") or {} if key not in ACTIVE_PROBES)
+    return f"artifact {', '.join(keys)}" if keys else None
 
 
 def renewal_blocker(cap: dict[str, Any], *, now: int) -> str | None:
@@ -1325,6 +1357,13 @@ def renewal_blocker(cap: dict[str, Any], *, now: int) -> str | None:
     expiry = cap.get("expiry")
     if expiry is None:
         return "it carries no expiry, so no timeout will retire it and there is nothing to renew"
+    owner = artifact_lifecycle(cap)
+    if owner:
+        return (
+            f"its expiry copies its {owner}'s own lifecycle, which the target enforces at run "
+            "time; renewing the ledger row would leave the target expired, so compile and "
+            "register a new version instead"
+        )
     status = cap.get("status")
     if status == "superseded":
         return "it is superseded, which is terminal"
@@ -3846,17 +3885,27 @@ def _selftest_renewal() -> None:
             assert "would not extend" in str(exc), exc
         else:
             raise AssertionError("a second renewal at the same moment stacked")
-        # A DECISION IS NOT A TIMEOUT: a deliberate retirement stays retired.
-        transition(name, "retired", reason="no longer wanted", path=ledger, timestamp=3_000)
+        # A DECISION IS NOT A TIMEOUT, even worded exactly like one: `transition` takes any reason,
+        # so the timeout's own words must not be what makes a retirement renewable.
+        transition(name, "retired", reason=EXPIRY_RETIREMENT_REASON, path=ledger, timestamp=3_000)
         try:
             renew(name, reason="undo", evidence_refs=["x"], path=ledger, timestamp=4_000)
         except ValueError as exc:
             assert "decision" in str(exc), exc
         else:
-            raise AssertionError("a renewal undid a deliberate retirement")
+            raise AssertionError("a renewal undid a deliberate retirement worded like the timeout")
+        # AN ARTIFACT'S EXPIRY IS NOT THE LEDGER'S: the target enforces its own lifecycle date.
+        artifact = {
+            **_blank_capability("generated"),
+            "expiry": 5_000,
+            "activation_evidence": {"role_manifest_hash": "manifest:1"},
+        }
+        blocker = renewal_blocker(artifact, now=4_000)
+        assert blocker and "role_manifest_hash" in blocker, blocker
     print(
         "capabilities.py renewal selftest: OK (the old way back fails, evidence required, an "
-        "expiry retirement revives to its prior status, renewals never stack, a decision stays)"
+        "expiry retirement revives to its prior status, renewals never stack, a decision stays "
+        "even worded like the timeout, an artifact-owned expiry is refused)"
     )
 
 
