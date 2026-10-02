@@ -262,21 +262,22 @@ copy and the special `tests/rail_exercises/` archive with one archive of the com
 tree:
 
 ```bash
-git -C "$SRC" archive --format=tar HEAD tests | {
-  tar -x -C "$MIRROR"
-  cat >/dev/null
-}
+git -C "$SRC" archive --format=tar HEAD tests | { tar -x -C "$MIRROR" && cat >/dev/null; }
 ```
 
 The `cat` drain is retained so macOS `tar` cannot close the pipe before `git archive` writes its
-padding. Extraction and draining remain joined with `&&` in the installed script, so a failed
-extraction cannot be hidden by a successful drain. Uncommitted test edits still do not travel:
-the archive is built from `HEAD`, not from the working tree.
+padding. Copy the line as it stands: extraction and draining are joined with `&&`, never with `;`
+or a line break inside the braces, because either of those lets `cat`'s exit 0 hide a failed
+extraction (the 2026-10-01 section above). Uncommitted test edits still do not travel: the
+archive is built from `HEAD`, not from the working tree.
 
 The repository guard in `tests/conftest.py` enforces the other half of that contract. It compares
 the tracked files under `tests/` with the files in the actual `git archive HEAD tests` result, then
 fails any test that reads an untracked, ignored, or `export-ignore`d input. Comparing with the
-archive itself also covers an `export-ignore` rule placed on an ancestor directory.
+archive itself also covers an `export-ignore` rule placed on an ancestor directory. Only files
+`HEAD` already holds can be `export-ignore`d: a fixture staged for the next commit is missing
+from `HEAD`'s archive too, but it ships with its commit, and counting it labelled a freshly
+`git add`ed fixture `export-ignore` in a repository with no `.gitattributes` at all.
 
 Witness the installed script without touching either live runtime by isolating both `HOME` and the
 mirror while preserving GitHub authentication:
