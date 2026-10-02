@@ -245,11 +245,11 @@ def skill_resource_absent() -> str | None:
 def repo_files_absent(*relative_paths: str) -> str | None:
     """Reason string when committed repo files a check asserts against are not in THIS tree.
 
-    The exec mirror is not a checkout. `orch-sync-mirror.sh` copies root-level `*.py`,
-    `orchestrate.sh`, `.verify-floor.json` and a few JSON registries to `~/.codex/orchestrator-mirror`
-    — because launchd cannot read the CloudStorage volume — and nothing else. So `.github/`,
-    `docs/`, `scripts/`, `ruff.toml` and `mypy.ini` simply do not exist there, while the `test_*.py`
-    files that assert against them are copied and DO run.
+    The exec mirror is not a checkout. `orch-sync-mirror.sh` copies to `~/.codex/orchestrator-mirror`
+    — because launchd cannot read the CloudStorage volume — only what it names: the modules (flat),
+    `orchestrate.sh`, `tests/`, `scripts/`, a few registries and config files, and since 2026-10-02
+    `.github/`, `docs/`, `.gitignore` and `ruff.toml`. Anything else a test reads is simply absent
+    there, while the `test_*.py` files that assert against it are copied and DO run.
 
     That asymmetry needs a detector rather than a `Path.is_file()` guard at each call site, for the
     reason the module header gives: a check that quietly passes because its subject was missing is
@@ -269,9 +269,9 @@ def repo_files_absent(*relative_paths: str) -> str | None:
     if not missing:
         return None
     return (
-        f"not present in this tree: {', '.join(sorted(missing))} — the exec mirror carries "
-        f"root-level modules only (orch-sync-mirror.sh), so repository configuration is asserted "
-        f"from a checkout. Run this check from the repo, where it is not skipped."
+        f"not present in this tree: {', '.join(sorted(missing))} — the exec mirror carries only "
+        f"what orch-sync-mirror.sh names, so repository configuration is asserted from a "
+        f"checkout. Run this check from the repo, where it is not skipped."
     )
 
 
@@ -349,30 +349,53 @@ def exec_mirror_shape() -> str | None:
     need two agreements, each measured in the shape it bounds -- the measuring window equal to the
     draining window, which is the latched-gate rule this file already follows everywhere else.
 
-    ONE POPULATION, CAUSED AND LICENSED BY THE SAME TWO DETECTORS. The marks below are the very
-    calls that PRODUCE the mirror-only skips: `repo_files_absent` from `test_ci_gate_config.py`
-    and `git_repo_absent` from `test_repo_artifact_hygiene.py`. The ceiling that licenses those
-    skips is therefore unlocked by exactly the facts that cause them, with no second literal to
-    drift. It selects WHICH agreed number applies -- never what the number is, which stays
-    hand-edited -- so this cannot become a gate that clears itself.
+    THE MARK THAT LICENSES THE POPULATION IS THE MARK THAT CAUSES IT. Until 2026-10-02 the marks
+    were the very calls that produced the two mirror-only skip families: `repo_files_absent(".github")`
+    and `git_repo_absent`. Then `orch-sync-mirror.sh` began shipping `.github/`, `docs/`,
+    `.gitignore` and `ruff.toml` (PR #352's tests opened a workflow file with no guard, and every
+    mirror verify was red), so the repository-configuration family runs here now and "no
+    `.github/`" stopped being TRUE of the mirror. A mark that is no longer true of the tree it
+    names would have handed the mirror the runner's ceiling and printed `tree: checkout`. What
+    remains mirror-only is the family `git_repo_absent` produces (`test_repo_artifact_hygiene.py`),
+    so the ceiling that licenses those skips is unlocked by exactly the fact that causes them, with
+    no second literal to drift. It selects WHICH agreed number applies -- never what the number is,
+    which stays hand-edited -- so this cannot become a gate that clears itself.
 
-    BOTH marks are required, and that AND is the conservative direction: the mirror ceiling is the
-    LOOSER of the two, so an ambiguous tree must fall back to the base agreement rather than help
-    itself to headroom. A checkout with `git` uninstalled still has `.github/`; a checkout whose
-    `.github/` was deleted is still a git repository. Neither reads as the mirror.
+    BOTH marks are required, and the AND keeps an ambiguous tree on the base agreement whichever of
+    the two ceilings happens to be looser. The second mark is the shape the sync builds on purpose:
+    the modules sit FLAT at the root rather than under `src/` -- `paths.checkout_root`'s own rule,
+    asked rather than restated. A checkout with `git` uninstalled, or a `git archive` export, still
+    keeps its modules under `src/`; a flat tree that is a git repository is a checkout from before
+    the 2026-08-23 move. None of them reads as the mirror.
     """
-    no_github = repo_files_absent(".github")
+    flat = _flat_layout()
     not_a_repo = git_repo_absent()
-    if not (no_github and not_a_repo):
+    if not (flat and not_a_repo):
         return None
     import paths
 
     here = paths.checkout_root(Path(__file__).resolve().parent)
     return (
-        f"{here} is the exec mirror, not a checkout: no .github/ directory, and git reports no "
-        f"repository here. orch-sync-mirror.sh copies files, not a checkout, so the tests that "
-        f"read repository configuration or ask git a question cannot run in this tree"
+        f"{here} is the exec mirror, not a checkout: its modules sit at the root rather than under "
+        f"src/, and git reports no repository here. orch-sync-mirror.sh copies files, flat, not a "
+        f"checkout, so the tests that ask git a question cannot run in this tree"
     )
+
+
+def _flat_layout() -> str | None:
+    """Reason string when this tree keeps its modules at its root instead of under `src/`.
+
+    One of `exec_mirror_shape`'s two marks, and like it NOT a prerequisite: nothing skips because
+    of it. Every checkout keeps its modules in `src/` (2026-08-23); `orch-sync-mirror.sh` copies them
+    FLAT into the exec mirror on purpose, and `paths.checkout_root` already encodes that rule for
+    path resolution, so this asks it rather than keeping a second copy that could drift.
+    """
+    import paths
+
+    module_dir = Path(__file__).resolve().parent
+    if paths.checkout_root(module_dir) != module_dir:
+        return None
+    return f"{module_dir} holds the modules at its root, not under src/"
 
 
 def codex_profile_binary_absent() -> str | None:
@@ -660,49 +683,53 @@ def _selftest() -> None:
 
     # ---- exec_mirror_shape: WHICH TREE, not "can this check run" ------------------------------
     # The composition rule is the whole function, so it is asserted directly in all four
-    # combinations. AND, never OR: the mirror ceiling is the LOOSER of the two agreements, so only
-    # an unambiguous flat copy may unlock it. Flipping the `and` to `or` turns three of these red.
-    _real_github, _real_git = repo_files_absent, git_repo_absent
+    # combinations. AND, never OR: only an unambiguous flat copy may select the mirror agreement,
+    # whichever ceiling is looser. Flipping the `and` to `or` turns two of these red.
+    _real_flat, _real_git = _flat_layout, git_repo_absent
     try:
-        for _no_github, _no_git, _want_mirror in (
+        for _flat, _no_git, _want_mirror in (
             (True, True, True),
             (True, False, False),
             (False, True, False),
             (False, False, False),
         ):
-            globals()["repo_files_absent"] = lambda *a, _r=_no_github: (
-                "no .github here" if _r else None
-            )
+            globals()["_flat_layout"] = lambda _r=_flat: "modules at the root" if _r else None
             globals()["git_repo_absent"] = lambda _r=_no_git: (
                 "not a git repository" if _r else None
             )
             got_shape = exec_mirror_shape()
-            assert bool(got_shape) is _want_mirror, (_no_github, _no_git, got_shape)
+            assert bool(got_shape) is _want_mirror, (_flat, _no_git, got_shape)
             if _want_mirror:
-                # It must NAME the tree and both marks, or a reader cannot tell why the looser
-                # ceiling is in force -- and an unexplained looser ceiling is the thing to fear.
+                # It must NAME the tree and both marks, or a reader cannot tell why the mirror's
+                # agreement is in force -- and an unexplained ceiling is the thing to fear.
                 assert got_shape is not None
-                assert ".github" in got_shape and "git" in got_shape, got_shape
+                assert "src/" in got_shape and "git" in got_shape, got_shape
     finally:
-        globals()["repo_files_absent"] = _real_github
+        globals()["_flat_layout"] = _real_flat
         globals()["git_repo_absent"] = _real_git
 
-    # THE REAL TREE, asserted in the direction that is layout-independent AND permissive-side:
-    # a genuine checkout must never be mistaken for the mirror, because that is the only error
-    # that hands a real repository the bigger skip ceiling. The mirror direction is asserted too,
-    # from the same two facts -- and this pair is what running verify FROM THE MIRROR exercises.
+    # THE REAL TREE. A genuine checkout must never be mistaken for the mirror, because that hands
+    # a repository the other shape's agreed number; the mirror direction is asserted from the same
+    # two facts -- and this is what running verify FROM THE MIRROR exercises. Whether `.github/` is
+    # present no longer decides anything: the sync ships it (2026-10-02), so the mirror has one.
     import paths
 
-    _root = paths.checkout_root(Path(__file__).resolve().parent)
-    if (_root / ".github").is_dir():
+    _module_dir = Path(__file__).resolve().parent
+    _root = paths.checkout_root(_module_dir)
+    if not git_repo_absent():
         assert exec_mirror_shape() is None, (
-            f"{_root} has .github/ and must read as a checkout, not the exec mirror: "
+            f"{_root} is a git repository and must read as a checkout, not the exec mirror: "
             f"{exec_mirror_shape()}"
         )
-    elif git_repo_absent():
+    elif _root == _module_dir:
         assert (
             exec_mirror_shape()
         ), f"{_root} is a flat non-repository copy and must read as the mirror"
+    else:
+        assert exec_mirror_shape() is None, (
+            f"{_root} keeps its modules under src/ and must read as a checkout even where git "
+            f"cannot answer: {exec_mirror_shape()}"
+        )
 
     # A skipped selftest must SPEAK, and its line must carry the shared mark verify.py greps
     # for. A skip that prints nothing is a silent zero-exit by another name.

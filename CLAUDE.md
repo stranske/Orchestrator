@@ -331,7 +331,11 @@ Do not create a second event log, model registry, or capability inventory.
   required, `$CI` never consulted) and `verify.mirror_key` derives the floor key, so any ceiling may
   carry a `mirror_` variant and an unset one falls back to the base — the strict direction. The
   summary always prints which tree it decided it was in. When you add a ceiling, ask which shape you
-  measured it in before writing the number down.
+  measured it in before writing the number down. Since 2026-10-02 the sync also ships `.github/`,
+  `docs/`, `.gitignore` and `ruff.toml`, so the mirror's one remaining absence is `.git` (21 skips),
+  and its marks are *flat* and *not a repository*. A mark that stops being true of a tree mislabels
+  it silently, so whenever the sync starts shipping something, check what `exec_mirror_shape()`
+  keys on.
 - **State lives behind TWO variables and they are not the same.** `ORCH_STATE_DIR` holds the audit
   cache, firing-monitor and redirect-sweep state; `ORCH_LOCAL_RUNTIME` holds the capability LEDGER
   and the Brain. Pointing only the first at an empty directory and concluding "the suite is
