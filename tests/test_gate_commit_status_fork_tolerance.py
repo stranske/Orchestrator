@@ -16,8 +16,9 @@ Gate has already decided. Three steps of `.github/workflows/pr-00-gate.yml` hand
 
 Each script is extracted from the workflow and run against the REAL `.github/scripts` helpers it
 requires; only the GitHub client and `core` are stubs. The checks need the workflow, those helpers
-and a Node runtime, and skip by name where any is absent -- the exec mirror carries no `.github/`,
-because GitHub, not launchd, runs this workflow, and CI checks it on every pull request.
+and a Node runtime. They run in CI, in every checkout and, since #387 ships `.github/` there, in
+the exec mirror. The `env_prereq` guards skip them, by name, only in a tree that lacks one of the
+three -- so a skip in the mirror now means the mirror is incomplete, never that it is expected.
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ FORK = {"fromFork": "true", "head": "outside-contributor/Orchestrator"}
 DELETED_FORK = {"fromFork": "true", "head": "deleted source repository"}
 SAME_REPO = {"fromFork": "false", "head": "stranske/Orchestrator"}
 REFUSED = {"status": 403, "message": "Resource not accessible by integration"}
+# github-api-with-retry.js counts this 404 as a permission refusal exactly like the 403.
+REFUSED_404 = {"status": 404, "message": "Resource not accessible by integration"}
 RATE_LIMITED = {"status": 403, "message": "API rate limit exceeded for installation"}
 
 
@@ -285,6 +288,9 @@ STATUS_CASES: list[dict[str, Any]] = [
         {"name": f"same_repo_{state}", **SAME_REPO, "state": state, "error": REFUSED}
         for state in ("success", "failure")
     ),
+    {"name": "same_repo_404", **SAME_REPO, "state": "success", "error": REFUSED_404},
+    {"name": "fork_404", **FORK, "state": "failure", "error": REFUSED_404},
+    {"name": "deleted_fork_404", **DELETED_FORK, "state": "failure", "error": REFUSED_404},
     {"name": "rate_limit_message", **FORK, "state": "success", "error": RATE_LIMITED},
     {
         "name": "rate_limit_429",
@@ -393,9 +399,20 @@ def test_a_fork_refusal_records_a_success_verdict_without_failing(status: dict) 
     assert any("read-only" in w and "'success'" in w for w in case["warnings"]), case
 
 
-@pytest.mark.parametrize("state", ["failure", "error", "pending"])
-def test_a_fork_refusal_fails_closed_for_any_other_verdict(status: dict, state: str) -> None:
-    case = status[f"fork_{state}"]
+@pytest.mark.parametrize(
+    "name,state",
+    [
+        ("fork_failure", "failure"),
+        ("fork_error", "error"),
+        ("fork_pending", "pending"),
+        ("fork_404", "failure"),
+        ("deleted_fork_404", "failure"),
+    ],
+)
+def test_a_fork_refusal_fails_closed_for_any_other_verdict(
+    status: dict, name: str, state: str
+) -> None:
+    case = status[name]
     assert case["threw"] is None, case
     assert len(case["failures"]) == 1 and f"'{state}'" in case["failures"][0], case
     assert _verdict_written_to_summary(case, state), case
@@ -408,11 +425,12 @@ def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
     assert _verdict_written_to_summary(case, "success"), case
 
 
-@pytest.mark.parametrize("state", ["success", "failure"])
-def test_a_same_repo_refusal_only_warns(status: dict, state: str) -> None:
+@pytest.mark.parametrize("name", ["same_repo_success", "same_repo_failure", "same_repo_404"])
+def test_a_same_repo_refusal_only_warns(status: dict, name: str) -> None:
     """The documented rule, restored: a status post must not fail the Gate. The retry helper warns
-    with the refusing token's name; whether the Gate passes is left to 'Enforce Gate success'."""
-    case = status[f"same_repo_{state}"]
+    with the refusing token's name; whether the Gate passes is left to 'Enforce Gate success'.
+    A 404 refusal takes the same path as a 403: the helper counts both as a permission refusal."""
+    case = status[name]
     assert case["threw"] is None and case["failures"] == [], case
     assert case["summaryWrites"] == 0, case
     assert any("blocked by permissions" in w for w in case["warnings"]), case
