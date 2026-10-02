@@ -133,12 +133,18 @@ safety switch, not dead code.
    stamped dispatch reached a terminal outcome it appends the corpus outcome link, which is what
    makes `synced_role_outcomes` climb with no owner in the loop (the manual `link-outcome` design
    produced 5 links in ~2 months). `--apply` is DEFAULT OFF behind `ORCH_REDIRECT_APPLY_BOOTSTRAP`;
-   armed, it applies at most one *authorised* plan per day, only on an ALREADY-DEAD lane (so no kill
-   ever runs and the apply reduces to release-claim + delegate, which the rails already do to a dead
-   stalled lane), never over a foreign claim, never on an un-stamped plan, and it disarms itself the
-   moment the Stage-2 deficits close. It exists because that gate is a structural deadlock:
-   `synced_role_outcomes` counts only applied advice, so the gate authorising apply required ten
-   applied outcomes. The machine-checkable arming condition lives in
+   armed, it applies at most one *authorised* plan per day, only on a lane SHOWN NOT LIVE — a dead
+   pid, or, for a keepalive lane (which has no pid), the supervisor's own report that it is stalled —
+   so no kill ever runs and the apply reduces to release-claim + delegate, which the rails already
+   do to a dead stalled lane. It refuses a lane of unknown liveness, a foreign claim and an
+   un-stamped plan, and it disarms itself the moment the Stage-2 deficits close. Its candidates are
+   the keepalive supervisor's LATEST stage-2 plan, screened for free before any offload (not live,
+   not recommended wait/collect, not already judged on identical input), at most 3 role runs per
+   day; every run prints offloads spent beside the candidates that could still be authorised, and
+   `--status` prints that drainable count beside the gate's deficits. (Until 2026-10-02 it judged
+   every report file ever written — 759 offloads, 30 closed PRs, all `wait`.) It exists because
+   that gate is a structural deadlock: `synced_role_outcomes` counts only applied advice, so the gate
+   authorising apply required ten applied outcomes. The machine-checkable arming condition lives in
    `capability_recurrence_check.SWITCH_ON_CRITERIA`, not in anyone's judgement.
 10. **research_scheduler.py + research_subjects.py** — opportunistic acquisition uses only capacity
    left after production/range reservation. A durable target/task/spec/base/arm fingerprint blocks

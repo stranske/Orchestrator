@@ -1016,8 +1016,13 @@ replay links are deliberately `not_role_learning=True` — so the gate required 
 anything could apply. `redirect_apply.py` breaks that deadlock at both ends: `link_applied_outcomes()`
 turns each applied redirect's own influence edge into the corpus link automatically, and a default-OFF,
 self-disabling bootstrap (`ORCH_REDIRECT_APPLY_BOOTSTRAP`) applies at most one authorised plan per day.
-Authorisation is a pure function of recorded state — dead prior process, no foreign claim, lineage stamp
-present, gate deficit still open, per-target and per-day bounds — never an owner review queue.
+Authorisation is a pure function of recorded state — prior lane shown not live, no foreign claim, lineage
+stamp present, gate deficit still open, per-target and per-day bounds — never an owner review queue.
+Liveness is three-valued: a keepalive lane has no pid, so it counts as not live only when the supervisor
+itself reports it stalled or exited, and UNKNOWN is a refusal (until 2026-10-02 a missing pid read as
+dead). The lane facts are one function, applied by a free screen before the role is paid and by
+`authorize()` after, over the keepalive supervisor's latest stage-2 plan rather than every report file
+it ever wrote; each run reports offloads spent beside the candidates that could still be authorised.
 
 ## PromptAgent — the second role (built 2026-06-20)
 
