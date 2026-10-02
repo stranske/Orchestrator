@@ -137,7 +137,7 @@ def build_checkout(root: Path, env: dict[str, str]) -> Path:
     put(tests / "fixtures" / "forgotten.txt", "forgotten\n")
     put(tests / "fixtures" / "leftover.txt", "stale\n")
     put(tests / "data" / "swallowed.json", "{}\n")
-    put(tests / "junky" / "a (Tim Stranske's conflicted copy 2026-10-02).txt", "junk\n")
+    put(tests / "junky" / "a (laptop's conflicted copy 2026-10-02).txt", "junk\n")
     put(tests / "junky" / ".DS_Store", "finder\n")
     put(tests / "__pycache__" / "stale.cpython-312.pyc", "")
     put(tests / "helper_not_yet_added.py", "")

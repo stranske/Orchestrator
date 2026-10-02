@@ -210,7 +210,13 @@ its own brings the 141 back at that line. The script also gained an `ERR` trap, 
 its line and says the mirror is half-synced instead of ending silently. The previous script is kept
 beside it as `orch-sync-mirror.sh.bak-2026-10-01`.
 
+> **Superseded 2026-10-02:** the `tests/rail_exercises` pipeline is gone. All of `tests/` now ships
+> in one archive that keeps this drain; see the last section.
+
 ## Nothing under `tests/` travels but the modules and `rail_exercises/` (2026-10-02)
+
+> **Superseded later on 2026-10-02:** the sync now ships the whole `tests/` tree, so the contract
+> at the end of this section no longer applies. The fixture stays inlined; see the last section.
 
 Under `tests/`, the sync ships exactly two things: the top-level `tests/*.py`, copied from the
 working tree, and `tests/rail_exercises/`, from `git archive HEAD`. PR #349 added a third kind of
