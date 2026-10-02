@@ -309,6 +309,33 @@ def _recorded_proposal_targets(
     return targets
 
 
+def _needs_recording(plans: list[dict], recorded: set[str]) -> tuple[list[dict], list[dict]]:
+    """Split the unrecorded eligible plans into the ones that need a Stage-2 recording and the ones
+    the redirect bootstrap's lane screen refuses, with its reasons.
+
+    A recording is drained in one of two ways: the bootstrap judges the candidate, or an operator
+    runs `stage2_record_command`. The bootstrap screens every candidate for free and judges none
+    whose report shows the lane live, of unknown liveness, or recommended wait/collect. Every one
+    of the 766 reports judged from 2026-06-23 to 2026-10-02 was `progress` or `running` with
+    `wait`. Counting a screened-out lane here leaves a count only the operator's offload can drain,
+    and that offload buys a verdict no plan can apply. The screen's own predicate decides, so the
+    planner and the screen count one population.
+    """
+    import redirect_apply  # lazy: only the stage-2 plan needs the bootstrap's lane rules
+
+    needs: list[dict] = []
+    refused: list[dict] = []
+    for plan in plans:
+        if plan.get("target") in recorded:
+            continue
+        blocks = redirect_apply.lane_refusals(plan.get("report") or {})
+        if blocks:
+            refused.append({"target": plan.get("target"), "blocks": blocks})
+        else:
+            needs.append(plan)
+    return needs, refused
+
+
 def stage2_acquisition_plan(
     *,
     owner: str = "stranske",
@@ -359,7 +386,7 @@ def stage2_acquisition_plan(
     recorded_live_targets = _recorded_proposal_targets(
         corpus_path, source="live-dispatch", valid_only=True
     )
-    eligible = [plan for plan in all_eligible if plan.get("target") not in recorded_live_targets]
+    eligible, lane_refused = _needs_recording(all_eligible, recorded_live_targets)
     already_recorded_eligible = [
         plan.get("target") for plan in all_eligible if plan.get("target") in recorded_live_targets
     ]
@@ -400,6 +427,15 @@ def stage2_acquisition_plan(
             keepalive_corpus_path=keepalive_corpus_path,
         )
 
+    if lane_refused:
+        live_context = (
+            f"{len(lane_refused)} live post-escalation PR(s) are lane-refused (the redirect "
+            "bootstrap's screen never judges them) and none is left to record"
+        )
+    elif all_eligible:
+        live_context = "no unrecorded live post-escalation PRs remain"
+    else:
+        live_context = "no eligible live post-escalation PRs exist"
     commands: list[dict] = []
     if eligible:
         commands.extend(
@@ -427,11 +463,6 @@ def stage2_acquisition_plan(
             }
         )
         status = "collect_historical_replay"
-        live_context = (
-            "no unrecorded live post-escalation PRs remain"
-            if all_eligible
-            else "no eligible live post-escalation PRs exist"
-        )
         recommendation = (
             f"{live_context}; run the historical collect command to add bounded blinded RedirectAgent "
             "replay evidence without enabling live supervision"
@@ -461,8 +492,8 @@ def stage2_acquisition_plan(
     else:
         status = "waiting_for_candidates"
         recommendation = (
-            "keep shadow/backfill collection running; no eligible live targets or unreplayed historical "
-            "candidates are currently available"
+            f"keep shadow/backfill collection running; {live_context}, and no unreplayed "
+            "historical candidates are currently available"
         )
 
     return {
@@ -474,8 +505,12 @@ def stage2_acquisition_plan(
         "report_dir": str(effective_report_dir),
         "live_candidate_count": len(targets),
         "eligible_live_candidate_count": len(all_eligible),
+        # The three partition the eligible count. `unrecorded` is what needs a recording: only
+        # candidates whose lane the bootstrap's screen admits, so the bootstrap can drain it.
         "unrecorded_live_candidate_count": len(eligible),
         "already_recorded_live_targets": sorted(t for t in already_recorded_eligible if t),
+        "lane_refused_live_candidate_count": len(lane_refused),
+        "lane_refused_live_candidates": lane_refused,
         "live_targets": targets,
         "live_plan_errors": errors,
         "plans": plans,
@@ -613,6 +648,8 @@ def _selftest() -> None:
             out = "stranske/Repo#77\n" if "needs-human" in cmd else ""
             return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
 
+        # The only lane the redirect bootstrap's screen admits from a pid-less keepalive report.
+        lanes = {"stranske/Repo#77": {"state": "stalled", "recommended_action": "inspect"}}
         original_plan_target = globals()["plan_target"]
 
         def fake_plan_target(
@@ -637,6 +674,7 @@ def _selftest() -> None:
             return {
                 "target": target,
                 "eligible": True,
+                "report": {"target": target, "agent": "keepalive", **lanes[target]},
                 "stage2_record_command": command,
                 "outcome_link_command_template": [
                     "python3",
@@ -701,6 +739,32 @@ def _selftest() -> None:
             assert recorded_live["already_recorded_live_targets"] == [
                 "stranske/Repo#77"
             ], recorded_live
+
+            # A lane the supervisor calls running, recommending wait, is the shape of every live
+            # report on record. The bootstrap's screen never judges it, so it needs no recording:
+            # it is counted as lane-refused with the screen's reasons, and no command is emitted.
+            def running_runner(cmd, capture_output=True, text=True):
+                out = "stranske/Repo#78\n" if "needs-human" in cmd else ""
+                return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+            lanes["stranske/Repo#78"] = {"state": "running", "recommended_action": "wait"}
+            running = stage2_acquisition_plan(
+                live_limit=2,
+                historical_limit=5,
+                report_dir=tmp_path / "reports",
+                redirect_corpus_path=redirect_corpus,
+                keepalive_corpus_path=keepalive_corpus,
+                runner=running_runner,
+            )
+            assert running["eligible_live_candidate_count"] == 1, running
+            assert running["unrecorded_live_candidate_count"] == 0, running
+            assert running["lane_refused_live_candidate_count"] == 1, running
+            live_records = [c for c in running["commands"] if c["kind"] == "live_stage2_record"]
+            assert live_records == [], running
+            (refused,) = running["lane_refused_live_candidates"]
+            assert refused["target"] == "stranske/Repo#78", refused
+            assert any("'running'" in b for b in refused["blocks"]), refused
+            assert any("recommends 'wait'" in b for b in refused["blocks"]), refused
         finally:
             globals()["plan_target"] = original_plan_target
     print("keepalive_supervisor.py selftest: OK")
@@ -850,12 +914,15 @@ def main(argv: list[str]) -> int:
                 print(
                     "live_candidates="
                     f"{result['unrecorded_live_candidate_count']} unrecorded / "
+                    f"{result['lane_refused_live_candidate_count']} lane-refused / "
                     f"{result['eligible_live_candidate_count']} eligible / "
                     f"{result['live_candidate_count']} total "
                     f"historical_would_collect={result['historical_preview'].get('would_collect', 0)}"
                 )
                 for item in result.get("commands") or []:
                     print(f"{item['kind']}_command=" + " ".join(item["command"]))
+                for item in result.get("lane_refused_live_candidates") or []:
+                    print(f"lane_refused={item['target']}: " + "; ".join(item["blocks"]))
             else:
                 print(f"post-escalation keepalive targets: {len(result['targets'])}")
             for plan in result["plans"]:

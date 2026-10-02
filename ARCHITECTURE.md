@@ -1032,6 +1032,10 @@ itself reports it stalled or exited, and UNKNOWN is a refusal (until 2026-10-02 
 dead). The lane facts are one function, applied by a free screen before the role is paid and by
 `authorize()` after, over the keepalive supervisor's latest stage-2 plan rather than every report file
 it ever wrote; each run reports offloads spent beside the candidates that could still be authorised.
+The supervisor's planner applies the same function before it counts a candidate as needing a Stage-2
+recording. A refused lane is listed with the screen's reasons instead, so the dashboard's recording
+warn counts only candidates the bootstrap can drain (until 2026-10-02 it also counted every lane the
+screen refuses, which only a manual offload could clear).
 
 ## PromptAgent — the second role (built 2026-06-20)
 

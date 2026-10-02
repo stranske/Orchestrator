@@ -142,7 +142,10 @@ safety switch, not dead code.
    not recommended wait/collect, not already judged on identical input), at most 3 role runs per
    day; every run prints offloads spent beside the candidates that could still be authorised, and
    `--status` prints that drainable count beside the gate's deficits. (Until 2026-10-02 it judged
-   every report file ever written — 759 offloads, 30 closed PRs, all `wait`.) It exists because
+   every report file ever written — 759 offloads, 30 closed PRs, all `wait`.) The supervisor's
+   stage-2 planner applies the same lane screen (`redirect_apply.lane_refusals`) before it asks for
+   a recording, so a lane the screen refuses is listed as `lane_refused` with its reasons rather
+   than raising the dashboard's `stage2_live_candidates` warn. It exists because
    that gate is a structural deadlock: `synced_role_outcomes` counts only applied advice, so the gate
    authorising apply required ten applied outcomes. The machine-checkable arming condition lives in
    `capability_recurrence_check.SWITCH_ON_CRITERIA`, not in anyone's judgement.

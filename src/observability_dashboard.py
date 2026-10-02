@@ -763,6 +763,11 @@ def _keepalive_supervisor(report: dict) -> dict:
         "stage2_unrecorded_live_candidate_count": live_plan.get(
             "unrecorded_live_candidate_count", 0
         ),
+        # None = not measured (a plan written before the planner applied the lane screen).
+        "stage2_lane_refused_live_candidate_count": live_plan.get(
+            "lane_refused_live_candidate_count"
+        ),
+        "stage2_lane_refused_live_candidates": live_plan.get("lane_refused_live_candidates") or [],
         "stage2_live_targets": live_plan.get("live_targets") or [],
         "stage2_live_commands": live_plan.get("commands") or [],
         "stage2_live_plan_recommendation": live_plan.get("recommendation"),
@@ -1069,6 +1074,7 @@ def _build_alerts(
             {
                 "live_targets": supervisor.get("stage2_live_targets") or [],
                 "commands": supervisor.get("stage2_live_commands") or [],
+                "lane_refused": supervisor.get("stage2_lane_refused_live_candidates") or [],
                 "plan_path": supervisor.get("stage2_live_plan_path"),
                 "plan_age_s": supervisor.get("stage2_live_plan_age_s"),
             },
@@ -1824,12 +1830,14 @@ def format_markdown(dashboard: dict) -> str:
         f"{supervisor.get('stage2_calibration_candidates_remaining')} "
         f"ready_for_supervised_apply={supervisor.get('stage2_ready_for_supervised_apply')}"
     )
+    lane_refused = supervisor.get("stage2_lane_refused_live_candidate_count")
     lines.append(
         f"- Stage 2 live plan: status={supervisor.get('stage2_live_plan_status') or 'unknown'} "
         f"age_s={supervisor.get('stage2_live_plan_age_s')} "
         f"live={supervisor.get('stage2_live_candidate_count')} "
         f"eligible={supervisor.get('stage2_eligible_live_candidate_count')} "
-        f"unrecorded={supervisor.get('stage2_unrecorded_live_candidate_count')}"
+        f"unrecorded={supervisor.get('stage2_unrecorded_live_candidate_count')} "
+        f"lane_refused={'unmeasured' if lane_refused is None else lane_refused}"
     )
     lines.append(f"- Live supervisor allowed: {supervisor.get('live_supervisor_allowed')}")
     if supervisor.get("recommendation"):

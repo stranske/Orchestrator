@@ -1135,6 +1135,10 @@ def _stage2_live_plan_summary(path: Path) -> dict:
         "live_candidate_count": 0,
         "eligible_live_candidate_count": 0,
         "unrecorded_live_candidate_count": 0,
+        # None = not measured: no plan, or one written before the planner applied the bootstrap's
+        # lane screen. 0 is a measurement, and only one of the two says nothing was refused.
+        "lane_refused_live_candidate_count": None,
+        "lane_refused_live_candidates": [],
         "commands": [],
         "live_targets": [],
         "recommendation": "run keepalive_supervisor.py --stage2-plan to refresh live candidate discovery",
@@ -1156,6 +1160,7 @@ def _stage2_live_plan_summary(path: Path) -> dict:
         age_s = max(0, int(time.time() - int(generated_at)))
     except (TypeError, ValueError):
         age_s = max(0, int(time.time() - path.stat().st_mtime))
+    lane_refused = data.get("lane_refused_live_candidate_count")
     return {
         **base,
         "status": data.get("status") or "unknown",
@@ -1164,6 +1169,8 @@ def _stage2_live_plan_summary(path: Path) -> dict:
         "live_candidate_count": int(data.get("live_candidate_count") or 0),
         "eligible_live_candidate_count": int(data.get("eligible_live_candidate_count") or 0),
         "unrecorded_live_candidate_count": int(data.get("unrecorded_live_candidate_count") or 0),
+        "lane_refused_live_candidate_count": None if lane_refused is None else int(lane_refused),
+        "lane_refused_live_candidates": data.get("lane_refused_live_candidates") or [],
         "commands": data.get("commands") or [],
         "live_targets": data.get("live_targets") or [],
         "recommendation": data.get("recommendation") or base["recommendation"],
