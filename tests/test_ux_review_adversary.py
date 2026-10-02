@@ -1,9 +1,38 @@
+import hashlib
 import json
-from pathlib import Path
 
 import ux_review as ur
 
-FIXTURE = Path(__file__).parent / "fixtures" / "ux_review_adversarial_2026_09_22.txt"
+# The adversary output this module tests against, kept IN the module so the test runs in every tree.
+#
+# Provenance: PR #349 (issue #325) added it as tests/fixtures/ux_review_adversarial_2026_09_22.txt,
+# a fixture copy (`run_id=fixture`) of the gemini critic's output in the trip-planner UX review of
+# 2026-09-22: six findings, two at severity 4 with stuck_probability 1.0 and 0.9, all of which the
+# old extractor dropped because it required a "scores" key. It moved here byte-for-byte on
+# 2026-10-02 because the exec mirror never had it: orch-sync-mirror.sh ships tests/*.py and
+# tests/rail_exercises and nothing else under tests/, so this test was the one failure of a mirror
+# verify while passing in every checkout and in CI. The header line and the ```json fence are part
+# of the capture, not decoration: they are what the parser has to see through.
+ADVERSARY_OUTPUT_2026_09_22 = """\
+=== 2026-09-22T18:20:00Z UX-ADVERSARY gemini/full run_id=fixture ===
+```json
+{
+  "findings": [
+    {"dimension":"adversarial","severity":4,"screen":"Plan","element":"Generate plan","failure_mode":"false_success","click_path":["open Plan","click Generate plan"],"stuck_probability":1.0},
+    {"dimension":"adversarial","severity":4,"screen":"Budget","element":"Estimated total","failure_mode":"fabricated_output","click_path":["open Budget","change destination"],"stuck_probability":0.9},
+    {"dimension":"adversarial","severity":3,"screen":"Itinerary","element":"Empty day","failure_mode":"recovery_failure","click_path":["open Itinerary","remove final item"],"stuck_probability":0.8},
+    {"dimension":"adversarial","severity":3,"screen":"Search","element":"No results","failure_mode":"missing_help","click_path":["open Search","enter unknown place"],"stuck_probability":0.7},
+    {"dimension":"adversarial","severity":2,"screen":"Compare","element":"Option cards","failure_mode":"confusion","click_path":["open Compare","select two options"],"stuck_probability":0.6},
+    {"dimension":"adversarial","severity":2,"screen":"Checkout","element":"Back button","failure_mode":"efficiency_trap","click_path":["open Checkout","click Back"],"stuck_probability":0.5}
+  ],
+  "worst_case": "Generate plan claims success while no usable itinerary exists",
+  "evidence_gaps": ["No offline recovery path was exercised"]
+}
+```
+"""
+# The git blob id of the file #349 committed (`git cat-file -p` it to compare), so editing the
+# capture fails here instead of quietly changing what the test below parses.
+ADVERSARY_OUTPUT_2026_09_22_BLOB = "6d4859d9de04ed0f0dbc12142ebfbad96a0cd8b4"
 
 
 def _clean_panel() -> dict[str, dict]:
@@ -19,7 +48,12 @@ def _clean_panel() -> dict[str, dict]:
 
 
 def test_2026_09_22_adversary_fixture_survives_aggregation() -> None:
-    parsed = ur.parse_adversarial_output(FIXTURE.read_text())
+    raw = ADVERSARY_OUTPUT_2026_09_22.encode()
+    blob = hashlib.sha1(b"blob %d\0" % len(raw) + raw, usedforsecurity=False).hexdigest()
+    assert (
+        blob == ADVERSARY_OUTPUT_2026_09_22_BLOB
+    ), "the 2026-09-22 capture was edited; a new capture belongs in a new test"
+    parsed = ur.parse_adversarial_output(ADVERSARY_OUTPUT_2026_09_22)
     report = ur.aggregate_panel(_clean_panel(), parsed, 4)
 
     assert len(report["adversarial"]["findings"]) == 6

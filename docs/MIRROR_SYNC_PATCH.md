@@ -209,3 +209,42 @@ git -C "$SRC" archive --format=tar HEAD scripts | { tar -x -C "$MIRROR" && cat >
 its own brings the 141 back at that line. The script also gained an `ERR` trap, so an abort now names
 its line and says the mirror is half-synced instead of ending silently. The previous script is kept
 beside it as `orch-sync-mirror.sh.bak-2026-10-01`.
+
+## Nothing under `tests/` travels but the modules and `rail_exercises/` (2026-10-02)
+
+Under `tests/`, the sync ships exactly two things: the top-level `tests/*.py`, copied from the
+working tree, and `tests/rail_exercises/`, from `git archive HEAD`. PR #349 added a third kind of
+file, `tests/fixtures/ux_review_adversarial_2026_09_22.txt`, which
+`tests/test_ux_review_adversary.py` read through `Path(__file__).parent / "fixtures"`. The sync
+never carried it, so a mirror `verify.py` of main `db0a9be` was red on that one test
+(`FileNotFoundError`: 866 passed, 1 failed, 40/40 mirror skips) while it passed in every checkout
+and in CI, neither of which runs in this shape.
+
+**The fix is in the repository, and this script needs no patch.** The capture is now a string
+constant in the test module, byte-for-byte, with the git blob id of the file #349 committed pinned
+beside it, so an edit to the capture fails the test instead of quietly changing what it parses. The
+fixture and its directory are deleted. It was the only tracked file under `tests/` that is neither a
+top-level `.py` nor inside `tests/rail_exercises/`, and every other test that resolves a path from
+its own `__file__` reads something the sync ships: the test modules themselves,
+`tests/rail_exercises/`, `scripts/` or `orchestrate.sh`. A `git archive` block for `tests/fixtures/`
+would now guard a directory that does not exist, and could not be witnessed doing anything.
+
+**The contract for the next test.** A file a test reads from beside itself must be one the sync
+ships, or live in the test module. If test data ever outgrows a string constant, ship its directory
+the way `tests/rail_exercises/` ships — a `git archive HEAD <dir>` block with the
+`&& cat >/dev/null` drain from the section above — in the same change that adds the data, and
+witness it in a scratch mirror built by this script. `ORCH_MIRROR` alone does not isolate that
+witness: the script also copies the Workflows registry to `$HOME/.codex/orchestrator/`, the live
+runtime directory, so point `HOME` at a scratch directory too (with `.codex/orchestrator/` created
+inside it) and keep `gh` authenticated with `GH_CONFIG_DIR`, which must come first so it expands
+against the real home:
+
+```bash
+GH_CONFIG_DIR="$HOME/.config/gh" HOME=<scratch-home> ORCH_MIRROR=<scratch-mirror> ~/.codex/bin/orch-sync-mirror.sh <checkout>
+```
+
+Then `cd <scratch-mirror> && python3 verify.py`, whose summary must open with
+`tree: EXEC MIRROR — mirror_* ceilings apply`. Witnessed that way for this change:
+`866 passed, 1 failed, 40/40` on unmodified main (the red, reproduced) and
+`867 passed, 0 failed, 40/40` with the capture inlined, 97 of 97 selftests and five of five gates in
+both, with the live mirror and the live registry untouched by either.
