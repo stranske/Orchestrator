@@ -210,7 +210,13 @@ its own brings the 141 back at that line. The script also gained an `ERR` trap, 
 its line and says the mirror is half-synced instead of ending silently. The previous script is kept
 beside it as `orch-sync-mirror.sh.bak-2026-10-01`.
 
+> **Superseded 2026-10-02:** the `tests/rail_exercises` pipeline is gone. All of `tests/` now ships
+> in one archive that keeps this drain; see the last section.
+
 ## Nothing under `tests/` travels but the modules and `rail_exercises/` (2026-10-02)
+
+> **Superseded later on 2026-10-02:** the sync now ships the whole `tests/` tree, so the contract
+> at the end of this section no longer applies. The fixture stays inlined; see the last section.
 
 Under `tests/`, the sync ships exactly two things: the top-level `tests/*.py`, copied from the
 working tree, and `tests/rail_exercises/`, from `git archive HEAD`. PR #349 added a third kind of
@@ -248,3 +254,42 @@ Then `cd <scratch-mirror> && python3 verify.py`, whose summary must open with
 `866 passed, 1 failed, 40/40` on unmodified main (the red, reproduced) and
 `867 passed, 0 failed, 40/40` with the capture inlined, 97 of 97 selftests and five of five gates in
 both, with the live mirror and the live registry untouched by either.
+
+## The whole tracked `tests/` tree now travels (2026-10-02)
+
+The current machine-local `~/.codex/bin/orch-sync-mirror.sh` replaces the top-level `tests/*.py`
+copy and the special `tests/rail_exercises/` archive with one archive of the complete tracked test
+tree:
+
+```bash
+git -C "$SRC" archive --format=tar HEAD tests | {
+  tar -x -C "$MIRROR"
+  cat >/dev/null
+}
+```
+
+The `cat` drain is retained so macOS `tar` cannot close the pipe before `git archive` writes its
+padding. Extraction and draining remain joined with `&&` in the installed script, so a failed
+extraction cannot be hidden by a successful drain. Uncommitted test edits still do not travel:
+the archive is built from `HEAD`, not from the working tree.
+
+The repository guard in `tests/conftest.py` enforces the other half of that contract. It compares
+the tracked files under `tests/` with the files in the actual `git archive HEAD tests` result, then
+fails any test that reads an untracked, ignored, or `export-ignore`d input. Comparing with the
+archive itself also covers an `export-ignore` rule placed on an ancestor directory.
+
+Witness the installed script without touching either live runtime by isolating both `HOME` and the
+mirror while preserving GitHub authentication:
+
+```bash
+GH_CONFIG_DIR="$HOME/.config/gh" \
+HOME=<scratch-home> \
+ORCH_MIRROR=<scratch-mirror> \
+~/.codex/bin/orch-sync-mirror.sh <checkout>
+cd <scratch-mirror> && python3 verify.py
+```
+
+The witness is complete only when the sync exits zero, identifies the exec-mirror tree, collects
+exactly the recorded floor, stays within the mirror skip ceiling, and passes every selftest and
+capability gate. The earlier fixture-inline and two-pipeline sections remain incident history;
+this section is the current procedure their supersession notes reference.
