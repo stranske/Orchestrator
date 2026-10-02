@@ -129,6 +129,19 @@ def test_a_last_invocation_no_event_recorded_does_not_count_and_is_named(ledger)
     assert "a last_invocation 1.0d ago that no invocation event recorded" in phrase, phrase
 
 
+def test_a_capability_with_no_ledger_row_is_unmeasured_not_never_invoked(ledger):
+    """A fresh clone or CI's bootstrapped ledger may hold no row for the capability at all. Nothing
+    it did can be read there, so the row is still raised, toward the alarm, and says it is blind."""
+    rows = capabilities.load(ledger, create=False)
+    del rows[CAP]
+    capabilities.save(rows, ledger)
+    row = _idle_row(ledger)
+    assert row is not None, "a capability with no ledger row read as an active switch"
+    assert row["trials_excluded"] is None, f"an unread row reported a measured count: {row}"
+    assert switch_review.idle_phrase(row).startswith("UNMEASURED"), row
+    assert switch_review.not_counted_phrase(row) == "", row
+
+
 def test_the_review_and_the_firing_monitor_read_one_split(ledger, monkeypatch):
     """Two readers that each told trials apart in their own loop could disagree about which
     invocation was one; both go through `capabilities.split_invocations`, and say the same."""

@@ -144,13 +144,24 @@ def _invocation_evidence(cap_id: str, *, now: int, path=None) -> dict:
     `trials_excluded`, those trials (every trial, when nothing counted), with the newest one's age in
     `newest_trial_days`; and `no_event_days`, the age of a `last_invocation` no trial explains, which
     moved with no invocation event. Each age is None when there is nothing to report.
+
+    NO LEDGER ROW IS NOT "NEVER INVOKED". With no row for the capability on this machine (a fresh
+    clone, CI's bootstrapped ledger) nothing it did can be read, so `trials_excluded` is None,
+    unmeasured, never a zero, and the switch is still raised as idle, toward the alarm, saying why.
     """
     # `load_declared`, not `load`: this is a REPORT, and its cadence row promises "writes require
     # ORCH_SWITCH_REVIEW=1; report-only otherwise". The writing loader creates a missing ledger,
     # seeds declared gate rows, reconciles declarations and expires rows, and writes the result into
     # the shared ledger on every review, flag or no flag. `load_declared` writes nothing; what is
     # read here is measured state, which reconciliation never touches.
-    cap = capabilities.load_declared(path or capabilities.REG).get(cap_id) or {}
+    cap = capabilities.load_declared(path or capabilities.REG).get(cap_id)
+    if cap is None:
+        return {
+            "last": 0,
+            "trials_excluded": None,
+            "newest_trial_days": None,
+            "no_event_days": None,
+        }
     split = capabilities.split_invocations(cap)
     last = max(split["other"], default=0)
     excluded = [stamp for stamp in split["trial"] if stamp > last]
@@ -1340,7 +1351,13 @@ def value_phrase(row: dict) -> str:
 
 
 def idle_phrase(row: dict) -> str:
-    """An ON-but-idle row's idleness: a number of days, or never, which is not a number of days."""
+    """An ON-but-idle row's idleness: a number of days, or never, which is not a number of days.
+
+    And never is a measurement: a capability with no ledger row on this machine was never READ
+    (`trials_excluded` is None), which must not print as never invoked.
+    """
+    if row.get("trials_excluded") is None:
+        return "UNMEASURED (no ledger row for it on this machine)"
     days = row.get("idle_days")
     return "never invoked" if days is None else f"{days}d"
 
