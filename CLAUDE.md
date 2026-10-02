@@ -19,6 +19,14 @@
 Read `README.md` first for what this project is and its important functionality. This file is the
 rules for anyone (human or agent) *changing* it.
 
+## Terminal merge invariant
+
+Every repository-local terminal merge, including one requested by a successor task prompt, must use
+`python3 src/merge_guard.py owner/repo#N --expected-head <sha> --confirm-merge`. Direct `gh pr merge`
+or `gh pr merge --auto` is forbidden as a fallback. If the guard blocks, stop: do not bypass it. The
+guard re-reads every GraphQL review-thread page, exact-head checks, and the seven-minute review floor
+immediately before mutation, then pins the merge with `--match-head-commit`.
+
 ## −2. REQUIRED READING BEFORE ANY WORK HERE: `ARCHITECTURE.md`
 
 **Read `ARCHITECTURE.md` and look at `orchestrator-loop.svg` before starting work in this tree — not

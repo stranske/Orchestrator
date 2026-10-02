@@ -39,6 +39,12 @@ If a file is synced from Workflows, fix it in Workflows first.
 - Before handing off or ending work, verify every pull request created or changed by the run is open and has `isDraft=false`. Convert a pre-existing draft to ready as a recovery action.
 - Do not close an otherwise valid pull request merely to free automation capacity; preserve its branch and route the real blocker or dependency explicitly.
 
+## Terminal Merge Invariant
+
+- Every repository-local terminal merge, including one requested by a successor task prompt, must use `python3 src/merge_guard.py owner/repo#N --expected-head <sha> --confirm-merge`.
+- Direct `gh pr merge` or `gh pr merge --auto` is forbidden as a fallback. If the guard blocks, stop rather than bypassing it.
+- The guard re-reads every GraphQL review-thread page, exact-head checks, and the seven-minute review floor immediately before mutation, then pins the merge with `--match-head-commit`.
+
 ## Commonly Managed Files
 
 Usually edit locally only when the file is repo-specific:
