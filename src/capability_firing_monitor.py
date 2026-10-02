@@ -9,7 +9,7 @@ and only one was instrumented:
   * `capabilities usage` answers "did it fire in the last 28 days" and gives a next action — but
     only as a SNAPSHOT. Nothing was stored, so a capability that fired last week and went silent
     this week looked identical to one that has been healthy all along.
-  * `switch_review` detects exactly that silence, but only for the five entries in
+  * `switch_review` detects exactly that silence, but only for the gated switches in
     `SWITCH_CAPABILITY`. The other thirty-odd capabilities had no such watch.
 
 The gap this closes is therefore narrow and specific: **persisted per-capability firing history, and

@@ -985,17 +985,23 @@ def status(
     plan_path: Path | None = None,
     pid_checker=None,
     now: int | None = None,
+    link_preview: bool = True,
 ) -> dict[str, Any]:
     """Read-only: where the gate stands, what could drain it, whether the bootstrap is armed.
 
     The gate's BLOCKING quantity is its two deficits; its DRAINABLE quantity is how many current
     candidates could possibly be authorised — free to compute, and reported in the same answer,
     because `5/3` alone read as "be patient" for 42 days while the drainable count was 0.
+
+    `link_preview=False` skips the one Brain read, the applied-outcome link preview, for a caller
+    that needs only the gate and its drain (`switch_review`'s ON-but-idle row). That read opens
+    `feedback._conn()`, which runs the schema script and its migrations and commits, and creates the
+    Brain where none exists. Skipped, both link fields are None: NOT READ, never zero.
     """
     corpus = corpus_path or redirect_shadow.CORPUS_PATH
     gate = gate_state(corpus)
     applied_targets, applies_today = _applied_history(corpus, now=now)
-    link_preview = preview_link_applied_outcomes(corpus_path=corpus)
+    links = preview_link_applied_outcomes(corpus_path=corpus) if link_preview else None
     drain = screen_candidates(
         report_dir=report_dir,
         plan_path=plan_path,
@@ -1022,8 +1028,8 @@ def status(
         "applied_targets": sorted(applied_targets),
         "applies_today": applies_today,
         "daily_bound": MAX_APPLIES_PER_DAY,
-        "unlinked_applied_outcomes": int(link_preview["pending"]),
-        "pending_outcome_links": link_preview["links"],
+        "unlinked_applied_outcomes": None if links is None else int(links["pending"]),
+        "pending_outcome_links": None if links is None else links["links"],
     }
 
 
@@ -1048,6 +1054,7 @@ def format_drainable(
 def format_status(out: dict) -> list[str]:
     gate = out["gate"]
     closed = not gate["bootstrap_needed"]
+    unlinked = out["unlinked_applied_outcomes"]
     return [
         f"{CAPABILITY_ID}: flag {BOOTSTRAP_FLAG}="
         f"{'1 (ARMED)' if out['flag_on'] else '0 (off)'} "
@@ -1068,7 +1075,7 @@ def format_status(out: dict) -> list[str]:
         f"  ready_for_supervised_apply={gate['ready_for_supervised_apply']} "
         f"bootstrap_needed={gate['bootstrap_needed']}",
         f"  applied today {out['applies_today']}/{out['daily_bound']}; "
-        f"unlinked applied outcomes: {out['unlinked_applied_outcomes']}",
+        f"unlinked applied outcomes: {'not read' if unlinked is None else unlinked}",
     ]
 
 
@@ -1334,6 +1341,32 @@ def _selftest_prescreen(tmp: Path) -> None:
     )
     assert zero.startswith("0 of 2 current candidates"), zero
     assert unknown_text.startswith("UNKNOWN — no stage-2 plan"), unknown_text
+
+    # ---- link_preview=False opens no Brain, and its link fields are NOT READ, never a zero. The
+    # gate and the drain are still read: they are what the caller (switch_review's row) asked for.
+    _write_stage2_plan(plan_path, [current], generated_at=now)
+    brain_opens: list = []
+
+    def brain_tripwire():
+        brain_opens.append("feedback._conn")
+        raise AssertionError("status(link_preview=False) opened the Brain")
+
+    saved_conn, feedback._conn = feedback._conn, brain_tripwire
+    try:
+        lean = status(
+            corpus,
+            env={BOOTSTRAP_FLAG: "1"},
+            report_dir=report_dir,
+            plan_path=plan_path,
+            now=now,
+            link_preview=False,
+        )
+    finally:
+        feedback._conn = saved_conn
+    assert brain_opens == [], brain_opens
+    assert lean["unlinked_applied_outcomes"] is None and lean["pending_outcome_links"] is None, lean
+    assert lean["drainable"] is not None and lean["current_candidates"] == 1, lean
+    assert any("unlinked applied outcomes: not read" in line for line in format_status(lean)), lean
 
 
 def _selftest() -> None:
@@ -1672,7 +1705,8 @@ def _selftest() -> None:
             "refusal, free screen agrees with authorize, --dry-run cannot spend silently, "
             "status read-only corpus hash, linker appends exactly one event, pid-less live lane "
             "refused, unknown liveness refused, stale reports never judged, identical input "
-            "judged once, per-run offload cap, drained and unknown renderings)"
+            "judged once, per-run offload cap, drained and unknown renderings, "
+            "link_preview=False opens no Brain)"
         )
     finally:
         feedback.DB_PATH = old_db
