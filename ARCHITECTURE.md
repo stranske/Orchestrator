@@ -750,13 +750,29 @@ retired on 2026-09-03 under `never_fired` on every run. Excluding `capabilities.
 fixed the report and would have minted a "useful" verdict for the fix, because the finding set's
 CONTENT moved while its keys and its projection, the two things the rule above compares, did not. So
 a report DECLARES the rule deciding which ledger rows its findings may name, under
-`capabilities.FINDING_POPULATION_KEY` (the monitor and the activation audit both declare
-`live_finding_population()`), and `tick_evidence` re-baselines whenever the declared population
+`capabilities.FINDING_POPULATION_KEY` (the activation audit declares `live_finding_population()`;
+the firing monitor declares it extended by its held-off rule, below), and `tick_evidence`
+re-baselines whenever the declared population
 differs from the one recorded with the previous observation, including "none recorded, one declared
 now", which is the transition itself. The rule is read from the report being graded, so each
 production is judged by the rule it was produced under, and a report that declares none never drifts.
 A row retired LATER still leaves the monitor's findings and is still graded: that finding was
 answered by a lifecycle action, where this one was answered by an edit to the monitor.
+
+**A deliberately-off capability is held off, not overdue (2026-10-02).** The firing monitor listed
+`issue-readiness` (its cadence step retired by default) and `range-lane-rollout` (its declared gate
+blocks the delivering path) under `overdue` and `regressed` on every run. A silent live row that a
+DECLARED hold keeps off is now named under `held_off`, with the hold, what lifts it, and the
+findings it would otherwise be, and the report prints `overdue` and `held off` side by side. Two
+declarations hold, and nothing is inferred: `gate_blocks_execution` on the declared branch of
+`classify_liveness` (a `gate_reason` alone reaches the same label without saying the path that fires
+is blocked), and the retirement of every cadence step that declares the row under the registry's
+`capabilities` field, never a match on names. A declared-off row that is firing has no silence to
+explain and is not listed. The list is reported, not graded: it moves when someone declares or lifts
+a hold, which is the ledger changing (the `reachable_ids` lesson above), and its effect on the graded
+lists already is graded. The monitor's declared population names the hold kinds and the three
+silence findings they exclude a row from, so this edit re-baselined the grader, while a hold declared
+or lifted later moves a graded finding exactly as a retirement does.
 
 **The activation audit's own history applies the same rule (2026-09-23).** `progress()` diffs
 `reachable_ids` against the last snapshot, and a not-live row is kept out of that set, so a capability
