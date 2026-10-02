@@ -93,6 +93,12 @@ REFRESH_S = 60.0  # how often the live record is rewritten while nothing is wron
 
 PS_ARGV = ("ps", "-A", "-o", "pid=,ppid=,stat=,lstart=,command=")
 PS_TIMEOUT_S = 30
+# How far two readings of one process's start time may differ and still be the same process. Linux
+# procps derives `lstart` from time(NULL) minus /proc/uptime, so consecutive `ps` calls can print one
+# process's start a second apart; compared as exact strings, the tick read as gone on an early poll
+# and the watcher left without a word (the first Linux CI run of this module, both Pythons). A pid
+# recycled within this window of the original's start is not a case worth a false "exited" for.
+START_TOLERANCE_S = 5
 
 
 # ---------------------------------------------------------------- process table -----------------
@@ -108,10 +114,6 @@ class Proc:
     started: str
     command: str
     state: str = ""
-
-    @property
-    def ident(self) -> tuple[int, str]:
-        return (self.pid, self.started)
 
     @property
     def zombie(self) -> bool:
@@ -145,8 +147,24 @@ def snapshot() -> dict[int, Proc]:
         timeout=PS_TIMEOUT_S,
         check=True,
         stdin=subprocess.DEVNULL,
+        env={**os.environ, "LC_ALL": "C"},  # English day/month names, so `lstart` always parses
     ).stdout
     return parse_ps(out)
+
+
+def start_epoch(started: str) -> float | None:
+    try:
+        return time.mktime(time.strptime(started, "%a %b %d %H:%M:%S %Y"))
+    except ValueError:
+        return None
+
+
+def same_start(a: Any, b: Any) -> bool:
+    """Whether two `lstart` readings belong to one process (see START_TOLERANCE_S)."""
+    if a == b:
+        return True
+    first, second = start_epoch(str(a)), start_epoch(str(b))
+    return first is not None and second is not None and abs(first - second) <= START_TOLERANCE_S
 
 
 def describe(proc: Proc, tick: Proc | None) -> str:
@@ -174,8 +192,10 @@ class Watch:
     tick_alert_s: int
     command_alert_s: int
     exclude: frozenset[int] = frozenset()
-    first_seen: dict[tuple[int, str], float] = field(default_factory=dict)
-    reported: set[tuple[int, str]] = field(default_factory=set)
+    # Keyed by pid, each carrying the start time it was first seen with, so a start that reads a
+    # second differently on the next poll is still the same command and its age keeps counting.
+    first_seen: dict[int, tuple[str, float]] = field(default_factory=dict)
+    reported: dict[int, str] = field(default_factory=dict)
     tick_reported: bool = False
 
 
@@ -218,7 +238,7 @@ def assess(watch: Watch, procs: Mapping[int, Proc], now: float) -> Verdict:
     command's age runs from when `watch` first saw it, so it is measured to within one poll."""
     tick = procs.get(watch.tick_pid)
     age = now - watch.armed_at
-    if tick is None or tick.zombie or tick.started != watch.tick_started:
+    if tick is None or tick.zombie or not same_start(tick.started, watch.tick_started):
         return Verdict(tick_gone=True, tick_age_s=age)
     commands = [
         p
@@ -228,18 +248,20 @@ def assess(watch: Watch, procs: Mapping[int, Proc], now: float) -> Verdict:
         and p.pid != p.ppid
         and not p.zombie
     ]
-    live = {p.ident for p in commands}
-    for ident in list(watch.first_seen):
-        if ident not in live:
-            del watch.first_seen[ident]
+    live = {p.pid: p for p in commands}
+    for pid in list(watch.first_seen):
+        current = live.get(pid)
+        if current is None or not same_start(current.started, watch.first_seen[pid][0]):
+            del watch.first_seen[pid]
+            watch.reported.pop(pid, None)
     for proc in commands:
-        watch.first_seen.setdefault(proc.ident, now)
+        watch.first_seen.setdefault(proc.pid, (proc.started, now))
     aged = tuple(
-        sorted(((p, now - watch.first_seen[p.ident]) for p in commands), key=lambda pa: -pa[1])
+        sorted(((p, now - watch.first_seen[p.pid][1]) for p in commands), key=lambda pa: -pa[1])
     )
     over = tuple((p, a) for p, a in aged if a >= watch.command_alert_s)
-    new_over = tuple((p, a) for p, a in over if p.ident not in watch.reported)
-    watch.reported.update(p.ident for p, _ in new_over)
+    new_over = tuple((p, a) for p, a in over if p.pid not in watch.reported)
+    watch.reported.update((p.pid, p.started) for p, _ in new_over)
     tick_over = age >= watch.tick_alert_s
     tick_new_over = tick_over and not watch.tick_reported
     watch.tick_reported = watch.tick_reported or tick_over
@@ -385,7 +407,11 @@ def append_history(state_dir: Path, record: Mapping[str, Any]) -> None:
 
 def _is_alive(procs: Mapping[int, Proc], pid: Any, started: Any) -> bool:
     proc = procs.get(pid) if isinstance(pid, int) else None
-    return proc is not None and not proc.zombie and (started is None or proc.started == started)
+    return (
+        proc is not None
+        and not proc.zombie
+        and (started is None or same_start(proc.started, started))
+    )
 
 
 def _armed_phrase(rec: Mapping[str, Any], now_epoch: float) -> str:
@@ -862,6 +888,9 @@ def _selftest() -> int:
     recycled = dict(table)
     recycled[100] = Proc(100, 1, "Sat Oct  3 09:00:00 2026", "something else")
     check(assess(w, recycled, 700.0).tick_gone, "a recycled tick pid is not the tick")
+    jitter = dict(table)
+    jitter[100] = Proc(100, 1, "Fri Oct 2 01:36:01 2026", table[100].command)
+    check(not assess(w, jitter, 700.0).tick_gone, "a start read a second later is the same tick")
     reaped_late = dict(table)
     reaped_late[100] = Proc(100, 1, table[100].started, table[100].command, "Z")
     check(assess(w, reaped_late, 700.0).tick_gone, "an unreaped (zombie) tick has exited")

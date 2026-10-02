@@ -42,14 +42,21 @@ DEADLOCKED = "import os; r, w = os.pipe(); os.write(w, b'x' * 4_000_000)"
 WAIT_S = 60.0
 
 
-def _wait_for(predicate, what: str, timeout: float = WAIT_S):
+def _wait_for(predicate, what: str, timeout: float = WAIT_S, state: Path | None = None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(0.05)
-    raise AssertionError(f"timed out after {timeout:.0f}s waiting for {what}")
+    # Say what the watcher DID record: a timeout alone told the first Linux CI failure nothing.
+    seen = ""
+    if state is not None:
+        history = state / tick_watchdog.HISTORY_NAME
+        seen = f"; record={_record(state)!r}; history=" + (
+            history.read_text(encoding="utf-8") if history.exists() else "<none>"
+        )
+    raise AssertionError(f"timed out after {timeout:.0f}s waiting for {what}{seen}")
 
 
 def _record(state: Path) -> dict[str, Any]:
@@ -111,6 +118,7 @@ def test_a_stuck_tick_is_reported_with_the_kill_that_frees_it(tmp_path: Path) ->
             and _record(state).get("drain")
             and _record(state),
             "a drain naming the stuck command",
+            state=state,
         )
         stuck_pid = rec["oldest_command"]["pid"]
         assert rec["drain"] == f"kill {stuck_pid}", rec
@@ -229,6 +237,22 @@ def test_a_shell_blocked_with_no_command_drains_by_the_tick_pid(tmp_path: Path) 
     out, rec = _watch(tmp_path, [alone] * 4, step_s=1200, tick_s=3600, command_s=600)
     assert "no command is running, so the tick shell itself is blocked" in out, out
     assert rec["drain"] == "kill 100", rec
+
+
+def test_a_start_time_that_jitters_by_a_second_is_the_same_process(tmp_path: Path) -> None:
+    """Linux procps derives `lstart` from time(NULL) minus /proc/uptime, so consecutive `ps` calls can
+    print one process's start a second apart. Compared as exact strings, the tick looked gone on an
+    early poll, the watcher finalized and left, and a stuck command was never reported -- the first
+    Linux CI run of this module, on both Python versions."""
+    a = (
+        "100 1 S Fri Oct  2 01:36:00 2026 bash orchestrate.sh --active\n"
+        "200 100 S Fri Oct  2 01:36:05 2026 python3 hang.py\n"
+    )
+    b = a.replace("01:36:00", "01:36:01").replace("01:36:05", "01:36:04")
+    out, rec = _watch(tmp_path, [a, b] * 3, step_s=600, tick_s=3600 * 9, command_s=1500)
+    assert rec["status"] == "running", rec  # never read as exited
+    # ... and the command's age kept accumulating across the flips, so it crossed its threshold.
+    assert "to unblock: kill 200" in out and rec["drain"] == "kill 200", (out, rec)
 
 
 def test_a_recycled_tick_pid_reads_as_the_tick_having_exited(tmp_path: Path) -> None:
