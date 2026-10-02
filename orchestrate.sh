@@ -995,3 +995,22 @@ if [[ "${mode}" == "active" ]] && _cadence_due consumer-sync-artifact-ingest && 
     fi
   else echo "  [cadence] consumer-sync artifact ingestion SKIPPED — gh core budget shed (stamp untouched; retry next tick)"; fi
 fi
+
+# ORCH-ANCHOR: completion-ping -------------------------------------------------------------------
+# EXTERNAL DEAD-MAN'S SWITCH, pinged on COMPLETION only. Every staleness monitor in this file
+# (capability-firing-monitor, switch-review, tick-evidence) runs INSIDE the tick, so a tick that
+# hangs, ABORTs in its preflight, or never starts reports nothing. 2026-09-26T04:40Z..10-02T01:35Z
+# the tick sat in a here-doc for 5d20h, launchd skipped every hourly firing behind it, and not one
+# line was printed. healthchecks.io is outside the machine and alerts when the pings STOP; the
+# suggested check is period 1h, grace 2h (a catch-up tick ran 1h17m and skipped one firing).
+#   * LAST, after every step: a ping from the top of the tick would keep arriving from a tick that
+#     hangs halfway through, which is exactly the failure it exists to catch.
+#   * --active only: a hand-run shadow tick must not mask a dead launchd job.
+#   * It can never fail the tick. A missing hc-ping.sh, an unset HC_ORCHESTRATOR_URL or no network
+#     all read as silence, and silence is the alarm. Off switch: unset HC_ORCHESTRATOR_URL in
+#     ~/.codex/handoff/healthchecks.env (hc-ping.sh is then a no-op), or pause the check. A second
+#     instance on the same machine points ORCH_HC_PING elsewhere so it cannot mask this one.
+# Pinned by tests/test_tick_completion_ping.py, which also runs this block.
+if [[ "$mode" == "active" ]]; then
+  "${ORCH_HC_PING:-$HOME/.codex/bin/hc-ping.sh}" orchestrator 2>/dev/null || true
+fi

@@ -29,6 +29,9 @@ STATE:     ~/.codex/orchestrator/   (Brain DB feedback/orchestrator.db, repos/, 
                                       .last-*/.fail-* stamps)
 HANDOFF:   ~/.codex/handoff/         (heartbeat orchestrator.json — legacy lanes yield to it;
                                       capacity.json, backlog.json, tick log orchestrator-cron.log)
+LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping.sh orchestrator;
+           healthchecks.io alerts when those pings stop (hung tick, preflight ABORT, job unloaded).
+           A no-op until HC_ORCHESTRATOR_URL is set in ~/.codex/handoff/healthchecks.env.
 ```
 
 - **Shadow vs active.** `./orchestrate.sh` (no args) = SHADOW: capacity + discovery + a dry-run
