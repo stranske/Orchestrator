@@ -411,6 +411,7 @@ if [[ ! -f "$INSTALLER" ]]; then
   print_unverified_override
   exit 3
 fi
+
 echo
 echo "== installing the verified snapshot (SRC is not read again)"
 python3 "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
