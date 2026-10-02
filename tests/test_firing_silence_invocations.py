@@ -78,6 +78,12 @@ def _events(ledger, cap_id: str, kind: str) -> list[dict]:
     return [e for e in row.get("event_history") or [] if e.get("type") == kind]
 
 
+def _one(ledger, cap_id: str, kind: str) -> dict:
+    events = _events(ledger, cap_id, kind)
+    assert len(events) == 1, f"{cap_id}: the run must record exactly one {kind}, got {events}"
+    return events[0]
+
+
 def _silences(ledger, monkeypatch, cap_id: str) -> list[str]:
     """Which silence findings the monitor files this row under, judged a minute from now."""
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS")  # the monitor's own credit is not under test
@@ -90,15 +96,15 @@ def _silences(ledger, monkeypatch, cap_id: str) -> list[str]:
     ]
 
 
-def test_the_rail_exercise_cadence_records_its_run_as_an_invocation(tick, monkeypatch, capsys):
+def test_the_rail_exercise_cadence_records_its_run_as_an_invocation(tick, monkeypatch):
     assert _silences(tick, monkeypatch, "rail-exercise-cadence") == ["never_fired"]
     totals = {"contracts": 2, "passed": 2, "failed": 0}
     monkeypatch.setattr(rail_exercise, "report", lambda *_a: {"totals": totals, "tree": "fixture"})
     monkeypatch.setattr(sys, "argv", ["rail_exercise.py", "--json"])
 
     assert rail_exercise.main() == 0
-    (invocation,) = _events(tick, "rail-exercise-cadence", "invocation")
-    (success,) = _events(tick, "rail-exercise-cadence", "success")
+    invocation = _one(tick, "rail-exercise-cadence", "invocation")
+    success = _one(tick, "rail-exercise-cadence", "success")
     assert invocation["ref"] == "rail_exercise.main", invocation
     assert invocation["timestamp"] <= success["timestamp"], "the run is recorded before its result"
     assert _silences(tick, monkeypatch, "rail-exercise-cadence") == []
@@ -113,9 +119,9 @@ def test_the_route_weights_export_records_its_run_as_an_invocation(tick, monkeyp
     monkeypatch.setattr(sys, "argv", ["route_weights_export.py", "--state-dir", str(tmp_path)])
 
     assert route_weights_export.main() == 0
-    (invocation,) = _events(tick, "route-weights-export", "invocation")
+    invocation = _one(tick, "route-weights-export", "invocation")
     assert invocation["ref"] == "route_weights_export.main", invocation
-    assert len(_events(tick, "route-weights-export", "success")) == 1
+    _one(tick, "route-weights-export", "success")
     assert _silences(tick, monkeypatch, "route-weights-export") == []
 
 
@@ -128,9 +134,9 @@ def test_the_research_usage_daily_report_records_its_run_as_an_invocation(
     )
 
     research_usage_guard.write_usage_report(tmp_path / "research-usage-report.json")
-    (invocation,) = _events(tick, "research-usage-guard", "invocation")
+    invocation = _one(tick, "research-usage-guard", "invocation")
     assert invocation["ref"] == "daily-report", invocation
-    assert len(_events(tick, "research-usage-guard", "success")) == 1
+    _one(tick, "research-usage-guard", "success")
     assert _silences(tick, monkeypatch, "research-usage-guard") == []
 
 
@@ -140,12 +146,12 @@ def test_a_sweep_that_finds_no_claims_still_credits_the_stall_watcher(tick, monk
 
     report = redirect_sweep.sweep()
     assert report["active_claim_count"] == 0 and report["watched_count"] == 0, report
-    (invocation,) = _events(tick, "stall-watcher", "invocation")
+    invocation = _one(tick, "stall-watcher", "invocation")
     assert invocation["ref"] == "redirect_sweep.sweep", invocation
     # ONE per sweep: a second tick is a second invocation, never coalesced into the first, because
     # an every-tick promise is judged against a quarter-day tolerance.
     redirect_sweep.sweep()
-    assert len(_events(tick, "stall-watcher", "invocation")) == 2
+    assert len(_events(tick, "stall-watcher", "invocation")) == 2, "two sweeps, two invocations"
     assert _silences(tick, monkeypatch, "stall-watcher") == []
 
 
