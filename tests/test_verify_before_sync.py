@@ -40,6 +40,9 @@ printf 'sync_home=%s\nsync_mirror=%s\nsync_gh=%s\nsync_src=%s\n' \
   "$HOME" "$ORCH_MIRROR" "${GH_CONFIG_DIR:-}" "$1" >> "$FAKE_RECORD"
 [[ "${FAKE_SYNC_RC:-0}" == "0" ]] || exit "$FAKE_SYNC_RC"
 mkdir -p "$ORCH_MIRROR"
+MODSRC="$1/src"
+[[ -d "$MODSRC" ]] || MODSRC="$1"
+cp "$MODSRC"/*.py "$ORCH_MIRROR"/
 cp "$FAKE_VERIFY" "$ORCH_MIRROR/verify.py"
 """
 
@@ -75,6 +78,10 @@ brain.close()
 touch = os.environ.get("FAKE_TOUCH_SRC")
 if touch:  # another session moving the clone while verify.py runs
     pathlib.Path(touch).write_text("moved under the run\n")
+expected = os.environ.get("FAKE_EXPECT_MIRROR_FILE")
+if expected:
+    with open(env["FAKE_RECORD"], "a") as fh:
+        fh.write(f"copied_expected={pathlib.Path(expected).is_file()}\n")
 print("  tree:       " + os.environ.get("FAKE_TREE", "EXEC MIRROR — mirror_* ceilings apply"))
 rc = int(os.environ.get("FAKE_VERIFY_RC", "0"))
 print("  VERIFIED — fake" if rc == 0 else "  FAILED — fake")
@@ -110,6 +117,7 @@ def world(tmp_path: Path) -> dict:
     src = tmp_path / "src"
     src.mkdir()
     (src / "orchestrate.sh").write_text("echo tick\n")
+    (src / "base.py").write_text("BASE = True\n")
     _git(src, "init", "-q")
     _git(src, "add", "-A")
     _git(src, "commit", "-q", "-m", "init")
@@ -231,6 +239,32 @@ def test_an_untracked_file_appearing_also_voids_the_verdict(world):
     """Modules are copied from the working tree, so an untracked one would ship as well."""
     result, _ = _run(world, FAKE_TOUCH_SRC=str(world["src"] / "new_module.py"))
     assert result.returncode == 3, result.stdout + result.stderr
+
+
+def test_an_ignored_module_copied_to_the_mirror_is_part_of_the_identity(world):
+    """Git ignore rules cannot hide bytes selected by the copier's working-tree glob."""
+    src = world["src"]
+    module_dir = src / "src"
+    module_dir.mkdir()
+    (module_dir / "base.py").write_text("BASE = True\n")
+    ignored = module_dir / "ignored.py"
+    ignored.write_text("VALUE = 'before'\n")
+    (src / ".gitignore").write_text("src/ignored.py\n")
+    _git(src, "add", ".gitignore", "src/base.py")
+    _git(src, "commit", "-q", "-m", "src layout")
+    assert (
+        subprocess.run(["git", "-C", str(src), "check-ignore", "-q", "src/ignored.py"]).returncode
+        == 0
+    )
+
+    result, record = _run(
+        world,
+        FAKE_TOUCH_SRC=str(ignored),
+        FAKE_EXPECT_MIRROR_FILE=str(Path("ignored.py")),
+    )
+    assert record["copied_expected"] == "True", record
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "VOID:" in result.stderr, result.stderr
 
 
 def test_a_tree_not_judged_as_the_mirror_shape_is_named(world):

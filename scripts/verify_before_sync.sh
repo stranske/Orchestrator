@@ -95,14 +95,43 @@ copy_state() {
   done
 }
 
-# What the sync copies: modules and root files from the WORKING TREE, tests/ and scripts/ from
-# HEAD. So the identity is HEAD, the content of every change against it, and every untracked file.
+# What the sync copies: a non-recursive module glob and selected root files from the WORKING TREE,
+# plus tests/ and scripts/ from HEAD. Hash those exact working-tree inputs, including ignored
+# modules; Git status is not the copy contract and can omit bytes that cp will deploy.
 source_identity() {
   git -C "$src" rev-parse HEAD || return 1
-  git -C "$src" diff HEAD --binary | git hash-object --stdin || return 1
-  git -C "$src" ls-files --others --exclude-standard | while IFS= read -r path; do
-    printf '%s %s\n' "$(git -C "$src" hash-object -- "$path" 2>/dev/null)" "$path"
-  done
+  "$python_bin" -c 'import hashlib, os, pathlib, struct, sys
+src = pathlib.Path(sys.argv[1]).resolve()
+h = hashlib.sha256()
+def add(label, payload):
+    name = label.encode("utf-8", "surrogateescape")
+    h.update(struct.pack(">Q", len(name)) + name)
+    h.update(struct.pack(">Q", len(payload)) + payload)
+mod = src / "src" if (src / "src").is_dir() else src
+add("module-layout", mod.relative_to(src).as_posix().encode())
+modules = sorted((p for p in mod.glob("*.py") if not p.name.startswith(".")), key=lambda p: os.fsencode(p.name))
+if not modules:
+    raise SystemExit(f"no Python modules selected from {mod}")
+for path in modules:
+    add(f"mirror/{path.name}", path.read_bytes())
+for label, path in (
+    ("mirror/orchestrate.sh", src / "orchestrate.sh"),
+    ("mirror/experiments/hypotheses.json", src / "experiments/hypotheses.json"),
+    ("mirror/experiments/features.json", src / "experiments/features.json"),
+    ("mirror/experiments/repo_knowledge.json", src / "experiments/repo_knowledge.json"),
+    ("mirror/data/feedback-snapshot.json", src / "data/feedback-snapshot.json"),
+    ("mirror/config/coverage-baseline.json", src / "config/coverage-baseline.json"),
+    ("mirror/.verify-floor.json", src / ".verify-floor.json"),
+    ("mirror/CLAUDE.md", src / "CLAUDE.md"),
+    ("mirror/IMPROVEMENT_BACKLOG.md", src / "IMPROVEMENT_BACKLOG.md"),
+):
+    add(label, path.read_bytes() if path.is_file() else b"<absent>")
+config = src / "pyproject.toml"
+if not config.is_file():
+    config = src / ".coveragerc"
+config_name = config.name if config.is_file() else "coverage-config"
+add(f"mirror/{config_name}", config.read_bytes() if config.is_file() else b"<absent>")
+print(h.hexdigest())' "$src" || return 1
 }
 
 if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
