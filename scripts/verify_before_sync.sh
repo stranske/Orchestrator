@@ -25,8 +25,12 @@
 # live Brain, and never runs the live sync: what to do with the verdict is the caller's decision.
 #
 # Usage: scripts/verify_before_sync.sh [SRC]    (SRC defaults to ~/.codex/orchestrator-src)
+#        scripts/verify_before_sync.sh --identity [SRC]
+#        prints a fingerprint of exactly what the copy reads from SRC, the same value a
+#        VERIFIED run prints, so a caller that copies afterwards can re-check its source
 # Exit:  0 VERIFIED
-#        1 NOT VERIFIED (verify.py's own exit code is printed)
+#        1 NOT VERIFIED: verify.py failed (its exit code is printed), or passed without judging
+#          the scratch tree as the exec-mirror shape, so the mirror's ceilings were not applied
 #        2 NOTHING VERIFIED: SRC is not a checkout, or the scratch copy failed
 #        3 VOID: SRC changed while verify.py ran, so the verdict is about a tree nobody would copy
 # Env:   ORCH_SYNC_SCRIPT  the copy script (default ~/.codex/bin/orch-sync-mirror.sh)
@@ -42,6 +46,11 @@
 set -uo pipefail
 
 real_home="$HOME"
+mode="verify"
+if [[ "${1:-}" == "--identity" ]]; then
+  mode="identity"
+  shift
+fi
 src="${1:-$real_home/.codex/orchestrator-src}"
 sync_script="${ORCH_SYNC_SCRIPT:-$real_home/.codex/bin/orch-sync-mirror.sh}"
 python_bin="${PYTHON:-python3}"
@@ -134,9 +143,17 @@ add(f"mirror/{config_name}", config.read_bytes() if config.is_file() else b"<abs
 print(h.hexdigest())' "$src" || return 1
 }
 
+# One line, so a caller can hold it: the fingerprint of the identity above.
+fingerprint() { printf '%s' "$1" | git hash-object --stdin; }
+
 if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
   fail "NOTHING VERIFIED: $src is not a git checkout"
   exit 2
+fi
+if [[ "$mode" == "identity" ]]; then
+  identity_now="$(source_identity)" || { fail "could not read the copy inputs of $src"; exit 2; }
+  fingerprint "$identity_now"
+  exit 0
 fi
 if ! before="$(source_identity)"; then
   fail "NOTHING VERIFIED: could not read the state of $src"
@@ -201,9 +218,11 @@ say "== verify.py in the scratch mirror, on the state copy (HOME stays real for 
   "$python_bin" verify.py) 2>&1 | tee "$scratch/verify.log"
 rc=${PIPESTATUS[0]}
 
+shape_ok=1
 if ! grep -q 'tree: *EXEC MIRROR' "$scratch/verify.log"; then
-  say "!! verify.py did not judge the scratch tree as the exec-mirror shape, so the ceilings it"
-  say "   applied were the checkout's, not the mirror's"
+  shape_ok=0
+  say "!! verify.py did not judge the scratch tree as the exec-mirror shape, so it applied the"
+  say "   checkout's ceilings: this is not the mirror's verdict, and it is NOT VERIFIED"
 fi
 if ! after="$(source_identity)" || [[ "$after" != "$before" ]]; then
   fail "VOID: $src changed while verify.py ran, so this verdict is about a tree the sync would"
@@ -211,8 +230,10 @@ if ! after="$(source_identity)" || [[ "$after" != "$before" ]]; then
   exit 3
 fi
 
-if [[ "$rc" == "0" ]]; then
+if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   verdict="VERIFIED"
+elif [[ "$rc" == "0" ]]; then
+  verdict="NOT VERIFIED (verify.py passed, but not in the exec-mirror shape)"
 else
   verdict="NOT VERIFIED (verify.py exit $rc)"
 fi
@@ -220,5 +241,8 @@ say ""
 say "== verify-before-sync: $verdict for $src @ $head_short ($dirty uncommitted)"
 say "   scratch mirror built by $sync_script, verified on a copy of $runtime_src; the live mirror,"
 say "   the live registry copy, the live ledger and the live Brain were not written"
-[[ "$rc" == "0" ]] && exit 0
+if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
+  say "   verified source identity: $(fingerprint "$before")"
+  exit 0
+fi
 exit 1

@@ -267,10 +267,28 @@ def test_an_ignored_module_copied_to_the_mirror_is_part_of_the_identity(world):
     assert "VOID:" in result.stderr, result.stderr
 
 
-def test_a_tree_not_judged_as_the_mirror_shape_is_named(world):
+def test_a_tree_not_judged_as_the_mirror_shape_is_not_verified(world):
+    """A pass under the checkout's ceilings is not the mirror's verdict, so it must not let the
+    caller copy: the shape mismatch is a NOT VERIFIED (exit 1), never a warning beside a 0."""
     result, _ = _run(world, FAKE_TREE="checkout")
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
     assert "did not judge the scratch tree as the exec-mirror shape" in result.stdout
+    assert "NOT VERIFIED (verify.py passed, but not in the exec-mirror shape)" in result.stdout
+    assert "verified source identity:" not in result.stdout, result.stdout
+
+
+def test_identity_mode_prints_the_fingerprint_a_green_verdict_was_taken_on(world):
+    """The wrapper copies AFTER the verdict, so it re-checks the source with `--identity`: the
+    fingerprint must equal the one a VERIFIED run printed, and move when a copied input moves."""
+    result, _ = _run(world)
+    assert result.returncode == 0, result.stdout + result.stderr
+    (line,) = [ln for ln in result.stdout.splitlines() if "verified source identity: " in ln]
+    verified = line.split("verified source identity: ", 1)[1].strip()
+    same, _ = _run(world, "--identity", str(world["src"]))
+    assert same.returncode == 0 and same.stdout.strip() == verified, (same.stdout, verified)
+    (world["src"] / "base.py").write_text("BASE = False\n")
+    moved, _ = _run(world, "--identity", str(world["src"]))
+    assert moved.returncode == 0 and moved.stdout.strip() != verified, moved.stdout
 
 
 def test_keep_leaves_the_scratch_mirror_for_inspection(world):
