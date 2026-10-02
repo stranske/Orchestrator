@@ -9,10 +9,12 @@ import ux_review as ur
 # a fixture copy (`run_id=fixture`) of the gemini critic's output in the trip-planner UX review of
 # 2026-09-22: six findings, two at severity 4 with stuck_probability 1.0 and 0.9, all of which the
 # old extractor dropped because it required a "scores" key. It moved here byte-for-byte on
-# 2026-10-02 because the exec mirror never had it: orch-sync-mirror.sh ships tests/*.py and
+# 2026-10-02 because the exec mirror never had it: orch-sync-mirror.sh then shipped tests/*.py and
 # tests/rail_exercises and nothing else under tests/, so this test was the one failure of a mirror
-# verify while passing in every checkout and in CI. The header line and the ```json fence are part
-# of the capture, not decoration: they are what the parser has to see through.
+# verify while passing in every checkout and in CI. (The sync now ships all of tests/ from
+# `git archive HEAD`, and tests/conftest.py fails a test that reads an input git would leave out.)
+# The header line and the ```json fence are part of the capture, not decoration: they are what the
+# parser has to see through.
 ADVERSARY_OUTPUT_2026_09_22 = """\
 === 2026-09-22T18:20:00Z UX-ADVERSARY gemini/full run_id=fixture ===
 ```json
