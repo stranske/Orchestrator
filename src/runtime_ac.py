@@ -5,7 +5,8 @@ The runtime_ac lane is a first increment for richer runtime AC checks. It turns
 goals into structured evidence plans, validates those plans, and emits
 review-before-run commands that route frontend checks through frontend_verify.py
 and deliberate-break checks through local_verify.py. Execution is opt-in via
---confirm-run and never mutates repositories.
+--confirm-run and never mutates repositories. Command checks can expect exit_0
+or exit_nonzero without shell exit-code inversion.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ VALID_EVIDENCE_TYPES = {
     "manual_review",
 }
 VALID_RISK_LEVELS = {"low", "medium", "high"}
-VALID_EXPECTED = {"exit_0", "contains", "regex", "manual_review"}
+VALID_EXPECTED = {"exit_0", "exit_nonzero", "contains", "regex", "manual_review"}
 MUTATING_FLAGS = {"--apply", "--write", "--in-place", "--inplace", "--fix", "--force"}
 MUTATING_GIT_SUBCOMMANDS = {
     "reset",
@@ -130,6 +131,7 @@ RUNTIME_AC_SCHEMA_EXAMPLE = {
                     "type": "command",
                     "name": "Course progress tests",
                     "command": "pytest tests/test_course_progress.py",
+                    # Use exit_nonzero for commands that must fail by design.
                     "expected": "exit_0",
                 },
                 {
@@ -1103,6 +1105,10 @@ def _completed_result(
         expected = check.get("expected") or "exit_0"
         if expected == "exit_0":
             status = "PASS" if completed.returncode == 0 else "FAIL"
+        elif expected == "exit_nonzero":
+            status = "PASS" if completed.returncode != 0 else "FAIL"
+            if status == "FAIL":
+                reason = "expected a nonzero exit; command exited 0"
         elif expected == "contains":
             needle = check.get("contains") or ""
             if completed.returncode != 0:
@@ -1450,6 +1456,33 @@ def _selftest() -> None:
     )
     assert nonzero_run["check_results"][0]["status"] == "FAIL", nonzero_run
     assert nonzero_run["gate"]["verdict"] == "FAIL", nonzero_run["gate"]
+
+    expected_nonzero = json.loads(json.dumps(command_spec))
+    expected_nonzero["verification"]["id"] = "expected-nonzero-runtime-ac"
+    expected_nonzero["acceptance_criteria"][0]["checks"][0]["expected"] = "exit_nonzero"
+    expected_nonzero["acceptance_criteria"][0]["checks"][0][
+        "command"
+    ] = f"{shlex.quote(sys.executable)} -c 'raise SystemExit(7)'"
+    assert validate_spec(expected_nonzero) == [], expected_nonzero
+    nonzero_expected_run = run_verification(
+        expected_nonzero, confirm_run=True, allow_command_checks=True, timeout=30
+    )
+    assert nonzero_expected_run["check_results"][0]["status"] == "PASS", nonzero_expected_run
+    assert nonzero_expected_run["gate"]["verdict"] == "PASS", nonzero_expected_run["gate"]
+
+    unexpected_zero = json.loads(json.dumps(expected_nonzero))
+    unexpected_zero["verification"]["id"] = "unexpected-zero-runtime-ac"
+    unexpected_zero["acceptance_criteria"][0]["checks"][0][
+        "command"
+    ] = f"{shlex.quote(sys.executable)} -c 'raise SystemExit(0)'"
+    zero_run = run_verification(
+        unexpected_zero, confirm_run=True, allow_command_checks=True, timeout=30
+    )
+    assert zero_run["check_results"][0]["status"] == "FAIL", zero_run
+    assert zero_run["check_results"][0]["reason"] == (
+        "expected a nonzero exit; command exited 0"
+    ), zero_run
+    assert zero_run["gate"]["verdict"] == "FAIL", zero_run["gate"]
 
     timeout_spec = json.loads(json.dumps(command_spec))
     timeout_spec["verification"]["id"] = "timeout-runtime-ac"
