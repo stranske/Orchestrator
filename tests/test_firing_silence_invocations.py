@@ -36,6 +36,7 @@ import redirect_apply
 import redirect_sweep
 import research_usage_guard
 import route_weights_export
+import watch
 
 DAY = 86400
 # The live row's own declarations. The other four are declared in code and reconciled by
@@ -156,6 +157,25 @@ def test_a_sweep_that_finds_no_claims_still_credits_the_stall_watcher(tick, monk
     assert _silences(tick, monkeypatch, "stall-watcher") == []
 
 
+def test_a_sweep_of_claims_is_one_invocation_and_the_classifier_keeps_its_own(
+    tick, monkeypatch, tmp_path
+):
+    """The sweep credits itself once and tells the classifier not to, so N claims are one
+    invocation, never N+1 (`usage_rate` counts events). A direct classifier call still credits."""
+    log = tmp_path / "lane.log"
+    log.write_text("working\n", encoding="utf-8")
+    fake = {f"o/r#{i}": {"agent": "codex", "pid": 999_999_999, "log": str(log)} for i in (1, 2)}
+    monkeypatch.setattr(claims, "active_claims", lambda **_k: fake)
+
+    report = redirect_sweep.sweep()
+    assert report["watched_count"] == 2, report
+    invocation = _one(tick, "stall-watcher", "invocation")
+    assert invocation["ref"] == "redirect_sweep.sweep", invocation
+    watch.classify_lane(pid=999_999_999, log=str(log))
+    refs = [e["ref"] for e in _events(tick, "stall-watcher", "invocation")]
+    assert refs == ["redirect_sweep.sweep", "watch.main"], refs
+
+
 def test_a_bootstrap_pass_that_applies_nothing_records_no_invocation(tick, monkeypatch, tmp_path):
     """The bootstrap's invocation means an authorised apply, and `switch_review` relies on that:
     its "ON but idle" row, and the drain that row carries, are the alarm for a gate that cannot
@@ -223,15 +243,20 @@ def test_the_monitor_names_what_a_silent_rows_history_contradicts(tmp_path, monk
 
     recorder, stopped = rep["silence_evidence"]["recorder"], rep["silence_evidence"]["stopped"]
     assert recorder["runs_after_last_invocation"] == 3, recorder
-    assert recorder["last_run"] == {"timestamp": now - DAY, "type": "success"}, recorder
+    assert recorder["last_run"] == {"timestamp": now - DAY, "type": "success", "age_days": 1.0}
+    assert recorder["ran_within_tolerance"] is True, recorder
     assert recorder["last_invocation_from"] == "consult_trial", recorder
-    assert recorder["production_invocations"] == 0 and recorder["trial_invocations"] == 1
+    assert recorder["non_trial_invocations"] == 0 and recorder["trial_invocations"] == 1
     # The result 30 s behind its own invocation is THAT invocation's result, never a second run.
     assert stopped["runs_after_last_invocation"] == 0, stopped
-    assert stopped["last_invocation_from"] == "production", stopped
+    assert stopped["last_invocation_from"] == "non_trial", stopped
     text = monitor.format_report(rep)
-    assert "RAN 3x since its last invocation (latest success 1.0d ago)" in text, text
-    assert text.count("its last invocation is a consult trial, not a tick") == 1, text
+    assert (
+        "RAN 3x with no invocation of its own, the latest a success 1.0d ago, inside its 2.0d"
+        in (text)
+    ), (text)
+    assert "a recording defect, not a silence" in text, text
+    assert text.count("its only invocations are consult trials") == 1, text
 
     # AN ANNOTATION MOVES NO FINDING: the same rows with their histories emptied are judged
     # identically, in membership and order, in every silence list.
@@ -252,6 +277,7 @@ def test_a_trial_the_propensity_writer_records_reads_as_a_trial(tmp_path):
     experiment = capability_propensity.ADVICE_REF_PREFIX + "0123456789ab"
     assert capability_propensity.record_trigger("cap", experiment, path=ledger)
 
-    found = monitor.silence_evidence(capabilities.load(ledger, create=False)["cap"], 2.0)
+    row = capabilities.load(ledger, create=False)["cap"]
+    found = monitor.silence_evidence(row, 2.0, int(time.time()))
     assert found["last_invocation_from"] == "consult_trial", found
-    assert (found["trial_invocations"], found["production_invocations"]) == (1, 0), found
+    assert (found["trial_invocations"], found["non_trial_invocations"]) == (1, 0), found

@@ -460,7 +460,8 @@ def sweep(
     # ONE CREDIT PER SWEEP, whatever it finds. `stall-watcher` promises "every tick", and the only
     # credit was the one `watch.classify_lane` records per claim, so a sweep with no claims recorded
     # nothing: from 2026-09-14 every tick swept 0 claims and the capability read as silent while it
-    # ran about 23 times a day. `classify_lane` keeps its own credit for its other callers.
+    # ran about 23 times a day. The classifier is called with `credit=False` below, so a sweep of N
+    # claims is one invocation, not N+1; its other callers keep their own credit.
     _capability_heartbeat()
     active = claims.active_claims(ttl=ttl, include_meta=True)
     reports: list[dict] = []
@@ -496,6 +497,7 @@ def sweep(
             expected_paths=inputs["expected_paths"],
             stale_seconds=stale_seconds,
             now=now,
+            credit=False,
         )
         reports.append(report)
         action = (
