@@ -1691,7 +1691,9 @@ def verdict_in_window(
 REOFFER_GRACE_DAYS = 14
 
 
-def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> dict:
+def propose_offer_improvements(
+    *, path=None, window_days: int = WINDOW_DAYS, as_the_tick_sees_it: bool = False
+) -> dict:
     """The THIRD axis: offers that cannot be judged, and the tables that would fix them.
 
     Two populations, and they need opposite work:
@@ -1707,6 +1709,8 @@ def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> 
     Report-only. It proposes edits to declared tables; it writes none of them, and the tables stay
     hand-authored on purpose — CLAUDE.md forbids a loop that edits an offer to increase selection,
     and an auto-writer here would be exactly that with an extra step.
+
+    `as_the_tick_sees_it` is passed to the pass's one `read_switches()`; the CLI sets it.
     """
     try:
         import capability_advisor
@@ -1723,7 +1727,7 @@ def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> 
         except TypeError:
             continue
     bound.discard("__none__")
-    switches = read_switches()
+    switches = read_switches(as_the_tick_sees_it=as_the_tick_sees_it)
     declared_nothing = sorted(c for c in bound if not declared_facts(c, switches=switches))
     said_so: dict[str, int] = {}
     held: dict[str, int] = {}
@@ -1750,7 +1754,7 @@ def propose_offer_improvements(*, path=None, window_days: int = WINDOW_DAYS) -> 
     }
 
 
-def read_switches() -> dict:
+def read_switches(*, as_the_tick_sees_it: bool = False) -> dict:
     """ONE read of which flag holds which capability, for one consumer pass.
 
     The gate facts `declared_facts` echoes come from `switch_review.switch_states()`, the switch
@@ -1760,10 +1764,19 @@ def read_switches() -> dict:
     A pass reads once and hands the result to every lookup (`switches=`). An unreadable source is
     still a read: it answers with no rows and says why, so a pass that could not read does not retry
     once per lookup.
+
+    `as_the_tick_sees_it` is for the CLI, which runs outside the tick. Its values then come from
+    `switch_review.env_as_the_tick_sees_it()`, not from this process alone, where a switch the tick
+    exports ON by default reads off: a re-offer echoed ORCH_REDIRECT_APPLY_BOOTSTRAP as
+    `gate_state: off` while every tick had it armed. It executes orchestrate.sh's prologue, so it is
+    off by default: a library or test pass must never run it.
     """
     try:
         import switch_review
 
+        if as_the_tick_sees_it:
+            env, sources = switch_review.env_as_the_tick_sees_it()
+            return dict(switch_review.switch_states(env=env, sources=sources))
         return dict(switch_review.switch_states())
     except Exception as exc:  # noqa: BLE001
         return {"held_off": [], "on_but_idle": [], "unreadable": f"{type(exc).__name__}: {exc}"}
@@ -1794,6 +1807,13 @@ def declared_facts(capability_id: str, *, switches: dict | None = None) -> dict:
             if row.get("capability") == capability_id and row.get("flag"):
                 facts["gate_flag"] = str(row["flag"])
                 facts["gate_state"] = str(row.get("state") or "unknown")
+                # WHERE THAT STATE WAS READ, so one process's "off" is never echoed as the tick's: a
+                # `tick-unconsulted` source says nothing asked the tick. The value tells "unset"
+                # from "0", which both read off.
+                if row.get("value") is not None:
+                    facts["gate_value"] = str(row["value"])
+                if row.get("value_source"):
+                    facts["gate_value_source"] = str(row["value_source"])
                 if row.get("criterion"):
                     facts["gate_criterion"] = str(row["criterion"])
                 break
@@ -1865,6 +1885,7 @@ def record_reoffer(
     window_days: int = WINDOW_DAYS,
     timestamp: int | None = None,
     now: int | None = None,
+    as_the_tick_sees_it: bool = False,
 ) -> dict:
     """One re-offer against a decline, carrying only declared facts the first offer omitted.
 
@@ -1878,6 +1899,9 @@ def record_reoffer(
       * NO UNDELIVERED FACT EXISTS — and this is the productive refusal. It means the offer was
         already as complete as the tables can make it, so the fix is the TABLES. The result carries
         `offer_improvement_needed`, which `propose_offer_improvements` reads.
+
+    `as_the_tick_sees_it` is passed to the one switch read, made only once a re-offer gets that
+    far; the CLI sets it.
     """
     if str(decline_kind) not in DECLINE_KINDS:
         raise ValueError(
@@ -1930,7 +1954,7 @@ def record_reoffer(
         capability_id, experiment_id, path=path, window_days=window_days, now=now
     )
     # One re-offer is one pass: both lookups below share a single switch read.
-    switches = read_switches()
+    switches = read_switches(as_the_tick_sees_it=as_the_tick_sees_it)
     facts = undelivered_facts(capability_id, delivered, reason_text, switches=switches)
     if not facts and declared_facts(capability_id, switches=switches):
         # THE CALLER ALREADY HAD IT. Distinct from "nothing is declared", and it must NOT consume
@@ -4912,13 +4936,29 @@ def _offline_switch_review(rows: dict | None = None):
         reached.append(("gh", args))
         return False, "", "selftest: a propensity selftest may not reach gh"
 
-    saved = (switch_review.switch_states, switch_review.review, switch_review._GH_CALL_RUNNER)
+    def tick_view() -> tuple[dict, dict]:
+        # The CLI's switch read executes orchestrate.sh's prologue; no selftest path may.
+        reached.append(("env_as_the_tick_sees_it", ()))
+        return {}, {}
+
+    saved = (
+        switch_review.switch_states,
+        switch_review.review,
+        switch_review._GH_CALL_RUNNER,
+        switch_review.env_as_the_tick_sees_it,
+    )
     switch_review.switch_states, switch_review.review = states, sweep
     switch_review._GH_CALL_RUNNER = gh
+    switch_review.env_as_the_tick_sees_it = tick_view
     try:
         yield reads
     finally:
-        switch_review.switch_states, switch_review.review, switch_review._GH_CALL_RUNNER = saved
+        (
+            switch_review.switch_states,
+            switch_review.review,
+            switch_review._GH_CALL_RUNNER,
+            switch_review.env_as_the_tick_sees_it,
+        ) = saved
     assert not reached, f"a propensity selftest reached the live switch sweep or gh: {reached[:3]}"
 
 
@@ -7434,8 +7474,12 @@ def main(argv: list[str]) -> int:
             if rep["applied"]:
                 print(f"  APPLIED: {rep['applied']}")
         return 0
+    # THE CLI RUNS OUTSIDE THE TICK, so both switch-reading commands resolve the switches as the
+    # tick sees them; a library or test caller of the same functions never executes the prologue.
     if args.command == "offer-improvements":
-        rep = propose_offer_improvements(window_days=args.window_days or WINDOW_DAYS)
+        rep = propose_offer_improvements(
+            window_days=args.window_days or WINDOW_DAYS, as_the_tick_sees_it=True
+        )
         print(json.dumps(rep, indent=2))
         return 0
     if args.command in {"trigger", "useful", "late-outcome", "reoffer", "decline"}:
@@ -7451,6 +7495,7 @@ def main(argv: list[str]) -> int:
                     decline_kind=args.kind,
                     path=pathlib.Path(args.ledger) if args.ledger else None,
                     window_days=args.window_days or WINDOW_DAYS,
+                    as_the_tick_sees_it=True,
                 )
             except ValueError as exc:
                 ap.error(str(exc))
