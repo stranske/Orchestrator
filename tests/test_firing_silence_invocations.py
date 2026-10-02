@@ -29,6 +29,7 @@ import pytest
 
 import capabilities
 import capability_firing_monitor as monitor
+import capability_propensity
 import claims
 import rail_exercise
 import redirect_apply
@@ -240,3 +241,17 @@ def test_the_monitor_names_what_a_silent_rows_history_contradicts(tmp_path, monk
     for key in SILENCE:
         assert rep[key] == blind[key], (key, rep[key], blind[key])
     assert {r["capability_id"] for r in rep["overdue"]} == {"recorder", "stopped"}, rep["overdue"]
+
+
+def test_a_trial_the_propensity_writer_records_reads_as_a_trial(tmp_path):
+    """Writer and reader share ONE constant, so a trial recorded the way every consult records one
+    reads as a trial, never as a tick firing. A reader holding its own copy of the spelling would
+    keep passing a synthetic test while counting every real trial as a tick."""
+    ledger = tmp_path / "capabilities.json"
+    capabilities.save({"cap": capabilities._blank_capability("cap")}, ledger)
+    experiment = capability_propensity.ADVICE_REF_PREFIX + "0123456789ab"
+    assert capability_propensity.record_trigger("cap", experiment, path=ledger)
+
+    found = monitor.silence_evidence(capabilities.load(ledger, create=False)["cap"], 2.0)
+    assert found["last_invocation_from"] == "consult_trial", found
+    assert (found["trial_invocations"], found["production_invocations"]) == (1, 0), found

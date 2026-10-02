@@ -140,9 +140,8 @@ ONDEMAND_RE = re.compile(
 # `last_success` and never `last_invocation`. `silence_evidence` names both from the row's own
 # history beside every silence finding; it annotates and changes no finding.
 SUITE_OR_CLI_MATCHERS = frozenset({"test_gate"})
-# `capability_propensity.ADVICE_REF_PREFIX`, the ref every consult trial carries. Not imported: that
-# module is far heavier than this report, and the prefix is part of its recorded event format.
-TRIAL_REF_PREFIX = "advice:"
+# The ref every consult trial carries: the writer's own constant, never a copy of its spelling.
+TRIAL_REF_PREFIX = capabilities.ADVICE_REF_PREFIX
 # The event types a heartbeat records at the END of a run, so each is evidence that the run happened.
 RUN_RESULT_EVENTS = ("success", "failure")
 SUITE_CADENCE_RE = re.compile(r"every suite run|every run|supervised CLI|CLI", re.IGNORECASE)

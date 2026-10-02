@@ -166,6 +166,13 @@ EVENT_FIELDS = {
     "offer_amendment": None,
 }
 
+# The ref of every consult-trial event: `capability_propensity` writes an `invocation` under it when
+# an advised candidate is triggered, and the firing monitor reads it to tell a trial from a tick.
+# Defined ONCE, here, because the writer and the reader live in different modules: a reader holding
+# its own copy of the literal would count every trial as a tick firing, silently, the day the two
+# spellings parted.
+ADVICE_REF_PREFIX = "advice:"
+
 KNOWN_GATES: dict[str, dict[str, Any]] = {
     "route-weights-export": {
         "findability_category": "exercise_bound",
