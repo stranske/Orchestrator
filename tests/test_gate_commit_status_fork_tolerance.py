@@ -405,7 +405,7 @@ COMMENT_RUNNER_JS = textwrap.dedent("""
           payload: {
             pull_request: {
               number: 1,
-              head: { repo: { full_name: headRepo } },
+              head: { repo: headRepo === null ? null : { full_name: headRepo } },
               base: { repo: { full_name: baseRepo } },
             },
           },
@@ -438,6 +438,11 @@ COMMENT_RUNNER_JS = textwrap.dedent("""
       const outcomes = {
         fork_read_only: await runCase({
           ...FORK,
+          error: makeError(403, 'Resource not accessible by integration'),
+        }),
+        deleted_fork_read_only: await runCase({
+          headRepo: null,
+          baseRepo: SAME.baseRepo,
           error: makeError(403, 'Resource not accessible by integration'),
         }),
         same_repo_read_only: await runCase({
@@ -488,6 +493,16 @@ def test_comment_fork_read_only_403_falls_back_to_the_job_summary(
     comment_outcomes: dict[str, Any],
 ) -> None:
     case = comment_outcomes["fork_read_only"]
+    assert case["threw"] is None
+    assert any("read-only" in warning for warning in case["warnings"])
+    assert "GATE SUMMARY BODY" in " ".join(case["summaryRaw"])
+    assert "<written>" in case["summaryRaw"]
+
+
+def test_comment_deleted_fork_read_only_403_falls_back_to_the_job_summary(
+    comment_outcomes: dict[str, Any],
+) -> None:
+    case = comment_outcomes["deleted_fork_read_only"]
     assert case["threw"] is None
     assert any("read-only" in warning for warning in case["warnings"])
     assert "GATE SUMMARY BODY" in " ".join(case["summaryRaw"])
