@@ -1025,8 +1025,9 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     },
     "rail-exercise:redirect": {
         "redirect-apply-bootstrap": "EXERCISE redirect_apply.py --status --json read-only: at most "
-        "one authorised plan per day and its pid-dead condition re-checked here; break case: a "
-        "fixture status with two plans in one day is reported over-limit. Never applies a plan",
+        "one authorised plan per day and its not-live condition re-checked here (a dead pid, or "
+        "the supervisor's own stalled for a pid-less lane); break case: a fixture status with two "
+        "plans in one day is reported over-limit. Never applies a plan",
         "live-keepalive-supervisor": "EXERCISE the stage-2 plan artifact recounted against GitHub: "
         "every eligible candidate is a post-escalation PR carrying the listed readiness deficits; "
         "break case: a fixture plan naming a merged PR is flagged. Never acts on a PR",
@@ -3192,10 +3193,11 @@ HOW_TO_USE = {
     ),
     "redirect-apply-bootstrap": (
         "RAIL — lifts the Stage-2 gate without a human: authorizes at most ONE RedirectAgent plan "
-        "per day (pid-dead condition load-bearing) and links outcomes back. Invoked by the daily "
-        "redirect apply/link cadence step behind ORCH_REDIRECT_APPLY_BOOTSTRAP. Never select it: "
-        "hand-applying bypasses the self-gating that defines it. State: redirect_apply.py "
-        "--status --json (read-only) "
+        "per day (load-bearing: the prior lane shown not live, and unknown liveness refused) and "
+        "links outcomes back. Invoked by the daily redirect apply/link cadence step behind "
+        "ORCH_REDIRECT_APPLY_BOOTSTRAP. Never select it: hand-applying bypasses the self-gating "
+        "that defines it. State: redirect_apply.py --status --json (read-only, gate deficits "
+        "beside the drainable count); redirect_apply.py --screen for the free candidate screen "
     ),
     "research-scheduler": (
         "RAIL — four pure planning functions that pick which experiment spare capacity funds, "

@@ -102,6 +102,15 @@ Determinism here is load-bearing: the claims/capacity/provision rails are what t
 delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An
 LLM verifier (a review panel) is a *supplement* to a gate, never a replacement for it.
 
+**The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
+2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
+drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
+symptom was silence. The tick's first lines arm it as a separate process in its own session. It
+reports a command past 90 min or a tick past 3 h with the exact `kill` that frees it, and is
+report-only by the owner's decision. It is deterministic code, so a rail by the definition above,
+but it selects nothing, gates nothing and feeds no learner. The diagram draws it as the rail along
+the right edge: beside every stage rather than inside one, because it runs outside the tick.
+
 ## Agent-roles — judgment, typed contract, swappable backend
 
 A role is defined in `roles.py` as `Role(name, route_as, eligible_backends, mode, build_prompt,
@@ -1016,8 +1025,13 @@ replay links are deliberately `not_role_learning=True` — so the gate required 
 anything could apply. `redirect_apply.py` breaks that deadlock at both ends: `link_applied_outcomes()`
 turns each applied redirect's own influence edge into the corpus link automatically, and a default-OFF,
 self-disabling bootstrap (`ORCH_REDIRECT_APPLY_BOOTSTRAP`) applies at most one authorised plan per day.
-Authorisation is a pure function of recorded state — dead prior process, no foreign claim, lineage stamp
-present, gate deficit still open, per-target and per-day bounds — never an owner review queue.
+Authorisation is a pure function of recorded state — prior lane shown not live, no foreign claim, lineage
+stamp present, gate deficit still open, per-target and per-day bounds — never an owner review queue.
+Liveness is three-valued: a keepalive lane has no pid, so it counts as not live only when the supervisor
+itself reports it stalled or exited, and UNKNOWN is a refusal (until 2026-10-02 a missing pid read as
+dead). The lane facts are one function, applied by a free screen before the role is paid and by
+`authorize()` after, over the keepalive supervisor's latest stage-2 plan rather than every report file
+it ever wrote; each run reports offloads spent beside the candidates that could still be authorised.
 
 ## PromptAgent — the second role (built 2026-06-20)
 

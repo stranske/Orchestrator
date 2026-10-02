@@ -97,10 +97,13 @@ export ORCH_ROLE_SHADOW="${ORCH_ROLE_SHADOW:-1}"
 # (ready_for_supervised_apply) is a structural deadlock — synced_role_outcomes counts only APPLIED
 # advice, so the gate authorising apply required 10 applied outcomes, and the historical route is
 # exhausted (124 replays). Armed, redirect_apply.py applies at most ONE authorised plan per day and
-# ONLY on an already-dead lane, so no kill ever runs and the apply reduces to release-claim +
-# delegate — what the closer/opener rails already do to a dead stalled lane every hour. It refuses a
-# live process, a foreign claim, an un-stamped plan, a repeat target, and it DISABLES ITSELF the
-# moment the gate deficits close. Kill switch: ORCH_REDIRECT_APPLY_BOOTSTRAP=0.
+# ONLY on a lane shown not live -- a dead pid, or, for a keepalive lane (which has no pid), the
+# supervisor's own report that it is stalled -- so no kill ever runs and the apply reduces to
+# release-claim + delegate, what the closer/opener rails already do to a dead stalled lane every
+# hour. It refuses a live process, a lane of UNKNOWN liveness, a foreign claim, an un-stamped plan, a
+# repeat target, and it DISABLES ITSELF the moment the gate deficits close. Until 2026-10-02 a
+# missing pid read as dead and the population was every report file ever written: 759 offloads
+# judged 30 closed PRs, all "wait". Kill switch: ORCH_REDIRECT_APPLY_BOOTSTRAP=0.
 # Arming criterion (machine-checkable) lives in capability_recurrence_check.SWITCH_ON_CRITERIA.
 export ORCH_REDIRECT_APPLY_BOOTSTRAP="${ORCH_REDIRECT_APPLY_BOOTSTRAP:-1}"
 export ORCH_ROLE_MAX_PER_CYCLE="${ORCH_ROLE_MAX_PER_CYCLE:-1}"
@@ -138,6 +141,66 @@ _gh_gate() { local rc=0; python3 "$ORCH/gh_capacity.py" --gate "$1" || rc=$?; [[
 mode="shadow"; [[ "${1:-}" == "--active" ]] && mode="active"
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] orchestrate tick: $mode"
 STAMP_DIR="${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}"; mkdir -p "$STAMP_DIR" 2>/dev/null || true
+
+# --- Per-step kill switch -------------------------------------------------------------------------
+# ONE mechanism giving every step a real off-lever, instead of a bespoke ORCH_* flag per capability.
+# Added 2026-08-21: the admission gate flagged six capabilities with "nothing can stop it without a
+# code change", and six new single-use flags would be six new untested branches on hot paths -- an
+# untested kill switch is theatre, because it reports a control nobody has proved works.
+#
+#   ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"   # comma or space separated
+#
+# THREE PROPERTIES, each of them the fix for a failure this repo has already paid for:
+#  1. IT ANNOUNCES ITSELF EVERY TICK. A silent disable is the latched-gate pattern exactly -- a thing
+#     that stays off because nothing says it is off. Every skipped step prints a line, so a disable
+#     left in place is visible in the very next log instead of five weeks later.
+#  2. IT TOUCHES NO STAMP. Re-enabling makes the step immediately due; the switch defers work, it
+#     does not fake completion. (A disable that marked success would silently skip a whole cadence.)
+#  3. IT REJECTS UNKNOWN KEYS LOUDLY. `ORCH_DISABLE_STEPS=feature-scanned` would otherwise disable
+#     nothing while the operator believes the step is off -- a control that lies is worse than none.
+#     Unknown names WARN and are ignored, so a typo can never silently leave a step running.
+# Fails toward MOTION: unset, empty or unparseable means nothing is disabled.
+# Defined HERE, above every step, because the tick watchdog just below consults it before the
+# first step runs; `_warn_unknown_disable_steps` needs the cadence registry, so it is CALLED later.
+_step_disabled() {   # $1=step key -> 0 (true) when the operator has disabled it
+  local key="$1" raw entry
+  raw="${ORCH_DISABLE_STEPS:-}"
+  [[ -z "$raw" ]] && return 1
+  for entry in ${raw//,/ }; do
+    [[ "$entry" == "$key" ]] || continue
+    echo "  [disabled] $key skipped by ORCH_DISABLE_STEPS (no stamp touched; re-enable and it runs next tick)"
+    return 0
+  done
+  return 1
+}
+_warn_unknown_disable_steps() {   # a typo must not read as a working switch
+  local raw entry
+  raw="${ORCH_DISABLE_STEPS:-}"
+  [[ -z "$raw" ]] && return 0
+  for entry in ${raw//,/ }; do
+    cadence_known "$entry" 2>/dev/null && continue
+    [[ "$entry" == "redirect-sweep" ]] && continue      # named tick step, not in the cadence registry
+    echo "  WARN: ORCH_DISABLE_STEPS names unknown step '$entry' -- nothing was disabled by it" >&2
+  done
+}
+
+# ORCH-ANCHOR: tick-watchdog ---------------------------------------------------------------------
+# A TICK THAT NEVER ENDS IS A GATE WITH NO DRAIN. launchd starts no tick while one is running, so
+# when the tick of 2026-09-26 04:40Z blocked inside bash's own here-document write, every cadence
+# after it stopped for five days and twenty hours -- and every line that could have said so runs
+# inside the tick. `tick_watchdog.py start` arms an observer OUTSIDE the tick (its own process, its
+# own session) before any step runs. Past 90 min for one command or 3 h for the tick it ALERTs into
+# this log with the stuck command, its age and the exact `kill` that frees the tick, repeats that
+# hourly while it stays stuck, and the next tick's first line says how the previous one ended.
+# REPORT-ONLY by the owner's decision (2026-10-02): it signals nothing. Active ticks only -- a
+# shadow run is attended. Kill switch: ORCH_DISABLE_STEPS=tick-watchdog.
+if [[ "$mode" == "active" ]]; then
+  if _step_disabled tick-watchdog; then
+    echo "  WARN: tick-watchdog disabled -- nothing watches this tick; a stuck step would hold it and every later tick, because launchd starts no tick while one runs"
+  elif ! python3 "$ORCH/tick_watchdog.py" start --state-dir "$STAMP_DIR" --tick-pid "$$"; then
+    echo "  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)"
+  fi
+fi
 
 # --- Log rotation (every tick, cheap, fail-open) -------------------------------------------------
 # This tick's own stdout/stderr go to the handoff cron log via launchd's StandardOutPath, and NOTHING
@@ -277,45 +340,9 @@ python3 "$ORCH/research_subjects.py" rounds-report --headline 2>> "$STAMP_DIR/ro
 # re-estimates the VERSIONED route_weights from accumulated outcomes (the router already reads
 # current_weights). Stamp-gated so the hourly tick runs them at the right cadence; never breaks the tick.
 _due() { [[ ! -f "$1" ]] && return 0; [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]; }   # due if missing or older than $2 days
-# --- Per-step kill switch -------------------------------------------------------------------------
-# ONE mechanism giving every step a real off-lever, instead of a bespoke ORCH_* flag per capability.
-# Added 2026-08-21: the admission gate flagged six capabilities with "nothing can stop it without a
-# code change", and six new single-use flags would be six new untested branches on hot paths -- an
-# untested kill switch is theatre, because it reports a control nobody has proved works.
-#
-#   ORCH_DISABLE_STEPS="feature-scan,redirect-sweep"   # comma or space separated
-#
-# THREE PROPERTIES, each of them the fix for a failure this repo has already paid for:
-#  1. IT ANNOUNCES ITSELF EVERY TICK. A silent disable is the latched-gate pattern exactly -- a thing
-#     that stays off because nothing says it is off. Every skipped step prints a line, so a disable
-#     left in place is visible in the very next log instead of five weeks later.
-#  2. IT TOUCHES NO STAMP. Re-enabling makes the step immediately due; the switch defers work, it
-#     does not fake completion. (A disable that marked success would silently skip a whole cadence.)
-#  3. IT REJECTS UNKNOWN KEYS LOUDLY. `ORCH_DISABLE_STEPS=feature-scanned` would otherwise disable
-#     nothing while the operator believes the step is off -- a control that lies is worse than none.
-#     Unknown names WARN and are ignored, so a typo can never silently leave a step running.
-# Fails toward MOTION: unset, empty or unparseable means nothing is disabled.
-_step_disabled() {   # $1=step key -> 0 (true) when the operator has disabled it
-  local key="$1" raw entry
-  raw="${ORCH_DISABLE_STEPS:-}"
-  [[ -z "$raw" ]] && return 1
-  for entry in ${raw//,/ }; do
-    [[ "$entry" == "$key" ]] || continue
-    echo "  [disabled] $key skipped by ORCH_DISABLE_STEPS (no stamp touched; re-enable and it runs next tick)"
-    return 0
-  done
-  return 1
-}
-_warn_unknown_disable_steps() {   # a typo must not read as a working switch
-  local raw entry
-  raw="${ORCH_DISABLE_STEPS:-}"
-  [[ -z "$raw" ]] && return 0
-  for entry in ${raw//,/ }; do
-    cadence_known "$entry" 2>/dev/null && continue
-    [[ "$entry" == "redirect-sweep" ]] && continue      # named tick step, not in the cadence registry
-    echo "  WARN: ORCH_DISABLE_STEPS names unknown step '$entry' -- nothing was disabled by it" >&2
-  done
-}
+# The per-step kill switch (`_step_disabled`, `_warn_unknown_disable_steps`) is defined near the
+# top, above the tick watchdog that consults it. The check below needs the cadence registry, so it
+# runs here.
 _warn_unknown_disable_steps
 # --- Declared retirement --------------------------------------------------------------------------
 # The OTHER way a step is off: retired by default, declared on its own row in cadence_registry.py
@@ -532,12 +559,16 @@ if [[ "${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}" == "1" ]]; then
 fi
 if python3 "$ORCH/redirect_sweep.py" "${redirect_sweep_args[@]}" >> "$STAMP_DIR/redirect-sweep.log" 2>&1; then :; else echo "  warn: redirect_sweep failed (continuing; see $STAMP_DIR/redirect-sweep.log)"; fi
 fi   # end: _step_disabled redirect-sweep
+# Where the keepalive supervisor's Stage-2 artifacts live, defined ONCE: the plan step below writes
+# them and the redirect apply step reads them, and its candidate population IS this plan. It read
+# the report directory instead until 2026-10-02 -- nothing prunes that directory, so it judged 30
+# closed PRs a day, one metered offload each.
+stage2_plan_json="${ORCH_KEEPALIVE_STAGE2_PLAN_JSON:-$STAMP_DIR/keepalive-supervisor-stage2-plan.json}"
+stage2_report_dir="${ORCH_KEEPALIVE_STAGE2_REPORT_DIR:-$STAMP_DIR/keepalive-supervisor-stage2}"
 if _cadence_due keepalive-stage2-plan && _attempt_ok keepalive-stage2-plan; then
   if _gh_gate search && _gh_gate core; then
     echo "  [cadence] keepalive supervisor Stage 2 live plan (daily; read-only surfacing)"
-    stage2_plan_json="${ORCH_KEEPALIVE_STAGE2_PLAN_JSON:-$STAMP_DIR/keepalive-supervisor-stage2-plan.json}"
     stage2_plan_tmp="$stage2_plan_json.tmp"
-    stage2_report_dir="${ORCH_KEEPALIVE_STAGE2_REPORT_DIR:-$STAMP_DIR/keepalive-supervisor-stage2}"
     stage2_backend="${ORCH_KEEPALIVE_STAGE2_BACKEND:-cursor}"
     mkdir -p "$(dirname "$stage2_plan_json")" "$stage2_report_dir" 2>/dev/null || true
     if python3 "$ORCH/keepalive_supervisor.py" --stage2-plan --stage2-backend "$stage2_backend" --write-report-dir "$stage2_report_dir" --json > "$stage2_plan_tmp"; then
@@ -580,15 +611,20 @@ if _cadence_due redirect-apply-link && _attempt_ok redirect-apply-link; then
   #                    what makes synced_role_outcomes climb without an owner running link-outcome
   #                    by hand (5 links in ~2 months under the manual design).
   #   --apply          self-gated on ORCH_REDIRECT_APPLY_BOOTSTRAP (default 0). With the flag off it
-  #                    returns immediately and spends no offload. Armed, it applies at most one
-  #                    authorised plan per day on an ALREADY-DEAD lane and disarms itself once the
-  #                    Stage-2 deficits close. See SWITCH_ON_CRITERIA in
+  #                    returns immediately and spends no offload. Armed, it screens the
+  #                    supervisor's CURRENT candidates (the stage-2 plan, never the report
+  #                    directory) for free, judges only what passes -- a lane shown not live, not
+  #                    recommended wait/collect, not already judged on identical input -- at most
+  #                    3 role runs, applies at most one authorised plan per day, and disarms itself
+  #                    once the Stage-2 deficits close. Each run prints offloads spent beside the
+  #                    candidates that could still be authorised. See SWITCH_ON_CRITERIA in
   #                    capability_recurrence_check.py for the machine-checkable arming condition.
   echo "  [cadence] redirect apply/link (daily; link applied-redirect outcomes, then self-gated apply)"
   redirect_apply_ok=1
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] redirect apply/link" >> "$STAMP_DIR/redirect-apply.log"
   python3 "$ORCH/redirect_apply.py" --link-outcomes >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
-  python3 "$ORCH/redirect_apply.py" --apply >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
-  python3 "$ORCH/redirect_apply.py" --status >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
+  python3 "$ORCH/redirect_apply.py" --apply --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
+  python3 "$ORCH/redirect_apply.py" --status --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
   if [[ "$redirect_apply_ok" == "1" ]]; then _mark_success redirect-apply-link; else _mark_fail redirect-apply-link "see $STAMP_DIR/redirect-apply.log"; fi
 fi
 if _cadence_due switch-review && _attempt_ok switch-review; then

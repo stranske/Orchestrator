@@ -55,7 +55,11 @@ TOOLS = [
     },
     {
         "name": "fleet_summary",
-        "description": "Orchestrator health: last tick, backlog/experiment stamps, DB volumes.",
+        "description": (
+            "Orchestrator health: the current or last tick (the tick watchdog's record -- its age "
+            "against its thresholds, and the exact `kill` that frees a stuck one), "
+            "backlog/experiment stamps, DB volumes."
+        ),
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -252,8 +256,19 @@ def _fleet_summary() -> dict:
     ):
         p = STATE_DIR / f".{stamp}"
         stamps[stamp] = int(p.stat().st_mtime) if p.exists() else None
+    # THE TICK ITSELF. `heartbeat_age_s` is the dispatch lane's heartbeat, written only while
+    # ORCH_DISPATCH_LANE=1, so with the lane in shadow this tool said nothing about the tick at all
+    # -- including for the 141 hours on 2026-09-26..10-02 when one was stuck and every cadence
+    # stopped. The watchdog's record answers "is the tick stuck, for how long, and what frees it".
+    try:
+        import tick_watchdog
+
+        tick: dict = tick_watchdog.summary(STATE_DIR)
+    except Exception as exc:  # the health tool must answer even when the watchdog cannot
+        tick = {"state": "unavailable", "error": f"{type(exc).__name__}: {exc}"[:300]}
     return {
         "heartbeat_age_s": (int(time.time()) - hb_ts) if hb_ts else None,
+        "tick": tick,
         "db_volumes": volumes,
         "cadence_stamps": stamps,
     }
