@@ -849,7 +849,9 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
             "rows_with_expiry": 0,
         }
     report["expiring"].sort(key=lambda row: (row["expiry"], row["capability_id"]))
-    report["renewable"] = sum(1 for row in report["expiring"] + report["lapsed"] if row["renewable"])
+    report["renewable"] = sum(
+        1 for row in report["expiring"] + report["lapsed"] if row["renewable"]
+    )
     if later:
         expiry, cap_id = min(later)
         report["next_expiry"] = {
@@ -1171,10 +1173,12 @@ def format_gate_expiry(section: dict) -> list[str]:
     )
 
     def activity(row: dict) -> str:
+        # Two different measurements, both labelled: the count is invocation EVENTS in the usage
+        # window, while `last_invocation` may also be advanced by causal reconciliation from the Brain.
         last = row["last_invocation_on"] or "never"
         return (
-            f"invoked {row['recent_invocations']}x in {row['recent_window_days']}d, last {last}; "
-            f"renewed {row['renewals']}x before"
+            f"{row['recent_invocations']} invocation event(s) in {row['recent_window_days']}d, "
+            f"last invocation {last}; renewed {row['renewals']}x before"
         )
 
     for row in expiring:

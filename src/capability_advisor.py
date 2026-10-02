@@ -3320,7 +3320,10 @@ HOW_TO_USE = {
     "switch-review": (
         "switch_review.py --json — the weekly re-raise for held switches: it re-reports every "
         "bounded trial and gated flag whose window expired with no decision recorded, so a deferral "
-        "cannot decay into a silent revert. Reports only; it never flips a switch"
+        "cannot decay into a silent revert. Its `gate_expiry` block names every ledger row within "
+        "two review windows of its expiry, or retired by it that recently, with the "
+        "`capabilities.py renew --name <id> --reason ... --evidence-ref ...` command that holds it. "
+        "Reports only; it never flips a switch or renews a row"
     ),
     # ---- AND THE THREE WITH NO PRECONDITION AT ALL, which the same audit also saw as null. Their
     # `precondition_met` was unset, so the note said nothing either: no verdict AND no guidance.

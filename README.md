@@ -502,6 +502,16 @@ never reported ready while any criterion is unevaluated** — un-encoded prose, 
 and unrecognised criteria all block readiness, so silence cannot read as a pass. Layer 2 reports
 readiness; lifting a gate stays a deliberate act (see the safety-switch policy in CLAUDE.md).
 
+**An expiry ends by decision, not by timeout.** Every row carrying an `expiry` is retired when it
+passes (`KNOWN_GATES` rows get `GATED_TTL_DAYS` at registration), and that retirement is the safe
+default. Holding a row is the other decision, and it must be written down:
+`python3 src/capabilities.py renew --name <id> --reason "..." --evidence-ref <ref>` extends the expiry
+to a fresh `GATED_TTL_DAYS` from today and appends a `renewed` event with the reason, the evidence
+and the row's own activity. It refuses without both, never stacks, and never undoes a deliberate
+retirement, but a row its EXPIRY retired comes back to the status the timeout interrupted. Nothing
+renews on a schedule. `switch_review.py`'s weekly sweep only names the rows within two review
+windows of their expiry, or retired by it that recently, with the command (`gate_expiry`, FYI only).
+
 Do not maintain a second static list of supposedly active or gated features here. Generate the
 current inventory with `python3 src/capabilities.py inventory` (or inspect
 `~/.codex/orchestrator/capability-inventory.md` after an active tick). It distinguishes deliberate

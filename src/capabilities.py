@@ -3825,7 +3825,11 @@ def _selftest_renewal() -> None:
             raise AssertionError(f"renewed without a reason and evidence: {reason!r} {refs!r}")
         assert ledger.read_bytes() == retired_bytes, "a refused renewal wrote the ledger"
         out = renew(
-            name, reason="still runs", evidence_refs=["ledger:redirect"], path=ledger, timestamp=2_000
+            name,
+            reason="still runs",
+            evidence_refs=["ledger:redirect"],
+            path=ledger,
+            timestamp=2_000,
         )
         stored = load(ledger, create=False)[name]
         assert out["revived_from"] == "retired", out
