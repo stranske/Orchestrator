@@ -931,6 +931,15 @@ def write_usage_report(
 ) -> dict[str, Any]:
     """Write the structured local report under the configured state root."""
 
+    # The daily report is half of this capability's declared cadence, so its run is an INVOCATION;
+    # the `success` below records only the result. With the success alone, `last_invocation` moved
+    # only when an admission was assessed, which needs a finished experiment to follow up, and the
+    # tick launches none while the research arm is off by default. So the report ran daily from
+    # 2026-08-30 while the firing monitor read it as silent.
+    try:
+        capabilities.production_heartbeat("research-usage-guard", "invocation", ref="daily-report")
+    except Exception:
+        pass
     report = generate_usage_report(conn=conn)
     if output_path is None:
         state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex/orchestrator"))
