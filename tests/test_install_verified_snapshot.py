@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -740,3 +741,112 @@ def test_runtime_registry_update_preserves_other_publishers_tempfile(
     assert observed[0] != shared_temporary
     assert not observed[0].exists()
     assert set(registry.parent.iterdir()) == original_entries
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "copy", "file_fsync", "replace", "directory_open", "directory_fsync"]
+)
+def test_runtime_registry_sync_order_cleanup_and_retry(tmp_path, monkeypatch, failure):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    expected = installer.snapshot_digest(snapshot)
+    events = []
+    temporaries = []
+    descriptors = []
+    directory_fd = None
+    fail_enabled = True
+    copy2 = installer.shutil.copy2
+    replace = Path.replace
+    open_fd = installer.os.open
+    close_fd = installer.os.close
+    fsync = installer.os.fsync
+
+    def observe(event):
+        events.append(event)
+        if fail_enabled and failure == event:
+            raise OSError(f"injected {event} failure")
+
+    def copy_registry(source, destination, **kwargs):
+        destination = Path(destination)
+        if destination.parent == registry.parent and destination != registry:
+            temporaries.append(destination)
+            observe("copy")
+        return copy2(source, destination, **kwargs)
+
+    def sync_descriptor(fd):
+        descriptors.append(fd)
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            assert registry.read_bytes() == (snapshot / "repo_review_registry.json").read_bytes()
+            observe("directory_fsync")
+        else:
+            assert registry.read_text() == '{"old": true}\n' or not fail_enabled
+            assert temporaries[-1].read_bytes() == (
+                snapshot / "repo_review_registry.json"
+            ).read_bytes()
+            observe("file_fsync")
+        fsync(fd)
+
+    def replace_registry(self, destination):
+        if Path(destination) == registry:
+            observe("replace")
+        return replace(self, destination)
+
+    def open_directory(path, flags, *args, **kwargs):
+        nonlocal directory_fd
+        if Path(path) == registry.parent:
+            observe("directory_open")
+            directory_fd = open_fd(path, flags, *args, **kwargs)
+            descriptors.append(directory_fd)
+            return directory_fd
+        return open_fd(path, flags, *args, **kwargs)
+
+    def close_descriptor(fd):
+        nonlocal directory_fd
+        if fd == directory_fd:
+            events.append("directory_close")
+            directory_fd = None
+        return close_fd(fd)
+
+    monkeypatch.setattr(installer.shutil, "copy2", copy_registry)
+    monkeypatch.setattr(installer.os, "fsync", sync_descriptor)
+    monkeypatch.setattr(installer.os, "open", open_directory)
+    monkeypatch.setattr(installer.os, "close", close_descriptor)
+    monkeypatch.setattr(Path, "replace", replace_registry)
+
+    if failure is None:
+        assert installer.install(snapshot, mirror, expected, registry) == 0
+        assert events == [
+            "copy",
+            "file_fsync",
+            "replace",
+            "directory_open",
+            "directory_fsync",
+            "directory_close",
+        ]
+    else:
+        with pytest.raises(OSError, match=f"injected {failure} failure"):
+            installer.install(snapshot, mirror, expected, registry)
+        order = ["copy", "file_fsync", "replace", "directory_open", "directory_fsync"]
+        expected_events = order[: order.index(failure) + 1]
+        if failure == "directory_fsync":
+            expected_events.append("directory_close")
+        assert events == expected_events
+
+    # Registry errors are reported after mirror installation; a directory-sync error
+    # leaves the new registry visible, with durability unconfirmed until a successful retry.
+    assert installer.snapshot_digest(mirror) == expected
+    published = failure in (None, "directory_open", "directory_fsync")
+    assert registry.read_text() == ('{"repos": []}\n' if published else '{"old": true}\n')
+    assert len(temporaries) == 1
+    assert not temporaries[0].exists()
+    assert not list(registry.parent.glob(f".{registry.name}.*.tmp"))
+    for fd in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+    if failure is not None:
+        fail_enabled = False
+        assert installer.install(snapshot, mirror, expected, registry) == 0
+        assert registry.read_bytes() == (snapshot / "repo_review_registry.json").read_bytes()
+        assert installer.snapshot_digest(mirror) == expected
+        assert all(not temporary.exists() for temporary in temporaries)

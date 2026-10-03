@@ -263,6 +263,35 @@ def _validate_payload(payload: Path) -> None:
         raise ValueError("snapshot docs do not match .docs-shipped.txt")
 
 
+def _write_runtime_registry(registry: Path, runtime_registry: Path) -> None:
+    """Durably replace the separate registry using the validated deployment bytes.
+
+    Failures before replace retain the old registry. Failures after replace leave
+    the new bytes visible but propagate: durability is unconfirmed until retry.
+    """
+
+    runtime_registry.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{runtime_registry.name}.",
+        suffix=".tmp",
+        dir=runtime_registry.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.close(fd)
+        shutil.copy2(registry, temporary)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        temporary.replace(runtime_registry)
+        directory_fd = os.open(runtime_registry.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def install(
     snapshot: Path,
     mirror: Path,
@@ -334,20 +363,7 @@ def install(
             )
 
         if runtime_registry is not None and registry.is_file():
-            runtime_registry = runtime_registry.expanduser()
-            runtime_registry.parent.mkdir(parents=True, exist_ok=True)
-            fd, temporary_name = tempfile.mkstemp(
-                prefix=f".{runtime_registry.name}.",
-                suffix=".tmp",
-                dir=runtime_registry.parent,
-            )
-            temporary = Path(temporary_name)
-            try:
-                os.close(fd)
-                shutil.copy2(registry, temporary)
-                temporary.replace(runtime_registry)
-            finally:
-                temporary.unlink(missing_ok=True)
+            _write_runtime_registry(registry, runtime_registry)
 
     module_count = len(list(mirror.glob("*.py")))
     test_count = len(list((mirror / "tests").glob("*.py")))
