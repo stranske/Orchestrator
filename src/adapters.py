@@ -42,9 +42,10 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 # default (safe, never wrong). Every pinned id is validated against the CLI's own catalog where a
 # probe exists (see MODEL_CATALOG_PROBES) so a vendor rename degrades instead of killing the seat.
 #
-# Tier research 2026-08-08 (verified against live CLIs + vendor docs):
-#   codex  — GPT-5.6 ships a genuine 3-tier family: Sol (flagship $5/$30), Terra (workhorse
-#            $2.50/$15, ~GPT-5.5 class), Luna (fastest/cheapest $1/$6). GA 2026-07-09.
+# Tier research 2026-10-03 (verified against current OpenAI model docs):
+#   codex  — Sol 6.1 is the current flagship, Terra 5.6 remains the workhorse,
+#            and Luna 6 is the current fast/cheap rung. Astra 6 remains an
+#            explicit assessment/escalation profile rather than a routine tier.
 #   claude — Claude 5 family: Opus 5.5 flagship (moved from Opus 5 on 2026-09-22), Sonnet 5.5 mid
 #            (moved from Sonnet 5 on 2026-09-30),
 #            Haiku 4.5 cheap.
@@ -68,7 +69,7 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 VIBE_MODEL = "mistral-medium-3.5"
 
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
+    "codex": {"cheap": "gpt-6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6.1-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5-5", "full": "claude-opus-5-5"},
     "gemini": {
         "cheap": "gemini-3.7-flash-low",
@@ -1697,9 +1698,9 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     # Routine Codex tiers: Luna (cheap) / Terra (mid) / Sol (full). Astra remains
     # available through an explicit immutable execution profile for difficult work.
     for tier, expected in (
-        ("cheap", "gpt-5.6-luna"),
+        ("cheap", "gpt-6-luna"),
         ("mid", "gpt-5.6-terra"),
-        ("full", "gpt-5.6-sol"),
+        ("full", "gpt-6.1-sol"),
     ):
         cc = build_command("codex", "x", mode=tier)
         assert cc[cc.index("--model") + 1] == expected, (tier, cc)
