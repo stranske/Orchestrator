@@ -287,7 +287,11 @@ def test_profile_decision_attaches_only_real_matching_attempt(tmp_path, monkeypa
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
     profile = execution_profiles.get_profile("codex-5.6-sol-high")
     envelope = execution_profiles.select_profile(
-        "implement", "owner/repo#23", [profile["profile_id"]], rng_seed=4
+        "model_profile_trial",
+        "owner/repo#23",
+        [profile["profile_id"]],
+        rng_seed=4,
+        allow_retired_profiles=True,
     )
     feedback.record_profile_decision(envelope)
     feedback.record_run("profile-run", "owner/repo#23", "implement", "codex")

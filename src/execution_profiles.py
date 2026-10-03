@@ -86,6 +86,8 @@ def _profile(
     provider: str = "openai",
     pool: str = "codex-subscription",
     adapter_version: str = "codex-cli-profile-v1",
+    lifecycle_status: str = "active",
+    successor_profile_id: str | None = None,
 ) -> dict[str, Any]:
     """One registered execution profile. Defaults stay codex so existing entries are unchanged.
 
@@ -109,8 +111,8 @@ def _profile(
         "adapter_version": adapter_version,
         "prompt_version": "orchestrator-prompt-v1",
         "capacity_pool_ids": [pool],
-        "lifecycle_status": "active",
-        "successor_profile_id": None,
+        "lifecycle_status": lifecycle_status,
+        "successor_profile_id": successor_profile_id,
         "prior_offset": prior_offset,
     }
 
@@ -124,10 +126,15 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
         _profile("codex-6-astra-medium", "gpt-6-astra", "medium"),
         _profile("codex-5.6-sol-high", "gpt-5.6-sol", "high", prior_offset=0.05),
         _profile("codex-5.6-sol-medium", "gpt-5.6-sol", "medium"),
+        _profile("codex-6.1-sol-low", "gpt-6.1-sol", "low"),
+        _profile("codex-6.1-sol-medium", "gpt-6.1-sol", "medium"),
+        _profile("codex-6.1-sol-high", "gpt-6.1-sol", "high", prior_offset=0.05),
         _profile("codex-5.6-terra-high", "gpt-5.6-terra", "high"),
         _profile("codex-5.6-terra-medium", "gpt-5.6-terra", "medium"),
         _profile("codex-5.6-luna-high", "gpt-5.6-luna", "high", prior_offset=-0.02),
         _profile("codex-5.6-luna-low", "gpt-5.6-luna", "low"),
+        _profile("codex-6-luna-low", "gpt-6-luna", "low"),
+        _profile("codex-6-luna-high", "gpt-6-luna", "high", prior_offset=-0.02),
         # One profile per agent so every seat can record a worker attempt. Models are the identities
         # `adapters.model_identity(agent, "full")` reports; `test_registry_models_match_adapters`
         # fails if they drift, because a registry that disagrees with the adapter would request a
@@ -280,13 +287,19 @@ CREATE TABLE IF NOT EXISTS route_weights_v2 (
 """
 
 
-# All older profile IDs remain available for explicit trials and historical joins.
-PROFILE_RETIREMENTS: dict[str, str] = {}
+# Historical profile definitions are immutable.  This production-only retirement
+# map keeps explicit trials addressable while preventing automatic selection.
+PROFILE_RETIREMENTS: dict[str, str] = {
+    "codex-5.6-sol-high": "codex-6.1-sol-high",
+    "codex-5.6-sol-medium": "codex-6.1-sol-medium",
+    "codex-5.6-luna-high": "codex-6-luna-high",
+    "codex-5.6-luna-low": "codex-6-luna-low",
+}
 
 # Production defaults are task-specific. Astra High remains an explicit escalation;
 # immutable trial profiles stay addressable without being chosen for routine work.
 CODEX_TASK_PROFILES = {
-    "implement": "codex-5.6-sol-high",
+    "implement": "codex-6.1-sol-high",
     "epic": "codex-6-astra-medium",
     "cross_repo": "codex-6-astra-medium",
     "runtime_ac": "codex-6-astra-medium",
@@ -295,21 +308,39 @@ CODEX_TASK_PROFILES = {
     "codemod": "codex-5.6-terra-medium",
     "polish": "codex-5.6-terra-medium",
     "review": "codex-5.6-terra-medium",
-    "closer": "codex-5.6-sol-medium",
-    "coordinator": "codex-5.6-sol-medium",
+    "closer": "codex-6.1-sol-medium",
+    "coordinator": "codex-6.1-sol-medium",
 }
 CODEX_OFFLOAD_PROFILES = {
-    "cheap": "codex-5.6-luna-low",
+    "cheap": "codex-6-luna-low",
     "mid": "codex-5.6-terra-medium",
-    "full": "codex-5.6-sol-high",
-    "assess": "codex-5.6-sol-medium",
+    "full": "codex-6.1-sol-high",
+    "assess": "codex-6.1-sol-medium",
 }
+
+
+def resolve_production_profile_id(profile_id: str) -> str:
+    """Follow retired-profile successors for automatic production selection."""
+    current = str(profile_id)
+    seen: set[str] = set()
+    while True:
+        successor = PROFILE_RETIREMENTS.get(current)
+        if not successor:
+            return current
+        if successor == current:
+            return current
+        if current in seen:
+            raise ValueError(f"profile successor cycle at {profile_id}")
+        seen.add(current)
+        current = str(successor)
 
 
 def default_codex_profile(task_type: str, mode: str | None = None) -> str:
     if task_type == "offload":
-        return CODEX_OFFLOAD_PROFILES.get(mode or "mid", CODEX_OFFLOAD_PROFILES["mid"])
-    return CODEX_TASK_PROFILES.get(task_type, "codex-5.6-sol-medium")
+        profile_id = CODEX_OFFLOAD_PROFILES.get(mode or "mid", CODEX_OFFLOAD_PROFILES["mid"])
+    else:
+        profile_id = CODEX_TASK_PROFILES.get(task_type, "codex-6.1-sol-medium")
+    return resolve_production_profile_id(profile_id)
 
 
 def default_codex_delegate_profile(
@@ -317,9 +348,9 @@ def default_codex_delegate_profile(
 ) -> str:
     """Pick a direct delegate's profile without losing explicit tier requests."""
     if explicit_mode in CODEX_OFFLOAD_PROFILES:
-        return CODEX_OFFLOAD_PROFILES[explicit_mode]
+        return resolve_production_profile_id(CODEX_OFFLOAD_PROFILES[explicit_mode])
     if lane == "closer" and task_type == "implement":
-        return CODEX_TASK_PROFILES["closer"]
+        return resolve_production_profile_id(CODEX_TASK_PROFILES["closer"])
     return default_codex_profile(task_type)
 
 
@@ -378,13 +409,16 @@ def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"unknown execution profile: {profile}") from exc
 
 
-def profiles_for_agent(agent: str, *, transport: str | None = None) -> list[dict[str, Any]]:
+def profiles_for_agent(
+    agent: str, *, transport: str | None = None, include_retired: bool = False
+) -> list[dict[str, Any]]:
+    """Return routable profiles, or include historical/trial profiles for reporting."""
     rows = [
         dict(p)
         for p in PROFILE_REGISTRY.values()
         if p["agent"] == agent
         and p["lifecycle_status"] == "active"
-        and p["profile_id"] not in PROFILE_RETIREMENTS
+        and (include_retired or p["profile_id"] not in PROFILE_RETIREMENTS)
     ]
     if transport:
         rows = [p for p in rows if transport in p["transport_support"]]
@@ -495,11 +529,18 @@ def select_profile(
     exploration_policy: str = "deterministic-best",
     policy_version: str = PROFILE_POLICY_VERSION,
     causal_context: dict[str, Any] | None = None,
+    allow_retired_profiles: bool = False,
 ) -> dict[str, Any]:
+    """Select an automatic profile, excluding retired IDs unless a trial opts in."""
     candidates = sorted(dict.fromkeys(str(pid) for pid in candidate_profile_ids))
     for profile_id in candidates:
         get_profile(profile_id)
-    gates = gate_results or {pid: {"eligible": True} for pid in candidates}
+    gates = {pid: dict((gate_results or {}).get(pid) or {"eligible": True}) for pid in candidates}
+    if not allow_retired_profiles:
+        for profile_id in candidates:
+            if profile_id in PROFILE_RETIREMENTS:
+                gates[profile_id]["eligible"] = False
+                gates[profile_id]["retirement_reason"] = "superseded_production_profile"
     eligible = [pid for pid in candidates if (gates.get(pid) or {}).get("eligible", True)]
     if not eligible:
         selected = None
@@ -525,6 +566,7 @@ def select_profile(
         "policy_version": policy_version,
         "assignment_probability": probability,
         "causal_context": causal_context or {},
+        "allow_retired_profiles": bool(allow_retired_profiles),
     }
     body["replay_hash"] = _digest(body)
     body["decision_id"] = f"profile-decision:{body['replay_hash'][:24]}"
@@ -543,6 +585,7 @@ def replay_decision(envelope: dict[str, Any]) -> dict[str, Any]:
         exploration_policy=envelope.get("exploration_policy") or "deterministic-best",
         policy_version=envelope["policy_version"],
         causal_context=envelope.get("causal_context") or {},
+        allow_retired_profiles=bool(envelope.get("allow_retired_profiles")),
     )
     if replayed["replay_hash"] != envelope.get("replay_hash"):
         raise ValueError("profile decision envelope is not replayable")
@@ -789,7 +832,7 @@ def report(conn: sqlite3.Connection, *, now: int | None = None) -> dict[str, Any
     now = int(now or time.time())
     profiles = []
     instrumentation_attempts_total = 0
-    for profile in profiles_for_agent("codex"):
+    for profile in profiles_for_agent("codex", include_retired=True):
         cov = resolved_model_coverage(conn, profile["profile_id"])
         instrumentation_attempts = int(
             conn.execute(
