@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import paths
+from scripts import install_verified_snapshot as installer
 
 INSTALLER = paths.REPO_ROOT / "scripts" / "install_verified_snapshot.py"
 
@@ -198,3 +199,242 @@ def test_install_rejects_missing_or_malformed_verifier_digest_before_mutation(tm
 
     assert result.returncode == 2
     assert original.read_text() == "still live\n"
+
+
+def _live_outputs(tmp_path: Path) -> tuple[Path, Path]:
+    mirror = tmp_path / "live mirror"
+    (mirror / "docs").mkdir(parents=True)
+    (mirror / "old.py").write_text("still live\n")
+    (mirror / "docs" / "old.md").write_text("old guide\n")
+    (mirror / ".docs-shipped.txt").write_text("docs/old.md\n")
+    registry = tmp_path / "runtime.json"
+    registry.write_text('{"old": true}\n')
+    return mirror, registry
+
+
+def _assert_live_outputs_unchanged(mirror: Path, registry: Path) -> None:
+    assert (mirror / "old.py").read_text() == "still live\n"
+    assert (mirror / "docs" / "old.md").read_text() == "old guide\n"
+    assert (mirror / ".docs-shipped.txt").read_text() == "docs/old.md\n"
+    assert not (mirror / "module.py").exists()
+    assert registry.read_text() == '{"old": true}\n'
+
+
+def test_payload_copy_failure_keeps_live_outputs_and_cleans_staging(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    expected = installer.snapshot_digest(snapshot)
+    copy_entry = installer._copy_entry
+    staging: list[Path] = []
+
+    def fail_late(source: Path, destination: Path) -> None:
+        if source == snapshot / "tests" / "fixtures" / "input.txt":
+            assert destination.parents[2] != mirror
+            staging.append(destination.parents[2])
+            assert (staging[0] / "module.py").is_file()
+            raise OSError("injected staging copy failure")
+        copy_entry(source, destination)
+
+    monkeypatch.setattr(installer, "_copy_entry", fail_late)
+    with pytest.raises(OSError, match="injected staging copy failure"):
+        installer.install(snapshot, mirror, expected, registry)
+
+    _assert_live_outputs_unchanged(mirror, registry)
+    assert len(staging) == 1
+    assert not staging[0].exists()
+
+
+@pytest.mark.parametrize("change", ["bytes", "mode", "link", "registry"])
+def test_corrupt_copy_is_rejected_before_live_mutation(tmp_path, monkeypatch, change):
+    snapshot = _snapshot(tmp_path)
+    (snapshot / "scripts" / "tool-link.sh").symlink_to("nested/tool.sh")
+    mirror, registry = _live_outputs(tmp_path)
+    expected = installer.snapshot_digest(snapshot)
+    copy_payload = installer._copy_payload
+
+    def corrupt_copy(source: Path, destination: Path, entries: list[Path]) -> None:
+        assert source == snapshot
+        assert destination != mirror
+        copy_payload(source, destination, entries)
+        if change == "bytes":
+            (destination / "module.py").write_text("changed while copying\n")
+        elif change == "mode":
+            (destination / "orchestrate.sh").chmod(0o644)
+        elif change == "link":
+            link = destination / "scripts" / "tool-link.sh"
+            link.unlink()
+            link.symlink_to("../orchestrate.sh")
+        else:
+            (destination / "repo_review_registry.json").write_text("not JSON\n")
+
+    monkeypatch.setattr(installer, "_copy_payload", corrupt_copy)
+    error = "Expecting value" if change == "registry" else "staged payload digest"
+    with pytest.raises(ValueError, match=error):
+        installer.install(snapshot, mirror, expected, registry)
+
+    _assert_live_outputs_unchanged(mirror, registry)
+
+
+def test_snapshot_change_during_staging_is_rejected_before_live_mutation(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    expected = installer.snapshot_digest(snapshot)
+    copy_entry = installer._copy_entry
+
+    def change_then_copy(source: Path, destination: Path) -> None:
+        if source == snapshot / "module.py":
+            source.write_text("changed after the initial digest check\n")
+        copy_entry(source, destination)
+
+    monkeypatch.setattr(installer, "_copy_entry", change_then_copy)
+    with pytest.raises(ValueError, match="staged payload digest"):
+        installer.install(snapshot, mirror, expected, registry)
+
+    _assert_live_outputs_unchanged(mirror, registry)
+
+
+def test_runtime_writes_during_preparation_are_preserved(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    (mirror / "docs" / "reports").mkdir()
+    (mirror / "experiments").mkdir()
+    expected = installer.snapshot_digest(snapshot)
+    copy_payload = installer._copy_payload
+
+    def write_then_copy(source: Path, destination: Path, entries: list[Path]) -> None:
+        if source == snapshot:
+            (mirror / "docs" / "reports" / "runtime.md").write_text("concurrent report\n")
+            (mirror / "experiments" / ".last-ship-gate").write_text("concurrent marker\n")
+        copy_payload(source, destination, entries)
+
+    monkeypatch.setattr(installer, "_copy_payload", write_then_copy)
+    assert installer.install(snapshot, mirror, expected, registry) == 0
+    assert (mirror / "docs" / "reports" / "runtime.md").read_text() == "concurrent report\n"
+    assert (mirror / "experiments" / ".last-ship-gate").read_text() == "concurrent marker\n"
+
+
+def test_install_never_reopens_snapshot_after_staging_validation(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    expected = installer.snapshot_digest(snapshot)
+    remove = installer._remove
+    displaced = tmp_path / "unavailable snapshot"
+
+    def remove_live_entry(path: Path) -> None:
+        if path == mirror / "old.py":
+            snapshot.rename(displaced)
+            (displaced / "repo_review_registry.json").write_text('{"changed": true}\n')
+        remove(path)
+
+    monkeypatch.setattr(installer, "_remove", remove_live_entry)
+    assert installer.install(snapshot, mirror, expected, registry) == 0
+    assert not snapshot.exists()
+    assert installer.snapshot_digest(mirror) == expected
+    assert registry.read_text() == '{"repos": []}\n'
+
+
+def test_install_round_trips_symlinks_and_directory_permissions(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    (snapshot / "scripts" / "tool-link.sh").symlink_to("nested/tool.sh")
+    (snapshot / "tests" / "fixture-link").symlink_to("fixtures", target_is_directory=True)
+    (snapshot / "scripts" / "nested").chmod(0o555)
+    (snapshot / "docs" / "briefs").chmod(0o750)
+    mirror = tmp_path / "live mirror"
+    expected = _digest(snapshot)
+
+    result = _run(snapshot, mirror, "--expected-digest", expected)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _digest(mirror) == expected
+    assert os.readlink(mirror / "scripts" / "tool-link.sh") == "nested/tool.sh"
+    assert os.readlink(mirror / "tests" / "fixture-link") == "fixtures"
+    assert (mirror / "scripts" / "nested").stat().st_mode & 0o777 == 0o555
+    assert (mirror / "docs" / "briefs").stat().st_mode & 0o777 == 0o750
+
+
+def test_invalid_prior_manifest_is_rejected_before_any_live_removal(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    manifest = mirror / ".docs-shipped.txt"
+    manifest.write_text("docs/../old.py\n")
+
+    result = _run(snapshot, mirror, "--expected-digest", _digest(snapshot))
+
+    assert result.returncode == 2
+    assert "unsafe shipped-doc path" in result.stderr
+    assert (mirror / "old.py").read_text() == "still live\n"
+    assert (mirror / "docs" / "old.md").read_text() == "old guide\n"
+    assert manifest.read_text() == "docs/../old.py\n"
+    assert registry.read_text() == '{"old": true}\n'
+
+
+@pytest.mark.parametrize("tree", [*installer.REPLACED_TREES, *installer.MERGED_TREES])
+def test_digest_rejects_structural_symlinks(tmp_path, tree):
+    snapshot = _snapshot(tmp_path)
+    (snapshot / tree).rename(tmp_path / "external tree")
+    (snapshot / tree).symlink_to(tmp_path / "external tree", target_is_directory=True)
+
+    result = _run(snapshot, "--digest")
+
+    assert result.returncode == 2
+    assert "snapshot tree is not a real directory" in result.stderr
+
+
+@pytest.mark.parametrize("path", ["experiments/hypotheses.json", "docs/guide.md"])
+def test_digest_rejects_entries_under_symlink_parents(tmp_path, path):
+    snapshot = _snapshot(tmp_path)
+    parent = (snapshot / path).parent
+    parent.rename(tmp_path / "external directory")
+    parent.symlink_to(tmp_path / "external directory", target_is_directory=True)
+
+    result = _run(snapshot, "--digest")
+
+    assert result.returncode == 2
+    assert "symlink parent" in result.stderr or "not a real directory" in result.stderr
+
+
+@pytest.mark.parametrize("path", ["data/feedback-snapshot.json", "extra.py"])
+def test_digest_rejects_directories_in_file_ownership_positions(tmp_path, path):
+    snapshot = _snapshot(tmp_path)
+    (snapshot / path).mkdir()
+
+    result = _run(snapshot, "--digest")
+
+    assert result.returncode == 2
+    assert "is a directory" in result.stderr
+
+
+def test_digest_rejects_special_files_without_reading_them(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    os.mkfifo(snapshot / "scripts" / "pipe")
+
+    result = _run(snapshot, "--digest")
+
+    assert result.returncode == 2
+    assert "unsupported snapshot entry: scripts/pipe" in result.stderr
+
+
+@pytest.mark.parametrize("target", ["absolute external", "absolute snapshot", "../../outside.sh"])
+def test_digest_rejects_symlinks_that_would_read_outside_the_staged_payload(tmp_path, target):
+    snapshot = _snapshot(tmp_path)
+    if target == "absolute external":
+        target = str(tmp_path / "outside.sh")
+    elif target == "absolute snapshot":
+        target = str(snapshot / "orchestrate.sh")
+    (snapshot / "scripts" / "link.sh").symlink_to(target)
+
+    result = _run(snapshot, "--digest")
+
+    assert result.returncode == 2
+    assert "snapshot symlink is not payload-relative" in result.stderr
+
+
+@pytest.mark.parametrize("contents", ["docs//guide.md\n", "docs/guide.md\ndocs/guide.md\n"])
+def test_digest_rejects_ambiguous_doc_manifest_paths(tmp_path, contents):
+    snapshot = _snapshot(tmp_path)
+    (snapshot / ".docs-shipped.txt").write_text(contents)
+
+    result = _run(snapshot, "--digest")
+
+    assert result.returncode == 2
+    assert "unsafe shipped-doc path" in result.stderr
