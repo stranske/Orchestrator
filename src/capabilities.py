@@ -173,6 +173,35 @@ EVENT_FIELDS = {
 # spellings parted.
 ADVICE_REF_PREFIX = "advice:"
 
+
+def split_invocations(cap: dict[str, Any]) -> dict[str, Any]:
+    """A row's `invocation` events, split into consult trials and every other invocation.
+
+    ONE split for every reader that must tell the two apart (`switch_review`'s ON-but-idle rule and
+    `capability_firing_monitor.silence_evidence`), so no two readers can disagree about which
+    invocation was a trial. A trial is an invocation under `ADVICE_REF_PREFIX`: an advised candidate
+    was triggered, from any session, through the ungated `heartbeat`. The rest are NOT "ticks": the
+    outcome bridge credits external CI runs the same way.
+
+    Returns `trial` and `other`, the timestamps of each class in history order, and `newest`, the
+    newest invocation event as `(timestamp, is_trial)`, the later-recorded on a tie, or None when the
+    row has none. Read from `event_history` alone: a causal reconciliation sets `last_invocation`
+    without any event, so the field cannot say which class moved it.
+    """
+    trial: list[int] = []
+    other: list[int] = []
+    newest: tuple[int, bool] | None = None
+    for event in cap.get("event_history") or []:
+        if event.get("type") != "invocation":
+            continue
+        stamp = int(event.get("timestamp") or 0)
+        is_trial = str(event.get("ref") or "").startswith(ADVICE_REF_PREFIX)
+        (trial if is_trial else other).append(stamp)
+        if newest is None or stamp >= newest[0]:
+            newest = (stamp, is_trial)
+    return {"trial": trial, "other": other, "newest": newest}
+
+
 KNOWN_GATES: dict[str, dict[str, Any]] = {
     "route-weights-export": {
         "findability_category": "exercise_bound",
@@ -3987,9 +4016,31 @@ def _selftest() -> None:
     _selftest_renewal()
     _selftest_read_cache()
     _selftest_shared_read_lock()
+    _selftest_split_invocations()
     print(
         "capabilities.py selftest: OK (+ usage rate / evidence debt / unblock classification, "
         "gate readiness w/ never-pass-on-silence)"
+    )
+
+
+def _selftest_split_invocations() -> None:
+    """A trial is told apart by its ref alone, from the history alone, and a tie goes to the later."""
+    history = [
+        {"type": "invocation", "timestamp": 100, "ref": "x.main"},
+        {"type": "invocation", "timestamp": 300, "ref": ADVICE_REF_PREFIX + "0123456789ab"},
+        {"type": "success", "timestamp": 400, "ref": "x.main"},
+        {"type": "invocation", "timestamp": 300},  # no ref is not a trial
+        {"type": "match", "timestamp": 500, "ref": ADVICE_REF_PREFIX + "0123456789ab"},
+    ]
+    split = split_invocations({"last_invocation": 900, "event_history": history})
+    assert split == {"trial": [300], "other": [100, 300], "newest": (300, False)}, split
+    tied_trial = split_invocations({"event_history": history[:2] + history[3:4] + history[1:2]})
+    assert tied_trial["newest"] == (300, True), "a tie goes to the later-recorded event"
+    empty = split_invocations({"last_invocation": 900})
+    assert empty == {"trial": [], "other": [], "newest": None}, "the field is never an event"
+    print(
+        "capabilities.py split-invocations selftest: OK (an advice: ref is a trial and nothing "
+        "else is, only invocation events count, a tie goes to the later event, the field is unread)"
     )
 
 
