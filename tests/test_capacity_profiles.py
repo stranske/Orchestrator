@@ -553,6 +553,11 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
         and profile["profile_id"] not in execution_profiles.PROFILE_RETIREMENTS
     )
     assert len(codex_candidates) == 9, codex_candidates
+    all_codex_profiles = [
+        profile
+        for profile in execution_profiles.PROFILE_REGISTRY.values()
+        if profile["agent"] == "codex"
+    ]
     envelope = execution_profiles.select_profile(
         "implement",
         "o/r#report",
@@ -563,7 +568,9 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
     )
     feedback.record_profile_decision(envelope)
     summary = feedback.profile_routing_summary()
-    assert summary["cold_starts"] == len(codex_candidates)
+    # Reporting includes explicit historical/trial profiles so their evidence remains visible;
+    # only the smaller candidate set is eligible for automatic selection.
+    assert summary["cold_starts"] == len(all_codex_profiles)
     assert summary["routing_decisions"] == 1
     assert summary["mean_assignment_probability"] == pytest.approx(1 / len(codex_candidates))
     # This field reports every REAL account, not "the pools in this decision", so it must equal the
@@ -576,6 +583,8 @@ def test_profile_report_surfaces_cold_starts_propensity_and_shared_pool(tmp_path
         "gpt-6.1-sol",
         "gpt-5.6-terra",
         "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-luna",
     }
 
 

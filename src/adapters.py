@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -202,16 +203,28 @@ CODEX_PROFILE_BIN = Path(
         "/Applications/ChatGPT.app/Contents/Resources/codex",
     )
 )
+CODEX_PROFILE_BIN_EXPLICIT = bool(os.environ.get("ORCH_CODEX_PROFILE_BIN"))
 
 
 def profile_codex_binary() -> str:
-    """Use the version-capable bundled CLI for exact profiles or fail closed."""
-    if not CODEX_PROFILE_BIN.is_file():
-        raise RuntimeError(
-            "exact Codex profiles require ORCH_CODEX_PROFILE_BIN pointing to a "
-            "version-capable Codex binary; refusing PATH fallback"
-        )
-    return str(CODEX_PROFILE_BIN)
+    """Resolve the exact-profile CLI without dropping model or effort pins.
+
+    An explicit ``ORCH_CODEX_PROFILE_BIN`` is an operator contract and never falls
+    back. Otherwise prefer the app bundle, then the installed global Codex CLI.
+    The latter is necessary on machines where the app bundle has not shipped a
+    usable binary; ``build_command`` still emits the immutable profile's exact
+    ``--model`` and reasoning-effort arguments either way.
+    """
+    if CODEX_PROFILE_BIN.is_file():
+        return str(CODEX_PROFILE_BIN)
+    if not CODEX_PROFILE_BIN_EXPLICIT:
+        global_codex = shutil.which("codex")
+        if global_codex and Path(global_codex).is_file():
+            return global_codex
+    raise RuntimeError(
+        "exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global "
+        "Codex CLI; refusing an unresolved binary"
+    )
 
 
 def codex_bypass_inner_sandbox() -> bool:
@@ -1713,13 +1726,13 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     # An EXACT profile resolves the version-capable Codex binary and `profile_codex_binary()`
     # fails closed rather than falling back to PATH — deliberately, since a profile that cannot
     # pin its version is not an exact profile. So this SECTION needs that binary installed; the
-    # default lives inside a macOS app bundle and cannot exist on a Linux runner. Everything else
-    # in this selftest runs anywhere.
+    # normally uses the app bundle, with an installed global CLI as the
+    # compatibility fallback. Everything else in this selftest runs anywhere.
     if env_prereq.runnable(gaps, env_prereq.codex_profile_binary_absent()):
         profile_commands = {}
         for profile in execution_profiles.profiles_for_agent("codex"):
             cmd = build_command("codex", "x", mode="full", profile=profile, transport="local")
-            assert cmd[0] == str(CODEX_PROFILE_BIN), cmd
+            assert cmd[0] == profile_codex_binary(), cmd
             assert cmd[cmd.index("--model") + 1] == profile["requested_model"], cmd
             assert cmd[cmd.index("--sandbox") + 1] == "workspace-write", cmd
             assert (

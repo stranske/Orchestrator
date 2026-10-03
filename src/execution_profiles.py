@@ -324,17 +324,15 @@ def resolve_production_profile_id(profile_id: str) -> str:
     current = str(profile_id)
     seen: set[str] = set()
     while True:
-        profile = PROFILE_REGISTRY.get(current)
         successor = PROFILE_RETIREMENTS.get(current)
         if not successor:
             return current
-        if not successor or successor == current:
+        if successor == current:
             return current
         if current in seen:
             raise ValueError(f"profile successor cycle at {profile_id}")
         seen.add(current)
         current = str(successor)
-    return current  # pragma: no cover
 
 
 def default_codex_profile(task_type: str, mode: str | None = None) -> str:
@@ -411,13 +409,16 @@ def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"unknown execution profile: {profile}") from exc
 
 
-def profiles_for_agent(agent: str, *, transport: str | None = None) -> list[dict[str, Any]]:
+def profiles_for_agent(
+    agent: str, *, transport: str | None = None, include_retired: bool = False
+) -> list[dict[str, Any]]:
+    """Return routable profiles, or include historical/trial profiles for reporting."""
     rows = [
         dict(p)
         for p in PROFILE_REGISTRY.values()
         if p["agent"] == agent
         and p["lifecycle_status"] == "active"
-        and p["profile_id"] not in PROFILE_RETIREMENTS
+        and (include_retired or p["profile_id"] not in PROFILE_RETIREMENTS)
     ]
     if transport:
         rows = [p for p in rows if transport in p["transport_support"]]
@@ -528,11 +529,18 @@ def select_profile(
     exploration_policy: str = "deterministic-best",
     policy_version: str = PROFILE_POLICY_VERSION,
     causal_context: dict[str, Any] | None = None,
+    allow_retired_profiles: bool = False,
 ) -> dict[str, Any]:
+    """Select an automatic profile, excluding retired IDs unless a trial opts in."""
     candidates = sorted(dict.fromkeys(str(pid) for pid in candidate_profile_ids))
     for profile_id in candidates:
         get_profile(profile_id)
-    gates = gate_results or {pid: {"eligible": True} for pid in candidates}
+    gates = {pid: dict((gate_results or {}).get(pid) or {"eligible": True}) for pid in candidates}
+    if not allow_retired_profiles:
+        for profile_id in candidates:
+            if profile_id in PROFILE_RETIREMENTS:
+                gates[profile_id]["eligible"] = False
+                gates[profile_id]["retirement_reason"] = "superseded_production_profile"
     eligible = [pid for pid in candidates if (gates.get(pid) or {}).get("eligible", True)]
     if not eligible:
         selected = None
@@ -558,6 +566,7 @@ def select_profile(
         "policy_version": policy_version,
         "assignment_probability": probability,
         "causal_context": causal_context or {},
+        "allow_retired_profiles": bool(allow_retired_profiles),
     }
     body["replay_hash"] = _digest(body)
     body["decision_id"] = f"profile-decision:{body['replay_hash'][:24]}"
@@ -576,6 +585,7 @@ def replay_decision(envelope: dict[str, Any]) -> dict[str, Any]:
         exploration_policy=envelope.get("exploration_policy") or "deterministic-best",
         policy_version=envelope["policy_version"],
         causal_context=envelope.get("causal_context") or {},
+        allow_retired_profiles=bool(envelope.get("allow_retired_profiles")),
     )
     if replayed["replay_hash"] != envelope.get("replay_hash"):
         raise ValueError("profile decision envelope is not replayable")
@@ -822,7 +832,7 @@ def report(conn: sqlite3.Connection, *, now: int | None = None) -> dict[str, Any
     now = int(now or time.time())
     profiles = []
     instrumentation_attempts_total = 0
-    for profile in profiles_for_agent("codex"):
+    for profile in profiles_for_agent("codex", include_retired=True):
         cov = resolved_model_coverage(conn, profile["profile_id"])
         instrumentation_attempts = int(
             conn.execute(

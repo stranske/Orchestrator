@@ -417,19 +417,17 @@ def _flat_layout() -> str | None:
 def codex_profile_binary_absent() -> str | None:
     """Reason string when the version-capable Codex binary exact profiles require is absent.
 
-    `adapters.profile_codex_binary()` fails closed rather than falling back to whatever `codex`
-    is on PATH — the whole point of an exact profile is that the binary can pin a version. The
-    default location is inside a macOS app bundle, so it cannot exist on a Linux runner.
+    The app bundle is preferred, with the installed global Codex CLI as the
+    compatibility fallback when no explicit path is configured. An explicit
+    path remains fail-closed, and an exact profile always preserves its model pin.
     """
     import adapters
 
-    if adapters.CODEX_PROFILE_BIN.is_file():
+    try:
+        adapters.profile_codex_binary()
         return None
-    return (
-        f"exact-profile Codex binary absent: {adapters.CODEX_PROFILE_BIN} "
-        f"(set ORCH_CODEX_PROFILE_BIN to a version-capable Codex binary) — "
-        f"adapters.profile_codex_binary() fails closed rather than using PATH"
-    )
+    except RuntimeError as exc:
+        return str(exc)
 
 
 def agent_cli_absent(*agents: str) -> str | None:

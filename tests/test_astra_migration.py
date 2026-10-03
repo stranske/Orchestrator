@@ -34,6 +34,40 @@ def test_retired_sol_luna_profiles_resolve_successors_and_stay_addressable(tmp_p
     assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="high"'
     legacy_argv = adapters.build_command("codex", "x", profile=legacy, transport="local")
     assert legacy_argv[legacy_argv.index("--model") + 1] == "gpt-5.6-sol"
+    automatic = execution_profiles.select_profile(
+        "implement",
+        "o/r#current",
+        ["codex-5.6-sol-high", "codex-6.1-sol-high"],
+        rng_seed=0,
+        scores={"codex-5.6-sol-high": 1.0, "codex-6.1-sol-high": 0.0},
+        exploration=True,
+    )
+    assert automatic["selected_profile_id"] == "codex-6.1-sol-high"
+    assert automatic["gate_results"]["codex-5.6-sol-high"]["eligible"] is False
+    explicit_trial = execution_profiles.select_profile(
+        "model_profile_trial",
+        "o/r#legacy-canary",
+        ["codex-5.6-sol-high"],
+        rng_seed=0,
+        allow_retired_profiles=True,
+    )
+    assert explicit_trial["selected_profile_id"] == "codex-5.6-sol-high"
+
+
+def test_global_codex_fallback_keeps_exact_profile_model_and_effort(tmp_path, monkeypatch):
+    global_codex = tmp_path / "codex"
+    global_codex.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    global_codex.chmod(0o755)
+    monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN", tmp_path / "absent-app-codex")
+    monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN_EXPLICIT", False)
+    monkeypatch.setattr(
+        adapters.shutil, "which", lambda name: str(global_codex) if name == "codex" else None
+    )
+    profile = execution_profiles.get_profile("codex-6.1-sol-medium")
+    argv = adapters.build_command("codex", "x", profile=profile, transport="local")
+    assert argv[0] == str(global_codex)
+    assert argv[argv.index("--model") + 1] == "gpt-6.1-sol"
+    assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="medium"'
 
 
 def test_existing_profile_database_accepts_new_immutable_profiles(tmp_path, monkeypatch):

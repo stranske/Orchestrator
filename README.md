@@ -329,8 +329,15 @@ safety switch, not dead code.
   `(agent, subject_family)` before posterior updates; legacy rows keep agent-level value without
   receiving invented subject provenance.
 - **Execution profiles**: `execution_profiles.py` keeps provider capacity pools separate from
-  model/profile identity (`codex-5.6-sol`, `codex-5.6-terra`, `codex-5.6-luna`). Profile routing
-  is fail-closed, capacity-aware, and shadow-learns per-agent/provider priors before any live
+  model/profile identity. Production pins are [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+  for Sol work, [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) for cheap
+  work, and [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) for the
+  established mid-tier workhorse; GPT-6 Astra remains an explicit escalation profile. The local
+  The migration's local `codex-cli 0.158.0` accepted this model-pin form; the installed global
+  runner is now `0.160.0` and is used when the app bundle has no binary. Superseded Sol/Luna
+  profiles remain explicit trial and
+  historical identities, but automatic and learned selection excludes them. Profile routing is
+  fail-closed, capacity-aware, and shadow-learns per-agent/provider priors before any live
   promotion. `feedback.py completion-events --jsonl` exports the canonical phase envelope used by
   downstream learning; it never fabricates historical observations.
 - **Sol/Terra/Luna trial bridge**: `model_profile_trial_bridge.py preflight|prepare|collect-remote|ingest|qualify`
