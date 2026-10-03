@@ -272,9 +272,7 @@ def test_runtime_registry_replaces_a_leaf_symlink_without_following_its_target(t
     registry.unlink()
     registry.symlink_to(snapshot / "module.py")
 
-    result = _run(
-        snapshot, mirror, "--expected-digest", expected, "--runtime-registry", registry
-    )
+    result = _run(snapshot, mirror, "--expected-digest", expected, "--runtime-registry", registry)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not registry.is_symlink()
