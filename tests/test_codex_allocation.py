@@ -16,7 +16,7 @@ def test_task_routes_use_the_requested_effort_and_preserve_escalation(tmp_path, 
     _profile_binary_stub(tmp_path, monkeypatch)
     cap = {"agents": {"codex": {"state": "ok"}}}
     expected = {
-        "implement": ("codex-5.6-sol-high", "high"),
+        "implement": ("codex-6.1-sol-high", "high"),
         "testgen": ("codex-5.6-terra-medium", "medium"),
         "review": ("codex-5.6-terra-medium", "medium"),
         "epic": ("codex-6-astra-medium", "medium"),
@@ -47,10 +47,10 @@ def test_explicit_astra_assessment_pins_model_effort_and_read_only_sandbox(tmp_p
 def test_offload_modes_select_bounded_profiles():
     for mode, profile_id in {
         None: "codex-5.6-terra-medium",
-        "cheap": "codex-5.6-luna-low",
+        "cheap": "codex-6-luna-low",
         "mid": "codex-5.6-terra-medium",
-        "full": "codex-5.6-sol-high",
-        "assess": "codex-5.6-sol-medium",
+        "full": "codex-6.1-sol-high",
+        "assess": "codex-6.1-sol-medium",
     }.items():
         assert dispatcher._select_offload_profile("codex", mode)["profile_id"] == profile_id
 
@@ -91,10 +91,10 @@ def test_default_offload_honors_mid_override(monkeypatch):
 
 def test_direct_delegate_honors_closer_lane_and_explicit_mode():
     choose = execution_profiles.default_codex_delegate_profile
-    assert choose("implement", "opener") == "codex-5.6-sol-high"
-    assert choose("implement", "closer") == "codex-5.6-sol-medium"
+    assert choose("implement", "opener") == "codex-6.1-sol-high"
+    assert choose("implement", "closer") == "codex-6.1-sol-medium"
     assert choose("implement", "closer", "mid") == "codex-5.6-terra-medium"
-    assert choose("implement", "opener", "cheap") == "codex-5.6-luna-low"
+    assert choose("implement", "opener", "cheap") == "codex-6-luna-low"
 
 
 def test_invalid_explicit_delegate_profile_fails_before_claim(monkeypatch):

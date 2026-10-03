@@ -315,11 +315,15 @@ cursor-agent live outside the default PATH):
   their strict JSON validation and gate commands.
 - **Guard a terminal merge with runtime AC (NEW)** — `python3 src/merge_guard.py owner/repo#N` dry-runs the
   merge command and reports whether runtime AC is required. `python3 src/merge_guard.py owner/repo#N
-  --confirm-merge [--method squash|merge|rebase]` is the terminal merge path when a human or local
-  orchestrator action would otherwise call `gh pr merge` directly. It fails closed if PR metadata cannot be
-  read, draft/non-open PRs are supplied, a required runtime-AC spec is missing, `ORCH_RUN_RUNTIME_AC=1` is
-  absent, or the gate verdict is not `PASS`. It uses the shared `runtime_ac_gate.py` helper, so tick and
-  terminal merges enforce the same policy. Use `python3 src/runtime_ac_gate.py --exercise [--json]` for a
+  --expected-head <sha> --confirm-merge [--method squash|merge|rebase]` is the only terminal merge path
+  when a human or local orchestrator action would otherwise call `gh pr merge` directly. Direct or auto
+  merge fallback is forbidden. The guard reads every GraphQL review-thread page and fails closed on active
+  threads, unknown or incomplete thread state, exact-head drift, non-success checks, or a review age below
+  the seven-minute exact-head review floor. It repeats that preflight immediately before mutation and passes
+  `--match-head-commit` to GitHub. It also fails closed if PR metadata cannot be read, draft/non-open PRs are
+  supplied, a required runtime-AC spec is missing, `ORCH_RUN_RUNTIME_AC=1` is absent, or the gate verdict is
+  not `PASS`. It uses the shared `runtime_ac_gate.py` helper, so tick and terminal merges enforce the same
+  policy. Use `python3 src/runtime_ac_gate.py --exercise [--json]` for a
   non-mutating active-gate smoke when no live backlog closer currently requires runtime AC; it writes a
   temporary command spec, runs the real gate executor, and removes the spec without patching feedback. Use
   `python3 src/runtime_ac_flow_monitor.py --json` for current truth: firing comes from structured

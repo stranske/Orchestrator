@@ -63,7 +63,8 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   always states what it did not check. On a machine with all prerequisites nothing skips at all.
   It checks the whole tree it runs in, so a PR's verdict is CI's run on the PR head. This machine's
   verdict on a merged tree is one run per sync, taken before the live mirror changes by
-  `scripts/verify_before_sync.sh` in a scratch mirror (CLAUDE.md §1).
+  `scripts/verify_before_sync.sh` in a scratch mirror; the wrapper then installs that exact verified
+  snapshot instead of re-reading the mutable checkout (CLAUDE.md §1).
   A run judges a PRIVATE COPY of the ledger and the Brain, taken once when it starts, so it never
   queues behind the tick's ledger lock and the code under test cannot write production state. Its
   selftests run eight at a time, and the two gates that are test files report the verdicts pytest
@@ -328,8 +329,15 @@ safety switch, not dead code.
   `(agent, subject_family)` before posterior updates; legacy rows keep agent-level value without
   receiving invented subject provenance.
 - **Execution profiles**: `execution_profiles.py` keeps provider capacity pools separate from
-  model/profile identity (`codex-5.6-sol`, `codex-5.6-terra`, `codex-5.6-luna`). Profile routing
-  is fail-closed, capacity-aware, and shadow-learns per-agent/provider priors before any live
+  model/profile identity. Production pins are [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+  for Sol work, [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) for cheap
+  work, and [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) for the
+  established mid-tier workhorse; GPT-6 Astra remains an explicit escalation profile. The local
+  The migration's local `codex-cli 0.158.0` accepted this model-pin form; the installed global
+  runner is now `0.160.0` and is used when the app bundle has no binary. Superseded Sol/Luna
+  profiles remain explicit trial and
+  historical identities, but automatic and learned selection excludes them. Profile routing is
+  fail-closed, capacity-aware, and shadow-learns per-agent/provider priors before any live
   promotion. `feedback.py completion-events --jsonl` exports the canonical phase envelope used by
   downstream learning; it never fabricates historical observations.
 - **Sol/Terra/Luna trial bridge**: `model_profile_trial_bridge.py preflight|prepare|collect-remote|ingest|qualify`

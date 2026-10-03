@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -42,9 +43,10 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 # default (safe, never wrong). Every pinned id is validated against the CLI's own catalog where a
 # probe exists (see MODEL_CATALOG_PROBES) so a vendor rename degrades instead of killing the seat.
 #
-# Tier research 2026-08-08 (verified against live CLIs + vendor docs):
-#   codex  — GPT-5.6 ships a genuine 3-tier family: Sol (flagship $5/$30), Terra (workhorse
-#            $2.50/$15, ~GPT-5.5 class), Luna (fastest/cheapest $1/$6). GA 2026-07-09.
+# Tier research 2026-10-03 (verified against current OpenAI model docs):
+#   codex  — Sol 6.1 is the current flagship, Terra 5.6 remains the workhorse,
+#            and Luna 6 is the current fast/cheap rung. Astra 6 remains an
+#            explicit assessment/escalation profile rather than a routine tier.
 #   claude — Claude 5 family: Opus 5.5 flagship (moved from Opus 5 on 2026-09-22), Sonnet 5.5 mid
 #            (moved from Sonnet 5 on 2026-09-30),
 #            Haiku 4.5 cheap.
@@ -68,7 +70,7 @@ AGENT_RUNTIME = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "a
 VIBE_MODEL = "mistral-medium-3.5"
 
 MODEL_TIERS: dict[str, dict[str, str]] = {
-    "codex": {"cheap": "gpt-5.6-luna", "mid": "gpt-5.6-terra", "full": "gpt-5.6-sol"},
+    "codex": {"cheap": "gpt-6-luna", "mid": "gpt-5.6-terra", "full": "gpt-6.1-sol"},
     "claude": {"cheap": "claude-haiku-4-5", "mid": "claude-sonnet-5-5", "full": "claude-opus-5-5"},
     "gemini": {
         "cheap": "gemini-3.7-flash-low",
@@ -201,16 +203,28 @@ CODEX_PROFILE_BIN = Path(
         "/Applications/ChatGPT.app/Contents/Resources/codex",
     )
 )
+CODEX_PROFILE_BIN_EXPLICIT = bool(os.environ.get("ORCH_CODEX_PROFILE_BIN"))
 
 
 def profile_codex_binary() -> str:
-    """Use the version-capable bundled CLI for exact profiles or fail closed."""
-    if not CODEX_PROFILE_BIN.is_file():
-        raise RuntimeError(
-            "exact Codex profiles require ORCH_CODEX_PROFILE_BIN pointing to a "
-            "version-capable Codex binary; refusing PATH fallback"
-        )
-    return str(CODEX_PROFILE_BIN)
+    """Resolve the exact-profile CLI without dropping model or effort pins.
+
+    An explicit ``ORCH_CODEX_PROFILE_BIN`` is an operator contract and never falls
+    back. Otherwise prefer the app bundle, then the installed global Codex CLI.
+    The latter is necessary on machines where the app bundle has not shipped a
+    usable binary; ``build_command`` still emits the immutable profile's exact
+    ``--model`` and reasoning-effort arguments either way.
+    """
+    if CODEX_PROFILE_BIN.is_file():
+        return str(CODEX_PROFILE_BIN)
+    if not CODEX_PROFILE_BIN_EXPLICIT:
+        global_codex = shutil.which("codex")
+        if global_codex and Path(global_codex).is_file():
+            return global_codex
+    raise RuntimeError(
+        "exact Codex profiles require ORCH_CODEX_PROFILE_BIN or an installed global "
+        "Codex CLI; refusing an unresolved binary"
+    )
 
 
 def codex_bypass_inner_sandbox() -> bool:
@@ -1697,9 +1711,9 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     # Routine Codex tiers: Luna (cheap) / Terra (mid) / Sol (full). Astra remains
     # available through an explicit immutable execution profile for difficult work.
     for tier, expected in (
-        ("cheap", "gpt-5.6-luna"),
+        ("cheap", "gpt-6-luna"),
         ("mid", "gpt-5.6-terra"),
-        ("full", "gpt-5.6-sol"),
+        ("full", "gpt-6.1-sol"),
     ):
         cc = build_command("codex", "x", mode=tier)
         assert cc[cc.index("--model") + 1] == expected, (tier, cc)
@@ -1712,13 +1726,13 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     # An EXACT profile resolves the version-capable Codex binary and `profile_codex_binary()`
     # fails closed rather than falling back to PATH — deliberately, since a profile that cannot
     # pin its version is not an exact profile. So this SECTION needs that binary installed; the
-    # default lives inside a macOS app bundle and cannot exist on a Linux runner. Everything else
-    # in this selftest runs anywhere.
+    # normally uses the app bundle, with an installed global CLI as the
+    # compatibility fallback. Everything else in this selftest runs anywhere.
     if env_prereq.runnable(gaps, env_prereq.codex_profile_binary_absent()):
         profile_commands = {}
         for profile in execution_profiles.profiles_for_agent("codex"):
             cmd = build_command("codex", "x", mode="full", profile=profile, transport="local")
-            assert cmd[0] == str(CODEX_PROFILE_BIN), cmd
+            assert cmd[0] == profile_codex_binary(), cmd
             assert cmd[cmd.index("--model") + 1] == profile["requested_model"], cmd
             assert cmd[cmd.index("--sandbox") + 1] == "workspace-write", cmd
             assert (

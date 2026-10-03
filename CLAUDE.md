@@ -19,6 +19,14 @@
 Read `README.md` first for what this project is and its important functionality. This file is the
 rules for anyone (human or agent) *changing* it.
 
+## Terminal merge invariant
+
+Every repository-local terminal merge, including one requested by a successor task prompt, must use
+`python3 src/merge_guard.py owner/repo#N --expected-head <sha> --confirm-merge`. Direct `gh pr merge`
+or `gh pr merge --auto` is forbidden as a fallback. If the guard blocks, stop: do not bypass it. The
+guard re-reads every GraphQL review-thread page, exact-head checks, and the seven-minute review floor
+immediately before mutation, then pins the merge with `--match-head-commit`.
+
 ## −2. REQUIRED READING BEFORE ANY WORK HERE: `ARCHITECTURE.md`
 
 **Read `ARCHITECTURE.md` and look at `orchestrator-loop.svg` before starting work in this tree — not
@@ -205,7 +213,8 @@ Do not create a second event log, model registry, or capability inventory.
   `cmp`-clean is not agreement: take the verdict in the MIRROR'S SHAPE, since a path resolved
   relative to a module's own directory is right in one tree and wrong in the other. Take it BEFORE
   the live mirror changes: `scripts/verify_before_sync.sh` verifies a scratch mirror built by the
-  copy script itself (see "which verify runs are needed" below).
+  copy script itself, and the wrapper installs that exact retained snapshot rather than re-reading
+  the mutable checkout (see "which verify runs are needed" below).
 - **The modules live in `src/`, the tests in `tests/`, and the CHECKOUT ROOT IS NOT THE MODULE
   DIRECTORY.** Those were the same directory until 2026-08-23, and every path in the tree was
   derived from that accident. Two questions with two answers now: sibling modules resolve from
@@ -285,9 +294,10 @@ Do not create a second event log, model registry, or capability inventory.
     source with the real copy script, isolated as `docs/MIRROR_SYNC_PATCH.md` prescribes. It
     verifies that mirror on a scratch COPY of the live state, because `verify.py`'s `ledger
     validate` gate is a writing load and must not write the live ledger before the copy. It then
-    re-checks that the source did not move meanwhile, and prints the verdict.
-    The sync wrapper `~/.codex/bin/orch-mirror-sync.sh` runs it before copying, and a red stops
-    the copy with the one command that copies anyway (that doc's patch, applied 2026-10-02).
+    re-checks both the source identity and deployment-payload digest, then publishes that payload
+    only on green. The sync wrapper `~/.codex/bin/orch-mirror-sync.sh` installs the verified snapshot;
+    it never re-reads the source or refetches the registry. A red or missing helper stops before
+    deployment with the one explicit `--no-verify` command (that doc's patch, applied 2026-10-02).
   - Measured when this was decided: a contended local run took 25 minutes for 7 minutes of CPU,
     and about half the time of its slowest checks was spent blocked on the machine-wide ledger
     lock. CI ran the same suite in 1m40s.

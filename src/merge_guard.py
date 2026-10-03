@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import exact_head_merge_gate
 import feedback
 import provision
 import runtime_ac_gate
@@ -26,7 +27,11 @@ MERGE_METHOD_FLAGS = {
 
 
 def build_merge_cmd(
-    target: str, *, method: str = "squash", delete_branch: bool = False, auto: bool = False
+    target: str,
+    *,
+    method: str = "squash",
+    delete_branch: bool = False,
+    expected_head: str | None = None,
 ) -> list[str]:
     repo, num = provision.parse_target(target)
     if num is None:
@@ -36,8 +41,8 @@ def build_merge_cmd(
     cmd = ["gh", "pr", "merge", str(num), "-R", repo, MERGE_METHOD_FLAGS[method]]
     if delete_branch:
         cmd.append("--delete-branch")
-    if auto:
-        cmd.append("--auto")
+    if expected_head:
+        cmd.extend(["--match-head-commit", expected_head])
     return cmd
 
 
@@ -157,12 +162,21 @@ def record_merge_outcome(
         return {"recorded": False, "error": str(exc)}
 
 
+def _preflight_block_reason(preflight: Any) -> str | None:
+    if not isinstance(preflight, dict) or not isinstance(preflight.get("blocked"), bool):
+        return "exact-head preflight returned a malformed result"
+    if preflight["blocked"]:
+        reason = preflight.get("reason")
+        return reason if isinstance(reason, str) and reason else "exact-head preflight blocked"
+    return None
+
+
 def guarded_merge(
     target: str,
     *,
     method: str = "squash",
     delete_branch: bool = False,
-    auto: bool = False,
+    expected_head: str | None = None,
     confirm_merge: bool = False,
     env: dict | None = None,
     spec_dir: str | Path | None = None,
@@ -172,9 +186,33 @@ def guarded_merge(
     merge_fn=subprocess.run,
     latest_run_fn=feedback.latest_run_id_for_target,
     record_outcome_fn=feedback.record_outcome,
+    preflight_fn=exact_head_merge_gate.snapshot,
 ) -> dict[str, Any]:
-    cmd = build_merge_cmd(target, method=method, delete_branch=delete_branch, auto=auto)
     dry_run = not confirm_merge
+    if confirm_merge and not expected_head:
+        return {
+            "target": target,
+            "dry_run": dry_run,
+            "blocked": True,
+            "reason": "--expected-head is required for an active merge",
+            "merge_executed": False,
+        }
+    preflight = None
+    if expected_head:
+        preflight = preflight_fn(target, expected_head=expected_head)
+        preflight_reason = _preflight_block_reason(preflight)
+        if preflight_reason is not None:
+            return {
+                "target": target,
+                "dry_run": dry_run,
+                "blocked": True,
+                "reason": preflight_reason,
+                "preflight": preflight,
+                "merge_executed": False,
+            }
+    cmd = build_merge_cmd(
+        target, method=method, delete_branch=delete_branch, expected_head=expected_head
+    )
     gate_result = evaluate_merge_gate(
         target,
         dry_run=dry_run,
@@ -193,6 +231,14 @@ def guarded_merge(
     if gate_result["blocked"]:
         return result
     if dry_run:
+        return result
+
+    final_preflight = preflight_fn(target, expected_head=expected_head)
+    result["final_preflight"] = final_preflight
+    final_preflight_reason = _preflight_block_reason(final_preflight)
+    if final_preflight_reason is not None:
+        result["blocked"] = True
+        result["reason"] = final_preflight_reason
         return result
 
     merge = merge_fn(cmd, capture_output=True, text=True)
@@ -216,7 +262,9 @@ def _selftest() -> None:
     import tempfile
 
     assert build_merge_cmd("o/r#5") == ["gh", "pr", "merge", "5", "-R", "o/r", "--squash"]
-    assert build_merge_cmd("o/r#5", method="rebase", delete_branch=True, auto=True) == [
+    assert build_merge_cmd(
+        "o/r#5", method="rebase", delete_branch=True, expected_head="abc123"
+    ) == [
         "gh",
         "pr",
         "merge",
@@ -225,7 +273,8 @@ def _selftest() -> None:
         "o/r",
         "--rebase",
         "--delete-branch",
-        "--auto",
+        "--match-head-commit",
+        "abc123",
     ]
 
     def open_meta(target):
@@ -236,6 +285,9 @@ def _selftest() -> None:
             "state": "OPEN",
             "is_draft": False,
         }
+
+    def clean_preflight(target, *, expected_head):
+        return {"target": target, "head": expected_head, "blocked": False, "reason": None}
 
     dry = guarded_merge("o/r#5", metadata_fn=open_meta)
     assert dry["merge_cmd"] and dry["merge_executed"] is False and dry["blocked"] is False, dry
@@ -269,9 +321,11 @@ def _selftest() -> None:
 
         missing = guarded_merge(
             "o/r#5",
+            expected_head="abc123",
             confirm_merge=True,
             spec_dir=tmp,
             metadata_fn=runtime_meta,
+            preflight_fn=clean_preflight,
             merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")),
         )
         assert missing["blocked"] is True and missing["gate"]["status"] == "missing_spec", missing
@@ -292,10 +346,12 @@ def _selftest() -> None:
         path.write_text(json.dumps(gate_spec), encoding="utf-8")
         disabled = guarded_merge(
             "o/r#5",
+            expected_head="abc123",
             confirm_merge=True,
             spec_dir=tmp,
             env={},
             metadata_fn=runtime_meta,
+            preflight_fn=clean_preflight,
             merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")),
         )
         assert (
@@ -303,11 +359,13 @@ def _selftest() -> None:
         ), disabled
         forced = guarded_merge(
             "o/r#6",
+            expected_head="abc123",
             confirm_merge=True,
             spec_dir=tmp,
             env={},
             require_runtime_ac=True,
             metadata_fn=open_meta,
+            preflight_fn=clean_preflight,
             merge_fn=lambda *a, **k: (_ for _ in ()).throw(AssertionError("merged")),
         )
         assert forced["blocked"] is True and forced["gate"]["status"] == "missing_spec", forced
@@ -321,10 +379,12 @@ def _selftest() -> None:
         recorded = []
         passed = guarded_merge(
             "o/r#5",
+            expected_head="abc123",
             confirm_merge=True,
             spec_dir=tmp,
             env={"ORCH_RUN_RUNTIME_AC": "1", "ORCH_RUNTIME_AC_ALLOW_COMMANDS": "1"},
             metadata_fn=runtime_meta,
+            preflight_fn=clean_preflight,
             merge_fn=fake_merge,
             latest_run_fn=lambda target, mode=None: "remote:o/r#5:codex",
             record_outcome_fn=lambda run_id, **kwargs: recorded.append((run_id, kwargs)),
@@ -336,8 +396,10 @@ def _selftest() -> None:
 
         blocked = guarded_merge(
             "o/r#5",
+            expected_head="abc123",
             confirm_merge=True,
             metadata_fn=runtime_meta,
+            preflight_fn=clean_preflight,
             gate_fn=lambda item, **kwargs: {
                 "target": item["target"],
                 "status": "executed",
@@ -380,7 +442,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("target", nargs="?", help="PR target owner/repo#N")
     parser.add_argument("--method", choices=sorted(MERGE_METHOD_FLAGS), default="squash")
     parser.add_argument("--delete-branch", action="store_true")
-    parser.add_argument("--auto", action="store_true", help="pass --auto to gh pr merge")
+    parser.add_argument(
+        "--expected-head",
+        help="exact PR head SHA; required with --confirm-merge",
+    )
     parser.add_argument("--confirm-merge", action="store_true", help="actually run gh pr merge")
     parser.add_argument(
         "--require-runtime-ac",
@@ -402,7 +467,7 @@ def main(argv: list[str]) -> int:
         args.target,
         method=args.method,
         delete_branch=args.delete_branch,
-        auto=args.auto,
+        expected_head=args.expected_head,
         confirm_merge=args.confirm_merge,
         require_runtime_ac=args.require_runtime_ac,
     )
