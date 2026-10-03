@@ -221,6 +221,91 @@ def _assert_live_outputs_unchanged(mirror: Path, registry: Path) -> None:
     assert registry.read_text() == '{"old": true}\n'
 
 
+@pytest.mark.parametrize("tree", ["snapshot", "mirror"])
+@pytest.mark.parametrize(
+    "relative,parent_alias",
+    [
+        ("module.py", False),
+        ("module.py", True),
+        ("docs/reports/runtime.json", False),
+        ("docs/reports/runtime.json", True),
+        (".", False),
+    ],
+)
+def test_runtime_registry_cannot_overwrite_deployment_or_runtime_mirror_content(
+    tmp_path, tree, parent_alias, relative
+):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    report = mirror / "docs" / "reports" / "runtime.json"
+    report.parent.mkdir()
+    report.write_text('{"runtime": true}\n')
+    root = snapshot if tree == "snapshot" else mirror
+    if parent_alias:
+        alias = tmp_path / "registry parent alias"
+        alias.symlink_to(root, target_is_directory=True)
+        root = alias
+    # module.py catches a post-digest deployment overwrite; reports catch runtime ownership.
+    destination = root / relative
+    before_digest = _digest(snapshot)
+
+    result = _run(
+        snapshot,
+        mirror,
+        "--expected-digest",
+        before_digest,
+        "--runtime-registry",
+        destination,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "runtime registry must be outside" in result.stderr
+    _assert_live_outputs_unchanged(mirror, registry)
+    assert report.read_text() == '{"runtime": true}\n'
+    assert _digest(snapshot) == before_digest
+
+
+def test_runtime_registry_replaces_a_leaf_symlink_without_following_its_target(tmp_path):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    expected = _digest(snapshot)
+    registry.unlink()
+    registry.symlink_to(snapshot / "module.py")
+
+    result = _run(
+        snapshot, mirror, "--expected-digest", expected, "--runtime-registry", registry
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not registry.is_symlink()
+    assert registry.read_text() == '{"repos": []}\n'
+    assert _digest(snapshot) == expected
+    assert _digest(mirror) == expected
+
+
+def test_runtime_registry_uses_the_validated_parent_if_its_alias_moves(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    separate = tmp_path / "separate runtime"
+    separate.mkdir()
+    alias = tmp_path / "runtime parent alias"
+    alias.symlink_to(separate, target_is_directory=True)
+    expected = installer.snapshot_digest(snapshot)
+    copy_payload = installer._copy_payload
+
+    def move_alias_then_copy(source, destination, entries):
+        if source == snapshot:
+            alias.unlink()
+            alias.symlink_to(mirror, target_is_directory=True)
+        copy_payload(source, destination, entries)
+
+    monkeypatch.setattr(installer, "_copy_payload", move_alias_then_copy)
+    assert installer.install(snapshot, mirror, expected, alias / "module.py") == 0
+    assert (separate / "module.py").read_text() == '{"repos": []}\n'
+    assert installer.snapshot_digest(mirror) == expected
+    assert registry.read_text() == '{"old": true}\n'
+
+
 def test_payload_copy_failure_keeps_live_outputs_and_cleans_staging(tmp_path, monkeypatch):
     snapshot = _snapshot(tmp_path)
     mirror, registry = _live_outputs(tmp_path)

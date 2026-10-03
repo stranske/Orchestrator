@@ -276,6 +276,16 @@ def install(
         raise ValueError("expected digest must be exactly 64 lowercase hexadecimal characters")
     if snapshot == mirror or snapshot in mirror.parents or mirror in snapshot.parents:
         raise ValueError("snapshot and mirror must be separate trees")
+    if runtime_registry is not None:
+        # Resolve the parent, not the leaf: the registry update replaces a leaf symlink
+        # rather than following it. A parent alias into either tree still overlaps ownership.
+        runtime_registry = runtime_registry.expanduser().absolute()
+        runtime_registry = runtime_registry.parent.resolve() / runtime_registry.name
+        if any(
+            runtime_registry == root or root in runtime_registry.parents
+            for root in (snapshot, mirror)
+        ):
+            raise ValueError("runtime registry must be outside the snapshot and mirror trees")
 
     entries = owned_entries(snapshot)
     actual_digest = snapshot_digest(snapshot)

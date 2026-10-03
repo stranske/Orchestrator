@@ -389,6 +389,14 @@ after this check also cannot be removed recursively. A conflicting layout must b
 retry; it is not permission to delete runtime data. A leaf symlink itself may be removed without
 deleting its target.
 
+The separate runtime-registry destination must be outside both the retained snapshot and the
+mirror. The installer rejects overlapping destinations before removing any live entries,
+including destinations whose parent symlink points into either tree. This prevents a registry
+update from overwriting verified deployment bytes after the digest check or consuming mirror-local
+runtime reports. The update uses the resolved parent path, so retargeting the original parent
+alias during preparation cannot redirect it into the mirror. A registry leaf symlink outside those
+trees is replaced without following its target.
+
 `tests/test_install_verified_snapshot.py` synchronizes a writer with the live copy, including
 handles opened before publication and a report created during it. It checks that the writes
 survive, obsolete deployment docs disappear, and the installed deployment digest still matches
