@@ -116,6 +116,7 @@ def snapshot_digest(snapshot: Path) -> str:
 
 
 def _validate_snapshot(snapshot: Path) -> None:
+    snapshot = snapshot.resolve()
     if not snapshot.is_dir():
         raise ValueError(f"snapshot is not a directory: {snapshot}")
     if not (snapshot / "orchestrate.sh").is_file():
@@ -162,6 +163,8 @@ def _remove_owned_file(path: Path) -> None:
 
     # unlink refuses a directory, including one created after the ownership preflight.
     # A symlink is removed as a leaf without following its runtime-owned target.
+    if path.is_dir() and not path.is_symlink():
+        raise IsADirectoryError(f"refusing to remove runtime directory: {path}")
     path.unlink(missing_ok=True)
 
 
@@ -172,9 +175,7 @@ def _validate_mirror_ownership(
 
     leaves = set(prior_docs) | {Path(name) for name in OWNED_FILES}
     leaves.update(
-        path.relative_to(mirror)
-        for pattern in ("*.py", "*.sh")
-        for path in mirror.glob(pattern)
+        path.relative_to(mirror) for pattern in ("*.py", "*.sh") for path in mirror.glob(pattern)
     )
     directories: set[Path] = set()
     for relative in entries:
@@ -325,9 +326,18 @@ def install(
         if runtime_registry is not None and registry.is_file():
             runtime_registry = runtime_registry.expanduser()
             runtime_registry.parent.mkdir(parents=True, exist_ok=True)
-            temporary = runtime_registry.with_name(runtime_registry.name + ".tmp")
-            shutil.copy2(registry, temporary)
-            temporary.replace(runtime_registry)
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=f".{runtime_registry.name}.",
+                suffix=".tmp",
+                dir=runtime_registry.parent,
+            )
+            temporary = Path(temporary_name)
+            try:
+                os.close(fd)
+                shutil.copy2(registry, temporary)
+                temporary.replace(runtime_registry)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     module_count = len(list(mirror.glob("*.py")))
     test_count = len(list((mirror / "tests").glob("*.py")))

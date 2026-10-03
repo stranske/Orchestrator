@@ -6,9 +6,9 @@ import threading
 from pathlib import Path
 
 import pytest
+from scripts import install_verified_snapshot as installer
 
 import paths
-from scripts import install_verified_snapshot as installer
 
 INSTALLER = paths.REPO_ROOT / "scripts" / "install_verified_snapshot.py"
 
@@ -553,3 +553,42 @@ def test_digest_rejects_ambiguous_doc_manifest_paths(tmp_path, contents):
 
     assert result.returncode == 2
     assert "unsafe shipped-doc path" in result.stderr
+
+
+@pytest.mark.parametrize("copy_fails", [False, True])
+def test_runtime_registry_update_preserves_other_publishers_tempfile(
+    tmp_path, monkeypatch, copy_fails
+):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    shared_temporary = registry.with_name(registry.name + ".tmp")
+    shared_temporary.write_text("another publisher's pending registry\n")
+    original_entries = set(registry.parent.iterdir())
+    copy2 = installer.shutil.copy2
+    observed = []
+
+    def copy_registry(source, destination, **kwargs):
+        destination = Path(destination)
+        if destination.parent == registry.parent and destination != registry:
+            observed.append(destination)
+            if copy_fails:
+                destination.write_text("partial registry\n")
+                raise OSError("registry copy interrupted")
+        return copy2(source, destination, **kwargs)
+
+    monkeypatch.setattr(installer.shutil, "copy2", copy_registry)
+    if copy_fails:
+        with pytest.raises(OSError, match="registry copy interrupted"):
+            installer.install(snapshot, mirror, installer.snapshot_digest(snapshot), registry)
+        assert registry.read_text() == '{"old": true}\n'
+    else:
+        assert (
+            installer.install(snapshot, mirror, installer.snapshot_digest(snapshot), registry) == 0
+        )
+        assert registry.read_text() == '{"repos": []}\n'
+
+    assert shared_temporary.read_text() == "another publisher's pending registry\n"
+    assert len(observed) == 1
+    assert observed[0] != shared_temporary
+    assert not observed[0].exists()
+    assert set(registry.parent.iterdir()) == original_entries
