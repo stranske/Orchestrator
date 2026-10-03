@@ -395,6 +395,71 @@ def test_runtime_writer_keeps_open_files_and_new_reports_during_publication(tmp_
 
 
 @pytest.mark.parametrize(
+    "retired",
+    [
+        "experiments/hypotheses.json",
+        "experiments/features.json",
+        "experiments/repo_knowledge.json",
+        "data/feedback-snapshot.json",
+        "config/coverage-baseline.json",
+    ],
+)
+def test_retiring_named_deployment_file_preserves_concurrent_runtime_writes(
+    tmp_path, monkeypatch, retired
+):
+    snapshot = _snapshot(tmp_path)
+    (snapshot / retired).unlink(missing_ok=True)
+    mirror, registry = _live_outputs(tmp_path)
+    retired_path = mirror / retired
+    retired_path.parent.mkdir(exist_ok=True)
+    retired_path.write_text("retired deployment bytes\n")
+    marker = retired_path.parent / ".last-ship-gate"
+    marker.write_text("before publication\n")
+    parent_inode = retired_path.parent.stat().st_ino
+    expected = installer.snapshot_digest(snapshot)
+    removal_started = threading.Event()
+    writes_finished = threading.Event()
+    errors: list[BaseException] = []
+    remove_owned_file = installer._remove_owned_file
+
+    with marker.open("a") as marker_stream:
+
+        def runtime_writer() -> None:
+            try:
+                assert removal_started.wait(10), "publisher did not retire the named file"
+                marker_stream.write("during publication\n")
+                marker_stream.flush()
+                (retired_path.parent / "new-report.json").write_text('{"runtime": true}\n')
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                writes_finished.set()
+
+        def remove_with_writer(path: Path) -> None:
+            remove_owned_file(path)
+            if path == retired_path:
+                removal_started.set()
+                assert writes_finished.wait(10), "runtime writer did not finish"
+
+        monkeypatch.setattr(installer, "_remove_owned_file", remove_with_writer)
+        writer = threading.Thread(target=runtime_writer)
+        writer.start()
+        try:
+            assert installer.install(snapshot, mirror, expected, registry) == 0
+        finally:
+            removal_started.set()
+            writer.join(timeout=10)
+        assert not writer.is_alive()
+        assert not errors
+
+    assert not retired_path.exists()
+    assert retired_path.parent.stat().st_ino == parent_inode
+    assert marker.read_text() == "before publication\nduring publication\n"
+    assert (retired_path.parent / "new-report.json").read_text() == '{"runtime": true}\n'
+    assert installer.snapshot_digest(mirror) == expected
+
+
+@pytest.mark.parametrize(
     "relative",
     ["docs/old.md", "docs/guide.md", "experiments/hypotheses.json", "module.py", ".gitignore"],
 )
