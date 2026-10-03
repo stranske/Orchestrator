@@ -58,7 +58,9 @@ function observe(root, relative) {
 }
 
 function world(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-reader-'));
+  // Python's installer resolves destination paths before invoking the copy hook.
+  // Canonicalize here too: macOS /tmp is an alias for /private/tmp.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'orch-reader-')));
   const snapshot = path.join(root, 'verified snapshot');
   const mirror = path.join(root, 'live mirror');
   const registry = path.join(root, 'runtime-registry.json');
