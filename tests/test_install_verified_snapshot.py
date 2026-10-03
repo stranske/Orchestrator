@@ -781,9 +781,10 @@ def test_runtime_registry_sync_order_cleanup_and_retry(tmp_path, monkeypatch, fa
             observe("directory_fsync")
         else:
             assert registry.read_text() == '{"old": true}\n' or not fail_enabled
-            assert temporaries[-1].read_bytes() == (
-                snapshot / "repo_review_registry.json"
-            ).read_bytes()
+            assert (
+                temporaries[-1].read_bytes()
+                == (snapshot / "repo_review_registry.json").read_bytes()
+            )
             observe("file_fsync")
         fsync(fd)
 
