@@ -744,7 +744,8 @@ def test_runtime_registry_update_preserves_other_publishers_tempfile(
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "copy", "file_fsync", "replace", "directory_open", "directory_fsync"]
+    "failure",
+    [None, "copy", "file_fsync", "replace", "directory_open", "directory_fsync"],
 )
 def test_runtime_registry_sync_order_cleanup_and_retry(tmp_path, monkeypatch, failure):
     snapshot = _snapshot(tmp_path)
