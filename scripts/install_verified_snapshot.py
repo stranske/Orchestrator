@@ -20,6 +20,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+# These trees and root-level *.py/*.sh files are deployment-owned in full. Merged
+# trees own only their manifest leaves; named files own no siblings or parent trees.
 REPLACED_TREES = ("tests", "scripts", ".github")
 MERGED_TREES = ("docs",)
 OWNED_FILES = (
@@ -155,16 +157,58 @@ def _remove(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _remove_owned_file(path: Path) -> None:
+    """Remove a deployment leaf without recursively deleting runtime-owned children."""
+
+    # unlink refuses a directory, including one created after the ownership preflight.
+    # A symlink is removed as a leaf without following its runtime-owned target.
+    path.unlink(missing_ok=True)
+
+
+def _validate_mirror_ownership(
+    payload: Path, mirror: Path, entries: list[Path], prior_docs: list[Path]
+) -> None:
+    """Fail before publication if a deployment leaf would consume a runtime directory."""
+
+    leaves = set(prior_docs) | {Path(name) for name in OWNED_FILES}
+    leaves.update(
+        path.relative_to(mirror)
+        for pattern in ("*.py", "*.sh")
+        for path in mirror.glob(pattern)
+    )
+    directories: set[Path] = set()
+    for relative in entries:
+        if relative.parts[0] in REPLACED_TREES:
+            continue
+        source = payload / relative
+        if source.is_dir() and not source.is_symlink():
+            directories.add(relative)
+        else:
+            leaves.add(relative)
+    for relative in leaves:
+        directories.update(parent for parent in relative.parents if parent != Path("."))
+    # Do not follow mirror-local symlinks into runtime storage when installing or
+    # removing owned files. Check shallow parents before inspecting any child.
+    for relative in sorted(directories, key=lambda path: (len(path.parts), str(path))):
+        path = mirror / relative
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            raise ValueError(f"deployment parent is not a real directory: {relative}")
+    for relative in leaves:
+        path = mirror / relative
+        if path.is_dir() and not path.is_symlink():
+            raise ValueError(f"deployment file would remove a runtime directory: {relative}")
+
+
 def _copy_entry(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_symlink():
-        _remove(destination)
+        _remove_owned_file(destination)
         destination.symlink_to(os.readlink(source))
         shutil.copystat(source, destination, follow_symlinks=False)
     elif source.is_dir():
         destination.mkdir(parents=True, exist_ok=True)
     else:
-        _remove(destination)
+        _remove_owned_file(destination)
         shutil.copy2(source, destination, follow_symlinks=False)
 
 
@@ -255,19 +299,20 @@ def install(
         # the separate registry update. Never reopen the retained snapshot after this boundary.
         entries = owned_entries(payload)
         registry = payload / "repo_review_registry.json"
+        _validate_mirror_ownership(payload, mirror, entries, prior_docs)
         mirror.mkdir(parents=True, exist_ok=True)
         # Match the legacy ownership contract; runtime content in the merged directories stays.
         # Publication is still in-place here. Reader pinning and atomic switching are separate
         # follow-ups; this boundary guarantees that preparation failures cannot damage the mirror.
         for pattern in ("*.py", "*.sh"):
             for path in mirror.glob(pattern):
-                _remove(path)
+                _remove_owned_file(path)
         for tree in REPLACED_TREES:
             _remove(mirror / tree)
         for relative_path in prior_docs:
-            _remove(mirror / relative_path)
+            _remove_owned_file(mirror / relative_path)
         for owned_file in OWNED_FILES:
-            _remove(mirror / owned_file)
+            _remove_owned_file(mirror / owned_file)
 
         _copy_payload(payload, mirror, entries)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -317,7 +318,7 @@ def test_install_never_reopens_snapshot_after_staging_validation(tmp_path, monke
     snapshot = _snapshot(tmp_path)
     mirror, registry = _live_outputs(tmp_path)
     expected = installer.snapshot_digest(snapshot)
-    remove = installer._remove
+    remove = installer._remove_owned_file
     displaced = tmp_path / "unavailable snapshot"
 
     def remove_live_entry(path: Path) -> None:
@@ -326,11 +327,125 @@ def test_install_never_reopens_snapshot_after_staging_validation(tmp_path, monke
             (displaced / "repo_review_registry.json").write_text('{"changed": true}\n')
         remove(path)
 
-    monkeypatch.setattr(installer, "_remove", remove_live_entry)
+    monkeypatch.setattr(installer, "_remove_owned_file", remove_live_entry)
     assert installer.install(snapshot, mirror, expected, registry) == 0
     assert not snapshot.exists()
     assert installer.snapshot_digest(mirror) == expected
     assert registry.read_text() == '{"repos": []}\n'
+
+
+def test_runtime_writer_keeps_open_files_and_new_reports_during_publication(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    reports = mirror / "docs" / "reports"
+    reports.mkdir()
+    (mirror / "experiments").mkdir()
+    report = reports / "runtime.md"
+    marker = mirror / "experiments" / ".last-ship-gate"
+    report.write_text("before report\n")
+    marker.write_text("before marker\n")
+    expected = installer.snapshot_digest(snapshot)
+    publish_started = threading.Event()
+    writes_finished = threading.Event()
+    errors: list[BaseException] = []
+    copy_entry = installer._copy_entry
+
+    # Open handles before publication: copying runtime output to another directory
+    # would strand these writes in the old inode even if the initial bytes survived.
+    with report.open("a") as report_stream, marker.open("a") as marker_stream:
+
+        def runtime_writer() -> None:
+            try:
+                assert publish_started.wait(10), "publisher did not reach live copy"
+                report_stream.write("during report\n")
+                report_stream.flush()
+                marker_stream.write("during marker\n")
+                marker_stream.flush()
+                (reports / "new.md").write_text("created during publication\n")
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                writes_finished.set()
+
+        def copy_with_writer(source: Path, destination: Path) -> None:
+            if destination == mirror / "module.py":
+                # Live owned files have been removed; the new executable is not yet copied.
+                assert not (mirror / "old.py").exists()
+                assert not destination.exists()
+                publish_started.set()
+                assert writes_finished.wait(10), "runtime writer did not finish"
+            copy_entry(source, destination)
+
+        monkeypatch.setattr(installer, "_copy_entry", copy_with_writer)
+        writer = threading.Thread(target=runtime_writer)
+        writer.start()
+        try:
+            assert installer.install(snapshot, mirror, expected, registry) == 0
+        finally:
+            publish_started.set()
+            writer.join(timeout=10)
+        assert not writer.is_alive()
+        assert not errors
+
+    assert report.read_text() == "before report\nduring report\n"
+    assert marker.read_text() == "before marker\nduring marker\n"
+    assert (reports / "new.md").read_text() == "created during publication\n"
+    assert not (mirror / "docs" / "old.md").exists()
+    assert installer.snapshot_digest(mirror) == expected
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["docs/old.md", "docs/guide.md", "experiments/hypotheses.json", "module.py", ".gitignore"],
+)
+def test_runtime_directory_at_owned_file_is_rejected_before_publication(tmp_path, relative):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    collision = mirror / relative
+    collision.unlink(missing_ok=True)
+    collision.mkdir(parents=True)
+    runtime_file = collision / "runtime.json"
+    runtime_file.write_text("keep runtime bytes\n")
+
+    result = _run(snapshot, mirror, "--expected-digest", _digest(snapshot))
+
+    assert result.returncode == 2
+    assert "would remove a runtime directory" in result.stderr
+    assert runtime_file.read_text() == "keep runtime bytes\n"
+    assert (mirror / "old.py").read_text() == "still live\n"
+    assert (mirror / ".docs-shipped.txt").read_text() == "docs/old.md\n"
+    assert registry.read_text() == '{"old": true}\n'
+
+
+@pytest.mark.parametrize("relative", ["docs/briefs", "experiments", "data", "config"])
+def test_runtime_storage_symlink_parent_is_rejected_before_publication(tmp_path, relative):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    runtime = tmp_path / "runtime storage"
+    runtime.mkdir()
+    runtime_file = runtime / "runtime.json"
+    runtime_file.write_text("keep runtime bytes\n")
+    (mirror / relative).symlink_to(runtime, target_is_directory=True)
+
+    result = _run(snapshot, mirror, "--expected-digest", _digest(snapshot))
+
+    assert result.returncode == 2
+    assert "deployment parent is not a real directory" in result.stderr
+    _assert_live_outputs_unchanged(mirror, registry)
+    assert runtime_file.read_text() == "keep runtime bytes\n"
+    assert list(runtime.iterdir()) == [runtime_file]
+
+
+def test_leaf_removal_never_recursively_removes_a_late_runtime_directory(tmp_path):
+    path = tmp_path / "previously shipped.md"
+    path.mkdir()
+    report = path / "runtime.md"
+    report.write_text("late runtime write\n")
+
+    with pytest.raises(IsADirectoryError):
+        installer._remove_owned_file(path)
+
+    assert report.read_text() == "late runtime write\n"
 
 
 def test_install_round_trips_symlinks_and_directory_permissions(tmp_path):

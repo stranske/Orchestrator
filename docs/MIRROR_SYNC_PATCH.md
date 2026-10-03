@@ -367,7 +367,37 @@ passes. Symlinks must be relative and stay within the payload. Preparation failu
 mirror untouched; the subsequent copy still runs in place, so reader consistency and recovery
 remain pending under #389.
 
-Its exit codes are 0 VERIFIED, 1 NOT VERIFIED, 2 nothing verified, and 3 VOID (`SRC` moved). It
+### Deployment and runtime ownership
+
+`scripts/install_verified_snapshot.py` defines the current ownership boundary. It does not
+enumerate all mirror files as deployment input or copy runtime output into its private payload:
+
+| Paths | Owner and publication behavior |
+|---|---|
+| Root `*.py`, `*.sh`; `tests/`, `scripts/`, `.github/` | Deployment-owned. Old entries are removed, including files no longer shipped. Do not store runtime output in these trees. |
+| `docs/` | Merged directory. Only the file or symlink paths listed in `.docs-shipped.txt` are deployment-owned. Parent directories do not grant ownership of their children. Old manifest leaves are removed; new leaves come from the retained snapshot. Unlisted reports remain runtime-owned, including `docs/reports/issue_completion_*`. |
+| `.docs-shipped.txt`, `.gitignore`, `.verify-floor.json`, `.coveragerc`, `pyproject.toml`, `ruff.toml`, `CLAUDE.md`, `IMPROVEMENT_BACKLOG.md`, `repo_review_registry.json` | Named deployment files, removed if absent from the new snapshot. |
+| `experiments/hypotheses.json`, `experiments/features.json`, `experiments/repo_knowledge.json`, `data/feedback-snapshot.json`, `config/coverage-baseline.json` | Named deployment files only. Other children and their parent directories remain runtime-owned. |
+| `experiments/.last-ship-gate`, unlisted docs/reports, other paths outside deployment ownership | Runtime-owned. Publication leaves these in place, preserving open file handles, concurrent updates, and newly created reports. |
+| `~/.codex/orchestrator/repo_review_registry.json` | Separate runtime-registry copy. Validated deployment bytes supply its update after mirror installation; there is no atomic transaction across these locations. Registry retry/recovery remains pending. |
+
+Before touching live deployment entries, the installer rejects a file-ownership path that now
+contains a real directory, or a merged parent that is a symlink or a non-directory. This prevents
+an obsolete shipped-doc entry from recursively deleting runtime children and prevents writes
+through parent symlinks into runtime storage. Leaf removal uses `unlink`, so a directory created
+after this check also cannot be removed recursively. A conflicting layout must be resolved before
+retry; it is not permission to delete runtime data. A leaf symlink itself may be removed without
+deleting its target.
+
+`tests/test_install_verified_snapshot.py` synchronizes a writer with the live copy, including
+handles opened before publication and a report created during it. It checks that the writes
+survive, obsolete deployment docs disappear, and the installed deployment digest still matches
+the receipt. These ownership checks do not make the current in-place executable copy atomic:
+reader consistency, interruption recovery, and ownership preservation across a future generation
+switch still require implementation and verification. Installed wrappers remain pending until
+merge and pull.
+
+The verifier's exit codes are 0 VERIFIED, 1 NOT VERIFIED, 2 nothing verified, and 3 VOID (`SRC` moved). It
 never writes the live mirror, the live registry copy, the live ledger or the live Brain.
 `tests/test_verify_before_sync.py` covers every exit path, the isolation of the copy, and the
 state copy, with stand-ins for the copy script and `verify.py`. The `verify.py` stand-in writes
