@@ -1280,7 +1280,7 @@ def raise_questions(rep: dict, *, dry_run: bool = True) -> dict:
             default = "keep it off; re-ask in a week"
         else:
             question = (
-                f"{flag} is ON but {cap_id} has recorded no invocation in "
+                f"{flag} is ON but {cap_id} has recorded no invocation outside consult trials in "
                 f"{REVIEW_DAYS}d. Keep it on, turn it off, or fix what feeds it?"
             )
             if row.get("drain"):
