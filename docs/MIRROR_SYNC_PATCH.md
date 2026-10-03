@@ -359,6 +359,14 @@ on the exact tree about to go live.
    snapshot change before mutating the live mirror. It never re-reads mutable `SRC` or fetches the
    registry a second time.
 
+The installer first builds a private deployment payload and checks its complete digest against
+the receipt, including permissions and symlink targets. It validates the copied docs manifest and
+registry JSON before removing any live deployment files. Installation and the separate registry
+update read that private payload, so the retained snapshot is no longer needed once preparation
+passes. Symlinks must be relative and stay within the payload. Preparation failures leave the live
+mirror untouched; the subsequent copy still runs in place, so reader consistency and recovery
+remain pending under #389.
+
 Its exit codes are 0 VERIFIED, 1 NOT VERIFIED, 2 nothing verified, and 3 VOID (`SRC` moved). It
 never writes the live mirror, the live registry copy, the live ledger or the live Brain.
 `tests/test_verify_before_sync.py` covers every exit path, the isolation of the copy, and the

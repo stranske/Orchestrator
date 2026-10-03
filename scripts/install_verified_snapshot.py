@@ -17,6 +17,7 @@ import shutil
 import stat
 import struct
 import sys
+import tempfile
 from pathlib import Path
 
 REPLACED_TREES = ("tests", "scripts", ".github")
@@ -40,6 +41,10 @@ OWNED_FILES = (
 GENERATED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", "htmlcov"}
 
 
+def _walk_error(error: OSError) -> None:
+    raise error
+
+
 def _add_digest_field(digest: hashlib._Hash, value: bytes) -> None:
     digest.update(struct.pack(">Q", len(value)))
     digest.update(value)
@@ -50,7 +55,7 @@ def _tree_entries(root: Path, relative: str) -> list[Path]:
     if not base.is_dir() or base.is_symlink():
         return []
     entries: list[Path] = [Path(relative)]
-    for directory, dirnames, filenames in os.walk(base, followlinks=False):
+    for directory, dirnames, filenames in os.walk(base, followlinks=False, onerror=_walk_error):
         here = Path(directory)
         dirnames[:] = sorted(name for name in dirnames if name not in GENERATED_DIRS)
         for name in dirnames:
@@ -118,6 +123,29 @@ def _validate_snapshot(snapshot: Path) -> None:
     installer = snapshot / "scripts" / Path(__file__).name
     if not installer.is_file():
         raise ValueError(f"snapshot has no verified installer: {installer}")
+    # A structural symlink would make enumeration omit a tree or copy bytes outside the
+    # payload. Leaf symlinks are retained as links, including their exact target metadata.
+    for tree in (*REPLACED_TREES, *MERGED_TREES):
+        path = snapshot / tree
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            raise ValueError(f"snapshot tree is not a real directory: {tree}")
+    for relative in owned_entries(snapshot):
+        path = snapshot / relative
+        for parent in relative.parents:
+            if (snapshot / parent).is_symlink():
+                raise ValueError(f"snapshot entry has a symlink parent: {relative}")
+        mode = path.lstat().st_mode
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            raise ValueError(f"unsupported snapshot entry: {relative}")
+        if stat.S_ISLNK(mode):
+            target = Path(os.readlink(path))
+            if target.is_absolute() or not path.resolve().is_relative_to(snapshot):
+                raise ValueError(f"snapshot symlink is not payload-relative: {relative}")
+        if str(relative) in OWNED_FILES and stat.S_ISDIR(mode):
+            raise ValueError(f"snapshot owned file is a directory: {relative}")
+        if len(relative.parts) == 1 and relative.suffix in (".py", ".sh"):
+            if stat.S_ISDIR(mode):
+                raise ValueError(f"snapshot module or script is a directory: {relative}")
 
 
 def _remove(path: Path) -> None:
@@ -132,26 +160,62 @@ def _copy_entry(source: Path, destination: Path) -> None:
     if source.is_symlink():
         _remove(destination)
         destination.symlink_to(os.readlink(source))
+        shutil.copystat(source, destination, follow_symlinks=False)
     elif source.is_dir():
         destination.mkdir(parents=True, exist_ok=True)
-        shutil.copystat(source, destination, follow_symlinks=False)
     else:
         _remove(destination)
         shutil.copy2(source, destination, follow_symlinks=False)
 
 
+def _copy_payload(source: Path, destination: Path, entries: list[Path]) -> None:
+    for relative in entries:
+        _copy_entry(source / relative, destination / relative)
+    # Apply directory permissions last, so a read-only shipped directory can still be built.
+    for relative in reversed(entries):
+        path = source / relative
+        if path.is_dir() and not path.is_symlink():
+            shutil.copystat(path, destination / relative, follow_symlinks=False)
+
+
 def _shipped_docs(manifest: Path) -> list[Path]:
     """Read the copier's prior docs manifest without permitting path traversal."""
 
-    if not manifest.is_file():
+    if manifest.is_symlink():
+        raise ValueError(f"shipped-doc manifest must not be a symlink: {manifest}")
+    if not manifest.exists():
         return []
+    if not manifest.is_file():
+        raise ValueError(f"shipped-doc manifest is not a file: {manifest}")
     paths: list[Path] = []
     for line in manifest.read_text(encoding="utf-8").splitlines():
         relative = Path(line)
-        if not line.startswith("docs/") or relative.is_absolute() or ".." in relative.parts:
+        if (
+            not line.startswith("docs/")
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or str(relative) != line
+            or relative in paths
+        ):
             raise ValueError(f"unsafe shipped-doc path in {manifest}: {line!r}")
         paths.append(relative)
     return paths
+
+
+def _validate_payload(payload: Path) -> None:
+    """Validate the complete copy, before any deployment-owned live entry is removed."""
+
+    _validate_snapshot(payload)
+    registry = payload / "repo_review_registry.json"
+    if registry.is_file():
+        json.loads(registry.read_text(encoding="utf-8"))
+    snapshot_docs = _shipped_docs(payload / ".docs-shipped.txt")
+    if set(snapshot_docs) != {
+        path.relative_to(payload)
+        for path in (payload / "docs").rglob("*")
+        if path.is_file() or path.is_symlink()
+    }:
+        raise ValueError("snapshot docs do not match .docs-shipped.txt")
 
 
 def install(
@@ -174,46 +238,51 @@ def install(
         raise ValueError(
             f"retained snapshot digest {actual_digest} != verified payload {expected_digest}"
         )
-    registry = snapshot / "repo_review_registry.json"
-    if registry.is_file():
-        json.loads(registry.read_text(encoding="utf-8"))
-    snapshot_docs = _shipped_docs(snapshot / ".docs-shipped.txt")
-    if set(snapshot_docs) != {
-        path.relative_to(snapshot)
-        for path in (snapshot / "docs").rglob("*")
-        if path.is_file() or path.is_symlink()
-    }:
-        raise ValueError("snapshot docs do not match .docs-shipped.txt")
-    mirror.mkdir(parents=True, exist_ok=True)
+    _validate_payload(snapshot)
+    prior_docs = _shipped_docs(mirror / ".docs-shipped.txt")
 
-    # Match the legacy copy contract: root modules/scripts and both committed trees are wholly
-    # source-owned.  The three data directories may hold live markers, so only their named source
-    # files are replaced.
-    for pattern in ("*.py", "*.sh"):
-        for path in mirror.glob(pattern):
-            _remove(path)
-    for tree in REPLACED_TREES:
-        _remove(mirror / tree)
-    for relative_path in _shipped_docs(mirror / ".docs-shipped.txt"):
-        _remove(mirror / relative_path)
-    for owned_file in OWNED_FILES:
-        _remove(mirror / owned_file)
+    with tempfile.TemporaryDirectory(prefix="orch-deployment-") as temporary_payload:
+        payload = Path(temporary_payload)
+        _copy_payload(snapshot, payload, entries)
+        _validate_payload(payload)
+        payload_digest = snapshot_digest(payload)
+        if payload_digest != expected_digest:
+            raise ValueError(
+                f"staged payload digest {payload_digest} != verified payload {expected_digest}"
+            )
 
-    for relative_path in entries:
-        _copy_entry(snapshot / relative_path, mirror / relative_path)
+        # Everything used below comes from the complete, validated private payload, including
+        # the separate registry update. Never reopen the retained snapshot after this boundary.
+        entries = owned_entries(payload)
+        registry = payload / "repo_review_registry.json"
+        mirror.mkdir(parents=True, exist_ok=True)
+        # Match the legacy ownership contract; runtime content in the merged directories stays.
+        # Publication is still in-place here. Reader pinning and atomic switching are separate
+        # follow-ups; this boundary guarantees that preparation failures cannot damage the mirror.
+        for pattern in ("*.py", "*.sh"):
+            for path in mirror.glob(pattern):
+                _remove(path)
+        for tree in REPLACED_TREES:
+            _remove(mirror / tree)
+        for relative_path in prior_docs:
+            _remove(mirror / relative_path)
+        for owned_file in OWNED_FILES:
+            _remove(mirror / owned_file)
 
-    installed_digest = snapshot_digest(mirror)
-    if installed_digest != expected_digest:
-        raise RuntimeError(
-            f"installed payload digest {installed_digest} != verified snapshot {expected_digest}"
-        )
+        _copy_payload(payload, mirror, entries)
 
-    if runtime_registry is not None and registry.is_file():
-        runtime_registry = runtime_registry.expanduser()
-        runtime_registry.parent.mkdir(parents=True, exist_ok=True)
-        temporary = runtime_registry.with_name(runtime_registry.name + ".tmp")
-        shutil.copy2(registry, temporary)
-        temporary.replace(runtime_registry)
+        installed_digest = snapshot_digest(mirror)
+        if installed_digest != expected_digest:
+            raise RuntimeError(
+                f"installed payload digest {installed_digest} != verified snapshot {expected_digest}"
+            )
+
+        if runtime_registry is not None and registry.is_file():
+            runtime_registry = runtime_registry.expanduser()
+            runtime_registry.parent.mkdir(parents=True, exist_ok=True)
+            temporary = runtime_registry.with_name(runtime_registry.name + ".tmp")
+            shutil.copy2(registry, temporary)
+            temporary.replace(runtime_registry)
 
     module_count = len(list(mirror.glob("*.py")))
     test_count = len(list((mirror / "tests").glob("*.py")))
