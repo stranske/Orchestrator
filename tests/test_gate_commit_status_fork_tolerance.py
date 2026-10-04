@@ -216,7 +216,7 @@ STATUS_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
         context: {
           repo: { owner: 'stranske', repo: 'Orchestrator' },
           sha: 'basesha',
-          payload: { pull_request: { head: { sha: 'headsha' } } },
+          payload: { pull_request: { head: { sha: spec.sha || 'headsha' } } },
         },
         github,
       }, record);
@@ -338,6 +338,14 @@ STATUS_CASES: list[dict[str, Any]] = [
     {"name": "written", **FORK, "state": "success", "error": None},
     {"name": "same_repo_written", **SAME_REPO, "state": "success", "error": None},
 ]
+
+# A new PR head must appear in both the refused request and the failure diagnostic. Keep the
+# original head controls as well: a hardcoded SHA must not satisfy either side of this check.
+STATUS_CASES.extend(
+    {**case, "name": f"{case['name']}_new_head", "sha": "updated-headsha"}
+    for case in list(STATUS_CASES)
+    if case["fromFork"] == "false" and case["error"] in (REFUSED, REFUSED_404)
+)
 
 COMMENT_CASES: list[dict[str, Any]] = [
     {"name": "fork", **FORK, "error": REFUSED},
@@ -465,19 +473,21 @@ def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
 def test_a_same_repo_refusal_fails_loudly(status: dict, cases: list[tuple[str, str]]) -> None:
     """Both refusal routes fail for every verdict, retaining the three baseline controls."""
     for name, state in cases:
-        case = status[name]
-        assert case["threw"] is not None, (name, case)
-        assert case["threw"]["message"] == (
-            "Same-repository Gate status publication was refused for headsha; "
-            f"computed verdict '{state}' was not published."
-        ), (name, case)
-        assert len(case["statusRequests"]) == 1, (name, case)
-        request = case["statusRequests"][0]
-        assert request["sha"] == "headsha" and request["state"] == state, (name, case)
-        assert request["context"] == "Gate / gate", (name, case)
-        assert case["summaryWrites"] == 0, (name, case)
-        assert any("blocked by permissions" in w for w in case["warnings"]), (name, case)
-        assert not any("read-only" in w for w in case["warnings"]), (name, case)
+        for suffix, sha in (("", "headsha"), ("_new_head", "updated-headsha")):
+            case_name = name + suffix
+            case = status[case_name]
+            assert case["threw"] is not None, (case_name, case)
+            assert case["threw"]["message"] == (
+                f"Same-repository Gate status publication was refused for {sha}; "
+                f"computed verdict '{state}' was not published."
+            ), (case_name, case)
+            assert len(case["statusRequests"]) == 1, (case_name, case)
+            request = case["statusRequests"][0]
+            assert request["sha"] == sha and request["state"] == state, (case_name, case)
+            assert request["context"] == "Gate / gate", (case_name, case)
+            assert case["summaryWrites"] == 0, (case_name, case)
+            assert any("blocked by permissions" in w for w in case["warnings"]), (case_name, case)
+            assert not any("read-only" in w for w in case["warnings"]), (case_name, case)
 
 
 def test_a_rate_limited_post_keeps_its_own_path(status: dict) -> None:

@@ -117,3 +117,28 @@ requires approval, but approval policy is never`. The checkout's Git directory i
 so the source/test commit is prepared in `/tmp/gate-fork-verdicts-review.git` and its patch at
 `/tmp/gate-fork-verdicts.patch`. Applying it to the PR branch and passing fresh exact-head CI
 remain outstanding; the seven-minute review floor and repository merge_guard remain required.
+
+The current follow-up runs each same-repository refusal case against two different PR heads.
+Both the publication request and refusal diagnostic must identify the selected head for every
+verdict through the 403 and 404 routes. Collection stays at 24 tests. An unchanged `d326e59`
+export produces **3 failed, 21 deselected**; production passes **24 tests** and the three-file
+Gate/configuration/verdict-replay regression run passes **48 tests**. A temporary export with
+the diagnostic hardcoded to the original head produces **3 failed, 21 deselected**, specifically
+at the new-head assertions. All pytest runs use `-m "not slow"`. The production workflow and
+retry helper are unchanged by this follow-up.
+
+Remote checks on `b997e06003f9c4d01819211df8196c408b13346d` pass for Gate, Python 3.12/3.13,
+lint, format, typecheck, verification, mirror verification, and combined coverage. PR #413 is
+open and ready for review. These results predate this test change; applying the follow-up and
+passing fresh exact-head CI remain required before the seven-minute floor and merge_guard.
+
+Black 26.5.1 leaves the changed test unchanged; the required repository-wide check with line
+length 100 and exclusion `(\.workflows-lib|node_modules)` passes for **297 files**.
+`git diff --check` passes. This runner again uses upstream-source tools staged in `/tmp`
+and the periodic worker wakeup described above.
+
+The branch commit is blocked by the checkout's read-only `.git` (`index.lock` creation fails).
+The source/test commit is saved in `/tmp/gate-head-review.git`, with an applyable patch at
+`/tmp/gate-head-review.patch`; both changed files remain in the working tree for automation.
+The first two acceptance criteria are locally verified. Fresh exact-head CI, the seven-minute
+review floor, and the repository merge_guard remain outstanding; no merge is claimed.
