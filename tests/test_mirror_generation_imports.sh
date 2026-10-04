@@ -118,7 +118,12 @@ def witness(incumbent):
             with selectors.DefaultSelector() as ready:
                 ready.register(reader.stdout, selectors.EVENT_READ)
                 assert ready.select(timeout=10), 'reader did not reach the rendezvous'
-            assert reader.stdout.readline().strip() == 'READY:old'
+            line = reader.stdout.readline().strip()
+            if line != 'READY:old':
+                if reader.poll() is None:
+                    reader.kill()
+                _, error = reader.communicate(timeout=10)
+                raise AssertionError(f'unexpected rendezvous {line!r}: {error}')
             (snapshot / 'old_only.py').unlink()
             (snapshot / 'later_only.py').write_text("VALUE = 'new only'\n")
             # A retained-generation reader must allow both publications to
