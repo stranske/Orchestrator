@@ -124,6 +124,48 @@ test('durable metadata receipt reproduces all manifest path/tree bindings withou
   assert.deepEqual(fs.readFileSync(path.join(w.output, 'metadata.json')), receipt);
 });
 
+test('retained PR receipt rejects substituting its last changed file with a supporting tree file', (t) => {
+  const w = world(t);
+  const reviews = path.join(__dirname, '../docs/reviews');
+  const metadata = JSON.parse(fs.readFileSync(path.join(reviews, 'pr-438-source-metadata.json')));
+  const manifest = JSON.parse(fs.readFileSync(path.join(reviews, 'pr-438-source-evidence.json')));
+  const supporting = manifest.files.find((file) => !file.changed);
+  assert.ok(metadata.tree.tree.some((entry) => entry.path === supporting.path));
+  metadata.changed_paths[metadata.changed_paths.length - 1] = supporting.path;
+  assert.equal(new Set(metadata.changed_paths).size, metadata.pull_request.changed_files);
+  let reads = 0;
+  assert.throws(() => capture(Buffer.from(JSON.stringify(metadata)), w.repo, w.output,
+    manifest.head_sha, () => { reads += 1; return Buffer.alloc(0); }), /authenticated PR file records/);
+  assert.equal(reads, 0, 'refuse the substituted set before reading any source');
+  assert.equal(fs.existsSync(w.output), false);
+});
+
+// Historical replay requires the bound objects, just like the contract witnesses.
+// Ordinary CI still runs the fixture and retained-metadata refusal tests above.
+if (process.env.ORCH_CONTRACT_SOURCE_MANIFEST) {
+  test('replays the retained exact-head receipt into a complete byte-identical source bundle', (t) => {
+    const w = world(t);
+    const manifestPath = path.resolve(process.env.ORCH_CONTRACT_SOURCE_MANIFEST);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath));
+    const receipt = fs.readFileSync(path.join(path.dirname(manifestPath), 'pr-438-source-metadata.json'));
+    const report = capture(receipt, path.resolve(__dirname, '..'), w.output,
+      process.env.ORCH_CONTRACT_EXPECTED_HEAD);
+    assert.deepEqual(report, manifest, 'reacquisition preserves every retained binding and disposition');
+    assert.equal(report.source_status, 'COMPLETE');
+    assert.equal(report.files.length, 22);
+    assert.equal(report.retrieved_changed_files, 14);
+    for (const file of report.files) {
+      const bytes = fs.readFileSync(path.join(w.output, file.artifact));
+      assert.equal(bytes.length, file.expected_bytes);
+      assert.equal(blobSha(bytes), file.blob_sha);
+      assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), file.sha256);
+    }
+    assert.deepEqual(fs.readFileSync(path.join(w.output, 'metadata.json')), receipt);
+    assert.equal(report.review_status, 'PENDING');
+    assert.equal(report.deployment_status, 'NOT_OBSERVED');
+  });
+}
+
 for (const defect of ['head', 'commit', 'tree', 'truncated', 'duplicates', 'traversal', 'omitted file']) {
   test(`rejects ${defect} metadata before writing a bundle`, (t) => {
     const w = world(t);

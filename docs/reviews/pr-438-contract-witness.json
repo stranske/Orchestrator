@@ -48,7 +48,7 @@
       "evidence": "Full exact-head pytest regression suite",
       "status": "UNKNOWN",
       "owner": "imi-merge-verify-closer operated by stranske",
-      "next_action": "Install pytest in the existing Sol lane, run the nine-file focused suite in pr-438-disposition.md against bound source and retain exact-head output."
+      "next_action": "Install pytest in the existing Sol lane, run the full exact-head pytest regression suite (not only the nine-file focused suite) against a clean exact-head checkout, and retain output including collection and skip measurements."
     },
     {
       "evidence": "Provisioned-machine copier/builder receipt",

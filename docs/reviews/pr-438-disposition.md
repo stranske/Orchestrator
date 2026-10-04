@@ -144,10 +144,14 @@ describe the earlier `57a828d` revision. They are not the final head's collectio
 
 | Evidence | Disposition | Owner | Next action |
 | --- | --- | --- | --- |
-| Full exact-head regression suite, including documented copier installer and pre-sync refusal paths | UNKNOWN; pytest is absent and PyPI DNS resolution failed | `imi-merge-verify-closer`, operated by stranske through the existing Sol lane | Run the command below against a clean tree whose relevant files match the manifest; retain exact-head test output |
+| Full exact-head regression suite, including documented copier installer and pre-sync refusal paths | UNKNOWN; pytest is absent and PyPI DNS resolution failed | `imi-merge-verify-closer`, operated by stranske through the existing Sol lane | Install pytest in the existing Sol lane, run the full exact-head pytest regression suite against a clean exact-head checkout, and retain output including collection and skip measurements; the nine-file focused command below does not resolve this UNKNOWN |
 | Recorded provisioned-machine copier/builder witness | PR body available as an author claim at `57a828d`; no independent machine receipt/log artifact retrieved | stranske, provisioned-machine operator | Supply the retained scratch-run log/receipt and copier bytes bound to that revision, or reproduce against the final head; retain bytes and permissions comparison |
 | Installed deployment | NOT_OBSERVED | stranske, provisioned-machine operator | If deployment is intended, perform the documented owner step and capture installed observations; do not infer it from these scratch runs |
 | Final independent Sol adjudication and complete changed-code inspection | UNKNOWN; this collection/focused witness run does not establish that lane's review | `imi-merge-verify-closer`, operated by stranske through the existing Sol lane | Review all bound source inputs and the evidence dispositions, retain a durable decision linked to the original comparison, and route demonstrated defects through normal repair gates |
+
+The following nine-file command is focused regression verification. The full-suite action
+above requires the entire exact-head suite with `pytest -m "not slow"`, including retained
+collection, deselection and skip counts; it is not satisfied by this focused command.
 
 ```bash
 pytest tests/test_build_exec_mirror.py tests/test_exec_mirror_shape.py \
@@ -173,7 +177,7 @@ No defect in #438's product implementation was demonstrated by this follow-up. T
 is resolved for source acquisition, with the review and machine evidence gaps explicitly
 retained. The overall acceptance criteria remain open pending the named actions above.
 
-## Delivery limitation for this run
+## Earlier delivery limitation
 
 The earlier acquisition and four-witness changes are published in PR #445 at
 `3b471dc19cc9f35fc393f2c0e7311f8c36c26751`. This follow-up rechecked all 22 local blobs against
@@ -210,17 +214,33 @@ hashes and command; [the test output](pr-445-review-recovery-tests.txt) records 
 0 failed, 0 skipped**, including all six historical contract witnesses. The fresh collector
 run retained **14/14 changed files** and preserved all **22** existing file/blob bindings.
 
-Originating-reviewer disposition is **PENDING**, owned by `coderabbitai` on the two threads.
-Next action: review the published repair and focused evidence, then record disposition in
-each originating thread. No thread is self-resolved and the current-head task stays unchecked
-until that disposition is obtained. These acquisition repairs do not supply the remaining
-full-suite, provisioned-machine, or independent Sol evidence.
+The previous recovery's delivery record is historical. Its source/test/evidence repair
+was subsequently published by keepalive in `187a717bd590ea1da78e7d11deba9aa5893ee245`.
+Authenticated revalidation at that head confirms **both originating threads are resolved
+by CodeRabbit**, each with an explicit addressed disposition for commits `720cd8e` through
+`187a717`. No thread was self-resolved by this run. These acquisition repairs do not supply
+the remaining full-suite, provisioned-machine, or independent Sol evidence.
 
-This recovery's source/test/evidence repair is committed in `/tmp/pr445-review-recovery`;
-the patch is retained at `/tmp/pr445-review-recovery.patch` and the working-tree files are
-also updated here. The workspace `.git` refused staging with a read-only-filesystem error.
-The GitHub connector rejected both repair-tree publication and the originating-reviewer
-reply with `MCP tool call requires approval, but approval policy is never`. No repair was
-published and no reviewer request was delivered. Owner `stranske` must publish the retained
-commit/patch and request CodeRabbit disposition in both originating threads. The task remains
-unchecked while publication and reviewer disposition are blocked.
+## Revalidation at 187a717
+
+[The new revalidation receipt](pr-445-review-revalidation.json) retains the authenticated
+thread snapshot, exact tested input hashes and [65-test output](pr-445-review-revalidation-tests.txt).
+The new tests reject a same-count substitution in the actual retained 14-file metadata
+receipt before reading source or creating output, and replay all 22 historical Git objects
+into a complete bundle identical to the retained manifest. They verify every retained
+artifact's size, Git object identity and SHA-256. Review remains PENDING and deployment
+NOT_OBSERVED in that source manifest; source acquisition is not independent adjudication.
+
+The third [full-suite action finding](https://github.com/stranske/Orchestrator/pull/445#discussion_r4179590720)
+was marked addressed by CodeRabbit at `720cd8e`, but current-head inspection found its
+requested correction absent from both the contract receipt and this disposition. This
+pass corrects both actions to require the entire exact-head suite and identifies the
+nine-file command as focused. Renewed originating-reviewer disposition for this correction
+remains PENDING. The whole-suite and machine observations remain UNKNOWN.
+
+PR-body reconciliation was rejected by automatic approval review: GitHub writes require
+approval and this session's approval policy is `never`. The proposed reconciliation reopens
+the six duplicated checkboxes for independent/final validation steps unsupported by the
+retained evidence; the other eight prior checked occurrences remain verified. The current
+review task stays unchecked pending the corrected-action disposition. Owner `stranske`
+must publish this pass's retained commit/patch and apply the proposed PR-body reconciliation.
