@@ -285,6 +285,7 @@ if [[ "$mode" == "active" ]]; then
   esac
 fi
 
+# ORCH-ANCHOR: mirror-reader-reentry -------------------------------------------------------------
 # Reopen the tick only after acquiring the publisher's shared lock. The helper
 # descriptor stays in the tick shell across Python children and exec transitions.
 # Bash-c prologue inspection has no script file and must remain read-only.
