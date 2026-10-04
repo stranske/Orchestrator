@@ -159,6 +159,25 @@ def test_a_new_finish_holds_the_gate_once():
     assert calls == []
 
 
+def test_a_new_finish_holds_later_candidates_in_the_same_run():
+    now = int(time.time())
+    pending = _promotion_dir("pending", evaluated_at=now - 3600)
+    expired = _promotion_dir("expired", evaluated_at=now - 20 * 86400)
+    # followup visits newest directories first: expire one before visiting the live candidate.
+    os.utime(expired, (now, now))
+    os.utime(pending, (now - 1, now - 1))
+    _stamp(26 * 3600)
+    calls: list = []
+
+    out = _followup(calls)
+
+    assert synthesis_promotion.load_state(expired)["delivery_phase"] == "discarded"
+    assert calls == [], "a new finish must hold the gate before the next candidate is visited"
+    assert synthesis_promotion.load_state(pending)["delivery_phase"] == "evaluated"
+    assert out["ship_gate"]["finished"] == 1
+    assert out["ship_gate"]["evaluated"] == 2
+
+
 def test_the_summary_line_carries_both_numbers_and_never_spells_unmeasured_as_zero():
     held = {
         "ship_gate": {

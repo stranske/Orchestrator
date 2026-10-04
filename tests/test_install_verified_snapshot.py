@@ -1072,7 +1072,6 @@ def test_tick_reader_excludes_real_publisher_across_child_imports(tmp_path, monk
     import threading
 
     snapshot = _snapshot(tmp_path)
-    root = INSTALLER.parent.parent
     prologue = _orchestrate_tick_prologue()
     child = (
         "import sys; from pathlib import Path; import module, paths; "
@@ -1083,8 +1082,10 @@ def test_tick_reader_excludes_real_publisher_across_child_imports(tmp_path, monk
 
     script = prologue + f"python3 -c {shlex.quote(child)}\n"
     (snapshot / "orchestrate.sh").write_text(script)
-    (snapshot / "mirror_reader.py").write_bytes((root / "src/mirror_reader.py").read_bytes())
-    (snapshot / "paths.py").write_bytes((root / "src/paths.py").read_bytes())
+    (snapshot / "mirror_reader.py").write_bytes(
+        (paths.MODULE_DIR / "mirror_reader.py").read_bytes()
+    )
+    (snapshot / "paths.py").write_bytes((paths.MODULE_DIR / "paths.py").read_bytes())
     (snapshot / "module.py").write_text("VALUE = 'old'\n")
     watchdog_calls = tmp_path / "watchdog-calls"
     (snapshot / "tick_watchdog.py").write_text(
@@ -1189,10 +1190,11 @@ def _run_reader_during_publication(
     import threading
 
     snapshot = _snapshot(tmp_path)
-    root = INSTALLER.parent.parent
 
-    (snapshot / "mirror_reader.py").write_bytes((root / "src/mirror_reader.py").read_bytes())
-    (snapshot / "paths.py").write_bytes((root / "src/paths.py").read_bytes())
+    (snapshot / "mirror_reader.py").write_bytes(
+        (paths.MODULE_DIR / "mirror_reader.py").read_bytes()
+    )
+    (snapshot / "paths.py").write_bytes((paths.MODULE_DIR / "paths.py").read_bytes())
     (snapshot / "module.py").write_text("VALUE = 'old'\n")
     mirror = tmp_path / "live mirror"
     installer.install(snapshot, mirror, installer.snapshot_digest(snapshot))
@@ -1271,9 +1273,8 @@ def test_standalone_python_reader_excludes_publisher_across_child_imports(
     tmp_path, monkeypatch, guarded
 ):
     """The same child observer crosses generations without the standalone entry guard."""
-    root = INSTALLER.parent.parent
     child = _reader_child_import_script()
-    mirror_reader = root / "src/mirror_reader.py"
+    mirror_reader = paths.MODULE_DIR / "mirror_reader.py"
 
     def reader_cmd_factory(mirror: Path) -> list[str]:
         command = ["python3", "-c", child]

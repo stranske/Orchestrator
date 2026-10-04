@@ -17,7 +17,8 @@ the same on a Linux runner, where nothing under the temp root is a symlink. Each
 interpreter because every runtime path is fixed from the environment at import, which is how the
 defect reached the dispatcher. The child inherits no ORCH_* variable, so no inherited override can
 point it back at live state (`rail_exercise.sandbox_overrides()` names the two that matter most),
-and its HOME is the sandbox.
+and its HOME is the sandbox. The registries that seed on a first load (`paths.SEEDED_REGISTRY_ENV`)
+are pointed into the sandbox as well, because their default is MODULE_DIR, which the mirror deploys.
 """
 
 from __future__ import annotations
@@ -81,6 +82,10 @@ def _runtime_behind_a_symlink(tmp_path: Path) -> tuple[Path, Path, str]:
     return real, link, f"{link}//runtime"
 
 
+SEEDED = paths.SEEDED_REGISTRY_ENV
+SEEDED_DEFAULTS = [paths.MODULE_DIR / "experiments" / name for name in SEEDED.values()]
+
+
 def _run_child(tmp_path: Path, script: str, runtime: str, *args: str, **env_extra: str) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith("ORCH_") and k != "HANDOFF_DIR"}
     env.update(
@@ -93,6 +98,11 @@ def _run_child(tmp_path: Path, script: str, runtime: str, *args: str, **env_extr
         PYTHONPATH=str(paths.MODULE_DIR),
         **env_extra,
     )
+    # Scrubbing ORCH_* also drops the variables that keep a first load's SEED out of MODULE_DIR,
+    # and the exec mirror deploys that directory: this child seeding repo_knowledge.json there
+    # VOIDed every verified sync on 2026-10-04. The seeds belong in the sandbox too.
+    env.update({var: str(tmp_path / "registries" / name) for var, name in SEEDED.items()})
+    absent = [path for path in SEEDED_DEFAULTS if not path.exists()]
     proc = subprocess.run(
         [sys.executable, "-c", script, *args],
         cwd=tmp_path,
@@ -102,6 +112,10 @@ def _run_child(tmp_path: Path, script: str, runtime: str, *args: str, **env_extr
         timeout=180,
         stdin=subprocess.DEVNULL,
     )
+    created = [str(path) for path in absent if path.exists()]
+    assert (
+        not created
+    ), f"the child seeded a registry inside MODULE_DIR, which the mirror deploys: {created}"
     lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT ")]
     assert proc.returncode == 0 and len(lines) == 1, (
         f"child exited {proc.returncode} with {len(lines)} RESULT line(s)\n"

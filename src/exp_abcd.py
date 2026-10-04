@@ -36,7 +36,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import adapters
 import capabilities
@@ -56,6 +56,18 @@ EXP_DIR = Path(os.environ.get("ORCH_EXP_DIR", ORCH / "experiments"))
 DISPATCH_LOG_DIR = (
     Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")) / "dispatch-logs"
 )
+
+
+class ShipGateSummary(TypedDict):
+    stamp_age_s: int | None
+    hold_s: int
+    launch_available_at_start: bool
+    evaluated: int
+    launchable: int
+    launched: int
+    finished: int
+    inflight: bool
+
 
 # The reasoning/mode the ORCHESTRATOR would assign each agent for a complex, multi-file
 # integration implement — set deliberately, so the experiment tests the choice I'd actually make:
@@ -1518,7 +1530,7 @@ def followup(
     # The gate's two numbers, reported together: how many promotions were waiting in `evaluated`
     # when this run looked, and for how many of them a launch was still available. The second one
     # is what nobody could see while the stamp below was being re-touched every hour.
-    ship_gate = {
+    ship_gate: ShipGateSummary = {
         "stamp_age_s": None if stamp_age_s is None else int(stamp_age_s),
         "hold_s": SHIP_GATE_HOLD_S,
         "launch_available_at_start": launch_available,
@@ -1531,6 +1543,7 @@ def followup(
     out["ship_gate"] = ship_gate
 
     def persist_terminal_checkpoint(edir: Path, state: dict, *, phase_before: str | None) -> None:
+        nonlocal launch_available
         phase = state.get("delivery_phase")
         if phase not in {"candidate_ready", "discarded", "durable"}:
             return
@@ -1558,6 +1571,7 @@ def followup(
         }
         (edir / "ship-gate.json").write_text(json.dumps(payload, indent=2) + "\n")
         gate_stamp.touch()
+        launch_available = False
         ship_gate["finished"] += 1
 
     # Read every promotion state ONCE before deciding anything. `promotion_inflight` used to be

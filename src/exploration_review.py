@@ -229,7 +229,7 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
         with feedback._conn() as c:
             rows = c.execute(
                 "SELECT r.run_id, r.task_type, r.agent, r.routing_metadata, "
-                "o.durability, o.adjudicated_verdict, o.verifier_verdict "
+                "o.durability, o.adjudicated_verdict, o.verifier_verdict, o.failure_class "
                 "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                 "WHERE r.routing_metadata IS NOT NULL AND r.ts>=?",
                 (since,),
@@ -237,7 +237,16 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
     except Exception as exc:
         rows = []
         evidence_error = f"{type(exc).__name__}: {exc}"
-    for run_id, task_type, agent, raw_metadata, durability, adjudicated, verifier in rows:
+    for (
+        run_id,
+        task_type,
+        agent,
+        raw_metadata,
+        durability,
+        adjudicated,
+        verifier,
+        failure_class,
+    ) in rows:
         metadata = _decode_metadata(raw_metadata)
         if not metadata:
             continue
@@ -264,7 +273,11 @@ def _recorded_exploration_evidence(window_days: int = 120) -> dict:
         stat["runs"] += 1
         stat["task_types"][task_type] = stat["task_types"].get(task_type, 0) + 1
         stat["agents"][agent] = stat["agents"].get(agent, 0) + 1
-        if feedback._has_outcome_evidence(durability, adjudicated, verifier):
+        # The routing-mode gate counts the same evidence the learner scores: an infra death or an
+        # unattributed closing PR is not an exploration outcome either way.
+        if feedback._has_outcome_evidence(
+            durability, adjudicated, verifier, failure_class=failure_class
+        ):
             outcome_exploration_runs += 1
             stat["outcome_runs"] += 1
             task_types_with_outcomes.add(task_type)

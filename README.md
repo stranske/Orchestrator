@@ -38,8 +38,10 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   plan, prints what it *would* do, writes no heartbeat and dispatches nothing — safe to run
   anytime alongside the live fleet. `--active` (launchd only) ingests keepalive outcomes live and, since
   2026-09-03, dispatches nothing unless `ORCH_DISPATCH_LANE=1`: the tick's own dispatch lane made 14
-  remote dispatches in 30 days (9 abandoned, none durable) while keepalive ran 1,239 rounds without
-  it, so claims and the heartbeat now run only when that flag is set. Since 2026-09-15 the same
+  remote dispatches in 30 days (5 merged, 2 since judged durable; 2 PRs closed unmerged; 7 labelled
+  issues closed with no PR from the labelled agent, 4 of them delivered by codex keepalive or by
+  hand; re-measured 2026-10-04) while keepalive ran 1,239 rounds without it, so claims and the
+  heartbeat now run only when that flag is set. Since 2026-09-15 the same
   flag also gates backlog discovery and the issue-readiness cadence (119 shadow ticks had planned 0
   dispatches; the lanes read `capacity.json` and never `backlog.json`), the tick-phase consult is
   opt-in (`ORCH_TICK_PHASE_CONSULT=1`; 3,371 offers in eleven days that no agent answers), and the
@@ -527,6 +529,15 @@ Enforcement binds on capabilities registered from 2026-08-21, and each requireme
 date (findability from 2026-08-23); the pre-cutoff set is reported as drainable debt on every run,
 with its causes and its drainable count, and does not fail the suite. Rationale and the failure modes:
 `ADDING_CAPABILITIES.md`.
+
+**Evaluating a capability's potential is a separate question from admitting it, with its own rule**
+(`CLAUDE.md` §6, owner rule 2026-10-04): a capability's record under the conditions it happened to
+run is evidence about its wiring, not its concept. Demand is measured from the population of
+situations it exists for, independently of invocations; the mechanism is traced to its first
+weakness, downstream included; the smallest full test in a real situation is designed before any
+verdict; "hand use" and an untraced "hold" are not verdicts; and the first question before
+concluding "no potential" is whether the evaluation itself was deficient. `ADDING_CAPABILITIES.md`
+Part 3 keeps the register of assessment failures that have recurred (A1–A7).
 
 ## Capability activation inventory
 

@@ -21,9 +21,11 @@ handed, exactly as that gate would.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -49,6 +51,11 @@ MODSRC="$1/src"
 cp "$MODSRC"/*.py "$ORCH_MIRROR"/
 cp "$FAKE_VERIFY" "$ORCH_MIRROR/verify.py"
 cp "$1/orchestrate.sh" "$ORCH_MIRROR/orchestrate.sh"
+# The real copier ships experiments/*.json only when the source has them.
+if compgen -G "$1/experiments/*.json" > /dev/null; then
+  mkdir -p "$ORCH_MIRROR/experiments"
+  cp "$1"/experiments/*.json "$ORCH_MIRROR/experiments/"
+fi
 mkdir -p "$ORCH_MIRROR/scripts"
 cp "$FAKE_INSTALLER" "$ORCH_MIRROR/scripts/install_verified_snapshot.py"
 chmod +x "$ORCH_MIRROR/scripts/install_verified_snapshot.py"
@@ -89,6 +96,17 @@ if touch:  # another session moving the clone while verify.py runs
 touch_mirror = os.environ.get("FAKE_TOUCH_MIRROR")
 if touch_mirror:
     (pathlib.Path.cwd() / touch_mirror).write_text("changed by verification\n")
+# What features.load(), repo_knowledge.load() and research_scheduler.load_hypotheses() do: read the
+# path their variable names, else MODULE_DIR/experiments/ (the cwd here), and seed it if absent.
+for pair in filter(None, os.environ.get("FAKE_SEED_REGISTRIES", "").split(",")):
+    var, _, name = pair.partition("=")
+    target = pathlib.Path(env.get(var) or pathlib.Path.cwd() / "experiments" / name)
+    found = target.read_text().strip() if target.is_file() else ""
+    if not found:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"seeded": "by verification"}\n')
+    with open(env["FAKE_RECORD"], "a") as fh:
+        fh.write(f"seeded_{var}={target}\nfound_{var}={found}\n")
 expected = os.environ.get("FAKE_EXPECT_MIRROR_FILE")
 if expected:
     with open(env["FAKE_RECORD"], "a") as fh:
@@ -410,6 +428,79 @@ def test_a_verify_run_that_changes_deployment_bytes_voids_the_snapshot(world):
     assert result.returncode == 3, result.stdout + result.stderr
     assert "verification changed deployment-owned bytes" in result.stderr
     assert not snapshot.exists()
+
+
+def test_registries_seeded_during_verification_never_land_in_the_mirror(world):
+    """THE INCIDENT (2026-10-04): every verified sync from the clean clone was VOID. In the flat
+    mirror the three registries' default paths are the deployment-owned experiments/*.json
+    (install_verified_snapshot.OWNED_FILES); the copy script ships them only when the source has
+    them, and a clean clone never does. So the first selftest to load one seeded it in the scratch
+    mirror, the payload changed under the verdict, and the sync was refused. The script now names a
+    scratch-state path for each, so the seeds land beside verify.py's other writes. The installer
+    here is the real one, so a seed in the mirror would change the real payload digest."""
+    seed = ",".join(f"{var}={name}" for var, name in paths.SEEDED_REGISTRY_ENV.items())
+    result, record = _run(world, FAKE_SEED_REGISTRIES=seed)
+    assert "VOID" not in result.stdout + result.stderr, (
+        "a registry seeded during verification changed the deployment payload",
+        result.stdout + result.stderr,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    mirror = Path(record["sync_mirror"]).resolve()
+    registries = Path(record["verify_runtime"]).parent / "registries"
+    seeded = {var: Path(record[f"seeded_{var}"]) for var in paths.SEEDED_REGISTRY_ENV}
+    for var, name in paths.SEEDED_REGISTRY_ENV.items():
+        assert seeded[var] == registries / name, (var, seeded[var])
+        assert mirror not in seeded[var].resolve().parents, (var, seeded[var])
+        assert record[f"found_{var}"] == "", (var, record[f"found_{var}"])
+    assert len(set(seeded.values())) == len(seeded), seeded
+
+
+def test_a_registry_the_source_ships_is_judged_as_shipped(world):
+    """When the source DOES ship a registry, the copier puts it in the mirror and the live tick will
+    read it, so verification must judge that content, not a fresh seed. The script copies each
+    shipped one into the scratch state; the loaders read it there and the mirror stays unwritten."""
+    (world["src"] / "experiments").mkdir()
+    for name in paths.SEEDED_REGISTRY_ENV.values():
+        (world["src"] / "experiments" / name).write_text(f'{{"shipped": "{name}"}}\n')
+    seed = ",".join(f"{var}={name}" for var, name in paths.SEEDED_REGISTRY_ENV.items())
+    result, record = _run(world, FAKE_SEED_REGISTRIES=seed)
+    assert "VOID" not in result.stdout + result.stderr, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    registries = Path(record["verify_runtime"]).parent / "registries"
+    for var, name in paths.SEEDED_REGISTRY_ENV.items():
+        assert record[f"found_{var}"] == f'{{"shipped": "{name}"}}', (
+            "verification judged a seed instead of the registry that ships",
+            var,
+            record[f"found_{var}"],
+        )
+        assert Path(record[f"seeded_{var}"]) == registries / name, (var, record)
+
+
+def test_the_seeding_loaders_read_the_variables_the_script_sets(tmp_path):
+    """The other half of the wiring, asked of the real modules: each loader resolves its registry
+    from the variable `paths.SEEDED_REGISTRY_ENV` names, so the script, the map and the modules
+    cannot drift apart silently. capabilities.py reads the features registry through the same one.
+    """
+    env = {**os.environ, "ORCH_LOCAL_RUNTIME": str(tmp_path), "ORCH_STATE_DIR": str(tmp_path)}
+    env.update({var: str(tmp_path / name) for var, name in paths.SEEDED_REGISTRY_ENV.items()})
+    probe = (
+        "import json, capabilities, features, repo_knowledge, research_scheduler\n"
+        "print(json.dumps({'ORCH_FEATURES_PATH': [str(features.REG), "
+        "str(capabilities.FEATURES_REG)], 'ORCH_REPO_KNOWLEDGE_PATH': [str(repo_knowledge.REG)], "
+        "'ORCH_HYP_PATH': [str(research_scheduler.HYP_PATH)]}))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        env=env,
+        cwd=paths.MODULE_DIR,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert out.returncode == 0, out.stderr
+    resolved = json.loads(out.stdout.strip().splitlines()[-1])
+    for var in paths.SEEDED_REGISTRY_ENV:
+        assert resolved[var] and set(resolved[var]) == {env[var]}, (var, resolved[var])
 
 
 def test_incomplete_verify_evidence_never_publishes_a_snapshot(world):
