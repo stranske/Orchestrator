@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import py_compile
+import select
 import shutil
 import subprocess
 import sys
@@ -300,6 +302,162 @@ print(json.dumps([
                 self.assertEqual(observation[:4], ["old", "old", "VALUE = 'old'", "old"])
                 self.assertEqual(observation[4:], [str(pinned), str(pinned)])
         self.assertEqual(len(watchdog.read_text().splitlines()), 1)
+
+    def test_startup_modules_share_the_tick_generation(self):
+        """Publication during the first startup module cannot change later tick reads."""
+        text = (REPO / "orchestrate.sh").read_text()
+        prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+        record = self.root / "startup-observations.jsonl"
+        observe = (
+            "import json, sys\nfrom pathlib import Path\nimport module, paths\n"
+            f"record = Path({str(record)!r})\n"
+            "def observe():\n"
+            "    with record.open('a') as output:\n"
+            "        output.write(json.dumps([module.VALUE, str(paths.REPO_ROOT)]) + '\\n')\n"
+            "observe()\n"
+        )
+        pause = (
+            "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+            "assert sys.stdin.readline() == 'resume\\n'\n"
+            "observe()\n"
+        )
+        footer = (
+            "import json\nfrom pathlib import Path\n"
+            f"print(json.dumps([json.loads(line) for line in Path({str(record)!r})"
+            ".read_text().splitlines()]))\n"
+        )
+        (self.snapshot / "observer.py").write_text(observe + footer)
+        (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
+        for mode in ("active", "shadow"):
+            with self.subTest(mode=mode):
+                record.unlink(missing_ok=True)
+                (self.snapshot / "tick_watchdog.py").write_text(observe + pause)
+                (self.snapshot / "cadence_registry.py").write_text(
+                    observe + (pause if mode == "shadow" else "") + "print(':')\n"
+                )
+                (self.snapshot / "orchestrate.sh").write_text(
+                    prologue + 'python3 "$ORCH/observer.py"\n'
+                )
+                self.set_value("old")
+                self.publish()
+                pinned = self.mirror.resolve()
+                env = dict(
+                    os.environ,
+                    ORCH_DIR=str(self.mirror),
+                    HOME=str(self.root),
+                    ORCH_STATE_DIR=str(self.root / "state"),
+                    PYTHONPATH=str(self.mirror),
+                )
+                for name in (
+                    "ORCH_PUBLICATION_READER_FD",
+                    "ORCH_PUBLICATION_ROOT",
+                    "ORCH_PUBLICATION_GENERATION",
+                    "ORCH_WATCHDOG_TICK_PID",
+                ):
+                    env.pop(name, None)
+                reader = subprocess.Popen(
+                    [
+                        "/bin/bash",
+                        str(self.mirror / "orchestrate.sh"),
+                        *(["--active"] if mode == "active" else []),
+                    ],
+                    cwd=self.root,
+                    env=env,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    ready, _, _ = select.select([reader.stderr], [], [], 15)
+                    self.assertTrue(ready, "first startup module did not rendezvous")
+                    self.assertEqual(reader.stderr.readline().strip(), "STARTUP-READY")
+                    self.set_value("new")
+                    self.publish()
+                    output, error = reader.communicate("resume\n", timeout=15)
+                    self.assertEqual(reader.returncode, 0, error)
+                    observations = json.loads(output.splitlines()[-1])
+                    self.assertEqual(len(observations), 5 if mode == "active" else 3)
+                    self.assertEqual(
+                        observations,
+                        [["old", str(pinned)]] * len(observations),
+                        "startup crossed executable generations",
+                    )
+                finally:
+                    if reader.poll() is None:
+                        reader.kill()
+                        reader.communicate(timeout=10)
+
+    def test_bytecode_cache_cannot_override_a_new_generation(self):
+        """Timestamp/size-valid old bytecode must not be shared with verified new code."""
+        timestamp = 1700000000
+        os.utime(self.snapshot / "module.py", (timestamp, timestamp))
+        self.publish()
+        pinned = self.mirror.resolve()
+
+        def imported_value(root):
+            result = subprocess.run(
+                [sys.executable, "-c", "import module; print(module.VALUE)"],
+                cwd=self.root,
+                env=dict(os.environ, PYTHONPATH=str(root)),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout.strip()
+
+        self.assertEqual(imported_value(pinned), "old")
+        self.assertTrue(list((pinned / "__pycache__").glob("module.*.pyc")))
+        py_compile.compile(str(pinned / "module.py"), cfile=str(pinned / "removed.pyc"))
+        (pinned / "removed.pyo").write_bytes(b"retired bytecode")
+        self.set_value("new")
+        os.utime(self.snapshot / "module.py", (timestamp, timestamp))
+        self.publish()
+        self.assertEqual(imported_value(self.mirror), "new")
+        self.assertEqual(imported_value(pinned), "old")
+        self.assertFalse((self.mirror / "__pycache__").is_symlink())
+        self.assertFalse((self.mirror / "removed.pyc").exists())
+        self.assertFalse((self.mirror / "removed.pyo").exists())
+        self.assertTrue((pinned / "removed.pyc").is_file())
+        self.assertEqual((self.mirror / "docs/reports/runtime.md").read_text(), "runtime\n")
+
+    def test_pinned_tick_still_aborts_on_refused_authentication(self):
+        text = (REPO / "orchestrate.sh").read_text()
+        prologue = text.split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+        (self.snapshot / "orchestrate.sh").write_text(
+            prologue + 'echo "UNEXPECTED: tick ran past authentication"\n'
+        )
+        (self.snapshot / "tick_watchdog.py").write_text("print('fixture watchdog armed')\n")
+        (self.snapshot / "cadence_registry.py").write_text("print(':')\n")
+        (self.snapshot / "gh_capacity.py").write_text(
+            "print('fixture refused authentication')\nraise SystemExit(77)\n"
+        )
+        self.publish()
+        env = dict(
+            os.environ,
+            ORCH_DIR=str(self.mirror),
+            HOME=str(self.root),
+            ORCH_STATE_DIR=str(self.root / "state"),
+        )
+        for name in (
+            "ORCH_PUBLICATION_READER_FD",
+            "ORCH_PUBLICATION_ROOT",
+            "ORCH_PUBLICATION_GENERATION",
+            "ORCH_WATCHDOG_TICK_PID",
+        ):
+            env.pop(name, None)
+        result = subprocess.run(
+            ["/bin/bash", str(self.mirror / "orchestrate.sh"), "--active"],
+            cwd=self.root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ABORT: fixture refused authentication", result.stderr)
+        self.assertNotIn("UNEXPECTED", result.stdout)
+        self.assertEqual(result.stdout.count("fixture watchdog armed"), 1)
 
     def test_same_observer_fails_on_incumbent_and_passes_on_generation_publisher(self):
         with patch.object(installer, "_publish_generation", self.incumbent_publish):

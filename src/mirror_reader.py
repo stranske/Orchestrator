@@ -104,8 +104,8 @@ def run(root: Path, command: list[str]) -> int:
         os.set_inheritable(lock.fileno(), True)
         if retained_generation(root, pinned):
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        # Keep the original tick PID: its already-armed watchdog also observes a
-        # blocked lock acquisition. Bash retains this fd while waiting for Python.
+        # Keep the original tick PID for the watchdog armed after reentry. Bash
+        # retains this fd while waiting for Python during initial migration.
         os.execvpe(command[0], command, env)
         raise AssertionError("exec returned")
 

@@ -681,7 +681,10 @@ aliases and `checkout_root()` to its module generation. The inherited descriptor
 stays open in the shell while it waits for Python children. For a permanently named
 generation it is unlocked before exec, allowing publication while the tick runs.
 For the incumbent real directory it stays locked until the reader exits, protecting
-initial migration. Exec preserves the tick PID and its already-armed watchdog.
+initial migration. Exec preserves the tick PID; the pinned tick arms its watchdog
+before running steps. Generation selection runs before the watchdog, cadence registry,
+and authentication preflight read executable modules. Authentication still precedes
+heartbeat activation and dispatch. Bootstrap lock acquisition precedes watchdog arming.
 Inherited descriptors are checked against the mirror-specific lock inode.
 A synchronized observer loads an old module, completes two publications while
 paused, then reads and imports old bytes again, including in a fresh child process.
@@ -823,8 +826,13 @@ included the positive publisher tests and their negative controls, rather than t
 incumbent-defect witness as proof of repair. That result predates the permanent-generation
 recovery and must be rerun. The additional standard-library witness runs with
 `PYTHONPATH=.:src python3 -m unittest discover -s tests -p test_mirror_generations.py -v`.
-Its four tests cover the paired observer, active/shadow tick entry, link-switch
-interruption/retry, and isolation of retained generations from the separate registry.
+Its witnesses cover the paired observer, active/shadow tick entry (including startup
+modules), refusal of authentication after pinning, link-switch interruption/retry,
+and isolation of retained generations from the separate registry. Python bytecode
+(`__pycache__/`, `.pyc`, and `.pyo`) stays with its old generation rather than becoming
+shared runtime storage: a timestamp/size-valid cache can otherwise override changed
+verified source bytes. The cache witness forces that collision and checks both new
+imports and the retained reader's old code, alongside preserved runtime reports.
 Shell syntax validation covers `orchestrate.sh`,
 `verify_before_sync.sh`, `publish_unverified_snapshot.sh`, and `incumbent_copy_guard.sh`.
 These results establish source behavior and process-interruption recovery, not power-loss

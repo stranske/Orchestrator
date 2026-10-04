@@ -399,6 +399,7 @@ def test_orchestrate_arms_the_watchdog_before_any_step() -> None:
         i
         for i, line in enumerate(lines)
         if 'python3 "$ORCH/' in line.split("#", 1)[0]
+        and '"$ORCH/mirror_reader.py"' not in line
         and needle not in line
         and not definition.match(line)
     ]
