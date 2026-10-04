@@ -313,7 +313,7 @@ def test_a_role_run_inherits_unjudgeable_and_its_exclusion(brain):
 def test_a_role_run_waits_while_its_acting_run_is_pending(brain):
     _role_lineage()
     res = _sweep(FakeGh(fail={("view", 20)}))
-    assert res["drains"] == {"grace": 0, "retry": 1, "acting_run": 1}, res
+    assert res["drains"] == {"grace": 0, "retry": 1, "fix_search": 0, "acting_run": 1}, res
     assert (res["skipped"], res["drainable"], res["undrainable"]) == (2, 2, 0)
 
 
