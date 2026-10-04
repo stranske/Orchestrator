@@ -158,12 +158,27 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
         self.publish()
         pinned = self.mirror.resolve()
         self.set_value("new")
+        publishers = []
+        popen = subprocess.Popen
+
+        def record_publisher(*args, **kwargs):
+            publisher = popen(*args, **kwargs)
+            publishers.append(publisher)
+            return publisher
+
         # Negative control: emulate a reader retaining shared mode while paused.
         # The publisher must reach flock before the short deadline starts.
         with (self.root / ".mirror.publish.lock").open("a") as reader_lock:
             fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)
-            with self.assertRaises(subprocess.TimeoutExpired):
-                self.publish_with_deadline(timeout=0.5)
+            with patch.object(subprocess, "Popen", side_effect=record_publisher):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    self.publish_with_deadline(timeout=0.5)
+            self.assertEqual(len(publishers), 1)
+            self.assertEqual(publishers[0].returncode, -signal.SIGKILL)
+            # Check reaping before releasing the lock: a surviving publisher could
+            # otherwise publish later and make the retry appear to have succeeded.
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(publishers[0].pid, os.WNOHANG)
             self.assertEqual(self.mirror.resolve(), pinned)
             self.assertEqual((pinned / "module.py").read_text(), "VALUE = 'old'\n")
         self.publish_with_deadline()
