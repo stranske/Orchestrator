@@ -933,8 +933,9 @@ contract's tree from the same source, before `verify.py` runs, and compares it w
 leaving out the registry. One line reports the result, `copy contract: ... built exactly the tree
 scripts/build_exec_mirror.sh builds` or `!! copy contract ... built DIFFERENT trees`, naming the
 first differences. It is FYI only and never changes the verdict, because the sync still judges the
-copier's own tree, which is what deploys. Until the copier below is installed the two copies agree
-only by coincidence. The first change to the builder after that makes this line say so.
+copier's own tree, which is what deploys. Until the copier below is installed, the two agree only
+because neither has changed since the move, and the first change to the builder makes this line
+report the difference.
 
 **The copier, whole.** After this change is merged and `~/.codex/orchestrator-src` is pulled,
 replace the contents of `~/.codex/bin/orch-sync-mirror.sh` with the block below. It keeps only what
