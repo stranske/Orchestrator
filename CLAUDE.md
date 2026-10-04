@@ -462,3 +462,55 @@ file: the log is machine-local (outside the tree), the accessor finds the item a
 note inside it, and it REFUSES on an ambiguous or unknown ref rather than guessing — a note filed
 against the wrong item corrupts the record it exists to improve. Do not duplicate lifecycle verdicts
 in prose; stale parallel inventories are how features get forgotten.
+
+## 6. Concept-first evaluation (MANDATORY before any verdict on a capability — owner rule, 2026-10-04)
+
+**A capability's record under the conditions it happened to run is evidence about its WIRING, not
+about its CONCEPT.** On 2026-10-04 ten of the thirteen rows expiring that week were recommended for
+expiry, "hold" or "hand use" from their invocation records. Measured against the situations they
+exist for, those recommendations were wrong on the facts. `role-prompt` had been declined 23 times,
+every one at a single-body moment, while 927 issues were filed in 90 days, 738 of them in 99
+batches of three or more — the exact situation it exists for — and no batch site had ever offered
+it. `live-keepalive-supervisor` was recommended "hold until role-redirect works" without anyone
+tracing whether it WOULD work then; it would not (a null `switch_agent` becomes a refused
+`<next-agent>` placeholder in 0 of 903 proposals, `collect`/`inspect` verdicts are not applyable,
+escalated PRs read as running). The owner's judgment: a verdict from the situation a capability
+happened to be tried in, delivered by the person whose wiring failed it, is not an evaluation — it
+is the kind of work that would stop anyone's development.
+
+Before recommending that ANY capability expire, retire, hold, or be kept "for hand use", write these
+six down, in this order, with the numbers:
+
+1. **The concept, in one sentence, and every situation it applies to** across the Orchestrator and
+   the fleet — not only where it was tried. (role-prompt: every batch of prompts or issue bodies —
+   the repo-review uploader, the audit filer, the research-program briefs, dispatch prompts.)
+2. **Demand, measured from the situation population, never from invocations.** Count how often
+   those situations occur from live data (GitHub, the Brain, the lanes' artifacts), independently
+   of whether the capability ran. "No demand" is a measured zero in THAT population. An invocation
+   count of zero is a wiring fact with two opposite causes — nothing offered it, or nothing needed
+   it — and does not distinguish them (ADDING_CAPABILITIES rule 6).
+3. **The mechanism and its first weakness.** How value would reach the outcome in those situations,
+   and which step breaks first: the caller, the input, the consumer, or the measurement. Trace
+   downstream too. A capability that waits on another must be shown to work once the other does;
+   "hold" without that trace is passivity with a label on it.
+4. **The smallest FULL test of the concept in a real situation**: what must be built, wired or
+   switched on to run it, the success measure, the date it is checked, and the verdict each result
+   produces. A trial that cannot produce a real verdict — a closed epic, a fixture, a dead issue, a
+   backend pinned to the one that fails — is REDIRECTED to one that can, not scored.
+5. **Then the recommendation.** "Hand use" is not one: nothing triggers it, so it is expiry with a
+   delay. A recommendation to expire must carry 1–4 and say why the concept has no place in this
+   system, not why the last attempt failed.
+6. **When you are about to conclude a capability lacks potential, the first question is whether
+   the evaluation was deficient.** The assessor's own failures — wrong population, pinned backend,
+   dead trial, unwired surface, numbers reconstructed instead of measured — count against the
+   assessment, never against the concept. Answer that question in writing before the verdict.
+
+**Machine side.** The value-chain monitor reports `situation_count` and `invocation_count` as two
+numbers and prints `demand unmeasured` for a capability that declares no situation query; it never
+prints `no demand` from an invocation count. Every renewal and every decided retirement cites the
+measurement it rests on.
+
+**Audit side.** `ADDING_CAPABILITIES.md` Part 3 keeps the register of assessment failures that have
+recurred here (A1–A7); an audit or exercise verdict states, per capability, which of them it checked
+for. The repo-audit and rail-exercise skills carry the same rule, so an audit cannot conclude without
+it.

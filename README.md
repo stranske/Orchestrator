@@ -528,6 +528,15 @@ date (findability from 2026-08-23); the pre-cutoff set is reported as drainable 
 with its causes and its drainable count, and does not fail the suite. Rationale and the failure modes:
 `ADDING_CAPABILITIES.md`.
 
+**Evaluating a capability's potential is a separate question from admitting it, with its own rule**
+(`CLAUDE.md` §6, owner rule 2026-10-04): a capability's record under the conditions it happened to
+run is evidence about its wiring, not its concept. Demand is measured from the population of
+situations it exists for, independently of invocations; the mechanism is traced to its first
+weakness, downstream included; the smallest full test in a real situation is designed before any
+verdict; "hand use" and an untraced "hold" are not verdicts; and the first question before
+concluding "no potential" is whether the evaluation itself was deficient. `ADDING_CAPABILITIES.md`
+Part 3 keeps the register of assessment failures that have recurred (A1–A7).
+
 ## Capability activation inventory
 
 `python3 src/capabilities.py usage` answers the question the inventory cannot: **why** a capability is
