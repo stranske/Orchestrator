@@ -13,6 +13,8 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import nullcontext
+from itertools import product
 from pathlib import Path
 from unittest.mock import patch
 
@@ -355,12 +357,21 @@ print(json.dumps([
         )
         (self.snapshot / "observer.py").write_text(observe + footer)
         (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
-        for mode in ("active", "shadow"):
-            with self.subTest(mode=mode):
+        for mode, retain_lock in product(("active", "shadow"), (False, True)):
+            with self.subTest(mode=mode, retain_lock=retain_lock):
                 record.unlink(missing_ok=True)
-                (self.snapshot / "tick_watchdog.py").write_text(observe + pause)
+                startup_pause = pause
+                if retain_lock:
+                    # Negative control: reproduce a reader that forgets to release
+                    # shared mode before pausing in a retained generation.
+                    startup_pause = (
+                        "import fcntl\n"
+                        f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
+                        "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
+                    ) + pause
+                (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
                 (self.snapshot / "cadence_registry.py").write_text(
-                    observe + (pause if mode == "shadow" else "") + "print(':')\n"
+                    observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
                 )
                 (self.snapshot / "orchestrate.sh").write_text(
                     prologue + 'python3 "$ORCH/observer.py"\n'
@@ -396,10 +407,18 @@ print(json.dumps([
                     text=True,
                 )
                 publication_errors = []
+                publication_attempted = threading.Event()
+                flock = fcntl.flock
+
+                def observed_flock(fd, operation):
+                    if operation == fcntl.LOCK_EX:
+                        publication_attempted.set()
+                    return flock(fd, operation)
 
                 def publish_new_generation():
                     try:
-                        self.publish()
+                        with patch.object(installer.fcntl, "flock", observed_flock):
+                            self.publish()
                     except BaseException as error:
                         publication_errors.append(error)
 
@@ -412,19 +431,33 @@ print(json.dumps([
                     self.set_value("new")
                     publisher.start()
                     publisher_started = True
-                    publisher.join(timeout=10)
-                    self.assertFalse(publisher.is_alive(), "publication blocked on paused reader")
-                    if publication_errors:
-                        raise publication_errors[0]
-                    output, error = reader.communicate("resume\n", timeout=15)
-                    self.assertEqual(reader.returncode, 0, error)
-                    observations = json.loads(output.splitlines()[-1])
-                    self.assertEqual(len(observations), 5 if mode == "active" else 3)
-                    self.assertEqual(
-                        observations,
-                        [["old", str(pinned)]] * len(observations),
-                        "startup crossed executable generations",
+                    self.assertTrue(
+                        publication_attempted.wait(10), "publisher did not reach the exclusive lock"
                     )
+                    expected_failure = (
+                        self.assertRaisesRegex(AssertionError, "publication blocked on paused reader")
+                        if retain_lock
+                        else nullcontext()
+                    )
+                    with expected_failure:
+                        publisher.join(timeout=0.5 if retain_lock else 10)
+                        self.assertFalse(
+                            publisher.is_alive(), "publication blocked on paused reader"
+                        )
+                        if publication_errors:
+                            raise publication_errors[0]
+                    if retain_lock:
+                        self.assertEqual(self.mirror.resolve(), pinned)
+                    else:
+                        output, error = reader.communicate("resume\n", timeout=15)
+                        self.assertEqual(reader.returncode, 0, error)
+                        observations = json.loads(output.splitlines()[-1])
+                        self.assertEqual(len(observations), 5 if mode == "active" else 3)
+                        self.assertEqual(
+                            observations,
+                            [["old", str(pinned)]] * len(observations),
+                            "startup crossed executable generations",
+                        )
                 finally:
                     if reader.poll() is None:
                         reader.kill()
@@ -434,6 +467,8 @@ print(json.dumps([
                         self.assertFalse(
                             publisher.is_alive(), "publisher did not exit after reader cleanup"
                         )
+                self.assertFalse(publication_errors, publication_errors)
+                self.assertEqual((self.mirror / "module.py").read_text(), "VALUE = 'new'\n")
 
     def test_bytecode_cache_cannot_override_a_new_generation(self):
         """Timestamp/size-valid old bytecode must not be shared with verified new code."""
