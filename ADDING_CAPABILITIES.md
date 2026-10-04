@@ -154,6 +154,37 @@ write it down with the criterion that would change it.
    demand" from "could not fire" first; they look identical in the data and have opposite fixes.
 7. **No human touchpoint that can accumulate.** Every gate here fails to an agent-performable fix.
    Nothing in this document queues anything for the owner.
+8. **Measure demand from the situation population, never from invocations** (CLAUDE.md §6). A
+   capability's record under the conditions it happened to run is evidence about its wiring, not
+   its concept; "never invoked" and "never needed" look identical in the ledger and are opposite
+   findings.
+9. **A trial that cannot produce a real verdict is redirected, not scored.** Scoring a dead trial
+   (an epic closed before the trial ran, a fixture standing in for a live lane) records an opinion
+   about the wrong thing, and that record then outlives its evidence.
+
+### Part 3 — Evaluating potential: concept first (owner rule, 2026-10-04)
+
+The nine parts say whether a capability can WORK WITH THIS SYSTEM. They say nothing about whether
+its concept is worth having, and the assessments that decide that have failed in the same ways
+repeatedly. Repo `CLAUDE.md` §6 is the procedure: concept and every situation it applies to → demand
+measured from that population → mechanism and first weakness, downstream included → the smallest
+full test in a real situation → the verdict → and, before any "no potential", whether the
+evaluation itself was deficient. This is the register of assessment failures that have actually
+recurred; a verdict that retires, expires or holds a capability states which of these it checked:
+
+| # | Assessment failure | Seen |
+|---|---|---|
+| A1 | An invocation count read as demand ("never invoked in 90 days" → "no demand") | role-prompt, strategy-experiments, range-lane-rollout, local-model-profile-trial — 2026-10-04 |
+| A2 | "Hand use" or "hold" offered as a verdict, with nothing that triggers the use or checks the hold | role-decomposer, role-adjudicator, live-keepalive-supervisor — 2026-10-04 |
+| A3 | A dead or fixture trial scored as a concept verdict instead of redirected | role-decomposer's two trials on Workflows #2884, closed six days earlier; five rows whose only "useful" verdicts were fixture exercises — 2026-09-02..10-04 |
+| A4 | A dependency named without the downstream chain traced ("hold until X works") | live-keepalive-supervisor — would not work once role-redirect did — 2026-10-04 |
+| A5 | The record of a broken caller read as the record of the concept (a backend pinned to the one that fails; calls on the wrong population) | role-redirect: 760 of 782 calls on healthy lanes, cursor failing 10 of 12 real stalls — 2026-10-02 |
+| A6 | Numbers reconstructed instead of measured (after a context summary, or from a declaration) | 8 of 14 decision cards — 2026-10-04 |
+| A7 | A verdict that never asked what would make the concept work | every A1–A5 instance |
+
+The machine half of this rule is the value-chain monitor's `situation_count` / `invocation_count`
+split (CLAUDE.md §6); the human half is the six written answers, and the register above is what the
+repo-audit and rail-exercise skills check against before concluding.
 
 ### The check that would have caught each mode
 
