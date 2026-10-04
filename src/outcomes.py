@@ -298,17 +298,12 @@ def _runner_payload(raw: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def runner_rounds(comments: list, *, provider: str, pr_number: int, since_ts: int) -> dict:
-    """Pure: `provider`'s keepalive runner rounds on PR `pr_number`, read from the trusted runner
-    markers in `comments` (oldest first, as the REST API lists them).
+def runner_records(comments: list, *, provider: str, pr_number: int) -> list[dict]:
+    """Resolve trusted reservations, completion receipts and legacy dispatch records.
 
-    A round is one dispatch: a reservation joined to its completion receipt by reservation id, a
-    receipt whose reservation is not in view, or the legacy record. Only rounds that started at or
-    after `since_ts` can be the delegation's, and one is CREDITED when it completed and was not
-    measured unproductive: `productive` False is runner_lib's own "produced nothing" verdict, and a
-    missing `productive` is unmeasured, which a completed legacy round always is. Error, pending and
-    undated rounds are counted beside the credited ones and never credited, so a PR whose agent was
-    dispatched and died on a usage limit is not that agent's work."""
+    Comments must be complete and oldest first, as the REST API lists them. Reuse this parser
+    for dispatch provenance so policy joins obey the same identity checks as outcome credit.
+    """
     reservations: dict[str, dict] = {}
     receipts: dict[str, dict] = {}
     legacy: dict | None = None
@@ -346,10 +341,19 @@ def runner_rounds(comments: list, *, provider: str, pr_number: int, since_ts: in
     rounds += [record for rid, record in receipts.items() if rid not in reservations]
     if legacy is not None:
         rounds.append(legacy)
+    return rounds
+
+
+def runner_rounds(comments: list, *, provider: str, pr_number: int, since_ts: int) -> dict:
+    """Count runner rounds since the label; only completed, productive rounds are credited.
+
+    Missing productivity is unmeasured (and credited for legacy records). Error, pending and
+    undated rounds are counted separately and never credited.
+    """
     counts = dict.fromkeys(
         ("credited", "unproductive", "errored", "pending", "before_label", "undated"), 0
     )
-    for record in rounds:
+    for record in runner_records(comments, provider=provider, pr_number=pr_number):
         started = utc_epoch.from_iso(record.get("started_at"))
         if started is None:
             counts["undated"] += 1
