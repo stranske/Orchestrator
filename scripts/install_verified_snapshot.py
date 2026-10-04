@@ -328,9 +328,11 @@ def _merge_runtime_content(
             destination.symlink_to(os.readlink(path))
             shutil.copystat(path, destination, follow_symlinks=False)
         else:
-            # Preserve the inode held by an already-running writer. Copying here
-            # silently drops appends made after this transfer boundary.
-            os.link(path, destination, follow_symlinks=False)
+            # Follow the retained directory entry, not just its current inode:
+            # writers may atomically replace a runtime marker via an open parent
+            # directory descriptor after transfer or even after publication.
+            # The old directory lands at retained in the same atomic exchange.
+            destination.symlink_to(retained / relative)
 
 
 def _exchange_directories(left: Path, right: Path) -> None:

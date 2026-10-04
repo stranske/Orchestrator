@@ -653,7 +653,8 @@ survived; the copy was reverted to `cmp`-identical bytes.
 The generation publisher serializes publication and the separate registry update with a
 mirror-specific advisory lock. Runtime-only directories such as `docs/reports` refer to
 retained storage instead of a copied directory. Runtime leaves in mixed directories use
-hard links so writers with open file descriptors keep writing the visible inode. Retired
+symlinks to retained directory entries so both open-file appends and atomic replacement
+through an already-open parent directory remain visible. Retired
 trees are deliberately retained: the publisher must not delete backing storage or trees
 that active readers might still require. Repeated publication preserves these references.
 
@@ -679,9 +680,10 @@ witness sees new bytes on its second read with the original unlocked prologue.
 The cost is that a running tick delays publication until it exits.
 
 This is a partial recovery, not an atomic-publication completion claim. Standalone
-Python/launchd entry points outside this tick still need reader protection. Creation
-or atomic replacement of runtime leaves directly in mixed deployment/runtime directories
-is not covered by shared inodes. The wrapper's `--no-verify` route now stages the
+Python/launchd entry points outside this tick still need reader protection. Creation of new
+runtime leaves directly in mixed deployment/runtime directories is still not covered;
+existing runtime leaves retain both append and atomic-replacement writes. The wrapper's
+`--no-verify` route now stages the
 incumbent copier under an isolated HOME and uses the same guarded publisher with
 an explicit UNVERIFIED status. Direct invocation of the installed incumbent copier,
 cleanup/migration, and standalone readers still need the full source #389 witnesses. Installed wrappers remain unchanged
@@ -689,7 +691,10 @@ until merge and pull; guarded deployment evidence remains pending.
 
 The after-transfer regression test opens report/marker handles before installation, writes
 after runtime transfer and after publication, creates a late report, and repeats installation.
-It fails on the prior copying publisher and passes with shared runtime storage. Earlier
+It fails on the prior copying publisher and passes with shared runtime storage. A second
+regression holds a mixed-directory descriptor and atomically replaces an existing marker
+after transfer, after publication, and after retry. It fails with inode-only hard links
+and passes with retained-entry references. Earlier
 Node witnesses only observe the old tree before the switch and the new tree afterward;
 they do not establish a pinned reader spanning publication.
 

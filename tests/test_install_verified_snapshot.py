@@ -917,6 +917,45 @@ def test_runtime_writes_after_transfer_survive_switch_and_retry(tmp_path, monkey
     assert (mirror / "docs/reports/late.md").read_text() == "late creation\n"
 
 
+def test_runtime_leaf_atomic_replacement_survives_publication_and_retry(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    (mirror / "experiments").mkdir()
+    marker = mirror / "experiments" / ".last-ship-gate"
+    marker.write_text("before\n")
+    expected = installer.snapshot_digest(snapshot)
+    transfer = installer._merge_runtime_content
+    directory_fd = os.open(marker.parent, os.O_RDONLY)
+    try:
+
+        def replace_marker(value):
+            fd = os.open(
+                ".marker-next", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600, dir_fd=directory_fd
+            )
+            with os.fdopen(fd, "w") as stream:
+                stream.write(value)
+            os.replace(
+                ".marker-next", ".last-ship-gate", src_dir_fd=directory_fd, dst_dir_fd=directory_fd
+            )
+
+        def transfer_then_replace(*args, **kwargs):
+            transfer(*args, **kwargs)
+            replace_marker("after transfer\n")
+
+        monkeypatch.setattr(installer, "_merge_runtime_content", transfer_then_replace)
+        assert installer.install(snapshot, mirror, expected, registry) == 0
+        assert marker.read_text() == "after transfer\n"
+        replace_marker("after publication\n")
+        assert marker.read_text() == "after publication\n"
+        monkeypatch.setattr(installer, "_merge_runtime_content", transfer)
+        assert installer.install(snapshot, mirror, expected, registry) == 0
+        replace_marker("after retry\n")
+        assert marker.read_text() == "after retry\n"
+        assert installer.snapshot_digest(mirror) == expected
+    finally:
+        os.close(directory_fd)
+
+
 @pytest.mark.parametrize("failure", [None, "before", "after"])
 def test_atomic_publication_has_no_missing_live_path(tmp_path, monkeypatch, failure):
     snapshot = _snapshot(tmp_path)
