@@ -1851,17 +1851,28 @@ UNATTRIBUTED_CLOSING_PR = "unattributed_closing_pr"
 # or nobody's). Same shape as UNATTRIBUTED_CLOSING_PR: terminal, no verdict, no merge state.
 UNATTRIBUTED_DELEGATION = "unattributed_delegation"
 
+# What the durability sweep writes for a merged outcome whose merge it cannot identify as THIS run's
+# (`durability_sweep.find_merge`): no merge on the run's own branch, several, one that landed before
+# the run started, or no repository target at all. Whether such a merge HELD can never be judged, so
+# the row leaves the pending set for good (DURABILITY_UNJUDGEABLE, a value no verdict uses) and stops
+# counting as a provisional PASS (the class, below). Unknown is not false: it is never a FAIL either.
+# Before 2026-10-04 these rows were re-skipped by every sweep, while `_is_success('pending', 'PASS')`
+# scored 27 of them as successes.
+DURABILITY_UNJUDGEABLE = "unjudgeable"
+UNJUDGEABLE_MERGE = "unjudgeable_merge"
+
 # Failure classes whose outcome says nothing about the agent that ran, so NO learner may score them:
-# the environment killed the run (`transient_infra`, from `mark_transient_infra`), or the target
-# closed through a PR the run cannot be shown to have produced, or a delegation's PR settled without
-# the delegated agent's work on it. ONE set: relearn's SQL reads it, relearn_quality and
+# the environment killed the run (`transient_infra`, from `mark_transient_infra`), the target
+# closed through a PR the run cannot be shown to have produced, a delegation's PR settled without
+# the delegated agent's work on it, or the merge a row recorded cannot be identified as the run's
+# own (`UNJUDGEABLE_MERGE`). ONE set: relearn's SQL reads it, relearn_quality and
 # exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
 # inside NONATTRIBUTABLE_FAILURE_CLASSES. The route learners named `transient_infra`
 # alone until 2026-10-04, so 15 closed-issue rows whose issue a merged PR had closed were labelled
 # full failures (3 inside the scored population then), at least 4 of them the runs' own merged PRs.
 # "" is deliberately absent: an unclassified FAIL is an attributed verdict to these learners.
 LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
-    {"transient_infra", UNATTRIBUTED_CLOSING_PR, UNATTRIBUTED_DELEGATION}
+    {"transient_infra", UNATTRIBUTED_CLOSING_PR, UNATTRIBUTED_DELEGATION, UNJUDGEABLE_MERGE}
 )
 
 # Failure classes that must never train as capability incapability (§2): the classes above and the

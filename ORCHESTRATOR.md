@@ -512,7 +512,11 @@ cursor-agent live outside the default PATH):
   waiting on the durability sweep.
   `durability_sweep.py` later resolves merged pending outcomes after the grace window; when an issue-target
   run's outcome notes explicitly say `PR #N merged`, the sweep checks that PR for age/reverts instead of
-  leaving the source issue target permanently pending.
+  leaving the source issue target permanently pending. Otherwise it judges THE merge the row recorded: the
+  target itself when it is a PR, or the one merge on the run's own branch (`orchestrator/issue-N` for a
+  local delegate, `<agent>/issue-N` for a remote one) inside the run's window. A row with no such merge is
+  closed as `unjudgeable` (excluded from learning, never a failure), a role run follows its acting run,
+  and each run prints pending beside drainable (2026-10-04: 111 rows had been re-skipped since June).
 
 ---
 
