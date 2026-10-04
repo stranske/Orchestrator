@@ -60,6 +60,7 @@ export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
 # _gh_gate skips a step THIS tick only when its resource is SHED, leaving the stamp untouched so the
 # next tick retries. Fail-open: gh_capacity --gate exits 75 ONLY on an explicit SHED; any other outcome
 # (ok/low/unknown, or even a gh_capacity error) proceeds, so a broken probe never halts the cadence.
+# It also skips when the --active preflight found GitHub unable to answer this tick (_gh_deferred).
 export ORCH_GH_THROTTLE="${ORCH_GH_THROTTLE:-1}"
 # Pre-delegation adversarial review (2026-07-08, audit item 16d): tick.py already gates HIGH-STAKES
 # closer items (explicit high-risk labels only — low volume) through adversarial.py's refute-mode
@@ -137,7 +138,12 @@ if [[ "${ORCH_RANGE_LANE_ROLLOUT}" == "1" && "$(date +%Y-%m-%d)" > "$ORCH_RANGE_
   export ORCH_RANGE_LANE_ROLLOUT=0
   echo "  [range-lane] trial window elapsed (until $ORCH_RANGE_LANE_TRIAL_UNTIL) → reverted to PREVIEW (safe default); re-confirm to extend"
 fi
-_gh_gate() { local rc=0; python3 "$ORCH/gh_capacity.py" --gate "$1" || rc=$?; [[ "$rc" -ne 75 ]]; }
+# The --active preflight's verdict for THIS tick (ORCH-ANCHOR: gh-auth-preflight, below), read through
+# ONE predicate by _gh_gate and by every GitHub-dependent step that has no budget gate of its own.
+# Empty: GitHub answered. Set: it could not (rate-limited, unreachable, or the classifier failed), so
+# the step skips with its stamp untouched and the next tick, which measures again, runs it.
+_gh_deferred() { [[ -n "${gh_defer_reason:-}" ]]; }
+_gh_gate() { if _gh_deferred; then echo "gh_capacity gate[$1]: deferred by the gh preflight" >&2; return 1; fi; local rc=0; python3 "$ORCH/gh_capacity.py" --gate "$1" || rc=$?; [[ "$rc" -ne 75 ]]; }
 mode="shadow"; [[ "${1:-}" == "--active" ]] && mode="active"
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] orchestrate tick: $mode"
 STAMP_DIR="${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}"; mkdir -p "$STAMP_DIR" 2>/dev/null || true
@@ -237,13 +243,45 @@ if ! cadence_shell="$(python3 "$ORCH/cadence_registry.py" shell)"; then
   exit 1
 fi
 eval "$cadence_shell"
-# PREFLIGHT: --active must never act on stale/blind state. If gh is unauthenticated (keyring
-# unreadable under launchd AND no token file), the rails can't read labels (false-negative) and
-# writes fail -> abort rather than delegate blind. Shadow may proceed (dry-run, read-only).
-if [[ "$mode" == "active" ]] && ! gh auth status >/dev/null 2>&1; then
-  echo "  ABORT: gh not authenticated (keyring unreadable under launchd, token file missing/unreadable);" >&2
-  echo "         refusing --active so we don't delegate on stale or blind state." >&2
-  exit 1
+# ORCH-ANCHOR: gh-auth-preflight ----------------------------------------------------------------
+# --active must never act on stale or blind state. With no usable token the rails read labels as
+# empty (a false negative) and their writes fail, so a missing or refused credential ABORTS here.
+# Shadow skips the check (dry-run, read-only).
+#
+# "GITHUB CANNOT ANSWER NOW" IS NOT "NOT AUTHENTICATED". `gh auth status`, the check that sat here,
+# exits 1 for both: a 403 rate limit, a secondary limit, a 5xx and an unreachable host all print
+# "The token in GH_TOKEN is invalid." On 2026-10-02T15:40Z the shared per-user REST budget was spent
+# and the tick aborted on a present, valid token. Nothing below this line ran -- no heartbeats, no
+# cadence, no monitors -- and the log named the wrong cause. The retained log holds six such aborts
+# since 2026-09-22. `gh_capacity.py --auth-preflight` asks with one REAL REST and one REAL GraphQL
+# call (never the exempt `rate_limit` endpoint) and exits:
+#   0   authenticated: everything runs.
+#   75  token present but GitHub cannot answer (rate-limited until <reset>, or unavailable): sets
+#       gh_defer_reason. Every GitHub-dependent step then skips this tick through _gh_deferred with
+#       its stamp untouched, the local steps run, and the next tick measures again.
+#   77  no token, HTTP 401, or a 403 that is not a rate limit: ABORT, as before.
+# Any other exit is the classifier failing, so it measured nothing. That defers too, and says so:
+# reading "could not measure" as "not authenticated" is the defect this block replaces.
+gh_defer_reason=""
+if [[ "$mode" == "active" ]]; then
+  gh_preflight_rc=0
+  gh_preflight_line="$(python3 "$ORCH/gh_capacity.py" --auth-preflight)" || gh_preflight_rc=$?
+  case "$gh_preflight_rc" in
+    0) echo "  $gh_preflight_line" ;;
+    75)
+      gh_defer_reason="$gh_preflight_line"
+      echo "  $gh_defer_reason"
+      ;;
+    77)
+      echo "  ABORT: $gh_preflight_line;" >&2
+      echo "         refusing --active so we don't delegate on stale or blind state." >&2
+      exit 1
+      ;;
+    *)
+      gh_defer_reason="gh preflight could not classify (exit $gh_preflight_rc): GitHub-dependent steps defer, local steps run"
+      echo "  $gh_defer_reason"
+      ;;
+  esac
 fi
 
 # ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
@@ -285,7 +323,10 @@ python3 "$ORCH/capacity.py"        >/dev/null 2>&1 || echo "  warn: capacity.py 
 # 2026-09-03, item 1). Measured 2026-09-04..15: 119 shadow ticks planned 0 dispatches; the lanes
 # read capacity.json and never backlog.json. So discovery runs only when the lane is live — the
 # day-10 verdict was "retire", and this is the retirement: nothing is built, nothing is counted.
-if [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
+if [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]] && _gh_deferred; then
+  # A failed live read falls back to the STALE cache, which the remote tick would then plan from.
+  echo "  discovery: SKIPPED — gh deferred by the preflight (backlog.json left as it was)"
+elif [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
   python3 "$ORCH/backlog.py" --live  >/dev/null 2>&1 || echo "  warn: backlog.py failed (continuing)"
 else
   echo "  discovery: skipped (dispatch lane shadow; ORCH_DISPATCH_LANE=1 to run backlog discovery)"
@@ -304,7 +345,13 @@ if [[ "$mode" == "active" ]]; then
   # exist only to protect this tick's own dispatches; with ORCH_DISPATCH_LANE=0 there are none, so
   # neither runs and the lanes never yield to us. tick.py still runs: it INGESTS keepalive outcomes
   # live (the Brain's evidence) and only PLANS delegation. Announced every tick.
-  if [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
+  # THE REMOTE TICK IS WHAT THE gh PREFLIGHT PROTECTS: it reads labels and then applies them, so on a
+  # tick GitHub cannot answer it would delegate on a false-negative read, and its ingest would read
+  # nothing. Deferred whole: no claims, no heartbeat (the lanes need not yield to a tick that
+  # dispatches nothing), no delegation, no ingest. The next tick measures again and runs it.
+  if _gh_deferred; then
+    echo "  remote tick SKIPPED — gh deferred by the preflight: no claims, no heartbeat, no delegation, no live ingest this tick"
+  elif [[ "${ORCH_DISPATCH_LANE:-0}" == "1" ]]; then
     python3 "$ORCH/claims.py" reap     >/dev/null 2>&1 || true
     # Heartbeat so the legacy opener/closer cron lanes YIELD to the orchestrator this tick (stale in 15m).
     printf '{"generated_at": %s, "pid": %s}\n' "$(date +%s)" "$$" > "$HOME/.codex/handoff/orchestrator.json"
@@ -314,7 +361,9 @@ if [[ "$mode" == "active" ]]; then
   # REMOTE model (owner's design): for each backlog item, choose a keepalive agent (reserve-aware) ->
   # apply agent:<X> -> the GitHub keepalive runs it on REMOTE capacity -> ingest the PR outcome into the
   # feedback loop. Local CLI delegation (router.py + dispatcher.py) remains available for bounded local work.
-  python3 "$ORCH/tick.py" --active --summary   || { echo "  remote tick failed; aborting"; exit 1; }
+  if ! _gh_deferred; then
+    python3 "$ORCH/tick.py" --active --summary   || { echo "  remote tick failed; aborting"; exit 1; }
+  fi
   # Experiment follow-up (2026-07-08, audit item 12b follow-through): the tick LAUNCHES A/B/C
   # experiments but nothing ever ran collect/evaluate on them — ZERO tick-* evaluation rows existed
   # (all judge evidence came from manual/backfill campaigns), so the research arm burned implementer
@@ -487,13 +536,15 @@ fi
 # repos, not on a title keyword) and the periodic report's FLEET-SHAPES lines. One GraphQL read per 40
 # PRs, cached per PR. Kill switch: ORCH_DISABLE_STEPS=fleet-shapes.
 if _cadence_due fleet-shapes && _attempt_ok fleet-shapes; then
-  echo "  [cadence] fleet work shapes (daily; merged agent PRs by commit type, labels, path classes)"
-  if python3 "$ORCH/fleet_shapes.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/fleet-shapes.log" 2>&1; then
-    python3 "$ORCH/fleet_shapes.py" tick-line --state-dir "$STAMP_DIR" || true
-    _mark_success fleet-shapes
-  else
-    _mark_fail fleet-shapes "see $STAMP_DIR/fleet-shapes.log"
-  fi
+  if _gh_gate graphql; then
+    echo "  [cadence] fleet work shapes (daily; merged agent PRs by commit type, labels, path classes)"
+    if python3 "$ORCH/fleet_shapes.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/fleet-shapes.log" 2>&1; then
+      python3 "$ORCH/fleet_shapes.py" tick-line --state-dir "$STAMP_DIR" || true
+      _mark_success fleet-shapes
+    else
+      _mark_fail fleet-shapes "see $STAMP_DIR/fleet-shapes.log"
+    fi
+  else echo "  [cadence] fleet work shapes SKIPPED — gh graphql budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 # Paired agent-switch observations (daily). The delegation policy switches agents on agent:auto PRs
 # after two rounds without progress; nothing recorded the pair. This reads each keepalive PR's agent
@@ -510,13 +561,15 @@ fi
 # (route_weights | static | unknown). The SWITCHES line comes from agent_switches.py itself, the same
 # phrase the periodic report prints, so the two cannot disagree about the route-weights count.
 if _cadence_due agent-switches && _attempt_ok agent-switches; then
-  echo "  [cadence] agent switches (daily; paired observations from label timelines and keepalive delegation logs)"
-  if python3 "$ORCH/agent_switches.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/agent-switches.log" 2>&1; then
-    python3 "$ORCH/agent_switches.py" tick-line --state-dir "$STAMP_DIR" || true
-    _mark_success agent-switches
-  else
-    _mark_fail agent-switches "see $STAMP_DIR/agent-switches.log"
-  fi
+  if _gh_gate graphql; then
+    echo "  [cadence] agent switches (daily; paired observations from label timelines and keepalive delegation logs)"
+    if python3 "$ORCH/agent_switches.py" run --state-dir "$STAMP_DIR" --json > "$STAMP_DIR/agent-switches.log" 2>&1; then
+      python3 "$ORCH/agent_switches.py" tick-line --state-dir "$STAMP_DIR" || true
+      _mark_success agent-switches
+    else
+      _mark_fail agent-switches "see $STAMP_DIR/agent-switches.log"
+    fi
+  else echo "  [cadence] agent switches SKIPPED — gh graphql budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 # Every tick: classify active local claims and persist redirect/decompose advisories.
 # SHADOW-ONLY: redirect_sweep.py never kills, releases claims, delegates, or applies redirect_plan.
@@ -555,13 +608,13 @@ if _cadence_due keepalive-stage2-plan && _attempt_ok keepalive-stage2-plan; then
       rm -f "$stage2_plan_tmp"
       _mark_fail keepalive-stage2-plan
     fi
-  else echo "  [cadence] keepalive Stage 2 live plan SKIPPED — gh budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] keepalive Stage 2 live plan SKIPPED — gh budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 if _cadence_due keepalive-ingest && _attempt_ok keepalive-ingest; then
   if _gh_gate core; then
     echo "  [cadence] keepalive outcome ingest (daily; source=keepalive agent + non-agent PRs into the Brain)"
     if python3 "$ORCH/keepalive_outcomes.py" --lookback-days 7 --include-non-agent >> "$STAMP_DIR/keepalive-ingest.log" 2>&1; then _mark_success keepalive-ingest; else _mark_fail keepalive-ingest "see $STAMP_DIR/keepalive-ingest.log"; fi
-  else echo "  [cadence] keepalive ingest SKIPPED — gh core budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] keepalive ingest SKIPPED — gh core budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 if _cadence_due local-outcomes-ingest && _attempt_ok local-outcomes-ingest; then
   if _gh_gate core; then
@@ -571,7 +624,7 @@ if _cadence_due local-outcomes-ingest && _attempt_ok local-outcomes-ingest; then
     # skipped_details — and used to send all of it to /dev/null, so a run that exited 0 while
     # ingesting nothing was indistinguishable from one that ingested everything (2026-08-09).
     if python3 "$ORCH/outcomes.py" --mode local >> "$STAMP_DIR/local-outcomes-ingest.log" 2>&1; then _mark_success local-outcomes-ingest; else _mark_fail local-outcomes-ingest "see $STAMP_DIR/local-outcomes-ingest.log"; fi
-  else echo "  [cadence] local outcomes ingest SKIPPED — gh core budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] local outcomes ingest SKIPPED — gh core budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 if _cadence_due capability-outcome-bridge && _attempt_ok capability-outcome-bridge; then
   # Propagate run outcomes into the capability ledger. Without this, capabilities record that they
@@ -582,12 +635,14 @@ if _cadence_due capability-outcome-bridge && _attempt_ok capability-outcome-brid
   if python3 "$ORCH/capability_outcome_bridge.py" >> "$STAMP_DIR/capability-outcome-bridge.log" 2>&1; then _mark_success capability-outcome-bridge; else _mark_fail capability-outcome-bridge "see $STAMP_DIR/capability-outcome-bridge.log"; fi
 fi
 if _cadence_due redirect-apply-link && _attempt_ok redirect-apply-link; then
-  # The consumer redirect_plan.apply_plan never had. TWO parts, both local (no gh, no budget gate):
+  # The consumer redirect_plan.apply_plan never had. TWO parts, and no budget gate, but --apply reaches
+  # GitHub through the delegation it runs, so the step defers with the gh preflight (below):
   #   --link-outcomes  ALWAYS ON, mutates nothing: for every redirect role run whose stamped
   #                    dispatch reached a terminal outcome, append the corpus outcome link. This is
   #                    what makes synced_role_outcomes climb without an owner running link-outcome
   #                    by hand (5 links in ~2 months under the manual design).
-  #   --apply          self-gated on ORCH_REDIRECT_APPLY_BOOTSTRAP (default 0). With the flag off it
+  #   --apply          self-gated on ORCH_REDIRECT_APPLY_BOOTSTRAP (armed by default since 2026-08-21,
+  #                    see its export at the top of this script). With the flag off it
   #                    returns immediately and spends no offload. Armed, it screens the
   #                    supervisor's CURRENT candidates (the stage-2 plan, never the report
   #                    directory) for free, judges only what passes -- a lane shown not live, not
@@ -596,13 +651,20 @@ if _cadence_due redirect-apply-link && _attempt_ok redirect-apply-link; then
   #                    once the Stage-2 deficits close. Each run prints offloads spent beside the
   #                    candidates that could still be authorised. See SWITCH_ON_CRITERIA in
   #                    capability_recurrence_check.py for the machine-checkable arming condition.
-  echo "  [cadence] redirect apply/link (daily; link applied-redirect outcomes, then self-gated apply)"
-  redirect_apply_ok=1
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] redirect apply/link" >> "$STAMP_DIR/redirect-apply.log"
-  python3 "$ORCH/redirect_apply.py" --link-outcomes >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
-  python3 "$ORCH/redirect_apply.py" --apply --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
-  python3 "$ORCH/redirect_apply.py" --status --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
-  if [[ "$redirect_apply_ok" == "1" ]]; then _mark_success redirect-apply-link; else _mark_fail redirect-apply-link "see $STAMP_DIR/redirect-apply.log"; fi
+  if _gh_deferred; then
+    # --apply DELEGATES: it releases a claim, then `dispatcher.py delegate` provisions from GitHub and
+    # reads labels and claims there. Armed by default, so never on a tick GitHub cannot answer. The
+    # step is one stamp, so the local --link-outcomes waits the tick too.
+    echo "  [cadence] redirect apply/link SKIPPED — gh deferred by the preflight (stamp untouched; retry next tick)"
+  else
+    echo "  [cadence] redirect apply/link (daily; link applied-redirect outcomes, then self-gated apply)"
+    redirect_apply_ok=1
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] redirect apply/link" >> "$STAMP_DIR/redirect-apply.log"
+    python3 "$ORCH/redirect_apply.py" --link-outcomes >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
+    python3 "$ORCH/redirect_apply.py" --apply --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || redirect_apply_ok=0
+    python3 "$ORCH/redirect_apply.py" --status --stage2-plan "$stage2_plan_json" --report-dir "$stage2_report_dir" >> "$STAMP_DIR/redirect-apply.log" 2>&1 || true
+    if [[ "$redirect_apply_ok" == "1" ]]; then _mark_success redirect-apply-link; else _mark_fail redirect-apply-link "see $STAMP_DIR/redirect-apply.log"; fi
+  fi
 fi
 if _cadence_due switch-review && _attempt_ok switch-review; then
   # Held switches must be revisited, not forgotten. ORCH_RANGE_LANE_ROLLOUT was turned on
@@ -727,13 +789,20 @@ if _cadence_due feature-scan && _attempt_ok feature-scan; then
 fi
 if _cadence_due capability-activation-audit && _attempt_ok capability-activation-audit; then
   # Can each capability fire AT ALL? Read-only static+ledger analysis; snapshots the reachable
-  # count so progress is measured rather than asserted. No gh calls (label index is cached 7d).
-  echo "  [cadence] capability activation audit (daily; can each capability fire?)"
-  if python3 "$ORCH/capability_activation_audit.py" --snapshot --json \
-       > "$STAMP_DIR/capability-activation.json" 2>> "$STAMP_DIR/capability-activation-audit.log"; then
-    _mark_success capability-activation-audit
+  # count so progress is measured rather than asserted. Its fleet label index is cached for 7 days,
+  # but a stale cache is refreshed with `gh label list` per fleet repo (120 s timeout each), and a
+  # refresh whose every read fails is cached as an EMPTY index for the next week. So it defers with
+  # the gh preflight, which costs one tick of a daily step.
+  if _gh_deferred; then
+    echo "  [cadence] capability activation audit SKIPPED — gh deferred by the preflight (stamp untouched; retry next tick)"
   else
-    _mark_fail capability-activation-audit "see $STAMP_DIR/capability-activation-audit.log"
+    echo "  [cadence] capability activation audit (daily; can each capability fire?)"
+    if python3 "$ORCH/capability_activation_audit.py" --snapshot --json \
+         > "$STAMP_DIR/capability-activation.json" 2>> "$STAMP_DIR/capability-activation-audit.log"; then
+      _mark_success capability-activation-audit
+    else
+      _mark_fail capability-activation-audit "see $STAMP_DIR/capability-activation-audit.log"
+    fi
   fi
 fi
 # ORCH-ANCHOR: tick-capability-evidence ----------------------------------------------------------
@@ -843,7 +912,7 @@ if _cadence_due issue-readiness && _attempt_ok issue-readiness; then
       rm -f "$readiness_tmp"
       _mark_fail issue-readiness "see $STAMP_DIR/issue-readiness.log"
     fi
-  else echo "  [cadence] issue readiness SKIPPED — gh budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] issue readiness SKIPPED — gh budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 if _cadence_due durability-sweep && _attempt_ok durability-sweep; then
   if _gh_gate search; then
@@ -851,7 +920,7 @@ if _cadence_due durability-sweep && _attempt_ok durability-sweep; then
     # Output goes to a LOG, never /dev/null: this step failed 71 times in a row (2026-08-21..09-14)
     # with its traceback discarded, so the ALERT named the step and nothing said why.
     if python3 "$ORCH/durability_sweep.py" >> "$STAMP_DIR/durability-sweep.log" 2>&1; then _mark_success durability-sweep; else _mark_fail durability-sweep "see $STAMP_DIR/durability-sweep.log"; fi
-  else echo "  [cadence] durability sweep SKIPPED — gh search budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] durability sweep SKIPPED — gh search budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 # Refresh promotion readiness and active priors only after late outcomes and
 # durability have landed. This consumes exact capability-version joins and is
@@ -901,10 +970,16 @@ if _cadence_due range-rollout && _attempt_ok range-rollout; then
   # module's own triple guard; active ticks only, so shadow runs stay read-only.
   echo "  [cadence] range-lane rollout (daily; preview unless ORCH_RANGE_LANE_ROLLOUT=1)"
   range_args=(--cached-backlog --json --max-dispatches 1)
+  range_live=0
   if [[ "$mode" == "active" && "${ORCH_RANGE_LANE_ROLLOUT:-0}" == "1" ]]; then
     range_args+=(--apply --confirm-rollout)
+    range_live=1
   fi
-  if python3 "$ORCH/range_lane_rollout.py" "${range_args[@]}" > "$STAMP_DIR/range-rollout.json" 2>>"$STAMP_DIR/range-rollout.log"; then
+  if [[ "$range_live" == "1" ]] && _gh_deferred; then
+    # Live dispatch plans from the CACHED backlog by design, and on a tick GitHub cannot answer nothing
+    # can confirm the target is still open and unclaimed. A preview instead would spend the daily slot.
+    echo "  [cadence] range-lane rollout SKIPPED — live dispatch, gh deferred by the preflight (stamp untouched; retry next tick)"
+  elif python3 "$ORCH/range_lane_rollout.py" "${range_args[@]}" > "$STAMP_DIR/range-rollout.json" 2>>"$STAMP_DIR/range-rollout.log"; then
     _mark_success range-rollout
   else
     _mark_fail range-rollout "see $STAMP_DIR/range-rollout.log"
@@ -990,7 +1065,7 @@ if _cadence_due keepalive-shadow && _attempt_ok keepalive-shadow; then
     else
       _mark_fail keepalive-shadow "gh PR search failed"
     fi
-  else echo "  [cadence] keepalive shadow SKIPPED — gh search budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] keepalive shadow SKIPPED — gh search budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 # Weekly: backfill the corpus with RESOLVED closed keepalive PRs (7-14 days old -> past the
 # durability grace, so merged ones resolve to durable/reverted, not 'merged_pending'). Idempotent
@@ -1000,7 +1075,7 @@ if _cadence_due keepalive-backfill && _attempt_ok keepalive-backfill; then
   if _gh_gate search; then
     echo "  [cadence] keepalive shadow backfill (weekly; resolved closed PRs + durability)"
     if python3 "$ORCH/keepalive_shadow.py" --backfill --days 14 --limit 40 >/dev/null 2>&1; then _mark_success keepalive-backfill; else _mark_fail keepalive-backfill; fi
-  else echo "  [cadence] keepalive backfill SKIPPED — gh search budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] keepalive backfill SKIPPED — gh search budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 
 # Daily: download and validate new shadow consumer-sync evidence artifacts and compute drift
@@ -1030,7 +1105,7 @@ if [[ "${mode}" == "active" ]] && _cadence_due consumer-sync-artifact-ingest && 
     else
       _mark_fail consumer-sync-artifact-ingest "see $STAMP_DIR/consumer-sync-artifact-ingest.log"
     fi
-  else echo "  [cadence] consumer-sync artifact ingestion SKIPPED — gh core budget shed (stamp untouched; retry next tick)"; fi
+  else echo "  [cadence] consumer-sync artifact ingestion SKIPPED — gh core budget shed or gh deferred (stamp untouched; retry next tick)"; fi
 fi
 
 # ORCH-ANCHOR: completion-ping -------------------------------------------------------------------
