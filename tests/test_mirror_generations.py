@@ -413,53 +413,59 @@ print(json.dumps([
                     text=True,
                     start_new_session=True,
                 )
-                publication_errors = []
-                publication_attempted = threading.Event()
-                flock = fcntl.flock
-
-                def observed_flock(fd, operation):
-                    if operation == fcntl.LOCK_EX:
-                        publication_attempted.set()
-                    return flock(fd, operation)
-
-                def publish_new_generation():
-                    try:
-                        with patch.object(installer.fcntl, "flock", observed_flock):
-                            self.publish()
-                    except BaseException as error:
-                        publication_errors.append(error)
-
-                publisher = threading.Thread(target=publish_new_generation, daemon=True)
-                publisher_started = False
+                # Isolate the publisher so a regression cannot leave a blocked
+                # daemon thread (or its flock patch) alive in the test runner.
+                publisher_code = """
+import fcntl
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import install_verified_snapshot as installer
+flock = fcntl.flock
+def observed_flock(fd, operation):
+    if operation == fcntl.LOCK_EX:
+        print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+    return flock(fd, operation)
+installer.fcntl.flock = observed_flock
+installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+"""
+                publisher = None
                 try:
                     ready, _, _ = select.select([reader.stderr], [], [], 15)
                     self.assertTrue(ready, "first startup module did not rendezvous")
                     self.assertEqual(reader.stderr.readline().strip(), "STARTUP-READY")
                     self.set_value("new")
-                    publisher.start()
-                    publisher_started = True
-                    self.assertTrue(
-                        publication_attempted.wait(10), "publisher did not reach the exclusive lock"
+                    publisher = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-c",
+                            publisher_code,
+                            str(Path(installer.__file__).parent),
+                            str(self.snapshot),
+                            str(self.mirror),
+                            installer.snapshot_digest(self.snapshot),
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
                     )
+                    ready, _, _ = select.select([publisher.stderr], [], [], 10)
+                    self.assertTrue(ready, "publisher did not reach the exclusive lock")
+                    self.assertEqual(publisher.stderr.readline().strip(), "PUBLICATION-ATTEMPTED")
                     if exit_shell:
                         # A dead tick shell can leave its startup child holding the
                         # lock. Cleanup must still terminate the child's process group.
                         reader.kill()
                         self.assertEqual(reader.wait(timeout=10), -signal.SIGKILL)
                     expected_failure = (
-                        self.assertRaisesRegex(
-                            AssertionError, "publication blocked on paused reader"
-                        )
+                        self.assertRaises(subprocess.TimeoutExpired)
                         if retain_lock
                         else nullcontext()
                     )
                     with expected_failure:
-                        publisher.join(timeout=0.5 if retain_lock else 10)
-                        self.assertFalse(
-                            publisher.is_alive(), "publication blocked on paused reader"
-                        )
-                        if publication_errors:
-                            raise publication_errors[0]
+                        _, error = publisher.communicate(timeout=0.5 if retain_lock else 10)
+                        self.assertEqual(publisher.returncode, 0, error)
                     if retain_lock:
                         self.assertEqual(self.mirror.resolve(), pinned)
                     else:
@@ -480,12 +486,16 @@ print(json.dumps([
                             os.killpg(reader.pid, signal.SIGKILL)
                         reader.communicate(timeout=10)
                     finally:
-                        if publisher_started:
-                            publisher.join(timeout=10)
-                            self.assertFalse(
-                                publisher.is_alive(), "publisher did not exit after reader cleanup"
-                            )
-                self.assertFalse(publication_errors, publication_errors)
+                        if publisher is not None:
+                            try:
+                                _, error = publisher.communicate(timeout=10)
+                                self.assertEqual(publisher.returncode, 0, error)
+                            finally:
+                                # Even a publisher that stays stuck after reader cleanup
+                                # must be killed and reaped before the temporary tree goes.
+                                with suppress(ProcessLookupError):
+                                    os.killpg(publisher.pid, signal.SIGKILL)
+                                publisher.communicate(timeout=10)
                 self.assertEqual((self.mirror / "module.py").read_text(), "VALUE = 'new'\n")
                 self.assertEqual(
                     installer.snapshot_digest(self.mirror), installer.snapshot_digest(self.snapshot)
