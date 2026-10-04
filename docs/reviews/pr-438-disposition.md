@@ -244,3 +244,38 @@ the six duplicated checkboxes for independent/final validation steps unsupported
 retained evidence; the other eight prior checked occurrences remain verified. The current
 review task stays unchecked pending the corrected-action disposition. Owner `stranske`
 must publish this pass's retained commit/patch and apply the proposed PR-body reconciliation.
+
+## Installation receipt revalidation at d962843
+
+The active [installation-manifest finding](https://github.com/stranske/Orchestrator/pull/445#discussion_r4179759913)
+is valid: the installation receipt named the later re-exported source manifest while retaining
+the original manifest's digest. This pass preserves the original bytes as
+[the installation source manifest](pr-438-install-source-evidence.json), retrieved from the
+published `720cd8e` Git blob `95c6124f60ccec9c15b5b74ce8aa7d0fa496765e`. Its SHA-256 is exactly
+`97f48f31fbd8246948b405b376ce7481b3ed8a4e7a575320a30685ec494f46a5`, as recorded by the original
+installation witness. All 22 source bindings match the later manifest; only the acquisition
+receipt changed. Retaining these manifest bytes does not recover the original scratch metadata
+export or replace the fresh normalized metadata receipt.
+
+The installation receipt now names that retained file and its immutable provenance, preserving
+the historical run output and input hashes. Its separate reproduction command pins both the
+source head and manifest digest. The witness runner refuses a missing or replaced manifest
+before executing any contract test. [A fresh six-witness run](pr-445-install-manifest-tests.txt)
+passed with **6 passed, 0 failed, 0 skipped** using the retained historical manifest and current
+runner. [The review regression run](pr-445-manifest-binding-tests.txt) also checks receipt bytes,
+equivalent JSON with different serialization, and digest validation before source reads.
+[The revalidation receipt](pr-445-manifest-binding.json) binds these runs to the exact inputs.
+
+The remaining UNKNOWN action in the installation receipt also now requires the full exact-head
+suite, aligning it with the earlier full-suite correction. That earlier thread's addressed
+disposition predates the actual correction; renewed originating-reviewer disposition remains
+pending for both this alignment and the installation-manifest repair. The two acquisition
+findings remain resolved by CodeRabbit. No thread was self-resolved. Full-suite, machine and
+independent Sol evidence remain UNKNOWN; installed deployment remains NOT_OBSERVED.
+
+The corrected PR body reopens the six unsupported checkbox occurrences and leaves the current
+review task unchecked. Its remote update was rejected by automatic approval review because
+GitHub writes require approval and this session's approval policy is `never`. The proposed body
+is retained at `/tmp/pr445-manifest-reconciled-body.md`. Workspace staging was refused because
+`.git` is read-only; the source/test/evidence commit and patch are retained in
+`/tmp/pr445-manifest-binding` and `/tmp/pr445-manifest-binding.patch` for publication.

@@ -12,7 +12,16 @@ function sha256(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
-function bindReviewInputs(repo, manifestBytes, expectedHead, requiredPaths = []) {
+function bindReviewInputs(repo, manifestBytes, expectedHead, requiredPaths = [], expectedManifestSha256) {
+  const manifestSha256 = sha256(manifestBytes);
+  // A head binding identifies source, but a receipt also identifies the exact
+  // manifest bytes it used. Refuse a replaced or re-exported receipt input even
+  // when it still describes the same head and file objects.
+  if (expectedManifestSha256 !== undefined
+    && (!/^[0-9a-f]{64}$/.test(expectedManifestSha256)
+      || manifestSha256 !== expectedManifestSha256)) {
+    throw new Error('source manifest bytes differ from the witness receipt digest');
+  }
   repo = fs.realpathSync(repo);
   const manifest = JSON.parse(manifestBytes.toString('utf8'));
   if (!/^[0-9a-f]{40}$/.test(expectedHead) || manifest.head_sha !== expectedHead
@@ -74,7 +83,7 @@ function bindReviewInputs(repo, manifestBytes, expectedHead, requiredPaths = [])
   }
   check();
   return { check, floorBytes: bytesByPath.get('.verify-floor.json'),
-    manifestSha256: sha256(manifestBytes), headSha: expectedHead };
+    manifestSha256, headSha: expectedHead };
 }
 
 module.exports = { bindReviewInputs };

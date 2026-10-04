@@ -1,0 +1,14 @@
+✔ installer owns every builder-shipped leaf in a superset of source inputs (194.52239ms)
+✔ scratch installer publishes every builder byte and mode and preserves runtime output (306.415874ms)
+✔ scratch installer refuses a changed snapshot before publication or registry update (291.800504ms)
+✔ each input that changes builder output also changes the pre-sync source identity (2496.580736ms)
+✔ documented copier matches builder bytes and modes and refuses a missing builder (246.223255ms)
+✔ every unreadable machine mark keeps strict mirror ceilings; verdict and rendering agree (193.730817ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3796.881381

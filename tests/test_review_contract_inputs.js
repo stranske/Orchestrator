@@ -49,6 +49,76 @@ test('reads the historical floor from its bound object without rewriting the cur
   assert.match(bound.manifestSha256, /^[0-9a-f]{64}$/);
 });
 
+test('pins the exact manifest bytes used by a witness receipt', (t) => {
+  const w = world(t);
+  const bytes = Buffer.from(JSON.stringify(w.manifest));
+  const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+  const bound = bindReviewInputs(w.repo, bytes, w.manifest.head_sha, [], digest);
+  assert.equal(bound.manifestSha256, digest);
+  assert.equal(bound.check(), 2);
+  // The same head and bindings in a new export do not reproduce the old receipt.
+  const replacement = Buffer.from(JSON.stringify(w.manifest, null, 2));
+  assert.deepEqual(JSON.parse(replacement), JSON.parse(bytes));
+  assert.throws(() => bindReviewInputs(w.repo, replacement, w.manifest.head_sha, [], digest),
+    /witness receipt digest/);
+});
+
+for (const digest of ['', 'invalid', '0'.repeat(64)]) {
+  test(`refuses an invalid or mismatched receipt digest (${digest || 'empty'}) before reading source`, (t) => {
+    const w = world(t);
+    const bytes = Buffer.from(JSON.stringify(w.manifest));
+    // Even an absent checkout must fail on receipt identity first.
+    assert.throws(() => bindReviewInputs(path.join(w.repo, 'absent'), bytes,
+      w.manifest.head_sha, [], digest), /witness receipt digest/);
+  });
+}
+
+test('retained installation manifest reproduces its receipt despite the later metadata re-export', () => {
+  const reviews = path.join(__dirname, '../docs/reviews');
+  const receipt = JSON.parse(fs.readFileSync(path.join(reviews, 'pr-438-install-witness.json')));
+  const bytes = fs.readFileSync(path.join(reviews, receipt.source_manifest));
+  assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), receipt.source_manifest_sha256);
+  const original = JSON.parse(bytes);
+  const currentBytes = fs.readFileSync(path.join(reviews, 'pr-438-source-evidence.json'));
+  const current = JSON.parse(currentBytes);
+  assert.notEqual(crypto.createHash('sha256').update(currentBytes).digest('hex'),
+    receipt.source_manifest_sha256);
+  assert.equal(original.head_sha, receipt.head_sha);
+  assert.equal(original.source_status, 'COMPLETE');
+  assert.equal(original.retrieved_changed_files, 14);
+  assert.equal(original.files.length, 22);
+  assert.deepEqual(original.files, current.files, 'metadata re-export preserves all source bindings');
+  assert.match(receipt.reproduction_command, new RegExp(receipt.source_manifest_sha256));
+  assert.ok(receipt.reproduction_command.includes(receipt.source_manifest));
+});
+
+for (const defect of ['replaced manifest', 'missing manifest']) {
+  test(`witness runner refuses a receipt with ${defect} before executing contract tests`, () => {
+    const repo = path.resolve(__dirname, '..');
+    const receipt = JSON.parse(fs.readFileSync(path.join(repo,
+      'docs/reviews/pr-438-install-witness.json')));
+    const env = { ...process.env,
+      ORCH_CONTRACT_EXPECTED_HEAD: receipt.head_sha,
+      ORCH_CONTRACT_EXPECTED_MANIFEST_SHA256: receipt.source_manifest_sha256 };
+    // This is an independent runner: inherited parent test context otherwise
+    // selects an internal reporter instead of emitting the child's diagnostics.
+    delete env.NODE_TEST_CONTEXT;
+    delete env.ORCH_CONTRACT_SOURCE_MANIFEST;
+    if (defect === 'replaced manifest') {
+      env.ORCH_CONTRACT_SOURCE_MANIFEST = path.join(repo, 'docs/reviews/pr-438-source-evidence.json');
+    }
+    const result = spawnSync(process.execPath,
+      [path.join(repo, 'tests/test_exec_mirror_contract_witness.js')],
+    { env, encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 1, result.error?.message);
+    const output = result.stdout + result.stderr;
+    assert.match(output, defect === 'replaced manifest' ? /witness receipt digest/
+      : /receipt digest requires a source manifest/);
+    assert.ok(!output.includes('installer owns every builder-shipped leaf'),
+      'receipt mismatch must stop before the synthetic contract runs');
+  });
+}
+
 for (const mutation of ['bytes', 'executable mode', 'leaf symlink', 'parent symlink']) {
   test(`refuses ${mutation} drift after the witness runs`, (t) => {
     const w = world(t);

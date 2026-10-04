@@ -18,13 +18,17 @@ const presync = path.join(repo, 'scripts', 'verify_before_sync.sh');
 const installer = path.join(repo, 'scripts', 'install_verified_snapshot.py');
 // Normal CI checks today's implementation. The opt-in review run must bind the
 // actual executable inputs to the retained historical manifest before and after.
+if (process.env.ORCH_CONTRACT_EXPECTED_MANIFEST_SHA256 !== undefined
+  && !process.env.ORCH_CONTRACT_SOURCE_MANIFEST) {
+  throw new Error('a witness receipt digest requires a source manifest');
+}
 const bound = process.env.ORCH_CONTRACT_SOURCE_MANIFEST ? bindReviewInputs(repo,
   fs.readFileSync(process.env.ORCH_CONTRACT_SOURCE_MANIFEST),
   process.env.ORCH_CONTRACT_EXPECTED_HEAD, [
     'scripts/build_exec_mirror.sh', 'scripts/verify_before_sync.sh',
     'scripts/install_verified_snapshot.py', 'docs/MIRROR_SYNC_PATCH.md',
     'src/env_prereq.py', 'src/verify.py', 'src/paths.py', 'src/mirror_reader.py',
-  ]) : null;
+  ], process.env.ORCH_CONTRACT_EXPECTED_MANIFEST_SHA256) : null;
 if (bound) after(() => assert.ok(bound.check() > 0));
 
 function run(command, args, options = {}) {
