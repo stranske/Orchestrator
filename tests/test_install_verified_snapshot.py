@@ -1237,16 +1237,28 @@ def _run_reader_during_publication(
             publisher.join(15)
 
 
-def test_standalone_python_reader_excludes_publisher_across_child_imports(tmp_path, monkeypatch):
-    """Launchd-style entry: mirror_reader run wrapping python3, not orchestrate.sh."""
+@pytest.mark.parametrize("guarded", [False, True], ids=["incumbent-entry", "guarded-entry"])
+def test_standalone_python_reader_excludes_publisher_across_child_imports(
+    tmp_path, monkeypatch, guarded
+):
+    """The same child observer crosses generations without the standalone entry guard."""
     root = INSTALLER.parent.parent
     child = _reader_child_import_script()
     mirror_reader = root / "src/mirror_reader.py"
 
     def reader_cmd_factory(mirror: Path) -> list[str]:
-        return ["python3", str(mirror_reader), "run", str(mirror), "python3", "-c", child]
+        command = ["python3", "-c", child]
+        if guarded:
+            command = ["python3", str(mirror_reader), "run", str(mirror), *command]
+        return command
 
-    _run_reader_during_publication(tmp_path, monkeypatch, reader_cmd_factory=reader_cmd_factory)
+    if guarded:
+        _run_reader_during_publication(tmp_path, monkeypatch, reader_cmd_factory=reader_cmd_factory)
+    else:
+        with pytest.raises(AssertionError, match="child crossed executable generations"):
+            _run_reader_during_publication(
+                tmp_path, monkeypatch, reader_cmd_factory=reader_cmd_factory
+            )
 
 
 def test_tick_reader_rejects_stale_or_wrong_mirror_lock(tmp_path, monkeypatch):

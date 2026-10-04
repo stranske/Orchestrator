@@ -680,7 +680,10 @@ witness sees new bytes on its second read with the original unlocked prologue.
 The cost is that a running tick delays publication until it exits.
 
 This is a partial recovery, not an atomic-publication completion claim. Standalone
-Python/launchd entry points outside this tick still need reader protection. Creation of new
+Python entries wrapped with `mirror_reader.py run MIRROR python3 ...` now have a paired
+production-publisher witness: the identical child observer crosses executable generations
+without that wrapper and stays on the old generation with it. Installed launchd commands
+that do not use the wrapper still need migration and live verification after merge/pull. Creation of new
 runtime leaves directly in mixed deployment/runtime directories is still not covered;
 existing runtime leaves retain both append and atomic-replacement writes. The wrapper's
 `--no-verify` route now stages the
@@ -708,4 +711,10 @@ A copy failure or invalid payload leaves both live locations untouched. The
 installer keeps the same exclusive publication lock and separate registry update,
 but prints `installed UNVERIFIED snapshot`: the digest is an integrity binding,
 not a verifier receipt. Neither helper nor wrapper runs `verify.py` on this route.
-Direct invocation of the incumbent copier remains outside this protection.
+Direct invocation of the incumbent copier remains outside this protection. An isolated
+real-copier witness pauses its first copy after deletion: a reader loses the live
+module on the direct route, while the guarded unverified route keeps the live module
+available because copying occurs in private staging. Both routes preserve the sampled
+runtime report and marker; neither updates the separate live registry during staging.
+That paired witness does not prove concurrent creation in mixed runtime directories
+or authorize installing wrappers before merge/pull.
