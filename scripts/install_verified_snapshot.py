@@ -9,6 +9,8 @@ that ``verify_before_sync.sh`` hashed and verified.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -331,6 +333,42 @@ def _merge_runtime_content(
             os.link(path, destination, follow_symlinks=False)
 
 
+def _exchange_directories(left: Path, right: Path) -> None:
+    """Exchange two existing directory entries in one kernel operation.
+
+    A two-rename fallback exposes a missing live path. Unsupported platforms or
+    filesystems therefore fail before changing the live generation.
+    """
+
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        exchange = getattr(library, "renamex_np", None)
+        if exchange is None:
+            raise OSError(errno.ENOTSUP, "atomic directory exchange is unavailable")
+        exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        exchange.restype = ctypes.c_int
+        result = exchange(os.fsencode(left), os.fsencode(right), 0x00000002)  # RENAME_SWAP
+    elif sys.platform.startswith("linux"):
+        exchange = getattr(library, "renameat2", None)
+        if exchange is None:
+            raise OSError(errno.ENOTSUP, "atomic directory exchange is unavailable")
+        exchange.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        exchange.restype = ctypes.c_int
+        result = exchange(-100, os.fsencode(left), -100, os.fsencode(right), 2)
+        # AT_FDCWD=-100; RENAME_EXCHANGE=2.
+    else:
+        raise OSError(errno.ENOTSUP, "atomic directory exchange is unavailable")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(left))
+
+
 def _publish_generation(
     payload: Path,
     mirror: Path,
@@ -350,7 +388,7 @@ def _publish_generation(
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
 
-    swapped = False
+    generation_identity = None
     try:
         _copy_payload(payload, staging, entries)
         _merge_runtime_content(mirror, staging, entries_set, prior_docs, retired)
@@ -359,19 +397,29 @@ def _publish_generation(
             raise RuntimeError(
                 f"staged generation digest {installed_digest} != verified snapshot {expected_digest}"
             )
+        # Put the complete generation at the eventual retained name first.
+        # At exchange, the old live tree lands exactly where runtime symlinks
+        # already point: no missing mirror or missing runtime-backing interval.
+        staging.rename(retired)
+        metadata = retired.stat()
+        generation_identity = (metadata.st_dev, metadata.st_ino)
         if mirror.exists():
-            mirror.rename(retired)
-        staging.rename(mirror)
-        swapped = True
-    except Exception:
-        if not swapped and retired.exists() and not mirror.exists():
+            _exchange_directories(mirror, retired)
+        else:
             retired.rename(mirror)
-        raise
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-        # Retained trees back shared runtime directories and may still be held
-        # by active readers. Do not reclaim them inside the publisher.
+        if retired.exists():
+            metadata = retired.stat()
+            if (metadata.st_dev, metadata.st_ino) == generation_identity:
+                # Publication failed before the swap; only private payload is removed.
+                # After exchange the retained inode is the OLD live tree, including
+                # writers' runtime backing. Preserve it even if the caller is interrupted
+                # immediately after the syscall returns and before it records success.
+                shutil.rmtree(retired)
+        # Retained trees may still be held by active readers/writers. Reclamation
+        # is deliberately outside the publisher.
 
 
 def _write_runtime_registry(registry: Path, runtime_registry: Path) -> None:

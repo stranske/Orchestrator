@@ -648,8 +648,17 @@ hard links so writers with open file descriptors keep writing the visible inode.
 trees are deliberately retained: the publisher must not delete backing storage or trees
 that active readers might still require. Repeated publication preserves these references.
 
-This is a partial recovery, not an atomic-publication completion claim. The two directory
-renames still expose a pathname gap, readers still need generation pinning, and creation
+Publication now uses a single native directory exchange (`renamex_np(RENAME_SWAP)` on
+macOS, `renameat2(RENAME_EXCHANGE)` on Linux). The validated generation is first placed
+at the retained pathname, then exchanged with the live directory in one kernel operation.
+The old generation lands at the runtime backing path in the same operation. Unsupported
+platforms or filesystems fail before changing the live directory; there is no two-rename
+fallback. Cleanup identifies the prepared inode so an exception immediately after exchange
+cannot delete the old runtime backing. Failure-injection tests cover both sides of the
+exchange and retry, alongside the production-kernel missing-path witness.
+
+This is a partial recovery, not an atomic-publication completion claim. Readers still
+need generation pinning, and creation
 or atomic replacement of runtime leaves directly in mixed deployment/runtime directories
 is not covered by shared inodes. Cleanup/migration and the incumbent `--no-verify` copier
 still need the full source #389 acceptance witnesses. Installed wrappers remain unchanged

@@ -899,3 +899,81 @@ def test_runtime_writes_after_transfer_survive_switch_and_retry(tmp_path, monkey
     assert installer.install(snapshot, mirror, expected, registry) == 0
     assert (mirror / "docs/reports/runtime.md").read_text().endswith("after publication\n")
     assert (mirror / "docs/reports/late.md").read_text() == "late creation\n"
+
+
+@pytest.mark.parametrize("failure", [None, "before", "after"])
+def test_atomic_publication_has_no_missing_live_path(tmp_path, monkeypatch, failure):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    (mirror / "module.py").write_text("VALUE = 'old'\n")
+    report = mirror / "docs/reports/runtime.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("runtime survives\n")
+    expected = installer.snapshot_digest(snapshot)
+    rename = Path.rename
+    observations = []
+
+    def observe():
+        assert mirror.is_dir(), "publisher exposed a missing live mirror"
+        observations.append((mirror / "module.py").read_text())
+        assert report.read_text() == "runtime survives\n"
+
+    def observed_rename(self, target):
+        result = rename(self, target)
+        observe()
+        return result
+
+    monkeypatch.setattr(Path, "rename", observed_rename)
+    if failure is not None:
+        exchange = installer._exchange_directories
+
+        def interrupted_exchange(left, right):
+            observe()
+            if failure == "before":
+                raise OSError("injected pre-publication failure")
+            exchange(left, right)
+            observe()
+            raise OSError("injected post-publication failure")
+
+        monkeypatch.setattr(installer, "_exchange_directories", interrupted_exchange)
+        with pytest.raises(OSError, match="injected"):
+            installer.install(snapshot, mirror, expected, registry)
+    else:
+        installer.install(snapshot, mirror, expected, registry)
+    observe()
+    assert observations
+    assert (mirror / "module.py").read_text() == (
+        "VALUE = 'old'\n" if failure == "before" else "VALUE = 'verified'\n"
+    )
+    assert not list(mirror.parent.glob(mirror.name + ".next-*"))
+    # Retry uses the same production publisher, preserving retained runtime backing.
+    if failure is not None:
+        monkeypatch.setattr(installer, "_exchange_directories", exchange)
+    installer.install(snapshot, mirror, expected, registry)
+    assert installer.snapshot_digest(mirror) == expected
+    assert report.read_text() == "runtime survives\n"
+
+
+@pytest.mark.parametrize("unavailable", ["platform", "kernel"])
+def test_atomic_exchange_fails_closed_when_unavailable(tmp_path, monkeypatch, unavailable):
+    import errno
+    from unittest.mock import Mock
+
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    (mirror / "module.py").write_text("VALUE = 'old'\n")
+    expected = installer.snapshot_digest(snapshot)
+    if unavailable == "platform":
+        monkeypatch.setattr(installer.sys, "platform", "unsupported")
+    else:
+        library = Mock()
+        library.renamex_np.return_value = -1
+        library.renameat2.return_value = -1
+        monkeypatch.setattr(installer.ctypes, "CDLL", lambda *args, **kwargs: library)
+        monkeypatch.setattr(installer.ctypes, "get_errno", lambda: errno.ENOTSUP)
+    with pytest.raises(OSError) as error:
+        installer.install(snapshot, mirror, expected, registry)
+    assert error.value.errno == errno.ENOTSUP
+    assert (mirror / "module.py").read_text() == "VALUE = 'old'\n"
+    assert not list(mirror.parent.glob(mirror.name + ".next-*"))
+    assert not list(mirror.parent.glob(mirror.name + ".retired-*"))
