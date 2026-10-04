@@ -382,7 +382,7 @@ def _merge_residual_runtime_content(
 
 
 def _exchange_directories(left: Path, right: Path) -> None:
-    """Exchange two existing directory entries in one kernel operation.
+    """Exchange two existing directory entries (including symlinks) atomically.
 
     A two-rename fallback exposes a missing live path. Unsupported platforms or
     filesystems therefore fail before changing the live generation.
@@ -424,51 +424,55 @@ def _publish_generation(
     expected_digest: str,
     prior_docs: list[Path],
 ) -> None:
-    """Install by building a complete generation, then switching the live mirror path atomically."""
+    """Publish a link to a complete, permanently named executable generation.
+
+    Only initial migration exchanges a real directory. Later publications replace
+    the live symlink, never the directory a pinned reader is using. All previously
+    published directories remain available for readers and runtime backing links.
+    """
 
     entries_set = set(entries)
     _validate_mirror_ownership(payload, mirror, entries, prior_docs)
     mirror.parent.mkdir(parents=True, exist_ok=True)
 
     staging = mirror.parent / f"{mirror.name}.next-{expected_digest[:12]}"
+    generation = mirror.parent / f"{mirror.name}.generation-{uuid.uuid4().hex}"
     retired = mirror.parent / f"{mirror.name}.retired-{uuid.uuid4().hex}"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
 
-    generation_identity = None
+    # During migration the real directory will land at retired. Once migrated,
+    # runtime links can point directly to the old, permanently named generation.
+    backing = mirror.resolve() if mirror.is_symlink() else retired
     try:
         _copy_payload(payload, staging, entries)
-        _merge_runtime_content(mirror, staging, entries_set, prior_docs, retired)
-        _merge_residual_runtime_content(mirror, staging, entries_set, prior_docs, retired)
+        _merge_runtime_content(mirror, staging, entries_set, prior_docs, backing)
+        _merge_residual_runtime_content(mirror, staging, entries_set, prior_docs, backing)
         installed_digest = snapshot_digest(staging)
         if installed_digest != expected_digest:
             raise RuntimeError(
                 f"staged generation digest {installed_digest} != verified snapshot {expected_digest}"
             )
-        # Put the complete generation at the eventual retained name first.
-        # At exchange, the old live tree lands exactly where runtime symlinks
-        # already point: no missing mirror or missing runtime-backing interval.
-        staging.rename(retired)
-        metadata = retired.stat()
-        generation_identity = (metadata.st_dev, metadata.st_ino)
-        if mirror.exists():
-            _exchange_directories(mirror, retired)
+        staging.rename(generation)
+        retired.symlink_to(generation.name, target_is_directory=True)
+        if mirror.is_symlink() or not mirror.exists():
+            # Keep the mirror's logical name intact: resolving it before locking
+            # would overwrite an old generation and acquire the wrong lock.
+            retired.replace(mirror)
         else:
-            retired.rename(mirror)
+            # A single exchange keeps the initial live path present and puts the
+            # old runtime directory at its backing path in that same operation.
+            _exchange_directories(mirror, retired)
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-        if retired.exists():
-            metadata = retired.stat()
-            if (metadata.st_dev, metadata.st_ino) == generation_identity:
-                # Publication failed before the swap; only private payload is removed.
-                # After exchange the retained inode is the OLD live tree, including
-                # writers' runtime backing. Preserve it even if the caller is interrupted
-                # immediately after the syscall returns and before it records success.
-                shutil.rmtree(retired)
-        # Retained trees may still be held by active readers/writers. Reclamation
-        # is deliberately outside the publisher.
+        if retired.is_symlink():
+            # This is only a private publication link, never the old real tree.
+            retired.unlink()
+        # Completed generations and retired real trees are retained even when an
+        # exception arrives just after the publication syscall. Reclamation must
+        # establish absence of both reader and runtime references; do not guess.
 
 
 def _write_runtime_registry(registry: Path, runtime_registry: Path) -> None:
@@ -509,11 +513,16 @@ def install(
     verified: bool = True,
 ) -> int:
     snapshot = snapshot.resolve()
-    mirror = mirror.expanduser().resolve()
+    mirror = mirror.expanduser().absolute()
+    mirror = mirror.parent.resolve() / mirror.name
+    active_root = mirror.resolve()
     _validate_snapshot(snapshot)
     if re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
         raise ValueError("expected digest must be exactly 64 lowercase hexadecimal characters")
-    if snapshot == mirror or snapshot in mirror.parents or mirror in snapshot.parents:
+    if any(
+        snapshot == root or snapshot in root.parents or root in snapshot.parents
+        for root in (mirror, active_root)
+    ):
         raise ValueError("snapshot and mirror must be separate trees")
     if runtime_registry is not None:
         # Resolve the parent, not the leaf: the registry update replaces a leaf symlink
@@ -522,7 +531,11 @@ def install(
         runtime_registry = runtime_registry.parent.resolve() / runtime_registry.name
         if any(
             runtime_registry == root or root in runtime_registry.parents
-            for root in (snapshot, mirror)
+            for root in (snapshot, mirror, active_root)
+        ) or any(
+            parent.parent == mirror.parent
+            and parent.name.startswith((mirror.name + ".generation-", mirror.name + ".retired-"))
+            for parent in (runtime_registry, *runtime_registry.parents)
         ):
             raise ValueError("runtime registry must be outside the snapshot and mirror trees")
 

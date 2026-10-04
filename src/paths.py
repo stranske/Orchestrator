@@ -20,7 +20,7 @@ module directory is named `src`, the checkout is its parent; otherwise the two c
 That makes this module a no-op on a flat tree, which is deliberate — it lands and is verified
 BEFORE any file moves, so the move itself changes no behaviour here.
 
-Deliberately dependency-free (pathlib only). Every module may import it without risking a cycle:
+Deliberately standard-library-only. Every module may import it without risking a cycle:
 `capabilities` imports `feedback`, and `feedback`'s own selftest imports `env_prereq`, so anything
 placed in those modules instead would close a loop for somebody.
 """
@@ -28,10 +28,20 @@ placed in those modules instead would close a loop for somebody.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 # The directory holding the orchestrator's modules — this file's own directory, by construction.
+_MODULE_ALIAS = Path(__file__).absolute().parent
 MODULE_DIR = Path(__file__).resolve().parent
+
+# Python normally retains the logical script/PYTHONPATH spelling in sys.path.
+# Once a mirror link moves, a later sibling import would reopen the new tree.
+# Anchor aliases of this module directory to the same physical generation as
+# MODULE_DIR. Other import roots (including synthetic test trees) are untouched.
+for _index, _entry in enumerate(sys.path):
+    if Path(_entry or os.curdir).resolve() == MODULE_DIR:
+        sys.path[_index] = str(MODULE_DIR)
 
 # The checkout root: the directory holding `orchestrate.sh`, `.verify-floor.json`, `.coveragerc`,
 # `pyproject.toml` and the docs. Equal to MODULE_DIR on a flat tree; its parent under `src/`.
@@ -75,6 +85,10 @@ def checkout_root(module_dir: Path) -> Path:
     asked; that is what stops the module dir and the checkout root drifting apart again.
     """
     module_dir = Path(module_dir)
+    # A caller using this module's original logical spelling must not follow a
+    # newly published mirror link. Preserve the layout rule for arbitrary trees.
+    if module_dir.absolute() == _MODULE_ALIAS:
+        module_dir = MODULE_DIR
     return module_dir.parent if module_dir.name == "src" else module_dir
 
 
