@@ -750,8 +750,9 @@ retired on 2026-09-03 under `never_fired` on every run. Excluding `capabilities.
 fixed the report and would have minted a "useful" verdict for the fix, because the finding set's
 CONTENT moved while its keys and its projection, the two things the rule above compares, did not. So
 a report DECLARES the rule deciding which ledger rows its findings may name, under
-`capabilities.FINDING_POPULATION_KEY` (the activation audit declares `live_finding_population()`;
-the firing monitor declares it extended by its held-off rule, below), and `tick_evidence`
+`capabilities.FINDING_POPULATION_KEY` (the activation audit declares `live_finding_population()`
+extended by its label evidence, and the firing monitor extends it by its held-off rule; both are
+below), and `tick_evidence`
 re-baselines whenever the declared population
 differs from the one recorded with the previous observation, including "none recorded, one declared
 now", which is the transition itself. The rule is read from the report being graded, so each
@@ -833,6 +834,24 @@ projection:
 `advisor_reach_regression` attaches only to live rows, whose membership in `regressed` is unchanged,
 so `by_defect` is identical for every input and no verdict is minted. Latent when fixed: the ledger's
 one not-live row was in neither baseline.
+
+**A repo the audit could not read is unknown, and the audit declares it (2026-10-04).** Its fleet
+label index was a 7-day cache, refreshed with one `gh label list` per fleet repo; a failed read was
+skipped and the refresh was then written as fresh regardless. So a refresh during an outage cached
+an EMPTY index for a week, a partial failure dropped the failed repos for a week, and a stale but
+good index was wiped by the refresh meant to renew it. Against a fake `gh`, every read failing
+removed `vocabulary_mismatch` for the week, and the four repos carrying `testing` failing asserted
+`label_absent_from_fleet` for a label four of twelve repos carry. Both move `by_defect`, so the
+outage itself would have been graded, in both directions. Each repo now keeps its last good labels
+and when they were read. A failed read keeps them, is reported under `unread` with its reason, and
+is retried by the next audit run, an hour later at the soonest. A repo with no labels at all is `unknown`: `label_coverage` reports it
+beside its counts, and `label_absent_from_fleet` is asserted or ruled out only when the answer would
+hold whatever that repo carries. The report declares the label rule and the repos never read in its
+finding population, so an observation drawn while any repo was never read re-baselines
+`tick_evidence` rather than being graded, and the declaration being new made the first report after
+the change a first observation too. Last good labels are not declared: a finding drawn from them is
+the one the last good read produced, and it is graded as usual. Latent when fixed: the live index
+held all twelve repos and `by_defect` was empty.
 
 ### A DECLARED BINDING WITH NO CALLER IS THE SAME DEFECT AS NO BINDING
 

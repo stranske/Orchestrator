@@ -1204,66 +1204,277 @@ def advisor_reach(caps: dict[str, dict]) -> dict:
 
 # --------------------------------------------------------------------------- fleet vocabulary
 
+LABEL_INDEX_FILE = "fleet-label-index.json"
+# How long one repo's successful label read is trusted before that repo is read again.
+LABEL_READ_TTL_S = 7 * 86400
+# How soon a repo whose read FAILED is tried again. Shorter than the audit's daily cadence, so the
+# next scheduled run always retries it; long enough that the audit's other callers (the admission
+# report, verify.py) do not re-ask GitHub on every call while it is down.
+LABEL_RETRY_S = 3600
+LABEL_READ_TIMEOUT_S = 120
+# Consecutive TIMED-OUT reads after which one refresh stops trying. A hung network costs
+# LABEL_READ_TIMEOUT_S per read, so twelve reads held the audit for 24 minutes; and a failed repo
+# is now retried by the next audit run rather than a week later, so that cost would recur. A repo
+# not tried is unread exactly like a failed one, and is retried on the same schedule.
+LABEL_TIMEOUT_BREAKER = 2
+# The rule the label findings rest on, declared in the report's finding population: an edit to it
+# makes the next observation incomparable with the last, so the tick's grader re-baselines instead
+# of crediting the audit with the edit (`capability_propensity.tick_evidence`).
+LABEL_EVIDENCE = "each repo's last good label read; a repo never read is unknown, never empty"
 
-def _fleet_label_index(*, use_cache: bool = True) -> dict:
-    """Labels that EXIST per repo. Cached: 12 API calls is too slow for a hot path."""
-    cache = STATE_DIR / "fleet-label-index.json"
-    if use_cache and cache.exists():
-        try:
-            blob = json.loads(cache.read_text())
-            if time.time() - float(blob.get("generated_at") or 0) < 7 * 86400:
-                return blob
-        except (OSError, ValueError):
-            pass
-    index = {}
-    # A FAILED gh call already means "unknown for this repo" (unauthenticated, offline, no
-    # access), and the loop skips it. An ABSENT gh binary meant an uncaught FileNotFoundError
-    # that took the whole audit down — same information, opposite outcome. Named here, and it
-    # short-circuits: with no gh at all there is nothing to ask 12 times.
-    if not shutil.which("gh"):
-        return {
-            "generated_at": time.time(),
-            "repos": {},
-            "unreadable": "gh CLI not installed; fleet label vocabulary unknown",
-        }
-    for full in getattr(backlog, "SUPPORTED_REPOS", []):
-        try:
-            proc = subprocess.run(
-                ["gh", "label", "list", "--repo", full, "--limit", "300", "--json", "name"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except (OSError, subprocess.SubprocessError):
-            continue  # unknown for this repo, exactly like a nonzero exit
-        if proc.returncode != 0:
-            continue
-        try:
-            index[full] = sorted(r["name"].strip().lower() for r in json.loads(proc.stdout or "[]"))
-        except ValueError:
-            continue
-    blob = {"generated_at": time.time(), "repos": index}
+
+def _iso(stamp: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(stamp)))
+
+
+def _load_label_cache(path: Path) -> dict:
+    """The cached `repos`/`read_at`/`unread`. A cache from before per-repo stamps reads as one read."""
+    empty: dict = {"repos": {}, "read_at": {}, "unread": {}}
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(blob, indent=2))
+        blob = json.loads(path.read_text())
+        stamp = float(blob.get("generated_at") or 0)
+        repos = {
+            str(r): [str(lab) for lab in labels]
+            for r, labels in (blob.get("repos") or {}).items()
+            if isinstance(labels, list)
+        }
+        read_at = blob.get("read_at") or {}
+        unread = blob.get("unread") or {}
+        return {
+            "repos": repos,
+            "read_at": {r: float(read_at.get(r, stamp) or 0) for r in repos},
+            "unread": {str(r): v for r, v in unread.items() if isinstance(v, dict)},
+        }
+    except (OSError, ValueError, TypeError, AttributeError):
+        return empty
+
+
+def _label_read_due(repo: str, cached: dict, now: float) -> bool:
+    """A failed repo is retried after LABEL_RETRY_S, a read one after LABEL_READ_TTL_S."""
+    failed = cached["unread"].get(repo)
+    if failed is not None:
+        return now - float(failed.get("failed_at") or 0) >= LABEL_RETRY_S
+    if repo not in cached["repos"]:
+        return True
+    return now - cached["read_at"].get(repo, 0) >= LABEL_READ_TTL_S
+
+
+def _read_repo_labels(full: str, run) -> tuple[list[str] | None, str, bool]:
+    """One repo's labels, or None and why not, and whether the read timed out.
+
+    `[]` is a repo read with no labels; None is a repo NOT read. Two answers, never one sentinel.
+    """
+    try:
+        proc = run(
+            ["gh", "label", "list", "--repo", full, "--limit", "300", "--json", "name"],
+            capture_output=True,
+            text=True,
+            timeout=LABEL_READ_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {LABEL_READ_TIMEOUT_S}s", True
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"[:200], False
+    if proc.returncode != 0:
+        err = " ".join((proc.stderr or "").split())
+        return None, f"gh exit {proc.returncode}: {err}"[:200], False
+    try:
+        return sorted(str(r["name"]).strip().lower() for r in json.loads(proc.stdout)), "", False
+    except (ValueError, TypeError, KeyError) as exc:
+        return None, f"unparseable gh output ({type(exc).__name__})", False
+
+
+def _write_label_cache(path: Path, blob: dict) -> None:
+    """Best effort, and atomic: a torn file reads as no cache, which would drop every last good read."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(blob, indent=2))
+        os.replace(tmp, path)
     except OSError:
-        pass
-    return blob
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _fleet_label_index(*, use_cache: bool = True, runner=None, now: float | None = None) -> dict:
+    """Labels that EXIST per repo, read with `gh label list` and cached PER REPO.
+
+    A READ THAT FAILED IS UNREAD, NEVER EMPTY. This used to write the refreshed index
+    unconditionally after skipping every repo whose read failed, so a refresh during an outage
+    cached an EMPTY index for the next 7 days, a partial failure dropped repos for the same week,
+    and a stale but good index was wiped by the refresh that should have renewed it. "Could not
+    read" was cached as "read: nothing", which hid real findings (`vocabulary_mismatch`) and
+    invented others (`label_absent_from_fleet` for a label four repos carried).
+
+    So each repo keeps its last good labels and when they were read. A failed read keeps them,
+    puts the repo under `unread` with the reason, and is retried after LABEL_RETRY_S. A repo with
+    no labels at all is listed under `unknown`, which `label_coverage` reports beside its counts
+    and never counts as a repo without the label. `use_cache=False` re-reads every repo now and
+    still keeps the last good labels of a read that fails. `runner` replaces `gh` (a test seam).
+    """
+    now = time.time() if now is None else float(now)
+    path = STATE_DIR / LABEL_INDEX_FILE
+    fleet = [str(r) for r in getattr(backlog, "SUPPORTED_REPOS", [])]
+    cached = _load_label_cache(path)
+    repos = {r: cached["repos"][r] for r in fleet if r in cached["repos"]}
+    read_at = {r: cached["read_at"][r] for r in repos}
+    unread = {r: cached["unread"][r] for r in fleet if r in cached["unread"]}
+    due = [r for r in fleet if not use_cache or _label_read_due(r, cached, now)]
+    if due:
+        run = runner or subprocess.run
+        # An ABSENT gh binary meant an uncaught FileNotFoundError that took the whole audit down,
+        # while a failed call meant "unknown for this repo": same information, opposite outcome.
+        # Now both are an unread repo, and with no gh at all there is nothing to ask 12 times.
+        no_gh = runner is None and not shutil.which("gh")
+        timeouts = 0
+        for full in due:
+            if no_gh:
+                labels, why = None, "gh CLI not installed"
+            elif timeouts >= LABEL_TIMEOUT_BREAKER:
+                labels, why = None, f"not tried: the {timeouts} reads before it timed out"
+            else:
+                labels, why, timed_out = _read_repo_labels(full, run)
+                timeouts = timeouts + 1 if timed_out else 0
+            if labels is None:
+                unread[full] = {"reason": why, "failed_at": now}
+                continue
+            repos[full], read_at[full] = labels, now
+            unread.pop(full, None)
+        _write_label_cache(
+            path,
+            {"generated_at": now, "repos": repos, "read_at": read_at, "unread": unread},
+        )
+    return {
+        "generated_at": now,
+        "repos": repos,
+        "read_at": read_at,
+        "unread": unread,
+        "unknown": [r for r in fleet if r not in repos],
+        "fleet": fleet,
+    }
+
+
+def label_index_summary(index: dict) -> dict:
+    """The label evidence in one place: the repos read, and beside them every repo that was not.
+
+    `unread` repos failed their last read and serve their last good labels; `unknown` are the unread
+    ones with none to serve. Reported together so a blind audit can never pass for a clean one.
+    """
+    unread = index.get("unread") or {}
+    fleet = list(index.get("fleet") or sorted(set(index.get("repos") or {}) | set(unread)))
+    read_at = index.get("read_at") or {}
+    retries = [float((v or {}).get("failed_at") or 0) + LABEL_RETRY_S for v in unread.values()]
+    return {
+        "repos": len(fleet),
+        "read": sum(1 for r in fleet if r not in unread),
+        "unread": {
+            r: {
+                "reason": (unread[r] or {}).get("reason"),
+                "last_good_read_at": _iso(read_at[r]) if r in read_at else None,
+            }
+            for r in sorted(unread)
+        },
+        "unknown": sorted(index.get("unknown") or []),
+        "retry_after": _iso(min(retries)) if retries else None,
+    }
+
+
+def format_label_line(summary: dict | None) -> str:
+    """The scorecard's fleet-label line. PURE, so the fully-read rendering is proved by construction."""
+    if not summary:
+        return "  fleet labels: not in this report"
+    total, read, unread = summary.get("repos", 0), summary.get("read", 0), summary.get("unread")
+    if not total:
+        return "  fleet labels: no fleet repos to read"
+    if not unread:
+        return f"  fleet labels: {read}/{total} repos read"
+    unknown = summary.get("unknown") or []
+    serving = (
+        f"{len(unknown)} never read, so their labels are UNKNOWN, not empty"
+        if unknown
+        else "serving their last good labels"
+    )
+    return (
+        f"  fleet labels: {read}/{total} repos read; UNREAD {len(unread)} "
+        f"({', '.join(r.split('/')[-1] for r in unread)}); {serving}; "
+        f"retry after {summary.get('retry_after')}"
+    )
+
+
+def finding_population(index: dict) -> dict:
+    """The rule deciding which rows the findings may name, and the label evidence they rest on.
+
+    Live rows only (`capabilities.live_finding_population`), plus the label evidence: its rule and
+    the repos never read. A label finding can be neither asserted nor ruled out for those repos, so a
+    finding that leaves `by_defect` while they are unknown was not resolved by anything; declaring
+    them makes `tick_evidence` re-baseline that observation rather than grade it. Last good labels
+    are not declared: a finding drawn from them is the finding the last good read produced.
+    """
+    return {
+        **capabilities.live_finding_population(),
+        "label_evidence": LABEL_EVIDENCE,
+        "label_repos_unknown": sorted(index.get("unknown") or []),
+    }
 
 
 def label_coverage(task_type: str, index: dict) -> dict:
-    """In how many repos does a label that produces this task_type actually exist?"""
+    """In how many repos does a label that produces this task_type actually exist?
+
+    `repos_unknown` names the repos whose labels were never read. They count in `repos_total` and
+    never in `missing_in`: a repo that was not read is not a repo without the label.
+    """
     wanted = {lab.lower() for lab in labels_producing(task_type)}
     repos = index.get("repos") or {}
+    unknown = sorted(str(r).split("/")[-1] for r in index.get("unknown") or [])
+    total = len(repos) + len(unknown)
     if not wanted or not repos:
-        return {"labels": sorted(wanted), "repos_with": None, "repos_total": len(repos)}
+        return {
+            "labels": sorted(wanted),
+            "repos_with": None,
+            "repos_total": total,
+            "repos_unknown": unknown,
+        }
     have = [r for r, labels in repos.items() if wanted & set(labels)]
     return {
         "labels": sorted(wanted),
         "repos_with": len(have),
-        "repos_total": len(repos),
+        "repos_total": total,
         "missing_in": sorted(r.split("/")[-1] for r in repos if r not in have)[:6],
+        "repos_unknown": unknown,
     }
+
+
+def label_shortfall(task_type: str, cov: dict) -> tuple[bool | None, str]:
+    """Is a label producing `task_type` absent or nearly absent from the fleet? With the note.
+
+    True and False are certain; None is UNKNOWN. A repo never read could carry the label, so the
+    finding is asserted only when it would stand whatever those repos carry, and ruled out only when
+    it would fall whatever they carry. With every repo read this is exactly the rule it always was.
+    """
+    have, total = cov.get("repos_with"), cov.get("repos_total") or 0
+    unknown = len(cov.get("repos_unknown") or [])
+    if have is None:
+        if unknown and cov.get("labels"):
+            return None, f"label coverage for {task_type!r} is unknown: no repo's labels were read"
+        return None, ""
+    sparse = max(1, (total or 12) // 6)
+    if have + unknown <= sparse:
+        if unknown:
+            return True, (
+                f"a label producing {task_type!r} exists in at most {have + unknown}/{total} "
+                f"repos ({unknown} never read)"
+            )
+        if have == 0:
+            return True, f"no repo carries a label producing {task_type!r}"
+        return True, f"a label producing {task_type!r} exists in only {have}/{total} repos"
+    if have <= sparse:
+        return None, (
+            f"label coverage for {task_type!r} is unknown: {have} of the {total - unknown} repos "
+            f"read carry it, and {unknown} were never read"
+        )
+    return False, ""
 
 
 # --------------------------------------------------------------------------- the audit
@@ -1321,17 +1532,11 @@ def audit_capability(
                 notes.append(f"no PROMPT_TEMPLATES[{value!r}]")
             cov = label_coverage(value, label_index)
             row.setdefault("label_coverage", {})[value] = cov  # type: ignore[index]
-            if cov.get("repos_with") == 0:
+            short, why = label_shortfall(value, cov)
+            if short:
                 defects.append("label_absent_from_fleet")
-                notes.append(f"no repo carries a label producing {value!r}")
-            elif (cov.get("repos_with") or 0) and cov["repos_with"] <= max(
-                1, (cov.get("repos_total") or 12) // 6
-            ):
-                defects.append("label_absent_from_fleet")
-                notes.append(
-                    f"a label producing {value!r} exists in only "
-                    f"{cov['repos_with']}/{cov['repos_total']} repos"
-                )
+            if why:
+                notes.append(why)
 
     elif entry == ENTRY_DIRECT:
         hb = heartbeat_reachable(cap)
@@ -1506,7 +1711,10 @@ def audit(*, path=None, use_cache: bool = True, ledger: dict | None = None) -> d
         "ledger_total": len(rows),
         "not_audited": {status: sorted(ids) for status, ids in sorted(not_audited.items())},
         "not_audited_count": sum(len(ids) for ids in not_audited.values()),
-        capabilities.FINDING_POPULATION_KEY: capabilities.live_finding_population(),
+        capabilities.FINDING_POPULATION_KEY: finding_population(index),
+        # BESIDE THE FINDINGS IT FEEDS: the repos whose labels were read and every one that was
+        # not, so a label finding absent for want of a read never reads as a clean bill.
+        "fleet_labels": label_index_summary(index),
         "reachable_ids": reachable,
         "by_entry_class": by_entry,
         "by_defect": {k: sorted(v) for k, v in sorted(by_defect.items())},
@@ -1652,6 +1860,7 @@ def format_scorecard(rep: dict, prog: dict | None = None) -> str:
         "",
         "  entry classes: "
         + ", ".join(f"{k}={v}" for k, v in sorted(rep["by_entry_class"].items())),
+        format_label_line(rep.get("fleet_labels")),
         "",
     ]
     if not_audited_count:
@@ -1797,6 +2006,17 @@ def _selftest() -> None:
     idx = {"repos": {"o/a": ["testing", "bug"], "o/b": ["bug"], "o/c": ["bug"]}}
     cov = label_coverage("testgen", idx)
     assert cov["repos_with"] == 1 and cov["repos_total"] == 3, cov
+
+    # A REPO NEVER READ IS UNKNOWN, NEVER A REPO WITHOUT THE LABEL. A failed read used to drop the
+    # repo from the index, so the carriers failing read as "no repo carries a label producing it".
+    blind = {"repos": {f"o/{i}": ["bug"] for i in range(8)}, "unknown": ["o/u1", "o/u2", "o/u3"]}
+    cov = label_coverage("testgen", blind)
+    assert (cov["repos_with"], cov["repos_total"], len(cov["repos_unknown"])) == (0, 11, 3), cov
+    assert label_shortfall("testgen", cov)[0] is None, "a repo never read read as one without it"
+    assert label_shortfall("testgen", {**cov, "repos_unknown": []})[0] is True, cov
+    # ...and the fully-read rendering is reachable, proved by construction rather than by waiting.
+    read = label_index_summary({"repos": {"o/a": []}, "fleet": ["o/a"]})
+    assert format_label_line(read) == "  fleet labels: 1/1 repos read", read
 
     tmpl = _prompt_templates()
     assert "testgen" in tmpl and "docs" not in tmpl
@@ -2396,6 +2616,7 @@ def _selftest() -> None:
 
     print(
         "capability_activation_audit.py selftest: OK (entry classes, emittable task types, "
+        "label coverage with a repo never read unknown rather than empty, "
         "heartbeat off-path vs no-heartbeat vs reachable, heartbeat env-suppression both "
         "directions, advisor reach + narrowing, progress + regression tracking with "
         "retired-since kept apart and an unknown baseline never compared, "

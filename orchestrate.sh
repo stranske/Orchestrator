@@ -802,10 +802,11 @@ if _cadence_due feature-scan && _attempt_ok feature-scan; then
 fi
 if _cadence_due capability-activation-audit && _attempt_ok capability-activation-audit; then
   # Can each capability fire AT ALL? Read-only static+ledger analysis; snapshots the reachable
-  # count so progress is measured rather than asserted. Its fleet label index is cached for 7 days,
-  # but a stale cache is refreshed with `gh label list` per fleet repo (120 s timeout each), and a
-  # refresh whose every read fails is cached as an EMPTY index for the next week. So it defers with
-  # the gh preflight, which costs one tick of a daily step.
+  # count so progress is measured rather than asserted. Its fleet label index keeps each repo's last
+  # good `gh label list` for 7 days; a read that fails keeps those labels, is reported unread and is
+  # retried by the next run (an hour at the soonest), so an outage no longer blinds it for a week (a
+  # failed refresh used to be cached as an EMPTY index). It still defers with the gh preflight:
+  # that costs one tick of a daily step and saves one failing read per fleet repo (120 s each).
   if _gh_deferred; then
     echo "  [cadence] capability activation audit SKIPPED — gh deferred by the preflight (stamp untouched; retry next tick)"
   else
