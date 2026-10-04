@@ -116,6 +116,16 @@ def is_local_delegate(mode: str | None, target: str | None) -> bool:
     return mode == "local" or (mode in LEGACY_LOCAL_MODES and "#" in str(target or ""))
 
 
+def needs_delegation_guard(source: str | None) -> bool:
+    """May only `_delegated_pr_state` decide this run's PR credit? True for a remote delegation.
+
+    ONE predicate, two callers. Ingest routes such a run through the guard, and merge_guard never
+    credits one, because ingest does not re-decide a run already recorded as merged and pending
+    durability. Until 2026-10-04 merge_guard credited the latest remote run on the merged target,
+    delegations included, and that PASS bypassed the guard for good."""
+    return source == DELEGATION_SOURCE
+
+
 def _pr_state(target: str, agent: str | None = None) -> dict | None:
     """Live: gh PR state for owner/repo#N.
 
@@ -917,7 +927,7 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
             pr = _state_fn(run["target"])
         elif mode == "local":
             pr = _local_pr_state(run["target"], run.get("agent"), pushes=pushes)
-        elif run.get("source") == DELEGATION_SOURCE:
+        elif needs_delegation_guard(run.get("source")):
             pr = _delegated_pr_state(run["target"], run.get("agent"), run.get("ts"))
         else:
             pr = _pr_state(run["target"], run.get("agent"))
