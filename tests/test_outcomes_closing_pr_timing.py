@@ -24,6 +24,7 @@ changes verdict. No real API: `subprocess.run` is replaced by a stub that answer
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 
 import pytest
@@ -70,6 +71,36 @@ def pages(*bodies: dict) -> tuple:
     return (0, json.dumps(out), "")
 
 
+def graphql_call_problems(argv: list) -> list[str]:
+    """What GitHub and gh would refuse in a `gh api graphql` call, by their own rules. Every declared
+    variable must arrive with its declared type: `-f` always sends a string, and `-F` sends digits
+    as an Int. A `--paginate` read must declare `$endCursor`, pass it as `after:` and ask for
+    `pageInfo { hasNextPage endCursor }`, or gh refetches the first page. Empty means accepted.
+    The stub answers a refused call as GitHub does, so a read built wrongly cannot pass a test that
+    expects a verdict: in production it would be unanswered on every ingest, forever."""
+    sent: dict = {}
+    for flag, pair in zip(argv, argv[1:]):
+        if flag in ("-f", "-F"):
+            key, _, value = pair.partition("=")
+            sent[key] = int(value) if flag == "-F" and value.lstrip("-").isdigit() else value
+    query = str(sent.pop("query", ""))
+    problems = []
+    for name, kind, required in re.findall(r"\$(\w+):\s*(\w+)(!?)", query.split("{", 1)[0]):
+        if name not in sent:
+            problems += [f"${name} is required and was not sent"] if required else []
+        elif (kind == "Int") != isinstance(sent[name], int):
+            problems.append(f"Variable ${name} of type {kind} was provided invalid value")
+    if "--paginate" in argv:
+        for needle in (
+            "$endCursor: String",
+            "after: $endCursor",
+            "pageInfo { hasNextPage endCursor }",
+        ):
+            if query.count(needle) != 1:
+                problems.append(f"--paginate needs {needle!r} exactly once in the query")
+    return problems
+
+
 def node(number: int, merged: str | None, state: str = "MERGED", repo: str = "o/r") -> dict:
     return {
         "number": number,
@@ -105,6 +136,9 @@ def gh(monkeypatch):
                 return subprocess.CompletedProcess(argv, *issue)
             if verb == "api graphql" and closing is not None:
                 assert "--paginate" in argv and "--slurp" in argv, argv
+                problems = graphql_call_problems(argv)
+                if problems:  # refused, as GitHub refuses it: exit 1 and the reason
+                    return subprocess.CompletedProcess(argv, 1, "", "gh: " + "; ".join(problems))
                 return subprocess.CompletedProcess(argv, *closing)
             raise AssertionError(f"unexpected gh call: {argv}")
 
@@ -172,6 +206,10 @@ def test_a_delegation_never_reads_late_references_as_a_closing_pr(gh):
         "(`late_closing_prs`), on this path too",
         outcome,
     )
+    assert "no closing PR references" not in outcome["notes"], (
+        "the issue HAS references, none of which counted: say so, never that it has none",
+        outcome,
+    )
 
 
 def test_a_pr_merged_the_second_before_the_close_counts(gh):
@@ -201,14 +239,14 @@ def test_a_pr_merged_long_before_a_later_close_still_counts(gh):
 
 
 def test_counted_and_late_references_are_both_named(gh):
-    """Trend#5816's shape: one reference merged before the close, another 113 s after it. The
-    verdict comes from the first; the notes still name the second as not counted."""
+    """Trend#5816, closed by hand at 00:39:26: #5834 merged 15 minutes before the close, #5836 113 s
+    after it. The verdict comes from the first; the notes still name the second as not counted."""
     closing = read(
-        "2026-08-13T00:39:26Z", (5815, "2026-08-13T00:39:25Z"), (5836, "2026-08-13T00:41:19Z")
+        "2026-08-13T00:39:26Z", (5834, "2026-08-13T00:24:50Z"), (5836, "2026-08-13T00:41:19Z")
     )
-    outcome = outcomes.state_to_outcome(closed_issue(gh, 5815, 5836, closing=closing))
+    outcome = outcomes.state_to_outcome(closed_issue(gh, 5834, 5836, closing=closing))
     assert outcome["failure_class"] == feedback.UNATTRIBUTED_CLOSING_PR, outcome
-    assert "closed by a PR no candidate branch produced (#5815)" in outcome["notes"], outcome
+    assert "closed by a PR no candidate branch produced (#5834)" in outcome["notes"], outcome
     assert "not counted: #5836 (merged 2026-08-13T00:41:19Z)" in outcome["notes"], outcome
     assert "closing_pr_count=1" in outcome["notes"], outcome
 
@@ -260,6 +298,31 @@ def test_every_page_of_references_is_read(gh):
         ["#2"],
         ["#1 (merged 2026-09-01T00:00:00Z)"],
     ), state
+
+
+def test_the_merge_time_read_is_a_call_github_accepts(monkeypatch):
+    """The read GitHub would refuse is the one no stub-only test notices: with `-f number=` (a
+    string for `Int!`) or no `after: $endCursor`, every closed issue with a reference would read
+    unanswered, or page forever, on every ingest. Assert the real argv, then that the check fires.
+    """
+    captured: list = []
+
+    def fake_run(argv, capture_output=True, text=True, **_kw):
+        captured.append(list(argv))
+        return subprocess.CompletedProcess(argv, *read(CLOSED_2819))
+
+    monkeypatch.setattr(outcomes.subprocess, "run", fake_run)
+    assert outcomes._closing_pr_merges("o/r", 2819) == {"closedAt": CLOSED_2819, "refs": []}
+    (argv,) = captured
+    assert graphql_call_problems(argv) == [], graphql_call_problems(argv)
+    as_string = [("-f" if arg == "-F" else arg) for arg in argv]
+    assert graphql_call_problems(as_string) == [
+        "Variable $number of type Int was provided invalid value"
+    ]
+    unpaged = [arg.replace("after: $endCursor", "") for arg in argv]
+    assert graphql_call_problems(unpaged) == [
+        "--paginate needs 'after: $endCursor' exactly once in the query"
+    ]
 
 
 def test_no_reference_needs_no_merge_time_read(gh):
