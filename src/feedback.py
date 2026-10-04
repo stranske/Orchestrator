@@ -4890,6 +4890,26 @@ def latest_run_id_for_target(target: str, mode: str | None = None) -> str | None
     return row[0] if row else None
 
 
+def runs_for_target(target: str, mode: str | None = None) -> list[dict]:
+    """Every run recorded for a target, newest first (the later-recorded row wins a tie), with the
+    `source` that decides how its PR may be credited (`outcomes.needs_delegation_guard`) and
+    whether an outcome row already exists for it (`has_outcome`)."""
+    with _conn() as c:
+        q = (
+            "SELECT r.run_id, r.source, r.ts, o.run_id IS NOT NULL FROM runs r "
+            "LEFT JOIN outcomes o ON o.run_id=r.run_id WHERE r.target=?"
+        )
+        params: list = [target]
+        if mode:
+            q += " AND r.mode=?"
+            params.append(mode)
+        rows = c.execute(q + " ORDER BY r.ts DESC, r.rowid DESC", params).fetchall()
+    return [
+        {"run_id": run_id, "source": source, "ts": ts, "has_outcome": bool(has_outcome)}
+        for run_id, source, ts, has_outcome in rows
+    ]
+
+
 def snapshot_json(path=None) -> dict:
     """Dump the live store to a human-readable JSON snapshot for the Code/Orchestrator project. The live
     SQLite stays on local disk (Dropbox-safe); THIS is the reviewable, version-controllable copy of the
@@ -5727,6 +5747,13 @@ def _selftest():
         record_run("local-target", "o/r#target", "implement", "vibe", mode="local", ts=300)
         assert latest_run_id_for_target("o/r#target") == "local-target"
         assert latest_run_id_for_target("o/r#target", mode="remote") == "newer-target"
+        assert [
+            (run["run_id"], run["source"], run["has_outcome"])
+            for run in runs_for_target("o/r#target", mode="remote")
+        ] == [
+            ("newer-target", "orchestrator_remote", False),
+            ("older-target", "orchestrator_remote", False),
+        ]
         with _conn() as c:
             sources = {
                 rid: (source, assignment)

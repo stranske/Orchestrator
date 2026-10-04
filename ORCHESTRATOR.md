@@ -319,8 +319,17 @@ cursor-agent live outside the default PATH):
   when a human or local orchestrator action would otherwise call `gh pr merge` directly. Direct or auto
   merge fallback is forbidden. The guard reads every GraphQL review-thread page and fails closed on active
   threads, unknown or incomplete thread state, exact-head drift, non-success checks, or a review age below
-  the seven-minute exact-head review floor. It repeats that preflight immediately before mutation and passes
-  `--match-head-commit` to GitHub. It also fails closed if PR metadata cannot be read, draft/non-open PRs are
+  the seven-minute exact-head review floor. The review age runs from THIS PR's latest event: its creation,
+  its last update, the last time it was marked ready for review, and the move of its head ref to the
+  expected head, read from the head repository's activity log. A push to another branch or a reference from
+  another PR does not reset it (until 2026-10-04 both did). A block names the anchor that set it
+  (`... 320s remaining (reset by head_ref_moved_at at <time>)`), and a head move the log cannot show
+  blocks. It
+  repeats that preflight immediately before mutation and passes
+  `--match-head-commit` to GitHub. After the merge it records PASS, pending durability, for the latest
+  remote run on the PR that is not a remote delegation; a delegation is left to outcome ingest's
+  attribution guard and named under `outcome.deferred_to_ingest`, or under
+  `outcome.delegations_already_recorded` when it already has an outcome, which ingest never re-decides. It also fails closed if PR metadata cannot be read, draft/non-open PRs are
   supplied, a required runtime-AC spec is missing, `ORCH_RUN_RUNTIME_AC=1` is absent, or the gate verdict is
   not `PASS`. It uses the shared `runtime_ac_gate.py` helper, so tick and terminal merges enforce the same
   policy. Use `python3 src/runtime_ac_gate.py --exercise [--json]` for a

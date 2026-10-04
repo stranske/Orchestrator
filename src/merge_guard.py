@@ -16,6 +16,7 @@ from typing import Any
 
 import exact_head_merge_gate
 import feedback
+import outcomes
 import provision
 import runtime_ac_gate
 
@@ -143,13 +144,52 @@ def evaluate_merge_gate(
 def record_merge_outcome(
     target: str,
     *,
-    latest_run_fn=feedback.latest_run_id_for_target,
+    remote_runs_fn=feedback.runs_for_target,
     record_outcome_fn=feedback.record_outcome,
 ) -> dict[str, Any]:
+    """Credit the merge to the latest remote run on `target` that the merge itself can credit.
+
+    A keepalive run IS its PR, so the PR merging is its PASS: outcome ingest applies the same rule.
+    A remote DELEGATION is credited only with its own PR and a completed round of the delegated
+    agent's runner since the label, which only ingest reads (`outcomes._delegated_pr_state`). So a
+    delegation is never credited here. Ingest decides only a run with NO outcome row: it never
+    re-decides a recorded one, whether merged and pending durability or terminal. So the report
+    names two lists, each empty when there is none and None when the runs could not be read:
+    `deferred_to_ingest`, the delegations ingest will decide, and `delegations_already_recorded`,
+    the ones neither side touches (a PR that closed, so ingest ended its delegation, then reopened
+    and merged). Until 2026-10-04 the latest remote run was credited whatever its source."""
+    # Nothing after a merge may raise: the caller must still see that the merge ran.
     try:
-        run_id = latest_run_fn(target, mode="remote")
-        if not run_id:
-            return {"recorded": False, "reason": "no remote run_id found for target"}
+        runs = remote_runs_fn(target, mode="remote")
+        delegations = [run for run in runs if outcomes.needs_delegation_guard(run.get("source"))]
+        report = {
+            "deferred_to_ingest": [
+                run["run_id"] for run in delegations if not run.get("has_outcome")
+            ],
+            "delegations_already_recorded": [
+                run["run_id"] for run in delegations if run.get("has_outcome")
+            ],
+        }
+        creditable = [
+            run["run_id"] for run in runs if not outcomes.needs_delegation_guard(run.get("source"))
+        ]
+    except Exception as exc:
+        return {
+            "recorded": False,
+            "error": str(exc),
+            "deferred_to_ingest": None,
+            "delegations_already_recorded": None,
+        }
+    if not creditable:
+        reason = (
+            "no remote run_id found for target that the merge can credit; it credits no remote "
+            "delegation, which only outcome ingest's attribution guard decides"
+            if delegations
+            else "no remote run_id found for target"
+        )
+        return {"recorded": False, "reason": reason, **report}
+    run_id = creditable[0]
+    try:
         record_outcome_fn(
             run_id,
             adjudicated_verdict="PASS",
@@ -157,9 +197,9 @@ def record_merge_outcome(
             durability="pending",
             notes="merge_guard: gh pr merge succeeded; durability pending sweep",
         )
-        return {"recorded": True, "run_id": run_id}
     except Exception as exc:
-        return {"recorded": False, "error": str(exc)}
+        return {"recorded": False, "run_id": run_id, "error": str(exc), **report}
+    return {"recorded": True, "run_id": run_id, **report}
 
 
 def _preflight_block_reason(preflight: Any) -> str | None:
@@ -184,7 +224,7 @@ def guarded_merge(
     metadata_fn=pr_metadata,
     gate_fn=runtime_ac_gate.gate_status,
     merge_fn=subprocess.run,
-    latest_run_fn=feedback.latest_run_id_for_target,
+    remote_runs_fn=feedback.runs_for_target,
     record_outcome_fn=feedback.record_outcome,
     preflight_fn=exact_head_merge_gate.snapshot,
 ) -> dict[str, Any]:
@@ -252,7 +292,7 @@ def guarded_merge(
         return result
     result["outcome"] = record_merge_outcome(
         target,
-        latest_run_fn=latest_run_fn,
+        remote_runs_fn=remote_runs_fn,
         record_outcome_fn=record_outcome_fn,
     )
     return result
@@ -386,13 +426,38 @@ def _selftest() -> None:
             metadata_fn=runtime_meta,
             preflight_fn=clean_preflight,
             merge_fn=fake_merge,
-            latest_run_fn=lambda target, mode=None: "remote:o/r#5:codex",
+            remote_runs_fn=lambda target, mode=None: [
+                {"run_id": "keepalive:o/r#5:codex", "source": "keepalive", "ts": 1}
+            ],
             record_outcome_fn=lambda run_id, **kwargs: recorded.append((run_id, kwargs)),
         )
         assert passed["blocked"] is False and passed["merge_executed"] is True, passed
         assert calls and recorded and recorded[0][1]["durability"] == "pending", (calls, recorded)
-        no_run = record_merge_outcome("o/r#5", latest_run_fn=lambda target, mode=None: None)
+        no_run = record_merge_outcome("o/r#5", remote_runs_fn=lambda target, mode=None: [])
         assert no_run["recorded"] is False and "no remote run_id" in no_run["reason"], no_run
+        assert no_run["deferred_to_ingest"] == [], no_run
+
+        # A remote delegation is never credited by the merge (outcome ingest's guard decides it),
+        # even when it is the latest remote run; an older keepalive run on the PR is its PR's run.
+        mixed = [
+            {"run_id": "remote:o/r#5:gemini", "source": "orchestrator_remote", "ts": 2},
+            {"run_id": "keepalive:o/r#5:codex", "source": "keepalive", "ts": 1},
+        ]
+        credited: list = []
+        keep = record_merge_outcome(
+            "o/r#5",
+            remote_runs_fn=lambda target, mode=None: mixed,
+            record_outcome_fn=lambda run_id, **kwargs: credited.append(run_id),
+        )
+        assert credited == ["keepalive:o/r#5:codex"], (keep, credited)
+        assert keep["deferred_to_ingest"] == ["remote:o/r#5:gemini"], keep
+        only = record_merge_outcome(
+            "o/r#5",
+            remote_runs_fn=lambda target, mode=None: mixed[:1],
+            record_outcome_fn=lambda run_id, **kwargs: credited.append(run_id),
+        )
+        assert only["recorded"] is False and credited == ["keepalive:o/r#5:codex"], only
+        assert only["deferred_to_ingest"] == ["remote:o/r#5:gemini"], only
 
         blocked = guarded_merge(
             "o/r#5",
@@ -431,7 +496,8 @@ def _selftest() -> None:
     )
     assert parsed_meta["labels"] == ["runtime-ac"] and parsed_meta["title"] == "T", parsed_meta
     print(
-        "merge_guard.py selftest: OK (metadata, runtime AC gate, dry-run, guarded gh merge, outcome patch)"
+        "merge_guard.py selftest: OK (metadata, runtime AC gate, dry-run, guarded gh merge, "
+        "outcome patch, delegation deferred to ingest)"
     )
 
 
