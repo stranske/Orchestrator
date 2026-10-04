@@ -163,9 +163,9 @@ class MirrorGenerationTests(unittest.TestCase):
         text = (REPO / "orchestrate.sh").read_text()
         prefix = text.split("# --- Log rotation (every tick, cheap, fail-open)", 1)[0]
         preflight = "# ORCH-ANCHOR: gh-auth-preflight"
-        tail = preflight + text.split(preflight, 1)[1].split(
-            "# ORCH-ANCHOR: heartbeat-export", 1
-        )[0]
+        tail = (
+            preflight + text.split(preflight, 1)[1].split("# ORCH-ANCHOR: heartbeat-export", 1)[0]
+        )
         (self.snapshot / "orchestrate.sh").write_text(
             prefix + tail + 'python3 "$ORCH/observer.py"\n'
         )
