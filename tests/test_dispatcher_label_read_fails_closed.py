@@ -15,7 +15,8 @@ OPEN. The tick logs show it twice, each time with a control in the same tick:
 The labelled agent never ran in either case, and #439 found both PASS rows false. The same shape
 sat one read earlier on the same path. `claims.holder()` answered None ("free") for a claim
 `_is_held` calls held when its meta could not be read, and None is what `tick.remote_tick` checks
-before it delegates.
+before it delegates. And because claim meta was rewritten in place, a read that landed between
+the truncation and the write made an OLD live claim look stale.
 
 These tests drive the real `subprocess` path through a fake `gh` on PATH. They pin the relationship:
 unknown is refused, and a known "no labels" still delegates. The refusal is never cached, so the
@@ -224,7 +225,7 @@ def test_a_held_claim_with_unreadable_meta_has_an_unknown_holder(tmp_path, monke
     unstamped = claims._claims_dir() / claims._slug(target)
     unstamped.mkdir(parents=True)  # what claim() leaves between its mkdir and its stamp
     assert claims.holder(target) == {"target": target, "agent": None, "meta": "unreadable"}
-    (unstamped / "meta").write_text('{"target": "o/r#8", "agent": "co')  # a rewrite, half-written
+    (unstamped / "meta").write_text('{"target": "o/r#8", "agent": "co')  # a meta that won't parse
     assert claims.holder(target) == {"target": target, "agent": None, "meta": "unreadable"}
     old = time.time() - claims.CLAIM_TTL_DEFAULT - 5
     os.utime(unstamped, (old, old))
@@ -242,3 +243,31 @@ def test_the_tick_blocks_a_target_whose_claim_holder_is_unknown(gh, sandboxed_ti
     assert gh.calls() == [], "a blocked target must not even be read"
     claims.release("o/r#8")
     assert sandboxed_tick("o/r#8", dry_run=True)["chosen"][0]["skip"] is None, "free once released"
+
+
+def test_a_reader_during_a_meta_rewrite_still_sees_the_claim_held(tmp_path, monkeypatch):
+    """An in-place rewrite truncates `meta` before it writes. `_is_held` ages unreadable meta by the
+    dir's mtime, so a read in that window called an OLD live claim stale, which the tick reads as
+    free and `reap_stale` may remove. The rewrite is atomic now: a reader lands on the old record
+    or the new one, never on the empty file between them."""
+    monkeypatch.setattr(claims, "_handoff_dir", lambda: tmp_path)
+    target = "o/r#9"
+    assert claims.claim(target, "codex")  # stamped with this test's live pid
+    claim_dir = claims._claims_dir() / claims._slug(target)
+    old = time.time() - claims.CLAIM_TTL_DEFAULT - 5
+    os.utime(claim_dir, (old, old))  # held by a live process for longer than the TTL
+    seen: list = []
+    real_write_text = Path.write_text
+
+    def write_with_a_reader_in_the_window(self, data, *args, **kwargs):
+        if self.parent == claim_dir:
+            self.open("w").close()  # where every write starts: an empty file
+            seen.append(claims.holder(target))
+        return real_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write_with_a_reader_in_the_window)
+    assert claims.update_metadata(target, "codex", lane="closer") is True
+    assert seen, "the probe never ran: the meta write no longer goes through Path.write_text"
+    assert all(h is not None and h.get("agent") == "codex" for h in seen), seen
+    assert claims.holder(target)["lane"] == "closer"
+    assert not list(claim_dir.glob(".meta.*")), "the temporary file must not outlive the write"

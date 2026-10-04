@@ -105,6 +105,16 @@ def _read_meta(path: Path) -> dict | None:
         return None
 
 
+def _write_meta(path: Path, meta: dict) -> None:
+    """Replace a claim's meta in one step, so a reader finds the old record or the new one.
+
+    Writing in place truncates first, and `_is_held` ages an unreadable meta by the dir's mtime, so a
+    read in between called an OLD live claim stale: free to the tick, reapable by `reap_stale`."""
+    tmp = path / f".meta.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(meta))
+    os.replace(tmp, path / "meta")
+
+
 def _is_held(path: Path, ttl: int, now: float) -> bool:
     """Is this claim dir still held?
 
@@ -145,9 +155,7 @@ def claim(target: str, agent: str, *, ttl: int = CLAIM_TTL_DEFAULT, pid: int | N
     pid = os.getpid() if pid is None else pid
 
     def _stamp() -> None:
-        (path / "meta").write_text(
-            json.dumps({"target": target, "agent": agent, "pid": pid, "ts": time.time()})
-        )
+        _write_meta(path, {"target": target, "agent": agent, "pid": pid, "ts": time.time()})
 
     try:
         path.mkdir()  # atomic on POSIX — exactly one concurrent caller wins
@@ -262,12 +270,12 @@ def update_metadata(
     if refresh_ts:
         meta["ts"] = time.time()
     meta["updated_ts"] = time.time()
-    (path / "meta").write_text(json.dumps(meta))
+    _write_meta(path, meta)
     return True
 
 
 # The `meta` that `holder()` reports for a claim that is HELD but whose meta cannot be read: a dir
-# mkdir'd and not yet stamped (or crashed before `_stamp`), or a meta file caught mid-rewrite.
+# mkdir'd and not yet stamped (or crashed before `_stamp`), or a meta file that does not parse.
 UNREADABLE_META = "unreadable"
 
 
@@ -369,6 +377,7 @@ def _selftest() -> None:
             update_metadata(T1, "codex", lane="opener", task_type="implement", pid=os.getpid())
             is True
         )
+        assert not list((_claims_dir() / _slug(T1)).glob(".meta.*")), "no tmp outlives a write"
         meta_claims = active_claims(include_meta=True)
         assert (
             meta_claims[T1]["lane"] == "opener" and meta_claims[T1]["task_type"] == "implement"
@@ -485,7 +494,7 @@ def _selftest() -> None:
             "agent": None,
             "meta": UNREADABLE_META,
         }, holder("nometa/T")
-        (nm / "meta").write_text('{"target": "nometa/T", "ag')  # a rewrite caught half-written
+        (nm / "meta").write_text('{"target": "nometa/T", "ag')  # a meta that does not parse
         assert holder("nometa/T") is not None, "a torn meta on a fresh claim is still held"
         old = time.time() - CLAIM_TTL_DEFAULT - 5
         os.utime(nm, (old, old))
