@@ -82,7 +82,11 @@ def test_the_scorecard_names_not_live_rows_without_calling_them_blocked(tmp_path
 def test_the_audit_declares_the_population_it_audits(tmp_path, monkeypatch):
     """The tick re-baselines when this changes, so a change to NOT_LIVE_STATES mints no verdict."""
     rep = _report(tmp_path, monkeypatch)
-    assert rep[capabilities.FINDING_POPULATION_KEY] == capabilities.live_finding_population()
+    declared = rep[capabilities.FINDING_POPULATION_KEY]
+    live = capabilities.live_finding_population()
+    assert {key: declared[key] for key in live} == live, declared
+    # ...extended by the label evidence its findings rest on (test_activation_audit_label_index).
+    assert declared == audit.finding_population({"repos": {}}), declared
 
 
 def test_not_live_states_are_canonical_lifecycle_states():
@@ -132,7 +136,7 @@ def test_the_snapshot_records_its_population_so_the_next_run_is_comparable(tmp_p
     assert audit.record_snapshot(rep, path=path)["recorded"]
     (last,) = audit.load_history(path)
     key = capabilities.FINDING_POPULATION_KEY
-    assert last[key] == rep[key] == capabilities.live_finding_population(), last
+    assert last[key] == rep[key] == audit.finding_population({"repos": {}}), last
     # FULLY DRAINED reads as a comparison with nothing in it, not as an unknown baseline.
     prog = audit.progress(rep, path=path)
     assert prog["baseline"] == rep["generated_at"], prog
