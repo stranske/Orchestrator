@@ -34,3 +34,39 @@ Verified task status for this round:
 - [ ] Apply this follow-up to the PR branch and pass fresh exact-head CI; retain the seven-minute floor and repository merge_guard before merging.
 
 The workspace `.git` is read-only, so the follow-up source/test commit was created in `/tmp/gate-status-refusal-review`; its patch is `/tmp/gate-status-refusal-followup.patch`. The validated two-file change also remains in the runner working tree for a writable runner to commit. GitHub checkbox, `needs-human` label, and blocker-comment updates were attempted but refused with `MCP tool call requires approval, but approval policy is never`; the remote task checkbox therefore remains unchanged. PR #413 was verified open and ready for review.
+
+The next keepalive follow-up makes the baseline control reproducible without a temporary pytest
+fixture or any production workflow edit. `GATE_TEST_WORKFLOW` selects an exported workflow;
+without it the harness reads production as before. The existing extraction test verifies export
+selection, identical script extraction, restoration of the default, and failure on a missing
+export. Collection remains 24 tests.
+
+```sh
+git show d326e59f5afeffd078cae488daa6b15a091640ac:.github/workflows/pr-00-gate.yml > /tmp/gate-status-refusal-baseline.yml
+GATE_TEST_WORKFLOW=/tmp/gate-status-refusal-baseline.yml python3 -m pytest tests/test_gate_commit_status_fork_tolerance.py -q -m "not slow" --override-ini addopts= -k same_repo_refusal
+python3 -m pytest tests/test_gate_commit_status_fork_tolerance.py -q -m "not slow" --override-ini addopts=
+python3 -m pytest tests/test_gate_commit_status_fork_tolerance.py tests/test_ci_gate_config.py tests/test_gate_replays_pytest_verdicts.py -q -m "not slow" --override-ini addopts=
+python3 -m black --line-length 100 tests/test_gate_commit_status_fork_tolerance.py
+python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+git diff --check
+```
+
+Verified with repository-pinned pytest 9.1.1: the unchanged baseline yields **3 failed, 21
+deselected** at the same-repository refusal assertion, production yields **24 passed**, and the
+three-file regression run yields **48 passed**. The workflow, retry helper, permissions and event
+configuration are untouched by this follow-up. The runner lacks pytest and Black and cannot
+reach PyPI, so upstream sources for the pinned tools were staged in `/tmp/gate-review-tools`
+and invoked with `PYTHONPATH=/tmp/gate-review-tools /usr/bin/python3` (Python 3.12.3).
+Fresh exact-head CI, the seven-minute review floor and repository merge_guard remain required;
+this local validation does not claim a merge or full-suite pass.
+
+The required full Black check passes: **297 files would be left unchanged**. This sandbox
+refuses socketpair writes with `EPERM`, preventing asynchronous worker results from waking
+Black's event loop. An opt-in periodic wakeup in `/tmp/gate-review-tools/sitecustomize.py`
+addresses that runner limitation; formatting and validation are unchanged. The successful
+command used `GATE_REVIEW_POLL_WORKERS=1 BLACK_NUM_WORKERS=1
+BLACK_CACHE_DIR=/tmp/gate-review-black-cache` alongside the tool `PYTHONPATH` above.
+`git diff --check` passes. The source/test commit is prepared in the writable bare repository
+`/tmp/gate-status-refusal-review.git`, and the applyable patch is
+`/tmp/gate-status-refusal-controls.patch`; the runner working tree retains the same two-file
+change because its `.git` directory cannot be written.

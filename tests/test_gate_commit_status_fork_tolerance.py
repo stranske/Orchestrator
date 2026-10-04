@@ -62,7 +62,14 @@ def _need_harness() -> None:
 
 
 def _workflow_lines() -> list[str]:
-    return (paths.REPO_ROOT / WORKFLOW).read_text(encoding="utf-8").splitlines()
+    """Read production by default, or an exported baseline for the refusal controls.
+
+    GATE_TEST_WORKFLOW lets the same assertions exercise an unchanged historical workflow
+    without replacing the protected production file. An invalid export must fail, not silently
+    fall back to production and make the negative control appear to pass.
+    """
+    workflow = Path(os.environ.get("GATE_TEST_WORKFLOW", str(paths.REPO_ROOT / WORKFLOW)))
+    return workflow.read_text(encoding="utf-8").splitlines()
 
 
 def _step_lines(step_name: str) -> list[str]:
@@ -544,7 +551,9 @@ def test_the_origin_step_classifies_every_shape(origin: dict) -> None:
         assert case["outputs"] == {"from_fork": from_fork, "head": head}, (name, case)
 
 
-def test_both_writers_read_the_one_fork_definition() -> None:
+def test_both_writers_read_the_one_fork_definition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Fork-ness is decided once. Each writer must read it from the origin step, which must run
     first, and neither may look at the payload's head repository itself -- two definitions of one
     fact drift, and #352's two copies had already diverged when they merged."""
@@ -557,3 +566,18 @@ def test_both_writers_read_the_one_fork_definition() -> None:
         assert block.count("steps.pr_" + "origin.outputs.from_fork") == 1, step
         script = _step_script(step)
         assert script.count("head?.repo") == 0 and script.count("head.repo") == 0, step
+
+    # The baseline control changes only the workflow input, retaining the real helper and
+    # assertions. Exercise selection here without changing this suite's 24-test collection.
+    original = _workflow_lines()
+    status_script = _step_script(STATUS_STEP)
+    exported = tmp_path / "exported-gate.yml"
+    exported.write_text("\n".join(original) + "\n# exported workflow control\n", encoding="utf-8")
+    with monkeypatch.context() as selected:
+        selected.setenv("GATE_TEST_WORKFLOW", str(exported))
+        assert _workflow_lines() == original + ["# exported workflow control"]
+        assert _step_script(STATUS_STEP) == status_script
+        exported.unlink()
+        with pytest.raises(FileNotFoundError):
+            _workflow_lines()
+    assert _workflow_lines() == original
