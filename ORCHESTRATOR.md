@@ -399,6 +399,9 @@ cursor-agent live outside the default PATH):
 - **Reconcile local execution ledger (NEW)** — `python3 src/ledger_reconcile.py reconcile [--dry-run] [--json]`
   joins local delegate start/complete rows and JSON usage events in dispatch logs into `costs(source=ledger)`.
   It skips unknown `run_id`s and never overwrites a richer `source=langsmith` or `source=ccusage` cost row.
+  It also classifies a run the provider refused before any work (`provider_limit_before_work`: codex's own
+  `turn.failed` event, no work event in the segment) as `transient_infra`, for runs started from
+  2026-10-04T15:00Z, and counts every such run under `provider_limit_deaths` by why it was or was not.
 - **Attribute ccusage sessions to runs (NEW)** — `python3 src/ccusage_reconcile.py reconcile --dry-run --json`
   previews, and `python3 src/ccusage_reconcile.py reconcile [--json]` writes, per-run Codex/Claude usage rows
   into `costs(source=ccusage)`. It joins ccusage `session` totals to dispatcher start/complete windows only

@@ -29,6 +29,103 @@ from typing import Any
 import adapters
 import execution_profiles
 import feedback
+import rate_incidents
+
+# A RUN THE PROVIDER REFUSED BEFORE IT DID ANYTHING IS INFRASTRUCTURE, NOT CAPABILITY (§2).
+# Measured 2026-10-04: five codex testgen delegates dispatched 2026-09-15 11:31-11:33Z each died in
+# 4-5 s on "You've hit your usage limit" with no command run, and exited 0, so the rc>128 rule below
+# could never see them. Outcome ingest then scored them from whatever their issues' PRs did: two
+# abandoned FAILs, and three PASSes credited through `orchestrator/issue-N` PRs another run had
+# merged, two of them a day before the run started.
+#
+# Rows are classified only for runs STARTED at or after this instant. Older rows are the population
+# the owner's 2026-10-04 decision covers (improvement log item 0), and this rule never rewrites them.
+PROVIDER_LIMIT_INFRA_SINCE = 1791126000  # 2026-10-04T15:00:00Z, after that decision's measurement
+
+# codex `exec --json` events that mean the run DID something. An item whose own type is `error` is the
+# harness's warning (every run prints "Under-development features enabled"), not work.
+_CODEX_WORK_EVENTS = frozenset({"item.started", "item.updated", "item.completed", "turn.completed"})
+
+# Why a run whose own log shows a provider refusal before any work was, or was not, classified.
+# Every run counted in `seen` lands in exactly one of the others, so the counts are a partition.
+PROVIDER_LIMIT_BUCKETS = (
+    "classified",  # marked transient_infra now (in a dry run: would be)
+    "excluded",  # already in a class no learner scores
+    "merged",  # recorded as merged: a PASS for a run that ran nothing; mark_transient_infra refuses it
+    "predates_rule",  # started before PROVIDER_LIMIT_INFRA_SINCE: the owner's decision governs it
+    "no_outcome_row",  # nothing recorded for any learner to score; a later pass rechecks it
+)
+
+
+def provider_limit_before_work(lines: list[str]) -> dict | None:
+    """The provider refused this run before it did anything: the evidence, or None.
+
+    Exact or nothing. The evidence is the harness's own terminal `turn.failed` event, whose message
+    the one text authority (`rate_incidents.classify_provider_failure`) rates as a high-confidence
+    provider limit, in a segment where no work event appears at all. A phrase in the transcript is
+    never enough: on 2026-10-04, 233 dispatch-log segments held a usage-limit phrase; of the 106
+    codex ones, 15 carried the refusal event and 91 had the phrase only in prose or command output.
+
+    Only codex's `exec --json` stream can say that nothing ran, so this reads that schema and no
+    other. claude (`-p`), cursor and vibe log only their final text, and gemini records its tool
+    steps in a separate per-run agy log. For those the answer is None, which means UNKNOWN, not "did
+    work": two of eight gemini runs that printed "Individual quota reached" with no output had run
+    tools for six minutes first.
+    """
+    failure = None
+    for line in lines:
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind in _CODEX_WORK_EVENTS:
+            item = event.get("item")
+            if kind == "turn.completed" or not (
+                isinstance(item, dict) and item.get("type") == "error"
+            ):
+                return None  # the run did something, so whatever ended it is not this rule's
+        elif kind == "turn.failed" and failure is None:
+            error = event.get("error")
+            message = str(error.get("message") or "") if isinstance(error, dict) else ""
+            category, subcategory, confidence = rate_incidents.classify_provider_failure(message)
+            if confidence == "high":
+                failure = {"category": category, "subcategory": subcategory, "message": message}
+    return failure
+
+
+def _settle_provider_limit_death(run_id: str, evidence: dict, *, dry_run: bool) -> str:
+    """Classify a run the provider refused before any work, when this rule owns its row.
+
+    Returns the PROVIDER_LIMIT_BUCKETS entry that says why it was or was not classified. Only a row
+    some learner still scores, recorded as not merged, for a run started under this rule, is
+    written; everything else is left exactly as recorded and counted under its reason.
+    """
+    with feedback._conn() as c:
+        row = c.execute(
+            "SELECT r.ts, o.run_id, o.merged, o.failure_class FROM runs r "
+            "LEFT JOIN outcomes o ON o.run_id=r.run_id WHERE r.run_id=?",
+            (run_id,),
+        ).fetchone()
+    if row is None or row[1] is None:
+        return "no_outcome_row"
+    started, _, merged, failure_class = row
+    if str(failure_class or "") in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES:
+        return "excluded"
+    if merged:
+        return "merged"
+    if int(started or 0) < PROVIDER_LIMIT_INFRA_SINCE:
+        return "predates_rule"
+    if dry_run:
+        return "classified"
+    reason = f"provider limit before any work: {evidence['subcategory']}"
+    # False only when another writer classified (or merged) the row since the read above.
+    return "classified" if feedback.mark_transient_infra(run_id, reason=reason) else "excluded"
 
 
 def _ledger_path(path: Path | None = None) -> Path:
@@ -141,16 +238,17 @@ def _classify_run_log_segment(
 ) -> dict | None:
     """Classify only this detached run's bounded log segment (fail-open)."""
     try:
-        import rate_incidents
-    except Exception as exc:
-        print(f"warn: rate-incident import failed for {agent}/{run_id}: {exc}", file=sys.stderr)
-        return None
-    try:
         combined_text = "\n".join(lines)
+        # The harness's own refusal event is provider evidence whatever the exit code: codex exits
+        # 0 on a refused turn, so the gate below took all five 2026-09-15 refusals for ordinary
+        # output (exit 0 or unknown), and none of them recorded an incident or shed the seat.
+        refusal = provider_limit_before_work(lines)
+        if refusal is not None:
+            combined_text = refusal["message"]
         # Successful or provenance-unknown task logs are ordinary model output. Only the strict
         # successful-stdout envelope may promote their text to provider evidence; otherwise test
         # fixtures and reviews that discuss HTTP 429/resource exhaustion become incidents.
-        if successful is not False and not rate_incidents.stdout_carries_capacity_evidence(
+        elif successful is not False and not rate_incidents.stdout_carries_capacity_evidence(
             combined_text
         ):
             return None
@@ -179,9 +277,11 @@ def _classify_run_log_segment(
             run_id=run_id,
             shed=shed,
             evidence=combined_text,
+            # The refusal names when the provider will serve again; shed until then, not 6 h.
+            reset_at=(rate_incidents.parse_relay_reset_at(combined_text) if refusal else None),
             extra={
                 "subcategory": evidence_result["subcategory"],
-                "source": "log_segment",
+                "source": "turn_failed_event" if refusal else "log_segment",
                 "log_file": str(log_file) if log_file else None,
             },
         )
@@ -655,6 +755,9 @@ def reconcile(
     log_costs_harvested = 0
     telemetry_runs_backfilled = 0
     rate_incident_classified = 0
+    # Every key present from the start, so a pass with nothing to classify prints zeros: an absent
+    # key would read as "not measured", which is the opposite of good news.
+    provider_limit_deaths = {"seen": 0, **{bucket: 0 for bucket in PROVIDER_LIMIT_BUCKETS}}
     prepared: list[dict[str, Any]] = []
 
     for run_id, run_rows in sorted(grouped.items()):
@@ -684,11 +787,19 @@ def reconcile(
             else:
                 skipped["unknown_run_id"] += 1
                 continue
+        log_file = _latest_log_file(run_rows)
+        # Before the cost-source skip below, on purpose: whether a run did any work has nothing to
+        # do with which cost row it got, and that skip ends the run's whole pass.
+        if log_file is not None:
+            refusal = provider_limit_before_work(_log_segment(log_file, run_id))
+            if refusal is not None:
+                provider_limit_deaths["seen"] += 1
+                bucket = _settle_provider_limit_death(run_id, refusal, dry_run=dry_run)
+                provider_limit_deaths[bucket] += 1
         existing_source = sources.get(run_id)
         if existing_source in {"langsmith", "ccusage"}:
             skipped[f"{existing_source}_cost_exists"] += 1
             continue
-        log_file = _latest_log_file(run_rows)
         # 16f/16h harvest from the run's log segment (same segment _log_usage scans).
         if log_file is not None and not dry_run:
             seg = _log_segment(log_file, run_id)
@@ -846,6 +957,9 @@ def reconcile(
         # unresolved 1414` is a coverage statement, while either number alone is not.
         "profile_resolved_backfills": profile_resolved_backfills,
         "infra_classified": infra_classified,
+        # Runs whose own log shows the provider refusing them before any work, partitioned by why
+        # each was or was not classified transient_infra (PROVIDER_LIMIT_BUCKETS).
+        "provider_limit_deaths": provider_limit_deaths,
         "resume_tokens_captured": resume_tokens_captured,
         "owner_questions_recorded": owner_questions_recorded,
         "log_costs_harvested": log_costs_harvested,
@@ -868,6 +982,11 @@ def _print_summary(summary: dict[str, Any], *, as_json: bool):
         f"ledger_reconcile: read {summary['rows_read']} row(s), saw "
         f"{summary['run_ids_seen']} run_id(s), {action} {summary['written_cost_rows']} cost row(s)"
     )
+    deaths = summary["provider_limit_deaths"]
+    print(
+        "provider refusals before any work: "
+        + ", ".join(f"{key} {deaths[key]}" for key in ("seen", *PROVIDER_LIMIT_BUCKETS))
+    )
     if summary["skipped"]:
         print(f"skipped: {json.dumps(summary['skipped'], sort_keys=True)}")
     if summary["errors"]:
@@ -880,10 +999,17 @@ def _selftest():
     tmp = Path(tempfile.mkdtemp(prefix="ledger-reconcile-selftest-"))
     old_db = feedback.DB_PATH
     old_handoff, old_ledger = adapters.HANDOFF, adapters.LEDGER
+    incident_paths = ("HANDOFF", "INCIDENT_FILE", "LOCK_FILE", "SHED_DIR")
+    old_incident_paths = {name: getattr(rate_incidents, name) for name in incident_paths}
     try:
         feedback.DB_PATH = tmp / "orchestrator.db"
         adapters.HANDOFF = tmp
         adapters.LEDGER = tmp / "capacity-ledger.ndjson"
+        # A refusal records an incident and may shed the seat: never in the real handoff dir.
+        rate_incidents.HANDOFF = tmp
+        rate_incidents.INCIDENT_FILE = tmp / "rate-limit-incidents.ndjson"
+        rate_incidents.LOCK_FILE = tmp / "rate-limit-incidents.ndjson.lock"
+        rate_incidents.SHED_DIR = tmp / "capacity-shed"
         feedback.record_run("local-1", "stranske/Repo#1", "implement", "codex", mode="local")
         feedback.record_run("remote-1", "stranske/Repo#2", "implement", "codex", mode="remote")
         feedback.record_run("ccusage-1", "stranske/Repo#3", "implement", "codex", mode="local")
@@ -1060,15 +1186,59 @@ def _selftest():
             d["decision"] == "keep old name" and d["source"] == "default_ratified"
             for d in decisions
         ), decisions
+
+        # A run the provider refused before any work (codex exits 0, so no rc>128 marker): its
+        # FAIL leaves the learners, a merged PASS is left as recorded, and both are counted.
+        refusal = "You've hit your usage limit. Try again at Jan 5th, 2099 3:11 AM."
+        for run_id, merged in (("refused-1", False), ("refused-2", True)):
+            feedback.record_run(run_id, "stranske/Repo#6", "testgen", "codex", mode="local")
+            feedback.record_outcome(
+                run_id,
+                adjudicated_verdict="PASS" if merged else "FAIL",
+                merged=merged,
+                durability="durable" if merged else "abandoned",
+            )
+            rlog = tmp / f"{run_id}.log"
+            rlog.write_text(
+                f"=== 2026-10-05T00:00:00Z dispatch codex/full -> stranske/Repo#6 [testgen] "
+                f"cwd=/tmp run_id={run_id} ===\n"
+                + json.dumps({"type": "turn.started"})
+                + "\n"
+                + json.dumps({"type": "turn.failed", "error": {"message": refusal}})
+                + "\n"
+            )
+            adapters.record_ledger(
+                "codex", count=1, event="start", run_id=run_id, log_file=str(rlog), ts=100
+            )
+        rsum = reconcile(adapters.LEDGER)
+        assert rsum["provider_limit_deaths"] == {
+            "seen": 2,
+            "classified": 1,
+            "excluded": 0,
+            "merged": 1,
+            "predates_rule": 0,
+            "no_outcome_row": 0,
+        }, rsum["provider_limit_deaths"]
+        with feedback._conn() as c:
+            refused = dict(
+                c.execute(
+                    "SELECT run_id, COALESCE(failure_class,'') FROM outcomes "
+                    "WHERE run_id LIKE 'refused-%'"
+                ).fetchall()
+            )
+        assert refused == {"refused-1": "transient_infra", "refused-2": ""}, refused
+        assert rate_incidents.INCIDENT_FILE.exists(), "the refusal must record an incident"
         print(
             "ledger_reconcile.py selftest: OK (completion rows, log usage parse, "
             "known-run guard, richer-source-preserving cost write, dry-run, "
-            "done-marker backfill for killed completions)"
+            "done-marker backfill for killed completions, provider refusal before any work)"
         )
     finally:
         feedback.DB_PATH = old_db
         adapters.HANDOFF = old_handoff
         adapters.LEDGER = old_ledger
+        for name, value in old_incident_paths.items():
+            setattr(rate_incidents, name, value)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
