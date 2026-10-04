@@ -194,11 +194,21 @@ _warn_unknown_disable_steps() {   # a typo must not read as a working switch
 # hourly while it stays stuck, and the next tick's first line says how the previous one ended.
 # REPORT-ONLY by the owner's decision (2026-10-02): it signals nothing. Active ticks only -- a
 # shadow run is attended. Kill switch: ORCH_DISABLE_STEPS=tick-watchdog.
-if [[ "$mode" == "active" ]]; then
+if [[ "$mode" == "active" && "${ORCH_WATCHDOG_TICK_PID:-}" != "$$" ]]; then
+  export ORCH_WATCHDOG_TICK_PID="$$"
   if _step_disabled tick-watchdog; then
     echo "  WARN: tick-watchdog disabled -- nothing watches this tick; a stuck step would hold it and every later tick, because launchd starts no tick while one runs"
   elif ! python3 "$ORCH/tick_watchdog.py" start --state-dir "$STAMP_DIR" --tick-pid "$$"; then
     echo "  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)"
+  fi
+fi
+
+# Reopen the tick only after acquiring the publisher's shared lock. The helper
+# descriptor stays in the tick shell across Python children and exec transitions.
+# Bash-c prologue inspection has no script file and must remain read-only.
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  if ! python3 "$ORCH/mirror_reader.py" check "$ORCH_REPO"; then
+    exec python3 "$ORCH/mirror_reader.py" run "$ORCH_REPO" /bin/bash "$ORCH_REPO/orchestrate.sh" "$@"
   fi
 fi
 

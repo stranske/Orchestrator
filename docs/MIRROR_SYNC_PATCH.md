@@ -657,8 +657,20 @@ fallback. Cleanup identifies the prepared inode so an exception immediately afte
 cannot delete the old runtime backing. Failure-injection tests cover both sides of the
 exchange and retry, alongside the production-kernel missing-path witness.
 
-This is a partial recovery, not an atomic-publication completion claim. Readers still
-need generation pinning, and creation
+The tick now reopens `orchestrate.sh` through `mirror_reader.py` after acquiring the
+publisher's shared lock. The inherited descriptor stays open in the shell while
+it waits for Python children, including children that close their own descriptors.
+Exec preserves the tick PID; the watchdog arms before any publication-lock wait
+and is retained across the restart. Inherited descriptors
+are checked against the mirror-specific lock inode; stale or other-mirror values
+cannot bypass acquisition. A synchronized production-publisher witness loads an
+old module in a Python child, reaches the installer's exclusive lock, reads again,
+and observes old bytes; publication then resumes and installs new bytes. The same
+witness sees new bytes on its second read with the original unlocked prologue.
+The cost is that a running tick delays publication until it exits.
+
+This is a partial recovery, not an atomic-publication completion claim. Standalone
+Python/launchd entry points outside this tick still need reader protection. Creation
 or atomic replacement of runtime leaves directly in mixed deployment/runtime directories
 is not covered by shared inodes. Cleanup/migration and the incumbent `--no-verify` copier
 still need the full source #389 acceptance witnesses. Installed wrappers remain unchanged

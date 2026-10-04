@@ -977,3 +977,133 @@ def test_atomic_exchange_fails_closed_when_unavailable(tmp_path, monkeypatch, un
     assert (mirror / "module.py").read_text() == "VALUE = 'old'\n"
     assert not list(mirror.parent.glob(mirror.name + ".next-*"))
     assert not list(mirror.parent.glob(mirror.name + ".retired-*"))
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_tick_reader_excludes_real_publisher_across_child_imports(tmp_path, monkeypatch, active):
+    """Replay the production prologue and install(), with a child spanning publication."""
+    import fcntl
+    import os
+    import threading
+
+    snapshot = _snapshot(tmp_path)
+    root = INSTALLER.parent.parent
+    prologue = (
+        (root / "orchestrate.sh")
+        .read_text()
+        .split("# --- Log rotation (every tick, cheap, fail-open)")[0]
+    )
+    child = (
+        "import sys; from pathlib import Path; import module, paths; "
+        "print(module.VALUE, flush=True); sys.stdin.readline(); "
+        "print((paths.MODULE_DIR / 'module.py').read_text().strip(), flush=True)"
+    )
+    import shlex
+
+    script = prologue + f"python3 -c {shlex.quote(child)}\n"
+    (snapshot / "orchestrate.sh").write_text(script)
+    (snapshot / "mirror_reader.py").write_bytes((root / "src/mirror_reader.py").read_bytes())
+    (snapshot / "paths.py").write_bytes((root / "src/paths.py").read_bytes())
+    (snapshot / "module.py").write_text("VALUE = 'old'\n")
+    watchdog_calls = tmp_path / "watchdog-calls"
+    (snapshot / "tick_watchdog.py").write_text(
+        "import sys; from pathlib import Path; "
+        f"p = Path({str(watchdog_calls)!r}); "
+        "p.open('a').write(sys.argv[sys.argv.index('--tick-pid') + 1] + '\\n')\n"
+    )
+    mirror = tmp_path / "live mirror"
+    installer.install(snapshot, mirror, installer.snapshot_digest(snapshot))
+    (snapshot / "module.py").write_text("VALUE = 'new'\n")
+    digest = installer.snapshot_digest(snapshot)
+    env = dict(
+        os.environ, ORCH_DIR=str(mirror), HOME=str(tmp_path), ORCH_STATE_DIR=str(tmp_path / "state")
+    )
+    env.pop("ORCH_PUBLICATION_READER_FD", None)
+    reader = subprocess.Popen(
+        ["/bin/bash", str(mirror / "orchestrate.sh"), *(["--active"] if active else [])],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=mirror,
+        env=env,
+    )
+    attempted = threading.Event()
+    errors = []
+    flock = fcntl.flock
+
+    def observed_flock(fd, operation):
+        if operation == fcntl.LOCK_EX:
+            attempted.set()
+        return flock(fd, operation)
+
+    monkeypatch.setattr(installer.fcntl, "flock", observed_flock)
+
+    def publish():
+        try:
+            installer.install(snapshot, mirror, digest)
+        except BaseException as error:
+            errors.append(error)
+
+    publisher = threading.Thread(target=publish, daemon=True)
+    try:
+        lines = []
+        while True:
+            line = reader.stdout.readline()
+            assert line, (lines, reader.stderr.read())
+            lines.append(line.strip())
+            if line.strip() == "old":
+                break
+        # A separate open description cannot acquire exclusive mode while the
+        # reader spans imports. This asserts kernel exclusion without a timing guess.
+        with (mirror.parent / f".{mirror.name}.publish.lock").open("a") as probe:
+            try:
+                flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                excluded = False
+            except BlockingIOError:
+                excluded = True
+        publisher.start()
+        assert attempted.wait(10), "production installer did not reach publication lock"
+        if not excluded:
+            # Negative control: let the unprotected publisher finish before the
+            # child's second read, making the mixed-generation failure deterministic.
+            publisher.join(15)
+            assert not publisher.is_alive()
+        reader.stdin.write("continue\n")
+        reader.stdin.flush()
+        output, error = reader.communicate(timeout=15)
+        assert reader.returncode == 0, error
+        if active:
+            assert watchdog_calls.read_text().splitlines() == [str(reader.pid)]
+        assert output.strip() == "VALUE = 'old'", "child crossed executable generations"
+        publisher.join(15)
+        assert not publisher.is_alive(), "publisher did not resume after reader exit"
+        assert not errors
+        assert (mirror / "module.py").read_text() == "VALUE = 'new'\n"
+    finally:
+        if reader.poll() is None:
+            reader.kill()
+            reader.communicate(timeout=10)
+        if publisher.ident is not None:
+            publisher.join(15)
+
+
+def test_tick_reader_rejects_stale_or_wrong_mirror_lock(tmp_path, monkeypatch):
+    import fcntl
+
+    import mirror_reader
+
+    root = tmp_path / "mirror"
+    root.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    monkeypatch.setenv(mirror_reader.LOCK_ENV, "999999")
+    assert not mirror_reader.inherited_lock(root)
+    with mirror_reader.lock_path(other).open("a") as wrong:
+        fcntl.flock(wrong.fileno(), fcntl.LOCK_SH)
+        monkeypatch.setenv(mirror_reader.LOCK_ENV, str(wrong.fileno()))
+        assert not mirror_reader.inherited_lock(root)
+    with mirror_reader.lock_path(root).open("a") as correct:
+        fcntl.flock(correct.fileno(), fcntl.LOCK_SH)
+        monkeypatch.setenv(mirror_reader.LOCK_ENV, str(correct.fileno()))
+        assert mirror_reader.inherited_lock(root)
