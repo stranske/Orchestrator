@@ -1491,6 +1491,7 @@ def _selftest_dispatch_policy(now: int) -> None:
                 "SELECT r.ts, r.routing_metadata, o.durability FROM runs r "
                 "JOIN outcomes o ON o.run_id=r.run_id WHERE r.run_id='policy-retry'"
             ).fetchone()
+        assert row is not None, "policy-retry"
         assert row[0] == earlier - 60 and row[2] == "durable", row
         assert json.loads(row[1])["policy_version"] == "policy-1", row
         assert json.loads(row[1])["attribution_source"] == "agent_label", row
@@ -1517,6 +1518,7 @@ def _selftest_dispatch_policy(now: int) -> None:
                 stored_metadata = c.execute(
                     "SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)
                 ).fetchone()
+                assert stored_metadata is not None, run_id
                 metadata = json.loads(stored_metadata[0])
             assert "policy_version" not in metadata, metadata
             if times:
