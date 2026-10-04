@@ -36,7 +36,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import adapters
 import capabilities
@@ -56,6 +56,18 @@ EXP_DIR = Path(os.environ.get("ORCH_EXP_DIR", ORCH / "experiments"))
 DISPATCH_LOG_DIR = (
     Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex" / "handoff")) / "dispatch-logs"
 )
+
+
+class ShipGateSummary(TypedDict):
+    stamp_age_s: int | None
+    hold_s: int
+    launch_available_at_start: bool
+    evaluated: int
+    launchable: int
+    launched: int
+    finished: int
+    inflight: bool
+
 
 # The reasoning/mode the ORCHESTRATOR would assign each agent for a complex, multi-file
 # integration implement — set deliberately, so the experiment tests the choice I'd actually make:
@@ -179,6 +191,33 @@ def _member_routing_metadata(member: dict[str, Any]) -> dict[str, Any]:
 
 def exp_paths(exp_id: str) -> Path:
     return EXP_DIR / exp_id
+
+
+# One ship-gate verdict a day. The stamp's age is measured against this constant and only this one
+# (latched-gate rule: the measuring window and the draining window share a name, never a pair of
+# literals), and the summary line prints it beside the age so a held gate reads as held.
+SHIP_GATE_HOLD_S = 86400
+
+
+def ship_gate_line(out: dict) -> str:
+    """One line with BOTH of the gate's numbers, for the tick log.
+
+    `evaluated N, launchable 0` beside a fresh stamp is the daily hold working. The same line for
+    weeks beside a stamp that never ages is the latch `persist_terminal_checkpoint` guards against.
+    A run that never reached the gate says so; "unmeasured" is never spelled as zero.
+    """
+    gate = out.get("ship_gate")
+    if not gate:
+        return "ship-gate: unmeasured (followup did not reach the gate)"
+    age = gate.get("stamp_age_s")
+    hold_h = int(gate.get("hold_s") or SHIP_GATE_HOLD_S) / 3600
+    age_txt = "no stamp yet" if age is None else f"stamp {age / 3600:.1f}h old, holds {hold_h:.0f}h"
+    empty = " — nothing to launch" if not gate.get("evaluated") else ""
+    return (
+        f"ship-gate: evaluated {gate['evaluated']}, launchable {gate['launchable']}, "
+        f"launched {gate['launched']}, finished {gate['finished']}, "
+        f"inflight {'yes' if gate.get('inflight') else 'no'} ({age_txt}){empty}"
+    )
 
 
 def ship_gate_stamp() -> Path:
@@ -1480,16 +1519,42 @@ def followup(
     )
     promotion_reconcile = promotion_reconcile_fn or synthesis_promotion.reconcile
     gate_stamp = ship_gate_stamp()
-    stamp_fresh = gate_stamp.exists() and (now - gate_stamp.stat().st_mtime) < 86400
+    stamp_age_s = (now - gate_stamp.stat().st_mtime) if gate_stamp.exists() else None
+    stamp_fresh = stamp_age_s is not None and stamp_age_s < SHIP_GATE_HOLD_S
     launch_available = not stamp_fresh
     promotion_inflight = False
     evaluator_dispatches = 0
     missing_spec_skips = 0
     max_missing_spec_skips = max(1, max_experiments * 10)
+    # The gate's two numbers, reported together: how many promotions were waiting in `evaluated`
+    # when this run looked, and for how many of them a launch was still available. The second one
+    # is what nobody could see while the stamp below was being re-touched every hour.
+    ship_gate: ShipGateSummary = {
+        "stamp_age_s": None if stamp_age_s is None else int(stamp_age_s),
+        "hold_s": SHIP_GATE_HOLD_S,
+        "launch_available_at_start": launch_available,
+        "evaluated": 0,
+        "launchable": 0,
+        "launched": 0,
+        "finished": 0,
+        "inflight": False,
+    }
+    out["ship_gate"] = ship_gate
 
-    def persist_terminal_checkpoint(edir: Path, state: dict) -> None:
+    def persist_terminal_checkpoint(edir: Path, state: dict, *, phase_before: str | None) -> None:
+        nonlocal launch_available
         phase = state.get("delivery_phase")
         if phase not in {"candidate_ready", "discarded", "durable"}:
+            return
+        # A FINISH HOLDS THE GATE ONCE; A FINISH THAT ALREADY HELD IT MAY NOT (2026-10-04). This
+        # used to run for every promotion that was ALREADY terminal, on every tick, and the
+        # `gate_stamp.touch()` below is the one-a-day hold on launches. With 256 finished
+        # promotions on disk the stamp was re-touched hourly, so `launch_available` was False at
+        # the start of every run from 2026-07-09 on: 254 of 256 evaluated candidates expired
+        # unlaunched after their 14-day TTL, the two launched before that made no commit, and
+        # nothing printed a launchable count (the JSON went to /dev/null and the ledger heartbeat
+        # fires only from the CLI). Only a promotion that reached this phase during THIS run holds.
+        if phase == phase_before and (edir / "ship-gate.json").exists():
             return
         verdict = (
             "use" if phase == "candidate_ready" else "durable" if phase == "durable" else "discard"
@@ -1505,15 +1570,40 @@ def followup(
         }
         (edir / "ship-gate.json").write_text(json.dumps(payload, indent=2) + "\n")
         gate_stamp.touch()
+        launch_available = False
+        ship_gate["finished"] += 1
+
+    # Read every promotion state ONCE before deciding anything. `promotion_inflight` used to be
+    # discovered in visit order, so an evaluated candidate that sorted before the running one
+    # could launch a second synthesis in the same run; the hourly re-touch of the stamp hid that
+    # by never letting a launch happen at all.
+    promotions = []
+    for edir in dirs:
+        try:
+            state = synthesis_promotion.load_state(edir)
+        except Exception as exc:
+            out["promotions"].append({"exp_id": edir.name, "error": str(exc)[:256]})
+            # An unreadable state may hide running synthesis. Preserve the file and reconcile
+            # readable promotions, but no candidate can safely launch during this run.
+            promotion_inflight = True
+            launch_available = False
+            continue
+        if state is not None:
+            promotions.append((edir, state))
+    synthesis_inflight_phases = {"synth_running", "synth_complete", "synth_verified"}
+    if any(s.get("delivery_phase") in synthesis_inflight_phases for _, s in promotions):
+        promotion_inflight = True
+        launch_available = False
 
     # Reconcile previously launched/evaluated promotions before discovering new
     # experiments. This is the resume path that the old eval-maps skip omitted.
-    for edir in dirs:
-        state = synthesis_promotion.load_state(edir)
-        if state is None:
-            continue
+    for edir, state in promotions:
         phase_before = state.get("delivery_phase")
         launch_fn = None
+        if phase_before == "evaluated":
+            ship_gate["evaluated"] += 1
+            if launch_available and not promotion_inflight:
+                ship_gate["launchable"] += 1
         if phase_before == "evaluated" and launch_available and not promotion_inflight:
             meta = json.loads((edir / "meta.json").read_text())
 
@@ -1531,12 +1621,13 @@ def followup(
                 mirror_fn=promotion_mirror_fn,
             )
             state = promotion["state"]
-            persist_terminal_checkpoint(edir, state)
+            persist_terminal_checkpoint(edir, state, phase_before=phase_before)
             actions = promotion.get("actions") or []
             if "synthesis_launched" in actions:
+                ship_gate["launched"] += 1
                 launch_available = False
             phase_after = state.get("delivery_phase")
-            if phase_after not in synthesis_promotion.TERMINAL_PHASES:
+            if phase_after in synthesis_inflight_phases:
                 promotion_inflight = True
                 launch_available = False
             out["promotions"].append(
@@ -1791,7 +1882,9 @@ def followup(
             ):
                 try:
                     synthesis_promotion.ensure_evaluated_state(edir, meta=meta, now=int(now))
+                    ship_gate["evaluated"] += 1
                     if launch_available and not promotion_inflight:
+                        ship_gate["launchable"] += 1
                         promotion = promotion_reconcile(
                             edir,
                             launch_fn=_bind_synthesis(synthesize_fn or synthesize, repo, edir.name),
@@ -1802,14 +1895,13 @@ def followup(
                             mirror_fn=promotion_mirror_fn,
                         )
                         promotion_state = promotion["state"]
-                        persist_terminal_checkpoint(edir, promotion_state)
+                        persist_terminal_checkpoint(edir, promotion_state, phase_before="evaluated")
                         entry["ship_gate"] = promotion_state["delivery_phase"]
                         entry["promotion_actions"] = promotion.get("actions") or []
+                        if "synthesis_launched" in entry["promotion_actions"]:
+                            ship_gate["launched"] += 1
                         launch_available = False
-                        if (
-                            promotion_state["delivery_phase"]
-                            not in synthesis_promotion.TERMINAL_PHASES
-                        ):
+                        if promotion_state["delivery_phase"] in synthesis_inflight_phases:
                             promotion_inflight = True
                     else:
                         entry["ship_gate"] = "queued_evaluated"
@@ -1842,6 +1934,7 @@ def followup(
                 }
             except Exception as exc:
                 out["processed"][-1]["redirect_corpus"] = {"error": str(exc)[:200]}
+    ship_gate["inflight"] = promotion_inflight
     return out
 
 
@@ -2223,7 +2316,13 @@ def main(argv):
         return 0
     if cmd == "followup":
         max_exp = int(argv[argv.index("--max") + 1]) if "--max" in argv else 1
-        print(json.dumps(followup(max_experiments=max_exp), indent=2, default=str))
+        result = followup(max_experiments=max_exp)
+        if "--summary-line" in argv:
+            # The tick prints this one line. The JSON used to go to /dev/null, so the ship gate
+            # had no visible numbers at all while it was latched (2026-07-09 .. 2026-10-04).
+            print(ship_gate_line(result))
+        else:
+            print(json.dumps(result, indent=2, default=str))
         return 0
     if cmd == "collect":
         print(json.dumps(collect(argv[1], argv[2]), indent=2, default=str))

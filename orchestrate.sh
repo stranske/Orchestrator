@@ -389,7 +389,11 @@ if [[ "$mode" == "active" ]]; then
   # Judge scores AND objective anchors both record inside evaluate(). Per-tick retry is intended
   # (no daily stamp): failures here must not go quiet for a day.
   echo "  [cadence] experiment follow-up (collect+evaluate finished A/B/C runs)"
-  python3 "$ORCH/exp_abcd.py" followup >/dev/null 2>&1 || echo "  warn: experiment followup failed (continuing)"
+  # One line with both of the ship gate's numbers (`evaluated N, launchable M`). The JSON went to
+  # /dev/null before, which is how a stamp re-touched every hour held every launch for 87 days
+  # (2026-07-09 .. 10-04) with nothing in this log to show it.
+  followup_line=$(python3 "$ORCH/exp_abcd.py" followup --summary-line 2>/dev/null) || echo "  warn: experiment followup failed (continuing)"
+  if [[ -n "${followup_line:-}" ]]; then echo "  $followup_line"; fi
 else
   # SHADOW: print what the remote tick WOULD delegate; applies NO labels, no heartbeat, no ingest writes.
   python3 "$ORCH/tick.py" --summary
