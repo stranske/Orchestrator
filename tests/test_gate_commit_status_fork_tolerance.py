@@ -328,6 +328,7 @@ STATUS_CASES: list[dict[str, Any]] = [
         "error": {"status": 403, "message": "Forbidden", "headers": {"retry-after": "60"}},
     },
     {"name": "written", **FORK, "state": "success", "error": None},
+    {"name": "same_repo_written", **SAME_REPO, "state": "success", "error": None},
 ]
 
 COMMENT_CASES: list[dict[str, Any]] = [
@@ -424,14 +425,29 @@ def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
     assert _verdict_written_to_summary(case, "success"), case
 
 
-@pytest.mark.parametrize("name", ["same_repo_success", "same_repo_failure", "same_repo_404"])
-def test_a_same_repo_refusal_fails_loudly(status: dict, name: str) -> None:
+@pytest.mark.parametrize(
+    "name,state",
+    [
+        ("same_repo_success", "success"),
+        ("same_repo_failure", "failure"),
+        ("same_repo_404", "success"),
+    ],
+)
+def test_a_same_repo_refusal_fails_loudly(status: dict, name: str, state: str) -> None:
     """A refused same-repository status must not leave a stale verdict silently."""
     case = status[name]
     assert case["threw"] is not None, case
-    assert "Same-repository Gate status publication was refused" in case["threw"]["message"], case
+    assert case["threw"]["message"] == (
+        "Same-repository Gate status publication was refused for headsha; "
+        f"computed verdict '{state}' was not published."
+    ), case
+    assert len(case["statusRequests"]) == 1, case
+    request = case["statusRequests"][0]
+    assert request["sha"] == "headsha" and request["state"] == state, case
+    assert request["context"] == "Gate / gate", case
     assert case["summaryWrites"] == 0, case
     assert any("blocked by permissions" in w for w in case["warnings"]), case
+    assert not any("read-only" in w for w in case["warnings"]), case
 
 
 def test_a_rate_limited_post_keeps_its_own_path(status: dict) -> None:
@@ -458,20 +474,21 @@ def test_other_post_errors_stay_loud(status: dict) -> None:
 
 
 def test_a_written_status_is_silent(status: dict) -> None:
-    case = status["written"]
-    assert case["threw"] is None and case["failures"] == [] and case["warnings"] == [], case
-    assert case["summaryWrites"] == 0, case
-    assert case["statusRequests"] == [
-        {
-            "owner": "stranske",
-            "repo": "Orchestrator",
-            "sha": "headsha",
-            "state": "success",
-            "context": "Gate / gate",
-            "description": "all checks passed",
-            "target_url": "https://example.invalid/run",
-        }
-    ], case
+    for name in ("written", "same_repo_written"):
+        case = status[name]
+        assert case["threw"] is None and case["failures"] == [] and case["warnings"] == [], case
+        assert case["summaryWrites"] == 0, case
+        assert case["statusRequests"] == [
+            {
+                "owner": "stranske",
+                "repo": "Orchestrator",
+                "sha": "headsha",
+                "state": "success",
+                "context": "Gate / gate",
+                "description": "all checks passed",
+                "target_url": "https://example.invalid/run",
+            }
+        ], case
 
 
 # ---- the summary-comment writer ----------------------------------------------------------------
