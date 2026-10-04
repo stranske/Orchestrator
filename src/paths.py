@@ -50,6 +50,20 @@ FLEET_ROOT = REPO_ROOT.parent
 # and an implicit `sys.path` accident is how that dependency would rot silently.
 TESTS_DIR = REPO_ROOT / "tests"
 
+# Registries that SEED themselves on a first load, at MODULE_DIR/experiments/<file>, unless the named
+# variable points elsewhere: features.py and capabilities.py read ORCH_FEATURES_PATH,
+# repo_knowledge.py ORCH_REPO_KNOWLEDGE_PATH, research_scheduler.py ORCH_HYP_PATH. In the flat exec
+# mirror those default paths are deployment-owned (install_verified_snapshot.OWNED_FILES), so a run
+# that loads one without its variable writes into the tree being deployed; on 2026-10-04 that VOIDed
+# every verified sync from a clean clone. Anything that runs the modules in a sandbox points all of
+# these at the sandbox. scripts/verify_before_sync.sh sets the same three, and
+# tests/test_verify_before_sync.py checks both the loaders and the script against this map.
+SEEDED_REGISTRY_ENV = {
+    "ORCH_FEATURES_PATH": "features.json",
+    "ORCH_REPO_KNOWLEDGE_PATH": "repo_knowledge.json",
+    "ORCH_HYP_PATH": "hypotheses.json",
+}
+
 
 def checkout_root(module_dir: Path) -> Path:
     """Apply the rule to an ARBITRARY module dir, not just this file's.
