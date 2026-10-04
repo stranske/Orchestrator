@@ -13,6 +13,22 @@ from scripts import install_verified_snapshot as installer
 import paths
 
 INSTALLER = paths.REPO_ROOT / "scripts" / "install_verified_snapshot.py"
+_LOG_ROTATION = "# --- Log rotation (every tick, cheap, fail-open)"
+_GH_PREFLIGHT = "# ORCH-ANCHOR: gh-auth-preflight"
+_HEARTBEAT_EXPORT = "# ORCH-ANCHOR: heartbeat-export"
+
+
+def _orchestrate_tick_prologue() -> str:
+    """Production tick preamble through mirror_reader, skipping log rotation only.
+
+    mirror_reader re-entry moved below gh-auth-preflight (after log rotation); replay
+    tests must still execute the same reader exclusion the launchd tick uses.
+    """
+    text = (paths.REPO_ROOT / "orchestrate.sh").read_text()
+    head, _rest = text.split(_LOG_ROTATION, 1)
+    tail = text.split(_GH_PREFLIGHT, 1)[1]
+    reader_block = _GH_PREFLIGHT + tail.split(_HEARTBEAT_EXPORT, 1)[0]
+    return head + reader_block
 
 
 def _snapshot(tmp_path: Path) -> Path:
@@ -988,11 +1004,7 @@ def test_tick_reader_excludes_real_publisher_across_child_imports(tmp_path, monk
 
     snapshot = _snapshot(tmp_path)
     root = INSTALLER.parent.parent
-    prologue = (
-        (root / "orchestrate.sh")
-        .read_text()
-        .split("# --- Log rotation (every tick, cheap, fail-open)")[0]
-    )
+    prologue = _orchestrate_tick_prologue()
     child = (
         "import sys; from pathlib import Path; import module, paths; "
         "print(module.VALUE, flush=True); sys.stdin.readline(); "
