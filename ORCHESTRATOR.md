@@ -500,9 +500,13 @@ cursor-agent live outside the default PATH):
   resolves the deterministic `orchestrator/issue-N` branch opened by local delegates. The daily cadence runs
   local ingest fail-open so dry-seam reports surface only runs whose PR state is still unavailable/open.
   If a local delegate's branch never produced a PR and the target issue is already closed, local ingest
-  records an abandoned outcome so stale no-PR branch gaps do not remain permanently actionable.
-  Dry-run output includes `skipped_details`, distinguishing `open_pr` waits from `no_pr_for_branch` join gaps,
-  and `pending_durability_details` for already-recorded merged outcomes waiting on the durability sweep.
+  records an abandoned outcome so stale no-PR branch gaps do not remain permanently actionable. That
+  verdict (and remote ingest's) needs every candidate branch to ANSWER "no PR": a lookup gh could not
+  answer (`lookup_failed`, `parse_failed`, `issue_lookup_failed`) records nothing, is retried at the next
+  ingest, and is counted in the summary's `unanswered` (2026-10-04; an unknown is not an abandonment).
+  Dry-run output includes `skipped_details`, distinguishing `open_pr` waits from `no_pr_for_branch` join gaps
+  and from unanswered lookups, and `pending_durability_details` for already-recorded merged outcomes
+  waiting on the durability sweep.
   `durability_sweep.py` later resolves merged pending outcomes after the grace window; when an issue-target
   run's outcome notes explicitly say `PR #N merged`, the sweep checks that PR for age/reverts instead of
   leaving the source issue target permanently pending.

@@ -11,7 +11,9 @@ durability pass (3b) downgrades merges that get reverted/reworked/reopened. The 
 Local delegates target issues, not PRs, so `--mode local` resolves the deterministic
 `orchestrator/issue-N` branch back to the PR state. If that branch never produced a PR and the target
 issue is already closed, the local run is terminal and records an abandoned outcome instead of staying a
-permanent no-PR join gap. `--selftest` runs fully offline (mocked PR states + temp store).
+permanent no-PR join gap. That verdict needs every candidate branch to have ANSWERED "no PR here": a
+lookup that could not answer leaves the run pending, retried at the next ingest, and counted in the
+summary's `unanswered`. `--selftest` runs fully offline (mocked PR states + temp store).
 """
 
 from __future__ import annotations
@@ -23,6 +25,14 @@ import sys
 
 import feedback
 import provision
+
+# A GitHub lookup here answers one of three ways: it FOUND the thing, it answered that there is
+# NOTHING there, or it could not answer (gh failed, or printed something that does not parse). Only
+# the second is evidence of absence. Reading the third as the second recorded a closed issue whose
+# branch lookups had all failed as `abandoned`: an unknown written into the outcome labels the router
+# learns from. So an unanswered lookup ends the resolution, the run is skipped with no outcome row,
+# and the next ingest asks again. One set, read by the resolvers and by the summary's count.
+UNANSWERED_LOOKUPS = frozenset({"lookup_failed", "parse_failed", "issue_lookup_failed"})
 
 
 def _pr_state(target: str, agent: str | None = None) -> dict | None:
@@ -93,11 +103,30 @@ def _pr_list_by_head(repo: str, branch: str) -> dict | None:
         arr = json.loads(r.stdout)
     except Exception:
         return {"lookup_status": "parse_failed", "branch": branch}
+    # None is reserved for GitHub answering "no PR has this head": only an empty LIST says that.
+    # `{}` or `null` is falsy too, and reading it as an answer would be the same unknown-as-no.
+    if not isinstance(arr, list) or (arr and not isinstance(arr[0], dict)):
+        return {"lookup_status": "parse_failed", "branch": branch}
     if not arr:
         return None
     arr[0]["lookup_status"] = "found"
     arr[0]["branch"] = branch
     return arr[0]
+
+
+def _branch_pr_lookup(repo: str, branches: list[str]) -> dict | None:
+    """Ask each candidate branch in order; return the first answer that is not "no PR here".
+
+    That answer is a FOUND PR or a lookup that could not answer, and either one ends the walk: a PR
+    found after an unanswered branch might not be the preferred branch's PR, and an all-clear after
+    it would read the unanswered branch as empty. None means every candidate branch answered "no PR
+    here", which is the only result the closed-issue abandonment verdict may be built on.
+    """
+    for branch in branches:
+        answer = _pr_list_by_head(repo, branch)
+        if answer is not None:
+            return answer
+    return None
 
 
 def _remote_issue_pr_state(
@@ -115,31 +144,26 @@ def _remote_issue_pr_state(
     for fallback_agent in ("codex", "cursor", "claude", "gemini"):
         candidate_branches.append(f"{fallback_agent}/issue-{num}")
     candidate_branches.append(f"orchestrator/issue-{num}")
-    seen: set[str] = set()
-    for branch in candidate_branches:
-        if branch in seen:
-            continue
-        seen.add(branch)
-        pr = _pr_list_by_head(repo, branch)
-        if pr and pr.get("lookup_status") == "found":
-            pr["target"] = f"{repo}#{num}"
-            pr["direct_lookup_error"] = direct_failure.get("error")
-            return pr
-        if isinstance(pr, dict) and pr.get("lookup_status") == "lookup_failed":
-            continue
+    branches = list(dict.fromkeys(candidate_branches))
+    pr = _branch_pr_lookup(repo, branches)
+    if pr is not None:
+        # FOUND: its state decides. Unanswered: it carries no state, so the run is skipped.
+        pr["target"] = f"{repo}#{num}"
+        pr["candidateBranches"] = sorted(branches)
+        pr["direct_lookup_error"] = direct_failure.get("error")
+        return pr
 
-    terminal_issue = _closed_issue_without_branch_pr(
-        repo, num, next(iter(seen), f"{agent or 'agent'}/issue-{num}")
-    )
-    if terminal_issue:
-        terminal_issue["lookup_status"] = "closed_issue_no_remote_pr"
-        terminal_issue["candidateBranches"] = sorted(seen)
+    terminal_issue = _closed_issue_without_branch_pr(repo, num, branches[0])
+    if terminal_issue is not None:
+        if terminal_issue["lookup_status"] == "closed_issue_no_branch_pr":
+            terminal_issue["lookup_status"] = "closed_issue_no_remote_pr"
+        terminal_issue["candidateBranches"] = sorted(branches)
         terminal_issue["direct_lookup_error"] = direct_failure.get("error")
         return terminal_issue
     return {
         "lookup_status": "no_pr_for_remote_issue_branch",
         "target": f"{repo}#{num}",
-        "candidateBranches": sorted(seen),
+        "candidateBranches": sorted(branches),
         "direct_lookup_error": direct_failure.get("error"),
     }
 
@@ -201,21 +225,14 @@ def _local_pr_state(target: str, agent: str | None = None) -> dict | None:
         return direct_pr
 
     candidates = _local_candidate_branches(num, agent)
-    first_failure: dict | None = None
-    for branch in candidates:
-        pr = _pr_list_by_head(repo, branch)
-        if pr and pr.get("lookup_status") == "found":
-            pr["target"] = target
-            return pr
-        if isinstance(pr, dict) and pr.get("lookup_status") == "lookup_failed":
-            first_failure = pr
-
-    if first_failure:
-        first_failure["target"] = target
-        first_failure["candidateBranches"] = candidates
-        return first_failure
+    pr = _branch_pr_lookup(repo, candidates)
+    if pr is not None:
+        # FOUND: its state decides. Unanswered: it carries no state, so the run is skipped.
+        pr["target"] = target
+        pr["candidateBranches"] = candidates
+        return pr
     terminal_issue = _closed_issue_without_branch_pr(repo, num, candidates[0])
-    if terminal_issue:
+    if terminal_issue is not None:
         terminal_issue["candidateBranches"] = candidates
         return terminal_issue
     return {
@@ -230,7 +247,15 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
     """When a local delegate never opened its deterministic PR branch but the issue is now closed,
     the run is terminal: no future PR state can arrive for that branch. Treat it as abandoned so the
     outcome gap does not remain permanently actionable.
+
+    Three answers: the closed-issue dict, None when GitHub answered and the issue is not closed, or
+    an `issue_lookup_failed` dict when gh could not say. The last carries no state, so it is skipped.
     """
+    unanswered = {
+        "lookup_status": "issue_lookup_failed",
+        "target": f"{repo}#{num}",
+        "branch": branch,
+    }
     r = subprocess.run(
         [
             "gh",
@@ -246,12 +271,14 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
         text=True,
     )
     if r.returncode != 0:
-        return None
+        return {**unanswered, "error": (r.stderr or r.stdout or "").strip()[:500]}
     try:
         issue = json.loads(r.stdout)
     except Exception:
-        return None
-    if (issue.get("state") or "").upper() != "CLOSED":
+        issue = None
+    if not isinstance(issue, dict) or not isinstance(issue.get("state"), str):
+        return {**unanswered, "error": "gh issue view printed no issue state"}
+    if issue["state"].upper() != "CLOSED":
         return None
     return {
         "lookup_status": "closed_issue_no_branch_pr",
@@ -269,8 +296,8 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
 def state_to_outcome(pr: dict | None) -> dict | None:
     """Pure: map a gh PR state -> feedback.record_outcome kwargs. OPEN -> None (still pending, re-check
     later). MERGED -> success with durability='pending' (a later sweep confirms it actually held).
-    CLOSED-unmerged -> abandoned failure."""
-    if not pr:
+    CLOSED-unmerged -> abandoned failure. A lookup that could not answer maps to nothing."""
+    if not pr or pr.get("lookup_status") in UNANSWERED_LOOKUPS:
         return None
     st = (pr.get("state") or "").upper()
     if st == "MERGED" or pr.get("mergedAt"):
@@ -429,6 +456,9 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
         "pending": len(pending),
         "recorded": len(recorded),
         "skipped": len(skipped),
+        # Skipped because GitHub could not answer, not because the work is still open: each one is
+        # retried next ingest. Always present, so a clean run reads `0` rather than a missing key.
+        "unanswered": sum(1 for row in skipped if row["reason"] in UNANSWERED_LOOKUPS),
         "pending_durability": len(pending_durability),
         "details": recorded,
         "skipped_details": skipped,
@@ -459,6 +489,7 @@ def ingest_modes(
         "pending": sum(row.get("pending", 0) for row in results),
         "recorded": sum(row.get("recorded", 0) for row in results),
         "skipped": sum(row.get("skipped", 0) for row in results),
+        "unanswered": sum(row.get("unanswered", 0) for row in results),
         "pending_durability": sum(row.get("pending_durability", 0) for row in results),
         "skipped_details": skipped_details,
         "pending_durability_details": pending_durability_details,
@@ -605,12 +636,45 @@ def _selftest():
     both_skips = [row for result in both["results"] for row in result.get("skipped_details", [])]
     assert any(row["reason"] == "open_pr" for row in both_skips), both
     assert any(row["reason"] == "state_unavailable" for row in both_skips), both
+    assert both["unanswered"] == 0, both
+    # A lookup that cannot answer is not "no PR": every branch lookup rate-limited while the issue
+    # reads CLOSED must write NO outcome row (skipped, counted unanswered), and the next ingest that
+    # gets answers records the real verdict. Own store, so only this run is pending; stubbed gh.
+    feedback.DB_PATH = Path(tmp) / "unanswered.db"
+    feedback.record_run("remote:o/r#8:codex", "o/r#8", "implement", "codex", mode="remote")
+    real_run = subprocess.run
+
+    def _gh(pr_list: tuple):
+        def fake_run(argv, **_kw):
+            if argv[1:3] == ["pr", "list"]:
+                return subprocess.CompletedProcess(argv, *pr_list)
+            if argv[1:3] == ["issue", "view"]:
+                return subprocess.CompletedProcess(argv, 0, json.dumps({"state": "CLOSED"}), "")
+            return subprocess.CompletedProcess(argv, 1, "", "not a pull request")
+
+        return fake_run
+
+    try:
+        subprocess.run = _gh((1, "", "API rate limit exceeded"))
+        rate_limited = ingest_outcomes(mode="remote")
+        subprocess.run = _gh((0, "[]", ""))
+        answered = ingest_outcomes(mode="remote")
+    finally:
+        subprocess.run = real_run
+    assert (rate_limited["recorded"], rate_limited["unanswered"]) == (0, 1), (
+        "unanswered branch lookups reached the closed-issue verdict",
+        rate_limited,
+    )
+    assert rate_limited["skipped_details"][0]["reason"] == "lookup_failed", rate_limited
+    assert (answered["recorded"], answered["unanswered"]) == (1, 0), answered
+    assert answered["details"][0]["durability"] == "abandoned", answered
     import shutil
 
     shutil.rmtree(tmp, ignore_errors=True)
     print(
         "outcomes.py selftest: OK (state->outcome mapping, ingest records merged/abandoned, "
-        "open skipped, merged stays pending for durability sweep)"
+        "open skipped, merged stays pending for durability sweep, unanswered lookups skipped "
+        "and retried rather than abandoned)"
     )
 
 
