@@ -86,7 +86,7 @@ class MirrorGenerationTests(unittest.TestCase):
             installer._remove_owned_file(mirror / relative)
         installer._copy_payload(payload, mirror, entries)
 
-    def observe_across_publications(self, guarded, tick_mode=None):
+    def observe_across_publications(self, guarded, tick_mode=None, extra_import_paths=()):
         self.publish()
         pinned = self.mirror.resolve()
         command = [sys.executable, str(self.mirror / "observer.py")]
@@ -104,7 +104,7 @@ class MirrorGenerationTests(unittest.TestCase):
             ]
         env = dict(
             os.environ,
-            PYTHONPATH=str(self.mirror),
+            PYTHONPATH=os.pathsep.join([str(self.mirror), *map(str, extra_import_paths)]),
             ORCH_DIR=str(self.mirror),
             HOME=str(self.root),
             ORCH_STATE_DIR=str(self.root / "state"),
@@ -158,6 +158,33 @@ class MirrorGenerationTests(unittest.TestCase):
                 reader.communicate(timeout=10)
             if publisher.ident is not None:
                 publisher.join(15)
+
+    def test_inherited_import_paths_exclude_later_generation_modules(self):
+        external = self.root / "external"
+        external.mkdir()
+        (external / "unrelated.py").write_text("VALUE = 'external'\n")
+        observer = OBSERVER.replace(
+            "import peer\n",
+            "import importlib.util\n"
+            "import unrelated\n"
+            "assert unrelated.VALUE == 'external'\n"
+            "assert importlib.util.find_spec('later_only') is None, 'crossed generations'\n"
+            "import peer\n",
+        )
+        (self.snapshot / "observer.py").write_text(observer)
+        original = self.set_value
+
+        def add_later_module(value):
+            original(value)
+            (self.snapshot / "scripts/later_only.py").write_text("VALUE = 'new'\n")
+
+        self.set_value = add_later_module
+        observed, pinned = self.observe_across_publications(
+            guarded=True, extra_import_paths=(self.mirror / "scripts", external)
+        )
+        self.assertTrue((self.mirror / "scripts/later_only.py").is_file())
+        self.assertEqual(observed[0], "old")
+        self.assertNotEqual(pinned, self.mirror.resolve())
 
     def test_tick_and_child_imports_remain_pinned_while_publication_completes(self):
         text = (REPO / "orchestrate.sh").read_text()

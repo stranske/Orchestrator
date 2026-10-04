@@ -84,7 +84,12 @@ def run(root: Path, command: list[str]) -> int:
                 "PYTHONPATH": os.pathsep.join(
                     [
                         str(modules),
-                        *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep)),
+                        *(
+                            pin_argument(entry)
+                            for entry in filter(
+                                None, os.environ.get("PYTHONPATH", "").split(os.pathsep)
+                            )
+                        ),
                     ]
                 ),
             },
