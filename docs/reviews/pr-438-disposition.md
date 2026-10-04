@@ -90,6 +90,17 @@ snapshot. Both logs report the bare shape and ceilings 47/7/2.
   matched builder bytes and permission bits, excluding only its Workflows registry. `gh`
   was stubbed with an empty registry; this does not validate the live registry fetch or the
   installed copier.
+- The follow-up adds four executable Node contract witnesses in
+  `tests/test_exec_mirror_contract_witness.js`, using Python's standard library and synthetic
+  repositories. [Retained output and source binding checks](pr-438-contract-witness.json)
+  record **4 passed, 0 failed, 0 skipped** against the complete bound inputs. All 22 manifest
+  bindings matched before and after the run. The current checkout's floor had moved, so its
+  historical blob was restored only in an isolated scratch checkout. The witnesses independently
+  mutate source candidates, compare copier bytes and modes, test every present/unreadable
+  machine mark, and check all three shape selections and each defined ceiling boundary. They
+  validate the configured ceilings, not a final-head whole-suite measurement. The provisioned
+  mirror's omitted selftest/gate ceiling keys correctly fall back to the base floor values.
+  Existing source and deployment collectors also passed their 15 and 18 Node tests.
 
 The exact-head floor has `collected=1566`, base test skips 26, provisioned-mirror skips 21,
 and bare-mirror ceilings 47/7/2. The PR's reported 1464 collection count and the break logs
@@ -118,10 +129,16 @@ retained. The overall acceptance criteria remain open pending the named actions 
 
 ## Delivery limitation for this run
 
-The workspace's `.git` is read-only, so the source/test/evidence change was committed in
-an isolated repository at `/tmp/orch-pr438-evidence-commit`, with PR #445's current head
-`b78a7f8dd474138ee5dc34b64277a3ebd845bde3` as its parent. Authenticated connector publication
-was rejected: GitHub writes require approval, while this session's approval policy is
-`never`. No remote commit or PR-body update was made. The verified checkboxes above describe
-local evidence, not a remote acceptance update. Stranske or the next worker with Git write
-access must publish the retained commit/patch and update only those verified task boxes.
+The previous acquisition change is now published in PR #445 at
+`2ec3907fc86413d0968afcd8a80f79115d9d6af5`. This follow-up rechecked all 22 local blobs and
+re-read the two authenticated run/job logs and the original PR's provisioned-machine claim.
+That claim still has no independently retrieved machine receipt.
+
+The workspace's `.git` is read-only. The follow-up test/evidence change is retained in an
+isolated repository at `/tmp/orch-pr438-contract-review`, based on that published head.
+Authenticated PR-body reconciliation was rejected: GitHub writes require approval, while
+this session's approval policy is `never`. The proposed body is retained at
+`/tmp/pr445-reconciled-body.md`, checking only the first two task occurrences in both lists.
+No remote acceptance update was made. Stranske or the next worker with Git write access
+must publish the retained commit/patch and apply that verified reconciliation. PR #445
+was observed open and ready for review. The independent Sol review remains UNKNOWN.

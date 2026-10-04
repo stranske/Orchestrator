@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "repository": "stranske/Orchestrator",
+  "pr_number": 438,
+  "head_sha": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+  "source_manifest": "pr-438-source-evidence.json",
+  "original_comparison": "https://github.com/stranske/Orchestrator/pull/438#issuecomment-5984380511",
+  "checked_bindings": 22,
+  "bindings_match_before_and_after": true,
+  "historical_floor_restored_in_scratch": true,
+  "witness": {
+    "path": "tests/test_exec_mirror_contract_witness.js",
+    "sha256": "db793131936738d570519ccba8a2897c35e44b5b295003511b147fd155b48a6a",
+    "command": "node --test --test-isolation=none tests/test_exec_mirror_contract_witness.js",
+    "exit_code": 0,
+    "tests": 4,
+    "passed": 4,
+    "failed": 0,
+    "skipped": 0,
+    "output": "\u2714 installer owns every builder-shipped leaf in a superset of source inputs (286.020685ms)\n\u2714 each input that changes builder output also changes the pre-sync source identity (4233.110058ms)\n\u2714 documented copier matches builder bytes and modes and refuses a missing builder (368.827372ms)\n\u2714 every unreadable machine mark keeps strict mirror ceilings; verdict and rendering agree (295.59662ms)\n\u2139 tests 4\n\u2139 suites 0\n\u2139 pass 4\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 5203.916533\n"
+  },
+  "observed_floor": {
+    "collected": 1566,
+    "skipped_max": 26,
+    "mirror_skipped_max": 21,
+    "bare_mirror_skipped_max": 47,
+    "selftest_skipped_max": 7,
+    "gate_skipped_max": 2,
+    "bare_mirror_selftest_skipped_max": 7,
+    "bare_mirror_gate_skipped_max": 2
+  },
+  "findings": [
+    "All builder-shipped leaves in the synthetic superset are installer-owned, including AGENTS.md and ORCHESTRATOR.md.",
+    "Each independently mutated candidate that changed the built mirror also changed the pre-sync source identity.",
+    "Documented copier matches builder bytes and modes except the stubbed Workflows registry and refuses a missing builder before writing.",
+    "Each unreadable detector and each present local mark prevents bare classification; all three shape selections and every defined ceiling boundary agree with rendering."
+  ],
+  "limitations": [
+    "Synthetic source fixture; no installed deployment or live registry fetch.",
+    "Machine marks are controlled probes; no provisioned-machine observation.",
+    "Boundary checks validate configured limits, not final-head whole-suite collection or skip measurements.",
+    "No independent Sol lane review or complete changed-code adjudication."
+  ],
+  "review_status": "PENDING",
+  "deployment_status": "NOT_OBSERVED",
+  "remaining_unknown": [
+    {
+      "evidence": "Full exact-head pytest regression suite",
+      "status": "UNKNOWN",
+      "owner": "imi-merge-verify-closer operated by stranske",
+      "next_action": "Install pytest in the existing Sol lane, run the nine-file focused suite in pr-438-disposition.md against bound source and retain exact-head output."
+    },
+    {
+      "evidence": "Provisioned-machine copier/builder receipt",
+      "status": "UNKNOWN",
+      "owner": "stranske, provisioned-machine operator",
+      "next_action": "Supply the recorded 57a828d receipt and bound copier bytes or reproduce on final head."
+    },
+    {
+      "evidence": "Independent Sol review and final disposition",
+      "status": "UNKNOWN",
+      "owner": "imi-merge-verify-closer operated by stranske",
+      "next_action": "Review complete bound source, reconcile the historical evidence and remaining gaps, and retain final adjudication linked to the original comparison."
+    }
+  ]
+}
