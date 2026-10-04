@@ -335,6 +335,52 @@ def _merge_runtime_content(
             destination.symlink_to(retained / relative)
 
 
+def _under_runtime_symlink(staging: Path, relative: Path) -> bool:
+    current = staging
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
+def _merge_residual_runtime_content(
+    live: Path,
+    staging: Path,
+    entries: set[Path],
+    prior_docs: list[Path],
+    retained: Path,
+) -> None:
+    """Merge runtime leaves that appeared on live after the primary merge pass."""
+
+    if not live.exists():
+        return
+    retired_shipped_docs = set(prior_docs) - set(_shipped_docs(staging / ".docs-shipped.txt"))
+    for path in sorted(
+        live.rglob("*"), key=lambda candidate: (len(candidate.parts), str(candidate))
+    ):
+        relative = path.relative_to(live)
+        if path.is_dir() and not path.is_symlink():
+            continue
+        if not path.is_file() and not path.is_symlink():
+            continue
+        if _deployment_owned_relative(relative, entries):
+            continue
+        if relative in retired_shipped_docs:
+            continue
+        if _under_runtime_symlink(staging, relative):
+            continue
+        destination = staging / relative
+        if destination.exists() or destination.is_symlink():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink():
+            destination.symlink_to(os.readlink(path))
+            shutil.copystat(path, destination, follow_symlinks=False)
+        else:
+            destination.symlink_to(retained / relative)
+
+
 def _exchange_directories(left: Path, right: Path) -> None:
     """Exchange two existing directory entries in one kernel operation.
 
@@ -394,6 +440,7 @@ def _publish_generation(
     try:
         _copy_payload(payload, staging, entries)
         _merge_runtime_content(mirror, staging, entries_set, prior_docs, retired)
+        _merge_residual_runtime_content(mirror, staging, entries_set, prior_docs, retired)
         installed_digest = snapshot_digest(staging)
         if installed_digest != expected_digest:
             raise RuntimeError(

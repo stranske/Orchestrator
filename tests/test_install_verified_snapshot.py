@@ -918,6 +918,35 @@ def test_runtime_writes_after_transfer_survive_switch_and_retry(tmp_path, monkey
     assert (mirror / "docs/reports/late.md").read_text() == "late creation\n"
 
 
+def test_new_runtime_leaf_in_mixed_directory_survives_publication_and_retry(tmp_path, monkeypatch):
+    """Runtime-only files created during publication in a mixed deployment/runtime tree."""
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    mixed = mirror / "experiments"
+    mixed.mkdir()
+    (mixed / "hypotheses.json").write_text("runtime copy\n")
+    marker = mixed / ".last-ship-gate"
+    marker.write_text("before\n")
+    expected = installer.snapshot_digest(snapshot)
+    transfer = installer._merge_runtime_content
+    new_leaf = mixed / "runtime-spawn.json"
+
+    def transfer_then_create(*args, **kwargs):
+        transfer(*args, **kwargs)
+        new_leaf.write_text('{"created": "during transfer"}\n')
+
+    monkeypatch.setattr(installer, "_merge_runtime_content", transfer_then_create)
+    assert installer.install(snapshot, mirror, expected, registry) == 0
+    assert new_leaf.read_text() == '{"created": "during transfer"}\n'
+    assert marker.read_text() == "before\n"
+    assert (mixed / "hypotheses.json").read_text() == "{}\n"
+    new_leaf.write_text('{"created": "after publication"}\n')
+    monkeypatch.setattr(installer, "_merge_runtime_content", transfer)
+    assert installer.install(snapshot, mirror, expected, registry) == 0
+    assert new_leaf.read_text() == '{"created": "after publication"}\n'
+    assert installer.snapshot_digest(mirror) == expected
+
+
 def test_runtime_leaf_atomic_replacement_survives_publication_and_retry(tmp_path, monkeypatch):
     snapshot = _snapshot(tmp_path)
     mirror, registry = _live_outputs(tmp_path)

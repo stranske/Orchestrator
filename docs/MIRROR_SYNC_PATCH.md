@@ -683,9 +683,10 @@ This is a partial recovery, not an atomic-publication completion claim. Standalo
 Python entries wrapped with `mirror_reader.py run MIRROR python3 ...` now have a paired
 production-publisher witness: the identical child observer crosses executable generations
 without that wrapper and stays on the old generation with it. Installed launchd commands
-that do not use the wrapper still need migration and live verification after merge/pull. Creation of new
-runtime leaves directly in mixed deployment/runtime directories is still not covered;
-existing runtime leaves retain both append and atomic-replacement writes. The wrapper's
+that do not use the wrapper still need migration and live verification after merge/pull. A regression
+now covers creating new runtime leaves directly in mixed deployment/runtime directories
+(`experiments/` with both shipped deployment bytes and runtime markers); existing runtime leaves
+retain both append and atomic-replacement writes. The wrapper's
 `--no-verify` route now stages the
 incumbent copier under an isolated HOME and uses the same guarded publisher with
 an explicit UNVERIFIED status. Direct invocation of the installed incumbent copier,
