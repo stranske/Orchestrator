@@ -51,6 +51,11 @@ MODSRC="$1/src"
 cp "$MODSRC"/*.py "$ORCH_MIRROR"/
 cp "$FAKE_VERIFY" "$ORCH_MIRROR/verify.py"
 cp "$1/orchestrate.sh" "$ORCH_MIRROR/orchestrate.sh"
+# The real copier ships experiments/*.json only when the source has them.
+if compgen -G "$1/experiments/*.json" > /dev/null; then
+  mkdir -p "$ORCH_MIRROR/experiments"
+  cp "$1"/experiments/*.json "$ORCH_MIRROR/experiments/"
+fi
 mkdir -p "$ORCH_MIRROR/scripts"
 cp "$FAKE_INSTALLER" "$ORCH_MIRROR/scripts/install_verified_snapshot.py"
 chmod +x "$ORCH_MIRROR/scripts/install_verified_snapshot.py"
@@ -91,15 +96,17 @@ if touch:  # another session moving the clone while verify.py runs
 touch_mirror = os.environ.get("FAKE_TOUCH_MIRROR")
 if touch_mirror:
     (pathlib.Path.cwd() / touch_mirror).write_text("changed by verification\n")
-# What features.load(), repo_knowledge.load() and research_scheduler.load_hypotheses() do on a
-# first load: seed at the path their variable names, else at MODULE_DIR/experiments/ (the cwd here).
+# What features.load(), repo_knowledge.load() and research_scheduler.load_hypotheses() do: read the
+# path their variable names, else MODULE_DIR/experiments/ (the cwd here), and seed it if absent.
 for pair in filter(None, os.environ.get("FAKE_SEED_REGISTRIES", "").split(",")):
     var, _, name = pair.partition("=")
     target = pathlib.Path(env.get(var) or pathlib.Path.cwd() / "experiments" / name)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text('{"seeded": "by verification"}\n')
+    found = target.read_text().strip() if target.is_file() else ""
+    if not found:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"seeded": "by verification"}\n')
     with open(env["FAKE_RECORD"], "a") as fh:
-        fh.write(f"seeded_{var}={target}\n")
+        fh.write(f"seeded_{var}={target}\nfound_{var}={found}\n")
 expected = os.environ.get("FAKE_EXPECT_MIRROR_FILE")
 if expected:
     with open(env["FAKE_RECORD"], "a") as fh:
@@ -439,10 +446,34 @@ def test_registries_seeded_during_verification_never_land_in_the_mirror(world):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     mirror = Path(record["sync_mirror"]).resolve()
-    for var in paths.SEEDED_REGISTRY_ENV:
-        seeded = Path(record[f"seeded_{var}"])
-        assert world["tmpdir"] in seeded.parents, (var, seeded)
-        assert mirror not in seeded.resolve().parents, (var, seeded)
+    registries = Path(record["verify_runtime"]).parent / "registries"
+    seeded = {var: Path(record[f"seeded_{var}"]) for var in paths.SEEDED_REGISTRY_ENV}
+    for var, name in paths.SEEDED_REGISTRY_ENV.items():
+        assert seeded[var] == registries / name, (var, seeded[var])
+        assert mirror not in seeded[var].resolve().parents, (var, seeded[var])
+        assert record[f"found_{var}"] == "", (var, record[f"found_{var}"])
+    assert len(set(seeded.values())) == len(seeded), seeded
+
+
+def test_a_registry_the_source_ships_is_judged_as_shipped(world):
+    """When the source DOES ship a registry, the copier puts it in the mirror and the live tick will
+    read it, so verification must judge that content, not a fresh seed. The script copies each
+    shipped one into the scratch state; the loaders read it there and the mirror stays unwritten."""
+    (world["src"] / "experiments").mkdir()
+    for name in paths.SEEDED_REGISTRY_ENV.values():
+        (world["src"] / "experiments" / name).write_text(f'{{"shipped": "{name}"}}\n')
+    seed = ",".join(f"{var}={name}" for var, name in paths.SEEDED_REGISTRY_ENV.items())
+    result, record = _run(world, FAKE_SEED_REGISTRIES=seed)
+    assert "VOID" not in result.stdout + result.stderr, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    registries = Path(record["verify_runtime"]).parent / "registries"
+    for var, name in paths.SEEDED_REGISTRY_ENV.items():
+        assert record[f"found_{var}"] == f'{{"shipped": "{name}"}}', (
+            "verification judged a seed instead of the registry that ships",
+            var,
+            record[f"found_{var}"],
+        )
+        assert Path(record[f"seeded_{var}"]) == registries / name, (var, record)
 
 
 def test_the_seeding_loaders_read_the_variables_the_script_sets(tmp_path):
