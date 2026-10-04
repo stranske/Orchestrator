@@ -39,6 +39,7 @@ _LOCAL_REGISTRY_CANDIDATES = (
 )
 # Back-compat module-level default (resolution happens lazily in _active_repos).
 REGISTRY_PATH = DROPBOX_REGISTRY_PATH
+REMOTE_RUN_SQL = "(source='orchestrator_remote' OR mode='remote' OR run_id LIKE 'remote:%')"
 
 
 def _resolve_registry_path() -> Path:
@@ -629,9 +630,7 @@ def _fetch_dispatch_times(repo: str, pr_number: int, agent: str) -> list[int] | 
 
 def _export_policy_at(dispatch_ts: int) -> dict | None:
     """Resolve the published export commit in force at dispatch, never today's local shadow."""
-    until = _dt.datetime.fromtimestamp(dispatch_ts, _dt.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    until = _dt.datetime.fromtimestamp(dispatch_ts, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _gh_throttle("core")
     commits = _run_json(
         [
@@ -707,7 +706,9 @@ def _stamp_existing_dispatch_policy(
     """Retry missing provenance and refresh a settled PR's rounds without replacing its run."""
     with feedback._conn() as c:
         row = c.execute(
-            "SELECT routing_metadata FROM runs WHERE run_id=? AND source='keepalive' AND agent=?",
+            "SELECT routing_metadata FROM runs WHERE run_id=? AND "
+            + REMOTE_RUN_SQL
+            + " AND agent=?",
             (run_id, agent),
         ).fetchone()
     if row is None:
@@ -787,7 +788,7 @@ def _existing_remote_for_pr(repo: str, pr_number: int) -> str | None:
         row = c.execute(
             "SELECT run_id FROM runs WHERE "
             "(run_id LIKE ? OR target=? OR (pr_number=? AND target=?)) "
-            "AND (source='orchestrator_remote' OR mode='remote' OR run_id LIKE 'remote:%') "
+            "AND " + REMOTE_RUN_SQL + " "
             "ORDER BY ts DESC LIMIT 1",
             (remote_prefix + "%", target_like, pr_number, target),
         ).fetchone()
@@ -1525,7 +1526,8 @@ def _selftest_dispatch_policy(now: int) -> None:
                 assert len(metadata["dispatch_policies"]) == 2, metadata
                 assert metadata["policy_settled_ts"] == now, metadata
 
-    for response in (None, [], {}, [{"sha": "invalid"}]):
+    invalid_responses: tuple[Any, ...] = (None, [], {}, [{"sha": "invalid"}])
+    for response in invalid_responses:
         with mock.patch(__name__ + "._run_json", return_value=response):
             assert _export_policy_at(earlier) is None, response
             assert _fetch_dispatch_times("policy/fixture", 101, "codex") in (None, [])
@@ -1535,13 +1537,11 @@ def _selftest_dispatch_policy(now: int) -> None:
         document(1, "unknown"),
         document(1, []),
     ):
-        with mock.patch(
-            __name__ + "._run_json", side_effect=[[{"sha": old_sha}], bad_document]
-        ):
+        with mock.patch(__name__ + "._run_json", side_effect=[[{"sha": old_sha}], bad_document]):
             assert _export_policy_at(earlier) is None, bad_document
     undated = runner_comment(101, earlier)
     undated["body"] = outcomes.RUNNER_MARKER_RE.sub(
-        '<!-- runner-reservation:codex:101:v1 '
+        "<!-- runner-reservation:codex:101:v1 "
         '{"provider":"codex","pr_number":101,"reservation_id":"undated"} -->',
         undated["body"],
     )
