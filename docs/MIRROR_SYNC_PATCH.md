@@ -280,6 +280,10 @@ archive itself also covers an `export-ignore` rule placed on an ancestor directo
 for the next commit is absent from `HEAD`'s archive but normally ships with that commit. The guard
 therefore checks staged additions against Git's cached `export-ignore` attributes: an ordinary
 staged fixture is allowed, while one already covered by an export-ignore rule remains watched.
+That includes a rule on a directory above the file. Git applies such a rule to the directory,
+not to each file inside it, so the guard asks about every parent directory with its trailing
+slash, the way `git archive` asks; the file's own path reports nothing (2026-10-04, six rule
+styles measured against `git archive`).
 
 Witness the installed script without touching either live runtime by isolating both `HOME` and the
 mirror while preserving GitHub authentication:

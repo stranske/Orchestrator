@@ -68,6 +68,10 @@ def test_staged_but_export_ignored():
     (HERE / "fixtures" / "staged_blocked.txt").read_text()
 
 
+def test_staged_under_an_export_ignored_directory():
+    (HERE / "slash_held" / "deep" / "inside.txt").read_text()
+
+
 def test_forgotten():
     (HERE / "fixtures" / "forgotten.txt").read_text()
 
@@ -133,7 +137,8 @@ def build_checkout(root: Path, env: dict[str, str]) -> Path:
         root / ".gitattributes",
         "tests/fixtures/held_back.txt export-ignore\n"
         "tests/fixtures/staged_blocked.txt export-ignore\n"
-        "tests/directory_held export-ignore\n",
+        "tests/directory_held export-ignore\n"
+        "tests/slash_held/ export-ignore\n",
     )
     put(tests / "conftest.py", CONFTEST.read_text())
     put(tests / "test_reads.py", READS)
@@ -153,7 +158,15 @@ def build_checkout(root: Path, env: dict[str, str]) -> Path:
     put(tests / "fixtures" / "staged.txt", "staged\n")
     # This staged addition is already covered by an export-ignore rule and must still be watched.
     put(tests / "fixtures" / "staged_blocked.txt", "staged but held back\n")
-    git("add", "tests/fixtures/staged.txt", "tests/fixtures/staged_blocked.txt")
+    # Staged two levels below a directory whose rule has a trailing slash: only asking about
+    # the directory, slash and all, the way `git archive` does, shows it will not ship.
+    put(tests / "slash_held" / "deep" / "inside.txt", "held by a rule on its grandparent\n")
+    git(
+        "add",
+        "tests/fixtures/staged.txt",
+        "tests/fixtures/staged_blocked.txt",
+        "tests/slash_held/deep/inside.txt",
+    )
     # On disk, never committed:
     put(tests / "fixtures" / "forgotten.txt", "forgotten\n")
     put(tests / "fixtures" / "leftover.txt", "stale\n")
@@ -262,6 +275,7 @@ def test_arm_watches_exactly_what_git_archive_leaves_out(tmp_path, monkeypatch):
         "data/swallowed.json": "ignored",
         "fixtures/held_back.txt": "export-ignore",
         "fixtures/staged_blocked.txt": "export-ignore",
+        "slash_held/deep/inside.txt": "export-ignore",
         "directory_held/input.txt": "export-ignore",
     }, (
         "the guard must watch the untracked, the .gitignore'd and the export-ignore'd inputs, and "
@@ -363,6 +377,7 @@ def test_reading_an_input_the_mirror_lacks_fails_that_test(tmp_path):
         reads + "test_force_added": "PASSED",
         reads + "test_staged_for_the_next_commit": "PASSED",
         reads + "test_staged_but_export_ignored": "FAILED",
+        reads + "test_staged_under_an_export_ignored_directory": "FAILED",
         reads + "test_copytree_over_junk": "PASSED",
         reads + "test_own_output": "PASSED",
         reads + "test_forgotten": "FAILED",
@@ -376,6 +391,6 @@ def test_reading_an_input_the_mirror_lacks_fails_that_test(tmp_path):
         "tests/data/swallowed.json: matched by .gitignore",
         "tests/fixtures/held_back.txt: tracked, but .gitattributes marks it export-ignore",
         "AssertionError: its own failure",  # a test that fails anyway keeps its own story
-        "tracked test inputs: armed -- watching 6 file(s)",
+        "tracked test inputs: armed -- watching 7 file(s)",
     ):
         assert why in out, f"missing {why!r}:\n{_quiet(out)}"
