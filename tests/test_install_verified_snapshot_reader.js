@@ -1,7 +1,7 @@
 'use strict';
 
 // Reader witness for #389 generation publication: the live mirror path is switched
-// only after a complete staged generation is built; pinned readers keep the prior tree.
+// only after staging. This witness does not prove reader pinning across the switch.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -130,7 +130,7 @@ test('reader control observes one complete generation without publication', { ti
 });
 
 for (const phase of ['before-copy', 'after-copy']) {
-  test(`generation publisher keeps pinned reader on the prior tree during ${phase}`, { timeout: 10000 }, async (t) => {
+  test(`staging preserves the live tree before the switch during ${phase}`, { timeout: 10000 }, async (t) => {
     const w = world(t);
     const pinned = fs.realpathSync(w.mirror);
     const first = observe(pinned, 'module.py');

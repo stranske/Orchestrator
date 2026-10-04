@@ -9,6 +9,7 @@ that ``verify_before_sync.sh`` hashed and verified.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ import stat
 import struct
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 # These trees and root-level *.py/*.sh files are deployment-owned in full. Merged
@@ -280,16 +282,34 @@ def _merge_runtime_content(
     staging: Path,
     entries: set[Path],
     prior_docs: list[Path],
+    retained: Path,
 ) -> None:
     """Bring mirror-local runtime output into a staged generation without touching deployment leaves."""
 
     if not live.exists():
         return
     retired_shipped_docs = set(prior_docs) - set(_shipped_docs(staging / ".docs-shipped.txt"))
+    shared_directories: list[Path] = []
+    protected = (
+        entries
+        | set(prior_docs)
+        | {Path(name) for name in OWNED_FILES}
+        | {Path(name) for name in MERGED_TREES}
+    )
     for path in sorted(
         live.rglob("*"), key=lambda candidate: (len(candidate.parts), str(candidate))
     ):
+        relative = path.relative_to(live)
+        if any(parent == relative or parent in relative.parents for parent in shared_directories):
+            continue
         if path.is_dir() and not path.is_symlink():
+            if not _deployment_owned_relative(relative, entries) and not any(
+                relative == owned or relative in owned.parents for owned in protected
+            ):
+                destination = staging / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.symlink_to(retained / relative, target_is_directory=True)
+                shared_directories.append(relative)
             continue
         if not path.is_file() and not path.is_symlink():
             continue
@@ -306,7 +326,9 @@ def _merge_runtime_content(
             destination.symlink_to(os.readlink(path))
             shutil.copystat(path, destination, follow_symlinks=False)
         else:
-            shutil.copy2(path, destination, follow_symlinks=False)
+            # Preserve the inode held by an already-running writer. Copying here
+            # silently drops appends made after this transfer boundary.
+            os.link(path, destination, follow_symlinks=False)
 
 
 def _publish_generation(
@@ -323,17 +345,15 @@ def _publish_generation(
     mirror.parent.mkdir(parents=True, exist_ok=True)
 
     staging = mirror.parent / f"{mirror.name}.next-{expected_digest[:12]}"
-    retired = mirror.parent / f"{mirror.name}.retired-{expected_digest[:12]}"
+    retired = mirror.parent / f"{mirror.name}.retired-{uuid.uuid4().hex}"
     if staging.exists():
         shutil.rmtree(staging)
-    if retired.exists():
-        shutil.rmtree(retired)
     staging.mkdir(parents=True)
 
     swapped = False
     try:
         _copy_payload(payload, staging, entries)
-        _merge_runtime_content(mirror, staging, entries_set, prior_docs)
+        _merge_runtime_content(mirror, staging, entries_set, prior_docs, retired)
         installed_digest = snapshot_digest(staging)
         if installed_digest != expected_digest:
             raise RuntimeError(
@@ -350,8 +370,8 @@ def _publish_generation(
     finally:
         if staging.exists():
             shutil.rmtree(staging)
-        if retired.exists():
-            shutil.rmtree(retired)
+        # Retained trees back shared runtime directories and may still be held
+        # by active readers. Do not reclaim them inside the publisher.
 
 
 def _write_runtime_registry(registry: Path, runtime_registry: Path) -> None:
@@ -430,10 +450,14 @@ def install(
         # the separate registry update. Never reopen the retained snapshot after this boundary.
         entries = owned_entries(payload)
         registry = payload / "repo_review_registry.json"
-        _publish_generation(payload, mirror, entries, expected_digest, prior_docs)
-
-        if runtime_registry is not None and registry.is_file():
-            _write_runtime_registry(registry, runtime_registry)
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        with (mirror.parent / f".{mirror.name}.publish.lock").open("a") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            # The previous publisher may have changed the shipped-doc manifest.
+            prior_docs = _shipped_docs(mirror / ".docs-shipped.txt")
+            _publish_generation(payload, mirror, entries, expected_digest, prior_docs)
+            if runtime_registry is not None and registry.is_file():
+                _write_runtime_registry(registry, runtime_registry)
 
     module_count = len(list(mirror.glob("*.py")))
     test_count = len(list((mirror / "tests").glob("*.py")))

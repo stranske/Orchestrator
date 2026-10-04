@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
 import subprocess
@@ -535,6 +536,7 @@ def test_retiring_named_deployment_file_preserves_concurrent_runtime_writes(
         assert not errors
 
     assert not retired_path.exists()
+    assert marker.read_text() == "before publication\nduring publication\n"
     assert installer.snapshot_digest(mirror) == expected
 
 
@@ -735,7 +737,14 @@ def test_runtime_registry_update_preserves_other_publishers_tempfile(
     assert len(observed) == 1
     assert observed[0] != shared_temporary
     assert not observed[0].exists()
-    assert set(registry.parent.iterdir()) == original_entries
+    publisher_state = {
+        path
+        for path in registry.parent.iterdir()
+        if path.name.startswith(mirror.name + ".retired-")
+        or path.name == f".{mirror.name}.publish.lock"
+    }
+    assert len(publisher_state) == 2
+    assert set(registry.parent.iterdir()) - publisher_state == original_entries
 
 
 @pytest.mark.parametrize(
@@ -847,3 +856,46 @@ def test_runtime_registry_sync_order_cleanup_and_retry(tmp_path, monkeypatch, fa
         assert registry.read_bytes() == (snapshot / "repo_review_registry.json").read_bytes()
         assert installer.snapshot_digest(mirror) == expected
         assert all(not temporary.exists() for temporary in temporaries)
+
+
+def test_runtime_writes_after_transfer_survive_switch_and_retry(tmp_path, monkeypatch):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    reports = mirror / "docs" / "reports"
+    reports.mkdir()
+    report = reports / "runtime.md"
+    report.write_text("before\n")
+    (mirror / "experiments").mkdir()
+    marker = mirror / "experiments" / ".last-ship-gate"
+    marker.write_text("before\n")
+    expected = installer.snapshot_digest(snapshot)
+    transfer = installer._merge_runtime_content
+    with report.open("a") as report_stream, marker.open("a") as marker_stream:
+
+        def transfer_then_write(*args, **kwargs):
+            with (mirror.parent / f".{mirror.name}.publish.lock").open("a") as rival:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(rival.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            transfer(*args, **kwargs)
+            report_stream.write("after transfer\n")
+            report_stream.flush()
+            marker_stream.write("after transfer\n")
+            marker_stream.flush()
+            (reports / "late.md").write_text("late creation\n")
+
+        monkeypatch.setattr(installer, "_merge_runtime_content", transfer_then_write)
+        assert installer.install(snapshot, mirror, expected, registry) == 0
+        report_stream.write("after publication\n")
+        report_stream.flush()
+        marker_stream.write("after publication\n")
+        marker_stream.flush()
+    assert (mirror / "docs/reports/runtime.md").read_text() == (
+        "before\nafter transfer\nafter publication\n"
+    )
+    assert marker.read_text() == "before\nafter transfer\nafter publication\n"
+    assert (mirror / "docs/reports/late.md").read_text() == "late creation\n"
+    assert installer.snapshot_digest(mirror) == expected
+    monkeypatch.setattr(installer, "_merge_runtime_content", transfer)
+    assert installer.install(snapshot, mirror, expected, registry) == 0
+    assert (mirror / "docs/reports/runtime.md").read_text().endswith("after publication\n")
+    assert (mirror / "docs/reports/late.md").read_text() == "late creation\n"

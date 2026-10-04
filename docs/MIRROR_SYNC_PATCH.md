@@ -637,3 +637,26 @@ survived; a doc listed in the previous manifest was removed; manifest entries po
 `docs/` were ignored. Deliberate break on a copy of the patched script: with the path guard removed,
 a manifest entry `../outside/victim.txt` DELETED that file outside the mirror; with the guard it
 survived; the copy was reverted to `cmp`-identical bytes.
+
+
+## PR #390 runtime-write recovery status
+
+The generation publisher serializes publication and the separate registry update with a
+mirror-specific advisory lock. Runtime-only directories such as `docs/reports` refer to
+retained storage instead of a copied directory. Runtime leaves in mixed directories use
+hard links so writers with open file descriptors keep writing the visible inode. Retired
+trees are deliberately retained: the publisher must not delete backing storage or trees
+that active readers might still require. Repeated publication preserves these references.
+
+This is a partial recovery, not an atomic-publication completion claim. The two directory
+renames still expose a pathname gap, readers still need generation pinning, and creation
+or atomic replacement of runtime leaves directly in mixed deployment/runtime directories
+is not covered by shared inodes. Cleanup/migration and the incumbent `--no-verify` copier
+still need the full source #389 acceptance witnesses. Installed wrappers remain unchanged
+until merge and pull; guarded deployment evidence remains pending.
+
+The after-transfer regression test opens report/marker handles before installation, writes
+after runtime transfer and after publication, creates a late report, and repeats installation.
+It fails on the prior copying publisher and passes with shared runtime storage. Earlier
+Node witnesses only observe the old tree before the switch and the new tree afterward;
+they do not establish a pinned reader spanning publication.
