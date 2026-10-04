@@ -399,8 +399,13 @@ Do not create a second event log, model registry, or capability inventory.
   learning) — don't let environment noise train as agent incapability. A delegate whose target
   issue closed through a PR none of its candidate branches produced is `unattributed_closing_pr`:
   never FAIL (someone delivered, possibly this run on a branch it chose) and never PASS (nothing
-  shows it was this run). Every learner excludes both classes through ONE set,
-  `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a role run inherits the class with the verdict.
+  shows it was this run). A remote DELEGATION (the tick labelled a target `agent:<X>`) is credited,
+  PASS or FAIL, only with its own PR — the labelled PR, or the PR on `{agent}/issue-N`, never another
+  agent's or lane's branch — when that PR settled after the label and keepalive's runner records
+  show a completed round of the labelled agent on it since then; otherwise it is
+  `unattributed_delegation` (none of the 9 merged delegation PASS rows met that bar). Every learner
+  excludes all three classes through ONE set, `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a
+  role run inherits the class with the verdict.
 - Missing cost/effort telemetry must never read as "free" — impute it (see feedback.relearn_quality).
   And a PARTIAL or sparse number is UNMEASURED, not cheap: cost enters the learners on one scale only
   (`feedback.COST_SCALE`, from `COMPLETE_COST_SOURCES` at `MIN_COST_COVERAGE` coverage); a LangSmith

@@ -1013,9 +1013,11 @@ def main(argv):
         return 0
     active = "--active" in argv
     # THE DISPATCH LANE IS SHADOW BY DEFAULT (assessment 2026-09-03, item 1): in 30 days this lane
-    # made 14 remote dispatches — 5 merged (2 later judged durable), 2 PRs closed unmerged, and 7
-    # labelled issues closed with no PR from the labelled agent, 4 of them delivered by codex
-    # keepalive or by hand — while keepalive ran 1,239 agent rounds without it, and its heartbeat
+    # made 14 remote dispatches and none was shown to be the labelled agent's work — the 5 credited
+    # merges were other lanes' work or empty, the 2 PRs closed unmerged were bootstraps whose agent
+    # round never completed, and 7 labelled issues closed with no PR from the labelled agent, 4 of
+    # them delivered by codex keepalive or by hand (re-measured 2026-10-04 from keepalive's runner
+    # records) — while keepalive ran 1,239 agent rounds without it, and its heartbeat
     # cost the closer lane a round each time it fired. An
     # active tick therefore INGESTS live (the Brain's evidence) and DELEGATES nothing unless
     # ORCH_DISPATCH_LANE=1 is set deliberately. Announced every run so the state is never silent.

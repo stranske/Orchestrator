@@ -16,18 +16,35 @@ PR: someone delivered, and no candidate branch says it was this run, so the run 
 `feedback.UNATTRIBUTED_CLOSING_PR`, a class no learner scores (counted in the summary's `unattributed`).
 Either verdict needs every candidate branch to have ANSWERED "no PR here": a lookup that could not
 answer leaves the run pending, retried at the next ingest, and counted in the summary's `unanswered`.
+
+A REMOTE DELEGATION (an `orchestrator_remote` run: the tick applied `agent:<X>` to an issue or PR)
+is credited with a PR only when the PR can be shown to be that delegation's work, and three exact
+conditions decide it (`_delegated_pr_state`). The run's own PR is on the delegated agent's own
+keepalive branch, `{agent}/issue-N`, or is the labelled PR itself: another agent's or another lane's
+branch is never this run's. A PR merged or closed before the label was applied cannot be its work.
+And a PASS or a FAIL needs at least one COMPLETED round of the delegated agent's keepalive runner
+on that PR since the label, not measured unproductive, read from the runner's own trusted markers.
+A settled PR without that evidence records no verdict, `feedback.UNATTRIBUTED_DELEGATION`, a class
+no learner scores. Until 2026-10-04 the resolver walked every agent's branch and
+`orchestrator/issue-N` and credited the first PR found, and a labelled PR's merge went to whatever
+agent the label named.
 `--selftest` runs fully offline (mocked PR states + temp store).
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
+import re
 import subprocess
 import sys
+import time
 
 import feedback
 import provision
+import utc_epoch
 
 # A GitHub lookup here answers one of three ways: it FOUND the thing, it answered that there is
 # NOTHING there, or it could not answer (gh failed, or printed something that does not parse). Only
@@ -35,11 +52,44 @@ import provision
 # branch lookups had all failed as `abandoned`: an unknown written into the outcome labels the router
 # learns from. So an unanswered lookup ends the resolution, the run is skipped with no outcome row,
 # and the next ingest asks again. One set, read by the resolvers and by the summary's count.
-UNANSWERED_LOOKUPS = frozenset({"lookup_failed", "parse_failed", "issue_lookup_failed"})
+UNANSWERED_LOOKUPS = frozenset(
+    {"lookup_failed", "parse_failed", "issue_lookup_failed", "runner_rounds_lookup_failed"}
+)
 ISSUE_VIEW_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
 # A closed target issue with every candidate branch answered "no PR". Which verdict it gets is decided
 # by the issue's closing PRs, in `state_to_outcome`.
 CLOSED_ISSUE_LOOKUPS = frozenset({"closed_issue_no_branch_pr", "closed_issue_no_remote_pr"})
+# The verdict classes that mean "terminal, but not this run's work", counted as `unattributed`.
+UNATTRIBUTED_CLASSES = frozenset(
+    {feedback.UNATTRIBUTED_CLOSING_PR, feedback.UNATTRIBUTED_DELEGATION}
+)
+# The runs whose PR credit needs the delegation guard: the tick labelled a target for an agent.
+# Keepalive-discovered runs (`keepalive`) ARE their PR, so `_pr_state` still resolves them directly.
+DELEGATION_SOURCE = "orchestrator_remote"
+PR_VIEW_FIELDS = "number,title,url,headRefName,state,mergedAt,closedAt"
+# The keepalive runner's own record of each dispatch, a PR comment written by Workflows
+# `scripts/runner_lib/core.py`: the legacy `runner-dispatch` record (one per provider, rewritten in
+# place, so it holds that provider's latest dispatch), the append-only `runner-reservation` written
+# before every dispatch, and the `runner-completion` receipt bound to a reservation by its id.
+RUNNER_MARKER_RE = re.compile(
+    r"<!--\s*(runner-dispatch|runner-reservation|runner-completion):([\w.-]+):(\d+):v1"
+    r"\s+([\s\S]*?)\s*-->"
+)
+RUNNER_RECEIPT_SCHEMA = "runner-completion-receipt/v1"
+# Who may write those markers: runner_lib's `_is_trusted_marker_comment`, a login in this set or an
+# author association below. Its fixture-only fallback (no author metadata at all) is not mirrored:
+# a real comment always carries a user, and a record nobody can be shown to have written is no
+# evidence.
+TRUSTED_RUNNER_MARKER_AUTHORS = frozenset(
+    {
+        "chatgpt-codex-connector",
+        "chatgpt-codex-connector[bot]",
+        "github-actions[bot]",
+        "stranske",
+        "stranske-automation-bot",
+    }
+)
+TRUSTED_RUNNER_MARKER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def _pr_state(target: str, agent: str | None = None) -> dict | None:
@@ -176,6 +226,229 @@ def _remote_issue_pr_state(
         "candidateBranches": sorted(branches),
         "direct_lookup_error": direct_failure.get("error"),
     }
+
+
+def _iso(ts: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def _settled_before(pr: dict, started_ts: int) -> tuple[str, int] | None:
+    """Pure: ("merged" | "closed", when) if the PR settled before `started_ts`, else None. A PR that
+    was already merged or closed when the label was applied cannot be the labelled agent's work."""
+    for key, verb in (("mergedAt", "merged"), ("closedAt", "closed")):
+        when = utc_epoch.from_iso(pr.get(key)) if pr.get(key) else None
+        if when is not None and when < started_ts:
+            return verb, when
+    return None
+
+
+def _trusted_runner_comment(comment: object) -> bool:
+    if not isinstance(comment, dict):
+        return False
+    user = comment.get("user")
+    login = user.get("login") if isinstance(user, dict) else None
+    if isinstance(login, str) and login.strip().lower() in TRUSTED_RUNNER_MARKER_AUTHORS:
+        return True
+    association = str(comment.get("author_association") or "").upper()
+    return association in TRUSTED_RUNNER_MARKER_ASSOCIATIONS
+
+
+def _runner_payload(raw: str) -> dict | None:
+    value = raw.strip()
+    try:
+        if value.startswith("base64:"):
+            value = base64.b64decode(value.removeprefix("base64:"), validate=True).decode("utf-8")
+        payload = json.loads(value)
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def runner_rounds(comments: list, *, provider: str, pr_number: int, since_ts: int) -> dict:
+    """Pure: `provider`'s keepalive runner rounds on PR `pr_number`, read from the trusted runner
+    markers in `comments` (oldest first, as the REST API lists them).
+
+    A round is one dispatch: a reservation joined to its completion receipt by reservation id, a
+    receipt whose reservation is not in view, or the legacy record. Only rounds that started at or
+    after `since_ts` can be the delegation's, and one is CREDITED when it completed and was not
+    measured unproductive: `productive` False is runner_lib's own "produced nothing" verdict, and a
+    missing `productive` is unmeasured, which a completed legacy round always is. Error, pending and
+    undated rounds are counted beside the credited ones and never credited, so a PR whose agent was
+    dispatched and died on a usage limit is not that agent's work."""
+    reservations: dict[str, dict] = {}
+    receipts: dict[str, dict] = {}
+    legacy: dict | None = None
+    for comment in comments:
+        if not _trusted_runner_comment(comment):
+            continue
+        for kind, marked, number, raw in RUNNER_MARKER_RE.findall(str(comment.get("body") or "")):
+            if marked != provider or int(number) != pr_number:
+                continue
+            payload = _runner_payload(raw)
+            if payload is None:
+                continue
+            if kind == "runner-completion":
+                record, rid = payload.get("record"), payload.get("reservation_id")
+                if (
+                    payload.get("schema") == RUNNER_RECEIPT_SCHEMA
+                    and isinstance(rid, str)
+                    and rid
+                    and isinstance(record, dict)
+                    and record.get("provider") == provider
+                    and record.get("pr_number") == pr_number
+                    and record.get("reservation_id") == rid
+                ):
+                    receipts[rid] = record
+                continue
+            if payload.get("provider") != provider or payload.get("pr_number") != pr_number:
+                continue
+            if kind == "runner-reservation":
+                rid = payload.get("reservation_id")
+                if isinstance(rid, str) and rid:
+                    reservations[rid] = payload
+            else:
+                legacy = payload
+    rounds = [receipts.get(rid, record) for rid, record in reservations.items()]
+    rounds += [record for rid, record in receipts.items() if rid not in reservations]
+    if legacy is not None:
+        rounds.append(legacy)
+    counts = dict.fromkeys(
+        ("credited", "unproductive", "errored", "pending", "before_label", "undated"), 0
+    )
+    for record in rounds:
+        started = utc_epoch.from_iso(record.get("started_at"))
+        if started is None:
+            counts["undated"] += 1
+        elif started < since_ts:
+            counts["before_label"] += 1
+        elif record.get("status") == "completed":
+            counts["unproductive" if record.get("productive") is False else "credited"] += 1
+        elif record.get("status") == "error":
+            counts["errored"] += 1
+        else:
+            counts["pending"] += 1
+    return counts
+
+
+def _runner_rounds(repo: str, pr_number: int, provider: str, since_ts: int) -> dict | None:
+    """Live: `runner_rounds` over every comment on the PR. None when GitHub did not answer."""
+    r = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{repo}/issues/{pr_number}/comments?per_page=100",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return None
+    try:
+        pages = json.loads(r.stdout)
+    except Exception:
+        return None
+    # --slurp wraps the pages in one array, so an answer is a list of lists; anything else is not.
+    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+        return None
+    comments = [comment for page in pages for comment in page]
+    return runner_rounds(comments, provider=provider, pr_number=pr_number, since_ts=since_ts)
+
+
+def _attribute_delegation(repo: str, pr: dict, agent: str | None, started_ts: int | None) -> dict:
+    """Mark a delegation's candidate PR with whether it can be SHOWN to be the delegation's work.
+
+    An open PR is left unmarked: its verdict waits, and so does the evidence read. A settled one is
+    attributable only with a credited round of the delegated agent's runner since the label. A read
+    that failed leaves the run unanswered (skipped, retried), never unattributed."""
+    pr["delegation"] = True
+    state = str(pr.get("state") or "").upper()
+    if state == "OPEN" and not pr.get("mergedAt"):
+        return pr
+    settled = _settled_before(pr, started_ts) if started_ts is not None else None
+    if settled is not None and started_ts is not None:
+        verb, when = settled
+        pr["attribution"] = {
+            "attributable": False,
+            "reason": f"it {verb} at {_iso(when)}, before the label at {_iso(started_ts)}",
+        }
+        return pr
+    number = pr.get("number")
+    if started_ts is None or not agent or not isinstance(number, int):
+        pr["attribution"] = {
+            "attributable": False,
+            "reason": "the run records no delegation time, agent or PR number to check it against",
+        }
+        return pr
+    rounds = _runner_rounds(repo, number, agent, started_ts)
+    if rounds is None:
+        pr["lookup_status"] = "runner_rounds_lookup_failed"
+        return pr
+    others = ", ".join(f"{key} {value}" for key, value in rounds.items() if value)
+    pr["attribution"] = {
+        "attributable": rounds["credited"] > 0,
+        "rounds": rounds,
+        "reason": (
+            f"{agent}'s runner completed {rounds['credited']} credited round(s) on it since the "
+            f"label at {_iso(started_ts)}" + (f" ({others})" if others else "")
+        ),
+    }
+    return pr
+
+
+def _delegated_pr_state(target: str, agent: str | None, started_ts: int | None) -> dict:
+    """Live: the PR a remote delegation is credited with, and whether it can be shown to be its.
+
+    That PR is the labelled target itself when the target is a PR. Otherwise it is the PR on the
+    delegated agent's own keepalive branch, `{agent}/issue-N`, which the keepalive bootstrap opens
+    for that label. No other branch is asked: another agent's branch or the local lane's
+    `orchestrator/issue-N` holds that lane's work, and the old first-found walk over them credited
+    a gemini label with a local vibe run's PR merged 39 days before the label. An own-branch PR
+    settled before the label belongs to an earlier delegation and is passed over too. With no PR of
+    its own the run gets the closed-issue verdicts, which the issue's closing PRs decide."""
+    repo, num = provision.parse_target(target)
+    if num is None:
+        return {"lookup_status": "invalid_target", "target": target}
+    r = subprocess.run(
+        ["gh", "pr", "view", str(num), "-R", repo, "--json", PR_VIEW_FIELDS],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode == 0:
+        try:
+            pr = json.loads(r.stdout)
+        except Exception:
+            pr = None
+        if not isinstance(pr, dict) or not isinstance(pr.get("state"), str):
+            return {"lookup_status": "parse_failed", "target": target}
+        pr.update(lookup_status="found", direct_target_pr=True, target=target)
+        return _attribute_delegation(repo, pr, agent, started_ts)
+    view_error = (r.stderr or r.stdout or "").strip()[:500]
+    own_branch = f"{agent}/issue-{num}" if agent else ""
+    context: dict = {
+        "target": target,
+        "candidateBranches": [own_branch] if own_branch else [],
+        "direct_lookup_error": view_error,
+    }
+    own = _pr_list_by_head(repo, own_branch) if own_branch else None
+    if own is not None:
+        own.update(context)
+        if own.get("lookup_status") != "found":
+            return own  # could not answer: it carries no state, so the run is skipped and re-asked
+        if started_ts is None or _settled_before(own, started_ts) is None:
+            return _attribute_delegation(repo, own, agent, started_ts)
+        context["passed_over_pr"] = f"#{own.get('number')}"
+    terminal_issue = _closed_issue_without_branch_pr(repo, num, own_branch)
+    if terminal_issue is None:
+        return {"lookup_status": "no_pr_for_remote_issue_branch", **context}
+    if terminal_issue["lookup_status"] == "closed_issue_no_branch_pr":
+        if "/pull/" in str(terminal_issue.get("url") or ""):
+            # `gh pr view` failed on a PR number, so this is a PR nobody read, not a closed issue.
+            return {"lookup_status": "lookup_failed", **context, "error": view_error}
+        terminal_issue["lookup_status"] = "closed_issue_no_remote_pr"
+    terminal_issue.update(context)
+    return terminal_issue
 
 
 def _pr_view(repo: str, num: int) -> dict | None:
@@ -340,10 +613,15 @@ def state_to_outcome(pr: dict | None) -> dict | None:
     (`feedback.UNATTRIBUTED_CLOSING_PR`, which every learner excludes). Reading it as FAIL trained
     the runs whose own PR closed the issue as failures; reading it as PASS would credit a run with a
     PR it cannot be shown to have produced; and leaving it pending would re-ask GitHub about an issue
-    that can never change, with nothing to drain it."""
+    that can never change, with nothing to drain it.
+
+    A remote delegation's own settled PR (`delegation`) is credited, PASS or FAIL, only when its
+    `attribution` says the delegation can be shown to have produced it (`_delegation_outcome`)."""
     if not pr or pr.get("lookup_status") in UNANSWERED_LOOKUPS:
         return None
     st = (pr.get("state") or "").upper()
+    if pr.get("delegation") and (st in ("MERGED", "CLOSED") or pr.get("mergedAt")):
+        return _delegation_outcome(pr)
     if st == "MERGED" or pr.get("mergedAt"):
         return {
             "merged": True,
@@ -383,6 +661,46 @@ def state_to_outcome(pr: dict | None) -> dict | None:
     return None
 
 
+def _delegation_outcome(pr: dict) -> dict:
+    """A remote delegation's own PR, settled. Credit needs a positive attribution: anything else
+    ends the run with no verdict and no merge state, under `feedback.UNATTRIBUTED_DELEGATION`, which
+    no learner scores. Only the credited merge names `PR #N merged`, the form durability_sweep
+    resolves an issue-target run's PR from (`_explicit_merged_pr_target`)."""
+    merged = (pr.get("state") or "").upper() == "MERGED" or bool(pr.get("mergedAt"))
+    head = f" ({pr['headRefName']})" if pr.get("headRefName") else ""
+    marked = pr.get("attribution")
+    attribution: dict = marked if isinstance(marked, dict) else {}
+    reason = attribution.get("reason") or "it carries no attribution"
+    if attribution.get("attributable") is not True:
+        return {
+            "merged": None,
+            "adjudicated_verdict": None,
+            "durability": "abandoned",
+            "failure_class": feedback.UNATTRIBUTED_DELEGATION,
+            "notes": (
+                f"remote delegation's PR #{pr.get('number')}{head} "
+                f"{'merged' if merged else 'closed unmerged'}, but {reason}; "
+                "not attributed to this run"
+            ),
+        }
+    if merged:
+        return {
+            "merged": True,
+            "adjudicated_verdict": "PASS",
+            "durability": "pending",
+            "notes": (
+                f"remote delegation's PR #{pr.get('number')} merged{head}; {reason}; "
+                "durability pending sweep"
+            ),
+        }
+    return {
+        "merged": False,
+        "adjudicated_verdict": "FAIL",
+        "durability": "abandoned",
+        "notes": f"remote delegation's PR #{pr.get('number')}{head} closed unmerged; {reason}",
+    }
+
+
 def _skip_reason(pr: dict | None) -> str:
     if not pr:
         return "state_unavailable"
@@ -417,6 +735,8 @@ def _skip_detail(run: dict, pr: dict | None) -> dict:
         "title",
         "error",
         "direct_lookup_error",
+        "passed_over_pr",
+        "attribution",
     ):
         if pr.get(key):
             detail[key] = pr[key]
@@ -428,7 +748,7 @@ def _pending_runs(mode: str) -> list[dict]:
         if mode != "local":
             rows = c.execute(
                 "SELECT r.run_id, r.target, r.agent, r.pr_number, "
-                "o.run_id IS NOT NULL, COALESCE(o.durability,'') "
+                "o.run_id IS NOT NULL, COALESCE(o.durability,''), r.ts, r.source "
                 "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                 "WHERE (o.run_id IS NULL OR o.durability='pending') AND r.mode=?",
                 (mode,),
@@ -440,7 +760,7 @@ def _pending_runs(mode: str) -> list[dict]:
             # orchestrator/issue-N PR branch.
             rows = c.execute(
                 "SELECT r.run_id, r.target, r.agent, r.pr_number, "
-                "o.run_id IS NOT NULL, COALESCE(o.durability,'') "
+                "o.run_id IS NOT NULL, COALESCE(o.durability,''), r.ts, r.source "
                 "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                 "WHERE (o.run_id IS NULL OR o.durability='pending') "
                 "AND (r.mode='local' OR "
@@ -454,8 +774,10 @@ def _pending_runs(mode: str) -> list[dict]:
             "pr_number": pr_number,
             "has_outcome": bool(has_outcome),
             "existing_durability": durability,
+            "ts": ts,
+            "source": source,
         }
-        for rid, target, agent, pr_number, has_outcome, durability in rows
+        for rid, target, agent, pr_number, has_outcome, durability, ts, source in rows
     ]
 
 
@@ -470,9 +792,10 @@ def _pending_durability_detail(run: dict) -> dict:
 def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None) -> dict:
     """For each delegated run lacking a resolved outcome, read its PR state and record the outcome.
     Remote runs may target a direct PR or a labeled opener issue whose keepalive PR branch is
-    {agent}/issue-N; LOCAL delegate runs target an ISSUE whose agent opened a PR on branch
-    orchestrator/issue-N. `_state_fn` overrides the live gh lookup (tests). Returns a summary;
-    idempotent (record_outcome patches)."""
+    {agent}/issue-N; a remote DELEGATION is credited with that PR only when it can be shown to be
+    its work (`_delegated_pr_state`). LOCAL delegate runs target an ISSUE whose agent opened a PR on
+    branch orchestrator/issue-N. `_state_fn` overrides the live gh lookup (tests). Returns a
+    summary; idempotent (record_outcome patches)."""
     pending = _pending_runs(mode)
     recorded, skipped = [], []
     pending_durability = []
@@ -484,6 +807,8 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
             pr = _state_fn(run["target"])
         elif mode == "local":
             pr = _local_pr_state(run["target"], run.get("agent"))
+        elif run.get("source") == DELEGATION_SOURCE:
+            pr = _delegated_pr_state(run["target"], run.get("agent"), run.get("ts"))
         else:
             pr = _pr_state(run["target"], run.get("agent"))
         oc = state_to_outcome(pr)
@@ -509,10 +834,9 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
         # retried next ingest. Always present, so a clean run reads `0` rather than a missing key.
         "unanswered": sum(1 for row in skipped if row["reason"] in UNANSWERED_LOOKUPS),
         # Recorded, and terminal, but scored by no learner: the issue closed through a PR no
-        # candidate branch produced. Always present for the same reason as `unanswered`.
-        "unattributed": sum(
-            1 for row in recorded if row["failure_class"] == feedback.UNATTRIBUTED_CLOSING_PR
-        ),
+        # candidate branch produced, or a delegation's own PR settled without its agent's work on
+        # it. Always present for the same reason as `unanswered`.
+        "unattributed": sum(1 for row in recorded if row["failure_class"] in UNATTRIBUTED_CLASSES),
         "pending_durability": len(pending_durability),
         "details": recorded,
         "skipped_details": skipped,
@@ -740,6 +1064,7 @@ def _selftest():
     assert rate_limited["skipped_details"][0]["reason"] == "lookup_failed", rate_limited
     assert (answered["recorded"], answered["unanswered"]) == (1, 0), answered
     assert answered["details"][0]["durability"] == "abandoned", answered
+    _selftest_delegation_attribution()
     import shutil
 
     shutil.rmtree(tmp, ignore_errors=True)
@@ -747,8 +1072,131 @@ def _selftest():
         "outcomes.py selftest: OK (state->outcome mapping, ingest records merged/abandoned, "
         "open skipped, merged stays pending for durability sweep, unanswered lookups skipped "
         "and retried rather than abandoned, a closing PR no candidate branch produced recorded "
-        "as unattributed rather than failed)"
+        "as unattributed rather than failed, a delegation credited only with its own PR and its "
+        "agent's completed runner rounds)"
     )
+
+
+def _runner_comment(kind: str, provider: str, pr: int, payload: dict, login: str) -> dict:
+    """A PR comment carrying one runner marker, encoded exactly as runner_lib's `_build_marker`."""
+    encoded = base64.b64encode(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    body = f"Runner dispatch state.\n\n<!-- {kind}:{provider}:{pr}:v1 base64:{encoded} -->"
+    return {"user": {"login": login}, "author_association": "CONTRIBUTOR", "body": body}
+
+
+def _selftest_delegation_attribution() -> None:
+    label = 1_790_000_000
+    after, before = _iso(label + 600), _iso(label - 600)
+
+    def reservation(provider: str, pr: int, rid: str, started: str) -> dict:
+        record = {"provider": provider, "pr_number": pr, "reservation_id": rid}
+        record.update(status="pending", started_at=started)
+        return _runner_comment("runner-reservation", provider, pr, record, "github-actions[bot]")
+
+    def receipt(provider: str, pr: int, rid: str, started: str, **final) -> dict:
+        record = {"provider": provider, "pr_number": pr, "reservation_id": rid}
+        record.update(started_at=started, **final)
+        payload = {"schema": RUNNER_RECEIPT_SCHEMA, "reservation_id": rid, "record": record}
+        return _runner_comment("runner-completion", provider, pr, payload, "github-actions[bot]")
+
+    comments = [
+        reservation("gemini", 5, "r1", after),
+        receipt("gemini", 5, "r1", after, status="completed", productive=True),
+        reservation("gemini", 5, "r2", after),
+        receipt("gemini", 5, "r2", after, status="completed", productive=False),
+        reservation("gemini", 5, "r3", after),
+        receipt("gemini", 5, "r3", after, status="error"),
+        reservation("gemini", 5, "r4", before),
+        reservation("codex", 5, "r5", after),
+        {**reservation("gemini", 5, "r6", after), "user": {"login": "mallory"}},
+    ]
+    counts = runner_rounds(comments, provider="gemini", pr_number=5, since_ts=label)
+    assert counts == {
+        "credited": 1,
+        "unproductive": 1,
+        "errored": 1,
+        "pending": 0,
+        "before_label": 1,
+        "undated": 0,
+    }, counts
+    assert runner_rounds(comments, provider="cursor", pr_number=5, since_ts=label)["credited"] == 0
+
+    def gh(answers: dict):
+        """Answers keyed `pr view`, `issue view`, `comments` and `list:<head branch>`."""
+
+        def fake_run(argv, **_kw):
+            if argv[1:3] == ["pr", "list"]:
+                key = f"list:{argv[argv.index('--head') + 1]}"
+            else:
+                key = "comments" if argv[1] == "api" else " ".join(argv[1:3])
+            calls.append(key)
+            if key not in answers:
+                raise AssertionError(f"unexpected gh call: {argv}")
+            return subprocess.CompletedProcess(argv, *answers[key])
+
+        return fake_run
+
+    def resolve(target: str, agent: str, answers: dict) -> dict | None:
+        real_run = subprocess.run
+        subprocess.run = gh(answers)
+        try:
+            return state_to_outcome(_delegated_pr_state(target, agent, label))
+        finally:
+            subprocess.run = real_run
+
+    not_a_pr = (1, "", "Could not resolve to a PullRequest")
+    closed_by_other = {"state": "CLOSED", "closedByPullRequestsReferences": [{"number": 2627}]}
+    # Workflows#2620: no PR of its own; the local lane's merged PR is never asked about or credited.
+    calls: list = []
+    outcome = resolve(
+        "o/r#2620",
+        "gemini",
+        {
+            "pr view": not_a_pr,
+            "list:gemini/issue-2620": (0, "[]", ""),
+            "issue view": (0, json.dumps(closed_by_other), ""),
+        },
+    )
+    assert outcome and outcome.get("failure_class") == feedback.UNATTRIBUTED_CLOSING_PR, outcome
+    assert not any("orchestrator/issue" in str(call) for call in calls), calls
+    # Trend#5913: a labelled PR that merged with only codex rounds on it is not gemini's PASS.
+    direct = {
+        "number": 5913,
+        "state": "MERGED",
+        "mergedAt": _iso(label + 3000),
+        "closedAt": _iso(label + 3000),
+        "headRefName": "codex/issue-5858",
+    }
+    codex_round = [receipt("codex", 5913, "c1", after, status="completed", productive=True)]
+    outcome = resolve(
+        "o/r#5913",
+        "gemini",
+        {
+            "pr view": (0, json.dumps(direct), ""),
+            "comments": (0, json.dumps([codex_round]), ""),
+        },
+    )
+    assert outcome and outcome.get("failure_class") == feedback.UNATTRIBUTED_DELEGATION, outcome
+    assert (outcome["merged"], outcome["adjudicated_verdict"]) == (None, None), outcome
+    # The legitimate case: its own branch, merged after the label, with a credited round.
+    own = {**direct, "number": 70, "headRefName": "gemini/issue-7"}
+    gemini_round = [
+        reservation("gemini", 70, "g1", after),
+        receipt("gemini", 70, "g1", after, status="completed", productive=True),
+    ]
+    outcome = resolve(
+        "o/r#7",
+        "gemini",
+        {
+            "pr view": not_a_pr,
+            "list:gemini/issue-7": (0, json.dumps([own]), ""),
+            "comments": (0, json.dumps([gemini_round]), ""),
+        },
+    )
+    assert outcome and outcome["adjudicated_verdict"] == "PASS", outcome
+    assert "PR #70 merged" in outcome["notes"], outcome
 
 
 def main(argv):

@@ -1833,15 +1833,26 @@ def record_capability_consumption(
 # So the row is terminal (the run leaves the pending set) and carries no verdict and no merge state.
 UNATTRIBUTED_CLOSING_PR = "unattributed_closing_pr"
 
+# What outcome ingest writes when a REMOTE DELEGATION's PR settled (merged or closed) and the
+# delegation cannot be shown to have produced it (`outcomes._delegated_pr_state`): the PR was
+# settled before the agent label was applied, or the delegated agent's keepalive runner has no
+# completed round on it since the label. Until 2026-10-04 such a PR was credited to whatever agent
+# the label named; all 9 merged orchestrator_remote PASS rows were of this kind (other lanes' work,
+# or nobody's). Same shape as UNATTRIBUTED_CLOSING_PR: terminal, no verdict, no merge state.
+UNATTRIBUTED_DELEGATION = "unattributed_delegation"
+
 # Failure classes whose outcome says nothing about the agent that ran, so NO learner may score them:
 # the environment killed the run (`transient_infra`, from `mark_transient_infra`), or the target
-# closed through a PR the run cannot be shown to have produced. ONE set: relearn's SQL reads it,
-# relearn_quality and exploration_review read it through `_has_outcome_evidence`, and the capability
-# tally reads it inside NONATTRIBUTABLE_FAILURE_CLASSES. The route learners named `transient_infra`
+# closed through a PR the run cannot be shown to have produced, or a delegation's PR settled without
+# the delegated agent's work on it. ONE set: relearn's SQL reads it, relearn_quality and
+# exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
+# inside NONATTRIBUTABLE_FAILURE_CLASSES. The route learners named `transient_infra`
 # alone until 2026-10-04, so 15 closed-issue rows whose issue a merged PR had closed were labelled
 # full failures (3 inside the scored population then), at least 4 of them the runs' own merged PRs.
 # "" is deliberately absent: an unclassified FAIL is an attributed verdict to these learners.
-LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset({"transient_infra", UNATTRIBUTED_CLOSING_PR})
+LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
+    {"transient_infra", UNATTRIBUTED_CLOSING_PR, UNATTRIBUTED_DELEGATION}
+)
 
 # Failure classes that must never train as capability incapability (§2): the classes above and the
 # UNCLASSIFIED bulk, every sweep-adjudicated lifecycle closure ("remote keepalive PR closed

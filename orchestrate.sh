@@ -52,9 +52,10 @@ fi
 # missing-spec recovery remains objective-only under every setting. See research_usage_guard.py.
 export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"
 # The tick's own remote dispatch lane (agent:* labels + heartbeat). Default OFF since 2026-09-03:
-# 14 dispatches in 30 days: 5 merged (2 since judged durable), 2 PRs closed unmerged, 7 labelled
-# issues closed with no PR from the labelled agent (4 delivered by codex keepalive or by hand), while
-# keepalive ran 1,239 rounds without it.
+# 14 dispatches in 30 days, none shown to be the labelled agent's work: the 5 credited merges were
+# other lanes' work or empty, the 2 PRs closed unmerged were bootstraps whose agent round never
+# completed, and 7 labelled issues closed with no PR from the labelled agent (4 delivered by codex
+# keepalive or by hand; re-measured 2026-10-04), while keepalive ran 1,239 rounds without it.
 export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
 # GitHub API rate-budget awareness (IMPROVEMENT_BACKLOG.md #8 P2). The local lanes share ONE gh token,
 # so gh-heavy cadence steps can hit the REST search (30/min) / core (5000/hr) budget. ORCH_GH_THROTTLE=1
