@@ -96,6 +96,12 @@ class Layout:
         """The private git dir exactly as the `.git` file names it, which is how codex reads it."""
         return (self.wt / ".git").read_text().split(":", 1)[1].strip()
 
+    @property
+    def expected_roots(self) -> list[str]:
+        """The grant, derived without the code under test: that git dir, then the shared dirs."""
+        shared = [str(self.common / name) for name in ("objects", "refs", "logs")]
+        return [self.gitdir_as_written, *shared]
+
 
 @pytest.fixture
 def layout(monkeypatch, tmp_path):
@@ -116,12 +122,7 @@ def _inside(path: Path, roots: list[str]) -> bool:
 def test_the_grant_is_the_worktree_git_dir_and_three_shared_dirs(layout):
     roots = adapters.codex_worktree_git_roots(layout.wt)
     common = layout.common
-    assert roots == [
-        layout.gitdir_as_written,
-        str(common / "objects"),
-        str(common / "refs"),
-        str(common / "logs"),
-    ], roots
+    assert roots == layout.expected_roots, roots
     # git's own answer names the same directory codex will protect.
     git_dir = _git(layout.wt, "rev-parse", "--absolute-git-dir").stdout.strip()
     assert Path(roots[0]).resolve() == Path(git_dir).resolve(), (roots[0], git_dir)
@@ -137,8 +138,7 @@ def test_build_command_grants_only_a_committing_workspace_write_codex_run(
     monkeypatch.delenv("CODEX_SANDBOX", raising=False)
     monkeypatch.setenv("ORCH_CODEX_BYPASS_INNER_SANDBOX", "0")
     monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
-    roots = adapters.codex_worktree_git_roots(layout.wt)
-    assert roots, "the fixture must be a linked worktree"
+    roots = layout.expected_roots
 
     granted = adapters.build_command("codex", "x", cwd=layout.wt, commits_in_worktree=True)
     assert _add_dirs(granted) == roots, granted
@@ -371,8 +371,7 @@ def test_plan_dispatch_grants_the_worktree_it_provisioned(layout, tmp_path):
     lines = [line for line in proc.stdout.splitlines() if line.startswith("RESULT ")]
     assert proc.returncode == 0 and len(lines) == 1, (proc.stdout[-3000:], proc.stderr[-3000:])
     out = json.loads(lines[0][len("RESULT ") :])
-    roots = adapters.codex_worktree_git_roots(layout.wt)
-    assert roots, "the fixture must be a linked worktree"
+    roots = layout.expected_roots
     for name, planned in out.items():
         assert Path(planned["cwd"]) == layout.wt.resolve(), (name, planned["cwd"])
         argv = planned["argv"]
