@@ -70,3 +70,28 @@ BLACK_CACHE_DIR=/tmp/gate-review-black-cache` alongside the tool `PYTHONPATH` ab
 `/tmp/gate-status-refusal-review.git`, and the applyable patch is
 `/tmp/gate-status-refusal-controls.patch`; the runner working tree retains the same two-file
 change because its `.git` directory cannot be written.
+
+The next verification round covers every same-repository verdict (`success`, `failure`,
+`error`, `pending`) through both the helper's 403 and 404 permission-refusal routes. Cases
+are grouped under the existing three refusal controls, retaining the 24-test collection and
+the unchanged-baseline result of **3 failed, 21 deselected**. Production passes **24 tests**;
+the Gate/configuration/verdict-replay regression run passes **48 tests**, all with
+`-m "not slow"`. Exports with the guard deliberately omitting `error` or `pending` produce
+**2 failed, 1 passed, 21 deselected**, demonstrating that the added assertions detect those
+regressions. Only temporary exports were mutated; production workflows and helpers are unchanged.
+
+Reconciliation reviewed `ccd4a71`, `8114039`, and `1e7752a`; the current PR changes three
+files, not the 34 claimed by the task prompt. GitHub reads confirmed PR #413 is open and ready
+and that Gate, Python 3.12/3.13, lint, format, and typecheck CI pass on `1e7752a`.
+The PR-body checkbox update, `needs-human` label, and reconciliation comment were all rejected
+with `MCP tool call requires approval, but approval policy is never`. Remote tracking remains
+unchanged. Fresh CI for this follow-up and the seven-minute review floor remain required;
+any terminal merge must still use the repository merge_guard. No merge was attempted.
+
+Black 26.5.1 formatted the changed test file and the required repository-wide check passed:
+**297 files would be left unchanged**. The upstream-source tools and worker-wakeup workaround
+described above were staged again in `/tmp/gate-review-tools`; `git diff --check` passes.
+The workspace Git directory is read-only. The follow-up commit is therefore prepared in
+`/tmp/gate-all-verdicts-review.git`, with its applyable patch at
+`/tmp/gate-all-verdicts.patch`; both changed files remain in the working tree for automation
+to commit on the PR branch.

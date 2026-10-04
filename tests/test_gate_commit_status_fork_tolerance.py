@@ -292,9 +292,12 @@ STATUS_CASES: list[dict[str, Any]] = [
     {"name": "deleted_fork", **DELETED_FORK, "state": "success", "error": REFUSED},
     *(
         {"name": f"same_repo_{state}", **SAME_REPO, "state": state, "error": REFUSED}
-        for state in ("success", "failure")
+        for state in ("success", "failure", "error", "pending")
     ),
-    {"name": "same_repo_404", **SAME_REPO, "state": "success", "error": REFUSED_404},
+    *(
+        {"name": f"same_repo_404_{state}", **SAME_REPO, "state": state, "error": REFUSED_404}
+        for state in ("success", "failure", "error", "pending")
+    ),
     {"name": "fork_404", **FORK, "state": "failure", "error": REFUSED_404},
     {"name": "deleted_fork_404", **DELETED_FORK, "state": "failure", "error": REFUSED_404},
     {"name": "rate_limit_message", **FORK, "state": "success", "error": RATE_LIMITED},
@@ -433,28 +436,30 @@ def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
 
 
 @pytest.mark.parametrize(
-    "name,state",
+    "cases",
     [
-        ("same_repo_success", "success"),
-        ("same_repo_failure", "failure"),
-        ("same_repo_404", "success"),
+        [("same_repo_success", "success")],
+        [(f"same_repo_{state}", state) for state in ("failure", "error", "pending")],
+        [(f"same_repo_404_{state}", state) for state in ("success", "failure", "error", "pending")],
     ],
+    ids=["same_repo_success-success", "same_repo_failure-failure", "same_repo_404-success"],
 )
-def test_a_same_repo_refusal_fails_loudly(status: dict, name: str, state: str) -> None:
-    """A refused same-repository status must not leave a stale verdict silently."""
-    case = status[name]
-    assert case["threw"] is not None, case
-    assert case["threw"]["message"] == (
-        "Same-repository Gate status publication was refused for headsha; "
-        f"computed verdict '{state}' was not published."
-    ), case
-    assert len(case["statusRequests"]) == 1, case
-    request = case["statusRequests"][0]
-    assert request["sha"] == "headsha" and request["state"] == state, case
-    assert request["context"] == "Gate / gate", case
-    assert case["summaryWrites"] == 0, case
-    assert any("blocked by permissions" in w for w in case["warnings"]), case
-    assert not any("read-only" in w for w in case["warnings"]), case
+def test_a_same_repo_refusal_fails_loudly(status: dict, cases: list[tuple[str, str]]) -> None:
+    """Both refusal routes fail for every verdict, retaining the three baseline controls."""
+    for name, state in cases:
+        case = status[name]
+        assert case["threw"] is not None, (name, case)
+        assert case["threw"]["message"] == (
+            "Same-repository Gate status publication was refused for headsha; "
+            f"computed verdict '{state}' was not published."
+        ), (name, case)
+        assert len(case["statusRequests"]) == 1, (name, case)
+        request = case["statusRequests"][0]
+        assert request["sha"] == "headsha" and request["state"] == state, (name, case)
+        assert request["context"] == "Gate / gate", (name, case)
+        assert case["summaryWrites"] == 0, (name, case)
+        assert any("blocked by permissions" in w for w in case["warnings"]), (name, case)
+        assert not any("read-only" in w for w in case["warnings"]), (name, case)
 
 
 def test_a_rate_limited_post_keeps_its_own_path(status: dict) -> None:
