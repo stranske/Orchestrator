@@ -112,6 +112,66 @@ class MirrorGenerationTests(unittest.TestCase):
     def publish(self):
         installer.install(self.snapshot, self.mirror, installer.snapshot_digest(self.snapshot))
 
+    def publish_with_deadline(self, timeout=10):
+        """Kill and reap publication if a paused reader keeps the exclusive lock blocked."""
+        publisher_code = """
+import fcntl
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import install_verified_snapshot as installer
+flock = fcntl.flock
+def observed_flock(fd, operation):
+    if operation == fcntl.LOCK_EX:
+        print('PUBLICATION-ATTEMPTED', file=sys.stderr, flush=True)
+    return flock(fd, operation)
+installer.fcntl.flock = observed_flock
+installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+"""
+        publisher = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                publisher_code,
+                str(Path(installer.__file__).parent),
+                str(self.snapshot),
+                str(self.mirror),
+                installer.snapshot_digest(self.snapshot),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            ready, _, _ = select.select([publisher.stderr], [], [], 10)
+            self.assertTrue(ready, "publisher did not reach the exclusive lock")
+            self.assertEqual(publisher.stderr.readline().strip(), "PUBLICATION-ATTEMPTED")
+            _, error = publisher.communicate(timeout=timeout)
+            self.assertEqual(publisher.returncode, 0, error)
+        finally:
+            with suppress(ProcessLookupError):
+                os.killpg(publisher.pid, signal.SIGKILL)
+            publisher.communicate(timeout=10)
+
+    def test_paused_reader_lock_bounds_publication_and_allows_retry(self):
+        self.publish()
+        pinned = self.mirror.resolve()
+        self.set_value("new")
+        # Negative control: emulate a reader retaining shared mode while paused.
+        # The publisher must reach flock before the short deadline starts.
+        with (self.root / ".mirror.publish.lock").open("a") as reader_lock:
+            fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.publish_with_deadline(timeout=0.5)
+            self.assertEqual(self.mirror.resolve(), pinned)
+            self.assertEqual((pinned / "module.py").read_text(), "VALUE = 'old'\n")
+        self.publish_with_deadline()
+        self.assertEqual((self.mirror / "module.py").read_text(), "VALUE = 'new'\n")
+        self.assertEqual(
+            installer.snapshot_digest(self.mirror), installer.snapshot_digest(self.snapshot)
+        )
+
     @staticmethod
     def incumbent_publish(payload, mirror, entries, expected_digest, prior_docs):
         """Negative control: deployment deletion/copy at the incumbent live pathname."""
@@ -250,12 +310,15 @@ print(json.dumps([
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            start_new_session=True,
         )
         try:
+            ready, _, _ = select.select([reader.stdout], [], [], 15)
+            self.assertTrue(ready, "reader did not report its inherited import paths")
             paths = json.loads(reader.stdout.readline())
             (self.snapshot / "later_only.py").write_text("VALUE = 'new generation only'\n")
             self.set_value("new")
-            self.publish()
+            self.publish_with_deadline()
             output, error = reader.communicate("resume\n", timeout=15)
             self.assertEqual(reader.returncode, 0, error)
             self.assertTrue((self.mirror / "later_only.py").is_file())
@@ -277,9 +340,9 @@ print(json.dumps([
                 ],
             )
         finally:
-            if reader.poll() is None:
-                reader.kill()
-                reader.communicate(timeout=10)
+            with suppress(ProcessLookupError):
+                os.killpg(reader.pid, signal.SIGKILL)
+            reader.communicate(timeout=10)
 
     def test_inherited_import_paths_exclude_later_generation_modules(self):
         external = self.root / "external"
