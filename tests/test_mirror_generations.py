@@ -395,12 +395,27 @@ print(json.dumps([
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                publication_errors = []
+
+                def publish_new_generation():
+                    try:
+                        self.publish()
+                    except BaseException as error:
+                        publication_errors.append(error)
+
+                publisher = threading.Thread(target=publish_new_generation, daemon=True)
+                publisher_started = False
                 try:
                     ready, _, _ = select.select([reader.stderr], [], [], 15)
                     self.assertTrue(ready, "first startup module did not rendezvous")
                     self.assertEqual(reader.stderr.readline().strip(), "STARTUP-READY")
                     self.set_value("new")
-                    self.publish()
+                    publisher.start()
+                    publisher_started = True
+                    publisher.join(timeout=10)
+                    self.assertFalse(publisher.is_alive(), "publication blocked on paused reader")
+                    if publication_errors:
+                        raise publication_errors[0]
                     output, error = reader.communicate("resume\n", timeout=15)
                     self.assertEqual(reader.returncode, 0, error)
                     observations = json.loads(output.splitlines()[-1])
@@ -414,6 +429,11 @@ print(json.dumps([
                     if reader.poll() is None:
                         reader.kill()
                         reader.communicate(timeout=10)
+                    if publisher_started:
+                        publisher.join(timeout=10)
+                        self.assertFalse(
+                            publisher.is_alive(), "publisher did not exit after reader cleanup"
+                        )
 
     def test_bytecode_cache_cannot_override_a_new_generation(self):
         """Timestamp/size-valid old bytecode must not be shared with verified new code."""
