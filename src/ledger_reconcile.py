@@ -63,8 +63,8 @@ def provider_limit_before_work(lines: list[str]) -> dict | None:
     Exact or nothing. The evidence is the harness's own terminal `turn.failed` event, whose message
     the one text authority (`rate_incidents.classify_provider_failure`) rates as a high-confidence
     provider limit, in a segment where no work event appears at all. A phrase in the transcript is
-    never enough: on 2026-10-04, 233 run segments held a usage-limit phrase and 106 of the codex
-    ones were prose or command output.
+    never enough: on 2026-10-04, 233 dispatch-log segments held a usage-limit phrase; of the 106
+    codex ones, 15 carried the refusal event and 91 had the phrase only in prose or command output.
 
     Only codex's `exec --json` stream can say that nothing ran, so this reads that schema and no
     other. claude (`-p`), cursor and vibe log only their final text, and gemini records its tool
@@ -240,8 +240,8 @@ def _classify_run_log_segment(
     try:
         combined_text = "\n".join(lines)
         # The harness's own refusal event is provider evidence whatever the exit code: codex exits
-        # 0 on a refused turn, so the gate below read all five 2026-09-15 refusals as successful
-        # output and none of them recorded an incident or shed the seat.
+        # 0 on a refused turn, so the gate below took all five 2026-09-15 refusals for ordinary
+        # output (exit 0 or unknown), and none of them recorded an incident or shed the seat.
         refusal = provider_limit_before_work(lines)
         if refusal is not None:
             combined_text = refusal["message"]
