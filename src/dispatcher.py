@@ -990,6 +990,10 @@ def _spawn(d: dict) -> int:
             str(d.get("profile_policy_version") or ""),
             "--propensity",
             str(d.get("profile_assignment_probability") or 0.0),
+            # The worktree the agent ran in: completion records the branches it pushed from there,
+            # which outcome ingest walks before the name-pattern candidates (pushed_branches.py).
+            "--workspace",
+            str(d.get("cwd") or ""),
         ]
     )
     # Marker BEFORE the python completion: the python step gets SIGKILLed in the wild (audit F2);

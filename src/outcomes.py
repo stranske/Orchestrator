@@ -28,6 +28,14 @@ A settled PR without that evidence records no verdict, `feedback.UNATTRIBUTED_DE
 no learner scores. Until 2026-10-04 the resolver walked every agent's branch and
 `orchestrator/issue-N` and credited the first PR found, and a labelled PR's merge went to whatever
 agent the label named.
+
+A local run's candidates START with the branches it pushed from its own worktree, which its
+completion step read from git's reflogs (`pushed_branches.py`, stored in `feedback.run_pushes`).
+Agents name their own branches, so a PR there is the exact answer the name patterns can only guess
+at, and it is credited only if it is the PR the run OPENED: head == branch, created at or after the
+run started. One that predates the run is rejected and its branch is not asked again. No record, an
+unreadable one or an empty one leaves the walk exactly as it was. The summary's `push_records`
+counts what happened (`credited`, `rejected`) and what was missing (`absent`, `unreadable`).
 `--selftest` runs fully offline (mocked PR states + temp store).
 """
 
@@ -44,7 +52,11 @@ import time
 
 import feedback
 import provision
+import pushed_branches
 import utc_epoch
+
+# The PR dict's `credited_via` for a PR found on a branch the run itself pushed (`_pushed_branch_pr`).
+PUSHED_BRANCH = "pushed_branch"
 
 # A GitHub lookup here answers one of three ways: it FOUND the thing, it answered that there is
 # NOTHING there, or it could not answer (gh failed, or printed something that does not parse). Only
@@ -143,7 +155,7 @@ def _pr_list_by_head(repo: str, branch: str) -> dict | None:
             "--state",
             "all",
             "--json",
-            "number,title,url,headRefName,state,mergedAt,closedAt",
+            "number,title,url,headRefName,state,mergedAt,closedAt,createdAt",
             "--limit",
             "1",
         ],
@@ -495,10 +507,50 @@ def _local_candidate_branches(num: int, agent: str | None = None) -> list[str]:
     return result
 
 
-def _local_pr_state(target: str, agent: str | None = None) -> dict | None:
+def _pushed_branch_pr(
+    repo: str, branches: list[str], start_ts: int
+) -> tuple[dict | None, list[str]]:
+    """Walk the branches the run pushed; return `(answer, rejected)`.
+
+    The answer is the first PR the run OPENED on one of them (`credited_via` == `PUSHED_BRANCH`), or the
+    first lookup that could not answer, which skips the run until the next ingest exactly as on any
+    candidate branch. A PR record that cannot be checked against the window (no head, no creation
+    time) is such a lookup too: unknown is neither credited nor rejected. `rejected` names every PR
+    found on a pushed branch that predates the run. The run pushed onto it and did not open it, so
+    it is not this run's delivery, and the caller does not ask that branch again.
+    """
+    rejected: list[str] = []
+    for branch in branches:
+        answer = _pr_list_by_head(repo, branch)
+        if answer is None:
+            continue
+        if answer.get("lookup_status") != "found":
+            return answer, rejected
+        opened = pushed_branches.pr_opened_in_window(answer, branch, start_ts)
+        if opened is None:
+            return {
+                "lookup_status": "parse_failed",
+                "branch": branch,
+                "error": "the PR on a pushed branch has no headRefName or createdAt to check",
+            }, rejected
+        if opened:
+            answer["credited_via"] = PUSHED_BRANCH
+            return answer, rejected
+        rejected.append(f"#{answer.get('number')} on {branch}")
+    return None, rejected
+
+
+def _local_pr_state(
+    target: str, agent: str | None = None, pushes: dict | None = None
+) -> dict | None:
     """Live: a LOCAL delegate's target is an ISSUE (owner/repo#N); its agent opened a PR on the
-    deterministic branch orchestrator/issue-N (provision.py). Resolve that PR's state (most recent
-    if several) so local-agent delegations close the loop the same way remote ones do.
+    deterministic branch orchestrator/issue-N (provision.py), or on a branch it named itself.
+    Resolve that PR's state (most recent if several) so local-agent delegations close the loop the
+    same way remote ones do.
+
+    `pushes` is the run's push record (`feedback.run_pushes`). Its branches are asked FIRST, through
+    `_pushed_branch_pr`, and are not asked again among the name-pattern candidates. Without a READ
+    record that has branches, every lookup below is exactly what it was before the record existed.
     """
     repo, num = provision.parse_target(target)
     if num is None:
@@ -507,22 +559,39 @@ def _local_pr_state(target: str, agent: str | None = None) -> dict | None:
     if direct_pr:
         return direct_pr
 
-    candidates = _local_candidate_branches(num, agent)
+    pushed = pushed_branches.recorded_branches(pushes)
+    rejected: list[str] = []
+    if pushed and pushes is not None:
+        pr, rejected = _pushed_branch_pr(repo, pushed, int(pushes["window_start"]))
+        if pr is not None:
+            pr["target"] = target
+            pr["candidateBranches"] = pushed
+            if rejected:
+                pr["pushedBranchRejected"] = rejected
+            return pr
+    candidates = [
+        branch for branch in _local_candidate_branches(num, agent) if branch not in pushed
+    ]
+    asked = pushed + candidates
+    extra = {"pushedBranchRejected": rejected} if rejected else {}
     pr = _branch_pr_lookup(repo, candidates)
     if pr is not None:
         # FOUND: its state decides. Unanswered: it carries no state, so the run is skipped.
         pr["target"] = target
-        pr["candidateBranches"] = candidates
+        pr["candidateBranches"] = asked
+        pr.update(extra)
         return pr
-    terminal_issue = _closed_issue_without_branch_pr(repo, num, candidates[0])
+    terminal_issue = _closed_issue_without_branch_pr(repo, num, asked[0])
     if terminal_issue is not None:
-        terminal_issue["candidateBranches"] = candidates
+        terminal_issue["candidateBranches"] = asked
+        terminal_issue.update(extra)
         return terminal_issue
     return {
         "lookup_status": "no_pr_for_branch",
         "target": target,
-        "branch": candidates[0],
-        "candidateBranches": candidates,
+        "branch": asked[0],
+        "candidateBranches": asked,
+        **extra,
     }
 
 
@@ -622,12 +691,24 @@ def state_to_outcome(pr: dict | None) -> dict | None:
     st = (pr.get("state") or "").upper()
     if pr.get("delegation") and (st in ("MERGED", "CLOSED") or pr.get("mergedAt")):
         return _delegation_outcome(pr)
+    # A PR the run opened on a branch it pushed is named in the notes as `PR #N merged`, the form
+    # durability_sweep.EXPLICIT_MERGED_PR_RE reads, so the sweep resolves the exact PR for a run
+    # whose target is the issue. Until 2026-10-04 that contract had no code writer.
+    own = pr.get("credited_via") == PUSHED_BRANCH
+    own_pr = f"local delegate PR #{pr.get('number')}"
+    own_branch = f"on the branch this run pushed ({pr.get('headRefName') or pr.get('branch')})"
+    rejected = "; ".join(pr.get("pushedBranchRejected") or [])
+    rejected_note = f"; a PR on a branch this run pushed predates the run: {rejected}"
     if st == "MERGED" or pr.get("mergedAt"):
         return {
             "merged": True,
             "adjudicated_verdict": "PASS",
             "durability": "pending",
-            "notes": "remote keepalive PR merged; durability pending sweep",
+            "notes": (
+                f"{own_pr} merged {own_branch}; durability pending sweep"
+                if own
+                else "remote keepalive PR merged; durability pending sweep"
+            ),
         }
     if st == "CLOSED":
         if pr.get("lookup_status") in CLOSED_ISSUE_LOOKUPS:
@@ -647,9 +728,13 @@ def state_to_outcome(pr: dict | None) -> dict | None:
                     "notes": (
                         f"{kind} issue closed by a PR no candidate branch produced ({closing}); "
                         f"not attributed to this run; closing_pr_count={closing_pr_count}"
+                        + (rejected_note if rejected else "")
                     ),
                 }
             notes = f"{kind} issue closed without matching branch PR; no closing PR references"
+            notes += rejected_note if rejected else ""
+        elif own:
+            notes = f"{own_pr} closed unmerged {own_branch}"
         else:
             notes = "remote keepalive PR closed unmerged"
         return {
@@ -731,6 +816,8 @@ def _skip_detail(run: dict, pr: dict | None) -> dict:
         "headRefName",
         "branch",
         "candidateBranches",
+        "credited_via",
+        "pushedBranchRejected",
         "direct_target_pr",
         "title",
         "error",
@@ -799,30 +886,48 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
     pending = _pending_runs(mode)
     recorded, skipped = [], []
     pending_durability = []
+    # Local runs only: a remote delegation runs on GitHub, so there is no worktree to have read and
+    # the counts would describe nothing (`None`, not zeros). For local runs all four keys are always
+    # present: `absent` and `unreadable` are the runs still resolved by name patterns alone.
+    push_records = (
+        {"credited": 0, "rejected": 0, "absent": 0, "unreadable": 0} if mode == "local" else None
+    )
     for run in pending:
         if run.get("has_outcome") and run.get("existing_durability") == "pending":
             pending_durability.append(_pending_durability_detail(run))
             continue
+        pushes = feedback.run_pushes(run["run_id"]) if push_records is not None else None
+        if push_records is not None:
+            if pushes is None:
+                push_records["absent"] += 1
+            elif pushes["status"] == "unreadable":
+                push_records["unreadable"] += 1
         if _state_fn:
             pr = _state_fn(run["target"])
         elif mode == "local":
-            pr = _local_pr_state(run["target"], run.get("agent"))
+            pr = _local_pr_state(run["target"], run.get("agent"), pushes=pushes)
         elif run.get("source") == DELEGATION_SOURCE:
             pr = _delegated_pr_state(run["target"], run.get("agent"), run.get("ts"))
         else:
             pr = _pr_state(run["target"], run.get("agent"))
+        if push_records is not None and pr and pr.get("pushedBranchRejected"):
+            push_records["rejected"] += 1
         oc = state_to_outcome(pr)
         if oc is None:
             skipped.append(_skip_detail(run, pr))
             continue
         if not dry_run:
             feedback.record_outcome(run["run_id"], **oc)
+        credited_via = pr.get("credited_via") if pr else None
+        if push_records is not None and credited_via == PUSHED_BRANCH:
+            push_records["credited"] += 1
         recorded.append(
             {
                 "run_id": run["run_id"],
                 "merged": oc["merged"],
                 "durability": oc["durability"],
                 "failure_class": oc.get("failure_class"),
+                "credited_via": credited_via,
             }
         )
     return {
@@ -837,6 +942,7 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
         # candidate branch produced, or a delegation's own PR settled without its agent's work on
         # it. Always present for the same reason as `unanswered`.
         "unattributed": sum(1 for row in recorded if row["failure_class"] in UNATTRIBUTED_CLASSES),
+        "push_records": push_records,
         "pending_durability": len(pending_durability),
         "details": recorded,
         "skipped_details": skipped,
@@ -869,6 +975,11 @@ def ingest_modes(
         "skipped": sum(row.get("skipped", 0) for row in results),
         "unanswered": sum(row.get("unanswered", 0) for row in results),
         "unattributed": sum(row.get("unattributed", 0) for row in results),
+        # Only the local path reads push records, so its counts are the whole answer; with no local
+        # path in this run there is nothing to report, which is None and never a row of zeros.
+        "push_records": next(
+            (row["push_records"] for row in results if row.get("push_records") is not None), None
+        ),
         "pending_durability": sum(row.get("pending_durability", 0) for row in results),
         "skipped_details": skipped_details,
         "pending_durability_details": pending_durability_details,
@@ -1065,6 +1176,55 @@ def _selftest():
     assert (answered["recorded"], answered["unanswered"]) == (1, 0), answered
     assert answered["details"][0]["durability"] == "abandoned", answered
     _selftest_delegation_attribution()
+    # A branch the run pushed (its push record) is asked FIRST, and the PR the run opened there is
+    # its delivery: credited, and named `PR #N merged` for the durability sweep. A PR on that branch
+    # created before the run started is not the run's. Own store, stubbed gh.
+    feedback.DB_PATH = Path(tmp) / "pushed.db"
+    feedback.record_run("o__r_12-codex-1", "o/r#12", "implement", "codex", mode="local")
+    feedback.record_run_pushes(
+        "o__r_12-codex-1",
+        status="read",
+        window_start=1000,
+        window_end=2000,
+        branches=[{"branch": "fix/12-own-name", "sha": "a" * 40, "pushed_ts": 1500}],
+    )
+    pr_created = {"at": "1970-01-01T00:25:00Z"}  # 1500: inside the run's window
+
+    def _gh_pushed(argv, **_kw):
+        if argv[1:3] == ["pr", "list"] and argv[argv.index("--head") + 1] == "fix/12-own-name":
+            found = {
+                "number": 13,
+                "state": "MERGED",
+                "mergedAt": "1970-01-01T00:30:00Z",
+                "headRefName": "fix/12-own-name",
+                "createdAt": pr_created["at"],
+            }
+            return subprocess.CompletedProcess(argv, 0, json.dumps([found]), "")
+        if argv[1:3] == ["pr", "list"]:
+            return subprocess.CompletedProcess(argv, 0, "[]", "")
+        if argv[1:3] == ["issue", "view"]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"state": "OPEN"}), "")
+        return subprocess.CompletedProcess(argv, 1, "", "not a pull request")
+
+    try:
+        subprocess.run = _gh_pushed
+        own = ingest_outcomes(mode="local", dry_run=True)
+        pr_created["at"] = "1970-01-01T00:16:00Z"  # 960: before the run started
+        older = ingest_outcomes(mode="local", dry_run=True)
+    finally:
+        subprocess.run = real_run
+    assert own["push_records"] == {"credited": 1, "rejected": 0, "absent": 0, "unreadable": 0}
+    assert own["details"][0]["credited_via"] == PUSHED_BRANCH, own
+    assert (
+        "PR #13 merged on the branch this run pushed"
+        in state_to_outcome(
+            {"state": "MERGED", "number": 13, "headRefName": "b", "credited_via": PUSHED_BRANCH}
+        )["notes"]
+    )
+    assert (older["recorded"], older["push_records"]["rejected"]) == (0, 1), (
+        "a PR on a pushed branch that predates the run was credited to it",
+        older,
+    )
     import shutil
 
     shutil.rmtree(tmp, ignore_errors=True)
@@ -1073,7 +1233,8 @@ def _selftest():
         "open skipped, merged stays pending for durability sweep, unanswered lookups skipped "
         "and retried rather than abandoned, a closing PR no candidate branch produced recorded "
         "as unattributed rather than failed, a delegation credited only with its own PR and its "
-        "agent's completed runner rounds)"
+        "agent's completed runner rounds, a PR the run opened on a branch it pushed credited "
+        "and one that predates the run rejected)"
     )
 
 

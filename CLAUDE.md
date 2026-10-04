@@ -408,6 +408,10 @@ Do not create a second event log, model registry, or capability inventory.
   `unattributed_delegation` (none of the 9 merged delegation PASS rows met that bar). Every learner
   excludes all three classes through ONE set, `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a
   role run inherits the class with the verdict.
+  A LOCAL run's candidates start with the branches it pushed from its own worktree, read from git's
+  reflogs when it completes (`pushed_branches.py`, Brain table `run_pushes`), never from the
+  transcript. A PR there counts only if the run opened it inside its window, and a run without a
+  usable record resolves exactly as before: unknown is not false.
 - Missing cost/effort telemetry must never read as "free" — impute it (see feedback.relearn_quality).
   And a PARTIAL or sparse number is UNMEASURED, not cheap: cost enters the learners on one scale only
   (`feedback.COST_SCALE`, from `COMPLETE_COST_SOURCES` at `MIN_COST_COVERAGE` coverage); a LangSmith
