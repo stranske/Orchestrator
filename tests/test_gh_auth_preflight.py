@@ -267,7 +267,7 @@ def test_an_authenticated_token_runs_everything(tmp_path: Path) -> None:
     assert [c.split()[:3] for c in calls] == [
         ["api", "--include", "user"],
         ["api", "--include", "graphql"],
-        ["api", "rate_limit"],  # the budget gate still probes when nothing deferred it
+        ["api", "--include", "user"],  # the budget gate reads core with a real call, not rate_limit
     ], calls
 
 
@@ -282,11 +282,16 @@ def test_a_classifier_that_fails_defers_and_says_so(tmp_path: Path) -> None:
     assert proc.stdout.rstrip().endswith("GATE-DEFERRED"), proc.stdout
 
 
-def test_a_shadow_tick_asks_nothing(tmp_path: Path) -> None:
+def test_a_shadow_tick_runs_no_preflight(tmp_path: Path) -> None:
     proc, calls = _run_preflight(tmp_path, "rate-limited", mode="shadow")
     assert proc.returncode == 0, proc.stderr
     assert "gh rate-limited" not in proc.stdout, "shadow is attended and read-only; no preflight"
-    assert not [c for c in calls if "--include" in c], calls
+    assert "deferred by the gh preflight" not in proc.stderr, proc.stderr
+    # Its one GitHub question is the budget gate's own real reading, which sees the spent budget
+    # that the exempt rate_limit endpoint reported as a fresh 5000/5000.
+    assert calls == ["api --include user"], calls
+    assert proc.stdout.rstrip().endswith("GATE-DEFERRED"), proc.stdout
+    assert "gh_capacity gate[core]: shed — 0/5000 remaining; refused (HTTP 403: " in proc.stderr
 
 
 # --- The whole tick, every module stubbed -------------------------------------------------------

@@ -12,28 +12,39 @@ per resource, a READ-TIME reduction over an append-only NDJSON ledger (design §
 event log; never rewritten"), fail-open, `--selftest` fully offline. No scoring, no learning here —
 it only answers "does the shared gh budget have headroom for resource X right now?".
 
-Signals, in priority (cf. capacity.py's "429 is authoritative" inversion):
-  1. `x-ratelimit-*` response headers from REAL `gh api` calls, fed for FREE by `gh_run()` (no extra
-     probe) — the read-time ledger, exactly capacity.json's pattern.
-  2. `probe()`: `gh api rate_limit` (a FREE endpoint that does not count against any budget) seeds /
-     refreshes the ledger on demand (cold start, the `orchestrate.sh` tick gate, the snapshot).
-Both append the same ledger rows; `state()`/`throttle()` read the most recent row per resource and
-reason over remaining-vs-limit and the window reset (past reset => the window refilled => OK).
+Where a figure comes from decides whether it is one (cf. capacity.py's "429 is authoritative"):
+  * A REAL row (`REAL_SOURCES`) carries the `x-ratelimit-*` headers GitHub returned on a call that
+    drew from the bucket: `gh_run()`, the auth preflight, and the gate's own reading. It is the
+    bucket's own count.
+  * A `probe` row comes from `gh api rate_limit`, which is exempt from the limit and answers from
+    another count. For core and graphql it has reported a fresh bucket while real calls showed
+    hundreds spent, and while every real call was refused (`REAL_MEASURE` has the dates). It is a
+    measurement only where it has been seen to agree with a real call: search.
+`measure()` takes one reading: a real call for core and graphql, the free probe for search, whose
+30/min budget a real call would spend. `state()`/`throttle()` reason over `_authoritative_row()`,
+the newest REAL row until the bucket it measured refills (past the reset => OK), however much newer
+a probe row is, and never a probe row for core or graphql. Until 2026-10-04 the newest row won
+whatever its source and the gate re-probed before every verdict, so the exempt endpoint's 5000/5000
+superseded every true count and no core or graphql exhaustion could ever SHED.
 
 `throttle(resource)`: paces (sleep to glide under the per-window rate when LOW) or defers (when SHED,
 returns action='defer' rather than blocking for up to an hour) so rate-heavy ops degrade gracefully.
-`orchestrate.sh`'s `--gate <resource>` skips a SHED step this tick (stamp untouched -> retried).
+It reads the ledger only, so inside a long step it reasons over the reading the step's gate took.
+`orchestrate.sh`'s `--gate <resource>` takes a fresh reading and skips a SHED step this tick (stamp
+untouched -> retried).
 
 `--auth-preflight` (`auth_preflight()`): the `--active` tick's first question, asked with REAL calls.
 It tells "GitHub cannot answer now" (rate-limited, unreachable) from "the token is missing or refused",
 which `gh auth status` reports with one exit code. Only the second aborts the tick.
 
-Read-only and safe; fail-open everywhere (probe failure or no data => OK/proceed, never a false halt).
+Read-only and safe; fail-open everywhere (a reading that measured nothing, or no data => proceed,
+never a false halt).
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -84,6 +95,30 @@ MAX_PACE_S = 10.0  # cap one throttle pace/short-defer sleep so a cron tick neve
 GATE_SHED_EXIT = 75  # --gate exit code when the resource is SHED (0 otherwise, fail-open)
 TRACKED = ("core", "search", "graphql")
 
+# Ledger row `source`s whose figures are the x-ratelimit-* headers of a call that drew from the
+# bucket: the bucket's own count. The other source, `probe`, is not always one (below).
+REAL_SOURCES = frozenset({"call", "preflight", "gate"})
+# The resources `gh api rate_limit` has been MEASURED misreporting, each with the one real call that
+# reads it instead. That endpoint is exempt from the limit and answers from another count: core and
+# graphql 5000/5000 while every real call was refused (2026-09-23); core 5000/5000 used 0 while a
+# real call showed 606 used (2026-10-02); core 5000/5000 used 0 against a real 66 used, and graphql
+# 4998 left against a real 4613 (2026-10-04). Search agreed that day (30/30, then 29/30 after one
+# real search), and a real search call would spend the 30/min budget the gate protects, so search
+# keeps the free probe. ONE table: the resources the gate spends a real call on, the resources no
+# probe row can speak for, and the preflight's two calls are the same set by construction.
+REAL_MEASURE: dict[str, list[str]] = {
+    "core": ["user"],  # one core request
+    "graphql": ["graphql", "-f", "query={ viewer { login } }"],  # one GraphQL point
+}
+MEASURE_TIMEOUT_S = 10  # the bound the probe it replaces had: a hung GitHub costs a step 10s
+SECONDARY_WAIT_S = 60  # GitHub's documented minimum wait after a refusal that names no lift time
+SOURCE_LABELS = {
+    "gate": "a real call",
+    "call": "a real call",
+    "preflight": "the preflight's real call",
+    "probe": "the rate_limit probe",
+}
+
 
 def _append_ledger(rows: list[dict]) -> None:
     """Append-only (single '>>'), never rewritten — no two-writer lost-update race (design §4.2)."""
@@ -96,11 +131,11 @@ def _append_ledger(rows: list[dict]) -> None:
             f.write(json.dumps(r) + "\n")
 
 
-def _latest_ledger(resource: str) -> dict | None:
-    """Most recent ledger row for `resource` — the read-time reduction (cf. capacity._ledger_usage)."""
+def _ledger_rows(resource: str) -> list[dict]:
+    """Every readable ledger row for `resource`, in append order."""
     if not GH_LEDGER.exists():
-        return None
-    latest = None
+        return []
+    rows = []
     for line in GH_LEDGER.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -109,20 +144,70 @@ def _latest_ledger(resource: str) -> dict | None:
             r = json.loads(line)
         except Exception:
             continue
-        if r.get("resource") != resource:
+        if not isinstance(r, dict) or r.get("resource") != resource:
             continue
-        ts = r.get("ts", 0)
-        if not isinstance(ts, (int, float)):
+        if not isinstance(r.get("ts", 0), (int, float)):
             continue
-        if latest is None or ts >= latest.get("ts", 0):
+        rows.append(r)
+    return rows
+
+
+def _latest_ledger(resource: str) -> dict | None:
+    """The newest row for `resource`, WHATEVER its source. Evidence only: `state()` never reasons
+    over it, because the newest row is usually the exempt probe's (see `_authoritative_row`)."""
+    latest = None
+    for r in _ledger_rows(resource):
+        if latest is None or r.get("ts", 0) >= latest.get("ts", 0):
             latest = r
     return latest
 
 
-def probe(*, timeout_s: int = 10, runner=subprocess.run) -> dict | None:
-    """Read `gh api rate_limit` (FREE; does not count against any budget) and seed the ledger with
-    one row per resource. Returns the `resources` dict or None on failure (fail-open: callers proceed).
-    """
+def _window_bound(row: dict, resource: str) -> float:
+    """One documented window after the reading: no bucket outlives it, so neither may a reading."""
+    ts = row.get("ts")
+    return (float(ts) if isinstance(ts, (int, float)) else 0.0) + WINDOW_SECONDS.get(resource, 3600)
+
+
+def _window_end(row: dict, resource: str) -> float:
+    """When the bucket `row` measured refills: its reported reset, never past `_window_bound`, so a
+    wrong header cannot hold the gate. The ONE answer both `_authoritative_row` (how long a real row
+    speaks for its bucket) and `state()` (when the budget counts as refilled) read."""
+    reset = row.get("reset")
+    if isinstance(reset, (int, float)) and reset > 0:
+        return min(float(reset), _window_bound(row, resource))
+    return _window_bound(row, resource)
+
+
+def _authoritative_row(resource: str, *, now: float) -> tuple[dict | None, bool]:
+    """The row `state()` reasons over, and whether a newer row was passed over to choose it.
+
+    The newest REAL row, while the bucket it measured has not refilled, however much newer a probe
+    row is. Past that window a `REAL_MEASURE` resource still reads only its real rows: an expired
+    one says the bucket refilled, and none at all is UNKNOWN, because no probe row measures it. Any
+    other resource falls back to its newest row, probe included, which is how search is read."""
+    newest: dict | None = None
+    newest_real: dict | None = None
+    for r in _ledger_rows(resource):
+        if newest is None or r.get("ts", 0) >= newest.get("ts", 0):
+            newest = r
+        if r.get("source") in REAL_SOURCES and (
+            newest_real is None or r.get("ts", 0) >= newest_real.get("ts", 0)
+        ):
+            newest_real = r
+    if resource in REAL_MEASURE or (
+        newest_real is not None and now < _window_end(newest_real, resource)
+    ):
+        return newest_real, newest is not newest_real
+    return newest, False
+
+
+def probe(*, timeout_s: int = MEASURE_TIMEOUT_S, runner=subprocess.run) -> dict | None:
+    """Read `gh api rate_limit` (FREE: exempt from every budget) and append one row per resource.
+    Returns the `resources` dict or None on failure (fail-open: callers proceed).
+
+    Exempt is not the same as accurate. Its rows are kept as evidence for every resource, and are a
+    measurement only for the resources outside `REAL_MEASURE`: `_authoritative_row` never reasons
+    over a probe row for core or graphql."""
     try:
         r = runner(["gh", "api", "rate_limit"], capture_output=True, text=True, timeout=timeout_s)
     except Exception:
@@ -218,41 +303,62 @@ def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runn
     return getattr(r, "returncode", 1), parsed
 
 
-def state(resource: str, *, _row: dict | None = None) -> tuple[str, dict]:
-    """4-state read-time verdict for one resource (pure: reads the ledger, makes NO gh calls)."""
-    row = _row if _row is not None else _latest_ledger(resource)
-    now = time.time()
-    if not row or row.get("remaining") is None or row.get("limit") is None:
-        return UNKNOWN, {
-            "resource": resource,
-            "pace_s": 0.0,
-            "reset_in_s": 0,
-            "reason": "no rate data; proceed (fail-open)",
-        }
-    remaining, limit = row["remaining"], row.get("limit") or 0
-    reset = row.get("reset") or 0
-    reset_in = max(0, int(reset - now)) if reset else 0
-    # Past the reset => the window refilled; the stale `remaining` no longer applies.
-    if reset and reset <= now:
-        return OK, {
-            "resource": resource,
-            "remaining": limit,
-            "limit": limit,
-            "reset_in_s": 0,
-            "pace_s": 0.0,
-            "reason": f"window reset; full budget ({limit})",
-        }
-    reserve = RESERVE.get(resource, DEFAULT_RESERVE)
-    frac = (remaining / limit) if limit else 0.0
+def state(resource: str, *, _row: dict | None = None, now: float | None = None) -> tuple[str, dict]:
+    """4-state read-time verdict for one resource (pure: reads the ledger, makes NO gh calls).
+
+    It reasons over `_authoritative_row()`, or over `_row`, a reading already in hand, and says
+    where its figure came from and how old it is (`source`, `measured_s_ago`)."""
+    now = time.time() if now is None else now
+    row, passed_over = (_row, False) if _row is not None else _authoritative_row(resource, now=now)
+    if not row:
+        reason = "no rate data; proceed (fail-open)"
+        if passed_over:  # one sentinel must not mean both "cannot measure" and "measured: full"
+            reason = (
+                f"no real measurement of {resource}; the exempt rate_limit probe's figure is not "
+                "one; proceed (fail-open)"
+            )
+        return UNKNOWN, {"resource": resource, "pace_s": 0.0, "reset_in_s": 0, "reason": reason}
     window = WINDOW_SECONDS.get(resource, 3600)
-    meta = {
+    ts = row.get("ts")
+    meta: dict[str, Any] = {
         "resource": resource,
-        "remaining": remaining,
-        "limit": limit,
-        "reset_in_s": reset_in,
+        "remaining": row.get("remaining"),
+        "limit": row.get("limit"),
+        "reset_in_s": 0,
         "window_s": window,
         "pace_s": 0.0,
+        "source": row.get("source"),
+        "measured_s_ago": max(0, int(now - ts)) if isinstance(ts, (int, float)) else None,
     }
+    # GitHub refused the reading call itself: a spent budget, or a secondary limit, which answers
+    # 403 with budget left and a Retry-After. The next call would be refused too, until the lift.
+    lift = row.get("limited_until")
+    if isinstance(lift, (int, float)) and min(float(lift), _window_bound(row, resource)) > now:
+        lift = min(float(lift), _window_bound(row, resource))
+        wait = math.ceil(lift - now)
+        left = row.get("remaining"), row.get("limit")
+        figures = f"{left[0]}/{left[1]} remaining; " if None not in left else ""
+        refusal = row.get("refusal") or "rate limited"
+        meta.update(
+            reset_in_s=wait,
+            reason=f"{figures}refused ({refusal}) until {_iso(int(lift))}; defer ~{wait}s",
+        )
+        return SHED, meta
+    end = _window_end(row, resource)
+    # Past the reset => the window refilled; the stale `remaining` no longer applies.
+    if end <= now:
+        limit = row.get("limit")
+        full = f"full budget ({limit})" if limit is not None else "budget refilled"
+        meta.update(remaining=limit, reason=f"window reset; {full}")
+        return OK, meta
+    remaining, limit = row.get("remaining"), row.get("limit")
+    if not isinstance(remaining, (int, float)) or not isinstance(limit, (int, float)):
+        meta["reason"] = "the reading carried no budget figures; proceed (fail-open)"
+        return UNKNOWN, meta
+    reset_in = max(0, int(end - now))
+    meta["reset_in_s"] = reset_in
+    reserve = RESERVE.get(resource, DEFAULT_RESERVE)
+    frac = (remaining / limit) if limit else 0.0
     if remaining <= reserve or frac <= SHED_FRAC:
         meta["reason"] = (
             f"{remaining}/{limit} remaining (<= reserve {reserve} or {SHED_FRAC:.0%}); "
@@ -306,28 +412,63 @@ def throttle_if_enabled(resource: str, **kw) -> dict | None:
         return None
 
 
+def _reading(
+    resource: str, *, runner=subprocess.run, now: float | None = None
+) -> tuple[str, dict, dict]:
+    """One fresh reading of `resource`, reduced: (state, meta, what `measure()` did). The gate and
+    the snapshot both read through here, so they cannot measure differently. A reading that measured
+    nothing falls back to the ledger: the newest REAL row stands until its bucket refills."""
+    now = time.time() if now is None else now
+    taken = measure(resource, runner=runner, now=now)
+    row = taken["row"]
+    if row is not None and row.get("resource") == resource:
+        st, meta = state(resource, _row=row, now=now)
+    else:
+        st, meta = state(resource, now=now)
+    return st, meta, taken
+
+
+def _gate_line(resource: str, st: str, meta: dict, taken: dict) -> str:
+    """The tick log's line: the verdict with its blocking figure and its drain (the reset), where
+    the figure came from, and, when this gate's own reading produced nothing, why not."""
+    line = f"gh_capacity gate[{resource}]: {st} — {meta.get('reason', '')}"
+    source = meta.get("source")
+    if source:
+        label = SOURCE_LABELS.get(source, source)
+        line += f" (measured by {label} {meta.get('measured_s_ago')}s ago)"
+    if taken["row"] is None and (taken["how"] == "real call" or taken["verdict"] != "ok"):
+        line += f"; this gate's {taken['how']} was {taken['verdict']}: {taken['detail']}"
+    return line
+
+
 def build(*, runner=subprocess.run) -> dict:
-    """Probe + snapshot the tracked resources (what `gh_capacity.py` with no args writes/prints)."""
-    resources = probe(runner=runner)
-    out: dict[str, Any] = {
-        "generated_at": int(time.time()),
-        "probe_ok": resources is not None,
-        "resources": {},
-    }
+    """Measure + snapshot the tracked resources (what `gh_capacity.py` with no args writes/prints),
+    through the gate's own `_reading()`."""
+    now = time.time()
+    out: dict[str, Any] = {"generated_at": int(now), "probe_ok": None, "resources": {}}
     for name in TRACKED:
-        st, meta = state(name)
-        out["resources"][name] = {"state": st, **meta}
+        st, meta, taken = _reading(name, runner=runner, now=now)
+        if taken["how"] == "probe":
+            out["probe_ok"] = taken["verdict"] == "ok"
+        out["resources"][name] = {"state": st, "measured_by": taken["how"], **meta}
     return out
 
 
+# The gate's latched-gate answers (~/.claude/skills/latched-gate-check). What drains a SHED: the
+# bucket's reset, a recorded epoch `state()` compares with the clock on every read, plus each later
+# reading superseding the row. Both run while the gate is shut: the comparison makes no call, and
+# the gate's own reading is not behind the gate. One window measures and drains: `_window_end`.
+# Fully drained it prints "ok — N/N remaining" or "window reset; full budget (N)" (selftest 9).
 def _gate(resource: str, *, runner=subprocess.run) -> int:
-    """orchestrate.sh hook: always re-probe (FREE rate_limit endpoint) for a real-time, cross-step
-    view of the SHARED budget, then exit non-zero ONLY when SHED. Fail-open: UNKNOWN/OK/LOW => 0, so a
-    broken probe (or budget an earlier step already used, leaving stale data) never silently halts the
-    cadence — a SHED step defers to the next tick (stamp untouched)."""
-    probe(runner=runner)
-    st, meta = state(resource)
-    print(f"gh_capacity gate[{resource}]: {st} — {meta.get('reason', '')}", file=sys.stderr)
+    """orchestrate.sh hook: take one fresh reading of `resource` (`measure()`), then exit non-zero
+    ONLY when SHED. Core and graphql are read with one real call, so an exhaustion that began after
+    the tick's preflight measured closes the next gated step. Until 2026-10-04 this re-probed the
+    exempt `rate_limit` endpoint, whose fresh 5000/5000 then superseded every true row, so no core
+    or graphql exhaustion could SHED here. Fail-open: a reading that measured nothing falls back to
+    the newest REAL row while its bucket has not refilled, else UNKNOWN; UNKNOWN/OK/LOW exit 0, and
+    a SHED step defers to the next tick (stamp untouched)."""
+    st, meta, taken = _reading(resource, runner=runner)
+    print(_gate_line(resource, st, meta, taken), file=sys.stderr)
     return GATE_SHED_EXIT if st == SHED else 0
 
 
@@ -492,6 +633,71 @@ def _classify_call(call: dict, *, now: float) -> dict:
     return {**out, "verdict": "unavailable", "detail": f"HTTP {status}: {_api_message(call)}"}
 
 
+# --- One real reading: what the gate and the preflight both record --------------------------------
+def _measured_row(
+    call: dict, check: dict, *, source: str, resource: str, now: float
+) -> dict | None:
+    """The ledger row one real answer supports, or None when it supports none.
+
+    Only an ACCEPTED credential's answer measures this token's bucket: `ok`, or `rate_limited` (GitHub
+    refused the call because a budget is spent). A 401 carries the anonymous 60/hour budget's
+    headers and a transport failure carries none, so neither is recorded. A refusal is recorded even
+    with no figures, because its lift time is the measurement."""
+    verdict = check.get("verdict")
+    if verdict not in ("ok", "rate_limited"):
+        return None
+    figures = _ratelimit_row_from_headers(call.get("headers") or {}, fallback_resource=resource)
+    if figures is None and verdict == "ok":
+        return None
+    row: dict[str, Any] = {
+        "resource": resource,
+        "remaining": None,
+        "limit": None,
+        "reset": None,
+        "used": None,
+        **(figures or {}),
+        "ts": now,
+        "source": source,
+    }
+    if verdict == "rate_limited":
+        row["limited_until"] = check.get("reset") or int(now) + SECONDARY_WAIT_S
+        row["refusal"] = check.get("detail")
+    return row
+
+
+def measure(
+    resource: str,
+    *,
+    runner=subprocess.run,
+    now: float | None = None,
+    timeout_s: int = MEASURE_TIMEOUT_S,
+) -> dict:
+    """Take one fresh reading of `resource` and append what it supports to the ledger.
+
+    `REAL_MEASURE` resources (core, graphql): its one real call, classified by the preflight's own
+    `_classify_call`, so "GitHub refused it" and "it did not answer" stay apart. Anything else: the
+    free `rate_limit` probe, because a real search call would spend the 30/min budget it protects.
+    Returns {how, verdict, detail, row}; `row` is None when the answer measured nothing."""
+    now = time.time() if now is None else now
+    if resource not in REAL_MEASURE:
+        answered = probe(runner=runner, timeout_s=timeout_s) is not None
+        detail = "rate_limit answered" if answered else "rate_limit did not answer"
+        verdict = "ok" if answered else "unavailable"
+        return {"how": "probe", "verdict": verdict, "detail": detail, "row": None}
+    call = _preflight_call(REAL_MEASURE[resource], runner=runner, timeout_s=timeout_s)
+    check = _classify_call(call, now=now)
+    row = _measured_row(call, check, source="gate", resource=resource, now=now)
+    detail = check["detail"]
+    if row is None and check["verdict"] == "ok":
+        detail = f"{detail} carried no x-ratelimit headers"
+    if row is not None:
+        try:
+            _append_ledger([row])
+        except OSError:
+            pass  # the ledger is evidence; the gate still reasons over the row in hand
+    return {"how": "real call", "verdict": check["verdict"], "detail": detail, "row": row}
+
+
 def _budget(check: dict, fallback: str) -> str:
     resource = check.get("resource") or fallback
     if check.get("remaining") is None or check.get("limit") is None:
@@ -514,22 +720,24 @@ def auth_preflight(
     exit code orchestrate.sh switches on, and the one line it prints.
 
     REST is asked first, because a refused credential there needs no second call. GraphQL is asked
-    only when REST answered. Each real answer also feeds the rate ledger, tagged `preflight`, so the
-    true budget is on record every tick beside the `rate_limit` probe's figure."""
+    only when REST answered. They are the gate's own two readings (`REAL_MEASURE`), and each answer
+    from an accepted credential is recorded the way the gate records one (`_measured_row`), tagged
+    `preflight`, so the true budget is on record every tick beside the `rate_limit` probe's figure.
+    """
     now = time.time() if now is None else now
-    rest_call = _preflight_call(["user"], runner=runner, timeout_s=timeout_s)
-    calls = [("rest", rest_call)]
+    rest_call = _preflight_call(REAL_MEASURE["core"], runner=runner, timeout_s=timeout_s)
+    calls = [("rest", "core", rest_call)]
     checks = [("rest", _classify_call(rest_call, now=now))]
     if checks[0][1]["verdict"] == "ok":
-        query = ["graphql", "-f", "query={ viewer { login } }"]
-        calls.append(("graphql", _preflight_call(query, runner=runner, timeout_s=timeout_s)))
-        checks.append(("graphql", _classify_call(calls[-1][1], now=now)))
+        gql_call = _preflight_call(REAL_MEASURE["graphql"], runner=runner, timeout_s=timeout_s)
+        calls.append(("graphql", "graphql", gql_call))
+        checks.append(("graphql", _classify_call(gql_call, now=now)))
     if record:
         rows = []
-        for name, call in calls:
-            row = _ratelimit_row_from_headers(call.get("headers") or {}, fallback_resource=name)
+        for (_, resource, call), (_, check) in zip(calls, checks):
+            row = _measured_row(call, check, source="preflight", resource=resource, now=now)
             if row is not None:
-                rows.append({**row, "source": "preflight"})
+                rows.append(row)
         try:
             _append_ledger(rows)
         except OSError:
@@ -632,8 +840,13 @@ def _selftest():
             )
 
         res = probe(runner=lambda *a, **k: FakeProbe())
-        assert res and res["search"]["remaining"] == 4
-        assert state("core")[0] == OK, state("core")  # 4900/5000 -> OK
+        assert res is not None and res["search"]["remaining"] == 4, res
+        assert _latest_ledger("core")["remaining"] == 4900, "the probe's figure is kept as evidence"
+        # ...and is no measurement of core: until 2026-10-04 this read 4900/5000 -> OK.
+        st, meta = state("core")
+        assert (
+            st == UNKNOWN and "rate_limit probe" in meta["reason"]
+        ), f"a rate_limit probe row was read as a measurement of core: {st} {meta}"
         assert state("search")[0] == LOW, state(
             "search"
         )  # 4/30 = 13% (>5%, >reserve 3) -> LOW (pace)
@@ -684,7 +897,7 @@ def _selftest():
         # 7. _gate: 0 for OK/UNKNOWN/LOW (fail-open), GATE_SHED_EXIT only for SHED.
         GH_LEDGER.write_text("")
 
-        # UNKNOWN + probe disabled (runner returns failure) => fail-open 0
+        # UNKNOWN + the reading fails (graphql's real call, search's probe) => fail-open 0
         class FailRunner:
             returncode = 1
             stdout = ""
@@ -809,10 +1022,143 @@ def _selftest():
         assert _latest_ledger("core")["source"] == "preflight", _latest_ledger("core")
         assert _latest_ledger("graphql")["remaining"] == 4990, _latest_ledger("graphql")
 
+        # 9. The gate sees a REAL exhaustion, and a blind probe row never hides one (2026-10-04).
+        #    The exempt `rate_limit` endpoint answers this stub the way it answered for real: a
+        #    fresh 5000/5000 whatever is true.
+        fresh = {"limit": 5000, "remaining": 5000, "reset": int(now) + 3600, "used": 0}
+        probe_out = json.dumps(
+            {
+                "resources": {
+                    "core": fresh,
+                    "graphql": fresh,
+                    "search": {"limit": 30, "remaining": 30, "reset": int(now) + 60, "used": 0},
+                }
+            }
+        )
+
+        def fake_gh(user=rest_ok, gql=gql_ok, seen=None):
+            def run(cmd, **_):
+                if seen is not None:
+                    seen.append(cmd)
+                if cmd[:3] == ["gh", "api", "rate_limit"]:
+                    return type("R", (), {"returncode": 0, "stdout": probe_out, "stderr": ""})()
+                r = gql if "graphql" in cmd else user
+                if isinstance(r, BaseException):
+                    raise r
+                return type("R", (), r)()
+
+            return run
+
+        def real(res, remaining, reset_in, source="gate", ts=now):
+            return {
+                "ts": ts,
+                "resource": res,
+                "remaining": remaining,
+                "limit": 5000,
+                "reset": now + reset_in,
+                "used": 5000 - remaining,
+                "source": source,
+            }
+
+        # 9a. A blind probe row NEWER than a true exhausted real row: the real row decides, for
+        #     every real source and both probe-blind resources, in state() and throttle() alike.
+        for src in sorted(REAL_SOURCES):
+            for res in sorted(REAL_MEASURE):
+                GH_LEDGER.write_text("")
+                _append_ledger([real(res, 0, 1800, src, ts=now - 5)])
+                probe(runner=fake_gh())
+                assert _latest_ledger(res)["source"] == "probe", "setup: the blind row is newest"
+                st, meta = state(res)
+                assert (
+                    st == SHED
+                ), f"a blind probe row superseded a true exhausted {src} row: {meta}"
+                assert throttle(res, sleeper=sl)["action"] == "defer", (src, res)
+
+        # 9b. A search gate's probe does not re-blind the in-loop core throttle. durability-sweep,
+        #     keepalive-shadow and keepalive-backfill are gated on search alone and throttle core.
+        GH_LEDGER.write_text("")
+        _append_ledger([real("core", 150, 1800, "preflight", ts=now - 60)])  # 3% at tick start
+        seen9: list = []
+        assert _gate("search", runner=fake_gh(seen=seen9)) == 0
+        assert [c[:3] for c in seen9] == [["gh", "api", "rate_limit"]], "search is never spent"
+        assert throttle("core", sleeper=sl)["action"] == "defer", state("core")
+
+        # 9c. The gate reads core and graphql with ONE real call each, never rate_limit, so an
+        #     exhaustion that began after the preflight measured closes it.
+        GH_LEDGER.write_text("")
+        auth_preflight(runner=fake_gh(), now=now)  # tick start: core 4321, graphql 4990
+        refused = answer(403, limit_msg, budget(0))
+        gql_refused = answer(
+            200,
+            {"errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded"}]},
+            budget(0, "graphql"),
+            rc=1,
+        )
+        for res, user, gql in (("core", refused, gql_ok), ("graphql", rest_ok, gql_refused)):
+            seen9 = []
+            assert (
+                _gate(res, runner=fake_gh(user, gql, seen9)) == GATE_SHED_EXIT
+            ), f"an exhaustion that began after the preflight measured did not close the {res} gate"
+            assert [c[3:] for c in seen9] == [REAL_MEASURE[res]], seen9
+        # Fully drained, it says so: a real full reading, and an exhausted reading whose window
+        # passed with no newer reading at all. A reading with no reset drains one window later.
+        full = answer(200, {"login": "stub-user"}, budget(5000))
+        st, meta, taken = _reading("core", runner=fake_gh(full))
+        assert _gate_line("core", st, meta, taken) == (
+            "gh_capacity gate[core]: ok — 5000/5000 remaining (100%); ok "
+            "(measured by a real call 0s ago)"
+        ), _gate_line("core", st, meta, taken)
+        st, meta = state("core", _row=real("core", 0, -1, ts=now - 3700))
+        assert (st, meta["reason"]) == (OK, "window reset; full budget (5000)"), meta
+        no_reset = {**real("core", 0, 0, "call", ts=now - 3601), "reset": None}
+        assert state("core", _row=no_reset)[0] == OK, "a reading with no reset held the gate"
+
+        # 9d. A refusal with budget left (a secondary limit) closes the gate until its lift, then
+        #     lets go. It is recorded with no figures: the lift time is the measurement.
+        GH_LEDGER.write_text("")
+        secondary_403 = answer(
+            403, {"message": "You have exceeded a secondary rate limit."}, {"Retry-After": "60"}
+        )
+        assert _gate("core", runner=fake_gh(secondary_403)) == GATE_SHED_EXIT
+        st, meta = state("core")
+        assert st == SHED and meta["reset_in_s"] == 60, meta
+        assert "secondary rate limit" in meta["reason"], meta
+        assert state("core", now=now + 61)[0] != SHED, "a lifted refusal still held the gate"
+
+        # 9e. A reading that measured nothing fails open on UNKNOWN and names why, and never erases
+        #     a real reading that still stands. A 401's anonymous 60/hour budget is never recorded.
+        GH_LEDGER.write_text("")
+        probe(runner=fake_gh())
+        hung = fake_gh(subprocess.TimeoutExpired("gh", MEASURE_TIMEOUT_S))
+        st, meta, taken = _reading("core", runner=hung)
+        assert _gate_line("core", st, meta, taken) == (
+            "gh_capacity gate[core]: unknown — no real measurement of core; the exempt "
+            "rate_limit probe's figure is not one; proceed (fail-open); this gate's real call "
+            "was unavailable: no answer within 10s"
+        ), _gate_line("core", st, meta, taken)
+        _append_ledger([real("core", 40, 1800, "preflight", ts=now - 300)])
+        st, meta, taken = _reading("core", runner=hung)
+        assert st == SHED, meta
+        assert "(measured by the preflight's real call 300s ago); this gate's real call was " in (
+            _gate_line("core", st, meta, taken)
+        )
+        GH_LEDGER.write_text("")
+        anonymous = answer(
+            401, {"message": "Bad credentials"}, {**budget(2), "X-Ratelimit-Limit": "60"}
+        )
+        assert _gate("core", runner=fake_gh(anonymous)) == 0 and _latest_ledger("core") is None
+
+        # 9f. One table: the preflight asks exactly the gate's real calls, and search is never one.
+        seen9 = []
+        auth_preflight(runner=fake_gh(seen=seen9), now=now, record=False)
+        assert [c[3:] for c in seen9] == [REAL_MEASURE["core"], REAL_MEASURE["graphql"]], seen9
+        assert "search" not in REAL_MEASURE and set(SOURCE_LABELS) == REAL_SOURCES | {"probe"}
+
         print(
             "gh_capacity.py selftest: OK (4-state per resource, read-time ledger, probe/gh_run "
             "header feed, pace/defer throttle, env-gated throttle_if_enabled, fail-open gate, "
-            "auth preflight: rate-limited/unavailable defer, only refused credentials abort)"
+            "auth preflight: rate-limited/unavailable defer, only refused credentials abort, "
+            "real-call gate reading, a blind probe row never supersedes a real one)"
         )
     finally:
         time.time = original_time
