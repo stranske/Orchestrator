@@ -37,6 +37,9 @@ INSTALLER = paths.REPO_ROOT / "scripts" / "install_verified_snapshot.py"
 # mirror whose verify.py records ITS environment and prints the summary lines verify.py prints.
 FAKE_SYNC = r"""#!/usr/bin/env bash
 set -euo pipefail
+SRC="$1"
+MIRROR="$ORCH_MIRROR"
+source "$FAKE_COPY_GUARD"
 printf 'sync_home=%s\nsync_mirror=%s\nsync_gh=%s\nsync_src=%s\n' \
   "$HOME" "$ORCH_MIRROR" "${GH_CONFIG_DIR:-}" "$1" >> "$FAKE_RECORD"
 [[ "${FAKE_SYNC_RC:-0}" == "0" ]] || exit "$FAKE_SYNC_RC"
@@ -150,6 +153,7 @@ def _run(world: dict, *args: str, **env: str) -> tuple[subprocess.CompletedProce
         "TMPDIR": str(world["tmpdir"]),
         "ORCH_SYNC_SCRIPT": str(world["tmp"] / "fake-sync.sh"),
         "FAKE_VERIFY": str(world["tmp"] / "fake-verify.py"),
+        "FAKE_COPY_GUARD": str(paths.REPO_ROOT / "scripts/incumbent_copy_guard.sh"),
         "FAKE_INSTALLER": str(INSTALLER),
         "FAKE_RECORD": str(world["record"]),
         "VERIFY_BEFORE_SYNC_MAX_DIR_MB": "1",

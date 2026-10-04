@@ -719,3 +719,37 @@ available because copying occurs in private staging. Both routes preserve the sa
 runtime report and marker; neither updates the separate live registry during staging.
 That paired witness does not prove concurrent creation in mixed runtime directories
 or authorize installing wrappers before merge/pull.
+
+
+### Direct incumbent copier entry guard (pending merge and pull)
+
+After merging and pulling #390, insert this immediately after the installed
+`~/.codex/bin/orch-sync-mirror.sh` defines `SRC` and `MIRROR`, before its trap,
+`mkdir`, `find`, or copy commands:
+
+```bash
+[[ -f "$SRC/scripts/incumbent_copy_guard.sh" ]] || {
+  echo "NOT SYNCED: source has no incumbent copy guard; live mirror untouched." >&2
+  exit 2
+}
+source "$SRC/scripts/incumbent_copy_guard.sh"
+```
+
+A direct call execs the guarded UNVERIFIED publisher and cannot fall back into
+live deletion/copy when it returns. The verifier and unverified staging helpers
+provide `ORCH_PRIVATE_COPY_ROOT`; the guard permits in-place copying only when
+both HOME and MIRROR match that existing private root's staging layout. A stray
+flag on the ordinary HOME or live mirror does not bypass the guard. Missing
+publisher code fails before any live write. This does not verify the payload or
+migrate standalone launchd readers. Installed files are unchanged until merge/pull;
+paired source tests and isolated copier evidence must precede deployment claims.
+
+The isolated actual installed copier (SHA256
+`2db903979ab8f52ed151e55b5469da34d0ac7d4cb8ae0b0631e7518f18a52053`)
+was replayed with and without this prologue. At its first copy, after deletion,
+the same observer found `paths.py` missing on the incumbent and present on the
+guarded direct route. Both runs completed and preserved sampled runtime report
+and marker bytes. The registry stayed unchanged during staging. GH was stubbed
+to its local fallback; this run proves registry preservation, not an authenticated
+registry update. No installed copier or wrapper was edited. Standalone launchd
+migration, full recovery acceptance, and post-merge deployment remain pending.

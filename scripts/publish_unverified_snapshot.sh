@@ -15,7 +15,7 @@ trap 'rm -rf "$stage_root"' EXIT
 stage_root="$(cd "$stage_root" && pwd -P)"
 mkdir -p "$stage_root/home/.codex/orchestrator"
 if ! GH_CONFIG_DIR="$gh_config" GH_NO_UPDATE_NOTIFIER=1 \
-    HOME="$stage_root/home" ORCH_MIRROR="$stage_root/mirror" \
+    ORCH_PRIVATE_COPY_ROOT="$stage_root" HOME="$stage_root/home" ORCH_MIRROR="$stage_root/mirror" \
     bash "$copy_script" "$source_root"; then
   echo "NOT SYNCED: unverified scratch copy failed; live mirror untouched." >&2
   exit 2

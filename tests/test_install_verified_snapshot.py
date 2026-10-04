@@ -1368,3 +1368,63 @@ def test_unverified_route_stages_copier_and_never_claims_verification(tmp_path, 
         assert (mirror / "old.py").read_text() == "still live\n"
         assert live_registry.read_text() == "incumbent registry\n"
     assert registry.read_text() == '{"old": true}\n'
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+@pytest.mark.parametrize("copy_failure", [False, True])
+def test_direct_copier_guard_keeps_live_tree_available(tmp_path, guarded, copy_failure):
+    """The same destructive copier loses a live file only without the entry guard."""
+    snapshot = _snapshot(tmp_path)
+    for name in ("incumbent_copy_guard.sh", "publish_unverified_snapshot.sh"):
+        (snapshot / "scripts" / name).write_bytes((paths.REPO_ROOT / "scripts" / name).read_bytes())
+    mirror, _registry = _live_outputs(tmp_path)
+    home = tmp_path / "home"
+    runtime = home / ".codex/orchestrator/repo_review_registry.json"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("old registry\n")
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    record = tmp_path / "reader-observation"
+    copier = tmp_path / "direct-copier.sh"
+    copier.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'SRC="$1"\nMIRROR="$ORCH_MIRROR"\n'
+        + ('source "$SRC/scripts/incumbent_copy_guard.sh"\n' if guarded else "")
+        + 'mkdir -p "$MIRROR"\n'
+        + 'find "$MIRROR" -maxdepth 1 -name "*.py" -delete\n'
+        + 'if [[ -f "$LIVE_MIRROR/old.py" ]]; then echo present; else echo missing; fi'
+        + ' > "$READER_RECORD"\n'
+        + '[[ "$COPY_FAILURE" != 1 ]] || exit 17\n'
+        + 'cp -R "$SRC/." "$MIRROR/"\n'
+    )
+    result = subprocess.run(
+        ["bash", str(copier), str(snapshot)],
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "TMPDIR": str(temporary),
+            "ORCH_SYNC_SCRIPT": str(copier),
+            "ORCH_MIRROR": str(mirror),
+            # An accidental override must not grant private-copy status to live HOME/MIRROR.
+            "ORCH_PRIVATE_COPY_ROOT": str(temporary),
+            "LIVE_MIRROR": str(mirror),
+            "READER_RECORD": str(record),
+            "COPY_FAILURE": "1" if copy_failure else "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert record.read_text().strip() == ("present" if guarded else "missing")
+    assert list(temporary.iterdir()) == []
+    if copy_failure:
+        assert result.returncode == (2 if guarded else 17), result.stdout + result.stderr
+        assert (mirror / "old.py").exists() == guarded
+        assert runtime.read_text() == "old registry\n"
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (mirror / "module.py").read_text() == "VALUE = 'verified'\n"
+        if guarded:
+            assert "installed UNVERIFIED snapshot" in result.stdout
+            assert "installed verified snapshot" not in result.stdout
+            assert installer.snapshot_digest(mirror) == installer.snapshot_digest(snapshot)
+            assert runtime.read_text() == '{"repos": []}\n'
