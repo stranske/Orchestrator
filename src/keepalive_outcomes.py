@@ -22,6 +22,7 @@ from typing import Any, TypedDict, cast
 import durability_sweep
 import feedback
 import outcomes
+import route_weights_export
 import verifier_evidence
 
 # Source-of-truth registry lives in Dropbox, but launchd/cron CANNOT read CloudStorage
@@ -602,6 +603,146 @@ def _run_ts(pr: dict) -> int:
     return _parse_gh_ts(pr.get("mergedAt") or pr.get("createdAt")) or int(time.time())
 
 
+def _fetch_dispatch_times(repo: str, pr_number: int, agent: str) -> list[int] | None:
+    """Read every trusted runner marker; PR creation/merge time is not dispatch time."""
+    _gh_throttle("core")
+    pages = _run_json(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{repo}/issues/{pr_number}/comments?per_page=100",
+        ],
+        timeout=120,
+    )
+    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+        return None
+    records = outcomes.runner_records(
+        [comment for page in pages for comment in page], provider=agent, pr_number=pr_number
+    )
+    times = [outcomes.utc_epoch.from_iso(record.get("started_at")) for record in records]
+    if any(timestamp is None for timestamp in times):
+        return None  # An undated round could belong to a different policy.
+    return sorted({timestamp for timestamp in times if timestamp is not None})
+
+
+def _export_policy_at(dispatch_ts: int) -> dict | None:
+    """Resolve the published export commit in force at dispatch, never today's local shadow."""
+    until = _dt.datetime.fromtimestamp(dispatch_ts, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _gh_throttle("core")
+    commits = _run_json(
+        [
+            "gh",
+            "api",
+            f"repos/stranske/Orchestrator/commits?sha={route_weights_export.EXPORT_BRANCH}"
+            f"&path={route_weights_export.EXPORT_PATH.as_posix()}&until={until}&per_page=1",
+        ]
+    )
+    if not isinstance(commits, list) or not commits or not isinstance(commits[0], dict):
+        return None
+    sha = commits[0].get("sha")
+    if not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{40}", sha):
+        return None
+    _gh_throttle("core")
+    document = _run_json(
+        [
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+            f"repos/stranske/Orchestrator/contents/{route_weights_export.EXPORT_PATH.as_posix()}"
+            f"?ref={sha}",
+        ]
+    )
+    if not isinstance(document, dict) or document.get("schema") != route_weights_export.SCHEMA:
+        return None
+    exploration = document.get("exploration")
+    if not isinstance(exploration, dict):
+        return None
+    version = exploration.get("policy_version")
+    mode = exploration.get("mode")
+    if (
+        not isinstance(version, str)
+        or not version
+        or mode not in ("epsilon-greedy", "thompson-hybrid")
+    ):
+        return None
+    return {
+        "policy_version": version,
+        "exploration_mode": mode,
+        "route_weights_version": document.get("source_version"),
+        "route_weights_commit": sha,
+    }
+
+
+def _dispatch_policy_metadata(dispatch_times: list[int] | None, policy_fn) -> dict:
+    """Keep PRs spanning different policy arms explicit instead of crediting one arm."""
+    if not dispatch_times:
+        return {}
+    policies = []
+    for timestamp in sorted(set(dispatch_times)):
+        policy = policy_fn(timestamp)
+        if policy is None:
+            return {}  # Incomplete history cannot identify the PR's policy.
+        policies.append({**policy, "dispatch_ts": timestamp})
+    metadata: dict[str, Any] = {"dispatch_policies": policies}
+    if len({policy["policy_version"] for policy in policies}) == 1:
+        metadata.update(policies[0])
+    return metadata
+
+
+def _stamp_existing_dispatch_policy(
+    run_id: str,
+    repo: str,
+    number: int,
+    agent: str,
+    times_fn,
+    policy_fn,
+    *,
+    settled_ts: int | None = None,
+) -> None:
+    """Retry missing provenance and refresh a settled PR's rounds without replacing its run."""
+    with feedback._conn() as c:
+        row = c.execute(
+            "SELECT routing_metadata FROM runs WHERE run_id=? AND source='keepalive' AND agent=?",
+            (run_id, agent),
+        ).fetchone()
+    if row is None:
+        return
+    metadata = feedback._routing_metadata_dict(row[0])
+    has_policy = bool(metadata.get("policy_version") or metadata.get("dispatch_policies"))
+    if has_policy and (settled_ts is None or metadata.get("policy_settled_ts") == settled_ts):
+        return
+    policy = _dispatch_policy_metadata(times_fn(repo, number, agent), policy_fn)
+    if not policy and not has_policy:
+        return
+    if policy and settled_ts is not None:
+        policy["policy_settled_ts"] = settled_ts
+    with feedback._conn() as c:
+        # Merge against the current row so attribution added during the API read is retained.
+        current = c.execute("SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        if current is not None:
+            metadata = feedback._routing_metadata_dict(current[0])
+            # A PR first ingested while open may cross a policy boundary before it settles.
+            # An unreadable final history must also clear that provisional single-arm tag.
+            for key in (
+                "policy_version",
+                "exploration_mode",
+                "route_weights_version",
+                "route_weights_commit",
+                "dispatch_ts",
+                "dispatch_policies",
+                "policy_settled_ts",
+            ):
+                metadata.pop(key, None)
+            metadata.update(policy)
+            c.execute(
+                "UPDATE runs SET routing_metadata=? WHERE run_id=?",
+                (json.dumps(metadata, sort_keys=True), run_id),
+            )
+
+
 def _stable_run_id(repo: str, pr_number: int, agent: str) -> str:
     return f"keepalive:{repo}#{pr_number}:{agent}"
 
@@ -952,6 +1093,8 @@ def ingest_keepalive_outcomes(
     _evidence_fetch_fn=None,
     _verifier_fetch_fn=None,
     _fix_fn=None,
+    _dispatch_times_fn=None,
+    _policy_at_dispatch_fn=None,
 ) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
@@ -959,6 +1102,17 @@ def ingest_keepalive_outcomes(
     verifier_fetch_fn = _verifier_fetch_fn or (
         verifier_evidence.fetch_decisions if _pr_fetch_fn is None else lambda _repo, _nums: {}
     )
+    dispatch_times_fn = _dispatch_times_fn or (
+        _fetch_dispatch_times if _pr_fetch_fn is None else lambda _repo, _number, _agent: None
+    )
+    policy_at_dispatch_fn = _policy_at_dispatch_fn or _export_policy_at
+    policy_cache: dict[int, dict | None] = {}
+
+    def cached_policy(timestamp: int) -> dict | None:
+        if timestamp not in policy_cache:
+            policy_cache[timestamp] = policy_at_dispatch_fn(timestamp)
+        return policy_cache[timestamp]
+
     revert_fn = _revert_fn
     if dry_run and revert_fn is None:
 
@@ -1120,7 +1274,18 @@ def ingest_keepalive_outcomes(
 
             summary["prs_seen"] += 1
             _record_attribution(summary, attribution_source)
-            if _existing_remote_for_pr(repo, pr_number):
+            existing_run_id = _existing_remote_for_pr(repo, pr_number)
+            if existing_run_id:
+                if not dry_run:
+                    _stamp_existing_dispatch_policy(
+                        existing_run_id,
+                        repo,
+                        pr_number,
+                        agent,
+                        dispatch_times_fn,
+                        cached_policy,
+                        settled_ts=_parse_gh_ts(pr.get("mergedAt") or pr.get("closedAt")),
+                    )
                 summary["skipped_existing"] += 1
                 continue
 
@@ -1147,6 +1312,15 @@ def ingest_keepalive_outcomes(
             if run_already_exists:
                 summary["skipped_existing"] += 1
             elif not dry_run:
+                routing_metadata: dict[str, Any] = {"attribution_source": attribution_source}
+                routing_metadata.update(
+                    _dispatch_policy_metadata(
+                        dispatch_times_fn(repo, pr_number, agent), cached_policy
+                    )
+                )
+                settled_ts = _parse_gh_ts(pr.get("mergedAt") or pr.get("closedAt"))
+                if routing_metadata.get("dispatch_policies") and settled_ts is not None:
+                    routing_metadata["policy_settled_ts"] = settled_ts
                 feedback.record_run(
                     run_id,
                     target,
@@ -1160,7 +1334,7 @@ def ingest_keepalive_outcomes(
                     source="keepalive",
                     assignment="assigned",
                     work_type=work_type,
-                    routing_metadata={"attribution_source": attribution_source},
+                    routing_metadata=routing_metadata,
                 )
                 summary["runs_recorded"] += 1
             elif dry_run:
@@ -1178,6 +1352,196 @@ def ingest_keepalive_outcomes(
 def _iso_days_ago(now: int, days: int) -> str:
     dt = _dt.datetime.fromtimestamp(now - days * 86400, _dt.timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _selftest_dispatch_policy(now: int) -> None:
+    """Offline regression: late ingestion must join the export active at the runner's start."""
+    from unittest import mock
+
+    earlier, boundary = now - 3600, now - 1800
+    old_sha, new_sha = "a" * 40, "b" * 40
+
+    def document(version, mode):
+        return {
+            "schema": route_weights_export.SCHEMA,
+            "source_version": version,
+            "exploration": {"policy_version": f"policy-{version}", "mode": mode},
+        }
+
+    documents = {
+        old_sha: document(1, "epsilon-greedy"),
+        new_sha: document(2, "thompson-hybrid"),
+    }
+
+    def runner_comment(number, timestamp, *, login="github-actions[bot]", provider="codex"):
+        return outcomes._runner_comment(
+            "runner-reservation",
+            provider,
+            number,
+            {
+                "provider": provider,
+                "pr_number": number,
+                "reservation_id": f"{number}:{timestamp}",
+                "started_at": outcomes._iso(timestamp),
+            },
+            login,
+        )
+
+    prs = [
+        {
+            "number": number,
+            "state": "MERGED",
+            "labels": [{"name": "agent:codex"}],
+            "createdAt": outcomes._iso(earlier - 7200),
+            "mergedAt": outcomes._iso(now),
+            "title": "Dispatch policy fixture",
+        }
+        for number in (101, 102)
+    ]
+
+    def fake_json(args, **kwargs):
+        endpoint = args[-1]
+        if "comments?" in endpoint:
+            number = int(endpoint.split("/issues/")[1].split("/")[0])
+            started = earlier if number == 101 else boundary
+            # Complete pagination, with untrusted and wrong-provider timestamps excluded.
+            return [
+                [runner_comment(number, started)],
+                [
+                    runner_comment(number, now, login="mallory"),
+                    runner_comment(number, now, provider="gemini"),
+                ],
+            ]
+        if "/commits?" in endpoint:
+            until = endpoint.split("&until=")[1].split("&")[0]
+            timestamp = outcomes.utc_epoch.from_iso(until)
+            assert timestamp is not None
+            return [{"sha": old_sha if timestamp < boundary else new_sha}]
+        assert "/contents/config/route-weights.json?ref=" in endpoint, endpoint
+        return documents[endpoint.split("?ref=")[1]]
+
+    with mock.patch(__name__ + "._run_json", side_effect=fake_json) as fetch:
+        result = ingest_keepalive_outcomes(
+            ["policy/fixture"],
+            _pr_fetch_fn=lambda _repo, _days: prs,
+            _dispatch_times_fn=_fetch_dispatch_times,
+            _revert_fn=lambda _pr: (False, "not reverted"),
+            _now=now,
+        )
+        assert result["runs_recorded"] == 2, result
+        with feedback._conn() as c:
+            rows = c.execute(
+                "SELECT r.pr_number, r.routing_metadata, o.run_id "
+                "FROM runs r JOIN outcomes o ON r.run_id=o.run_id "
+                "WHERE r.target LIKE 'policy/fixture#%' ORDER BY r.pr_number"
+            ).fetchall()
+        assert len(rows) == 2, rows
+        for row, version, started in zip(rows, (1, 2), (earlier, boundary)):
+            metadata = json.loads(row[1])
+            assert metadata["policy_version"] == f"policy-{version}", metadata
+            assert metadata["dispatch_ts"] == started, metadata
+            assert metadata["attribution_source"] == "agent_label", metadata
+            assert "exploration" not in metadata  # A policy tag alone does not prove exploration.
+        assert _fetch_dispatch_times("policy/fixture", 101, "codex") == [earlier]
+        old = _export_policy_at(earlier)
+        new = _export_policy_at(boundary)
+        assert old and new
+        mixed = _dispatch_policy_metadata([earlier, boundary], _export_policy_at)
+        assert "policy_version" not in mixed, mixed
+        assert [p["policy_version"] for p in mixed["dispatch_policies"]] == ["policy-1", "policy-2"]
+        same = _dispatch_policy_metadata([earlier, earlier + 60], _export_policy_at)
+        assert same["policy_version"] == "policy-1", same
+        assert len(same["dispatch_policies"]) == 2, same
+        assert _dispatch_policy_metadata([earlier], lambda _ts: None) == {}
+        assert _dispatch_policy_metadata(None, _export_policy_at) == {}
+        before = fetch.call_count
+        ingest_keepalive_outcomes(
+            ["policy/fixture"],
+            _pr_fetch_fn=lambda _repo, _days: prs,
+            _dispatch_times_fn=_fetch_dispatch_times,
+            dry_run=True,
+        )
+        assert fetch.call_count == before  # Existing rows and dry runs do not refetch provenance.
+
+        # Retry a row first discovered while runner provenance was unavailable. Neither its run
+        # timestamp nor its joined outcome changes, and unrelated routing metadata survives.
+        feedback.record_run(
+            "policy-retry",
+            "policy/fixture#103",
+            "implement",
+            "codex",
+            mode="remote",
+            source="keepalive",
+            ts=earlier - 60,
+            routing_metadata={"attribution_source": "agent_label"},
+        )
+        feedback.record_outcome("policy-retry", merged=True, durability="durable")
+        result = ingest_keepalive_outcomes(
+            ["policy/fixture"],
+            _pr_fetch_fn=lambda _repo, _days: [{**prs[0], "number": 103}],
+            _dispatch_times_fn=lambda _repo, _number, _agent: [earlier],
+        )
+        assert result["runs_recorded"] == 0, result
+        with feedback._conn() as c:
+            row = c.execute(
+                "SELECT r.ts, r.routing_metadata, o.durability FROM runs r "
+                "JOIN outcomes o ON o.run_id=r.run_id WHERE r.run_id='policy-retry'"
+            ).fetchone()
+        assert row[0] == earlier - 60 and row[2] == "durable", row
+        assert json.loads(row[1])["policy_version"] == "policy-1", row
+        assert json.loads(row[1])["attribution_source"] == "agent_label", row
+
+        # A run first observed while open must be refreshed at settlement: new rounds can span
+        # policy arms. A failed final lookup must not leave its provisional arm on the outcome.
+        for number, times in ((104, [earlier, boundary]), (105, None)):
+            run_id = f"policy-open-{number}"
+            feedback.record_run(
+                run_id,
+                f"policy/fixture#{number}",
+                "implement",
+                "codex",
+                mode="remote",
+                source="keepalive",
+                routing_metadata={"policy_version": "policy-1"},
+            )
+            ingest_keepalive_outcomes(
+                ["policy/fixture"],
+                _pr_fetch_fn=lambda _repo, _days: [{**prs[0], "number": number}],
+                _dispatch_times_fn=lambda _repo, _number, _agent: times,
+            )
+            with feedback._conn() as c:
+                metadata = json.loads(
+                    c.execute("SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)).fetchone()[
+                        0
+                    ]
+                )
+            assert "policy_version" not in metadata, metadata
+            if times:
+                assert len(metadata["dispatch_policies"]) == 2, metadata
+                assert metadata["policy_settled_ts"] == now, metadata
+
+    for response in (None, [], {}, [{"sha": "invalid"}]):
+        with mock.patch(__name__ + "._run_json", return_value=response):
+            assert _export_policy_at(earlier) is None, response
+            assert _fetch_dispatch_times("policy/fixture", 101, "codex") in (None, [])
+    for bad_document in (
+        {},
+        {"schema": route_weights_export.SCHEMA},
+        document(1, "unknown"),
+        document(1, []),
+    ):
+        with mock.patch(
+            __name__ + "._run_json", side_effect=[[{"sha": old_sha}], bad_document]
+        ):
+            assert _export_policy_at(earlier) is None, bad_document
+    undated = runner_comment(101, earlier)
+    undated["body"] = outcomes.RUNNER_MARKER_RE.sub(
+        '<!-- runner-reservation:codex:101:v1 '
+        '{"provider":"codex","pr_number":101,"reservation_id":"undated"} -->',
+        undated["body"],
+    )
+    with mock.patch(__name__ + "._run_json", return_value=[[undated]]):
+        assert _fetch_dispatch_times("policy/fixture", 101, "codex") is None
 
 
 def _selftest() -> None:
@@ -1561,7 +1925,8 @@ def _selftest() -> None:
         assert len(fetch_calls) == 2, fetch_calls
         assert fetch_calls[0][0] == "o/r", fetch_calls
 
-        print("keepalive_outcomes.py selftest: OK")
+        _selftest_dispatch_policy(now)
+        print("keepalive_outcomes.py selftest: OK (including dispatch-time export policy joins)")
     finally:
         feedback.DB_PATH = old_db
         shutil.rmtree(tmp, ignore_errors=True)
