@@ -6,11 +6,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import pytest
+
 import exploration_offline
 import exploration_review
 import feedback
 import keepalive_outcomes
-import pytest
 import route_weights_export
 import router
 import switch_review
