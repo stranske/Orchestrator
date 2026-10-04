@@ -31,7 +31,7 @@
 #        VERIFIED run prints; retained for diagnostics, not as the wrapper's deployment gate
 # Exit:  0 VERIFIED
 #        1 NOT VERIFIED: verify.py failed (its exit code is printed), or passed without judging
-#          the scratch tree as the exec-mirror shape, so the mirror's ceilings were not applied
+#          the scratch tree as the shape this caller expects, so the right ceilings were not applied
 #        2 NOTHING VERIFIED: SRC is not a checkout, or the scratch copy failed
 #        3 VOID: SRC changed while verify.py ran, so the verdict is about a tree nobody would copy
 # Env:   ORCH_SYNC_SCRIPT  the copy script (default ~/.codex/bin/orch-sync-mirror.sh)
@@ -41,6 +41,15 @@
 #                          verify.py is handed the copies, never these
 #        VERIFY_BEFORE_SYNC_MAX_DIR_MB  largest state directory copied (default 50)
 #        VERIFY_BEFORE_SYNC_KEEP=1  keep the scratch directory and print its path
+#        VERIFY_BEFORE_SYNC_TREE  the `tree:` label verify.py must print for a verdict (default
+#                          `EXEC MIRROR`, the owner's provisioned mirror). CI's exec-mirror job sets
+#                          `BARE EXEC MIRROR`: it runs this same script on a runner, with
+#                          ORCH_SYNC_SCRIPT=scripts/build_exec_mirror.sh, so a mirror-only defect
+#                          fails on its PR. The match is on the label's START, so the default never
+#                          accepts the bare shape and its larger ceilings.
+#        VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG=1  pass --floor-may-lag to verify.py. CI sets it: a floor
+#                          lagging behind reality is the checkout job's business, and a collection
+#                          DROP still fails either way.
 #
 # No here-documents or here-strings: bash 5.3 feeds them through a pipe, and a pipe can block
 # forever once system pipe memory is exhausted (tests/test_orchestrate_no_heredoc.py).
@@ -79,6 +88,10 @@ ledger_src="${ORCH_CAPABILITIES_PATH:-$runtime_src/capabilities.json}"
 brain_src="${ORCH_FEEDBACK_DB:-$runtime_src/feedback/orchestrator.db}"
 max_dir_mb="${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-50}"
 skipped_dirs=""
+expected_tree="${VERIFY_BEFORE_SYNC_TREE:-EXEC MIRROR}"
+# A scalar, not an array: an empty array under `set -u` is an unbound variable in bash 3.2.
+floor_flag=""
+[[ "${VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG:-0}" == "1" ]] && floor_flag="--floor-may-lag"
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'verify-before-sync: %s\n' "$*" >&2; }
@@ -150,6 +163,8 @@ for label, path in (
     ("mirror/config/coverage-baseline.json", src / "config/coverage-baseline.json"),
     ("mirror/.verify-floor.json", src / ".verify-floor.json"),
     ("mirror/CLAUDE.md", src / "CLAUDE.md"),
+    ("mirror/AGENTS.md", src / "AGENTS.md"),
+    ("mirror/ORCHESTRATOR.md", src / "ORCHESTRATOR.md"),
     ("mirror/IMPROVEMENT_BACKLOG.md", src / "IMPROVEMENT_BACKLOG.md"),
 ):
     add(label, path.read_bytes() if path.is_file() else b"<absent>")
@@ -230,6 +245,33 @@ if ! payload_before="$("$python_bin" "$installer" "$scratch/mirror" --digest)"; 
   exit 2
 fi
 
+# ONE COPY CONTRACT (2026-10-04, FYI ONLY). CI's exec-mirror job builds its flat copy with
+# scripts/build_exec_mirror.sh. The copy script above is the owner's file, and it agrees with CI only
+# while it delegates to that builder (docs/MIRROR_SYNC_PATCH.md, "One copy contract"). So when the
+# two are different files, build the contract's tree too, BEFORE verify.py writes anything, and say
+# whether CI verified the tree this sync ships. It never changes the verdict: this run judges the
+# copy script's own tree, which is what deploys. The registry is excluded because it is the one
+# thing the copy script adds that is not repository content.
+contract="$src/scripts/build_exec_mirror.sh"
+contract_line=""
+if [[ -f "$contract" ]]; then
+  sync_real="$(cd "$(dirname "$sync_script")" 2>/dev/null && pwd -P)/$(basename "$sync_script")"
+  contract_real="$(cd "$src/scripts" && pwd -P)/build_exec_mirror.sh"
+  if [[ "$sync_real" == "$contract_real" ]]; then
+    contract_line="copy contract: built by scripts/build_exec_mirror.sh itself, the builder CI's exec-mirror job uses"
+  elif ! bash "$contract" "$src" "$scratch/contract" >"$scratch/contract.log" 2>&1; then
+    contract_line="!! copy contract (FYI; the verdict is unaffected): scripts/build_exec_mirror.sh failed on $src, so whether CI verified this tree is unknown"
+  elif contract_diff="$(diff -rq -x repo_review_registry.json "$scratch/contract" "$scratch/mirror" 2>&1)"; then
+    contract_line="copy contract: $sync_script built exactly the tree scripts/build_exec_mirror.sh builds, which CI's exec-mirror job verifies"
+  else
+    contract_line="!! copy contract (FYI; the verdict is unaffected): $sync_script and scripts/build_exec_mirror.sh built DIFFERENT trees, so CI's exec-mirror job did not verify what this sync ships; apply docs/MIRROR_SYNC_PATCH.md, \"One copy contract\". First differences: $(printf '%s\n' "$contract_diff" | head -3 | tr '\n' ';')"
+  fi
+  rm -rf "$scratch/contract"
+else
+  contract_line="!! copy contract (FYI; the verdict is unaffected): $src has no scripts/build_exec_mirror.sh"
+fi
+say "   $contract_line"
+
 runtime_copy="$scratch/state/runtime"
 statedir_copy="$runtime_copy"
 say "== scratch copy of the live state ($runtime_src), which verify.py may read AND write"
@@ -284,7 +326,7 @@ say "== verify.py in the scratch mirror, on the state copy (HOME stays real for 
   ORCH_FEATURES_PATH="$registry_copy/features.json" \
   ORCH_REPO_KNOWLEDGE_PATH="$registry_copy/repo_knowledge.json" \
   ORCH_HYP_PATH="$registry_copy/hypotheses.json" \
-  "$python_bin" verify.py) 2>&1 | tee "$scratch/verify.log"
+  "$python_bin" verify.py ${floor_flag:+"$floor_flag"}) 2>&1 | tee "$scratch/verify.log"
 pipe_status=("${PIPESTATUS[@]}")
 rc=${pipe_status[0]}
 tee_rc=${pipe_status[1]}
@@ -294,11 +336,15 @@ if [[ "$tee_rc" != "0" ]]; then
   exit 2
 fi
 
+# The label must START the line's value: `tree: <spaces>EXEC MIRROR` never matches
+# `tree: <spaces>BARE EXEC MIRROR`, so the owner's verdict cannot be taken under the bare shape's
+# larger ceilings, and CI's cannot be taken under the provisioned mirror's.
 shape_ok=1
-if ! grep -q 'tree: *EXEC MIRROR' "$scratch/verify.log"; then
+if ! grep -Eq "tree: +${expected_tree}( |\$)" "$scratch/verify.log"; then
   shape_ok=0
-  say "!! verify.py did not judge the scratch tree as the exec-mirror shape, so it applied the"
-  say "   checkout's ceilings: this is not the mirror's verdict, and it is NOT VERIFIED"
+  say "!! verify.py did not judge the scratch tree as the $expected_tree shape, so the ceilings it"
+  say "   applied are not the ones this verdict requires, and it is NOT VERIFIED. It printed:"
+  say "   $(grep -m1 'tree:' "$scratch/verify.log" || echo '(no tree: line)')"
 fi
 if ! after="$(source_identity)" || [[ "$after" != "$before" ]]; then
   fail "VOID: $src changed while verify.py ran, so this verdict is about a tree the sync would"
@@ -317,7 +363,7 @@ fi
 if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   verdict="VERIFIED"
 elif [[ "$rc" == "0" ]]; then
-  verdict="NOT VERIFIED (verify.py passed, but not in the exec-mirror shape)"
+  verdict="NOT VERIFIED (verify.py passed, but not in the $expected_tree shape)"
 else
   verdict="NOT VERIFIED (verify.py exit $rc)"
 fi
@@ -325,6 +371,7 @@ say ""
 say "== verify-before-sync: $verdict for $src @ $head_short ($dirty uncommitted)"
 say "   scratch mirror built by $sync_script, verified on a copy of $runtime_src; the live mirror,"
 say "   the live registry copy, the live ledger and the live Brain were not written"
+say "   $contract_line"
 if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   say "   verified source identity: $(fingerprint "$before")"
   if [[ -n "$snapshot_out" ]]; then

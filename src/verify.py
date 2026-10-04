@@ -1675,6 +1675,72 @@ def _selftest() -> None:
     assert len(_probs_c) == 1 and _rend_c["skipped_max"] == "31/26 max", _rend_c
     # An unset ceiling still says so rather than rendering a bare count.
     assert "no ceiling set" in _ceiling_report({}, _s31, shape=EXEC_MIRROR)[1]["skipped_max"]
+
+    # ---- THE THIRD SHAPE: the flat copy on a BARE machine (2026-10-04) ------------------------
+    # CI's exec-mirror job verifies the flat tree on a runner, deprived both ways, so it skips the
+    # runner family AND the git family. Its own agreement must govern it, be named in every message,
+    # and fall back to the base (the strict direction for a shape whose deprivation contains the
+    # base's) when unset. Numbers here are illustrative; the real ones are in the floor file.
+    _three = {"skipped_max": 26, "mirror_skipped_max": 21, "bare_mirror_skipped_max": 47}
+    _s47 = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 47}
+    assert shape_key("skipped_max", BARE_EXEC_MIRROR) == "bare_mirror_skipped_max"
+    assert ceiling_limit(_three, "skipped_max", shape=BARE_EXEC_MIRROR) == (
+        47,
+        "bare_mirror_skipped_max",
+    )
+    # The bare union passes under its own agreement and is a breach under BOTH of the others:
+    # neither the runner's number nor the owner's mirror's may silently stand in for it.
+    _probs_b, _rend_b = _ceiling_report(_three, _s47, shape=BARE_EXEC_MIRROR)
+    assert _probs_b == [] and _rend_b["skipped_max"] == "47/47 max [bare_mirror_skipped_max]", _rend_b
+    for _other, _key in ((CHECKOUT, "`skipped_max`"), (EXEC_MIRROR, "`mirror_skipped_max`")):
+        _breach = _ceiling_problems(_three, _s47, shape=_other)
+        assert len(_breach) == 1 and _key in _breach[0], (_other, _breach)
+    _over_b = _ceiling_problems(_three, {**_s47, "skipped_max": 48}, shape=BARE_EXEC_MIRROR)
+    assert len(_over_b) == 1 and "`bare_mirror_skipped_max`" in _over_b[0], _over_b
+    assert "(bare exec mirror)" in _over_b[0], "the message must say which shape it is bounding"
+    # Unset bare key: the base agreement governs, and the bare union is RED against it.
+    _unset_b = _ceiling_problems({"skipped_max": 26}, _s47, shape=BARE_EXEC_MIRROR)
+    assert len(_unset_b) == 1 and "`skipped_max`" in _unset_b[0], _unset_b
+    # WHICH SHAPE, composed from the two detectors in all four combinations. A checkout is a
+    # checkout on any machine, because the base agreement was measured on the bare one; only a
+    # mirror tree splits by machine. DELIBERATE-BREAK DEMO: let `tree_shape` ask the machine first
+    # and a bare CHECKOUT (CI's verify job) reads as the bare mirror, so the second case goes red.
+    _real_tree, _real_machine = exec_mirror_shape, bare_machine
+    try:
+        for _is_mirror, _is_bare, _want in (
+            (False, False, CHECKOUT),
+            (False, True, CHECKOUT),
+            (True, False, EXEC_MIRROR),
+            (True, True, BARE_EXEC_MIRROR),
+        ):
+            globals()["exec_mirror_shape"] = lambda _m=_is_mirror: "flat, not a repo" if _m else None
+            globals()["bare_machine"] = lambda _b=_is_bare: "no prerequisites" if _b else None
+            _got_shape, _why = tree_shape()
+            assert _got_shape == _want, (_is_mirror, _is_bare, _got_shape)
+            # The reason names every fact that chose the shape, so a reader can check it.
+            assert (_why is None) is (_want == CHECKOUT), _why
+            if _want == BARE_EXEC_MIRROR:
+                assert _why and "flat, not a repo" in _why and "no prerequisites" in _why, _why
+    finally:
+        globals()["exec_mirror_shape"] = _real_tree
+        globals()["bare_machine"] = _real_machine
+    # The bare label must NOT begin with the provisioned one. scripts/verify_before_sync.sh accepts
+    # the owner's verdict only when the line reads `tree: <spaces>EXEC MIRROR`, so a provisioned
+    # machine misread as bare is refused there instead of verified under the larger agreement.
+    assert TREE_LABELS[EXEC_MIRROR].startswith("EXEC MIRROR ")
+    assert TREE_LABELS[BARE_EXEC_MIRROR].startswith("BARE EXEC MIRROR ")
+    assert not re.match(r"EXEC MIRROR", TREE_LABELS[BARE_EXEC_MIRROR]), TREE_LABELS
+    # Every shape's label names the key family it applies, so the summary is self-explaining.
+    for _shape, _prefix in SHAPE_CEILING_PREFIX.items():
+        if _prefix:
+            assert f"{_prefix}*" in TREE_LABELS[_shape], (_shape, TREE_LABELS[_shape])
+    # And the REAL floor file must carry the bare agreement for every skip ceiling, or CI's
+    # exec-mirror job is bounded by a number measured on another shape.
+    for _key in ("skipped_max", "selftest_skipped_max", "gate_skipped_max"):
+        assert _real_floor.get(shape_key(_key, BARE_EXEC_MIRROR)) is not None, (
+            f".verify-floor.json records no `{shape_key(_key, BARE_EXEC_MIRROR)}`; the bare exec "
+            "mirror would be bounded by the runner checkout's number, which it cannot meet"
+        )
     # THE ONE WIRING PIN, because everything above is pure and `verify()` is not cheap to call:
     # dropping the keyword reverts the defect exactly (the mirror bounded by the runner's number)
     # while every assertion above stays green — this repo's founding failure, code that exists and
@@ -2060,7 +2126,7 @@ def _selftest() -> None:
         "--reconcile-floor forgives ONLY a drift it "
         "healed and never an unwritten one, absent-module line is silent when clean and is "
         "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail, "
-        "two tree shapes carry two agreed ceilings and the exec mirror can go GREEN, "
+        "three tree shapes carry three agreed ceilings, each mirror shape GREEN under its own, "
         "selftests classify identically at any width, a run reads one private copy of the "
         "state and writes neither source, a failed copy refuses the run, and only a replayable "
         "pytest verdict is kept)"
