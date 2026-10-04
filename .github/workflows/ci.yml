@@ -236,6 +236,66 @@ jobs:
       # not check. If that list grows, the ceiling turns it into a red rather than a footnote.
 
   # ---------------------------------------------------------------------------------------------
+  # THE FLAT EXEC-MIRROR SHAPE, VERIFIED ON EVERY PR (2026-10-04).
+  #
+  # WHAT THIS FIXES. The `verify` job above judges a CHECKOUT. launchd runs a different tree: the
+  # exec mirror, a FLAT copy (modules at the root, no .git). On 2026-10-04 the owner's verified sync
+  # was refused for three independent defects that existed only in that shape, each green here on
+  # its own PR (#408): tests that read `src/<module>` by path, loaders seeding deployment-owned
+  # registries, and a test child that seeded one into the deployable tree. The only detector was
+  # scripts/verify_before_sync.sh, which runs when the owner syncs, i.e. after merge.
+  #
+  # WHAT IT RUNS: that same script, not a second procedure. ORCH_SYNC_SCRIPT points it at
+  # scripts/build_exec_mirror.sh, which is the copy contract the owner's copier calls
+  # (docs/MIRROR_SYNC_PATCH.md, "One copy contract"), so this verifies the tree a sync ships. It
+  # builds a scratch flat copy, hashes the deployment-owned bytes, runs verify.py there with every
+  # registry and state path in scratch, and fails if verification changed a deployed byte (the VOID
+  # that caught two of the three causes) or if the source moved.
+  #
+  # ITS OWN CEILINGS. On a runner the flat copy lacks the git family (like the owner's mirror) AND
+  # every local prerequisite (like this runner's checkout), so it is a third shape. verify.py
+  # detects it (env_prereq.exec_mirror_shape AND env_prereq.bare_machine, never $CI) and bounds it
+  # by `bare_mirror_*` in .verify-floor.json, measured here. VERIFY_BEFORE_SYNC_TREE makes the
+  # script refuse any other classification, so a mislabelled tree is a red, not a looser number.
+  #
+  # LATCHED-GATE ANSWERS. 1: a red here is cleared by the PR that fixes the mirror-only defect (or
+  # ships the missing file from the builder), or by a deliberate, named ceiling raise. 2: both run
+  # while the job is red, since nothing here blocks a push or a re-run. 3: the bare ceilings are
+  # measured in this job, the only place that shape is detected, and the digest is the installer's
+  # one function before and after. 4: drained, it prints `tree: BARE EXEC MIRROR`, `N/N max
+  # [bare_mirror_skipped_max]` and `== verify-before-sync: VERIFIED`, and every green run of this
+  # job is an input that produced it.
+  #
+  # --floor-may-lag on every event: a lagging floor is the `verify` job's business, and a collection
+  # DROP still fails here. Runs beside `verify`, so a PR waits no longer than before.
+  exec-mirror:
+    name: verify.py in the flat exec-mirror shape (the tree a sync ships)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pyyaml coverage
+
+      - name: Build the flat copy with the sync's copy contract and verify it there
+        env:
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+          ORCH_SYNC_SCRIPT: ${{ github.workspace }}/scripts/build_exec_mirror.sh
+          VERIFY_BEFORE_SYNC_TREE: BARE EXEC MIRROR
+          VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG: '1'
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          bash scripts/verify_before_sync.sh "$GITHUB_WORKSPACE"
+
+  # ---------------------------------------------------------------------------------------------
   # THE FLOOR'S DRAIN, RUN AUTOMATICALLY — main only.
   #
   # WHAT THIS FIXES. `collected` in .verify-floor.json is an EQUALITY (2026-08-23), and correctly

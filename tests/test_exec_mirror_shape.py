@@ -90,3 +90,71 @@ def test_the_mirror_is_the_flat_copy_that_is_not_a_repository(
         assert "src/" in shape and "git" in shape, f"the reason must name both marks: {shape}"
     else:
         assert shape is None, f"{tree} is a checkout's shape and read as the mirror: {shape}"
+
+
+# --------------------------------------------------------------------------- WHICH MACHINE
+# `bare_machine()` splits the exec-mirror tree into two agreements: the owner's provisioned mirror
+# (`mirror_*`) and CI's flat copy on a runner (`bare_mirror_*`). Asked of the REAL function in a fresh
+# interpreter with PATH, HOME and the Codex binary path controlled, so the answer comes from the
+# filesystem and no stub stands between them. PATH holds only /usr/bin and /bin, which carry none of
+# the seat CLIs on either macOS or a runner; the interpreter is invoked by absolute path.
+
+_ASK_MACHINE = (
+    "import json, sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import env_prereq\n"
+    "print(json.dumps(env_prereq.bare_machine()))\n"
+)
+
+
+def _machine(tmp_path: Path, *, cli: str | None = None, skill=False, codex=False) -> str | None:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    if cli:
+        (bin_dir / cli).write_text("#!/bin/sh\nexit 0\n")
+        (bin_dir / cli).chmod(0o755)
+    if skill:
+        resource = home / ".codex/skills/code-workspace-hygiene/scripts/audit_code_root.sh"
+        resource.parent.mkdir(parents=True, exist_ok=True)
+        resource.write_text("#!/bin/sh\n")
+    codex_bin = tmp_path / "codex-profile-bin"
+    if codex:
+        codex_bin.write_text("#!/bin/sh\n")
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "HOME": str(home),
+        "ORCH_CODEX_PROFILE_BIN": str(codex_bin),
+        "ORCH_LOCAL_RUNTIME": str(tmp_path / "runtime"),
+        "ORCH_STATE_DIR": str(tmp_path / "state"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", _ASK_MACHINE, str(paths.MODULE_DIR)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_a_machine_with_no_local_prerequisite_is_bare(tmp_path: Path) -> None:
+    got = _machine(tmp_path)
+    assert got and "none of this instance's local prerequisites" in got, got
+
+
+@pytest.mark.parametrize(
+    "present",
+    [
+        pytest.param({"cli": "claude"}, id="one-seat-cli-present"),
+        pytest.param({"skill": True}, id="reference-skill-present"),
+        pytest.param({"codex": True}, id="codex-binary-present"),
+    ],
+)
+def test_any_one_local_prerequisite_keeps_the_machine_provisioned(
+    tmp_path: Path, present: dict
+) -> None:
+    """One mark present is enough: the machine then takes the smaller `mirror_*` agreement."""
+    assert _machine(tmp_path, **present) is None

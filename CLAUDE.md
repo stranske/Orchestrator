@@ -328,7 +328,7 @@ Do not create a second event log, model registry, or capability inventory.
   that makes CI run MORE. **Never turn a real failure into a skip**, and never add a skip without
   a reason string — a reason-less skip is indistinguishable from a pass, which is this repo's
   founding defect wearing a different hat.
-- **A CEILING BOUNDS ONE DEPRIVED SHAPE, AND THERE ARE TWO.** `skipped_max` was measured on a bare
+- **A CEILING BOUNDS ONE DEPRIVED SHAPE, AND THERE ARE THREE.** `skipped_max` was measured on a bare
   GitHub runner — no agent CLIs, no `~/.codex/skills`, no app bundle, no populated ledger — and was
   then also applied to the EXEC MIRROR, which is the opposite deprivation: every local prerequisite
   present, but a flat file copy with no `.github/` and no `.git`, so it skips 31 tests a runner
@@ -338,9 +338,16 @@ Do not create a second event log, model registry, or capability inventory.
   verdict. Raising the number would have been the wrong repair; it would have handed the RUNNER
   five units of slack, where 26 is the measured bound. **Each shape carries its own agreed number,
   measured where it is enforced**: `env_prereq.exec_mirror_shape()` detects the tree (both marks
-  required, `$CI` never consulted) and `verify.mirror_key` derives the floor key, so any ceiling may
-  carry a `mirror_` variant and an unset one falls back to the base — the strict direction. The
-  summary always prints which tree it decided it was in. When you add a ceiling, ask which shape you
+  required, `$CI` never consulted) and `verify.shape_key` derives the floor key, so any ceiling may
+  carry a shape variant and an unset one falls back to the base. The summary always prints which
+  tree it decided it was in. **The third shape (2026-10-04) is CI's flat copy**: the `exec-mirror`
+  job verifies the tree a sync ships, built by `scripts/build_exec_mirror.sh` (the one copy
+  contract, which the owner's copier calls), and on a runner that tree is deprived BOTH ways, so it
+  skips the git family AND the runner family. `env_prereq.bare_machine()` tells that machine from
+  the owner's (every local prerequisite absent; any one present, or unreadable, means
+  provisioned), and `verify.tree_shape()` applies `bare_mirror_*`, measured in that job. A
+  file a test or the tick reads at run time ships from that builder, in the change that starts
+  reading it; the job fails the PR otherwise. When you add a ceiling, ask which shape you
   measured it in before writing the number down. Since 2026-10-02 the sync also ships `.github/`,
   `docs/`, `.gitignore` and `ruff.toml`, so the mirror's one remaining absence is `.git` (21 skips),
   and its marks are *flat* and *not a repository*. A mark that stops being true of a tree mislabels

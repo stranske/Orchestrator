@@ -887,3 +887,160 @@ Review the retained exit status, match the checkout commit to the actual merge/p
 launchd/cron entries, compare runtime reports/markers before and after publication, and retain
 durable `verify:compare` output before checking the deployment task complete. This repository
 change does not install wrappers or supply those live observations.
+
+## One copy contract: the repository defines what the mirror carries (2026-10-04)
+
+**The incident.** On 2026-10-04 the owner's verified sync of main was refused, for three independent
+defects that existed only in the flat exec mirror (#408): four tests read `src/<module>` by path,
+three loaders seeded deployment-owned registries under the verdict, and a test child seeded one
+into the deployable tree. Each was green in CI on its own PR, because CI verified a CHECKOUT. The
+only check of the flat shape was `scripts/verify_before_sync.sh`, and it runs when the owner syncs,
+after merge.
+
+**What changed.**
+
+- `scripts/build_exec_mirror.sh` builds everything the mirror carries FROM THIS REPOSITORY. It is the
+  repository part of `~/.codex/bin/orch-sync-mirror.sh`, moved without changing what it does: the
+  same files, the same `git archive` drains, the same `docs/` merge and the same executable bits.
+  One deliberate exception, reachable only if the repository ever drops `docs/` entirely: the
+  previous manifest's docs and the manifest itself are then removed, where the copier left them for
+  the installer to deploy. It needs a git checkout and an explicit destination, and has no default
+  that could name the live mirror. Witnessed on 2026-10-04 by running the installed copier and the builder on the same source
+  into two scratch trees: 2,103 entries each, identical in contents and permissions. The one
+  difference is `repo_review_registry.json`, which the copier fetches from Workflows.
+- CI's new `exec-mirror` job runs `scripts/verify_before_sync.sh` itself, with
+  `ORCH_SYNC_SCRIPT=scripts/build_exec_mirror.sh`. A PR is therefore judged in the flat shape, by the
+  same procedure and the same payload-digest check as a sync. A mirror-only defect now fails on the
+  PR that introduces it.
+- On a runner that flat copy is a THIRD deprived shape. Like the owner's mirror, it is flat and not a
+  repository, so it skips the git family. Like a runner checkout, it has no local prerequisite, so
+  it skips the runner family too. `env_prereq.bare_machine()` detects that machine from three
+  marks: no agent seat with a CLI or credential file, no reference skill resource, and no
+  version-capable Codex binary. `verify.tree_shape()` then prints `tree: BARE EXEC MIRROR` and
+  applies `bare_mirror_*` from `.verify-floor.json`, measured by that job. If any mark is present,
+  or one cannot be read, the machine is provisioned and the owner's `mirror_*` agreement applies.
+- `verify_before_sync.sh` takes `VERIFY_BEFORE_SYNC_TREE`, the `tree:` label it requires: `EXEC
+  MIRROR` by default, `BARE EXEC MIRROR` in CI. The match is on the label's start, so the owner's
+  sync refuses a bare classification and its larger ceilings, and CI refuses the provisioned one.
+  `VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG=1` passes `--floor-may-lag`: a lagging floor is the checkout
+  job's business, and a collection drop still fails.
+- The source identity now covers `AGENTS.md` and `ORCHESTRATOR.md`, which the copy reads from the
+  working tree, and `install_verified_snapshot.OWNED_FILES` now owns both. Before, the installer
+  never installed them, so the live mirror kept stale copies. `tests/test_build_exec_mirror.py`
+  fails any file the builder ships that the installer does not own, and any working-tree input the
+  identity does not cover.
+
+**Every sync now says whether CI verified what it ships.** `verify_before_sync.sh` also builds the
+contract's tree from the same source, before `verify.py` runs, and compares it with the copier's,
+leaving out the registry. One line reports the result, `copy contract: ... built exactly the tree
+scripts/build_exec_mirror.sh builds` or `!! copy contract ... built DIFFERENT trees`, naming the
+first differences. It is FYI only and never changes the verdict, because the sync still judges the
+copier's own tree, which is what deploys. Until the copier below is installed, the two agree only
+because neither has changed since the move, and the first change to the builder makes this line
+report the difference.
+
+**The copier, whole.** After this change is merged and `~/.codex/orchestrator-src` is pulled,
+replace the contents of `~/.codex/bin/orch-sync-mirror.sh` with the block below. It keeps only what
+is not repository content, the Workflows registry, and calls the builder for everything else, so a
+sync copies exactly what it copied before and nothing about HOW the copier is called changes.
+
+It deliberately does NOT carry #390's entry guard. That guard routes a direct call through the
+guarded publisher, which is #389's deployment step and belongs with that section's wrapper. If you
+have already inserted the guard ("Direct incumbent copier entry guard" above), keep its five lines
+immediately after the `MIRROR=` line. If you have not, that section's insertion applies to this file
+unchanged when you deploy #389, at the same place.
+
+```bash
+#!/usr/bin/env bash
+# orch-sync-mirror.sh — copy the canonical orchestrator CODE to the local exec-mirror launchd runs.
+#
+# WHY: launchd (and cron) cannot read macOS CloudStorage/Dropbox paths — they get EPERM ("Operation
+# not permitted"), and a symlink does NOT bypass it. So the scheduled tick runs from local disk, and
+# this copies a checkout there. Run it from an interactive context, through orch-mirror-sync.sh.
+#
+# WHAT IT COPIES IS DEFINED IN THE REPOSITORY (2026-10-04). $SRC/scripts/build_exec_mirror.sh builds
+# everything that comes from the repository, and CI's exec-mirror job builds its flat copy with the
+# same script, so the tree CI verifies on every PR is the tree this copies. Never add a copy step
+# here: add it to that script, in the change that needs the file. This keeps only what is not
+# repository content, the Workflows registry. (docs/MIRROR_SYNC_PATCH.md, "One copy contract")
+set -euo pipefail
+SRC="${1:-$HOME/Library/CloudStorage/Dropbox/Learning/Code/Orchestrator}"
+MIRROR="${ORCH_MIRROR:-$HOME/.codex/orchestrator-mirror}"
+trap 'echo "ERR: orch-sync-mirror.sh aborted at line $LINENO (rc $?): $MIRROR is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify." >&2' ERR
+if [[ ! -f "$SRC/orchestrate.sh" ]]; then
+  echo "ERR: no orchestrate.sh in $SRC — Dropbox unreadable (launchd context?) or wrong path." >&2
+  exit 1
+fi
+BUILDER="$SRC/scripts/build_exec_mirror.sh"
+if [[ ! -f "$BUILDER" ]]; then
+  echo "NOT SYNCED: $SRC has no scripts/build_exec_mirror.sh, which defines what the mirror carries; pull the clone first. $MIRROR was not touched." >&2
+  exit 2
+fi
+bash "$BUILDER" "$SRC" "$MIRROR"
+# repo_review_registry.json lives in the Workflows repo (NOT $SRC). keepalive_outcomes.py reads it,
+# and launchd cannot read CloudStorage paths, so the mirror carries a local copy.
+WF_REGISTRY="$HOME/Library/CloudStorage/Dropbox/Learning/Code/Workflows/config/repo_review_registry.json"
+# PREFER WHAT IS MERGED ON GITHUB. The Dropbox checkout of Workflows is a partial clone pulled by
+# hand, so copying it could silently revert a registry change merged upstream. `gh` reads main
+# directly; the Dropbox file is the fallback when GitHub is unreachable.
+WF_REGISTRY_GH="$(mktemp)"
+if gh api repos/stranske/Workflows/contents/config/repo_review_registry.json --jq .content 2>/dev/null | base64 -d > "$WF_REGISTRY_GH" 2>/dev/null \
+   && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$WF_REGISTRY_GH" 2>/dev/null; then
+  registry_src="$WF_REGISTRY_GH"; registry_from="GitHub main"
+elif [[ -f "$WF_REGISTRY" ]]; then
+  registry_src="$WF_REGISTRY"; registry_from="Dropbox checkout (GitHub unreachable)"
+else
+  registry_src=""; registry_from="none"
+fi
+if [[ -n "$registry_src" ]]; then
+  cp "$registry_src" "$MIRROR/repo_review_registry.json"
+  cp "$registry_src" "$HOME/.codex/orchestrator/repo_review_registry.json" 2>/dev/null || true
+  echo "repo_review_registry.json from $registry_from"
+else
+  echo "repo_review_registry.json: NONE (GitHub unreachable and no Dropbox checkout); the mirror keeps whatever copy it had" >&2
+fi
+rm -f "$WF_REGISTRY_GH"
+```
+
+The steps, about two minutes, once. Pull, keep a backup, write the block above over the file (the
+one-liner extracts it from this document exactly as the tests do), and check the syntax:
+
+```bash
+git -C ~/.codex/orchestrator-src pull --ff-only
+```
+
+```bash
+cp ~/.codex/bin/orch-sync-mirror.sh ~/.codex/bin/orch-sync-mirror.sh.bak-2026-10-04
+```
+
+```bash
+python3 -c 'import pathlib as p; h=p.Path.home(); t=(h/".codex/orchestrator-src/docs/MIRROR_SYNC_PATCH.md").read_text(); i=t.index("**The copier, whole.**"); s=t.index("```bash\n",i)+8; (h/".codex/bin/orch-sync-mirror.sh").write_text(t[s:t.index("\n```",s)]+"\n")'
+```
+
+```bash
+bash -n ~/.codex/bin/orch-sync-mirror.sh && grep -c build_exec_mirror ~/.codex/bin/orch-sync-mirror.sh
+```
+
+Then sync as usual. The pre-sync output carries `copy contract: ... built exactly the tree
+scripts/build_exec_mirror.sh builds, which CI's exec-mirror job verifies`; to undo, copy the backup
+back. `tests/test_build_exec_mirror.py` extracts the block above and runs it in a scratch world: it
+builds through the builder and adds only the registry, and it refuses a source without the builder
+before writing anything. It also inserts #390's documented guard exactly where that section says and
+checks the result: a staging call still builds, a direct call goes to the guarded publisher, and
+the guard block is present byte for byte, which is what the deployment-evidence collector looks for.
+
+**Latched-gate answers for CI's `exec-mirror` job and the `bare_mirror_*` ceilings.**
+
+1. *What clears a red?* The PR that fixes the mirror-only defect, or that ships the missing file from
+   the builder. Otherwise, a deliberate ceiling raise that names what goes unchecked.
+2. *Can that run while the gate is closed?* Yes. Nothing here blocks a push, a re-run or the floor
+   reconcile job, and a fix is judged by the same job that went red.
+3. *Measuring window = draining window?* Each `bare_mirror_*` number is measured by this job, the one
+   place that shape is detected, and read only there through `verify.ceiling_limit`. The digest is
+   the installer's one function, taken before and after verification.
+4. *What does it print when drained?* `tree: BARE EXEC MIRROR — bare_mirror_* ceilings apply`, each
+   ceiling as `N/N max [bare_mirror_...]`, and `== verify-before-sync: VERIFIED`. Every green run of
+   the job is an input that produced it, and `verify.py --selftest` renders it by construction.
+
+The copy-contract line is not a gate: it reports and never blocks, and it has no state that could
+latch.

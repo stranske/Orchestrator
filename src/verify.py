@@ -195,7 +195,7 @@ def coverage_combine_and_report(root: pathlib.Path | None = None) -> str:
 # Imported from env_prereq rather than duplicated: a shared literal in two files is a pair that
 # drifts, and a mark that drifts turns a skip back into a silent pass.
 try:
-    from env_prereq import PREREQ_ABSENT_MARK, exec_mirror_shape
+    from env_prereq import PREREQ_ABSENT_MARK, bare_machine, exec_mirror_shape
 except Exception:  # noqa: BLE001
     PREREQ_ABSENT_MARK = "PREREQUISITE ABSENT:"
 
@@ -207,6 +207,10 @@ except Exception:  # noqa: BLE001
         skips more. Defaulting to the mirror would hand an unknown tree the extra headroom, which
         is the one error worth engineering against here.
         """
+        return None
+
+    def bare_machine() -> str | None:
+        """Fallback: read the machine as PROVISIONED, the smaller agreement, for the same reason."""
         return None
 
 
@@ -892,36 +896,85 @@ CEILINGS = (
 # own agreed number, measured in the shape it bounds — the measuring window equal to the draining
 # window, which is the house rule this file already applies everywhere else.
 #
-# ONE RULE, NOT A SECOND TABLE. The mirror's key for any ceiling is its base key with this prefix,
-# derived here and consumed by both `_ceiling_problems` and `--update-floor`, so the check and the
-# writer cannot name different keys and a ceiling added later gets its shape variant for free. A
-# mirror key that is unset (or misspelt) simply falls back to the base agreement — the STRICT
-# direction, which fails toward a loud red rather than toward silence.
-MIRROR_CEILING_PREFIX = "mirror_"
+# THREE SHAPES SINCE 2026-10-04. CI now verifies the flat exec-mirror shape too (the `exec-mirror`
+# job, building its copy with scripts/build_exec_mirror.sh), so a mirror-only defect fails on its PR
+# rather than at the owner's sync. On a runner that copy is deprived BOTH ways: flat and not a
+# repository (the git family the owner's mirror skips), and without any local prerequisite (the
+# runner family a checkout skips). Neither number bounds that union, so it carries its own,
+# `bare_mirror_*`, measured in CI where it is enforced. `env_prereq.bare_machine()` tells it apart
+# from the owner's mirror, and `tree_shape` below is the one place that asks.
+#
+# Only the MIRROR tree splits by machine. The base agreement was already measured on the bare
+# machine (a runner checkout), and the owner's checkout runs are not a verdict anywhere. The owner's
+# mirror run is the pre-sync verdict, so its number must stay the provisioned one.
+#
+# ONE RULE, NOT A SECOND TABLE. A shape's key for any ceiling is the base key with that shape's
+# prefix, derived here and consumed by both the check and the rendering through `ceiling_limit`.
+# `--update-floor` carries every key it does not re-measure, so no shape key needs registering
+# anywhere, and a ceiling added later gets its shape variants for free. A shape key that is unset
+# (or misspelt) falls back to the BASE agreement. That is the strict direction for the bare mirror,
+# whose deprivation contains the base's, so a missing `bare_mirror_*` key goes red. It is NOT strict
+# for the owner's mirror, whose selftest and gate ceilings borrow the runner's 7 and 2 today because
+# no `mirror_` variant of those keys was ever measured. Measure one before relying on it.
+CHECKOUT, EXEC_MIRROR, BARE_EXEC_MIRROR = "checkout", "exec mirror", "bare exec mirror"
+SHAPE_CEILING_PREFIX = {CHECKOUT: "", EXEC_MIRROR: "mirror_", BARE_EXEC_MIRROR: "bare_mirror_"}
+MIRROR_CEILING_PREFIX = SHAPE_CEILING_PREFIX[EXEC_MIRROR]
+# The `tree:` line for each shape. scripts/verify_before_sync.sh matches it against the shape its
+# caller expects: the owner's sync accepts only `EXEC MIRROR`, CI's job only `BARE EXEC MIRROR`. So
+# the bare label must not BEGIN with the provisioned one: a provisioned machine misread as bare would
+# otherwise pass the owner's check with the larger agreement. The selftest pins that.
+TREE_LABELS = {
+    CHECKOUT: "checkout",
+    EXEC_MIRROR: "EXEC MIRROR — mirror_* ceilings apply",
+    BARE_EXEC_MIRROR: "BARE EXEC MIRROR — bare_mirror_* ceilings apply",
+}
+
+
+def shape_key(key: str, shape: str) -> str:
+    """The floor-file key holding `shape`'s agreed maximum for `key` (the base key on a checkout)."""
+    return f"{SHAPE_CEILING_PREFIX[shape]}{key}"
 
 
 def mirror_key(key: str) -> str:
     """The floor-file key holding the EXEC MIRROR's agreed maximum for `key`."""
-    return f"{MIRROR_CEILING_PREFIX}{key}"
+    return shape_key(key, EXEC_MIRROR)
 
 
-def ceiling_limit(floor: dict, key: str, *, mirror: bool) -> tuple[int | None, str]:
-    """The limit in force for `key` in THIS tree, and the floor key that set it.
+def tree_shape() -> tuple[str, str | None]:
+    """Which agreement bounds THIS tree, and the detected facts that chose it.
+
+    The tree first: only a flat copy that is not a repository is an exec mirror. Then, for a mirror
+    only, the machine: a machine with none of this instance's local prerequisites is the bare one.
+    Both answers come from env_prereq detectors of the thing itself, never from `$CI`. Either detector
+    answering None keeps the smaller agreement in force, so an unknown can never buy headroom.
+    """
+    mirror_reason = exec_mirror_shape()
+    if not mirror_reason:
+        return CHECKOUT, None
+    bare_reason = bare_machine()
+    if bare_reason:
+        return BARE_EXEC_MIRROR, f"{mirror_reason}; and {bare_reason}"
+    return EXEC_MIRROR, mirror_reason
+
+
+def ceiling_limit(floor: dict, key: str, *, shape: str = CHECKOUT) -> tuple[int | None, str]:
+    """The limit in force for `key` in a tree of `shape`, and the floor key that set it.
 
     Returns the key as well as the number because every failure message here has to name the
-    integer to raise, and on the mirror that is a DIFFERENT key. "raise `skipped_max`" read from a
-    mirror run sends the reader to edit the number CI depends on — the gate telling you to break
-    the other environment to clear this one.
+    integer to raise, and on a mirror that is a DIFFERENT key. "raise `skipped_max`" read from a
+    mirror run sends the reader to edit the number CI's checkout job depends on — the gate telling
+    you to break the other environment to clear this one.
 
-    The mirror value REPLACES the base rather than adding to it. On the mirror the local
+    A shape value REPLACES the base rather than adding to it. On the owner's mirror the local
     prerequisites are all present, so the runner-shape absences the base number pays for do not
-    occur; adding the two would buy 26 units of headroom that nothing there can legitimately spend.
+    occur, and adding the two would buy headroom nothing there can legitimately spend. The bare
+    mirror's value is measured on the union directly, so it needs no addition either.
     """
-    if mirror:
-        mk = mirror_key(key)
-        limit = floor.get(mk)
+    if shape != CHECKOUT:
+        sk = shape_key(key, shape)
+        limit = floor.get(sk)
         if limit is not None:
-            return int(limit), mk
+            return int(limit), sk
     base = floor.get(key)
     return (None if base is None else int(base)), key
 
@@ -1112,7 +1165,7 @@ def _carried_forward(floor: dict) -> dict:
     }
 
 
-def _ceiling_report(floor: dict, actual: dict, *, mirror: bool) -> tuple[list[str], dict[str, str]]:
+def _ceiling_report(floor: dict, actual: dict, *, shape: str) -> tuple[list[str], dict[str, str]]:
     """The ceiling VERDICT and the `count/limit` RENDERING for every ceiling, from ONE shape
     decision. Pure.
 
@@ -1124,10 +1177,10 @@ def _ceiling_report(floor: dict, actual: dict, *, mirror: bool) -> tuple[list[st
     computed against 26, which reads as a bug in the tool rather than in the tree. One call, one
     decision, and the selftest can hold both halves against each other.
     """
-    problems = _ceiling_problems(floor, actual, mirror=mirror)
+    problems = _ceiling_problems(floor, actual, shape=shape)
     rendered = {}
     for key, _label in CEILINGS:
-        limit, in_force = ceiling_limit(floor, key, mirror=mirror)
+        limit, in_force = ceiling_limit(floor, key, shape=shape)
         observed = actual.get(key)
         if limit is None:
             rendered[key] = f"{observed} (no ceiling set)"
@@ -1140,10 +1193,10 @@ def _ceiling_report(floor: dict, actual: dict, *, mirror: bool) -> tuple[list[st
     return problems, rendered
 
 
-def _ceiling_problems(floor: dict, actual: dict, *, mirror: bool = False) -> list[str]:
+def _ceiling_problems(floor: dict, actual: dict, *, shape: str = CHECKOUT) -> list[str]:
     """Is anything skipping MORE than the agreed maximum FOR THIS TREE SHAPE? Pure, same reason.
 
-    `mirror` defaults to False so an unshaped call is bounded by the base (smaller) agreement —
+    `shape` defaults to CHECKOUT so an unshaped call is bounded by the base (smaller) agreement —
     the strict direction, and the one every existing caller and selftest already means.
 
     An UNSET ceiling means "nothing agreed yet", not "zero" — reading a missing key as 0 would
@@ -1157,11 +1210,11 @@ def _ceiling_problems(floor: dict, actual: dict, *, mirror: bool = False) -> lis
     silence is the wrong answer.
     """
     problems = []
-    where = " (exec mirror)" if mirror else ""
+    where = "" if shape == CHECKOUT else f" ({shape})"
     for key, label in CEILINGS:
         # The key that SET the limit, not the base key — on the mirror they differ, and every
         # message below has to send the reader to the number that actually governs this run.
-        limit, in_force = ceiling_limit(floor, key, mirror=mirror)
+        limit, in_force = ceiling_limit(floor, key, shape=shape)
         if limit is None:
             continue
         observed = actual.get(key, 0)
@@ -1253,8 +1306,8 @@ def verify(
     # mirror and a bare runner are two different deprived shapes and one number cannot bound both.
     # See `ceiling_limit`. Computed once and threaded through the check and the rendering, so the
     # verdict and the summary cannot disagree about which agreement was in force.
-    mirror_reason = exec_mirror_shape()
-    ceiling_problems, ceiling_rendered = _ceiling_report(floor, actual, mirror=bool(mirror_reason))
+    detected_shape, shape_reason = tree_shape()
+    ceiling_problems, ceiling_rendered = _ceiling_report(floor, actual, shape=detected_shape)
     problems += ceiling_problems
 
     def _cap(key: str) -> str:
@@ -1289,8 +1342,8 @@ def verify(
     # nothing on the machine where it is silent, and the whole point is that "which ceilings are
     # in force" must never have to be inferred.
     lines.append(
-        f"  tree:       {'EXEC MIRROR — mirror_* ceilings apply' if mirror_reason else 'checkout'}"
-        + (f"\n              {mirror_reason}" if mirror_reason else "")
+        f"  tree:       {TREE_LABELS[detected_shape]}"
+        + (f"\n              {shape_reason}" if shape_reason else "")
     )
     # ALWAYS printed, like `tree:`. Which state the run judged is never something to infer.
     lines.append(f"  state:      {run_state['line']}")
@@ -1538,17 +1591,19 @@ def _selftest() -> None:
     _two = {"skipped_max": 26, "mirror_skipped_max": 31}
     _s31 = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 31}
     # The bug, reproduced: on a CHECKOUT 31 skips is still a breach and must stay one.
-    _as_checkout = _ceiling_problems(_two, _s31, mirror=False)
+    _as_checkout = _ceiling_problems(_two, _s31, shape=CHECKOUT)
     assert len(_as_checkout) == 1 and "CEILING exceeded" in _as_checkout[0], _as_checkout
     assert "`skipped_max`" in _as_checkout[0], "a checkout must be sent to the base key"
     # The fix: the same 31 on the MIRROR is exactly at its own agreed maximum, and passes. This is
     # the assertion that would have been red for as long as the defect existed — the drained
     # state, which the house rule says must be reachable by some real input. It is: this is the
     # live mirror's measured count.
-    assert _ceiling_problems(_two, _s31, mirror=True) == [], "the mirror must be able to go GREEN"
+    assert (
+        _ceiling_problems(_two, _s31, shape=EXEC_MIRROR) == []
+    ), "the mirror must be able to go GREEN"
     # And the mirror ceiling is still a ceiling: one over it fails, naming the MIRROR key. Sending
     # a mirror reader to raise `skipped_max` would tell them to loosen the number CI depends on.
-    _over_m = _ceiling_problems(_two, {**_s31, "skipped_max": 32}, mirror=True)
+    _over_m = _ceiling_problems(_two, {**_s31, "skipped_max": 32}, shape=EXEC_MIRROR)
     assert len(_over_m) == 1 and "`mirror_skipped_max`" in _over_m[0], _over_m
     assert "exec mirror" in _over_m[0], "the message must say which shape it is bounding"
     # A ceiling with NO mirror variant falls back to the base agreement — the strict direction, so
@@ -1556,19 +1611,22 @@ def _selftest() -> None:
     _fallback = _ceiling_problems(
         {"selftest_skipped_max": 7},
         {**{k: 0 for k, _ in CEILINGS}, "selftest_skipped_max": 8},
-        mirror=True,
+        shape=EXEC_MIRROR,
     )
     assert len(_fallback) == 1 and "`selftest_skipped_max`" in _fallback[0], _fallback
-    # `mirror=False` is the default, and it must be the STRICT one: an unshaped call cannot help
+    # CHECKOUT is the default shape, and it must be the STRICT one: an unshaped call cannot help
     # itself to the looser number.
     assert _ceiling_problems(_two, _s31) == _as_checkout, "the default shape is checkout"
     # The key rule itself, since both the check and `--update-floor` derive from it. A second
     # table would be a matching pair, and a drifted pair here deletes the mirror ceiling.
     assert mirror_key("skipped_max") == "mirror_skipped_max"
-    assert ceiling_limit(_two, "skipped_max", mirror=True) == (31, "mirror_skipped_max")
-    assert ceiling_limit(_two, "skipped_max", mirror=False) == (26, "skipped_max")
-    assert ceiling_limit({"skipped_max": 26}, "skipped_max", mirror=True) == (26, "skipped_max")
-    assert ceiling_limit({}, "skipped_max", mirror=True) == (None, "skipped_max")
+    assert ceiling_limit(_two, "skipped_max", shape=EXEC_MIRROR) == (31, "mirror_skipped_max")
+    assert ceiling_limit(_two, "skipped_max", shape=CHECKOUT) == (26, "skipped_max")
+    assert ceiling_limit({"skipped_max": 26}, "skipped_max", shape=EXEC_MIRROR) == (
+        26,
+        "skipped_max",
+    )
+    assert ceiling_limit({}, "skipped_max", shape=EXEC_MIRROR) == (None, "skipped_max")
     # THE REAL FLOOR FILE must actually carry the mirror agreement, or every assertion above is
     # about a shape that nothing configures — the defect would still be live with a green suite.
     _real_floor = load_floor()
@@ -1614,12 +1672,82 @@ def _selftest() -> None:
     # THE VERDICT AND THE SUMMARY MUST AGREE, which is why they come from one call. Held against
     # each other here, in both shapes: a run that renders `31/31 max` above a verdict computed
     # against 26 reads as a broken tool, and the reader stops believing either number.
-    _probs_m, _rend_m = _ceiling_report(_two, _s31, mirror=True)
+    _probs_m, _rend_m = _ceiling_report(_two, _s31, shape=EXEC_MIRROR)
     assert _probs_m == [] and _rend_m["skipped_max"] == "31/31 max [mirror_skipped_max]", _rend_m
-    _probs_c, _rend_c = _ceiling_report(_two, _s31, mirror=False)
+    _probs_c, _rend_c = _ceiling_report(_two, _s31, shape=CHECKOUT)
     assert len(_probs_c) == 1 and _rend_c["skipped_max"] == "31/26 max", _rend_c
     # An unset ceiling still says so rather than rendering a bare count.
-    assert "no ceiling set" in _ceiling_report({}, _s31, mirror=True)[1]["skipped_max"]
+    assert "no ceiling set" in _ceiling_report({}, _s31, shape=EXEC_MIRROR)[1]["skipped_max"]
+
+    # ---- THE THIRD SHAPE: the flat copy on a BARE machine (2026-10-04) ------------------------
+    # CI's exec-mirror job verifies the flat tree on a runner, deprived both ways, so it skips the
+    # runner family AND the git family. Its own agreement must govern it, be named in every message,
+    # and fall back to the base (the strict direction for a shape whose deprivation contains the
+    # base's) when unset. Numbers here are illustrative; the real ones are in the floor file.
+    _three = {"skipped_max": 26, "mirror_skipped_max": 21, "bare_mirror_skipped_max": 47}
+    _s47 = {**{k: 0 for k, _ in CEILINGS}, "skipped_max": 47}
+    assert shape_key("skipped_max", BARE_EXEC_MIRROR) == "bare_mirror_skipped_max"
+    assert ceiling_limit(_three, "skipped_max", shape=BARE_EXEC_MIRROR) == (
+        47,
+        "bare_mirror_skipped_max",
+    )
+    # The bare union passes under its own agreement and is a breach under BOTH of the others:
+    # neither the runner's number nor the owner's mirror's may silently stand in for it.
+    _probs_b, _rend_b = _ceiling_report(_three, _s47, shape=BARE_EXEC_MIRROR)
+    assert (
+        _probs_b == [] and _rend_b["skipped_max"] == "47/47 max [bare_mirror_skipped_max]"
+    ), _rend_b
+    for _other, _key in ((CHECKOUT, "`skipped_max`"), (EXEC_MIRROR, "`mirror_skipped_max`")):
+        _breach = _ceiling_problems(_three, _s47, shape=_other)
+        assert len(_breach) == 1 and _key in _breach[0], (_other, _breach)
+    _over_b = _ceiling_problems(_three, {**_s47, "skipped_max": 48}, shape=BARE_EXEC_MIRROR)
+    assert len(_over_b) == 1 and "`bare_mirror_skipped_max`" in _over_b[0], _over_b
+    assert "(bare exec mirror)" in _over_b[0], "the message must say which shape it is bounding"
+    # Unset bare key: the base agreement governs, and the bare union is RED against it.
+    _unset_b = _ceiling_problems({"skipped_max": 26}, _s47, shape=BARE_EXEC_MIRROR)
+    assert len(_unset_b) == 1 and "`skipped_max`" in _unset_b[0], _unset_b
+    # WHICH SHAPE, composed from the two detectors in all four combinations. A checkout is a
+    # checkout on any machine, because the base agreement was measured on the bare one; only a
+    # mirror tree splits by machine. DELIBERATE-BREAK DEMO: let `tree_shape` ask the machine first
+    # and a bare CHECKOUT (CI's verify job) reads as the bare mirror, so the second case goes red.
+    _real_tree, _real_machine = exec_mirror_shape, bare_machine
+    try:
+        for _is_mirror, _is_bare, _want in (
+            (False, False, CHECKOUT),
+            (False, True, CHECKOUT),
+            (True, False, EXEC_MIRROR),
+            (True, True, BARE_EXEC_MIRROR),
+        ):
+            globals()["exec_mirror_shape"] = lambda _m=_is_mirror: (
+                "flat, not a repo" if _m else None
+            )
+            globals()["bare_machine"] = lambda _b=_is_bare: "no prerequisites" if _b else None
+            _got_shape, _why = tree_shape()
+            assert _got_shape == _want, (_is_mirror, _is_bare, _got_shape)
+            # The reason names every fact that chose the shape, so a reader can check it.
+            assert (_why is None) is (_want == CHECKOUT), _why
+            if _want == BARE_EXEC_MIRROR:
+                assert _why and "flat, not a repo" in _why and "no prerequisites" in _why, _why
+    finally:
+        globals()["exec_mirror_shape"] = _real_tree
+        globals()["bare_machine"] = _real_machine
+    # The bare label must NOT begin with the provisioned one. scripts/verify_before_sync.sh accepts
+    # the owner's verdict only when the line reads `tree: <spaces>EXEC MIRROR`, so a provisioned
+    # machine misread as bare is refused there instead of verified under the larger agreement.
+    assert TREE_LABELS[EXEC_MIRROR].startswith("EXEC MIRROR ")
+    assert TREE_LABELS[BARE_EXEC_MIRROR].startswith("BARE EXEC MIRROR ")
+    assert not re.match(r"EXEC MIRROR", TREE_LABELS[BARE_EXEC_MIRROR]), TREE_LABELS
+    # Every shape's label names the key family it applies, so the summary is self-explaining.
+    for _shape, _prefix in SHAPE_CEILING_PREFIX.items():
+        if _prefix:
+            assert f"{_prefix}*" in TREE_LABELS[_shape], (_shape, TREE_LABELS[_shape])
+    # And the REAL floor file must carry the bare agreement for every skip ceiling, or CI's
+    # exec-mirror job is bounded by a number measured on another shape.
+    for _key in ("skipped_max", "selftest_skipped_max", "gate_skipped_max"):
+        assert _real_floor.get(shape_key(_key, BARE_EXEC_MIRROR)) is not None, (
+            f".verify-floor.json records no `{shape_key(_key, BARE_EXEC_MIRROR)}`; the bare exec "
+            "mirror would be bounded by the runner checkout's number, which it cannot meet"
+        )
     # THE ONE WIRING PIN, because everything above is pure and `verify()` is not cheap to call:
     # dropping the keyword reverts the defect exactly (the mirror bounded by the runner's number)
     # while every assertion above stays green — this repo's founding failure, code that exists and
@@ -1632,7 +1760,7 @@ def _selftest() -> None:
     # two separate call sites, so removing one left the needle matching the other and the demo
     # passed while the defect was fully restored. The two sites are now one (`_ceiling_report`),
     # and the count assertion is what will say so if they ever split again.
-    _shape_pin = "mirror=bool(" + "mirror_reason)"
+    _shape_pin = "shape=" + "detected_shape"
     assert _src.count(_shape_pin) == 1, (
         f"the exec-mirror shape needle matches {_src.count(_shape_pin)} site(s), not 1. At 0, "
         "verify() no longer feeds the DETECTED shape into the ceilings and the mirror is bounded "
@@ -2005,7 +2133,7 @@ def _selftest() -> None:
         "--reconcile-floor forgives ONLY a drift it "
         "healed and never an unwritten one, absent-module line is silent when clean and is "
         "never counted as a skip, mypy ratchet prints both numbers and its ceiling can fail, "
-        "two tree shapes carry two agreed ceilings and the exec mirror can go GREEN, "
+        "three tree shapes carry three agreed ceilings, each mirror shape GREEN under its own, "
         "selftests classify identically at any width, a run reads one private copy of the "
         "state and writes neither source, a failed copy refuses the run, and only a replayable "
         "pytest verdict is kept)"

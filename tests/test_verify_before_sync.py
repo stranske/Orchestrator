@@ -82,6 +82,7 @@ seen = {
     "saw_docs": str((runtime / "local-docs" / "a.md").is_file()),
     "saw_big": str((runtime / "agent-runtime").exists()),
     "saw_rows": str(brain.execute("select count(*) from t").fetchone()[0]),
+    "verify_args": " ".join(sys.argv[1:]),
 }
 with open(env["FAKE_RECORD"], "a") as fh:
     fh.writelines(f"{k}={v}\n" for k, v in seen.items())
@@ -397,9 +398,46 @@ def test_a_tree_not_judged_as_the_mirror_shape_is_not_verified(world):
     caller copy: the shape mismatch is a NOT VERIFIED (exit 1), never a warning beside a 0."""
     result, _ = _run(world, FAKE_TREE="checkout")
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "did not judge the scratch tree as the exec-mirror shape" in result.stdout
-    assert "NOT VERIFIED (verify.py passed, but not in the exec-mirror shape)" in result.stdout
+    assert "did not judge the scratch tree as the EXEC MIRROR shape" in result.stdout
+    assert "NOT VERIFIED (verify.py passed, but not in the EXEC MIRROR shape)" in result.stdout
     assert "verified source identity:" not in result.stdout, result.stdout
+    # It names what verify.py DID decide, so the reader need not go and look.
+    assert "tree:       checkout" in result.stdout, result.stdout
+
+
+BARE = "BARE EXEC MIRROR — bare_mirror_* ceilings apply"
+
+
+def test_the_owner_sync_refuses_a_verdict_taken_under_the_bare_shape(world):
+    """The bare shape's ceilings are larger by a whole runner family of skips. A provisioned
+    machine misread as bare must therefore be refused by the owner's sync, not verified under them:
+    the default expectation matches only a label that BEGINS `EXEC MIRROR`."""
+    result, _ = _run(world, FAKE_TREE=BARE)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "NOT VERIFIED (verify.py passed, but not in the EXEC MIRROR shape)" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("printed", "verified"),
+    [(BARE, True), ("EXEC MIRROR — mirror_* ceilings apply", False), ("checkout", False)],
+)
+def test_ci_expects_the_bare_shape_and_only_the_bare_shape(world, printed, verified):
+    """CI's exec-mirror job sets VERIFY_BEFORE_SYNC_TREE to the bare label. Each expectation accepts
+    exactly its own shape, so neither environment can be judged by the other's agreement."""
+    result, _ = _run(world, FAKE_TREE=printed, VERIFY_BEFORE_SYNC_TREE="BARE EXEC MIRROR")
+    assert (result.returncode == 0) is verified, result.stdout + result.stderr
+    if not verified:
+        assert "not in the BARE EXEC MIRROR shape" in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize(("flag", "args"), [("1", "--floor-may-lag"), ("", ""), ("0", "")])
+def test_floor_may_lag_reaches_verify_py_only_when_asked(world, flag, args):
+    """CI passes --floor-may-lag: a lagging floor is the checkout job's business. The owner's sync
+    never sets it, so its verdict still enforces the floor's equality."""
+    extra = {"VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG": flag} if flag else {}
+    result, record = _run(world, **extra)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record["verify_args"] == args, record
 
 
 def test_identity_mode_prints_the_fingerprint_a_green_verdict_was_taken_on(world):
