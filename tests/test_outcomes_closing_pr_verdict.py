@@ -317,6 +317,8 @@ def test_a_role_run_keeps_its_own_class_when_the_acting_run_has_none(brain):
     )
     feedback.record_outcome("work:2", adjudicated_verdict="PASS", merged=True, durability="pending")
     assert _row("role:triage:gemini:2")[3] == "transient_infra"
+    feedback.record_outcome("work:2", durability="broke_later")
+    assert _row("role:triage:gemini:2")[3] == "transient_infra"
 
 
 def test_the_exploration_gate_does_not_count_it(brain):

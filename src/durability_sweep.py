@@ -399,7 +399,11 @@ def find_merge(run: dict, *, _gh=None, now: int | None = None) -> dict:
     if len(records) >= OWN_BRANCH_PR_LIMIT:
         return _unjudgeable(f"{branch} carries {len(records)}+ PRs; its merge cannot be read whole")
     started = int(run.get("ts") or 0)
-    recorded = int(run.get("recorded_ts") or now or time.time()) + INGEST_CLOCK_SKEW_S
+    # A missing observation time is not evidence that this historical run saw a later merge.
+    # Direct/note-named PRs above remain attributable without this issue-branch window.
+    if not run.get("recorded_ts"):
+        return _unjudgeable("missing outcome recording time; own-branch merge window is unknown")
+    recorded = int(run["recorded_ts"]) + INGEST_CLOCK_SKEW_S
     merges = [item for item in records if item["state"].upper() == "MERGED"]
     in_window = [
         item for item in merges if started <= (_parse_gh_ts(item.get("mergedAt")) or -1) <= recorded
@@ -870,9 +874,6 @@ def classify_durability(
             "durability": "reverted",
             "notes": f"durability_sweep: {revert_note}; merge age {age}d",
         }
-    if reverted is None:
-        return {"durability": None, "reason": revert_note, "drain": _revert_drain(revert_note)}
-
     if delivered(pr) is False:
         paths = ", ".join(
             str(f.get("path") if isinstance(f, dict) else f) for f in (pr.get("files") or [])
@@ -902,7 +903,10 @@ def classify_durability(
     if broke is True:
         return {
             "durability": "broke_later",
-            "notes": f"durability_sweep: {fix_note}; held {age}d before that",
+            "notes": (
+                f"durability_sweep: {fix_note}; held {age}d before that; "
+                f"revert status: {revert_note}"
+            ),
             "fix_search": fix_search,
         }
     if broke is None:
@@ -914,6 +918,10 @@ def classify_durability(
             "drain": DRAIN_FIX_SEARCH,
             "fix_search": fix_search,
         }
+    # Uncertain reversion cannot erase an independently attributable failure above. Its exact
+    # subtype may still be refined later, but it must never become a learning exclusion.
+    if reverted is None:
+        return {"durability": None, "reason": revert_note, "drain": _revert_drain(revert_note)}
     return {
         "durability": "durable",
         "notes": f"durability_sweep: held {age}d; {revert_note}; {fix_note}",
