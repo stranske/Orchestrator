@@ -2113,7 +2113,8 @@ def run_prompt_agent(
     role = ROLE_REGISTRY["prompt"]
     if dispatch:
         _role_capability_event("prompt", "match", metadata={"target": target})
-    task_type = (task_type or "implement") if output == "dispatch_prompt" else task_type
+    dispatch_task_type = task_type or "implement"
+    task_type = dispatch_task_type if output == "dispatch_prompt" else task_type
     ctx = {
         "output": output,
         "target": target,
@@ -2142,7 +2143,7 @@ def run_prompt_agent(
         backend_name = routing["agent"] if routing else None
 
     baseline_prompt = (
-        dispatcher.build_prompt(task_type, target, target_detail or goal, lane=lane)
+        dispatcher.build_prompt(dispatch_task_type, target, target_detail or goal, lane=lane)
         if output == "dispatch_prompt"
         else None
     )
@@ -2178,10 +2179,10 @@ def run_prompt_agent(
         if (
             output == "dispatch_prompt"
             and isinstance(proposal, dict)
-            and proposal.get("task_type") != task_type
+            and proposal.get("task_type") != dispatch_task_type
         ):
             verrs.append(
-                f"task_type must stay on the deterministic rail-selected value {task_type!r}; "
+                f"task_type must stay on the deterministic rail-selected value {dispatch_task_type!r}; "
                 f"got {proposal.get('task_type')!r}"
             )
         if verrs:

@@ -109,7 +109,9 @@ def test_batch_routes_once_and_records_one_run_per_item_with_a_shared_batch_id(
     assert {json.loads(row[1])["batch_id"] for row in rows} == {result["batch_id"]}
 
 
-def test_no_capacity_does_not_route_each_item_or_write_baseline_as_issue(private_brain, monkeypatch):
+def test_no_capacity_does_not_route_each_item_or_write_baseline_as_issue(
+    private_brain, monkeypatch
+):
     routes = []
     monkeypatch.setattr(roles, "route_role", lambda *a, **kw: routes.append(a) and None)
     result = roles.run_prompt_batch(
@@ -122,7 +124,9 @@ def test_no_capacity_does_not_route_each_item_or_write_baseline_as_issue(private
     assert all(item["errors"] and item["body_file"] is None for item in manifest["items"])
 
 
-def test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts(private_brain, monkeypatch, capsys):
+def test_cli_batch_writes_valid_bodies_and_invalid_item_verdicts(
+    private_brain, monkeypatch, capsys
+):
     items = [
         {"target": "owner/repo#1", "goal": "Good", "proposal_json": proposal()},
         {"target": "owner/repo#2", "goal": "Bad", "proposal_json": proposal("Bad body")},
