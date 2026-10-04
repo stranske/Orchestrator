@@ -36,7 +36,7 @@ this document has already produced confidently wrong fleet-level conclusions.
 | `capacity.py` | pipeline → here | The lanes read it to choose which agent gets an advisory review |
 | `orchestrator_review` fallback | pipeline → here | A review-fallback path routes an advisory review through this tool |
 | `capability_propensity --deliverable` → `capability_outcome_bridge` | pipeline → here | Lane verdicts name a PR explicitly; the bridge joins positive versioned verdicts to keepalive runs and records capability influence edges |
-| `tick.py --active` → `delegate_remote` | here → pipeline | Applies `agent:*` labels, driving keepalive on REMOTE capacity — **shadow by default since 2026-09-03** (`ORCH_DISPATCH_LANE=1` re-enables): 14 dispatches in 30 days — 5 merged (2 since judged durable), 2 PRs closed unmerged, and 7 labelled issues closed with no PR from the labelled agent, 4 of them delivered by codex keepalive or by hand (re-measured 2026-10-04) — while keepalive ran 1,239 rounds without it |
+| `tick.py --active` → `delegate_remote` | here → pipeline | Applies `agent:*` labels, driving keepalive on REMOTE capacity — **shadow by default since 2026-09-03** (`ORCH_DISPATCH_LANE=1` re-enables): 14 dispatches in 30 days, none shown to be the labelled agent's work — the 5 credited merges were other lanes' work or empty (a local run's PR merged before the label, an empty bootstrap, a bootstrap the closer finished, 2 codex PRs the labelled agent never ran on), the 2 PRs closed unmerged were bootstraps whose agent round never completed, and 7 labelled issues closed with no PR from the labelled agent, 4 of them delivered by codex keepalive or by hand (re-measured 2026-10-04 from keepalive's runner records) — while keepalive ran 1,239 rounds without it |
 
 So this tool is a **capacity advisor, a review router, and (in shadow unless deliberately enabled) a keepalive driver**. It is **not** the
 fleet's work-discovery engine: `backlog._is_ready()` is this tool's own private discovery path, and
@@ -148,7 +148,13 @@ rejected records the disagreement and inherits no PASS. The role inherits the ac
 an outcome in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` trains neither surface. That set holds an infra
 death (`transient_infra`) and, since 2026-10-04, `unattributed_closing_pr`: outcome ingest found no PR on
 any candidate branch of a delegate whose issue a PR closed, so it records the run as over with no verdict
-rather than as a failure (no stage, component or surface moved, so the loop diagram is unchanged). This keeps role learning separate from normal
+rather than as a failure. The same day it gained `unattributed_delegation`: a remote delegation is credited
+with a PR only when the PR is its own (the labelled PR, or `{agent}/issue-N`), settled after the label, and
+keepalive's own runner records (`runner-reservation`/`runner-completion`/`runner-dispatch` PR markers from
+trusted writers) show a completed round of the labelled agent on it since the label; otherwise the settled
+run is over with no verdict. Until then ingest credited the first PR on any agent's or lane's branch, and
+none of the 9 merged delegation PASS rows was the labelled agent's work (no stage, component or surface
+moved, so the loop diagram is unchanged). This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
 that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail

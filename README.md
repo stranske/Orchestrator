@@ -38,9 +38,11 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   plan, prints what it *would* do, writes no heartbeat and dispatches nothing — safe to run
   anytime alongside the live fleet. `--active` (launchd only) ingests keepalive outcomes live and, since
   2026-09-03, dispatches nothing unless `ORCH_DISPATCH_LANE=1`: the tick's own dispatch lane made 14
-  remote dispatches in 30 days (5 merged, 2 since judged durable; 2 PRs closed unmerged; 7 labelled
-  issues closed with no PR from the labelled agent, 4 of them delivered by codex keepalive or by
-  hand; re-measured 2026-10-04) while keepalive ran 1,239 rounds without it, so claims and the
+  remote dispatches in 30 days and none was shown to be the labelled agent's work (the 5 credited
+  merges were other lanes' work or empty; the 2 PRs closed unmerged were bootstraps whose agent round
+  never completed; 7 labelled issues closed with no PR from the labelled agent, 4 of them delivered
+  by codex keepalive or by hand; re-measured 2026-10-04 from keepalive's runner records) while
+  keepalive ran 1,239 rounds without it, so claims and the
   heartbeat now run only when that flag is set. Since 2026-09-15 the same
   flag also gates backlog discovery and the issue-readiness cadence (119 shadow ticks had planned 0
   dispatches; the lanes read `capacity.json` and never `backlog.json`), the tick-phase consult is
