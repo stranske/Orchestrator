@@ -66,7 +66,7 @@ def pages(*bodies: dict) -> tuple:
     for body in bodies:
         conn = {"pageInfo": {"hasNextPage": body["more"]}, "nodes": body["nodes"]}
         issue = {"closedAt": body["closedAt"], "closedByPullRequestsReferences": conn}
-        out.append({"data": {"repository": {"issue": issue}}})
+        out.append({"data": {"repository": {"issueOrPullRequest": issue}}})
     return (0, json.dumps(out), "")
 
 
@@ -291,7 +291,16 @@ UNREADABLE = {
     "rate-limited": RATE_LIMIT,
     "not-json": (0, "<html>502</html>", ""),
     "no-pages": (0, "[]", ""),
-    "page-without-a-list": (0, json.dumps([{"data": {"repository": {"issue": None}}}]), ""),
+    "page-without-a-list": (
+        0,
+        json.dumps([{"data": {"repository": {"issueOrPullRequest": None}}}]),
+        "",
+    ),
+    "a-pull-request-number": (
+        0,
+        json.dumps([{"data": {"repository": {"issueOrPullRequest": {}}}}]),
+        "",
+    ),
     "says-more-pages-exist": pages(
         {"closedAt": CLOSED_2819, "more": True, "nodes": [node(3402, "2026-09-07T14:58:30Z")]}
     ),

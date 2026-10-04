@@ -92,14 +92,15 @@ CLOSED_ISSUE_LOOKUPS = frozenset({"closed_issue_no_branch_pr", "closed_issue_no_
 CLOSING_PR_MERGE_SLACK_SECONDS = 10
 # The issue's close time and every closing reference with its merge time, in ONE read, so the two
 # times compared always come from the same answer and a reference in the list carries its own merge
-# time: no second lookup per reference exists to fail. `first: 100` with no `includeClosedPrs` is the
-# list `gh issue view` reads (gh 2.94); `--paginate` follows `$endCursor` past it.
+# time: no second lookup per reference exists to fail. It resolves the number through
+# `issueOrPullRequest` and reads `first: 100` with no `includeClosedPrs`, exactly as `gh issue view`
+# does (gh 2.94), so it answers whenever the issue view answered; `--paginate` follows `$endCursor`.
 CLOSING_PR_QUERY = (
     "query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {"
-    " repository(owner: $owner, name: $name) { issue(number: $number) { closedAt"
-    " closedByPullRequestsReferences(first: 100, after: $endCursor) {"
+    " repository(owner: $owner, name: $name) { issueOrPullRequest(number: $number) {"
+    " ... on Issue { closedAt closedByPullRequestsReferences(first: 100, after: $endCursor) {"
     " pageInfo { hasNextPage endCursor }"
-    " nodes { number url state mergedAt repository { nameWithOwner } } } } } }"
+    " nodes { number url state mergedAt repository { nameWithOwner } } } } } } }"
 )
 # The verdict classes that mean "terminal, but not this run's work", counted as `unattributed`.
 UNATTRIBUTED_CLASSES = frozenset(
@@ -725,7 +726,7 @@ def _closing_pr_merges(repo: str, num: int) -> dict:
     for page in pages:
         data = page.get("data") if isinstance(page, dict) else None
         repository = data.get("repository") if isinstance(data, dict) else None
-        issue = repository.get("issue") if isinstance(repository, dict) else None
+        issue = repository.get("issueOrPullRequest") if isinstance(repository, dict) else None
         conn = issue.get("closedByPullRequestsReferences") if isinstance(issue, dict) else None
         nodes = conn.get("nodes") if isinstance(conn, dict) else None
         info = conn.get("pageInfo") if isinstance(conn, dict) else None
@@ -1500,7 +1501,7 @@ def _closing_read(closed: str | None, *refs: tuple) -> tuple:
     ]
     conn = {"pageInfo": {"hasNextPage": False, "endCursor": "MQ"}, "nodes": nodes}
     issue = {"closedAt": closed, "closedByPullRequestsReferences": conn}
-    return (0, json.dumps([{"data": {"repository": {"issue": issue}}}]), "")
+    return (0, json.dumps([{"data": {"repository": {"issueOrPullRequest": issue}}}]), "")
 
 
 def _runner_comment(kind: str, provider: str, pr: int, payload: dict, login: str) -> dict:
