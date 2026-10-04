@@ -423,15 +423,6 @@ def test_a_verify_run_that_changes_deployment_bytes_voids_the_snapshot(world):
     assert not snapshot.exists()
 
 
-# The registries that SEED themselves on a first load, by the variable each loader reads and the
-# file name it seeds under MODULE_DIR/experiments/ without one.
-REGISTRY_VARIABLES = {
-    "ORCH_FEATURES_PATH": "features.json",
-    "ORCH_REPO_KNOWLEDGE_PATH": "repo_knowledge.json",
-    "ORCH_HYP_PATH": "hypotheses.json",
-}
-
-
 def test_registries_seeded_during_verification_never_land_in_the_mirror(world):
     """THE INCIDENT (2026-10-04): every verified sync from the clean clone was VOID. In the flat
     mirror the three registries' default paths are the deployment-owned experiments/*.json
@@ -440,7 +431,7 @@ def test_registries_seeded_during_verification_never_land_in_the_mirror(world):
     mirror, the payload changed under the verdict, and the sync was refused. The script now names a
     scratch-state path for each, so the seeds land beside verify.py's other writes. The installer
     here is the real one, so a seed in the mirror would change the real payload digest."""
-    seed = ",".join(f"{var}={name}" for var, name in REGISTRY_VARIABLES.items())
+    seed = ",".join(f"{var}={name}" for var, name in paths.SEEDED_REGISTRY_ENV.items())
     result, record = _run(world, FAKE_SEED_REGISTRIES=seed)
     assert "VOID" not in result.stdout + result.stderr, (
         "a registry seeded during verification changed the deployment payload",
@@ -448,7 +439,7 @@ def test_registries_seeded_during_verification_never_land_in_the_mirror(world):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     mirror = Path(record["sync_mirror"]).resolve()
-    for var in REGISTRY_VARIABLES:
+    for var in paths.SEEDED_REGISTRY_ENV:
         seeded = Path(record[f"seeded_{var}"])
         assert world["tmpdir"] in seeded.parents, (var, seeded)
         assert mirror not in seeded.resolve().parents, (var, seeded)
@@ -456,10 +447,11 @@ def test_registries_seeded_during_verification_never_land_in_the_mirror(world):
 
 def test_the_seeding_loaders_read_the_variables_the_script_sets(tmp_path):
     """The other half of the wiring, asked of the real modules: each loader resolves its registry
-    from the variable REGISTRY_VARIABLES names, so the script and the modules cannot drift apart
-    silently. capabilities.py reads the features registry too, through the same variable."""
+    from the variable `paths.SEEDED_REGISTRY_ENV` names, so the script, the map and the modules
+    cannot drift apart silently. capabilities.py reads the features registry through the same one.
+    """
     env = {**os.environ, "ORCH_LOCAL_RUNTIME": str(tmp_path), "ORCH_STATE_DIR": str(tmp_path)}
-    env.update({var: str(tmp_path / name) for var, name in REGISTRY_VARIABLES.items()})
+    env.update({var: str(tmp_path / name) for var, name in paths.SEEDED_REGISTRY_ENV.items()})
     probe = (
         "import json, capabilities, features, repo_knowledge, research_scheduler\n"
         "print(json.dumps({'ORCH_FEATURES_PATH': [str(features.REG), "
@@ -476,7 +468,7 @@ def test_the_seeding_loaders_read_the_variables_the_script_sets(tmp_path):
     )
     assert out.returncode == 0, out.stderr
     resolved = json.loads(out.stdout.strip().splitlines()[-1])
-    for var in REGISTRY_VARIABLES:
+    for var in paths.SEEDED_REGISTRY_ENV:
         assert resolved[var] and set(resolved[var]) == {env[var]}, (var, resolved[var])
 
 
