@@ -34,15 +34,25 @@ def private_brain(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_issue_body_mode_validates_format_sections_and_needs_no_task_type(private_brain):
+def test_issue_body_mode_validates_format_sections_and_needs_no_task_type(
+    private_brain, monkeypatch
+):
+    routes = []
+    calls = []
+    monkeypatch.setattr(
+        roles, "route_role", lambda *a, **kw: routes.append(a) or {"agent": "cursor"}
+    )
+
+    def offload(backend, prompt, **kwargs):
+        calls.append((backend, prompt))
+        return {"run_id": f"fake:{len(calls)}", "output": json.dumps(proposal()), "exit": 0}
+
+    monkeypatch.setattr(roles.dispatcher, "offload", offload)
     result = roles.run_prompt_agent(
         target="owner/repo#1",
         goal="Author the issue",
-        task_type=None,
         output="issue_body",
-        backend="cursor",
         dispatch=True,
-        proposal_json=proposal(),
     )
     assert result["errors"] == []
     assert result["issue_body"] == BODY
@@ -50,6 +60,32 @@ def test_issue_body_mode_validates_format_sections_and_needs_no_task_type(privat
     assert result["dispatch_prompt"] is None
     assert result["baseline_prompt"] is None
     assert "issue authoring" in result["prompt"]
+    assert result["backend_run_id"] == "fake:1"
+    assert result["decision_source"] == "prompt_agent"
+    assert result["role_record_error"] is None
+    assert routes == [("prompt",)]
+    assert calls == [("cursor", result["prompt"])]
+    # Both omitting task_type and explicitly supplying None must accept the backend output.
+    explicit_none = roles.run_prompt_agent(
+        target="owner/repo#2",
+        goal="Author another issue",
+        task_type=None,
+        output="issue_body",
+        dispatch=True,
+    )
+    assert explicit_none["errors"] == []
+    assert explicit_none["issue_body"] == BODY
+    assert explicit_none["backend_run_id"] == "fake:2"
+    assert explicit_none["role_run_id"] != result["role_run_id"]
+    with feedback._conn() as conn:
+        rows = conn.execute(
+            "SELECT run_id,decomposition FROM runs WHERE role_name='prompt'"
+        ).fetchall()
+    recorded = {run_id: json.loads(metadata) for run_id, metadata in rows}
+    assert set(recorded) == {result["role_run_id"], explicit_none["role_run_id"]}
+    for item in (result, explicit_none):
+        assert recorded[item["role_run_id"]]["backend_run_id"] == item["backend_run_id"]
+        assert recorded[item["role_run_id"]]["proposal"] == proposal()
     assert roles._validate_prompt_agent(proposal())  # Dispatch mode retains its stronger contract.
 
 
@@ -79,13 +115,18 @@ def test_batch_routes_once_and_records_one_run_per_item_with_a_shared_batch_id(
 ):
     routes = []
     calls = []
+    bodies = [BODY.replace("Add batch authoring", f"Author issue {n}") for n in (1, 2)]
     monkeypatch.setattr(
         roles, "route_role", lambda *a, **kw: routes.append(a) or {"agent": "cursor"}
     )
 
     def offload(backend, prompt, **kwargs):
         calls.append((backend, prompt))
-        return {"run_id": f"fake:{len(calls)}", "output": json.dumps(proposal()), "exit": 0}
+        return {
+            "run_id": f"fake:{len(calls)}",
+            "output": json.dumps(proposal(bodies[len(calls) - 1])),
+            "exit": 0,
+        }
 
     monkeypatch.setattr(roles.dispatcher, "offload", offload)
     result = roles.run_prompt_batch(
@@ -93,20 +134,34 @@ def test_batch_routes_once_and_records_one_run_per_item_with_a_shared_batch_id(
         output="issue_body",
         dispatch=True,
     )
-    assert len(routes) == 1
+    assert routes == [("prompt",)]
     assert len(calls) == 2
     assert all(backend == "cursor" for backend, _ in calls)
     ids = [item["role_run_id"] for item in result["items"]]
     assert len(set(ids)) == 2 and all(ids)
     assert all(not item["errors"] for item in result["items"])
+    assert [item["issue_body"] for item in result["items"]] == bodies
+    assert [item["backend_run_id"] for item in result["items"]] == ["fake:1", "fake:2"]
+    assert all(item["role_record_error"] is None for item in result["items"])
     assert all(item["batch_id"] == result["batch_id"] for item in result["items"])
     assert all(item["routing"] == result["routing"] for item in result["items"])
     with feedback._conn() as conn:
         rows = conn.execute(
-            "SELECT run_id,decomposition FROM runs WHERE role_name='prompt'"
+            "SELECT run_id,target,agent,decomposition FROM runs WHERE role_name='prompt'"
         ).fetchall()
     assert {row[0] for row in rows} == set(ids)
-    assert {json.loads(row[1])["batch_id"] for row in rows} == {result["batch_id"]}
+    assert len(rows) == len(result["items"])
+    recorded = {
+        run_id: (target, agent, json.loads(metadata)) for run_id, target, agent, metadata in rows
+    }
+    for item in result["items"]:
+        target, agent, metadata = recorded[item["role_run_id"]]
+        assert target == item["target"]
+        assert agent == "cursor"
+        assert metadata["batch_id"] == result["batch_id"]
+        assert metadata["backend_run_id"] == item["backend_run_id"]
+        assert metadata["proposal"] == proposal(item["issue_body"])
+        assert metadata["decision_source"] == "prompt_agent"
 
 
 def test_no_capacity_does_not_route_each_item_or_write_baseline_as_issue(
