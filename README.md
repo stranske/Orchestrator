@@ -328,7 +328,9 @@ safety switch, not dead code.
   spread maps to real weight spread); **human_calibration.py** + **objective_anchor.py** supply
   machine ground-truth anchors (no owner code-review required — see CLAUDE.md).
 - **Two-tier outcomes**: signal-killed/infra failures are classified `transient_infra` and excluded
-  from learning, so environment noise never trains as agent incapability.
+  from learning, so environment noise never trains as agent incapability. Since 2026-10-04 that
+  includes a run the provider refused before any work, read only from codex's own `turn.failed`
+  event (codex exits 0 on it); a text-only log is unknown and left as recorded.
 - **Independent-subject weighting**: explicitly linked research repetitions are down-weighted by
   `(agent, subject_family)` before posterior updates; legacy rows keep agent-level value without
   receiving invented subject provenance.
@@ -440,7 +442,9 @@ safety switch, not dead code.
 ### Telemetry & recovery (ledger_reconcile.py, daily)
 - Harvests real cost (agent-reported `total_cost_usd`), latency, tokens, done-markers, **resume
   tokens** (CLI session IDs → `feedback.py resume-hint <run_id>`), and **owner questions** from run
-  logs. Backfills killed completions from markers.
+  logs. Backfills killed completions from markers. Classifies a run its provider refused before any
+  work as `transient_infra` and records it as a capacity incident, so the seat sheds until the
+  provider's stated reset (`provider_limit_deaths` in the summary says why each was or was not).
 
 ### Human touchpoints (all non-blocking — see CLAUDE.md attention budget)
 - **Owner questions** (interrupt-as-data): agents record a product-level question + the default they
