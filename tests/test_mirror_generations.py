@@ -435,7 +435,9 @@ print(json.dumps([
                         publication_attempted.wait(10), "publisher did not reach the exclusive lock"
                     )
                     expected_failure = (
-                        self.assertRaisesRegex(AssertionError, "publication blocked on paused reader")
+                        self.assertRaisesRegex(
+                            AssertionError, "publication blocked on paused reader"
+                        )
                         if retain_lock
                         else nullcontext()
                     )
