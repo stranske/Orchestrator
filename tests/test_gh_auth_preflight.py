@@ -192,6 +192,17 @@ def test_the_preflight_sits_above_the_heartbeat_export() -> None:
     assert needle in block, "the classifier call must sit inside the preflight block"
 
 
+def test_active_preflight_precedes_mirror_reader_reentry() -> None:
+    """A refused credential must abort before a mirror can exec a second tick."""
+    text = _text()
+    reader = 'python3 "$ORCH/mirror_reader.py" check "$ORCH_REPO"'
+    count = text.count(reader)
+    assert count == 1, f"expected exactly one mirror-reader check, found {count}"
+    assert text.index(ANCHOR) < text.index(reader), (
+        "the GitHub auth preflight must run before mirror_reader can re-enter orchestrate.sh"
+    )
+
+
 def test_gh_auth_status_is_not_the_preflight() -> None:
     """It answers 1 for a rate limit, a 5xx and an unreachable host as for a refused token."""
     assert ("gh auth " + "status") not in _code(_text()), (
