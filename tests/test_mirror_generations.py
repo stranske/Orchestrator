@@ -15,7 +15,13 @@ from unittest.mock import patch
 
 from scripts import install_verified_snapshot as installer
 
+import paths
+
 REPO = Path(__file__).resolve().parents[1]
+# The MODULES, wherever this tree keeps them: src/ in a checkout, the root of the flat exec mirror.
+# `REPO / "src"` raised FileNotFoundError in the mirror, which CI's exec-mirror job caught on its
+# first run (2026-10-04), the same class #408 fixed in test_install_verified_snapshot.py.
+MODULES = paths.MODULE_DIR
 OBSERVER = """
 import json
 import os
@@ -52,7 +58,7 @@ class MirrorGenerationTests(unittest.TestCase):
         self.mirror = self.root / "mirror"
         (self.snapshot / "scripts").mkdir(parents=True)
         for name in ("paths.py", "mirror_reader.py"):
-            shutil.copy2(REPO / "src" / name, self.snapshot / name)
+            shutil.copy2(MODULES / name, self.snapshot / name)
         shutil.copy2(
             Path(installer.__file__), self.snapshot / "scripts" / "install_verified_snapshot.py"
         )
@@ -97,7 +103,7 @@ class MirrorGenerationTests(unittest.TestCase):
         elif guarded:
             command = [
                 sys.executable,
-                str(REPO / "src/mirror_reader.py"),
+                str(MODULES / "mirror_reader.py"),
                 "run",
                 str(self.mirror),
                 *command,
@@ -200,7 +206,7 @@ print(json.dumps([
         reader = subprocess.Popen(
             [
                 sys.executable,
-                str(REPO / "src/mirror_reader.py"),
+                str(MODULES / "mirror_reader.py"),
                 "run",
                 str(self.mirror),
                 sys.executable,

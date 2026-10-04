@@ -22,11 +22,10 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-import yaml
+from scripts import install_verified_snapshot as installer
 
 import paths
 import verify
@@ -223,11 +222,6 @@ def test_everything_the_builder_ships_is_owned_by_the_installer(tmp_path: Path) 
     mirror = tmp_path / "mirror"
     proc = _build(src, mirror)
     assert proc.returncode == 0, proc.stderr
-    sys.path.insert(0, str(INSTALLER.parent))
-    try:
-        import install_verified_snapshot as installer
-    finally:
-        sys.path.remove(str(INSTALLER.parent))
     owned = {p.as_posix() for p in installer.owned_entries(mirror)}
     shipped = {
         p.relative_to(mirror).as_posix() for p in mirror.rglob("*") if p.is_file() or p.is_symlink()
@@ -443,14 +437,18 @@ def test_ci_verifies_the_contract_in_the_bare_shape_with_one_procedure() -> None
     point both state variables at scratch. The script's default must stay the owner's provisioned
     label, so a sync can never be verified under the bare shape's larger ceilings.
     """
-    job = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]["exec-mirror"]
-    step = next(s for s in job["steps"] if "verify_before_sync.sh" in s.get("run", ""))
-    env = step["env"]
+    text = CI.read_text(encoding="utf-8")
+    # The job's block, read as text: from its key at two-space indent to the next job's key.
+    # (No YAML parser: the Gate refuses test imports that pyproject does not declare.)
+    start = text.index("\n  exec-mirror:\n")
+    nxt = re.search(r"\n  [A-Za-z0-9_-]+:\n", text[start + 1 :])
+    block = text[start : start + 1 + nxt.start()] if nxt else text[start:]
+    env = dict(re.findall(r"^\s{10}([A-Z_]+):\s*(.+?)\s*$", block, flags=re.M))
+    assert "scripts/verify_before_sync.sh" in block, block
     assert env["ORCH_SYNC_SCRIPT"].endswith("/scripts/build_exec_mirror.sh"), env
-    assert verify.TREE_LABELS[verify.BARE_EXEC_MIRROR].startswith(
-        env["VERIFY_BEFORE_SYNC_TREE"] + " "
-    )
-    assert str(env["VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG"]) == "1", env
+    label = env["VERIFY_BEFORE_SYNC_TREE"]
+    assert verify.TREE_LABELS[verify.BARE_EXEC_MIRROR].startswith(label + " "), env
+    assert env["VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG"].strip("'\"") == "1", env
     assert {"ORCH_STATE_DIR", "ORCH_LOCAL_RUNTIME"} <= set(env), env
     defaults = re.findall(
         r"VERIFY_BEFORE_SYNC_TREE:-([^}]+)\}", PRESYNC.read_text(encoding="utf-8")
