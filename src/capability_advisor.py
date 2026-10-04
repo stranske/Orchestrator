@@ -2804,7 +2804,8 @@ def experiment_id(task: str) -> str:
     """
     import hashlib
 
-    return "advice:" + hashlib.sha1(str(task or "").encode()).hexdigest()[:12]
+    digest = hashlib.sha1(str(task or "").encode()).hexdigest()[:12]
+    return capabilities.ADVICE_REF_PREFIX + digest
 
 
 def _record_auto_declines(advice: dict, *, surface: str = "", path=None) -> int:
@@ -2858,18 +2859,21 @@ def _record_matches(advice: dict, *, skill: str = "", surface: str = "", path=No
     surface. The control arm existed in the ledger and was unreachable, which is the same
     "recorded but unusable" defect one level down from the declines this change is about.
     """
-    import hashlib
-
-    digest = hashlib.sha1(str(advice.get("task") or "").encode()).hexdigest()[:12]
-    # exposed via experiment_id() so a caller can record trigger/outcome against it
+    # The offer is recorded under experiment_id() itself, the id a caller records trigger and
+    # outcome against, so the two cannot be derived twice and drift. The key namespace follows the
+    # same prefix: a respelt ref under an unchanged key would dedupe a re-consult against the old
+    # offer and never record the new one.
+    ref = experiment_id(advice.get("task"))
+    prefix = capabilities.ADVICE_REF_PREFIX
+    digest = ref[len(prefix) :]
     written = 0
     for entry in advice.get("capabilities") or []:
         ok = capabilities.heartbeat(
             entry["capability_id"],
             "match",
-            ref=f"advice:{digest}",
+            ref=ref,
             path=path or capabilities.REG,
-            idempotency_key=f"advice:{entry['capability_id']}:{digest}",
+            idempotency_key=f"{prefix}{entry['capability_id']}:{digest}",
             metadata={
                 "source": "capability_advisor",
                 "skill": skill or None,

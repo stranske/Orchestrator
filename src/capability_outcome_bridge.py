@@ -102,7 +102,7 @@ def _fleet_verdict_index(ledger: dict) -> dict[str, list[dict]]:
             version = str(meta.get("capability_version_id") or "")
             if not (
                 event.get("type") == "outcome"
-                and ref.startswith("advice:")
+                and ref.startswith(capabilities.ADVICE_REF_PREFIX)
                 and event.get("idempotency_key") == f"useful:{cap_id}:{ref}"
                 and meta.get("source") == "capability_propensity"
                 and meta.get("useful") is True
