@@ -95,3 +95,25 @@ The workspace Git directory is read-only. The follow-up commit is therefore prep
 `/tmp/gate-all-verdicts-review.git`, with its applyable patch at
 `/tmp/gate-all-verdicts.patch`; both changed files remain in the working tree for automation
 to commit on the PR branch.
+
+The fork compatibility follow-up covers all four verdicts for both forks and deleted forks
+through both permission-refusal routes (403 and 404). Assertions require the exact failure
+diagnostic for non-success verdicts, one summary write, one status request against the PR head,
+and permission/read-only warnings without misclassifying the refusal as a rate limit. The
+existing rate-limit controls remain intact and collection remains 24 tests.
+
+Verification: unchanged `d326e59` export **3 failed, 21 deselected**; production **24 passed**;
+Gate/configuration/verdict-replay regression run **48 passed**. A temporary production export
+whose fork fallback excludes deleted repositories yields **7 failed, 1 passed, 16 deselected**
+with `-k 'fork_refusal or deleted_fork'`, proving the compatibility checks detect that regression.
+All pytest runs use `-m "not slow"`. Black 26.5.1 formats the changed test and the required
+repository-wide check passes for **297 files**; `git diff --check` passes. Production workflows
+and helpers are unchanged by this follow-up.
+
+Reconciliation reviewed all four PR commits through `5b8985e`: the PR changes three files,
+and its current Gate and CI runs pass. PR #413 remains open and ready for review. Updating its
+first two acceptance checkboxes and adding `needs-human` were rejected with `MCP tool call
+requires approval, but approval policy is never`. The checkout's Git directory is read-only,
+so the source/test commit is prepared in `/tmp/gate-fork-verdicts-review.git` and its patch at
+`/tmp/gate-fork-verdicts.patch`. Applying it to the PR branch and passing fresh exact-head CI
+remain outstanding; the seven-minute review floor and repository merge_guard remain required.

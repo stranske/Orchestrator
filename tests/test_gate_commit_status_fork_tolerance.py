@@ -284,12 +284,12 @@ ORIGIN_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
 
 
 STATUS_CASES: list[dict[str, Any]] = [
-    {"name": "fork_success", **FORK, "state": "success", "error": REFUSED},
     *(
-        {"name": f"fork_{state}", **FORK, "state": state, "error": REFUSED}
-        for state in ("failure", "error", "pending")
+        {"name": f"{origin}_{error['status']}_{state}", **head, "state": state, "error": error}
+        for origin, head in (("fork", FORK), ("deleted_fork", DELETED_FORK))
+        for error in (REFUSED, REFUSED_404)
+        for state in ("success", "failure", "error", "pending")
     ),
-    {"name": "deleted_fork", **DELETED_FORK, "state": "success", "error": REFUSED},
     *(
         {"name": f"same_repo_{state}", **SAME_REPO, "state": state, "error": REFUSED}
         for state in ("success", "failure", "error", "pending")
@@ -298,8 +298,6 @@ STATUS_CASES: list[dict[str, Any]] = [
         {"name": f"same_repo_404_{state}", **SAME_REPO, "state": state, "error": REFUSED_404}
         for state in ("success", "failure", "error", "pending")
     ),
-    {"name": "fork_404", **FORK, "state": "failure", "error": REFUSED_404},
-    {"name": "deleted_fork_404", **DELETED_FORK, "state": "failure", "error": REFUSED_404},
     {"name": "rate_limit_message", **FORK, "state": "success", "error": RATE_LIMITED},
     {
         "name": "rate_limit_429",
@@ -398,41 +396,61 @@ def _verdict_written_to_summary(case: dict[str, Any], state: str) -> bool:
     return case["summaryWrites"] == 1 and "headsha" in summary and f"**{state}**" in summary
 
 
+def _assert_fork_refusal(case: dict[str, Any], state: str) -> None:
+    """Both permission routes must publish the verdict once and preserve its failure floor."""
+    assert case["threw"] is None, case
+    expected_failures = (
+        [] if state == "success" else [f"Gate verdict for headsha is '{state}': all checks passed"]
+    )
+    assert case["failures"] == expected_failures, case
+    assert _verdict_written_to_summary(case, state), case
+    assert "all checks passed" in " ".join(case["summaryRaw"]), case
+    assert any("read-only" in w and f"'{state}'" in w for w in case["warnings"]), case
+    assert any("blocked by permissions" in w for w in case["warnings"]), case
+    assert not any("Rate limit" in w for w in case["warnings"]), case
+    assert len(case["statusRequests"]) == 1, case
+    request = case["statusRequests"][0]
+    assert request["sha"] == "headsha" and request["state"] == state, case
+    assert request["context"] == "Gate / gate", case
+
+
 # ---- the commit-status writer ------------------------------------------------------------------
 
 
 def test_a_fork_refusal_records_a_success_verdict_without_failing(status: dict) -> None:
-    case = status["fork_success"]
-    assert case["threw"] is None and case["failures"] == [], case
-    assert _verdict_written_to_summary(case, "success"), case
-    assert "all checks passed" in " ".join(case["summaryRaw"]), case
-    assert any("read-only" in w and "'success'" in w for w in case["warnings"]), case
+    for origin in ("fork", "deleted_fork"):
+        for code in (403, 404):
+            _assert_fork_refusal(status[f"{origin}_{code}_success"], "success")
 
 
 @pytest.mark.parametrize(
-    "name,state",
+    "cases",
     [
-        ("fork_failure", "failure"),
-        ("fork_error", "error"),
-        ("fork_pending", "pending"),
-        ("fork_404", "failure"),
-        ("deleted_fork_404", "failure"),
+        [(f"{origin}_403_failure", "failure") for origin in ("fork", "deleted_fork")],
+        [(f"{origin}_403_error", "error") for origin in ("fork", "deleted_fork")],
+        [(f"{origin}_403_pending", "pending") for origin in ("fork", "deleted_fork")],
+        [(f"{origin}_404_failure", "failure") for origin in ("fork", "deleted_fork")],
+        [
+            (f"{origin}_404_{state}", state)
+            for origin in ("fork", "deleted_fork")
+            for state in ("error", "pending")
+        ],
     ],
+    ids=["403-failure", "403-error", "403-pending", "404-failure", "404-error-pending"],
 )
 def test_a_fork_refusal_fails_closed_for_any_other_verdict(
-    status: dict, name: str, state: str
+    status: dict, cases: list[tuple[str, str]]
 ) -> None:
-    case = status[name]
-    assert case["threw"] is None, case
-    assert len(case["failures"]) == 1 and f"'{state}'" in case["failures"][0], case
-    assert _verdict_written_to_summary(case, state), case
+    for name, state in cases:
+        _assert_fork_refusal(status[name], state)
 
 
 def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
-    case = status["deleted_fork"]
-    assert case["threw"] is None and case["failures"] == [], case
-    assert any("deleted source repository" in w for w in case["warnings"]), case
-    assert _verdict_written_to_summary(case, "success"), case
+    for code in (403, 404):
+        for state in ("success", "failure", "error", "pending"):
+            case = status[f"deleted_fork_{code}_{state}"]
+            assert any("deleted source repository" in w for w in case["warnings"]), case
+            _assert_fork_refusal(case, state)
 
 
 @pytest.mark.parametrize(
