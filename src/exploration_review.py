@@ -123,6 +123,7 @@ def _simulate_mode(
             exploration_rate=1.0,
             exploration_mode=mode,
             rng=random.Random(seed),
+            simulate=True,
         )
         if not pick:
             continue
@@ -174,6 +175,7 @@ def _task_summary(
         _neutral_capacity(route_table),
         learned=learned,
         exploration_rate=0.0,
+        simulate=True,
     )
     epsilon = _simulate_mode(
         task_type,
