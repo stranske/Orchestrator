@@ -443,6 +443,81 @@ def research_tick(
 
 DISPATCH_LANE_ENV = "ORCH_DISPATCH_LANE"
 
+# THE PER-TICK DELEGATION CAP, and the bound on how many items a tick examines to fill it. Both are
+# resolved once, by `delegation_bounds`, and `remote_tick` writes both into the plan beside the
+# counts they bound, so the loop and the TICK-PLAN headline read the same numbers.
+DELEGATIONS_PER_TICK_ENV = "ORCH_MAX_REMOTE_PER_TICK"
+DELEGATIONS_PER_TICK_DEFAULT = 3
+# Every examined item costs a `gh api` label read plus the role-selector hooks (and, for a closer
+# item, the runtime-AC gate and, when high-stakes, an adversarial panel). A refusal spends nothing
+# remote, so it no longer counts against the cap, which leaves this bound as what keeps a backlog
+# of owned items from turning into unbounded reads. Measured over the live period (2026-06-15 to
+# 09-02): the backlog per tick was p90 24, max 42 items, and the items that were not owned were p90
+# 3, p99 15, max 29. Examined first (`examination_order`), the unowned ones fit inside 4 x 3 = 12 in
+# all but 25 of 1,857 ticks.
+EXAMINED_PER_DELEGATION = 4
+
+
+def delegation_bounds(
+    env: Mapping[str, str], max_delegations: int | None = None
+) -> tuple[int, int]:
+    """(delegation cap, examination bound) for one tick: `ORCH_MAX_REMOTE_PER_TICK` (default 3) and
+    `EXAMINED_PER_DELEGATION` times it. `max_delegations` overrides the variable (tests)."""
+    cap_n = (
+        max_delegations
+        if max_delegations is not None
+        else int(env.get(DELEGATIONS_PER_TICK_ENV, str(DELEGATIONS_PER_TICK_DEFAULT)))
+    )
+    return cap_n, EXAMINED_PER_DELEGATION * cap_n
+
+
+def is_delegation(row: Mapping[str, Any]) -> bool:
+    """THE ONE PREDICATE for "this plan row is a delegation": the dispatcher neither refused it
+    (`skip`: paused, owned by an agent, or ownership unread) nor rejected it (`error`). In a shadow
+    tick the label WOULD apply; in an active tick it was attempted and its run recorded, whether or
+    not GitHub accepted the label.
+
+    The per-tick cap counts exactly these rows, `production_reserve` reserves research capacity for
+    exactly these, a rejected-role influence edge is written only for these, and the TICK-PLAN
+    headline counts them as delegations. Until 2026-10-04 the cap counted every row that reached the
+    dispatcher. Refusals spend nothing remote, yet they filled it: over the live period (2026-06-15
+    to 09-02) 2,826 of its slots went to refusals and 25 to delegations, 546 ticks deferred an item
+    while every slot held a refusal, and 65 targets that carried no agent label when first deferred
+    were never examined at all. A row with no `labels_read` still counts: the cap bounds spend, and
+    the safe error is to count a row that spent nothing, never to miss one that did."""
+    return not row.get("skip") and not row.get("error")
+
+
+def _discovery_refusal(item: Mapping[str, Any]) -> str | None:
+    """What the dispatcher's own rail (`_remote_skip_reason`) says about the labels DISCOVERY saw on
+    this item. None when it would not refuse them, or when the item carries no labels at all, which
+    is unknown and so examined with the delegable items. It only ORDERS the examination: the live
+    read inside `delegate_remote` still decides every delegation."""
+    labels = item.get("labels")
+    if not isinstance(labels, (list, tuple, set, frozenset)):
+        return None
+    names = {str(lab.get("name", "")) if isinstance(lab, Mapping) else str(lab) for lab in labels}
+    return dispatcher._remote_skip_reason(names, "")
+
+
+def examination_order(items: list) -> list[tuple[dict, bool]]:
+    """`(item, delegable)` pairs: items the rail would not refuse on their discovery labels first,
+    the rest after them, each group in backlog order.
+
+    The order is what keeps the examination bound from latching. Discovery lists a closer item only
+    when its PR already carries an `agent:*` label (`backlog.build_backlog`), and it lists the closer
+    items first. Examined in that order, they are refused one after another, and enough of them hold
+    every item behind them out of every tick until keepalive finishes them. Examined last, they can
+    hold back nothing that could be delegated."""
+    delegable: list[tuple[dict, bool]] = []
+    refused: list[tuple[dict, bool]] = []
+    for item in items:
+        if _discovery_refusal(item) is None:
+            delegable.append((item, True))
+        else:
+            refused.append((item, False))
+    return delegable + refused
+
 
 def remote_tick(
     items: list,
@@ -458,23 +533,36 @@ def remote_tick(
     research_tick_fn=None,
 ) -> dict:
     """Choose + delegate each item to a keepalive agent (remote), then ingest outcomes. Applies no labels
-    when dry_run; do_ingest=False skips the ingest pass (tests). Caps delegations per tick
-    (ORCH_MAX_REMOTE_PER_TICK, default 3) so a large backlog can't fan out unbounded autonomous spend —
-    excess items are DEFERRED to the next tick."""
+    when dry_run; do_ingest=False skips the ingest pass (tests).
+
+    Two bounds per tick, from `delegation_bounds`. The CAP (ORCH_MAX_REMOTE_PER_TICK, default 3)
+    counts delegations, the rows `is_delegation` accepts, so a large backlog can't fan out unbounded
+    autonomous spend. A refused row spends nothing remote and takes no slot. The EXAMINATION bound
+    (EXAMINED_PER_DELEGATION x the cap) counts every item that enters the per-item pipeline, so a
+    backlog of owned items can't turn into unbounded label reads and hooks. Items reach the pipeline
+    in `examination_order`. Every item left once either bound is reached is DEFERRED to the next tick.
+
+    The plan names each deferral's bound, and how many deferred items were delegable on their
+    discovery labels (`deferral.delegable`, the blocking quantity) beside how many of those wait only
+    on this tick's own delegations (`deferral.drainable`). Those drain without help: once a label
+    applies, the target is owned, so the next tick's dispatcher refuses it and it takes no slot. A
+    delegable item deferred by the examination bound waits behind examined items that did not
+    delegate, so it is not drainable. A shadow tick applies nothing, so its plan repeats."""
     import os
 
     env = os.environ if env is None else env
     roles.reset_role_invocation_counts()
     if not dry_run:
         claims.reap_stale()
-    cap_n = (
-        max_delegations
-        if max_delegations is not None
-        else int(os.environ.get("ORCH_MAX_REMOTE_PER_TICK", "3"))
-    )
+    cap_n, examine_n = delegation_bounds(env, max_delegations)
     chosen: list[Any] = []
     no_capacity: list[Any] = []
     deferred: list[Any] = []
+    deferred_by_cap: list[Any] = []
+    deferred_by_examine_cap: list[Any] = []
+    deferred_delegable: list[Any] = []
+    deferred_drainable: list[Any] = []
+    delegations = refused = errors = examined = 0
     blocked: list[Any] = []
     adversarial_reviews: list[Any] = []
     runtime_ac_gates: list[Any] = []
@@ -488,10 +576,20 @@ def remote_tick(
         }
     )
     runtime_ac_gate_fn = runtime_ac_gate_fn or runtime_ac_gate.gate_status
-    for item in items:
-        if len(chosen) >= cap_n:  # per-tick cap: defer the rest (cost guard)
-            deferred.append(item.get("target"))
+    for item, delegable in examination_order(items):
+        target = item.get("target")
+        if delegations >= cap_n or examined >= examine_n:  # per-tick bounds: defer the rest
+            by_cap = delegations >= cap_n
+            deferred.append(target)
+            (deferred_by_cap if by_cap else deferred_by_examine_cap).append(target)
+            if delegable:
+                deferred_delegable.append(target)
+                # Held only by this tick's own delegations, which free their slots once applied. A
+                # cap of 0 is reached with none, and nothing frees it but the operator.
+                if by_cap and delegations > 0:
+                    deferred_drainable.append(target)
             continue
+        examined += 1
         tt = item.get("task_type", "implement")
         held = claims.holder(str(item.get("target")))
         if held is not None:  # None is the one answer that means free; an unknown holder holds
@@ -560,7 +658,21 @@ def remote_tick(
         if accepted_role_ids:
             delegate_kwargs["influenced_by_role_run_ids"] = accepted_role_ids
         res = dispatcher.delegate_remote(pick["agent"], item["target"], **delegate_kwargs)
-        if not dry_run:
+        row = {
+            "target": item.get("target"),
+            "task_type": tt,
+            "agent": pick["agent"],
+            "applied": res.get("applied"),
+            "skip": res.get("skip"),
+            "labels_read": res.get("labels_read"),
+            "error": res.get("error"),
+            "dry_run": dry_run,
+        }
+        # A disagreement edge needs a run to point at, and only a delegation records one. Written for
+        # a refusal, it pointed at a run id nothing recorded, and a later delegation of the same
+        # target to the same agent inherited it: of the 210 rejected `remote:` role edges in the
+        # Brain on 2026-10-04, 2 were written in the tick that recorded their run.
+        if not dry_run and is_delegation(row):
             repo, num = provision.parse_target(item["target"])
             downstream_run_id = f"remote:{repo}#{num}:{pick['agent']}"
             rejected_ids = []
@@ -578,20 +690,19 @@ def remote_tick(
                     accepted=False,
                     metadata={"status": "shadow_only", "disagreement": True},
                 )
-        chosen.append(
-            {
-                "target": item.get("target"),
-                "task_type": tt,
-                "agent": pick["agent"],
-                "applied": res.get("applied"),
-                "skip": res.get("skip"),
-                "labels_read": res.get("labels_read"),
-                "dry_run": dry_run,
-            }
-        )
+        chosen.append(row)
+        if is_delegation(row):
+            delegations += 1
+        elif row["skip"]:
+            refused += 1
+        else:
+            errors += 1
+    # Research yields capacity only to rows that will run: a refusal runs no agent. Every examined
+    # target stays excluded from research, because a refused one is another agent's work.
     production_reserve: dict[str, int] = {}
     for row in chosen:
-        production_reserve[row["agent"]] = production_reserve.get(row["agent"], 0) + 1
+        if is_delegation(row):
+            production_reserve[row["agent"]] = production_reserve.get(row["agent"], 0) + 1
     reserved_targets = {str(row["target"]) for row in chosen if row.get("target")}
     range_task_types = {"testgen", "epic", "codemod", "cross_repo", "runtime_ac"}
     reserved_targets.update(
@@ -626,6 +737,18 @@ def remote_tick(
         "ingest": ingest,
         "dry_run": dry_run,
         "cap": cap_n,
+        "examine_cap": examine_n,
+        "delegations": delegations,
+        "refused": refused,
+        "errors": errors,
+        "examined": examined,
+        "deferral": {
+            "delegable": len(deferred_delegable),
+            "drainable": len(deferred_drainable),
+            "by_cap": deferred_by_cap,
+            "by_examine_cap": deferred_by_examine_cap,
+            "delegable_targets": deferred_delegable,
+        },
         "adversarial_reviews": adversarial_reviews,
         "runtime_ac_gates": runtime_ac_gates,
         "role_shadows": role_shadows,
@@ -797,6 +920,71 @@ def _selftest():
         assert not held_out["chosen"], held_out
         assert held_out["blocked"][0]["reason"] == "claimed by an unknown holder", held_out
         claims.release("o/r#902")
+        # THE CAP COUNTS DELEGATIONS, NEVER REFUSALS (2026-10-04). Three targets the live read
+        # shows owned, then one it does not: the refusals used to take the only slot of a cap of 1
+        # and defer the one target that could be delegated.
+        owned_live = {"o/r#911", "o/r#912", "o/r#913"}
+
+        def owned_or_fresh(target):
+            return ({"agent:codex"} if target in owned_live else set()), ""
+
+        dispatcher._target_labels = owned_or_fresh  # type: ignore
+        capped = remote_tick(
+            [{"target": f"o/r#{n}", "task_type": "implement"} for n in (911, 912, 913, 914)],
+            all_keep,
+            dry_run=True,
+            do_ingest=False,
+            max_delegations=1,
+            research_tick_fn=no_research,
+        )
+        assert (capped["delegations"], capped["refused"], capped["examined"]) == (1, 3, 4), capped
+        assert capped["deferred"] == [] and capped["chosen"][-1]["target"] == "o/r#914", capped
+        # The examination bound still holds a backlog of refusals to EXAMINED_PER_DELEGATION reads
+        # per slot, and the plan names what it held back: blocking, and not drainable.
+        reads = []
+
+        def owned_and_counted(target):
+            reads.append(target)
+            return {"agent:codex"}, ""
+
+        dispatcher._target_labels = owned_and_counted  # type: ignore
+        bounded = remote_tick(
+            [{"target": f"o/r#{920 + i}", "task_type": "implement"} for i in range(6)],
+            all_keep,
+            dry_run=True,
+            do_ingest=False,
+            max_delegations=1,
+            research_tick_fn=no_research,
+        )
+        assert len(reads) == bounded["examined"] == bounded["examine_cap"] == 4, (reads, bounded)
+        assert bounded["deferral"]["by_examine_cap"] == ["o/r#924", "o/r#925"], bounded
+        assert (bounded["deferral"]["delegable"], bounded["deferral"]["drainable"]) == (
+            2,
+            0,
+        ), bounded
+        # Items the rail refuses on their DISCOVERY labels are examined after the rest, so owned
+        # closer PRs at the head of the backlog cannot hold back an item that can be delegated.
+        owned_live = {"o/r#931", "o/r#932", "o/r#933"}
+        dispatcher._target_labels = owned_or_fresh  # type: ignore
+        ordered = remote_tick(
+            [
+                {"target": f"o/r#{n}", "lane": "closer", "labels": ["agent:codex"]}
+                for n in (931, 932, 933)
+            ]
+            + [{"target": "o/r#934", "task_type": "implement", "labels": ["status: ready"]}],
+            all_keep,
+            dry_run=True,
+            do_ingest=False,
+            max_delegations=1,
+            research_tick_fn=no_research,
+        )
+        assert ordered["chosen"][0]["target"] == "o/r#934" and ordered["delegations"] == 1, ordered
+        assert ordered["deferred"] == ["o/r#931", "o/r#932", "o/r#933"], ordered
+        assert (ordered["deferral"]["delegable"], ordered["deferral"]["drainable"]) == (
+            0,
+            0,
+        ), ordered
+        dispatcher._target_labels = lambda target: (set(), "")  # type: ignore
         research_arbitration = {}
 
         def capture_reserved_research(*args, **kwargs):
@@ -808,8 +996,10 @@ def _selftest():
                 "blocked_reasons": ["production_reserved"],
             }
 
+        # Numbered: a target with no PR number is a dispatcher ERROR row, which reserves nothing.
+        # This case used one, and its truthiness check passed only because errors reserved too.
         production_range = {
-            "target": "o/r#production-range",
+            "target": "o/r#77",
             "task_type": "testgen",
             "lane": "opener",
         }
@@ -824,10 +1014,27 @@ def _selftest():
         assert (
             production_range["target"] in research_arbitration["excluded_targets"]
         ), research_arbitration
-        assert research_arbitration["production_reserve"], research_arbitration
+        assert research_arbitration["production_reserve"] == {
+            arbitration["chosen"][0]["agent"]: 1
+        }, research_arbitration
         assert (
             claims.holder(production_range["target"]) is None
         ), "production-reserved dry-run created a research claim"
+        # A refusal runs no agent, so it reserves no capacity. Its target stays excluded from
+        # research, because it is another agent's work.
+        dispatcher._target_labels = lambda target: ({"agent:codex"}, "")  # type: ignore
+        research_arbitration.clear()
+        refused_range = remote_tick(
+            [production_range],
+            all_keep,
+            dry_run=True,
+            do_ingest=False,
+            research_tick_fn=capture_reserved_research,
+        )
+        assert refused_range["refused"] == 1, refused_range
+        assert research_arbitration["production_reserve"] == {}, research_arbitration
+        assert production_range["target"] in research_arbitration["excluded_targets"]
+        dispatcher._target_labels = lambda target: (set(), "")  # type: ignore
         high = {
             "target": "stranske/Workflows#202",
             "task_type": "implement",
@@ -1020,7 +1227,9 @@ def _selftest():
 
         print(
             "tick.py selftest: OK (remote choose->delegate per item, reserve-aware, learned weights, "
-            "no-capacity skip, per-tick cap, unread labels and unknown claim holders refuse, "
+            "no-capacity skip, per-tick cap counts delegations not refusals, examination bound, "
+            "refused-on-discovery-labels examined last, refusals reserve no research capacity, "
+            "unread labels and unknown claim holders refuse, "
             "adversarial review hook, runtime AC gate hook, "
             "production-before-research arbitration, true research task_type, "
             "shadow/opt-in research hook)"
@@ -1041,6 +1250,42 @@ def _selftest():
         claims._handoff_dir = old_claims_handoff  # type: ignore
         dispatcher._target_labels = old_target_labels  # type: ignore
         feedback.DB_PATH = old_feedback_db
+
+
+def plan_headline(out: Mapping[str, Any], artifact: Any, *, lane_live: bool) -> str:
+    """The one TICK-PLAN line. Each bound prints beside the count it bounds, as the plan carries
+    them (`delegations`/`cap`, `examined`/`examine_cap`), and the deferred items print their blocking
+    quantity (`deferral.delegable`) beside their drainable one. Those numbers are read from the plan
+    `remote_tick` wrote, never recounted here, so the line cannot disagree with the loop. A number the
+    plan does not carry prints `?`, never 0: unknown is not a measured zero.
+
+    Until 2026-10-04 the shadow line read "3 targets chosen, 0 applied, 3 skipped" every hour.
+    "Skipped" lumped a refusal together with a delegation that would have applied, so it could not show
+    that every slot held a refusal while an item was deferred."""
+    chosen = out.get("chosen") or []
+    applied = sum(row.get("applied") is True for row in chosen)
+    # The ownership read's own pair: a target whose labels GitHub did not return is refused,
+    # and the next tick reads it again, so "0 unanswered" is this refusal fully drained. A row
+    # that never reached a read (an error) is in neither count.
+    answered = sum(row.get("labels_read") is True for row in chosen)
+    unanswered = sum(row.get("labels_read") is False for row in chosen)
+    deferral = out.get("deferral") or {}
+
+    def n(value: Any) -> str:
+        return "?" if value is None else str(value)
+
+    delegations = f"delegations {n(out.get('delegations'))}/{n(out.get('cap'))}"
+    delegations += f" attempted, {applied} applied" if lane_live else " would apply (shadow)"
+    errors = f", {out['errors']} dispatcher errors" if out.get("errors") else ""
+    return (
+        f"TICK-PLAN: {delegations}; {n(out.get('refused'))} refused{errors}; "
+        f"examined {n(out.get('examined'))}/{n(out.get('examine_cap'))}; "
+        f"label reads {answered} answered, {unanswered} unanswered (refused); "
+        f"{len(out.get('no_capacity') or [])} no capacity, "
+        f"{len(out.get('blocked') or [])} blocked; "
+        f"deferred {len(out.get('deferred') or [])} (delegable {n(deferral.get('delegable'))}, "
+        f"drainable {n(deferral.get('drainable'))}) -> {artifact}"
+    )
 
 
 def main(argv):
@@ -1086,23 +1331,7 @@ def main(argv):
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-        chosen = out.get("chosen") or []
-        applied = sum(bool(row.get("applied")) for row in chosen)
-        skipped = len(chosen) - applied
-        # The ownership read's own pair: a target whose labels GitHub did not return is refused,
-        # and the next tick reads it again, so "0 unanswered" is this refusal fully drained. A row
-        # that never reached a read (an error) is in neither count.
-        answered = sum(row.get("labels_read") is True for row in chosen)
-        unanswered = sum(row.get("labels_read") is False for row in chosen)
-        shadow = " (shadow)" if not lane_live else ""
-        print(
-            f"TICK-PLAN: {len(chosen)} targets chosen, {applied} applied, "
-            f"{skipped} skipped{shadow}; "
-            f"label reads {answered} answered, {unanswered} unanswered (refused); "
-            f"{len(out.get('no_capacity') or [])} no capacity, "
-            f"{len(out.get('deferred') or [])} deferred, "
-            f"{len(out.get('blocked') or [])} blocked -> {artifact}"
-        )
+        print(plan_headline(out, artifact, lane_live=lane_live))
     else:
         print(json.dumps(out, indent=2, default=str))
     return 0

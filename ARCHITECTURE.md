@@ -116,6 +116,20 @@ claim meta is replaced in one step (`claims._write_meta`). The tick headline pri
 a refusal as soon as GitHub answers. (No stage, component or surface moved; the diagram is
 unchanged.)
 
+**A refusal takes no delegation slot (2026-10-04).** The tick's per-tick cap
+(`ORCH_MAX_REMOTE_PER_TICK`, default 3) used to count every row that reached `delegate_remote`,
+refusals included. Discovery lists a closer item only when its PR already carries an `agent:*`
+label, and lists closer items first, so the cap filled with refusals. Over the live period
+(2026-06-15 to 09-02), 2,826 of its slots went to refusals and 25 to delegations, and 65 targets that
+carried no agent label when first deferred were never examined. `tick.is_delegation` is now the one
+predicate the cap, `production_reserve`, the rejected-role influence edge and the `TICK-PLAN`
+headline consume. A second bound, `EXAMINED_PER_DELEGATION` (4) times the cap, limits the items a
+tick examines, so a backlog of owned PRs cannot turn into unbounded label reads. Items the rail
+refuses on their discovery labels are examined after the rest (`tick.examination_order`), so they
+cannot hold a delegable item behind that bound. The plan and the headline print each bound beside its
+count, and the deferred items' blocking quantity (`delegable`) beside the drainable one. (No stage,
+component or surface moved; the diagram is unchanged.)
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
