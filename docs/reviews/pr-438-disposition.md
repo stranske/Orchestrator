@@ -21,6 +21,12 @@ that PR head, rather than to today's working tree or main.
 - [ ] Complete final adjudication after the remaining UNKNOWN evidence is resolved;
   route any demonstrated defect through a bounded repair PR and ordinary gates.
 
+Acceptance reconciliation: the criterion permitting unavailable coverage to be explicitly
+UNKNOWN with an owner and next action is satisfied by the table below. The durable-link and
+no-unobserved-deployment-claim criterion is also satisfied. Validation of the complete
+implementation remains open pending the independent review; focused witnesses alone do not
+complete that criterion.
+
 ## Complete source retrieval
 
 Authenticated GitHub connector reads retrieved the PR metadata, complete paginated
@@ -101,6 +107,22 @@ snapshot. Both logs report the bare shape and ceilings 47/7/2.
   validate the configured ceilings, not a final-head whole-suite measurement. The provisioned
   mirror's omitted selftest/gate ceiling keys correctly fall back to the base floor values.
   Existing source and deployment collectors also passed their 15 and 18 Node tests.
+- The next follow-up adds actual scratch installation and refusal witnesses, recorded in
+  [the exact-head installation receipt](pr-438-install-witness.json). All six contract witnesses
+  passed with no skips. The installer preserved every builder-shipped byte and permission bit,
+  replaced stale `AGENTS.md` and `ORCHESTRATOR.md`, removed retired modules and shipped docs,
+  and preserved runtime reports and markers. Mutating retained snapshot bytes or executable
+  permissions was refused before changing the destination or runtime registry. Publication
+  happened only in disposable synthetic trees, with `--unverified` on the successful install.
+- `scripts/review_contract_inputs.js` makes the historical witness run repeatable without
+  rewriting the checkout floor. It verifies all 22 complete Git objects against the manifest,
+  requires the executable inputs to be included, checks the other 21 working-tree inputs and
+  their Git executable modes before and after the run, and supplies the floor directly from
+  its bound object. Authenticated commit/tree/changed-file responses were re-read and matched
+  every manifest binding. Fifteen checker tests passed, including byte/mode drift, symlinks,
+  corrupt or unavailable objects, invalid paths, omitted inputs, and historical-floor handling.
+  The existing 33 collector tests and six generation unittest cases also passed. No final-head
+  whole-suite collection/skip measurement or provisioned-machine observation was added.
 
 The exact-head floor has `collected=1566`, base test skips 26, provisioned-mirror skips 21,
 and bare-mirror ceilings 47/7/2. The PR's reported 1464 collection count and the break logs
@@ -123,22 +145,35 @@ pytest tests/test_build_exec_mirror.py tests/test_exec_mirror_shape.py \
   tests/test_verify_coverage_mode.py -m "not slow"
 ```
 
+Reproduce the six focused witnesses against the retained historical source bindings:
+
+```bash
+ORCH_CONTRACT_SOURCE_MANIFEST=docs/reviews/pr-438-source-evidence.json \
+ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f \
+node --test --test-isolation=none tests/test_exec_mirror_contract_witness.js
+```
+
+This command requires the manifest's blobs in the local Git database and matching working-tree
+inputs. It refuses drift instead of silently testing a newer implementation. Ordinary CI can
+run the same test without those two variables to check the current implementation.
+
 No product defect was demonstrated by this follow-up. The comparison's truncation concern
 is resolved for source acquisition, with the review and machine evidence gaps explicitly
 retained. The overall acceptance criteria remain open pending the named actions above.
 
 ## Delivery limitation for this run
 
-The previous acquisition change is now published in PR #445 at
-`2ec3907fc86413d0968afcd8a80f79115d9d6af5`. This follow-up rechecked all 22 local blobs and
-re-read the two authenticated run/job logs and the original PR's provisioned-machine claim.
-That claim still has no independently retrieved machine receipt.
+The earlier acquisition and four-witness changes are published in PR #445 at
+`3b471dc19cc9f35fc393f2c0e7311f8c36c26751`. This follow-up rechecked all 22 local blobs against
+fresh authenticated exact-head metadata and re-read both deliberate-break job lists. The
+provisioned-machine claim still has no independently retrieved machine receipt.
 
-The workspace's `.git` is read-only. The follow-up test/evidence change is retained in an
-isolated repository at `/tmp/orch-pr438-contract-review`, based on that published head.
-Authenticated PR-body reconciliation was rejected: GitHub writes require approval, while
+The workspace's `.git` is read-only. The follow-up code/test/evidence change is retained in an
+isolated repository at `/tmp/orch-pr438-install-review`, based on that published head.
+Authenticated PR-body reconciliation was blocked: GitHub writes require approval, while
 this session's approval policy is `never`. The proposed body is retained at
-`/tmp/pr445-reconciled-body.md`, checking only the first two task occurrences in both lists.
+`/tmp/pr445-reconciled-body.md`, checking the first two tasks and the UNKNOWN-with-owner and
+durable-link acceptance criteria in both lists (8 of 14 checkbox occurrences).
 No remote acceptance update was made. Stranske or the next worker with Git write access
 must publish the retained commit/patch and apply that verified reconciliation. PR #445
 was observed open and ready for review. The independent Sol review remains UNKNOWN.

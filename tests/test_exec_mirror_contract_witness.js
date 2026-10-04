@@ -8,13 +8,24 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { test } = require('node:test');
+const { after, test } = require('node:test');
+const { bindReviewInputs } = require('../scripts/review_contract_inputs');
 
 const repo = path.resolve(__dirname, '..');
 const python = process.env.PYTHON || 'python3';
 const builder = path.join(repo, 'scripts', 'build_exec_mirror.sh');
 const presync = path.join(repo, 'scripts', 'verify_before_sync.sh');
 const installer = path.join(repo, 'scripts', 'install_verified_snapshot.py');
+// Normal CI checks today's implementation. The opt-in review run must bind the
+// actual executable inputs to the retained historical manifest before and after.
+const bound = process.env.ORCH_CONTRACT_SOURCE_MANIFEST ? bindReviewInputs(repo,
+  fs.readFileSync(process.env.ORCH_CONTRACT_SOURCE_MANIFEST),
+  process.env.ORCH_CONTRACT_EXPECTED_HEAD, [
+    'scripts/build_exec_mirror.sh', 'scripts/verify_before_sync.sh',
+    'scripts/install_verified_snapshot.py', 'docs/MIRROR_SYNC_PATCH.md',
+    'src/env_prereq.py', 'src/verify.py', 'src/paths.py', 'src/mirror_reader.py',
+  ]) : null;
+if (bound) after(() => assert.ok(bound.check() > 0));
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -112,6 +123,73 @@ test('installer owns every builder-shipped leaf in a superset of source inputs',
   assert.ok(leaves.includes('AGENTS.md') && leaves.includes('ORCHESTRATOR.md'));
 });
 
+test('scratch installer publishes every builder byte and mode and preserves runtime output', (t) => {
+  const w = world(t);
+  const snapshot = path.join(w.root, 'snapshot');
+  const mirror = path.join(w.root, 'installed');
+  build(w, snapshot);
+  write(path.join(snapshot, 'repo_review_registry.json'), '{"repos": []}\n');
+  const digest = run(python, [installer, snapshot, '--digest'], { env: w.env });
+  const before = tree(snapshot);
+  write(path.join(mirror, 'stale.py'), 'STALE = True\n');
+  write(path.join(mirror, 'AGENTS.md'), 'stale instructions\n');
+  write(path.join(mirror, 'ORCHESTRATOR.md'), 'stale contract\n');
+  write(path.join(mirror, '.docs-shipped.txt'), 'docs/removed.md\n');
+  write(path.join(mirror, 'docs', 'removed.md'), 'removed source doc\n');
+  write(path.join(mirror, 'docs', 'reports', 'runtime.md'), 'runtime report\n');
+  write(path.join(mirror, 'experiments', '.last-ship-gate'), 'runtime marker\n');
+  const registry = path.join(w.root, 'runtime-registry.json');
+  write(registry, '{"old": true}\n');
+  run(python, [installer, snapshot, mirror, '--expected-digest', digest,
+    '--runtime-registry', registry, '--unverified'], { env: w.env });
+  // Runtime content is linked into the retained prior generation. Inspect these
+  // paths separately; the contract comparison concerns the shipped entries.
+  const installed = tree(mirror, ['docs/reports', 'experiments/.last-ship-gate']);
+  for (const [name, entry] of Object.entries(before)) {
+    assert.deepEqual(installed[name], entry, `${name} changed bytes or mode during installation`);
+  }
+  assert.equal(run(python, [installer, mirror, '--digest'], { env: w.env }), digest);
+  assert.deepEqual(tree(snapshot), before, 'installer modified its retained snapshot');
+  for (const name of ['stale.py', 'docs/removed.md']) {
+    assert.equal(fs.existsSync(path.join(mirror, name)), false, `${name} was not retired`);
+  }
+  assert.equal(fs.readFileSync(path.join(mirror, 'docs/reports/runtime.md'), 'utf8'), 'runtime report\n');
+  assert.equal(fs.readFileSync(path.join(mirror, 'experiments/.last-ship-gate'), 'utf8'), 'runtime marker\n');
+  assert.equal(fs.readFileSync(registry, 'utf8'), '{"repos": []}\n');
+});
+
+test('scratch installer refuses a changed snapshot before publication or registry update', (t) => {
+  const w = world(t);
+  const snapshot = path.join(w.root, 'snapshot');
+  const mirror = path.join(w.root, 'installed');
+  build(w, snapshot);
+  write(path.join(snapshot, 'repo_review_registry.json'), '{"repos": []}\n');
+  const digest = run(python, [installer, snapshot, '--digest'], { env: w.env });
+  write(path.join(mirror, 'base.py'), 'old generation\n');
+  const registry = path.join(w.root, 'runtime-registry.json');
+  write(registry, '{"old": true}\n');
+  const before = tree(mirror);
+  const target = path.join(snapshot, 'AGENTS.md');
+  const bytes = fs.readFileSync(target);
+  const mode = fs.statSync(target).mode & 0o7777;
+  for (const mutation of ['bytes', 'mode']) {
+    try {
+      if (mutation === 'bytes') fs.appendFileSync(target, 'changed after verification\n');
+      else fs.chmodSync(target, mode ^ 0o100);
+      const refused = spawnSync(python, [installer, snapshot, mirror, '--expected-digest', digest,
+        '--runtime-registry', registry], { env: w.env, encoding: 'utf8', timeout: 30000 });
+      assert.equal(refused.status, 2, refused.stderr);
+      assert.match(refused.stderr, /retained snapshot digest.*!= verified payload/);
+      assert.deepEqual(tree(mirror), before, `${mutation} mutation changed live scratch bytes`);
+      assert.equal(fs.lstatSync(mirror).isSymbolicLink(), false);
+      assert.equal(fs.readFileSync(registry, 'utf8'), '{"old": true}\n');
+    } finally {
+      fs.writeFileSync(target, bytes);
+      fs.chmodSync(target, mode);
+    }
+  }
+});
+
 test('each input that changes builder output also changes the pre-sync source identity', (t) => {
   const w = world(t);
   const clean = path.join(w.root, 'clean');
@@ -172,7 +250,11 @@ test('documented copier matches builder bytes and modes and refuses a missing bu
   assert.equal(fs.existsSync(mirror), false);
 });
 
-test('every unreadable machine mark keeps strict mirror ceilings; verdict and rendering agree', () => {
+test('every unreadable machine mark keeps strict mirror ceilings; verdict and rendering agree', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-contract-floor-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const floor = path.join(root, 'floor.json');
+  fs.writeFileSync(floor, bound ? bound.floorBytes : fs.readFileSync(path.join(repo, '.verify-floor.json')));
   const output = pythonCode(
     'import json, sys\nfrom unittest.mock import patch\n'
       + 'sys.path.insert(0, sys.argv[1])\nimport env_prereq, verify\n'
@@ -205,6 +287,6 @@ test('every unreadable machine mark keeps strict mirror ceilings; verdict and re
       + '        assert problems and any(key_in_force in p for p in problems), (shape, key)\n'
       + '        assert rendered[key].startswith(f"{limit + 1}/{limit} max"), rendered[key]\n'
       + 'print("three shapes, all present and unreadable machine marks, every ceiling boundary checked")\n',
-    path.join(repo, 'src'), path.join(repo, '.verify-floor.json'));
+    path.join(repo, 'src'), floor);
   assert.match(output, /every ceiling boundary checked/);
 });
