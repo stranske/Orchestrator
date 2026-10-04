@@ -258,9 +258,20 @@ if [[ -n "$skipped_dirs" ]]; then
   say "   not copied, over $max_dir_mb MB (checks that need them see nothing):$skipped_dirs"
 fi
 
+# features.py, repo_knowledge.py and research_scheduler.py SEED their registry on first load, at
+# MODULE_DIR/experiments/ unless their variable names another path. In the flat mirror that is the
+# deployment-owned experiments/*.json (install_verified_snapshot.OWNED_FILES), which the copy script
+# ships only when the source has them, and a clean clone never does. Seeded there mid-run, they
+# changed the payload under the verdict and VOIDed every verified sync from such a source
+# (2026-10-04). So they seed here, beside verify.py's other writes, starting absent exactly as the
+# live mirror starts after a copy.
+registry_copy="$scratch/state/registries"
 say "== verify.py in the scratch mirror, on the state copy (HOME stays real for the installed CLIs)"
 (cd "$scratch/mirror" && ORCH_LOCAL_RUNTIME="$runtime_copy" ORCH_STATE_DIR="$statedir_copy" \
   ORCH_CAPABILITIES_PATH="$ledger_copy" ORCH_FEEDBACK_DB="$brain_copy" \
+  ORCH_FEATURES_PATH="$registry_copy/features.json" \
+  ORCH_REPO_KNOWLEDGE_PATH="$registry_copy/repo_knowledge.json" \
+  ORCH_HYP_PATH="$registry_copy/hypotheses.json" \
   "$python_bin" verify.py) 2>&1 | tee "$scratch/verify.log"
 pipe_status=("${PIPESTATUS[@]}")
 rc=${pipe_status[0]}
