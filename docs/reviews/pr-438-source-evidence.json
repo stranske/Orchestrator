@@ -4,13 +4,14 @@
   "pr_number": 438,
   "head_sha": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
   "tree_sha": "94bdda87c056fc7d8d07497fbb5c6915ed83ae82",
-  "metadata_sha256": "6ad0b3dccdf25b5441210aa97a24d2836365779661f5e99c38da11c61813c04a",
-  "retrieval_transport": "authenticated GitHub connector",
+  "metadata_sha256": "aa57c6f9ea3545425d43750738b9658a7ce84d5e9be1961ad44bceb6f4506124",
+  "changed_path_validation": "exact equality with complete authenticated PR file records",
+  "retrieval_transport": "authenticated GitHub connector; normalized credential-free export",
   "source_urls": [
     "https://github.com/stranske/Orchestrator/pull/438",
     "https://api.github.com/repos/stranske/Orchestrator/git/commits/883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
     "https://api.github.com/repos/stranske/Orchestrator/git/trees/94bdda87c056fc7d8d07497fbb5c6915ed83ae82?recursive=1",
-    "https://api.github.com/repos/stranske/Orchestrator/pulls/438/files"
+    "https://api.github.com/repos/stranske/Orchestrator/pulls/438/files?per_page=100&page=1"
   ],
   "source_status": "COMPLETE",
   "review_status": "PENDING",

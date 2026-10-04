@@ -30,7 +30,9 @@ complete that criterion.
 ## Complete source retrieval
 
 Authenticated GitHub connector reads retrieved the PR metadata, complete paginated
-changed-file list, Git commit, and untruncated recursive tree. The commit binds the head to
+changed-file list, Git commit, and untruncated recursive tree. Fresh recovery reads retained
+a [credential-free metadata export](pr-438-source-metadata.json), including all 2,165 tree
+entries and all 14 PR-file records (one page at `per_page=100`). The commit binds the head to
 tree `94bdda87c056fc7d8d07497fbb5c6915ed83ae82`. The terminal could not contact GitHub,
 and the head commit is not in the local object database. The individual blobs are present,
 however, and were retrieved by object ID, not by working-tree path or the squash commit.
@@ -41,26 +43,36 @@ source URL. Each retrieved blob matched both its authenticated size and Git obje
 The changed files total 570,728 full-file bytes; all 22 files total 689,871 bytes. These
 are full-file byte counts, not a claim about the comparison's changed-code character count.
 
-The complete byte artifacts and original exported metadata were retained locally under
-`/tmp/pr438-bound-source-evidence/`. That scratch directory is ephemeral. Durable
-file/blob bindings and authenticated GitHub source URLs are committed here; the scratch
-artifact names in the manifest are relative to that directory. Remote content remains
-retrievable by the retained blob IDs after scratch cleanup.
+The original metadata export and byte artifacts were retained only under the ephemeral
+`/tmp/pr438-bound-source-evidence/`. That original export is unavailable; its former
+`metadata_sha256` (`6ad0b3dccdf25b5441210aa97a24d2836365779661f5e99c38da11c61813c04a`)
+cannot reconstruct its contents. The fresh normalized export supersedes that acquisition
+receipt, without claiming to recover the original export. The manifest now hashes the
+committed export's exact bytes. Re-capture retrieved all 22 blobs and left every file/blob
+binding unchanged. The export retains only PR/head/count, commit/tree identity, tree records,
+PR-file records, requested paths and provenance URLs; it contains no request headers or
+authentication material. Scratch blob artifact names remain relative to the output bundle.
+Remote content remains retrievable by the retained blob IDs after scratch cleanup.
 
 `scripts/capture_review_source_evidence.js` accepts an authenticated metadata export
 containing `repository`, `pr_number`, `pull_request` (`head_sha`, `changed_files`),
-`commit`, `tree`, `changed_paths`, and `required_paths`. `retrieval_transport` and
+`commit`, `tree`, `changed_paths`, `required_paths`, and `pull_request_files` (same `head_sha`,
+`complete: true`, and aggregated `files` records from every authenticated PR-files page).
+`retrieval_transport` and
 `source_urls` record provenance. It does not authenticate an arbitrary export itself.
 The caller must obtain the export through authenticated GitHub access. It refuses mismatched
-head/tree bindings, truncated trees, and a path list that disagrees with the PR's file count.
+head/tree bindings, truncated trees, and a changed-path set that differs from the complete
+PR-file records, even when the file count agrees. Missing/incomplete file records are refused
+before creating an output bundle. The exporter must obtain every page and confirm head identity;
+the collector checks the declared bindings and exact set equality, not network authentication.
 Incomplete or corrupt bytes are UNKNOWN with an owner and next action. Retrieval success
 always leaves review PENDING and deployment NOT_OBSERVED.
 
-Reproduce retention with the exported metadata and local Git object database:
+Reproduce retention with the committed export and local Git object database:
 
 ```bash
 node scripts/capture_review_source_evidence.js \
-  /tmp/pr438-source-metadata.json . /tmp/pr438-new-source-bundle \
+  docs/reviews/pr-438-source-metadata.json . /tmp/pr438-new-source-bundle \
   883ee0b84f5bd5b3bbee7c85c586004aafd58e5f
 ```
 
@@ -157,7 +169,7 @@ This command requires the manifest's blobs in the local Git database and matchin
 inputs. It refuses drift instead of silently testing a newer implementation. Ordinary CI can
 run the same test without those two variables to check the current implementation.
 
-No product defect was demonstrated by this follow-up. The comparison's truncation concern
+No defect in #438's product implementation was demonstrated by this follow-up. The comparison's truncation concern
 is resolved for source acquisition, with the review and machine evidence gaps explicitly
 retained. The overall acceptance criteria remain open pending the named actions above.
 
@@ -174,6 +186,41 @@ Authenticated PR-body reconciliation was blocked: GitHub writes require approval
 this session's approval policy is `never`. The proposed body is retained at
 `/tmp/pr445-reconciled-body.md`, checking the first two tasks and the UNKNOWN-with-owner and
 durable-link acceptance criteria in both lists (8 of 14 checkbox occurrences).
-No remote acceptance update was made. Stranske or the next worker with Git write access
+No remote acceptance update was made in that earlier run. Stranske or the next worker with Git write access
 must publish the retained commit/patch and apply that verified reconciliation. PR #445
 was observed open and ready for review. The independent Sol review remains UNKNOWN.
+
+## Current-head review recovery
+
+The [opener's review recovery request](https://github.com/stranske/Orchestrator/pull/445#issuecomment-5985449089)
+identifies two active CodeRabbit findings at `720cd8e873d824c83b8d3862aac954902bb61dfe`.
+Both were valid on inspection:
+
+- [Metadata retention](https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529427):
+  repaired by the fresh committed export and re-captured manifest described above. The
+  original scratch export remains unavailable; the fresh receipt is independently retained.
+- [Changed-path set equality](https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529429):
+  repaired by comparing `changed_paths` with the complete authenticated PR-file records.
+  The same-count substitution witness failed before the code repair and passed afterward.
+  Regressions also cover absent/incomplete exports, wrong-head records, omitted/duplicate
+  records, invalid filenames, ordering and durable metadata/hash/tree reproduction.
+
+[Focused repair proof](pr-445-review-recovery.json) retains the inspected head, tested input
+hashes and command; [the test output](pr-445-review-recovery-tests.txt) records **63 passed,
+0 failed, 0 skipped**, including all six historical contract witnesses. The fresh collector
+run retained **14/14 changed files** and preserved all **22** existing file/blob bindings.
+
+Originating-reviewer disposition is **PENDING**, owned by `coderabbitai` on the two threads.
+Next action: review the published repair and focused evidence, then record disposition in
+each originating thread. No thread is self-resolved and the current-head task stays unchecked
+until that disposition is obtained. These acquisition repairs do not supply the remaining
+full-suite, provisioned-machine, or independent Sol evidence.
+
+This recovery's source/test/evidence repair is committed in `/tmp/pr445-review-recovery`;
+the patch is retained at `/tmp/pr445-review-recovery.patch` and the working-tree files are
+also updated here. The workspace `.git` refused staging with a read-only-filesystem error.
+The GitHub connector rejected both repair-tree publication and the originating-reviewer
+reply with `MCP tool call requires approval, but approval policy is never`. No repair was
+published and no reviewer request was delivered. Owner `stranske` must publish the retained
+commit/patch and request CodeRabbit disposition in both originating threads. The task remains
+unchecked while publication and reviewer disposition are blocked.

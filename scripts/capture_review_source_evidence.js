@@ -37,6 +37,20 @@ function validate(metadata, expectedHead) {
     || !Array.isArray(metadata.required_paths) || !Array.isArray(metadata.tree.tree)) {
     throw new Error('repository, PR, and complete changed/required path lists matching the PR file count are required');
   }
+  // Count equality alone permits substituting an unrelated file from the tree.
+  // The caller must aggregate every authenticated PR-files page and bind that
+  // export to the same head; this collector does not authenticate the export.
+  const prFiles = metadata.pull_request_files;
+  if (prFiles?.complete !== true || prFiles.head_sha !== expectedHead
+    || !Array.isArray(prFiles.files) || prFiles.files.length !== metadata.pull_request.changed_files
+    || prFiles.files.some((file) => !file || typeof file.filename !== 'string' || !file.filename)) {
+    throw new Error('complete authenticated PR file records bound to the exact head are required');
+  }
+  const filenames = new Set(prFiles.files.map((file) => file.filename));
+  if (filenames.size !== prFiles.files.length
+    || metadata.changed_paths.some((name) => !filenames.has(name))) {
+    throw new Error('changed paths must equal the complete authenticated PR file records');
+  }
   const entries = new Map();
   for (const entry of metadata.tree.tree) {
     if (typeof entry.path !== 'string' || entry.path.startsWith('/')
@@ -121,6 +135,7 @@ function capture(metadataBytes, repo, output, expectedHead, reader = readBlob) {
     repository: metadata.repository, pr_number: metadata.pr_number,
     head_sha: expectedHead, tree_sha: metadata.commit.tree.sha,
     metadata_sha256: sha256(metadataBytes),
+    changed_path_validation: 'exact equality with complete authenticated PR file records',
     retrieval_transport: metadata.retrieval_transport || 'unspecified metadata export',
     source_urls: metadata.source_urls || [],
     source_status: files.every((file) => file.status === 'RETRIEVED') ? 'COMPLETE' : 'UNKNOWN',

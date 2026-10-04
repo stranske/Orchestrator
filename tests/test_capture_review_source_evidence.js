@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const { blobSha, capture, main } = require('../scripts/capture_review_source_evidence');
@@ -36,6 +37,9 @@ function world(t) {
       { path: 'module.py', type: 'blob', mode: '100644', sha, size: bytes.length },
     ] },
     changed_paths: ['module.py'], required_paths: [],
+    pull_request_files: { head_sha: head, complete: true, files: [
+      { filename: 'module.py', sha, status: 'modified' },
+    ] },
   };
   return { root, repo, output, head, metadata, bytes, sha };
 }
@@ -57,7 +61,67 @@ test('retains complete exact-head bytes and bindings despite working-tree drift'
   assert.equal(report.files[0].git_mode, '100644');
   assert.deepEqual(fs.readFileSync(path.join(w.output, report.files[0].artifact)), w.bytes);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(w.output, 'manifest.json'))), report);
+  const retainedMetadata = fs.readFileSync(path.join(w.output, 'metadata.json'));
+  assert.deepEqual(JSON.parse(retainedMetadata), w.metadata);
+  assert.equal(crypto.createHash('sha256').update(retainedMetadata).digest('hex'),
+    report.metadata_sha256);
   assert.equal(fs.readFileSync(path.join(w.repo, 'module.py'), 'utf8'), 'different working tree\n');
+});
+
+test('rejects a same-count changed-path substitution with another real tree file', (t) => {
+  const w = world(t);
+  w.metadata.tree.tree.push({ ...w.metadata.tree.tree[0], path: 'alias.py' });
+  w.metadata.changed_paths = ['alias.py'];
+  assert.throws(() => collect(w), /authenticated PR file records/);
+  assert.equal(fs.existsSync(w.output), false);
+});
+
+for (const defect of ['absent', 'incomplete', 'wrong head', 'omitted', 'duplicate', 'invalid filename']) {
+  test(`rejects ${defect} PR file records before writing a bundle`, (t) => {
+    const w = world(t);
+    if (defect === 'absent') delete w.metadata.pull_request_files;
+    if (defect === 'incomplete') w.metadata.pull_request_files.complete = false;
+    if (defect === 'wrong head') w.metadata.pull_request_files.head_sha = 'a'.repeat(40);
+    if (defect === 'omitted') w.metadata.pull_request_files.files = [];
+    if (defect === 'duplicate') {
+      w.metadata.changed_paths.push('alias.py');
+      w.metadata.pull_request.changed_files = 2;
+      w.metadata.pull_request_files.files.push({ ...w.metadata.pull_request_files.files[0] });
+    }
+    if (defect === 'invalid filename') w.metadata.pull_request_files.files[0].filename = null;
+    assert.throws(() => collect(w), /authenticated PR file records/);
+    assert.equal(fs.existsSync(w.output), false);
+  });
+}
+
+test('compares the complete aggregated PR file set independently of ordering', (t) => {
+  const w = world(t);
+  w.metadata.tree.tree.push({ ...w.metadata.tree.tree[0], path: 'alias.py' });
+  w.metadata.changed_paths.push('alias.py');
+  w.metadata.pull_request.changed_files = 2;
+  w.metadata.pull_request_files.files.unshift({ filename: 'alias.py' });
+  assert.equal(collect(w).retrieved_changed_files, 2);
+});
+
+test('durable metadata receipt reproduces all manifest path/tree bindings without historical blobs', (t) => {
+  const w = world(t);
+  const reviews = path.join(__dirname, '../docs/reviews');
+  const receipt = fs.readFileSync(path.join(reviews, 'pr-438-source-metadata.json'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(reviews, 'pr-438-source-evidence.json')));
+  const report = capture(receipt, w.repo, w.output, manifest.head_sha, () => {
+    throw new Error('historical objects intentionally unavailable');
+  });
+  assert.equal(report.metadata_sha256, manifest.metadata_sha256);
+  assert.equal(report.changed_path_validation, manifest.changed_path_validation);
+  assert.equal(report.tree_sha, manifest.tree_sha);
+  assert.equal(report.changed_files, manifest.changed_files);
+  assert.equal(report.source_status, 'UNKNOWN');
+  const bindings = (m) => m.files.map((file) => ({
+    path: file.path, changed: file.changed, blob: file.blob_sha,
+    mode: file.git_mode, size: file.expected_bytes, source: file.source_url,
+  }));
+  assert.deepEqual(bindings(report), bindings(manifest));
+  assert.deepEqual(fs.readFileSync(path.join(w.output, 'metadata.json')), receipt);
 });
 
 for (const defect of ['head', 'commit', 'tree', 'truncated', 'duplicates', 'traversal', 'omitted file']) {
