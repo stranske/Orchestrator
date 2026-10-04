@@ -28,6 +28,13 @@ import outcomes
 RATE_LIMIT = (1, "", "API rate limit exceeded for user ID 23046322.")
 UNPARSEABLE = (0, "<html>502 Bad Gateway</html>", "")
 NO_PR = (0, "[]", "")
+# What `gh issue view --json state,closedByPullRequestsReferences` prints for a closed issue that no
+# PR closed: the list is always present when asked for, and here it is empty.
+CLOSED_NO_CLOSING_PR = (
+    0,
+    json.dumps({"state": "CLOSED", "closedByPullRequestsReferences": []}),
+    "",
+)
 
 
 def _merged(branch: str) -> tuple:
@@ -53,7 +60,7 @@ def gh(monkeypatch):
     `issue` is the issue-view answer. Returns the list of branches looked up, in order."""
     looked_up: list[str] = []
 
-    def install(*, default=NO_PR, branches=None, issue=(0, json.dumps({"state": "CLOSED"}), "")):
+    def install(*, default=NO_PR, branches=None, issue=CLOSED_NO_CLOSING_PR):
         branches = branches or {}
 
         def fake_run(argv, capture_output=True, text=True, **_kw):

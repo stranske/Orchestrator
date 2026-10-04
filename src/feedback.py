@@ -1827,12 +1827,29 @@ def record_capability_consumption(
         }
 
 
-# Failure classes that must never train as capability incapability (§2): infra noise and the
-# UNCLASSIFIED bulk. `mark_transient_infra` writes the first; the second is every sweep-adjudicated
-# lifecycle closure ("remote keepalive PR closed unmerged") that nothing ever judged on its merits.
-# Consumed by `capability_causal_evidence`'s tally_class — the ONE predicate both
-# `_causal_readiness` and `reconcile_causal_lifecycle` count from, so the two can never drift.
-NONATTRIBUTABLE_FAILURE_CLASSES = frozenset({"", "transient_infra"})
+# What outcome ingest writes when a delegate's target issue closed through a PR that no candidate
+# branch of the run produced (`outcomes.state_to_outcome`). The run may have opened that PR on a
+# branch it chose, or another agent or a person may have, and nothing the ingest can see says which.
+# So the row is terminal (the run leaves the pending set) and carries no verdict and no merge state.
+UNATTRIBUTED_CLOSING_PR = "unattributed_closing_pr"
+
+# Failure classes whose outcome says nothing about the agent that ran, so NO learner may score them:
+# the environment killed the run (`transient_infra`, from `mark_transient_infra`), or the target
+# closed through a PR the run cannot be shown to have produced. ONE set: relearn's SQL reads it,
+# relearn_quality and exploration_review read it through `_has_outcome_evidence`, and the capability
+# tally reads it inside NONATTRIBUTABLE_FAILURE_CLASSES. The route learners named `transient_infra`
+# alone until 2026-10-04, so 15 closed-issue rows whose issue a merged PR had closed were labelled
+# full failures (3 inside the scored population then), at least 4 of them the runs' own merged PRs.
+# "" is deliberately absent: an unclassified FAIL is an attributed verdict to these learners.
+LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset({"transient_infra", UNATTRIBUTED_CLOSING_PR})
+
+# Failure classes that must never train as capability incapability (§2): the classes above and the
+# UNCLASSIFIED bulk, every sweep-adjudicated lifecycle closure ("remote keepalive PR closed
+# unmerged") that nothing ever judged on its merits. Derived from the set above, so a class excluded
+# from route learning cannot be counted as a capability failure. Consumed by
+# `capability_causal_evidence`'s tally_class — the ONE predicate both `_causal_readiness` and
+# `reconcile_causal_lifecycle` count from, so the two can never drift.
+NONATTRIBUTABLE_FAILURE_CLASSES = frozenset({""}) | LEARNING_EXCLUDED_FAILURE_CLASSES
 
 CAPABILITY_REGRESSION_DURABILITY = {
     "reverted",
@@ -2459,6 +2476,7 @@ def record_outcome(
     durability=None,
     notes=None,
     influenced_by_run_id=None,
+    failure_class=None,
 ):
     with _conn() as c:
         _record_outcome_in_conn(
@@ -2471,6 +2489,7 @@ def record_outcome(
             durability=durability,
             notes=notes,
             influenced_by_run_id=influenced_by_run_id,
+            failure_class=failure_class,
         )
 
 
@@ -2750,13 +2769,20 @@ def _capability_attribution_of(c: sqlite3.Connection, run_id: str) -> list[tuple
 def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str) -> int:
     """Back-propagate a target's current terminal state over accepted edges only."""
     outcome = c.execute(
-        "SELECT verifier_verdict,adjudicated_verdict,merged,ci_status,durability,notes "
-        "FROM outcomes WHERE run_id=?",
+        "SELECT verifier_verdict,adjudicated_verdict,merged,ci_status,durability,notes,"
+        "failure_class FROM outcomes WHERE run_id=?",
         (target_run_id,),
     ).fetchone()
     if outcome is None:
         return 0
-    vv, av, merged, ci_status, durability, downstream_notes = outcome
+    vv, av, merged, ci_status, durability, downstream_notes, failure_class = outcome
+    # A role inherits the acting run's verdict, so it inherits that verdict's exclusion too: copying
+    # every other field and dropping this one is how 7 role:triage runs trained on closed-issue
+    # labels their acting runs were never judged by. Only an excluded class travels; None writes
+    # nothing, so a role row's own class is never cleared by a propagation.
+    role_failure_class = (
+        failure_class if failure_class in LEARNING_EXCLUDED_FAILURE_CLASSES else None
+    )
     terminal_verdict = av or vv or ci_status
     target_event_id = _latest_completion_event_id(c, target_run_id)
     rows = c.execute(
@@ -2846,6 +2872,7 @@ def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str
                     durability=durability,
                     notes=role_notes,
                     propagate_lineage=False,
+                    failure_class=role_failure_class,
                 )
         propagated += 1
     accepted_role = c.execute(
@@ -2874,6 +2901,7 @@ def _record_outcome_in_conn(
     notes=None,
     influenced_by_run_id=None,
     propagate_lineage: bool = True,
+    failure_class=None,
 ):
     row = c.execute("SELECT run_id FROM outcomes WHERE run_id=?", (run_id,)).fetchone()
     values = [
@@ -2884,6 +2912,7 @@ def _record_outcome_in_conn(
         ("durability", durability),
         ("notes", notes),
         ("influenced_by_run_id", influenced_by_run_id),
+        ("failure_class", failure_class),
     ]
     if row:  # late-arriving update (e.g. a durability sweep days later) — patch, don't clobber
         sets, vals = [], []
@@ -2902,7 +2931,8 @@ def _record_outcome_in_conn(
         c.execute(
             "INSERT INTO outcomes "
             "(run_id, verifier_verdict, adjudicated_verdict, merged, ci_status, durability, "
-            "durability_checked_ts, notes, influenced_by_run_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            "durability_checked_ts, notes, influenced_by_run_id, failure_class) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 run_id,
                 verifier_verdict,
@@ -2913,6 +2943,7 @@ def _record_outcome_in_conn(
                 int(time.time()) if durability else None,
                 notes,
                 influenced_by_run_id,
+                failure_class,
             ),
         )
     stored = c.execute(
@@ -4623,6 +4654,8 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
             c, {a for priors in task_type_priors.values() for a in priors}, since
         )
         cells: dict[tuple[str, str], dict] = {}
+        excluded_classes = sorted(LEARNING_EXCLUDED_FAILURE_CLASSES)
+        excluded_marks = ",".join("?" for _ in excluded_classes)
         for task_type, priors in task_type_priors.items():
             for agent, prior in priors.items():
                 rows = c.execute(
@@ -4631,8 +4664,9 @@ def relearn(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DAYS) -> i
                     "WHERE r.task_type=? AND r.agent=? AND r.ts>=? "
                     f"AND {_learning_assignment_sql()} "
                     "AND COALESCE(o.durability_checked_ts, r.ts)>=? "  # broke-later detection floor (#293)
-                    "AND COALESCE(o.failure_class,'') != 'transient_infra'",  # item 9: infra != capability
-                    (task_type, agent, since, DURABILITY_DETECTION_SINCE),
+                    # item 9 and 2026-10-04: an excluded class says nothing about the agent
+                    f"AND COALESCE(o.failure_class,'') NOT IN ({excluded_marks})",
+                    (task_type, agent, since, DURABILITY_DETECTION_SINCE, *excluded_classes),
                 ).fetchall()
                 n = len(rows)
                 succ = sum(1 for d, a, v, _cu, _src in rows if _is_success(d, a, v))
@@ -5043,8 +5077,18 @@ def prune_dead_evidence(min_influence: int = 1) -> list[str]:
 
 
 def _has_outcome_evidence(
-    durability: str | None, adjudicated: str | None, verifier: str | None
+    durability: str | None,
+    adjudicated: str | None,
+    verifier: str | None,
+    *,
+    failure_class: str | None,
 ) -> bool:
+    """Is this outcome evidence about the agent that ran? A row in an excluded class never is.
+
+    `failure_class` is required, with no default, so a caller cannot read outcomes and forget the
+    exclusion: relearn_quality and the exploration gate both pass the row's class."""
+    if str(failure_class or "") in LEARNING_EXCLUDED_FAILURE_CLASSES:
+        return False
     if verifier is not None or adjudicated is not None:
         return True
     return durability in {
@@ -5172,9 +5216,11 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                         # the arm's real diff); only the OUTCOME label below is infra noise.
                         q, run_model = eval_q_by_run[run_id]
                         raw_n += 1
-                    elif str(failure_class or "") == "transient_infra":
-                        continue  # item 9: infra death is not capability evidence
-                    elif _has_outcome_evidence(durability, adjudicated, verifier):
+                    elif _has_outcome_evidence(
+                        durability, adjudicated, verifier, failure_class=failure_class
+                    ):
+                        # An excluded class (item 9's infra death, an unattributed closing PR) is
+                        # not capability evidence, so it falls through to `continue` below.
                         if int(checked_ts or run_ts or 0) < DURABILITY_DETECTION_SINCE:
                             # Judged before broke-later detection existed: an optimistic label, the
                             # same row the receiver rail refuses (#293). Counted, never scored.

@@ -9,11 +9,14 @@ durability pass (3b) downgrades merges that get reverted/reworked/reopened. The 
 (durability, not green CI) lives in feedback.py.
 
 Local delegates target issues, not PRs, so `--mode local` resolves the deterministic
-`orchestrator/issue-N` branch back to the PR state. If that branch never produced a PR and the target
-issue is already closed, the local run is terminal and records an abandoned outcome instead of staying a
-permanent no-PR join gap. That verdict needs every candidate branch to have ANSWERED "no PR here": a
-lookup that could not answer leaves the run pending, retried at the next ingest, and counted in the
-summary's `unanswered`. `--selftest` runs fully offline (mocked PR states + temp store).
+`orchestrator/issue-N` branch back to the PR state. If no candidate branch produced a PR and the target
+issue is already closed, the run is terminal instead of staying a permanent no-PR join gap, and the
+issue's closing PRs decide which terminal verdict it gets. No closing PR: abandoned, a FAIL. A closing
+PR: someone delivered, and no candidate branch says it was this run, so the run records NO verdict and
+`feedback.UNATTRIBUTED_CLOSING_PR`, a class no learner scores (counted in the summary's `unattributed`).
+Either verdict needs every candidate branch to have ANSWERED "no PR here": a lookup that could not
+answer leaves the run pending, retried at the next ingest, and counted in the summary's `unanswered`.
+`--selftest` runs fully offline (mocked PR states + temp store).
 """
 
 from __future__ import annotations
@@ -34,6 +37,9 @@ import provision
 # and the next ingest asks again. One set, read by the resolvers and by the summary's count.
 UNANSWERED_LOOKUPS = frozenset({"lookup_failed", "parse_failed", "issue_lookup_failed"})
 ISSUE_VIEW_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
+# A closed target issue with every candidate branch answered "no PR". Which verdict it gets is decided
+# by the issue's closing PRs, in `state_to_outcome`.
+CLOSED_ISSUE_LOOKUPS = frozenset({"closed_issue_no_branch_pr", "closed_issue_no_remote_pr"})
 
 
 def _pr_state(target: str, agent: str | None = None) -> dict | None:
@@ -247,13 +253,31 @@ def _local_pr_state(target: str, agent: str | None = None) -> dict | None:
     }
 
 
+def _closing_pr_name(ref: object, repo: str) -> str:
+    """`#N` for a closing PR in the issue's own repo, `owner/name#N` for one elsewhere."""
+    if not isinstance(ref, dict):
+        return str(ref)
+    number = ref.get("number")
+    where = ref.get("repository")
+    where = where if isinstance(where, dict) else {}
+    owner = where.get("owner")
+    owner = owner if isinstance(owner, dict) else {}
+    ref_repo = f"{owner.get('login')}/{where.get('name')}" if owner and where.get("name") else repo
+    if number is None:
+        return str(ref.get("url") or ref)
+    return f"#{number}" if ref_repo == repo else f"{ref_repo}#{number}"
+
+
 def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | None:
-    """When a local delegate never opened its deterministic PR branch but the issue is now closed,
-    the run is terminal: no future PR state can arrive for that branch. Treat it as abandoned so the
-    outcome gap does not remain permanently actionable.
+    """When a delegate never opened a PR on any candidate branch but the issue is now closed, the
+    run is terminal: no future PR state can arrive for those branches, so the outcome gap must not
+    remain permanently actionable. The issue's closing PRs (`closing_prs`) decide the verdict in
+    `state_to_outcome`, so they are part of the answer.
 
     Three answers: the closed-issue dict, None when GitHub answered and the issue is not closed, or
     an `issue_lookup_failed` dict when gh could not say. The last carries no state, so it is skipped.
+    A CLOSED issue whose closing-PR list did not come back is the third answer too: whether someone
+    delivered is the question the verdict turns on, and a missing list cannot say "nobody did".
     """
     unanswered = {
         "lookup_status": "issue_lookup_failed",
@@ -287,6 +311,9 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
         return {**unanswered, "error": f"gh issue view printed no known issue state: {state!r}"}
     if state.upper() != "CLOSED":
         return None
+    refs = issue.get("closedByPullRequestsReferences") if isinstance(issue, dict) else None
+    if not isinstance(refs, list):
+        return {**unanswered, "error": f"gh issue view printed no closing-PR list: {refs!r}"}
     return {
         "lookup_status": "closed_issue_no_branch_pr",
         "target": f"{repo}#{num}",
@@ -296,14 +323,24 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
         "title": issue.get("title"),
         "url": issue.get("url"),
         "closedAt": issue.get("closedAt"),
-        "closing_pr_count": len(issue.get("closedByPullRequestsReferences") or []),
+        "closing_pr_count": len(refs),
+        "closing_prs": [_closing_pr_name(ref, repo) for ref in refs],
     }
 
 
 def state_to_outcome(pr: dict | None) -> dict | None:
     """Pure: map a gh PR state -> feedback.record_outcome kwargs. OPEN -> None (still pending, re-check
     later). MERGED -> success with durability='pending' (a later sweep confirms it actually held).
-    CLOSED-unmerged -> abandoned failure. A lookup that could not answer maps to nothing."""
+    CLOSED-unmerged -> abandoned failure. A lookup that could not answer maps to nothing.
+
+    A closed issue with no PR on any candidate branch is terminal, and its closing PRs decide how.
+    None: the run delivered nothing that landed, an abandoned FAIL. Some: the issue was delivered,
+    and nothing says by this run, so the row records NO verdict and no merge state, only that the
+    run is over (durability 'abandoned', the lifecycle end) and why it is not evidence
+    (`feedback.UNATTRIBUTED_CLOSING_PR`, which every learner excludes). Reading it as FAIL trained
+    the runs whose own PR closed the issue as failures; reading it as PASS would credit a run with a
+    PR it cannot be shown to have produced; and leaving it pending would re-ask GitHub about an issue
+    that can never change, with nothing to drain it."""
     if not pr or pr.get("lookup_status") in UNANSWERED_LOOKUPS:
         return None
     st = (pr.get("state") or "").upper()
@@ -315,22 +352,26 @@ def state_to_outcome(pr: dict | None) -> dict | None:
             "notes": "remote keepalive PR merged; durability pending sweep",
         }
     if st == "CLOSED":
-        if pr.get("lookup_status") in {
-            "closed_issue_no_branch_pr",
-            "closed_issue_no_remote_pr",
-        }:
+        if pr.get("lookup_status") in CLOSED_ISSUE_LOOKUPS:
             closing_pr_count = pr.get("closing_pr_count") or 0
-            suffix = (
-                f"; closing_pr_count={closing_pr_count}"
-                if closing_pr_count
-                else "; no closing PR references"
-            )
             kind = (
                 "remote delegate"
                 if pr.get("lookup_status") == "closed_issue_no_remote_pr"
                 else "local delegate"
             )
-            notes = f"{kind} issue closed without matching branch PR{suffix}"
+            if closing_pr_count:
+                closing = ", ".join(pr.get("closing_prs") or []) or f"{closing_pr_count} PR(s)"
+                return {
+                    "merged": None,
+                    "adjudicated_verdict": None,
+                    "durability": "abandoned",
+                    "failure_class": feedback.UNATTRIBUTED_CLOSING_PR,
+                    "notes": (
+                        f"{kind} issue closed by a PR no candidate branch produced ({closing}); "
+                        f"not attributed to this run; closing_pr_count={closing_pr_count}"
+                    ),
+                }
+            notes = f"{kind} issue closed without matching branch PR; no closing PR references"
         else:
             notes = "remote keepalive PR closed unmerged"
         return {
@@ -456,6 +497,7 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
                 "run_id": run["run_id"],
                 "merged": oc["merged"],
                 "durability": oc["durability"],
+                "failure_class": oc.get("failure_class"),
             }
         )
     return {
@@ -466,6 +508,11 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
         # Skipped because GitHub could not answer, not because the work is still open: each one is
         # retried next ingest. Always present, so a clean run reads `0` rather than a missing key.
         "unanswered": sum(1 for row in skipped if row["reason"] in UNANSWERED_LOOKUPS),
+        # Recorded, and terminal, but scored by no learner: the issue closed through a PR no
+        # candidate branch produced. Always present for the same reason as `unanswered`.
+        "unattributed": sum(
+            1 for row in recorded if row["failure_class"] == feedback.UNATTRIBUTED_CLOSING_PR
+        ),
         "pending_durability": len(pending_durability),
         "details": recorded,
         "skipped_details": skipped,
@@ -497,6 +544,7 @@ def ingest_modes(
         "recorded": sum(row.get("recorded", 0) for row in results),
         "skipped": sum(row.get("skipped", 0) for row in results),
         "unanswered": sum(row.get("unanswered", 0) for row in results),
+        "unattributed": sum(row.get("unattributed", 0) for row in results),
         "pending_durability": sum(row.get("pending_durability", 0) for row in results),
         "skipped_details": skipped_details,
         "pending_durability_details": pending_durability_details,
@@ -551,6 +599,22 @@ def _selftest():
     assert closed_no_branch["merged"] is False, closed_no_branch
     assert closed_no_branch["durability"] == "abandoned", closed_no_branch
     assert "without matching branch PR" in closed_no_branch["notes"]
+    # ...but a closing PR means someone delivered: terminal, no verdict, a class no learner scores.
+    closed_by_pr = state_to_outcome(
+        {
+            "lookup_status": "closed_issue_no_remote_pr",
+            "state": "CLOSED",
+            "closing_pr_count": 1,
+            "closing_prs": ["#3067"],
+        }
+    )
+    assert closed_by_pr.get("failure_class") == feedback.UNATTRIBUTED_CLOSING_PR, (
+        "a closing PR no candidate branch produced was recorded as a verdict on this run",
+        closed_by_pr,
+    )
+    assert (closed_by_pr["merged"], closed_by_pr["adjudicated_verdict"]) == (None, None)
+    assert closed_by_pr["durability"] != "pending" and "#3067" in closed_by_pr["notes"]
+    assert feedback.UNATTRIBUTED_CLOSING_PR in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES
     with feedback._conn() as c:
         row = c.execute(
             "SELECT merged, durability FROM outcomes WHERE run_id='remote:o/r#1:cursor'"
@@ -656,7 +720,8 @@ def _selftest():
             if argv[1:3] == ["pr", "list"]:
                 return subprocess.CompletedProcess(argv, *pr_list)
             if argv[1:3] == ["issue", "view"]:
-                return subprocess.CompletedProcess(argv, 0, json.dumps({"state": "CLOSED"}), "")
+                closed = {"state": "CLOSED", "closedByPullRequestsReferences": []}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(closed), "")
             return subprocess.CompletedProcess(argv, 1, "", "not a pull request")
 
         return fake_run
@@ -681,7 +746,8 @@ def _selftest():
     print(
         "outcomes.py selftest: OK (state->outcome mapping, ingest records merged/abandoned, "
         "open skipped, merged stays pending for durability sweep, unanswered lookups skipped "
-        "and retried rather than abandoned)"
+        "and retried rather than abandoned, a closing PR no candidate branch produced recorded "
+        "as unattributed rather than failed)"
     )
 
 
