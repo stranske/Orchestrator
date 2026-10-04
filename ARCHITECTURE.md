@@ -156,7 +156,12 @@ trusted writers) show a completed round of the labelled agent on it since the la
 run is over with no verdict, and so is a delegation whose issue closed with no PR of its own and no closing PR,
 since its agent never had a PR to run on (a local run, which did run, keeps that case's FAIL). Until then ingest credited the first PR on any agent's or lane's branch, and
 none of the 9 merged delegation PASS rows was the labelled agent's work (no stage, component or surface
-moved, so the loop diagram is unchanged). A local run's candidates start with the branches it pushed from its own worktree, which its completion step reads from git's reflogs (`pushed_branches.py`, the Brain table `run_pushes`): a PR there is credited only if the run opened it (head == branch, created at or after the run started), and a run with no usable record resolves exactly as before (again no stage, component or surface moved). Also since
+moved, so the loop diagram is unchanged). The merge guard's own outcome patch keeps to that rule: it
+credits the latest remote run on the merged PR only if that run is not a delegation (a keepalive run is
+its PR), and leaves a delegation with no outcome for ingest to decide, through the one predicate both read
+(`outcomes.needs_delegation_guard`). Until 2026-10-04 it credited whichever remote run was latest, and
+ingest never re-decides a row already merged and pending durability, so a delegation's merge PASS would
+have skipped the guard for good (latent: its 2 rows were keepalive runs; again no stage moved). A local run's candidates start with the branches it pushed from its own worktree, which its completion step reads from git's reflogs (`pushed_branches.py`, the Brain table `run_pushes`): a PR there is credited only if the run opened it (head == branch, created at or after the run started), and a run with no usable record resolves exactly as before (again no stage, component or surface moved). Also since
 2026-10-04 the set holds `unjudgeable_merge`: the durability sweep (`durability_sweep.find_merge`) judges only
 THE merge a row recorded, a direct PR target or the one merge on the run's own branch, and closes a row with
 no such merge as durability `unjudgeable`. Until then such rows were re-skipped on every run while their
