@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """durability_sweep.py - resolve pending durability labels for merged orchestrator outcomes.
 
-A merge is only a provisional success. Days later, this sweep re-checks merged PRs whose
-feedback outcome still has durability='pending'. It patches only high-confidence outcomes:
-reopened, reverted, or durable. Any ambiguity stays pending so the learner never treats an
-undone merge as a durable win.
+A merge is only a provisional success, and a provisional success still SCORES:
+`feedback._is_success('pending', 'PASS')` is True, so every merged row this sweep leaves pending
+counts as a win until it is judged. Days after the merge, the sweep finds THE merge each pending
+row recorded (`find_merge`) and judges whether it held: durable, reverted, reopened, abandoned
+(delivered nothing) or broke_later. A row whose merge cannot be identified as the run's own is
+closed as `unjudgeable` and excluded from learning: never left pending, never called a failure.
+Every row it does leave pending names what will judge it (`DRAINS`), and every run prints how many
+rows are pending, how many of them something will drain, and how many nothing will.
 
 `--selftest` runs fully offline against a temp feedback store.
 """
@@ -37,21 +41,90 @@ MAX_REVERT_PRS = 50
 MAX_FIX_PRS = 200
 MAX_BASE_COMMITS = 100
 EXPLICIT_MERGED_PR_RE = re.compile(r"\bPR\s+#(?P<num>\d+)\s+merged\b", re.IGNORECASE)
+# Every field classify_durability reads, so a direct PR target costs ONE `gh pr view`.
+PR_FIELDS = "number,state,mergedAt,closedAt,mergeCommit,baseRefName,headRefName,title,files"
+# What GitHub prints when a number is not a pull request: here, an ISSUE target. The only failure
+# text the resolver reads; any other failure means GitHub did not answer, never "no PR".
+GH_NOT_A_PULL_REQUEST = "Could not resolve to a PullRequest"
+# PRs listed per own branch. A branch carrying this many cannot be read whole, so its merge is
+# ambiguous rather than guessed.
+OWN_BRANCH_PR_LIMIT = 30
+# A merge an outcome recorded landed before ingest wrote the row; this allows for the local clock
+# running behind GitHub's.
+INGEST_CLOCK_SKEW_S = 3600
+
+# What judges a row the sweep leaves pending. A pending row is BLOCKING: it still scores as a
+# provisional PASS. It is DRAINABLE only when one of these will judge it; anything else is
+# reported as undrainable, which a correct sweep never produces.
+DRAIN_GRACE = "grace"  # the merge is younger than GRACE_DAYS: judged on a known date
+DRAIN_RETRY = "retry"  # GitHub did not answer this run: the next run asks again
+DRAIN_ACTING_RUN = "acting_run"  # a role run: its verdict propagates when its acting run's lands
+DRAINS = (DRAIN_GRACE, DRAIN_RETRY, DRAIN_ACTING_RUN)
+VERDICTS = ("durable", "reverted", "reopened", "abandoned", "broke_later")
+
+# The revert check's notes that mean nothing answered, so a later run may get an answer. Any other
+# note on an undecided check means it answered and still cannot decide (both searches past their
+# limits), which no rerun changes: that row is closed as unjudgeable instead of skipped forever.
+REVERT_SEARCH_FAILED = "revert PR search failed"
+BASE_SCAN_FAILED = "base commit scan failed"
+BASE_BRANCH_UNKNOWN = "missing base branch"
+REVERT_RESOLVER_AMBIGUOUS = "revert resolver ambiguous"
+UNANSWERED_REVERT_NOTES = frozenset(
+    {REVERT_SEARCH_FAILED, BASE_SCAN_FAILED, BASE_BRANCH_UNKNOWN, REVERT_RESOLVER_AMBIGUOUS}
+)
 
 
 def _pending_merged_runs() -> list[dict]:
     """Runs whose outcome is a merged PR but durability has not been resolved yet."""
     with feedback._conn() as c:
         rows = c.execute(
-            "SELECT r.run_id, r.target, r.mode, r.pr_number, COALESCE(o.notes,'') "
+            "SELECT r.run_id, r.target, r.mode, r.pr_number, COALESCE(o.notes,''), r.agent, r.ts, "
+            "o.durability_checked_ts "
             "FROM runs r JOIN outcomes o ON r.run_id=o.run_id "
             "WHERE o.merged=1 AND COALESCE(o.durability,'pending')='pending' "
             "ORDER BY r.ts ASC"
         ).fetchall()
     return [
-        {"run_id": rid, "target": target, "mode": mode, "pr_number": prn, "notes": notes}
-        for rid, target, mode, prn, notes in rows
+        {
+            "run_id": rid,
+            "target": target,
+            "mode": mode,
+            "pr_number": prn,
+            "notes": notes,
+            "agent": agent,
+            "ts": ts,
+            # When ingest recorded the merge: the merge it saw cannot have landed later than this.
+            "recorded_ts": recorded,
+        }
+        for rid, target, mode, prn, notes, agent, ts, recorded in rows
     ]
+
+
+def _acting_runs(run_id: str) -> list[tuple[str, str]]:
+    """(acting run, its durability) for each run this one influenced as an ACCEPTED role.
+
+    A role run is not judged here. `feedback` copies the acting run's outcome onto it, durability
+    and an excluded class included, whenever that run's outcome is recorded. A role run's target is
+    a role label such as `triage:4-items`, so the sweep could never look it up: the three that were
+    pending sat skipped for "missing or invalid mergedAt" on every run since August.
+    """
+    with feedback._conn() as c:
+        return [
+            (str(target), str(durability or "pending"))
+            for target, durability in c.execute(
+                "SELECT e.target_run_id, o.durability FROM influence_edges e "
+                "LEFT JOIN outcomes o ON o.run_id=e.target_run_id "
+                "WHERE e.source_run_id=? AND e.influence_type='role' AND e.accepted=1 "
+                "ORDER BY e.created_ts, e.edge_id",
+                (run_id,),
+            )
+        ]
+
+
+def _current_durability(run_id: str) -> str:
+    with feedback._conn() as c:
+        row = c.execute("SELECT durability FROM outcomes WHERE run_id=?", (run_id,)).fetchone()
+    return str((row[0] if row else None) or "pending")
 
 
 def _merged_verifier_candidates() -> dict[tuple[str, int], set[str]]:
@@ -180,58 +253,150 @@ def _gh_throttle(resource: str) -> None:
         pass
 
 
-def _gh_pr_details(target: str, mode: str | None) -> dict | None:
-    """Live PR details beyond outcomes.py's state helpers: number, base, title, merge commit."""
-    repo, num = provision.parse_target(target)
-    if num is None:
-        return None
-
-    fields = "number,state,mergedAt,closedAt,mergeCommit,baseRefName,title,files"
-    if mode == "local":
-        arr = _run_json(
-            [
-                "gh",
-                "pr",
-                "list",
-                "-R",
-                repo,
-                "--head",
-                f"orchestrator/issue-{num}",
-                "--state",
-                "all",
-                "--json",
-                fields,
-                "--limit",
-                "1",
-            ]
-        )
-        return arr[0] if isinstance(arr, list) and arr else None
-
-    obj = _run_json(["gh", "pr", "view", str(num), "-R", repo, "--json", fields])
-    return obj if isinstance(obj, dict) else None
+def _gh_answer(args: list[str], *, timeout: int = 30) -> tuple[object | None, str | None]:
+    """(parsed JSON, None) when gh answered; (None, what went wrong) when it did not."""
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, "gh timed out"
+    if r.returncode != 0:
+        return None, (r.stderr or r.stdout or "").strip()[:300] or f"gh exited {r.returncode}"
+    try:
+        return json.loads(r.stdout), None
+    except Exception:
+        return None, "gh printed no JSON"
 
 
-def _merge_dicts(*items: dict | None) -> dict | None:
-    out = {}
-    for item in items:
-        if isinstance(item, dict):
-            out.update({k: v for k, v in item.items() if v is not None})
-    return out or None
+def _own_branch(run: dict, number: int) -> str | None:
+    """The branch THIS run's own work landed on, when its target is an issue.
+
+    A local delegate works on `orchestrator/issue-N` (provision.provision_worktree). A remote one
+    labels the issue `agent:<X>` and keepalive opens `<X>/issue-N`. Exact names only: widening to
+    `<X>/issue-N-*` was measured on 2026-10-04 and would credit other runs' PRs (#411).
+    """
+    if outcomes.is_local_delegate(run.get("mode"), run.get("target")):
+        return f"orchestrator/issue-{number}"
+    agent = str(run.get("agent") or "").strip()
+    return f"{agent}/issue-{number}" if agent else None
 
 
-def _resolved_pr_state(run: dict, _state_fn=None) -> dict | None:
-    """Resolve a run target to PR state, reusing outcomes.py helpers for direct/local targets."""
+def _found(pr: dict, repo: str, how: str) -> dict:
+    return {"status": "found", "pr": {**pr, "repo": pr.get("repo") or repo}, "how": how}
+
+
+def _unanswered(reason: str) -> dict:
+    return {"status": "unanswered", "reason": reason}
+
+
+def _unjudgeable(reason: str) -> dict:
+    return {"status": "unjudgeable", "reason": reason}
+
+
+def _pr_record(obj: object) -> dict | None:
+    """A PR record GitHub answered with, or None. A record needs a state to be an answer."""
+    return obj if isinstance(obj, dict) and isinstance(obj.get("state"), str) else None
+
+
+def find_merge(run: dict, *, _gh=None, now: int | None = None) -> dict:
+    """THE merge this merged outcome recorded: found exactly, or a definite reason it cannot be.
+
+    Outcome ingest never stored which PR it credited. `runs.pr_number` is NULL for a local delegate
+    and holds the ISSUE number for a remote one, and the ingest note says only "PR merged". So the
+    merge is found again here, and it must be the SAME merge or none: a durable verdict on another
+    run's merge is a false success the learner cannot see.
+
+    Three answers, and only the first leads to a verdict:
+    - found: the target is itself a PR (or the outcome notes name "PR #N merged") and it merged;
+      or the target is an issue and exactly ONE merge on the run's own branch landed after the run
+      started and no later than its outcome was recorded.
+    - unanswered: GitHub did not answer. The next sweep asks again.
+    - unjudgeable: GitHub answered and no such merge exists. No rerun changes that.
+
+    Until 2026-10-04 the sweep fetched merge details by the TARGET number, which for an issue
+    target is not a PR, and took the newest PR on a branch rather than the merged one. 101 rows sat
+    skipped for a merge SHA the sweep never asked for, and 10 for a merge time it never found.
+    """
+    gh = _gh or _gh_answer
     target = _state_lookup_target(run)
-    if _state_fn:
-        pr = _state_fn(target)
-        return pr if isinstance(pr, dict) else None
-
-    mode = run.get("mode")
-    base_state = outcomes._local_pr_state(target) if mode == "local" else outcomes._pr_state(target)
-    if base_state is None:
-        return None
-    details = _gh_pr_details(target, mode)
-    return _merge_dicts(base_state, details)
+    named_in_notes = target != run["target"]
+    repo, number = provision.parse_target(str(target or ""))
+    if not repo or number is None:
+        return _unjudgeable(
+            f"no repository target ({run['target']!r}) and no acting run to inherit a verdict from"
+        )
+    _gh_throttle("graphql")
+    answer, error = gh(["gh", "pr", "view", str(number), "-R", repo, "--json", PR_FIELDS])
+    pr = _pr_record(answer)
+    if pr is not None:
+        how = "named in the outcome notes" if named_in_notes else "direct PR target"
+        if pr["state"].upper() == "MERGED" or pr.get("mergedAt"):
+            return _found(pr, repo, how)
+        return _unjudgeable(
+            f"the row recorded a merge, and PR #{number} ({how}) reads {pr['state']} with no merge"
+        )
+    if answer is not None or not error or GH_NOT_A_PULL_REQUEST not in error:
+        return _unanswered(
+            f"PR lookup for {repo}#{number} did not answer: {error or 'no PR record'}"
+        )
+    if named_in_notes:
+        return _unjudgeable(f"the outcome notes name PR #{number}, and it is not a pull request")
+    branch = _own_branch(run, number)
+    if branch is None:
+        return _unjudgeable(f"{repo}#{number} is an issue and no agent names the run's own branch")
+    _gh_throttle("graphql")
+    listed, error = gh(
+        [
+            "gh",
+            "pr",
+            "list",
+            "-R",
+            repo,
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--json",
+            "number,state,mergedAt",
+            "--limit",
+            str(OWN_BRANCH_PR_LIMIT),
+        ]
+    )
+    prs = [_pr_record(item) for item in listed] if isinstance(listed, list) else None
+    if prs is None or any(item is None for item in prs):
+        return _unanswered(f"PR list for {repo} {branch} did not answer: {error or 'no PR list'}")
+    records = [item for item in prs if item is not None]
+    if len(records) >= OWN_BRANCH_PR_LIMIT:
+        return _unjudgeable(f"{branch} carries {len(records)}+ PRs; its merge cannot be read whole")
+    started = int(run.get("ts") or 0)
+    recorded = int(run.get("recorded_ts") or now or time.time()) + INGEST_CLOCK_SKEW_S
+    merges = [item for item in records if item["state"].upper() == "MERGED"]
+    in_window = [
+        item for item in merges if started <= (_parse_gh_ts(item.get("mergedAt")) or -1) <= recorded
+    ]
+    if len(in_window) == 1:
+        _gh_throttle("graphql")
+        merged = int(in_window[0]["number"])
+        answer, error = gh(["gh", "pr", "view", str(merged), "-R", repo, "--json", PR_FIELDS])
+        detail = _pr_record(answer)
+        if detail is None:
+            return _unanswered(f"PR #{merged} on {branch} did not answer: {error or 'no record'}")
+        return _found(detail, repo, f"the one merge on {branch}")
+    names = ", ".join(f"#{item.get('number')} at {item.get('mergedAt')}" for item in merges)
+    if in_window:
+        return _unjudgeable(
+            f"{len(in_window)} merges on {branch} fall in the run's window ({names})"
+        )
+    if merges:
+        return _unjudgeable(
+            f"the merges on {branch} ({names}) land before the run started or after its outcome "
+            "was recorded; the merge this row recorded is not the run's own"
+        )
+    if records:
+        return _unjudgeable(
+            f"{branch} has {len(records)} PR(s) and none merged; the merge this row recorded is "
+            "another branch's"
+        )
+    return _unjudgeable(f"no PR on {branch}; the merge this row recorded is another branch's")
 
 
 def _merge_sha(pr: dict) -> str | None:
@@ -391,7 +556,7 @@ def _revert_pr_status(
             # then fall back to the CORE-limited commit scan per PR rather than re-hitting search.
             revert_cache[repo] = (arr, hit_limit)
     if arr is None:
-        return None, "revert PR search failed"
+        return None, REVERT_SEARCH_FAILED
     for item in arr:
         title = item.get("title") or ""
         haystack = f"{title}\n{item.get('body') or ''}"
@@ -422,7 +587,7 @@ def _revert_commit_status(
     _gh_throttle("core")  # gh api = CORE (5000/hr)
     arr = _run_json(["gh", "api", path])
     if not isinstance(arr, list):
-        return None, "base commit scan failed"
+        return None, BASE_SCAN_FAILED
     needle = f"This reverts commit {merge_sha}"
     for item in arr:
         msg = (item.get("commit") or {}).get("message") or ""
@@ -450,23 +615,29 @@ def _live_revert_status(pr: dict, revert_cache: dict | None = None) -> tuple[boo
         if pr_check[0] is True:
             return pr_check
 
+    # The commit scan needs the merge SHA, the merge time and the base branch, and it is only ever
+    # a second opinion: a COMPLETED revert-PR search that found nothing answers on its own (below).
+    # So what the scan lacks costs the scan alone. Until 2026-10-04 a missing SHA returned "unknown"
+    # here before the search's answer was read.
+    commit_check: tuple[bool | None, str]
     if not merge_sha:
-        return None, "missing merge commit SHA"
-    if not merged_at:
-        return None, "missing mergedAt"
-    if not base:
-        base = _default_branch(repo)
-    if not base:
-        return None, "missing base branch"
-
-    commit_check = _revert_commit_status(repo, base, merge_sha, merged_at)
+        commit_check = (None, "missing merge commit SHA")
+    elif not merged_at:
+        commit_check = (None, "missing mergedAt")
+    else:
+        base = base or _default_branch(repo)
+        if base:
+            commit_check = _revert_commit_status(repo, base, merge_sha, merged_at)
+        else:
+            commit_check = (None, BASE_BRANCH_UNKNOWN)
     if commit_check[0] is True:
         return commit_check
     # No revert found. A completed "no revert PR" probe is sufficient in these PR-gated repos even when
     # the bounded commit scan was inconclusive (a high-churn window can still hit the page limit).
     if pr_check[0] is False or commit_check[0] is False:
         return False, "no revert PR or base-branch revert commit found"
-    return None, commit_check[1]
+    # Both notes travel, because whether a rerun can decide depends on both (UNANSWERED_REVERT_NOTES).
+    return None, f"{pr_check[1]}; {commit_check[1]}"
 
 
 def _normalize_revert_status(value) -> tuple[bool | None, str]:
@@ -478,7 +649,13 @@ def _normalize_revert_status(value) -> tuple[bool | None, str]:
         return True, "revert resolver found revert"
     if value is False:
         return False, "revert resolver found no revert"
-    return None, "revert resolver ambiguous"
+    return None, REVERT_RESOLVER_AMBIGUOUS
+
+
+def _revert_drain(note: str) -> str | None:
+    """DRAIN_RETRY when part of an undecided revert check went unanswered, else None (closed)."""
+    parts = {part.strip() for part in str(note or "").split(";")}
+    return DRAIN_RETRY if parts & UNANSWERED_REVERT_NOTES else None
 
 
 def _revert_status(
@@ -541,10 +718,11 @@ def classify_durability(
     _fix_fn=None,
     fix_cache: dict | None = None,
 ) -> dict:
-    """Pure-ish classifier. Returns a pending result whenever evidence is incomplete."""
+    """Pure-ish classifier. An undecided result (`durability` None) names its `drain`: what will
+    decide it later (DRAINS), or None when nothing can, which the sweep closes as unjudgeable."""
     now = int(now or time.time())
     if not pr:
-        return {"durability": None, "reason": "PR state unavailable"}
+        return {"durability": None, "reason": "PR state unavailable", "drain": DRAIN_RETRY}
 
     repo, target_num = provision.parse_target(run["target"])
     pr = dict(pr)
@@ -555,11 +733,16 @@ def classify_durability(
     merged_at = pr.get("mergedAt")
     merged_ts = _parse_gh_ts(merged_at)
     if merged_ts is None:
-        return {"durability": None, "reason": "missing or invalid mergedAt"}
+        return {"durability": None, "reason": "missing or invalid mergedAt", "drain": None}
 
     age = _age_days(merged_ts, now)
     if now - merged_ts < grace_days * SECONDS_PER_DAY:
-        return {"durability": None, "reason": f"merge age {age}d < grace {grace_days}d"}
+        return {
+            "durability": None,
+            "reason": f"merge age {age}d < grace {grace_days}d",
+            "drain": DRAIN_GRACE,
+            "drains_at": merged_ts + grace_days * SECONDS_PER_DAY,
+        }
 
     state = (pr.get("state") or "").upper()
     if state == "OPEN":
@@ -569,7 +752,11 @@ def classify_durability(
         }
 
     if state not in ("MERGED", "CLOSED"):
-        return {"durability": None, "reason": f"ambiguous PR state {state or 'unknown'}"}
+        return {
+            "durability": None,
+            "reason": f"ambiguous PR state {state or 'unknown'}",
+            "drain": None,
+        }
 
     reverted, revert_note = _revert_status(pr, _revert_fn=_revert_fn, revert_cache=revert_cache)
     if reverted is True:
@@ -578,7 +765,7 @@ def classify_durability(
             "notes": f"durability_sweep: {revert_note}; merge age {age}d",
         }
     if reverted is None:
-        return {"durability": None, "reason": revert_note}
+        return {"durability": None, "reason": revert_note, "drain": _revert_drain(revert_note)}
 
     if delivered(pr) is False:
         paths = ", ".join(
@@ -625,8 +812,20 @@ def sweep_durability(
     _revert_fn=None,
     _now: int | None = None,
     _verifier_fetch_fn=None,
+    _gh=None,
 ) -> dict:
-    """Patch old merged+pending outcomes when their durability can be resolved with confidence."""
+    """Judge every merged+pending outcome, close the ones that can never be judged, and say what
+    will judge each one left pending.
+
+    THE LATCH THIS REPLACED (2026-10-04). The sweep chose every merged pending row but could judge
+    only a direct PR target: an issue target's merge commit was fetched by the issue number, the
+    newest PR on a branch stood in for the merged one, and a role run has no repository target at
+    all. Each run re-skipped the same rows and counted them in one `skipped` number with the rows
+    merely waiting out the grace period, so 111 rows waited forever, 27 of them scored as successes
+    meanwhile, and the summary read as "busy". Now every row ends one of three ways (judged,
+    closed as unjudgeable, or pending with a named drain), and the summary prints the pending count
+    beside the drainable one, so a stuck row reads as undrainable on the day it appears.
+    """
     # Every class classify_durability() can return starts at ZERO here, so the summary always prints
     # them all — a class that never occurred reads as `0`, not as a missing key. And the increment
     # below tolerates a class this table has not learned, because the alternative was measured: the
@@ -636,59 +835,172 @@ def sweep_durability(
     # able to switch the sweep off.
     summary: dict[str, Any] = {
         "checked": 0,
-        "durable": 0,
-        "reverted": 0,
-        "reopened": 0,
-        "abandoned": 0,
-        "broke_later": 0,
+        **{verdict: 0 for verdict in VERDICTS},
+        "judged": 0,
+        feedback.DURABILITY_UNJUDGEABLE: 0,
+        # Rows left pending. BLOCKING: each still scores as a provisional PASS.
         "skipped": 0,
+        "drainable": 0,
+        "undrainable": 0,
+        "drains": {drain: 0 for drain in DRAINS},
+        "next_grace_drain": None,
+        "lineage_resolved": 0,
+        "skip_reasons": {},
         "details": [],
     }
     # Existing injected PR-state tests are offline; production and explicit verifier tests
     # refresh the verdict independently of durability's grace-period selection.
     if _state_fn is None or _verifier_fetch_fn is not None:
         summary.update(refresh_verifier_verdicts(dry_run=dry_run, _fetch_fn=_verifier_fetch_fn))
+    now = int(_now or time.time())
     revert_cache: dict = {}  # repo -> cached revert search, so a bulk sweep does 1 search/repo
     fix_cache: dict = {}  # repo -> cached fix search, same reason: 1 search/repo, matched locally
+    role_runs: list[dict] = []
     for run in _pending_merged_runs():
         summary["checked"] += 1
-        pr = _resolved_pr_state(run, _state_fn=_state_fn)
+        if _acting_runs(run["run_id"]):
+            role_runs.append(run)  # judged after every acting run has had its chance, below
+            continue
+        if _state_fn is not None:
+            state = _state_fn(_state_lookup_target(run))
+            found = (
+                _found(state, provision.parse_target(run["target"])[0], "injected state")
+                if isinstance(state, dict)
+                else _unanswered("PR state unavailable")
+            )
+        else:
+            found = find_merge(run, _gh=_gh, now=now)
+        if found["status"] == "unanswered":
+            _leave_pending(summary, run, found["reason"], DRAIN_RETRY)
+            continue
+        if found["status"] != "found":
+            _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
+            continue
         verdict = classify_durability(
             run,
-            pr,
+            found["pr"],
             grace_days=grace_days,
-            now=_now,
+            now=now,
             _revert_fn=_revert_fn,
             revert_cache=revert_cache,
             fix_cache=fix_cache,
         )
         durability = verdict.get("durability")
         if durability is None:
-            summary["skipped"] += 1
-            summary["details"].append(
-                {
-                    "run_id": run["run_id"],
-                    "target": run["target"],
-                    "action": "skip",
-                    "reason": verdict.get("reason"),
-                }
-            )
+            if verdict.get("drain") in DRAINS:
+                _leave_pending(
+                    summary, run, verdict["reason"], verdict["drain"], verdict.get("drains_at")
+                )
+            else:
+                _close_unjudgeable(summary, run, verdict["reason"], dry_run=dry_run)
             continue
 
         summary[durability] = summary.get(durability, 0) + 1
+        summary["judged"] += 1
+        notes = verdict["notes"]
+        if found["how"] not in ("direct PR target", "injected state"):
+            # The target does not name the PR this verdict is about, so the note does.
+            notes += f"; judged #{found['pr'].get('number')} ({found['how']})"
         detail = {
             "run_id": run["run_id"],
             "target": run["target"],
             "action": "patch",
             "durability": durability,
-            "notes": verdict["notes"],
+            "notes": notes,
         }
         if dry_run:
             detail["dry_run"] = True
         else:
-            feedback.record_outcome(run["run_id"], durability=durability, notes=verdict["notes"])
+            feedback.record_outcome(run["run_id"], durability=durability, notes=notes)
         summary["details"].append(detail)
+    for run in role_runs:
+        acting = _acting_runs(run["run_id"])
+        if _current_durability(run["run_id"]) != "pending":
+            summary["lineage_resolved"] += 1  # its acting run was judged above and it propagated
+            summary["details"].append(
+                {"run_id": run["run_id"], "target": run["target"], "action": "lineage"}
+            )
+            continue
+        waiting = [acting_run for acting_run, durability in acting if durability == "pending"]
+        if waiting:
+            _leave_pending(summary, run, f"awaits its acting run {waiting[0]}", DRAIN_ACTING_RUN)
+        else:
+            # Every acting run is judged and the verdict never arrived: a propagation defect, not a
+            # durability question. Reported, never patched here.
+            judged = ", ".join(f"{acting_run}={durability}" for acting_run, durability in acting)
+            _leave_pending(summary, run, f"acting runs judged ({judged}) did not propagate", None)
+    summary["line"] = summary_line(summary)
     return summary
+
+
+def _leave_pending(
+    summary: dict, run: dict, reason: str, drain: str | None, drains_at: int | None = None
+) -> None:
+    """Count a row left pending under the drain that will judge it, or as undrainable."""
+    summary["skipped"] += 1
+    key = re.sub(r"\d+", "N", str(reason))
+    summary["skip_reasons"][key] = summary["skip_reasons"].get(key, 0) + 1
+    if drain in DRAINS:
+        summary["drainable"] += 1
+        summary["drains"][drain] += 1
+    else:
+        summary["undrainable"] += 1
+    if drains_at:
+        due = _dt.datetime.fromtimestamp(drains_at, _dt.timezone.utc).strftime("%Y-%m-%d")
+        summary["next_grace_drain"] = min(filter(None, (summary["next_grace_drain"], due)))
+    summary["details"].append(
+        {
+            "run_id": run["run_id"],
+            "target": run["target"],
+            "action": "skip",
+            "reason": reason,
+            "drain": drain,
+        }
+    )
+
+
+def _close_unjudgeable(summary: dict, run: dict, reason: str, *, dry_run: bool) -> None:
+    """Close a row whose merge can never be judged: terminal, excluded from learning, never FAIL."""
+    summary[feedback.DURABILITY_UNJUDGEABLE] += 1
+    notes = f"durability_sweep: unjudgeable: {reason}"
+    detail = {
+        "run_id": run["run_id"],
+        "target": run["target"],
+        "action": "patch",
+        "durability": feedback.DURABILITY_UNJUDGEABLE,
+        "failure_class": feedback.UNJUDGEABLE_MERGE,
+        "notes": notes,
+    }
+    if dry_run:
+        detail["dry_run"] = True
+    else:
+        feedback.record_outcome(
+            run["run_id"],
+            durability=feedback.DURABILITY_UNJUDGEABLE,
+            failure_class=feedback.UNJUDGEABLE_MERGE,
+            notes=notes,
+        )
+    summary["details"].append(detail)
+
+
+def summary_line(summary: dict) -> str:
+    """One line with the blocking number beside the drainable one, and the drained state named."""
+    verdicts = ", ".join(f"{verdict} {summary.get(verdict, 0)}" for verdict in VERDICTS)
+    head = (
+        f"durability_sweep: checked {summary['checked']}; judged {summary['judged']} ({verdicts}); "
+        f"closed unjudgeable {summary[feedback.DURABILITY_UNJUDGEABLE]}"
+    )
+    pending = summary["skipped"]
+    if pending == 0:
+        return f"{head}; pending 0, fully drained"
+    drains = ", ".join(f"{drain} {summary['drains'][drain]}" for drain in DRAINS)
+    if summary["next_grace_drain"]:
+        drains += f", next grace drain {summary['next_grace_drain']}"
+    tail = f"{head}; pending {pending}, drainable {summary['drainable']} ({drains})"
+    if summary["undrainable"]:
+        stuck = next(d for d in summary["details"] if d.get("action") == "skip" and not d["drain"])
+        return f"{tail}, UNDRAINABLE {summary['undrainable']} (first: {stuck['reason']})"
+    return f"{tail}, undrainable 0"
 
 
 def _iso_days_ago(now: int, days: int) -> str:
@@ -1164,6 +1476,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     res = sweep_durability(grace_days=args.grace_days, dry_run=args.dry_run)
+    print(res["line"], file=sys.stderr)
     print(json.dumps(res, indent=2, default=str))
     return 0
 

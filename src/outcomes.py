@@ -102,6 +102,18 @@ TRUSTED_RUNNER_MARKER_AUTHORS = frozenset(
     }
 )
 TRUSTED_RUNNER_MARKER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# Older local delegates recorded their agent mode ("composer"/"full"/"cheap") in runs.mode before the
+# stable "local" mode existed, and some cheap rows predate source stamping. They still target an
+# issue and resolve through the same orchestrator/issue-N PR branch. ONE definition: local ingest
+# selects by it and the durability sweep names a run's own branch by it. Until 2026-10-04 the sweep
+# kept its own `mode == "local"`, so it searched these 71 runs' branches in the remote order, and for
+# 4 of them it found a closed PR the ingest had never credited.
+LEGACY_LOCAL_MODES = ("composer", "full", "cheap")
+
+
+def is_local_delegate(mode: str | None, target: str | None) -> bool:
+    """Did a LOCAL delegate record this run? Its own work lands on orchestrator/issue-N."""
+    return mode == "local" or (mode in LEGACY_LOCAL_MODES and "#" in str(target or ""))
 
 
 def _pr_state(target: str, agent: str | None = None) -> dict | None:
@@ -841,17 +853,16 @@ def _pending_runs(mode: str) -> list[dict]:
                 (mode,),
             ).fetchall()
         else:
-            # Older local delegates recorded their agent mode ("composer"/"full"/"cheap") in
-            # runs.mode before stable local mode existed, and some cheap rows predate source
-            # stamping. They still target an issue and resolve through the same
-            # orchestrator/issue-N PR branch.
+            # `is_local_delegate` in SQL: the same LEGACY_LOCAL_MODES, so the two cannot drift.
+            legacy_marks = ",".join("?" for _ in LEGACY_LOCAL_MODES)
             rows = c.execute(
                 "SELECT r.run_id, r.target, r.agent, r.pr_number, "
                 "o.run_id IS NOT NULL, COALESCE(o.durability,''), r.ts, r.source "
                 "FROM runs r LEFT JOIN outcomes o ON r.run_id=o.run_id "
                 "WHERE (o.run_id IS NULL OR o.durability='pending') "
                 "AND (r.mode='local' OR "
-                "(r.mode IN ('composer','full','cheap') AND instr(r.target,'#')>0))"
+                f"(r.mode IN ({legacy_marks}) AND instr(r.target,'#')>0))",
+                LEGACY_LOCAL_MODES,
             ).fetchall()
     return [
         {
