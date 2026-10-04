@@ -149,7 +149,7 @@ an outcome in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` trains neither surfac
 death (`transient_infra`: a signal-killed run, or since 2026-10-04 one the provider refused before any
 work, read only from codex's own `turn.failed` event because it exits 0) and, since 2026-10-04,
 `unattributed_closing_pr`: outcome ingest found no PR on any candidate branch of a delegate whose issue
-a PR closed, so it records the run as over with no verdict rather than as a failure. The same day it gained `unattributed_delegation`: a remote delegation is credited
+a PR closed, so it records the run as over with no verdict rather than as a failure. A PR closed the issue only if it merged by the time the issue closed: GitHub lists every PR that links an issue, including ones created after it closed, and those are named and not counted (an unread merge time leaves the run unanswered). The same day it gained `unattributed_delegation`: a remote delegation is credited
 with a PR only when the PR is its own (the labelled PR, or `{agent}/issue-N`), settled after the label, and
 keepalive's own runner records (`runner-reservation`/`runner-completion`/`runner-dispatch` PR markers from
 trusted writers) show a completed round of the labelled agent on it since the label; otherwise the settled
