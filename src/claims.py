@@ -266,12 +266,25 @@ def update_metadata(
     return True
 
 
+# The `meta` that `holder()` reports for a claim that is HELD but whose meta cannot be read: a dir
+# mkdir'd and not yet stamped (or crashed before `_stamp`), or a meta file caught mid-rewrite.
+UNREADABLE_META = "unreadable"
+
+
 def holder(target: str, *, ttl: int = CLAIM_TTL_DEFAULT) -> dict | None:
-    """Live holder meta for `target`, or None if free/stale."""
+    """Live holder meta for `target`, or None if free/stale.
+
+    A claim `_is_held` calls held is never None here, even when its meta cannot be read: it answers
+    `{"target": target, "agent": None, "meta": UNREADABLE_META}`, a holder that is unknown. Until
+    2026-10-04 it answered None, the word for "free", so the tick's check before a remote delegation
+    called a held claim free in exactly the window the no-meta TOCTOU guard above exists for."""
     path = _claims_dir() / _slug(target)
     if not path.exists() or not _is_held(path, ttl, time.time()):
         return None
-    return _read_meta(path)
+    meta = _read_meta(path)
+    if meta is None:
+        return {"target": target, "agent": None, "meta": UNREADABLE_META}
+    return meta
 
 
 def active_claims(*, ttl: int = CLAIM_TTL_DEFAULT, include_meta: bool = False) -> dict:
@@ -465,6 +478,19 @@ def _selftest() -> None:
         assert (
             _is_held(nm, CLAIM_TTL_DEFAULT, time.time()) is True
         ), "unstamped fresh dir must be held"
+        # ...and the READER callers use must say so too: None is "free", so a held claim it cannot
+        # read answers an unknown holder (the predicate above held while this reader said free).
+        assert holder("nometa/T") == {
+            "target": "nometa/T",
+            "agent": None,
+            "meta": UNREADABLE_META,
+        }, holder("nometa/T")
+        (nm / "meta").write_text('{"target": "nometa/T", "ag')  # a rewrite caught half-written
+        assert holder("nometa/T") is not None, "a torn meta on a fresh claim is still held"
+        old = time.time() - CLAIM_TTL_DEFAULT - 5
+        os.utime(nm, (old, old))
+        assert holder("nometa/T") is None, "past the TTL an unreadable claim is stale, as before"
+        shutil.rmtree(nm)
 
         _concurrent_tests()
         print(
