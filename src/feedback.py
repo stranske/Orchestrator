@@ -661,6 +661,13 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
             # by the environment (signal-killed wrapper, env crash) never trains as a capability
             # FAIL. Written by mark_transient_infra() from done-marker rc evidence.
             c.execute("ALTER TABLE outcomes ADD COLUMN failure_class TEXT")
+        if "failure_class_origin" not in outcome_cols:
+            c.execute("ALTER TABLE outcomes ADD COLUMN failure_class_origin TEXT")
+            # Legacy propagation notes cannot prove that a later direct write did not own
+            # the class. Keep ambiguous exclusions until explicit new evidence replaces them.
+            c.execute(
+                "UPDATE outcomes SET failure_class_origin='own' WHERE failure_class IS NOT NULL"
+            )
     if "execution_attempts" in tables:
         attempt_cols = {
             row[1] for row in c.execute("PRAGMA table_info(execution_attempts)").fetchall()
@@ -2546,10 +2553,11 @@ def mark_transient_infra(run_id: str, reason: str = "") -> bool:
     newly classified."""
     with _conn() as c:
         cur = c.execute(
-            "UPDATE outcomes SET failure_class='transient_infra', "
+            "UPDATE outcomes SET failure_class='transient_infra', failure_class_origin='own', "
             "notes=COALESCE(notes,'') || CASE WHEN ?!='' THEN ' [infra: ' || ? || ']' ELSE '' END "
             "WHERE run_id=? AND COALESCE(merged,0)=0 "
-            "AND COALESCE(failure_class,'') != 'transient_infra'",
+            "AND (COALESCE(failure_class,'') != 'transient_infra' "
+            "OR COALESCE(failure_class_origin,'') != 'own')",
             (reason, reason, run_id),
         )
         return cur.rowcount > 0
@@ -3045,17 +3053,19 @@ def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str
                         durability,
                     )
                     aggregate_notes, role_class = role_notes, role_failure_class
+                role_class_origin = "inherited" if role_class is not None else None
                 previous = c.execute(
-                    "SELECT failure_class,notes FROM outcomes WHERE run_id=?", (source_run_id,)
+                    "SELECT failure_class,failure_class_origin FROM outcomes WHERE run_id=?",
+                    (source_run_id,),
                 ).fetchone()
                 if (
-                    role_class is None
-                    and previous
+                    previous
                     and previous[0] in LEARNING_EXCLUDED_FAILURE_CLASSES
-                    and not str(previous[1] or "").startswith("automatically influenced")
+                    and previous[1] != "inherited"
                 ):
                     # A role's own infrastructure exclusion is not inherited attribution debt.
                     role_class = previous[0]
+                    role_class_origin = "own"
                     role_notes = f"role own exclusion {role_class}; {role_notes}"
                 _record_outcome_in_conn(
                     c,
@@ -3068,12 +3078,13 @@ def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str
                     notes=role_notes,
                     propagate_lineage=False,
                     failure_class=role_class,
+                    failure_class_origin=role_class_origin,
                 )
                 # Generic late updates deliberately ignore None; this role aggregate explicitly
                 # replaces an inherited exclusion when another acting run supplies evidence.
                 c.execute(
-                    "UPDATE outcomes SET failure_class=? WHERE run_id=?",
-                    (role_class, source_run_id),
+                    "UPDATE outcomes SET failure_class=?,failure_class_origin=? WHERE run_id=?",
+                    (role_class, role_class_origin, source_run_id),
                 )
         propagated += 1
     accepted_role = c.execute(
@@ -3103,6 +3114,7 @@ def _record_outcome_in_conn(
     influenced_by_run_id=None,
     propagate_lineage: bool = True,
     failure_class=None,
+    failure_class_origin="own",
 ):
     row = c.execute("SELECT run_id FROM outcomes WHERE run_id=?", (run_id,)).fetchone()
     values = [
@@ -3114,6 +3126,7 @@ def _record_outcome_in_conn(
         ("notes", notes),
         ("influenced_by_run_id", influenced_by_run_id),
         ("failure_class", failure_class),
+        ("failure_class_origin", failure_class_origin if failure_class is not None else None),
     ]
     if row:  # late-arriving update (e.g. a durability sweep days later) — patch, don't clobber
         sets, vals = [], []
@@ -3132,8 +3145,8 @@ def _record_outcome_in_conn(
         c.execute(
             "INSERT INTO outcomes "
             "(run_id, verifier_verdict, adjudicated_verdict, merged, ci_status, durability, "
-            "durability_checked_ts, notes, influenced_by_run_id, failure_class) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "durability_checked_ts, notes, influenced_by_run_id, failure_class,failure_class_origin) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 run_id,
                 verifier_verdict,
@@ -3145,6 +3158,7 @@ def _record_outcome_in_conn(
                 notes,
                 influenced_by_run_id,
                 failure_class,
+                failure_class_origin if failure_class is not None else None,
             ),
         )
     stored = c.execute(

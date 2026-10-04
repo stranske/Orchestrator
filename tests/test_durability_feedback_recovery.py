@@ -11,6 +11,7 @@ Run without pytest: PYTHONPATH=src python3 -m unittest discover -s tests
 from __future__ import annotations
 
 import datetime as dt
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -207,6 +208,83 @@ class DurabilityFeedbackRecoveryTests(unittest.TestCase):
 
     def test_role_exclusion_after_attributable_failure_cannot_erase_learning(self):
         self.assert_role_failure_survives(("failed", "unknown"))
+
+    def linked_role(self):
+        """Create a role and its accepted acting edge for exclusion provenance tests."""
+        role = "role:triage:gemini:own-exclusion"
+        feedback.record_role_run(role, "triage", "triage:one-item", "gemini")
+        feedback.record_run(
+            "acting", "o/r#42", "implement", "codex", influenced_by_role_run_ids=[role]
+        )
+        return role
+
+    def test_role_owned_exclusion_without_notes_survives_repeated_propagation(self):
+        """A direct outcome owns its class even when earlier propagation notes remain."""
+        role = self.linked_role()
+        feedback.record_outcome("acting", adjudicated_verdict="PASS", durability="pending")
+        self.assertTrue(self.row(role)[2].startswith("automatically influenced"))
+        feedback.record_outcome(role, failure_class="transient_infra")
+        for update in ({"durability": "broke_later"}, {"notes": "late acting evidence"}):
+            feedback.record_outcome("acting", **update)
+            self.assertEqual(self.row(role)[1], "transient_infra")
+            self.assert_learning(task_type="role:triage", agent="gemini", observations=0)
+
+    def test_role_owned_class_survives_an_inherited_exclusion_and_its_recovery(self):
+        """An excluded acting run must not replace the role's independent exclusion."""
+        role = self.linked_role()
+        feedback.record_outcome(role, failure_class="transient_infra")
+        feedback.record_outcome(
+            "acting", durability="unjudgeable", failure_class=feedback.UNJUDGEABLE_MERGE
+        )
+        self.assertEqual(self.row(role)[1], "transient_infra")
+        feedback.record_run(
+            "repair", "o/r#43", "implement", "codex", influenced_by_role_run_ids=[role]
+        )
+        feedback.record_outcome("repair", adjudicated_verdict="FAIL", durability="broke_later")
+        self.assertEqual(self.row(role)[1], "transient_infra")
+        self.assert_learning(task_type="role:triage", agent="gemini", observations=0)
+
+    def test_infra_marker_claims_an_inherited_class_as_role_owned(self):
+        """The independent infra writer must persist ownership even for the same class."""
+        role = self.linked_role()
+        feedback.record_outcome("acting", durability="abandoned", failure_class="transient_infra")
+        self.assertTrue(feedback.mark_transient_infra(role))
+        self.assertFalse(feedback.mark_transient_infra(role))
+        feedback.record_run(
+            "repair", "o/r#43", "implement", "codex", influenced_by_role_run_ids=[role]
+        )
+        feedback.record_outcome("repair", adjudicated_verdict="FAIL", durability="broke_later")
+        self.assertEqual(self.row(role)[1], "transient_infra")
+        self.assert_learning(task_type="role:triage", agent="gemini", observations=0)
+
+    def test_migration_preserves_legacy_exclusions_without_guessing_from_notes(self):
+        """Legacy notes cannot prove inheritance; reopening preserves unknown ownership."""
+        role = "role:triage:gemini:legacy"
+        with sqlite3.connect(feedback.DB_PATH) as conn:
+            conn.executescript(feedback.SCHEMA)
+            conn.execute("ALTER TABLE outcomes ADD COLUMN failure_class TEXT")
+            conn.execute(
+                "INSERT INTO runs (run_id,role_name,task_type,agent,ts) VALUES (?,?,?,?,?)",
+                (role, "triage", "role:triage", "gemini", NOW),
+            )
+            conn.execute(
+                "INSERT INTO outcomes (run_id,failure_class,notes) VALUES (?,?,?)",
+                (role, "transient_infra", "automatically influenced legacy-acting"),
+            )
+        for _ in range(2):
+            with feedback._conn() as conn:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT failure_class_origin FROM outcomes WHERE run_id=?", (role,)
+                    ).fetchone(),
+                    ("own",),
+                )
+        feedback.record_run(
+            "acting", "o/r#42", "implement", "codex", influenced_by_role_run_ids=[role]
+        )
+        feedback.record_outcome("acting", adjudicated_verdict="FAIL", durability="broke_later")
+        self.assertEqual(self.row(role)[1], "transient_infra")
+        self.assert_learning(task_type="role:triage", agent="gemini", observations=0)
 
 
 if __name__ == "__main__":
