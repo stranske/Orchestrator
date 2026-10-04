@@ -82,7 +82,10 @@ def run(root: Path, command: list[str]) -> int:
                 GENERATION_ENV: str(pinned),
                 "ORCH_DIR": str(pinned),
                 "PYTHONPATH": os.pathsep.join(
-                    [str(modules), *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep))]
+                    [
+                        str(modules),
+                        *filter(None, os.environ.get("PYTHONPATH", "").split(os.pathsep)),
+                    ]
                 ),
             },
         )
