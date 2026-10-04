@@ -2863,7 +2863,7 @@ def _record_matches(advice: dict, *, skill: str = "", surface: str = "", path=No
     # outcome against, so the two cannot be derived twice and drift. The key namespace follows the
     # same prefix: a respelt ref under an unchanged key would dedupe a re-consult against the old
     # offer and never record the new one.
-    ref = experiment_id(advice.get("task"))
+    ref = experiment_id(str(advice.get("task") or ""))
     prefix = capabilities.ADVICE_REF_PREFIX
     digest = ref[len(prefix) :]
     written = 0
