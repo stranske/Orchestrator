@@ -8,6 +8,7 @@ from unittest.mock import patch
 import exploration_offline
 import exploration_review
 import feedback
+import route_weights_export
 import router
 
 
@@ -119,3 +120,61 @@ def test_review_simulations_do_not_heartbeat():
             )
             heartbeat.assert_called_once()
             assert heartbeat.call_args.args == ("thompson-hybrid-routing", "invocation")
+
+
+def test_export_carries_a_policy_version_and_one_sampled_challenger_per_task_type():
+    with TemporaryDirectory() as tmp:
+        database = Path(tmp) / "weights.db"
+        route_weights_export._fixture_db(database)
+        with sqlite3.connect(database) as c:
+            c.execute("DELETE FROM route_weights")
+            for task_type in route_weights_export.CONSUMER_TASK_TYPES:
+                for agent, posterior, n_obs in (
+                    ("cursor", 0.99, 1000),
+                    ("codex", 0.1, 1),
+                    ("gemini", 0.9, 1000),
+                    ("claude", 1.0, 1000),  # reserve seats never become challengers
+                    ("vibe", 0.01, 0),  # local seats never become challengers
+                ):
+                    c.execute(
+                        "INSERT INTO route_weights "
+                        "(version, ts, task_type, agent, posterior, score, n_obs, success_rate) "
+                        "VALUES (1,100,?,?,?,?,?,?)",
+                        (task_type, agent, posterior, posterior, n_obs, posterior),
+                    )
+        database_before = database.read_bytes()
+        output = Path(tmp) / "export.json"
+        policies = []
+        with patch.object(router, "_capability_heartbeat") as heartbeat:
+            for week, mode in ((2, "epsilon-greedy"), (3, "thompson-hybrid")):
+                now = week * route_weights_export.WEEK_SECONDS + 100
+                document = route_weights_export.build_document(database, now=now)
+                assert document["schema"] == "orchestrator.route-weights/v1"
+                exploration = document["exploration"]
+                assert exploration["mode"] == mode
+                assert exploration["rate"] == router.EXPLORATION_RATE_DEFAULT
+                assert exploration["policy_version"].startswith("route-exploration/v1:")
+                policies.append(exploration["policy_version"])
+                assert set(exploration["challengers"]) == set(
+                    route_weights_export.CONSUMER_TASK_TYPES
+                )
+                for task_type, challenger in exploration["challengers"].items():
+                    allowed = {
+                        row["agent"]
+                        for row in router.ROUTE_TABLE[task_type]["agents"]
+                        if not row["late"]
+                    } & (router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS - router.BACKUP_AGENTS)
+                    assert challenger in allowed - {"cursor"}
+                    expected = (
+                        "gemini"
+                        if mode == "thompson-hybrid" and "gemini" in allowed
+                        else "codex"
+                    )
+                    assert challenger == expected
+                assert route_weights_export.write_document(output, document) is True
+                refreshed = route_weights_export.build_document(database, now=now + 86400)
+                assert refreshed["exploration"] == exploration
+                assert route_weights_export.write_document(output, refreshed) is False
+            heartbeat.assert_not_called()
+        assert policies[0] != policies[1]
+        assert database.read_bytes() == database_before
