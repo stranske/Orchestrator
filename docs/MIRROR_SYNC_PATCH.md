@@ -753,3 +753,22 @@ and marker bytes. The registry stayed unchanged during staging. GH was stubbed
 to its local fallback; this run proves registry preservation, not an authenticated
 registry update. No installed copier or wrapper was edited. Standalone launchd
 migration, full recovery acceptance, and post-merge deployment remain pending.
+
+### Launchd reader migration (source evidence)
+
+The primary hourly job (`com.stranske.orchestrator`) already runs
+`orchestrate.sh --active` against the exec mirror. That entry re-acquires the
+publisher shared lock through `mirror_reader.py` before reopening executable
+code (see the `mirror-reader-reentry` anchor in `orchestrate.sh`). No plist edit
+is required for that job once this branch merges and the mirror is refreshed.
+
+Any additional LaunchAgent or cron line that executes Python directly against
+`ORCH_MIRROR` must wrap the command as
+`python3 "$ORCH/mirror_reader.py" run "$ORCH_REPO" …` so child imports pin one
+generation. Source tests `test_tick_reader_excludes_real_publisher_across_child_imports`
+and `test_standalone_python_reader_excludes_publisher_across_child_imports` are
+the paired witnesses; post-merge live plist review remains operator-owned.
+
+Overlapping publishers contend on the exclusive `.publish.lock` and never observe
+a partial generation; `test_overlapping_publishers_serialize_on_exclusive_lock`
+covers that serialization path beside the interruption and retry regressions.

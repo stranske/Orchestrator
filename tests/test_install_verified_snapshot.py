@@ -1428,3 +1428,58 @@ def test_direct_copier_guard_keeps_live_tree_available(tmp_path, guarded, copy_f
             assert "installed verified snapshot" not in result.stdout
             assert installer.snapshot_digest(mirror) == installer.snapshot_digest(snapshot)
             assert runtime.read_text() == '{"repos": []}\n'
+
+
+def test_overlapping_publishers_serialize_on_exclusive_lock(tmp_path, monkeypatch):
+    """The second publisher blocks until the first completes the atomic switch."""
+    import shutil
+    import threading
+
+    snapshot_old = _snapshot(tmp_path)
+    snapshot_new = tmp_path / "verified snapshot new"
+    shutil.copytree(snapshot_old, snapshot_new)
+    (snapshot_new / "module.py").write_text("VALUE = 'new'\n")
+    mirror, registry = _live_outputs(tmp_path)
+    (mirror / "module.py").write_text("VALUE = 'old'\n")
+    digest_old = installer.snapshot_digest(snapshot_old)
+    digest_new = installer.snapshot_digest(snapshot_new)
+    installer.install(snapshot_old, mirror, digest_old, registry)
+
+    publishing = threading.Event()
+    release_first = threading.Event()
+    publish_generation = installer._publish_generation
+
+    def slow_publish(*args, **kwargs):
+        publishing.set()
+        assert release_first.wait(15), "first publisher released before overlap was observed"
+        return publish_generation(*args, **kwargs)
+
+    monkeypatch.setattr(installer, "_publish_generation", slow_publish)
+    errors: list[BaseException] = []
+
+    def publish_new():
+        try:
+            installer.install(snapshot_new, mirror, digest_new, registry)
+        except BaseException as error:
+            errors.append(error)
+
+    def publish_again():
+        try:
+            installer.install(snapshot_new, mirror, digest_new, registry)
+        except BaseException as error:
+            errors.append(error)
+
+    first = threading.Thread(target=publish_new, daemon=True)
+    second = threading.Thread(target=publish_again, daemon=True)
+    first.start()
+    assert publishing.wait(15), "first publisher did not reach generation publication"
+    second.start()
+    second.join(0.5)
+    assert second.is_alive(), "second publisher finished before the first released the lock"
+    assert (mirror / "module.py").read_text() == "VALUE = 'verified'\n"
+    release_first.set()
+    first.join(30)
+    second.join(30)
+    assert not errors
+    assert (mirror / "module.py").read_text() == "VALUE = 'new'\n"
+    assert installer.snapshot_digest(mirror) == digest_new
