@@ -209,15 +209,6 @@ if [[ "$mode" == "active" && "${ORCH_WATCHDOG_TICK_PID:-}" != "$$" ]]; then
   fi
 fi
 
-# Reopen the tick only after acquiring the publisher's shared lock. The helper
-# descriptor stays in the tick shell across Python children and exec transitions.
-# Bash-c prologue inspection has no script file and must remain read-only.
-if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-  if ! python3 "$ORCH/mirror_reader.py" check "$ORCH_REPO"; then
-    exec python3 "$ORCH/mirror_reader.py" run "$ORCH_REPO" /bin/bash "$ORCH_REPO/orchestrate.sh" "$@"
-  fi
-fi
-
 # --- Log rotation (every tick, cheap, fail-open) -------------------------------------------------
 # This tick's own stdout/stderr go to the handoff cron log via launchd's StandardOutPath, and NOTHING
 # rotated it: measured 2026-08-21 at 59.8 MB / 1,876,027 lines, 5x the 11.8 MB the hygiene item
@@ -292,6 +283,17 @@ if [[ "$mode" == "active" ]]; then
       echo "  $gh_defer_reason"
       ;;
   esac
+fi
+
+# Reopen the tick only after acquiring the publisher's shared lock. The helper
+# descriptor stays in the tick shell across Python children and exec transitions.
+# Bash-c prologue inspection has no script file and must remain read-only.
+# Placed AFTER the gh preflight so a refused or missing token ABORTs before any
+# mirror exec would re-enter the tick on blind state.
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  if ! python3 "$ORCH/mirror_reader.py" check "$ORCH_REPO"; then
+    exec python3 "$ORCH/mirror_reader.py" run "$ORCH_REPO" /bin/bash "$ORCH_REPO/orchestrate.sh" "$@"
+  fi
 fi
 
 # ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
