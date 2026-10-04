@@ -41,6 +41,11 @@ def test_issue_body_mode_validates_format_sections_and_needs_no_task_type(
     calls = []
     backend_body = BODY
     monkeypatch.setattr(
+        roles.dispatcher,
+        "build_prompt",
+        lambda *a, **kw: pytest.fail("issue authoring constructed a worker dispatch prompt"),
+    )
+    monkeypatch.setattr(
         roles, "route_role", lambda *a, **kw: routes.append(a) or {"agent": "cursor"}
     )
 
@@ -206,6 +211,39 @@ def test_batch_routes_once_and_records_one_run_per_item_with_a_shared_batch_id(
         assert metadata["backend_run_id"] == item["backend_run_id"]
         assert metadata["proposal"] == proposal(item["issue_body"])
         assert metadata["decision_source"] == "prompt_agent"
+
+    # Sharing a routing decision must still allow each authored issue to earn its own outcome.
+    expected_outcomes = {}
+    for index, (item, verdict) in enumerate(zip(result["items"], ("PASS", "FAIL")), 1):
+        downstream = f"work:batch-item:{index}"
+        feedback.record_run(
+            downstream,
+            item["target"],
+            "implement",
+            "cursor",
+            influenced_by_role_run_ids=[item["role_run_id"]],
+        )
+        feedback.record_outcome(
+            downstream,
+            adjudicated_verdict=verdict,
+            merged=verdict == "PASS",
+            ci_status="success" if verdict == "PASS" else "failure",
+            durability="durable" if verdict == "PASS" else "reverted",
+        )
+        expected_outcomes[item["role_run_id"]] = (
+            "role:prompt",
+            verdict,
+            int(verdict == "PASS"),
+            "success" if verdict == "PASS" else "failure",
+            "durable" if verdict == "PASS" else "reverted",
+        )
+        with feedback._conn() as conn:
+            outcomes = conn.execute(
+                "SELECT r.run_id,r.task_type,o.adjudicated_verdict,o.merged,"
+                "o.ci_status,o.durability FROM runs r JOIN outcomes o USING(run_id) "
+                "WHERE r.role_name='prompt'"
+            ).fetchall()
+        assert {run_id: tuple(values) for run_id, *values in outcomes} == expected_outcomes
 
 
 def test_no_capacity_does_not_route_each_item_or_write_baseline_as_issue(
