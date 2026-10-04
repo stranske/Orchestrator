@@ -175,6 +175,16 @@ CREATE TABLE IF NOT EXISTS owner_questions (
   expires_ts INTEGER, status TEXT DEFAULT 'open',   -- open|answered|expired_default
   answer TEXT, answered_ts INTEGER
 );
+-- 2026-10-04: the branches a LOCAL run pushed from its own worktree inside its own window, read
+-- from git's reflogs when the run completes (pushed_branches.py) and walked first by local outcome
+-- ingest. No row: nothing was attempted. status 'unreadable': the read failed, `reason` says why.
+-- status 'read' with branches_json '[]': a measured zero. branches_json is a list of
+-- {"branch", "sha", "pushed_ts"}, latest push first.
+CREATE TABLE IF NOT EXISTS run_pushes (
+  run_id TEXT PRIMARY KEY, status TEXT NOT NULL, reason TEXT, workspace TEXT,
+  window_start INTEGER NOT NULL, window_end INTEGER NOT NULL,
+  branches_json TEXT NOT NULL, recorded_ts INTEGER NOT NULL
+);
 """
 )
 
@@ -2558,6 +2568,84 @@ def resume_hint(run_id) -> dict | None:
         "cwd": cwd,
         "captured_ts": ts,
         "command": cmd.format(token=token) if cmd else None,
+    }
+
+
+# What the completion step found in a local run's worktree (pushed_branches.py). Two statuses,
+# because "could not look" and "looked, and the run pushed nothing" are different facts and only the
+# second is a measurement: `read` (its branch list may be empty) and `unreadable` (with a reason).
+RUN_PUSH_STATUSES = frozenset({"read", "unreadable"})
+
+
+def record_run_pushes(
+    run_id,
+    *,
+    status,
+    window_start,
+    window_end,
+    branches=(),
+    reason=None,
+    workspace=None,
+) -> None:
+    """Store the push record for one finished run, replacing any earlier one for the same run."""
+    if status not in RUN_PUSH_STATUSES:
+        raise ValueError(f"unknown push record status: {status!r}")
+    if (status == "unreadable") != bool(reason):
+        raise ValueError("an unreadable push record names its reason, and only an unreadable one")
+    start, end = int(window_start), int(window_end)
+    if start > end:
+        raise ValueError(f"push record window ends before it starts: {start} > {end}")
+    rows = []
+    for item in branches or ():
+        branch = str((item or {}).get("branch") or "").strip()
+        if not branch:
+            raise ValueError(f"push record branch has no name: {item!r}")
+        rows.append(
+            {
+                "branch": branch,
+                "sha": str(item.get("sha") or ""),
+                "pushed_ts": int(item.get("pushed_ts") or 0),
+            }
+        )
+    if status == "unreadable" and rows:
+        raise ValueError("an unreadable push record cannot list branches")
+    with _conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO run_pushes (run_id, status, reason, workspace, window_start, "
+            "window_end, branches_json, recorded_ts) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                run_id,
+                status,
+                reason,
+                str(workspace) if workspace else None,
+                start,
+                end,
+                json.dumps(rows, sort_keys=True),
+                int(time.time()),
+            ),
+        )
+
+
+def run_pushes(run_id) -> dict | None:
+    """The run's push record, or None when its completion step never recorded one."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT status, reason, workspace, window_start, window_end, branches_json, recorded_ts "
+            "FROM run_pushes WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+    if not row:
+        return None
+    status, reason, workspace, start, end, branches_json, recorded_ts = row
+    return {
+        "run_id": run_id,
+        "status": status,
+        "reason": reason,
+        "workspace": workspace,
+        "window_start": int(start),
+        "window_end": int(end),
+        "branches": json.loads(branches_json),
+        "recorded_ts": recorded_ts,
     }
 
 

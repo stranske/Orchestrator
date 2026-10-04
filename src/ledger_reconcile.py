@@ -29,6 +29,7 @@ from typing import Any
 import adapters
 import execution_profiles
 import feedback
+import pushed_branches
 import rate_incidents
 
 # A RUN THE PROVIDER REFUSED BEFORE IT DID ANYTHING IS INFRASTRUCTURE, NOT CAPABILITY (§2).
@@ -633,6 +634,7 @@ def record_completion(
     subject_id: str | None = None,
     arm_id: str | None = None,
     exit_code: int | None = None,
+    workspace: str | None = None,
 ) -> None:
     if selected_profile_id:
         probe_reason = None
@@ -724,6 +726,14 @@ def record_completion(
     except Exception:
         # Capacity accounting must survive a best-effort evidence sink failure.
         pass
+    # The branches this run pushed from its own worktree, read NOW because the next `fetch --prune`
+    # deletes a merged branch's remote-tracking reflog (pushed_branches.py). Last and best-effort:
+    # the accounting above never waits on it, and a failure is reported in the run's own log.
+    if workspace:
+        try:
+            pushed_branches.record_at_completion(run_id, workspace, started_ts)
+        except Exception as exc:  # noqa: BLE001 - never fatal to the completion step
+            print(f"warn: push record not written for {run_id}: {exc}", file=sys.stderr)
 
 
 def reconcile(
@@ -1269,6 +1279,7 @@ def main(argv: list[str]) -> int:
     complete.add_argument("--subject-id")
     complete.add_argument("--arm-id")
     complete.add_argument("--exit-code", type=int)
+    complete.add_argument("--workspace", help="the run's worktree; its pushes are recorded")
 
     rec = sub.add_parser(
         "reconcile", help="write feedback.costs rows from local ledger/log evidence"
@@ -1312,6 +1323,7 @@ def main(argv: list[str]) -> int:
             subject_id=args.subject_id,
             arm_id=args.arm_id,
             exit_code=args.exit_code,
+            workspace=args.workspace,
         )
         return 0
     if args.cmd == "reconcile":

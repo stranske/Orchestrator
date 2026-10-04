@@ -155,7 +155,7 @@ keepalive's own runner records (`runner-reservation`/`runner-completion`/`runner
 trusted writers) show a completed round of the labelled agent on it since the label; otherwise the settled
 run is over with no verdict. Until then ingest credited the first PR on any agent's or lane's branch, and
 none of the 9 merged delegation PASS rows was the labelled agent's work (no stage, component or surface
-moved, so the loop diagram is unchanged). This keeps role learning separate from normal
+moved, so the loop diagram is unchanged). A local run's candidates start with the branches it pushed from its own worktree, which its completion step reads from git's reflogs (`pushed_branches.py`, the Brain table `run_pushes`): a PR there is credited only if the run opened it (head == branch, created at or after the run started), and a run with no usable record resolves exactly as before (again no stage, component or surface moved). This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
 that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail
