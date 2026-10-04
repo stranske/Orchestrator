@@ -91,16 +91,27 @@ def test_issue_body_mode_validates_format_sections_and_needs_no_task_type(
     for item in (result, explicit_none):
         assert recorded[item["role_run_id"]]["backend_run_id"] == item["backend_run_id"]
         assert recorded[item["role_run_id"]]["proposal"] == proposal()
-    # Check the format contract through the backend path, not just the validator helper.
+    # Exercise every format rejection through the backend path and role recording.
+    invalid_bodies = []
     for section in ("Why", "Tasks", "Acceptance Criteria", "Non-Goals"):
-        backend_body = BODY.replace("## " + section, "## Other")
+        error = f"issue_body requires a non-empty ## {section} section"
+        invalid_bodies.append((BODY.replace("## " + section, "## Other"), error))
+        start = BODY.index("## " + section)
+        end = BODY.find("\n## ", start + 1)
+        empty_body = BODY[:start] + "## " + section + "\n" + (BODY[end:] if end != -1 else "")
+        invalid_bodies.append((empty_body, error))
+    for marker in ("-", "- [x]"):
+        invalid_bodies.append(
+            (BODY.replace("- [ ]", marker), "issue_body Tasks requires unchecked task checkboxes")
+        )
+    for backend_body, error in invalid_bodies:
         rejected = roles.run_prompt_agent(
             target="owner/repo#3",
             goal="Reject an incomplete issue",
             output="issue_body",
             dispatch=True,
         )
-        assert f"issue_body requires a non-empty ## {section} section" in rejected["errors"]
+        assert error in rejected["errors"]
         assert rejected["proposal"] is None
         assert rejected["issue_body"] is None
         assert rejected["dispatch_prompt"] is None
