@@ -758,9 +758,10 @@ def test_runtime_registry_update_preserves_other_publishers_tempfile(
         path
         for path in registry.parent.iterdir()
         if path.name.startswith(mirror.name + ".retired-")
+        or path.name.startswith(mirror.name + ".generation-")
         or path.name == f".{mirror.name}.publish.lock"
     }
-    assert len(publisher_state) == 2
+    assert len(publisher_state) == 3
     assert set(registry.parent.iterdir()) - publisher_state == original_entries
 
 
@@ -1183,6 +1184,7 @@ def _run_reader_during_publication(
     monkeypatch: pytest.MonkeyPatch,
     *,
     reader_cmd_factory: Callable[[Path], list[str]],
+    incumbent: bool = False,
 ) -> None:
     """Shared witness: child spans publication and must stay on one generation."""
     import fcntl
@@ -1190,6 +1192,21 @@ def _run_reader_during_publication(
     import threading
 
     snapshot = _snapshot(tmp_path)
+
+    if incumbent:
+
+        def in_place_publish(payload, mirror, entries, expected_digest, prior_docs):
+            mirror.mkdir(exist_ok=True)
+            for pattern in ("*.py", "*.sh"):
+                for path in mirror.glob(pattern):
+                    installer._remove_owned_file(path)
+            for tree in installer.REPLACED_TREES:
+                installer._remove(mirror / tree)
+            for relative in [*prior_docs, *map(Path, installer.OWNED_FILES)]:
+                installer._remove_owned_file(mirror / relative)
+            installer._copy_payload(payload, mirror, entries)
+
+        monkeypatch.setattr(installer, "_publish_generation", in_place_publish)
 
     (snapshot / "mirror_reader.py").write_bytes(
         (paths.MODULE_DIR / "mirror_reader.py").read_bytes()
@@ -1268,27 +1285,27 @@ def _run_reader_during_publication(
             publisher.join(15)
 
 
-@pytest.mark.parametrize("guarded", [False, True], ids=["incumbent-entry", "guarded-entry"])
+@pytest.mark.parametrize("mode", ["incumbent-in-place", "generation-entry", "guarded-entry"])
 def test_standalone_python_reader_excludes_publisher_across_child_imports(
-    tmp_path, monkeypatch, guarded
+    tmp_path, monkeypatch, mode
 ):
-    """The same child observer crosses generations without the standalone entry guard."""
+    """The same observer fails on in-place copying and passes on retained generations."""
     child = _reader_child_import_script()
     mirror_reader = paths.MODULE_DIR / "mirror_reader.py"
 
     def reader_cmd_factory(mirror: Path) -> list[str]:
         command = ["python3", "-c", child]
-        if guarded:
+        if mode == "guarded-entry":
             command = ["python3", str(mirror_reader), "run", str(mirror), *command]
         return command
 
-    if guarded:
-        _run_reader_during_publication(tmp_path, monkeypatch, reader_cmd_factory=reader_cmd_factory)
-    else:
+    if mode == "incumbent-in-place":
         with pytest.raises(AssertionError, match="child crossed executable generations"):
             _run_reader_during_publication(
-                tmp_path, monkeypatch, reader_cmd_factory=reader_cmd_factory
+                tmp_path, monkeypatch, reader_cmd_factory=reader_cmd_factory, incumbent=True
             )
+    else:
+        _run_reader_during_publication(tmp_path, monkeypatch, reader_cmd_factory=reader_cmd_factory)
 
 
 def test_tick_reader_rejects_stale_or_wrong_mirror_lock(tmp_path, monkeypatch):
