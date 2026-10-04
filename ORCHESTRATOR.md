@@ -328,7 +328,8 @@ cursor-agent live outside the default PATH):
   repeats that preflight immediately before mutation and passes
   `--match-head-commit` to GitHub. After the merge it records PASS, pending durability, for the latest
   remote run on the PR that is not a remote delegation; a delegation is left to outcome ingest's
-  attribution guard and named under `outcome.deferred_to_ingest`. It also fails closed if PR metadata cannot be read, draft/non-open PRs are
+  attribution guard and named under `outcome.deferred_to_ingest`, or under
+  `outcome.delegations_already_recorded` when it already has an outcome, which ingest never re-decides. It also fails closed if PR metadata cannot be read, draft/non-open PRs are
   supplied, a required runtime-AC spec is missing, `ORCH_RUN_RUNTIME_AC=1` is absent, or the gate verdict is
   not `PASS`. It uses the shared `runtime_ac_gate.py` helper, so tick and terminal merges enforce the same
   policy. Use `python3 src/runtime_ac_gate.py --exercise [--json]` for a

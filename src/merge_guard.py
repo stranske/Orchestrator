@@ -151,28 +151,45 @@ def record_merge_outcome(
 
     A keepalive run IS its PR, so the PR merging is its PASS: outcome ingest applies the same rule.
     A remote DELEGATION is credited only with its own PR and a completed round of the delegated
-    agent's runner since the label, which only ingest reads (`outcomes._delegated_pr_state`), and
-    ingest never re-decides a run already recorded as merged and pending durability. So a
-    delegation is never credited here: it gets no outcome, which keeps it in ingest's pending set,
-    and is named in `deferred_to_ingest` (a list, empty when there is none; None when the runs could
-    not be read). Until 2026-10-04 the latest remote run was credited whatever its source."""
+    agent's runner since the label, which only ingest reads (`outcomes._delegated_pr_state`). So a
+    delegation is never credited here. Ingest decides only a run with NO outcome row: it never
+    re-decides a recorded one, whether merged and pending durability or terminal. So the report
+    names two lists, each empty when there is none and None when the runs could not be read:
+    `deferred_to_ingest`, the delegations ingest will decide, and `delegations_already_recorded`,
+    the ones neither side touches (a PR that closed, so ingest ended its delegation, then reopened
+    and merged). Until 2026-10-04 the latest remote run was credited whatever its source."""
+    # Nothing after a merge may raise: the caller must still see that the merge ran.
     try:
         runs = remote_runs_fn(target, mode="remote")
-        deferred = [
-            run["run_id"] for run in runs if outcomes.needs_delegation_guard(run.get("source"))
-        ]
+        delegations = [run for run in runs if outcomes.needs_delegation_guard(run.get("source"))]
+        report = {
+            "deferred_to_ingest": [
+                run["run_id"] for run in delegations if not run.get("has_outcome")
+            ],
+            "delegations_already_recorded": [
+                run["run_id"] for run in delegations if run.get("has_outcome")
+            ],
+        }
         creditable = [
             run["run_id"] for run in runs if not outcomes.needs_delegation_guard(run.get("source"))
         ]
-        if not creditable:
-            reason = (
-                "no remote run_id found for target that the merge can credit; outcome ingest "
-                "decides the remote delegation run(s) with its attribution guard"
-                if deferred
-                else "no remote run_id found for target"
-            )
-            return {"recorded": False, "reason": reason, "deferred_to_ingest": deferred}
-        run_id = creditable[0]
+    except Exception as exc:
+        return {
+            "recorded": False,
+            "error": str(exc),
+            "deferred_to_ingest": None,
+            "delegations_already_recorded": None,
+        }
+    if not creditable:
+        reason = (
+            "no remote run_id found for target that the merge can credit; it credits no remote "
+            "delegation, which only outcome ingest's attribution guard decides"
+            if delegations
+            else "no remote run_id found for target"
+        )
+        return {"recorded": False, "reason": reason, **report}
+    run_id = creditable[0]
+    try:
         record_outcome_fn(
             run_id,
             adjudicated_verdict="PASS",
@@ -180,9 +197,9 @@ def record_merge_outcome(
             durability="pending",
             notes="merge_guard: gh pr merge succeeded; durability pending sweep",
         )
-        return {"recorded": True, "run_id": run_id, "deferred_to_ingest": deferred}
     except Exception as exc:
-        return {"recorded": False, "error": str(exc), "deferred_to_ingest": None}
+        return {"recorded": False, "run_id": run_id, "error": str(exc), **report}
+    return {"recorded": True, "run_id": run_id, **report}
 
 
 def _preflight_block_reason(preflight: Any) -> str | None:

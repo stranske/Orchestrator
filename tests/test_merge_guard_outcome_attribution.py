@@ -11,9 +11,11 @@ had written were keepalive runs, but each of the 23 delegation runs was the late
 target, and 2 of those targets are PRs (Trend#5913, Trend#5944).
 
 THE RULE. The merge credits the latest remote run that is not a delegation: a keepalive run IS its
-PR, which is ingest's own rule. A delegation gets no outcome from the merge, so it stays in ingest's
-pending set, and it is named in `deferred_to_ingest`. Both sides read ONE predicate,
-`outcomes.needs_delegation_guard`. No real API: `subprocess.run` is replaced by a stub.
+PR, which is ingest's own rule. A delegation gets no outcome from the merge. One with no outcome row
+stays in ingest's pending set and is named in `deferred_to_ingest`; one already recorded (its PR
+closed, then reopened and merged) is named in `delegations_already_recorded`, because ingest never
+re-decides a recorded run. Both sides read ONE predicate, `outcomes.needs_delegation_guard`. No real
+API: `subprocess.run` is replaced by a stub.
 """
 
 from __future__ import annotations
@@ -92,7 +94,12 @@ def test_the_latest_delegation_is_deferred_and_the_keepalive_run_is_credited(bra
 
     result = merge_guard.record_merge_outcome("o/r#5913")
 
-    assert result == {"recorded": True, "run_id": KEEPALIVE, "deferred_to_ingest": [DELEGATION]}
+    assert result == {
+        "recorded": True,
+        "run_id": KEEPALIVE,
+        "deferred_to_ingest": [DELEGATION],
+        "delegations_already_recorded": [],
+    }
     merged, verdict, durability, failure_class, notes = _row(KEEPALIVE)
     assert (merged, verdict, durability, failure_class) == (1, "PASS", "pending", None)
     assert notes.startswith("merge_guard:")
@@ -129,9 +136,55 @@ def test_only_a_delegation_on_the_target_records_nothing(brain) -> None:
     result = merge_guard.record_merge_outcome("o/r#5913")
 
     assert result["recorded"] is False
-    assert "outcome ingest decides the remote delegation" in result["reason"]
+    assert "credits no remote delegation" in result["reason"]
     assert result["deferred_to_ingest"] == [DELEGATION]
     assert _row(DELEGATION) is None
+
+
+def test_a_delegation_already_recorded_is_named_and_left_alone(brain) -> None:
+    """Its PR closed unmerged, so ingest ended the delegation; the PR then reopened and merged.
+    Ingest never re-decides a recorded run, so calling it deferred would be false."""
+    _trend_5913_shape()
+    feedback.record_outcome(
+        DELEGATION,
+        adjudicated_verdict="FAIL",
+        merged=False,
+        durability="abandoned",
+        notes="remote delegation's PR #5913 closed unmerged",
+    )
+
+    result = merge_guard.record_merge_outcome("o/r#5913")
+
+    assert result == {
+        "recorded": True,
+        "run_id": KEEPALIVE,
+        "deferred_to_ingest": [],
+        "delegations_already_recorded": [DELEGATION],
+    }
+    assert _row(DELEGATION)[:3] == (0, "FAIL", "abandoned")
+    assert DELEGATION not in {run["run_id"] for run in outcomes._pending_runs("remote")}
+
+
+def test_a_failed_write_still_reports_the_runs_it_read() -> None:
+    runs = [
+        {"run_id": DELEGATION, "source": "orchestrator_remote", "ts": 2, "has_outcome": False},
+        {"run_id": KEEPALIVE, "source": "keepalive", "ts": 1, "has_outcome": False},
+    ]
+
+    def locked(run_id, **kwargs):
+        raise RuntimeError("database is locked")
+
+    result = merge_guard.record_merge_outcome(
+        "o/r#5913", remote_runs_fn=lambda target, mode=None: runs, record_outcome_fn=locked
+    )
+
+    assert result == {
+        "recorded": False,
+        "run_id": KEEPALIVE,
+        "error": "database is locked",
+        "deferred_to_ingest": [DELEGATION],
+        "delegations_already_recorded": [],
+    }
 
 
 def test_no_remote_run_reports_a_measured_empty_deferral(brain) -> None:
@@ -141,16 +194,29 @@ def test_no_remote_run_reports_a_measured_empty_deferral(brain) -> None:
         "recorded": False,
         "reason": "no remote run_id found for target",
         "deferred_to_ingest": [],
+        "delegations_already_recorded": [],
     }
 
 
-def test_unreadable_runs_report_an_unknown_deferral() -> None:
-    def unreadable(target, mode=None):
-        raise RuntimeError("database is locked")
+def _locked_store(target, mode=None):
+    raise RuntimeError("database is locked")
 
-    result = merge_guard.record_merge_outcome("o/r#5913", remote_runs_fn=unreadable)
 
-    assert result == {"recorded": False, "error": "database is locked", "deferred_to_ingest": None}
+@pytest.mark.parametrize(
+    ("runs_fn", "error"),
+    [(_locked_store, "database is locked"), (lambda target, mode=None: [{}], "'run_id'")],
+    ids=["store-raises", "row-without-run-id"],
+)
+def test_unreadable_runs_report_unknown_lists_and_never_raise(runs_fn, error: str) -> None:
+    """After a merge nothing may raise: the caller must still see that the merge ran."""
+    result = merge_guard.record_merge_outcome("o/r#5913", remote_runs_fn=runs_fn)
+
+    assert result == {
+        "recorded": False,
+        "error": error,
+        "deferred_to_ingest": None,
+        "delegations_already_recorded": None,
+    }
 
 
 def test_one_predicate_decides_both_the_merge_and_ingest(brain, monkeypatch) -> None:
@@ -199,5 +265,6 @@ def test_the_merge_path_credits_through_the_same_rule(brain) -> None:
         "recorded": True,
         "run_id": KEEPALIVE,
         "deferred_to_ingest": [DELEGATION],
+        "delegations_already_recorded": [],
     }
     assert _row(DELEGATION) is None
