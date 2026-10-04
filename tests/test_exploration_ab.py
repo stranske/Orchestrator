@@ -1,5 +1,6 @@
 """Historical exploration sizing and read-only simulation regressions."""
 
+import json
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,9 +9,56 @@ from unittest.mock import patch
 import exploration_offline
 import exploration_review
 import feedback
+import keepalive_outcomes
+import pytest
 import route_weights_export
 import router
 import switch_review
+
+
+@pytest.mark.parametrize(
+    "run_id,source,mode,eligible",
+    [
+        ("policy-keepalive", "keepalive", "remote", True),
+        ("policy-original", "orchestrator_remote", "local", True),
+        ("policy-mode", "legacy", "remote", True),
+        ("remote:o/r#1:old", "legacy", "local", True),
+        ("policy-local", "legacy", "local", False),
+    ],
+)
+def test_existing_remote_policy_stamping_matches_lookup(
+    tmp_path, monkeypatch, run_id, source, mode, eligible
+):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run(
+        run_id,
+        "o/r#1",
+        "implement",
+        "codex",
+        source=source,
+        mode=mode,
+        ts=100,
+        routing_metadata={"original": "preserved"},
+    )
+    feedback.record_outcome(run_id, merged=True, durability="durable")
+    assert keepalive_outcomes._existing_remote_for_pr("o/r", 1) == (run_id if eligible else None)
+    keepalive_outcomes._stamp_existing_dispatch_policy(
+        run_id,
+        "o/r",
+        1,
+        "codex",
+        lambda *_: [100],
+        lambda _: {"policy_version": "dispatch-1"},
+    )
+    with feedback._conn() as c:
+        row = c.execute(
+            "SELECT r.ts,r.routing_metadata,o.durability FROM runs r JOIN outcomes o USING(run_id) WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+    assert row is not None and row[0] == 100 and row[2] == "durable"
+    metadata = json.loads(row[1])
+    assert metadata.get("policy_version") == ("dispatch-1" if eligible else None)
+    assert metadata["original"] == "preserved"
 
 
 def _weight(c, version, ts, agent, posterior, n_obs, task_type="implement"):
