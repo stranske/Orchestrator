@@ -10,6 +10,7 @@ import exploration_review
 import feedback
 import route_weights_export
 import router
+import switch_review
 
 
 def _weight(c, version, ts, agent, posterior, n_obs, task_type="implement"):
@@ -176,3 +177,115 @@ def test_export_carries_a_policy_version_and_one_sampled_challenger_per_task_typ
             heartbeat.assert_not_called()
         assert policies[0] != policies[1]
         assert database.read_bytes() == database_before
+
+
+def _exploration_run(run_id, mode, *, exploration=True, source="router_assignment", **outcome):
+    import time
+
+    feedback.record_run(
+        run_id,
+        "o/r#1",
+        "implement",
+        "codex",
+        ts=int(time.time()),
+        routing_metadata={
+            "source": source,
+            "exploration": exploration,
+            "exploration_mode": mode,
+        },
+    )
+    if outcome:
+        fields = list(outcome)
+        with feedback._conn() as c:
+            c.execute(
+                f"INSERT INTO outcomes (run_id, {', '.join(fields)}) "
+                f"VALUES ({', '.join('?' for _ in range(len(fields) + 1))})",
+                [run_id, *outcome.values()],
+            )
+
+
+def _switch_report(gate):
+    return switch_review.format_report(
+        {
+            "review_days": switch_review.REVIEW_DAYS,
+            "raise_count": 0,
+            "due": [],
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "exploration_gate": gate,
+        }
+    )
+
+
+def test_switch_review_reports_grades_and_durability_separately(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    epsilon = "epsilon-greedy"
+    _exploration_run("pending-pass", epsilon, adjudicated_verdict="PASS", durability="pending")
+    _exploration_run("reverted-pass", epsilon, adjudicated_verdict="PASS", durability="reverted")
+    _exploration_run(
+        "verifier-fail",
+        epsilon,
+        adjudicated_verdict="PASS",
+        verifier_verdict="NON_PASS",
+        durability="durable",
+    )
+    _exploration_run("swept-only", epsilon, durability="durable")
+    _exploration_run("verifier-pass", epsilon, verifier_verdict="PASS", durability="pending")
+    _exploration_run(
+        "infra",
+        epsilon,
+        adjudicated_verdict="PASS",
+        durability="durable",
+        failure_class="transient_infra",
+    )
+    _exploration_run("waiting", epsilon)
+    _exploration_run("exploitation", epsilon, exploration=False, adjudicated_verdict="PASS")
+    _exploration_run("unattributed", epsilon, source="keepalive", adjudicated_verdict="PASS")
+    _exploration_run(
+        "thompson-fail", "thompson-hybrid", adjudicated_verdict="FAIL", durability="pending"
+    )
+    with patch.object(router, "_capability_heartbeat") as heartbeat:
+        gate = switch_review._exploration_gate()
+        heartbeat.assert_not_called()
+    by_mode = {row["mode"]: row for row in gate["arms"]}
+    arm = by_mode[epsilon]
+    assert arm["runs"] == 7
+    assert arm["graded_runs"] == 4
+    assert arm["pass_runs"] == 3
+    assert arm["pass_rate"] == 3 / 4
+    assert arm["durability_runs"] == 3
+    assert arm["durable_runs"] == 2
+    assert arm["durable_rate"] == 2 / 3
+    text = _switch_report(gate)
+    assert "window=120d" in text
+    assert "PASS denominator=graded G" in text
+    assert "durable denominator=completed durability sweeps D" in text
+    assert (
+        "epsilon-greedy: exploration decisions N=7 graded G=4 PASS=75.0% durable=66.7% D=3" in text
+    )
+    assert (
+        "thompson-hybrid: exploration decisions N=1 graded G=1 PASS=0.0% durable=unmeasured D=0"
+        in text
+    )
+
+
+def test_switch_review_empty_arms_have_unmeasured_percentages(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    with feedback._conn():
+        pass
+    text = _switch_report(switch_review._exploration_gate())
+    for mode in ("epsilon-greedy", "thompson-hybrid"):
+        assert (
+            f"{mode}: exploration decisions N=0 graded G=0 PASS=unmeasured durable=unmeasured D=0"
+            in text
+        )
+
+
+def test_switch_review_unreadable_arms_do_not_report_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path)
+    gate = switch_review._exploration_gate()
+    assert gate["suspect"] is True
+    text = _switch_report(gate)
+    assert "SUSPECT — direct_mode_evidence_unreadable" in text
+    assert "exploration decisions N=" not in text
