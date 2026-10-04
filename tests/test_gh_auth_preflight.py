@@ -438,9 +438,17 @@ def test_a_refused_token_still_aborts_the_whole_tick(tmp_path: Path) -> None:
     proc, calls = _run_tick(tmp_path, "refused", lane_live=False)
     assert proc.returncode == 1, proc.stdout
     assert "  ABORT: gh not authenticated (rest: HTTP 401: Bad credentials);" in proc.stderr
+    # mirror_reader pins the tick generation before the auth preflight; it is not dispatch.
     after = [
         c
         for c in calls
-        if not c.startswith(("tick_watchdog.py", "cadence_registry.py", "gh_capacity.py"))
+        if not c.startswith(
+            (
+                "tick_watchdog.py",
+                "cadence_registry.py",
+                "gh_capacity.py",
+                "mirror_reader.py",
+            )
+        )
     ]
     assert not after, f"steps ran after a refused token: {after}"
