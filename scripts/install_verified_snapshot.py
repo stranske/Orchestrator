@@ -36,6 +36,11 @@ OWNED_FILES = (
     "pyproject.toml",
     "ruff.toml",
     "CLAUDE.md",
+    # The copy contract (scripts/build_exec_mirror.sh) ships these two for the terminal
+    # merge-contract test, and an unowned file is never installed, so the live mirror kept stale
+    # copies. tests/test_build_exec_mirror.py fails any shipped file this tuple does not own.
+    "AGENTS.md",
+    "ORCHESTRATOR.md",
     "IMPROVEMENT_BACKLOG.md",
     "repo_review_registry.json",
     "experiments/hypotheses.json",

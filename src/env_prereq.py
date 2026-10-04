@@ -245,8 +245,9 @@ def skill_resource_absent() -> str | None:
 def repo_files_absent(*relative_paths: str) -> str | None:
     """Reason string when committed repo files a check asserts against are not in THIS tree.
 
-    The exec mirror is not a checkout. `orch-sync-mirror.sh` copies to `~/.codex/orchestrator-mirror`
-    — because launchd cannot read the CloudStorage volume — only what it names: the modules (flat),
+    The exec mirror is not a checkout. The sync copies to `~/.codex/orchestrator-mirror` — because
+    launchd cannot read the CloudStorage volume — only what `scripts/build_exec_mirror.sh` names
+    (the one copy contract since 2026-10-04, also what CI's exec-mirror job builds): the modules (flat),
     `orchestrate.sh`, `tests/`, `scripts/`, a few registries and config files, and since 2026-10-02
     `.github/`, `docs/`, `.gitignore` and `ruff.toml`. Anything else a test reads is simply absent
     there, while the `test_*.py` files that assert against it are copied and DO run.

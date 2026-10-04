@@ -1165,9 +1165,7 @@ def _carried_forward(floor: dict) -> dict:
     }
 
 
-def _ceiling_report(
-    floor: dict, actual: dict, *, shape: str
-) -> tuple[list[str], dict[str, str]]:
+def _ceiling_report(floor: dict, actual: dict, *, shape: str) -> tuple[list[str], dict[str, str]]:
     """The ceiling VERDICT and the `count/limit` RENDERING for every ceiling, from ONE shape
     decision. Pure.
 
@@ -1600,7 +1598,9 @@ def _selftest() -> None:
     # the assertion that would have been red for as long as the defect existed — the drained
     # state, which the house rule says must be reachable by some real input. It is: this is the
     # live mirror's measured count.
-    assert _ceiling_problems(_two, _s31, shape=EXEC_MIRROR) == [], "the mirror must be able to go GREEN"
+    assert (
+        _ceiling_problems(_two, _s31, shape=EXEC_MIRROR) == []
+    ), "the mirror must be able to go GREEN"
     # And the mirror ceiling is still a ceiling: one over it fails, naming the MIRROR key. Sending
     # a mirror reader to raise `skipped_max` would tell them to loosen the number CI depends on.
     _over_m = _ceiling_problems(_two, {**_s31, "skipped_max": 32}, shape=EXEC_MIRROR)
@@ -1622,7 +1622,10 @@ def _selftest() -> None:
     assert mirror_key("skipped_max") == "mirror_skipped_max"
     assert ceiling_limit(_two, "skipped_max", shape=EXEC_MIRROR) == (31, "mirror_skipped_max")
     assert ceiling_limit(_two, "skipped_max", shape=CHECKOUT) == (26, "skipped_max")
-    assert ceiling_limit({"skipped_max": 26}, "skipped_max", shape=EXEC_MIRROR) == (26, "skipped_max")
+    assert ceiling_limit({"skipped_max": 26}, "skipped_max", shape=EXEC_MIRROR) == (
+        26,
+        "skipped_max",
+    )
     assert ceiling_limit({}, "skipped_max", shape=EXEC_MIRROR) == (None, "skipped_max")
     # THE REAL FLOOR FILE must actually carry the mirror agreement, or every assertion above is
     # about a shape that nothing configures — the defect would still be live with a green suite.
@@ -1691,7 +1694,9 @@ def _selftest() -> None:
     # The bare union passes under its own agreement and is a breach under BOTH of the others:
     # neither the runner's number nor the owner's mirror's may silently stand in for it.
     _probs_b, _rend_b = _ceiling_report(_three, _s47, shape=BARE_EXEC_MIRROR)
-    assert _probs_b == [] and _rend_b["skipped_max"] == "47/47 max [bare_mirror_skipped_max]", _rend_b
+    assert (
+        _probs_b == [] and _rend_b["skipped_max"] == "47/47 max [bare_mirror_skipped_max]"
+    ), _rend_b
     for _other, _key in ((CHECKOUT, "`skipped_max`"), (EXEC_MIRROR, "`mirror_skipped_max`")):
         _breach = _ceiling_problems(_three, _s47, shape=_other)
         assert len(_breach) == 1 and _key in _breach[0], (_other, _breach)
@@ -1713,7 +1718,9 @@ def _selftest() -> None:
             (True, False, EXEC_MIRROR),
             (True, True, BARE_EXEC_MIRROR),
         ):
-            globals()["exec_mirror_shape"] = lambda _m=_is_mirror: "flat, not a repo" if _m else None
+            globals()["exec_mirror_shape"] = lambda _m=_is_mirror: (
+                "flat, not a repo" if _m else None
+            )
             globals()["bare_machine"] = lambda _b=_is_bare: "no prerequisites" if _b else None
             _got_shape, _why = tree_shape()
             assert _got_shape == _want, (_is_mirror, _is_bare, _got_shape)
