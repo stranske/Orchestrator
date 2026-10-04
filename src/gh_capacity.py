@@ -24,6 +24,10 @@ reason over remaining-vs-limit and the window reset (past reset => the window re
 returns action='defer' rather than blocking for up to an hour) so rate-heavy ops degrade gracefully.
 `orchestrate.sh`'s `--gate <resource>` skips a SHED step this tick (stamp untouched -> retried).
 
+`--auth-preflight` (`auth_preflight()`): the `--active` tick's first question, asked with REAL calls.
+It tells "GitHub cannot answer now" (rate-limited, unreachable) from "the token is missing or refused",
+which `gh auth status` reports with one exit code. Only the second aborts the tick.
+
 Read-only and safe; fail-open everywhere (probe failure or no data => OK/proceed, never a false halt).
 """
 
@@ -31,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -326,6 +331,217 @@ def _gate(resource: str, *, runner=subprocess.run) -> int:
     return GATE_SHED_EXIT if st == SHED else 0
 
 
+# --- Auth preflight: the --active tick's first question ------------------------------------------
+# `gh auth status` cannot answer it. It exits 1, printing "The token in GH_TOKEN is invalid.", for a
+# missing token, a 401, a 403 rate limit, a secondary limit, a 502 and an unreachable host alike
+# (measured 2026-10-02 against a local stub). On 2026-10-02T15:40Z the owner's per-user REST budget
+# was exhausted (Actions jobs failed on it from 15:39:02Z to 15:42:39Z), and the tick read "cannot
+# measure now" as "measured: not authenticated". It aborted, so nothing below the preflight ran: no
+# heartbeats, no cadence steps, no monitors. Its log also named the wrong cause.
+#
+# So the preflight asks with REAL calls, one REST and one GraphQL, the two budgets the tick spends.
+# It never reads `rate_limit`: that endpoint is exempt from the limit, and it has reported a fresh
+# 5000/5000 while every real call failed. It has three exits, and only positive evidence that the
+# credentials are missing or refused aborts. Everything it cannot measure defers instead.
+PREFLIGHT_OK = 0
+PREFLIGHT_DEFER = GATE_SHED_EXIT  # token present, GitHub cannot answer now: GitHub-dependent steps defer
+PREFLIGHT_UNAUTHENTICATED = 77  # EX_NOPERM: no token (gh exit 4), HTTP 401, or a 403 that is no rate limit
+PREFLIGHT_EXITS = {
+    "ok": PREFLIGHT_OK,
+    "rate_limited": PREFLIGHT_DEFER,
+    "unavailable": PREFLIGHT_DEFER,
+    "unauthenticated": PREFLIGHT_UNAUTHENTICATED,
+}
+PREFLIGHT_TIMEOUT_S = 20
+PREFLIGHT_DEFERS = "GitHub-dependent steps defer, local steps run"
+_STATUS_LINE_RE = re.compile(r"^HTTP/\S+\s+(\d{3})\b")
+_TOKEN_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{20,})")
+
+
+def _as_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_line(text: str, limit: int = 160) -> str:
+    """The first non-blank line, token-shaped strings redacted: this text goes to the tick log."""
+    for line in (text or "").splitlines():
+        if line.strip():
+            return _TOKEN_RE.sub("<redacted>", line.strip())[:limit]
+    return ""
+
+
+def _preflight_call(args: list[str], *, runner, timeout_s: int) -> dict:
+    """One `gh api --include` call, reduced to what the classifier reads. Never raises."""
+    cmd = ["gh", "api", "--include", *args]
+    try:
+        r = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except FileNotFoundError:
+        return {"transport_error": "gh CLI not found on PATH"}
+    except subprocess.TimeoutExpired:
+        return {"transport_error": f"no answer within {timeout_s}s"}
+    except Exception as exc:  # noqa: BLE001 -- a transport failure is a measurement, not a crash
+        return {"transport_error": f"{type(exc).__name__}: {exc}"}
+    out = getattr(r, "stdout", "") or ""
+    status = _STATUS_LINE_RE.match(out.lstrip().split("\n", 1)[0].strip())
+    headers, body = _split_headers_body(out)
+    try:
+        parsed = json.loads(body) if body else None
+    except ValueError:
+        parsed = None
+    return {
+        "rc": getattr(r, "returncode", 1),
+        "status": int(status.group(1)) if status else None,
+        "headers": headers,
+        "body": parsed,
+        "stderr": getattr(r, "stderr", "") or "",
+    }
+
+
+def _api_message(call: dict) -> str:
+    """GitHub's own words: the REST `message`, else the first GraphQL error, else gh's stderr."""
+    body = call.get("body")
+    if isinstance(body, dict):
+        if body.get("message"):
+            return _first_line(str(body["message"]))
+        errors = body.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            return _first_line(str(errors[0].get("message") or errors[0].get("type") or ""))
+    return _first_line(call.get("stderr", ""))
+
+
+def _rate_limited(call: dict, *, now: float) -> tuple[bool, int | None]:
+    """(is this answer a rate limit, the epoch it lifts at or None). PURE.
+
+    The fleet's Actions predicate (`isRateLimitError` in agents-auto-pilot.yml): HTTP 429, a 403 that
+    names a rate limit, or no budget remaining. Plus a Retry-After header (the secondary limits) and
+    GraphQL's RATE_LIMITED error, which arrives on an HTTP 200."""
+    status, headers, body = call.get("status"), call.get("headers") or {}, call.get("body")
+    remaining = _as_int(headers.get("x-ratelimit-remaining"))
+    retry_after = _as_int(headers.get("retry-after"))
+    errors = body.get("errors") if isinstance(body, dict) else None
+    graphql_limited = isinstance(errors, list) and any(
+        isinstance(e, dict) and str(e.get("type") or "").upper() == "RATE_LIMITED" for e in errors
+    )
+    limited = (
+        status == 429
+        or (status == 403 and ("rate limit" in _api_message(call).lower() or retry_after is not None))
+        or (remaining is not None and remaining <= 0)
+        or graphql_limited
+    )
+    if not limited:
+        return False, None
+    if retry_after is not None:
+        return True, int(now) + retry_after
+    return True, _as_int(headers.get("x-ratelimit-reset"))
+
+
+def _classify_call(call: dict, *, now: float) -> dict:
+    """One answer -> {verdict, detail, reset, resource, remaining, limit}. PURE.
+
+    A verdict of `unauthenticated` needs positive evidence: gh's own exit 4 (no credential at all),
+    an HTTP 401, or a 403 that is not a rate limit. A transport failure, a timeout, a 5xx or an answer
+    this cannot read is `unavailable`: it could not be measured, which is not a "no"."""
+    headers = call.get("headers") or {}
+    out = {
+        "resource": headers.get("x-ratelimit-resource"),
+        "remaining": _as_int(headers.get("x-ratelimit-remaining")),
+        "limit": _as_int(headers.get("x-ratelimit-limit")),
+        "reset": None,
+    }
+    if "transport_error" in call:
+        return {**out, "verdict": "unavailable", "detail": call["transport_error"]}
+    rc, status = call.get("rc"), call.get("status")
+    if rc == 4:
+        detail = "no token: gh exited 4, authentication required"
+        return {**out, "verdict": "unauthenticated", "detail": detail}
+    if status is None:
+        if rc == 0:
+            return {**out, "verdict": "ok", "detail": "gh succeeded"}
+        detail = _first_line(call.get("stderr", "")) or f"gh exited {rc} with no HTTP response"
+        return {**out, "verdict": "unavailable", "detail": detail}
+    if status == 401:
+        detail = f"HTTP 401: {_api_message(call) or 'Bad credentials'}"
+        return {**out, "verdict": "unauthenticated", "detail": detail}
+    limited, reset = _rate_limited(call, now=now)
+    if limited:
+        detail = f"HTTP {status}: {_api_message(call)}"
+        return {**out, "verdict": "rate_limited", "reset": reset, "detail": detail}
+    if status == 403:
+        detail = f"HTTP 403, not a rate limit: {_api_message(call)}"
+        return {**out, "verdict": "unauthenticated", "detail": detail}
+    if rc == 0 and 200 <= status < 300:
+        return {**out, "verdict": "ok", "detail": f"HTTP {status}"}
+    return {**out, "verdict": "unavailable", "detail": f"HTTP {status}: {_api_message(call)}"}
+
+
+def _budget(check: dict, fallback: str) -> str:
+    resource = check.get("resource") or fallback
+    if check.get("remaining") is None or check.get("limit") is None:
+        return f"{resource} budget not reported"
+    return f"{resource} {check['remaining']}/{check['limit']}"
+
+
+def _iso(epoch: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def auth_preflight(
+    *,
+    runner=subprocess.run,
+    timeout_s: int = PREFLIGHT_TIMEOUT_S,
+    now: float | None = None,
+    record: bool = True,
+) -> dict:
+    """Is the token present and accepted, and can GitHub answer right now? Returns the verdict, the
+    exit code orchestrate.sh switches on, and the one line it prints.
+
+    REST is asked first, because a refused credential there needs no second call. GraphQL is asked
+    only when REST answered. Each real answer also feeds the rate ledger, tagged `preflight`, so the
+    true budget is on record every tick beside the `rate_limit` probe's figure."""
+    now = time.time() if now is None else now
+    rest_call = _preflight_call(["user"], runner=runner, timeout_s=timeout_s)
+    calls = [("rest", rest_call)]
+    checks = [("rest", _classify_call(rest_call, now=now))]
+    if checks[0][1]["verdict"] == "ok":
+        query = ["graphql", "-f", "query={ viewer { login } }"]
+        calls.append(("graphql", _preflight_call(query, runner=runner, timeout_s=timeout_s)))
+        checks.append(("graphql", _classify_call(calls[-1][1], now=now)))
+    if record:
+        rows = []
+        for name, call in calls:
+            row = _ratelimit_row_from_headers(call.get("headers") or {}, fallback_resource=name)
+            if row is not None:
+                rows.append({**row, "source": "preflight"})
+        try:
+            _append_ledger(rows)
+        except OSError:
+            pass  # the ledger is evidence, never a reason to misreport the verdict
+    name, decisive = next(((n, c) for n, c in checks if c["verdict"] != "ok"), checks[-1])
+    verdict = decisive["verdict"]
+    if verdict == "ok":
+        body = rest_call.get("body")
+        login = body.get("login") if isinstance(body, dict) else None
+        budgets = ", ".join(_budget(c, n) for n, c in checks)
+        line = f"gh: authenticated as {login or 'an unnamed account'} ({budgets})"
+    elif verdict == "rate_limited":
+        until = f"until {_iso(decisive['reset'])}" if decisive["reset"] else "(reset not reported)"
+        detail = f"{_budget(decisive, name)}; {decisive['detail']}"
+        line = f"gh rate-limited {until}: {PREFLIGHT_DEFERS} ({detail})"
+    elif verdict == "unavailable":
+        line = f"gh unavailable: {PREFLIGHT_DEFERS} ({name}: {decisive['detail']})"
+    else:
+        line = f"gh not authenticated ({name}: {decisive['detail']})"
+    return {
+        "verdict": verdict,
+        "exit": PREFLIGHT_EXITS[verdict],
+        "line": line,
+        "checks": dict(checks),
+    }
+
+
 def _selftest():
     import shutil
     import tempfile
@@ -466,9 +682,109 @@ def _selftest():
         _append_ledger([{**row("search", 25, 30, 50), "ts": now + 1}])
         assert _gate("search", runner=lambda *a, **k: FailRunner()) == 0
 
+        # 8. auth_preflight: the answers measured from gh 2.94.0 against a local stub, 2026-10-02.
+        #    Only positive evidence of a missing or refused credential may exit 77; anything that
+        #    could not be measured exits 75 (defer), because "cannot measure" is not "no".
+        reset = int(now) + 300
+
+        def answer(status, body, headers=None, rc=None, stderr=""):
+            head = "".join(f"{k}: {v}\r\n" for k, v in (headers or {}).items())
+            return {
+                "returncode": (0 if status < 400 else 1) if rc is None else rc,
+                "stdout": f"HTTP/2.0 {status} X\r\n{head}\r\n{json.dumps(body)}",
+                "stderr": stderr,
+            }
+
+        def budget(remaining, resource="core"):
+            return {
+                "X-Ratelimit-Limit": "5000",
+                "X-Ratelimit-Remaining": str(remaining),
+                "X-Ratelimit-Reset": str(reset),
+                "X-Ratelimit-Resource": resource,
+            }
+
+        rest_ok = answer(200, {"login": "stub-user"}, budget(4321))
+        gql_ok = answer(200, {"data": {"viewer": {"login": "stub-user"}}}, budget(4990, "graphql"))
+
+        def gh(rest, gql=gql_ok, seen=None):
+            def run(cmd, **_):
+                if seen is not None:
+                    seen.append(cmd)
+                if isinstance(rest, BaseException) or isinstance(rest, type):
+                    raise rest if isinstance(rest, BaseException) else rest()
+                r = gql if "graphql" in cmd else rest
+                return type("R", (), r)()
+
+            return run
+
+        def verdict(rest, gql=gql_ok):
+            return auth_preflight(runner=gh(rest, gql), now=now, record=False)
+
+        seen: list = []
+        ok = auth_preflight(runner=gh(rest_ok, seen=seen), now=now, record=False)
+        assert ok["exit"] == PREFLIGHT_OK and ok["verdict"] == "ok", ok
+        assert ok["line"] == "gh: authenticated as stub-user (core 4321/5000, graphql 4990/5000)", ok
+        assert [c[:4] for c in seen] == [
+            ["gh", "api", "--include", "user"],
+            ["gh", "api", "--include", "graphql"],
+        ], seen
+        assert all("rate_limit" not in c for c in seen), "the exempt endpoint must never be asked"
+
+        limit_msg = {"message": "API rate limit exceeded for user ID 1. If you reach out ..."}
+        primary = verdict(answer(403, limit_msg, budget(0)))
+        assert primary["exit"] == PREFLIGHT_DEFER and primary["verdict"] == "rate_limited", primary
+        assert primary["line"].startswith(
+            f"gh rate-limited until {_iso(reset)}: GitHub-dependent steps defer, local steps run ("
+        ), primary["line"]
+        assert "graphql" not in primary["checks"], "a rate-limited REST answer needs no 2nd call"
+        secondary = verdict(
+            answer(403, {"message": "You have exceeded a secondary rate limit."}, {"Retry-After": "60"})
+        )
+        assert secondary["verdict"] == "rate_limited" and secondary["checks"]["rest"]["reset"] == (
+            int(now) + 60
+        ), secondary
+        assert verdict(answer(429, {"message": "Too Many Requests"}))["verdict"] == "rate_limited"
+        gql_limited = answer(
+            200,
+            {"errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded"}]},
+            budget(0, "graphql"),
+            rc=1,
+        )
+        g = verdict(rest_ok, gql_limited)
+        assert g["exit"] == PREFLIGHT_DEFER and "(graphql 0/5000; " in g["line"], g
+        for unavailable in (
+            answer(502, {"message": "Server Error"}),
+            {"returncode": 1, "stdout": "", "stderr": 'Get "https://api.github.com/user": dial tcp'},
+            FileNotFoundError,
+            subprocess.TimeoutExpired("gh", 20),
+        ):
+            v = verdict(unavailable)
+            assert v["exit"] == PREFLIGHT_DEFER and v["verdict"] == "unavailable", (unavailable, v)
+            assert v["line"].startswith("gh unavailable: GitHub-dependent steps defer"), v["line"]
+        no_token = {"returncode": 4, "stdout": "", "stderr": "To get started with GitHub CLI"}
+        for refused in (
+            no_token,
+            answer(401, {"message": "Bad credentials"}),
+            answer(403, {"message": "Sorry. Your account was suspended."}, budget(4000)),
+        ):
+            v = verdict(refused)
+            assert v["exit"] == PREFLIGHT_UNAUTHENTICATED, (refused, v)
+            assert v["line"].startswith("gh not authenticated (rest: "), v["line"]
+        bad_gql = verdict(rest_ok, answer(401, {"message": "Bad credentials"}))
+        assert bad_gql["exit"] == PREFLIGHT_UNAUTHENTICATED, bad_gql
+        # Never a token in the line, whatever an error message carries.
+        leaky = verdict(answer(401, {"message": "token gho_" + "a" * 36 + " is not valid"}))
+        assert "gho_" not in leaky["line"] and "<redacted>" in leaky["line"], leaky["line"]
+        # The real answers feed the ledger, tagged; the exempt probe's figure stays beside them.
+        GH_LEDGER.write_text("")
+        auth_preflight(runner=gh(rest_ok), now=now)
+        assert _latest_ledger("core")["source"] == "preflight", _latest_ledger("core")
+        assert _latest_ledger("graphql")["remaining"] == 4990, _latest_ledger("graphql")
+
         print(
             "gh_capacity.py selftest: OK (4-state per resource, read-time ledger, probe/gh_run "
-            "header feed, pace/defer throttle, env-gated throttle_if_enabled, fail-open gate)"
+            "header feed, pace/defer throttle, env-gated throttle_if_enabled, fail-open gate, "
+            "auth preflight: rate-limited/unavailable defer, only refused credentials abort)"
         )
     finally:
         time.time = original_time
@@ -484,6 +800,10 @@ def main(argv: list[str]) -> int:
         i = argv.index("--gate")
         resource = argv[i + 1] if i + 1 < len(argv) else "core"
         return _gate(resource)
+    if "--auth-preflight" in argv:
+        result = auth_preflight()
+        print(result["line"])
+        return result["exit"]
     HANDOFF.mkdir(parents=True, exist_ok=True)
     snap = build()
     OUT.write_text(json.dumps(snap, indent=2) + "\n")
