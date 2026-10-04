@@ -7,7 +7,7 @@ and a merge's own weeks were read only by chance. When nothing read named the me
 full, the check said "unknown" and the classifier recorded `durable` anyway, by an "additive" rule:
 436 of the 1,367 rows judged durable since the broke-later detection floor carry that note.
 
-THE RULE. One read per repo per run, from the oldest merge being judged (`_fix_search_plan`), read
+THE RULE. One read per repo per run, from the oldest merge being judged (`fix_search_plan`), read
 whole: one `merged:<since>..*` range qualifier, up to GitHub's 1,000-result cap, and a window at the
 cap is split by merge date and read newest first. A merge the read reached is judged as before. One it
 did not reach is never durable: it stays pending under DRAIN_FIX_SEARCH, read again by every run, and
@@ -350,3 +350,46 @@ def test_the_drained_line_states_coverage_by_count(brain):
         1,
         None,
     )
+
+
+# --- keepalive ingest: the second caller, planned the same way ----------------------------------
+
+
+def _keepalive_pr(number: int, merged_at: int) -> dict:
+    return {
+        "number": number,
+        "state": "MERGED",
+        "title": f"Change {number}",
+        "labels": [{"name": "agent:codex"}],
+        "createdAt": _iso(merged_at - 3600),
+        "updatedAt": _iso(merged_at),
+        "mergedAt": _iso(merged_at),
+        "closedAt": _iso(merged_at),
+        "headRefName": f"codex/issue-{number}",
+        "baseRefName": "main",
+        "mergeCommit": {"oid": f"sha{number}"},
+        "author": {"login": "someone"},
+        "body": "",
+        "files": [{"path": "src/app.py"}],
+        "reverted": False,
+    }
+
+
+def test_keepalive_ingest_reads_each_repo_once_from_its_oldest_merge(brain):
+    """Ingest judges a merged PR past grace too, and until 2026-10-04 it passed no cache, so it ran
+    one search per PR. It plans its reads exactly as the sweep does."""
+    import keepalive_outcomes
+
+    prs = [_keepalive_pr(n, NOW - days * DAY) for n, days in ((301, 10), (302, 25), (303, 2))]
+    search = FixSearch({"o/r": [_fix(900, NOW - 24 * DAY, "Fixes a regression from #302")]})
+    keepalive_outcomes.ingest_keepalive_outcomes(
+        ["o/r"],
+        _pr_fetch_fn=lambda _repo, _days: prs,
+        _now=NOW,
+        _fix_fn=search,
+        _closure_context_fn=lambda _repo, _number: "",
+        _evidence_fetch_fn=lambda _repo, _numbers: {},
+    )
+    assert search.calls == [("o/r", NOW - 25 * DAY, None)], search.calls
+    judged = {n: _row(f"keepalive:o/r#{n}:codex")[0] for n in (301, 302, 303)}
+    assert judged == {301: "durable", 302: "broke_later", 303: "pending"}, judged

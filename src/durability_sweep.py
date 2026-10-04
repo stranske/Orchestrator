@@ -599,7 +599,7 @@ def _fix_followup_status(
     (FIX_SEARCH_RETRY_DAYS), so unknown can stay unknown without becoming a latch.
 
     `since_ts` is the oldest merge the caller will ask about in this repo, so ONE read covers them
-    all (`_fix_search_plan`); `fix_cache` holds that read for the run.
+    all (`fix_search_plan`); `fix_cache` holds that read for the run.
     """
     now = int(now or time.time())
     entry = fix_cache.get(repo) if fix_cache is not None else None
@@ -931,7 +931,7 @@ def sweep_durability(
     beside the drainable one, so a stuck row reads as undrainable on the day it appears.
 
     Merges are found first and judged second, because the broke-later check reads each repo's fix
-    PRs ONCE, from the oldest merge it will be asked about (`_fix_search_plan`); `fix_search` in the
+    PRs ONCE, from the oldest merge it will be asked about (`fix_search_plan`); `fix_search` in the
     summary counts the merges that read covered and the ones it did not.
     """
     # Every class classify_durability() can return starts at ZERO here, so the summary always prints
@@ -992,7 +992,17 @@ def sweep_durability(
             _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
             continue
         resolved.append((run, found))
-    fix_since = _fix_search_plan(resolved, now=now, grace_days=grace_days)
+    fix_since = fix_search_plan(
+        (
+            (
+                found["pr"].get("repo") or provision.parse_target(run["target"])[0],
+                _parse_gh_ts(found["pr"].get("mergedAt")),
+            )
+            for run, found in resolved
+        ),
+        now=now,
+        grace_days=grace_days,
+    )
     for run, found in resolved:
         verdict = classify_durability(
             run,
@@ -1080,19 +1090,15 @@ def sweep_durability(
     return summary
 
 
-def _fix_search_plan(
-    resolved: list[tuple[dict, dict]], *, now: int, grace_days: int
-) -> dict[str, int]:
-    """repo -> the oldest merge past grace among the merges about to be judged.
+def fix_search_plan(merges, *, now: int, grace_days: int = GRACE_DAYS) -> dict[str, int]:
+    """repo -> the oldest merge past grace among `merges`, the (repo, merged_ts) about to be judged.
 
     Only a merge past grace reaches the fix check, so a read from the oldest of them reaches every
-    merge the check will be asked about in that repo: ONE window per repo, never one per PR.
+    merge the check will be asked about in that repo: ONE window per repo, never one per PR. The
+    sweep and keepalive ingest both plan their reads here.
     """
     since: dict[str, int] = {}
-    for run, found in resolved:
-        pr = found["pr"]
-        merged_ts = _parse_gh_ts(pr.get("mergedAt"))
-        repo = pr.get("repo") or provision.parse_target(run["target"])[0]
+    for repo, merged_ts in merges:
         if merged_ts is None or not repo or now - merged_ts < grace_days * SECONDS_PER_DAY:
             continue
         since[repo] = min(since.get(repo, merged_ts), merged_ts)
