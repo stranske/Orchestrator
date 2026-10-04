@@ -122,13 +122,13 @@ def _preflight_block() -> str:
     text = _text()
     assert text.count(ANCHOR) == 1, f"expected exactly one {ANCHOR!r} in orchestrate.sh"
     assert text.count(HEARTBEAT_ANCHOR) == 1, f"expected exactly one {HEARTBEAT_ANCHOR!r}"
-    assert text.count(MIRROR_READER_ANCHOR) == 1, (
-        f"expected exactly one {MIRROR_READER_ANCHOR!r} in orchestrate.sh"
-    )
+    assert (
+        text.count(MIRROR_READER_ANCHOR) == 1
+    ), f"expected exactly one {MIRROR_READER_ANCHOR!r} in orchestrate.sh"
     start, end = text.index(ANCHOR), text.index(MIRROR_READER_ANCHOR)
-    assert start < end < text.index(HEARTBEAT_ANCHOR), (
-        "the gh preflight and mirror-reader reentry must run above the heartbeat export"
-    )
+    assert (
+        start < end < text.index(HEARTBEAT_ANCHOR)
+    ), "the gh preflight and mirror-reader reentry must run above the heartbeat export"
     return text[start:end]
 
 
@@ -201,12 +201,12 @@ def test_the_preflight_sits_above_the_heartbeat_export() -> None:
 def test_active_preflight_precedes_mirror_reader_reentry() -> None:
     """A refused credential must abort before a mirror can exec a second tick."""
     text = _text()
-    assert text.count(MIRROR_READER_ANCHOR) == 1, (
-        "expected exactly one mirror-reader reentry anchor"
-    )
-    assert text.index(ANCHOR) < text.index(MIRROR_READER_ANCHOR), (
-        "the GitHub auth preflight must run before mirror_reader can re-enter orchestrate.sh"
-    )
+    assert (
+        text.count(MIRROR_READER_ANCHOR) == 1
+    ), "expected exactly one mirror-reader reentry anchor"
+    assert text.index(ANCHOR) < text.index(
+        MIRROR_READER_ANCHOR
+    ), "the GitHub auth preflight must run before mirror_reader can re-enter orchestrate.sh"
 
 
 def test_gh_auth_status_is_not_the_preflight() -> None:
