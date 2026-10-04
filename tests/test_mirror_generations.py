@@ -358,8 +358,10 @@ print(json.dumps([
         )
         (self.snapshot / "observer.py").write_text(observe + footer)
         (self.snapshot / "gh_capacity.py").write_text(observe + "print('fixture authenticated')\n")
-        for mode, retain_lock in product(("active", "shadow"), (False, True)):
-            with self.subTest(mode=mode, retain_lock=retain_lock):
+        for mode, (retain_lock, exit_shell) in product(
+            ("active", "shadow"), ((False, False), (True, False), (True, True))
+        ):
+            with self.subTest(mode=mode, retain_lock=retain_lock, exit_shell=exit_shell):
                 record.unlink(missing_ok=True)
                 startup_pause = pause
                 if retain_lock:
@@ -439,6 +441,11 @@ print(json.dumps([
                     self.assertTrue(
                         publication_attempted.wait(10), "publisher did not reach the exclusive lock"
                     )
+                    if exit_shell:
+                        # A dead tick shell can leave its startup child holding the
+                        # lock. Cleanup must still terminate the child's process group.
+                        reader.kill()
+                        self.assertEqual(reader.wait(timeout=10), -signal.SIGKILL)
                     expected_failure = (
                         self.assertRaisesRegex(
                             AssertionError, "publication blocked on paused reader"
@@ -480,6 +487,9 @@ print(json.dumps([
                             )
                 self.assertFalse(publication_errors, publication_errors)
                 self.assertEqual((self.mirror / "module.py").read_text(), "VALUE = 'new'\n")
+                self.assertEqual(
+                    installer.snapshot_digest(self.mirror), installer.snapshot_digest(self.snapshot)
+                )
 
     def test_bytecode_cache_cannot_override_a_new_generation(self):
         """Timestamp/size-valid old bytecode must not be shared with verified new code."""
