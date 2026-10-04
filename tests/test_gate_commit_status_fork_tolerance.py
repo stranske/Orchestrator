@@ -9,9 +9,8 @@ Gate has already decided. Three steps of `.github/workflows/pr-00-gate.yml` hand
 * `Ensure consolidated summary comment` falls back to the job summary when a fork's comment write
   is refused, and stays loud otherwise;
 * `Report Gate commit status` keeps the retry helper's `gate-commit-status` task, under which the
-  helper swallows a permission refusal, warns with the refusing token's name and returns null: the
-  documented rule that a status post must not fail the Gate. On a same-repo pull request that
-  warning is the whole response. For a fork, where no status can ever be written, the step records
+  helper swallows a permission refusal, warns with the refusing token's name and returns null: an expected refusal only for a fork. A same-repository refusal fails loudly instead of
+  leaving a stale commit-status verdict. For a fork, where no status can ever be written, the step records
   the verdict in the job summary and fails a verdict other than `success`.
 
 Each script is extracted from the workflow and run against the REAL `.github/scripts` helpers it
@@ -426,12 +425,11 @@ def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
 
 
 @pytest.mark.parametrize("name", ["same_repo_success", "same_repo_failure", "same_repo_404"])
-def test_a_same_repo_refusal_only_warns(status: dict, name: str) -> None:
-    """The documented rule, restored: a status post must not fail the Gate. The retry helper warns
-    with the refusing token's name; whether the Gate passes is left to 'Enforce Gate success'.
-    A 404 refusal takes the same path as a 403: the helper counts both as a permission refusal."""
+def test_a_same_repo_refusal_fails_loudly(status: dict, name: str) -> None:
+    """A refused same-repository status must not leave a stale verdict silently."""
     case = status[name]
-    assert case["threw"] is None and case["failures"] == [], case
+    assert case["threw"] is not None, case
+    assert "Same-repository Gate status publication was refused" in case["threw"]["message"], case
     assert case["summaryWrites"] == 0, case
     assert any("blocked by permissions" in w for w in case["warnings"]), case
 

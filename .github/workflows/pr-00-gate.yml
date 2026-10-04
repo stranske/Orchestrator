@@ -1257,12 +1257,17 @@ jobs:
               }
               return;
             }
-            // Under `gate-commit-status` the helper SWALLOWS a permission refusal: it warns,
-            // names the refusing token and returns null, because a status post must not fail
-            // the Gate. On a same-repo pull request that warning is the whole response (see the
-            // `env: {}` note above). A fork's token is read-only by design, so no status can be
-            // written for it at all: record the verdict in the job summary, and fail a verdict
-            // other than `success` here, because 'Enforce Gate success' acts on `failure` only.
+            // The helper returns null for a permission refusal. Only a fork has the
+            // expected read-only token: an unexpected same-repository refusal must
+            // fail loudly instead of leaving an old commit-status verdict untouched.
+            if (response === null && process.env.PR_FROM_FORK !== 'true') {
+              throw new Error(
+                `Same-repository Gate status publication was refused for ${sha}; ` +
+                  `computed verdict '${state}' was not published.`,
+              );
+            }
+            // Fork status writes are unavailable by design; publish the computed
+            // verdict in the job summary and fail any verdict other than success.
             if (response === null && process.env.PR_FROM_FORK === 'true') {
               core.warning(
                 `Fork pull request from ${process.env.PR_HEAD}: the workflow token is read-only, ` +
