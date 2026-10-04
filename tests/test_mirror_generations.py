@@ -8,12 +8,13 @@ import os
 import py_compile
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from itertools import product
 from pathlib import Path
 from unittest.mock import patch
@@ -363,12 +364,15 @@ print(json.dumps([
                 startup_pause = pause
                 if retain_lock:
                     # Negative control: reproduce a reader that forgets to release
-                    # shared mode before pausing in a retained generation.
+                    # shared mode before pausing in a retained generation. Ignore
+                    # stdin EOF so cleanup must terminate the child, not just its shell.
                     startup_pause = (
-                        "import fcntl\n"
+                        "import fcntl, threading\n"
                         f"reader_lock = open({str(self.root / '.mirror.publish.lock')!r}, 'a')\n"
                         "fcntl.flock(reader_lock.fileno(), fcntl.LOCK_SH)\n"
-                    ) + pause
+                        "print('STARTUP-READY', file=sys.stderr, flush=True)\n"
+                        "threading.Event().wait()\n"
+                    )
                 (self.snapshot / "tick_watchdog.py").write_text(observe + startup_pause)
                 (self.snapshot / "cadence_registry.py").write_text(
                     observe + (startup_pause if mode == "shadow" else "") + "print(':')\n"
@@ -405,6 +409,7 @@ print(json.dumps([
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    start_new_session=True,
                 )
                 publication_errors = []
                 publication_attempted = threading.Event()
@@ -461,14 +466,18 @@ print(json.dumps([
                             "startup crossed executable generations",
                         )
                 finally:
-                    if reader.poll() is None:
-                        reader.kill()
+                    try:
+                        # Startup modules are children of the shell. Kill the whole
+                        # session to release their locks and pipes before joining.
+                        with suppress(ProcessLookupError):
+                            os.killpg(reader.pid, signal.SIGKILL)
                         reader.communicate(timeout=10)
-                    if publisher_started:
-                        publisher.join(timeout=10)
-                        self.assertFalse(
-                            publisher.is_alive(), "publisher did not exit after reader cleanup"
-                        )
+                    finally:
+                        if publisher_started:
+                            publisher.join(timeout=10)
+                            self.assertFalse(
+                                publisher.is_alive(), "publisher did not exit after reader cleanup"
+                            )
                 self.assertFalse(publication_errors, publication_errors)
                 self.assertEqual((self.mirror / "module.py").read_text(), "VALUE = 'new'\n")
 
