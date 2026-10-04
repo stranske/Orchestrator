@@ -159,6 +159,90 @@ class MirrorGenerationTests(unittest.TestCase):
             if publisher.ident is not None:
                 publisher.join(15)
 
+    def test_inherited_pythonpath_cannot_import_a_later_generation_module(self):
+        observer = """
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+print(json.dumps(os.environ['PYTHONPATH'].split(os.pathsep)), flush=True)
+sys.stdin.readline()
+child = subprocess.run(
+    [sys.executable, '-c',
+     'import importlib.util; print(importlib.util.find_spec("later_only") is not None)'],
+    capture_output=True, text=True, check=True,
+)
+print(json.dumps([
+    importlib.util.find_spec('later_only') is not None,
+    child.stdout.strip() == 'True',
+]), flush=True)
+"""
+        (self.snapshot / "observer.py").write_text(observer)
+        self.publish()
+        pinned = self.mirror.resolve()
+        outside = self.root / "external"
+        outside.mkdir()
+        sibling = self.root / "mirror-other"
+        sibling.mkdir()
+        inherited = [
+            str(outside),
+            str(self.mirror / "plugins"),
+            str(self.mirror / "plugins" / ".."),
+            str(self.mirror / ".." / "mirror"),
+            str(self.mirror / ".." / "external"),
+            str(sibling),
+            "relative-entry",
+            str(self.mirror),
+            str(outside),
+        ]
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(inherited))
+        reader = subprocess.Popen(
+            [
+                sys.executable,
+                str(REPO / "src/mirror_reader.py"),
+                "run",
+                str(self.mirror),
+                sys.executable,
+                str(self.mirror / "observer.py"),
+            ],
+            cwd=self.root,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            paths = json.loads(reader.stdout.readline())
+            (self.snapshot / "later_only.py").write_text("VALUE = 'new generation only'\n")
+            self.set_value("new")
+            self.publish()
+            output, error = reader.communicate("resume\n", timeout=15)
+            self.assertEqual(reader.returncode, 0, error)
+            self.assertTrue((self.mirror / "later_only.py").is_file())
+            self.assertFalse((pinned / "later_only.py").exists())
+            self.assertEqual(json.loads(output), [False, False])
+            self.assertEqual(
+                paths,
+                [
+                    str(pinned),
+                    str(outside),
+                    str(pinned / "plugins"),
+                    str(pinned),
+                    str(pinned),
+                    str(self.mirror / ".." / "external"),
+                    str(sibling),
+                    "relative-entry",
+                    str(pinned),
+                    str(outside),
+                ],
+            )
+        finally:
+            if reader.poll() is None:
+                reader.kill()
+                reader.communicate(timeout=10)
+
     def test_inherited_import_paths_exclude_later_generation_modules(self):
         external = self.root / "external"
         external.mkdir()

@@ -69,6 +69,9 @@ def run(root: Path, command: list[str]) -> int:
             # Rewrite only path arguments inside the mirror, without interpreting
             # shell strings or changing unrelated arguments containing its name.
             path = Path(argument)
+            if path.is_absolute():
+                # Normalize dot segments without resolving the live publication link.
+                path = Path(os.path.abspath(path))
             if path.is_absolute() and path.is_relative_to(root):
                 return str(pinned / path.relative_to(root))
             return argument
