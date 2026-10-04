@@ -212,12 +212,11 @@ def ship_gate_line(out: dict) -> str:
     age = gate.get("stamp_age_s")
     hold_h = int(gate.get("hold_s") or SHIP_GATE_HOLD_S) / 3600
     age_txt = "no stamp yet" if age is None else f"stamp {age / 3600:.1f}h old, holds {hold_h:.0f}h"
-    if not gate.get("evaluated"):
-        return f"ship-gate: evaluated 0 — nothing to launch ({age_txt})"
+    empty = " — nothing to launch" if not gate.get("evaluated") else ""
     return (
         f"ship-gate: evaluated {gate['evaluated']}, launchable {gate['launchable']}, "
         f"launched {gate['launched']}, finished {gate['finished']}, "
-        f"inflight {'yes' if gate.get('inflight') else 'no'} ({age_txt})"
+        f"inflight {'yes' if gate.get('inflight') else 'no'} ({age_txt}){empty}"
     )
 
 
@@ -1623,7 +1622,10 @@ def followup(
                 ship_gate["launched"] += 1
                 launch_available = False
             phase_after = state.get("delivery_phase")
-            if phase_after not in synthesis_promotion.TERMINAL_PHASES:
+            if (
+                phase_after not in synthesis_promotion.TERMINAL_PHASES
+                and phase_after != "evaluated"
+            ):
                 promotion_inflight = True
                 launch_available = False
             out["promotions"].append(

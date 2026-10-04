@@ -178,6 +178,36 @@ def test_a_new_finish_holds_later_candidates_in_the_same_run():
     assert out["ship_gate"]["evaluated"] == 2
 
 
+def test_a_held_evaluated_candidate_is_queued_without_inflight_work():
+    _promotion_dir("held", evaluated_at=int(time.time()) - 3600)
+    _stamp(3600)
+    calls: list = []
+
+    gate = _followup(calls)["ship_gate"]
+
+    assert calls == []
+    assert gate["evaluated"] == 1 and gate["launchable"] == 0
+    assert gate["inflight"] is False
+
+
+def test_zero_evaluated_summary_retains_finishes_and_inflight_work():
+    line = exp_abcd.ship_gate_line(
+        {
+            "ship_gate": {
+                "evaluated": 0,
+                "launchable": 0,
+                "launched": 0,
+                "finished": 2,
+                "inflight": True,
+                "stamp_age_s": None,
+            }
+        }
+    )
+
+    assert "evaluated 0, launchable 0" in line
+    assert "finished 2" in line and "inflight yes" in line
+
+
 def test_the_summary_line_carries_both_numbers_and_never_spells_unmeasured_as_zero():
     held = {
         "ship_gate": {
