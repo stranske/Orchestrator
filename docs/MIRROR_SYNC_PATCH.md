@@ -772,3 +772,23 @@ the paired witnesses; post-merge live plist review remains operator-owned.
 Overlapping publishers contend on the exclusive `.publish.lock` and never observe
 a partial generation; `test_overlapping_publishers_serialize_on_exclusive_lock`
 covers that serialization path beside the interruption and retry regressions.
+
+
+### Abrupt publisher death and retry (source evidence)
+
+`test_process_death_preserves_generation_runtime_and_retry` exits a real child
+process with `os._exit`, bypassing Python cleanup at three boundaries: private
+generation staging, immediately before the native directory exchange, and
+immediately after exchange. Before exchange the old executable generation
+remains complete; after exchange the new verified generation remains complete.
+An already-open runtime report descriptor remains writable across process death
+and a second publication, and the runtime marker survives both. The separate
+registry remains old until retry writes the validated new registry.
+
+Retry removes the abandoned `.next-<digest>` staging directory while holding the
+publication lock. Retired trees are retained conservatively, including a complete
+prepared tree left by death before exchange: this publisher cannot prove that an
+old tree has no reader or runtime backing references, so it never bulk-deletes
+`.retired-*`. These tests cover process interruption, not machine power loss or
+filesystem durability after reboot. Installed-wrapper and guarded deployment
+evidence remains pending until merge and pull.

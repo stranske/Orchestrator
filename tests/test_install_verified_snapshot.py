@@ -1483,3 +1483,79 @@ def test_overlapping_publishers_serialize_on_exclusive_lock(tmp_path, monkeypatc
     assert not errors
     assert (mirror / "module.py").read_text() == "VALUE = 'new'\n"
     assert installer.snapshot_digest(mirror) == digest_new
+
+
+@pytest.mark.parametrize("phase", ["staging", "before_exchange", "after_exchange"])
+def test_process_death_preserves_generation_runtime_and_retry(tmp_path, phase):
+    """An abrupt publisher exit skips finally; retry must preserve live and backing data."""
+    import sys
+
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    (mirror / "module.py").write_text("VALUE = 'old'\n")
+    report = mirror / "docs/reports/runtime.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("before publication\n")
+    marker = mirror / "experiments/.last-ship-gate"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("marker survives\n")
+    digest = installer.snapshot_digest(snapshot)
+    registry_before = registry.read_bytes()
+    child = r"""
+import os
+import sys
+from pathlib import Path
+from scripts import install_verified_snapshot as installer
+snapshot, mirror, registry = map(Path, sys.argv[1:4])
+digest, phase = sys.argv[4:6]
+copy = installer._copy_payload
+exchange = installer._exchange_directories
+
+def interrupted_copy(payload, destination, entries):
+    copy(payload, destination, entries)
+    if phase == "staging" and ".next-" in destination.name:
+        os._exit(91)
+
+def interrupted_exchange(left, right):
+    if phase == "before_exchange":
+        os._exit(91)
+    exchange(left, right)
+    os._exit(91)
+
+installer._copy_payload = interrupted_copy
+installer._exchange_directories = interrupted_exchange
+installer.install(snapshot, mirror, digest, registry)
+raise AssertionError("publisher did not reach the interruption boundary")
+"""
+    # Keep a real pre-publication file descriptor alive across process death and retry.
+    with report.open("a") as writer:
+        result = subprocess.run(
+            [sys.executable, "-c", child, str(snapshot), str(mirror), str(registry), digest, phase],
+            cwd=paths.REPO_ROOT,
+            env={**os.environ, "TMPDIR": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 91, result.stdout + result.stderr
+        assert mirror.is_dir()
+        expected = "VALUE = 'verified'\n" if phase == "after_exchange" else "VALUE = 'old'\n"
+        assert (mirror / "module.py").read_text() == expected
+        assert registry.read_bytes() == registry_before
+        writer.write("after process death\n")
+        writer.flush()
+        assert report.read_text() == "before publication\nafter process death\n"
+        assert marker.read_text() == "marker survives\n"
+        if phase == "staging":
+            assert list(mirror.parent.glob(f"{mirror.name}.next-*"))
+        else:
+            assert list(mirror.parent.glob(f"{mirror.name}.retired-*"))
+
+        installer.install(snapshot, mirror, digest, registry)
+        writer.write("after retry\n")
+        writer.flush()
+        assert report.read_text() == "before publication\nafter process death\nafter retry\n"
+        assert marker.read_text() == "marker survives\n"
+        assert installer.snapshot_digest(mirror) == digest
+        assert not list(mirror.parent.glob(f"{mirror.name}.next-*"))
+        assert registry.read_bytes() == (snapshot / "repo_review_registry.json").read_bytes()
