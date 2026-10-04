@@ -878,20 +878,24 @@ node "$source_root/scripts/capture_mirror_deployment_evidence.js" \
   "$source_root" "$HOME/.codex/orchestrator-mirror" \
   "$evidence_dir/verified-payload.sha256" \
   "$HOME/.codex/orchestrator/repo_review_registry.json" \
-  "$HOME/.codex/bin" "$evidence_dir/publication.log" "$evidence_dir/observations.json"
+  "$HOME/.codex/bin" "$evidence_dir/publication.log" \
+  "$evidence_dir/publication-exit.txt" "$evidence_dir/observations.json"
 ```
 
 The Node collector reads installed state and writes only the new observation file. It records
 the checkout commit, both installed-wrapper SHA256 values and presence of their documented
 blocks, the retained receipt and physical-generation digest, publication-log SHA256 and
-success markers, and the separate registry's correspondence with the generation. A mismatch
-returns exit 2. A publication overlapping collection also returns exit 2; collect again using
+success markers, the retained publication exit status and its SHA256, and the separate
+registry's correspondence with the generation. A nonzero publication exit status or other
+mismatch returns exit 2. Missing or malformed exit evidence is rejected without writing an
+observation file. A publication overlapping collection also returns exit 2; collect again using
 the receipt and log for the currently active generation. Existing evidence is never overwritten.
 Move the evidence directory to retained operator storage before clearing temporary files.
 
 Even matching observations carry `deployment_status: pending-operator-review`: block presence
-does not prove wrapper control-flow placement, and log markers do not prove command exit.
-Review the retained exit status, match the checkout commit to the actual merge/pull, inspect
+does not prove wrapper control-flow placement. The collector requires a retained zero exit
+status as well as success log markers; that status is an operator-supplied observation, not an
+independent replay of the command. Match the checkout commit to the actual merge/pull, inspect
 launchd/cron entries, compare runtime reports/markers before and after publication, and retain
 durable `verify:compare` output before checking the deployment task complete. This repository
 change does not install wrappers or supply those live observations.
