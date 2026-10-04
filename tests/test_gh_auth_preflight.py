@@ -32,6 +32,7 @@ import paths
 ORCHESTRATE = paths.REPO_ROOT / "orchestrate.sh"
 ANCHOR = "# ORCH-ANCHOR: " + "gh-auth-preflight"
 HEARTBEAT_ANCHOR = "# ORCH-ANCHOR: " + "heartbeat-export"
+MIRROR_READER_ANCHOR = "# ORCH-ANCHOR: " + "mirror-reader-reentry"
 DEFERS = "GitHub-dependent steps defer, local steps run"
 RESET = 4102444800  # 2100-01-01T00:00:00Z: a reset far enough out that no test run reaches it
 RATE_LIMITED_LINE = (
@@ -117,12 +118,17 @@ def _code(text: str) -> str:
 
 
 def _preflight_block() -> str:
-    """The real preflight: from its anchor up to the heartbeat export it must stay above."""
+    """The real preflight, ending before mirror-reader reentry, with both above heartbeat."""
     text = _text()
     assert text.count(ANCHOR) == 1, f"expected exactly one {ANCHOR!r} in orchestrate.sh"
     assert text.count(HEARTBEAT_ANCHOR) == 1, f"expected exactly one {HEARTBEAT_ANCHOR!r}"
-    start, end = text.index(ANCHOR), text.index(HEARTBEAT_ANCHOR)
-    assert start < end, "the gh preflight must run above the heartbeat export"
+    assert (
+        text.count(MIRROR_READER_ANCHOR) == 1
+    ), f"expected exactly one {MIRROR_READER_ANCHOR!r} in orchestrate.sh"
+    start, end = text.index(ANCHOR), text.index(MIRROR_READER_ANCHOR)
+    assert (
+        start < end < text.index(HEARTBEAT_ANCHOR)
+    ), "the gh preflight and mirror-reader reentry must run above the heartbeat export"
     return text[start:end]
 
 
@@ -190,6 +196,17 @@ def test_the_preflight_sits_above_the_heartbeat_export() -> None:
     needle = 'gh_capacity.py" --auth-' + "preflight"
     assert _text().count(needle) == 1, f"expected exactly one {needle!r} in orchestrate.sh"
     assert needle in block, "the classifier call must sit inside the preflight block"
+
+
+def test_active_preflight_precedes_mirror_reader_reentry() -> None:
+    """A refused credential must abort before a mirror can exec a second tick."""
+    text = _text()
+    assert (
+        text.count(MIRROR_READER_ANCHOR) == 1
+    ), "expected exactly one mirror-reader reentry anchor"
+    assert text.index(ANCHOR) < text.index(
+        MIRROR_READER_ANCHOR
+    ), "the GitHub auth preflight must run before mirror_reader can re-enter orchestrate.sh"
 
 
 def test_gh_auth_status_is_not_the_preflight() -> None:

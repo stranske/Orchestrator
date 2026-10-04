@@ -363,7 +363,53 @@ on the exact tree about to go live.
    snapshot change before mutating the live mirror. It never re-reads mutable `SRC` or fetches the
    registry a second time.
 
-Its exit codes are 0 VERIFIED, 1 NOT VERIFIED, 2 nothing verified, and 3 VOID (`SRC` moved). It
+The installer first builds a private deployment payload and checks its complete digest against
+the receipt, including permissions and symlink targets. It validates the copied docs manifest and
+registry JSON before removing any live deployment files. Installation and the separate registry
+update read that private payload, so the retained snapshot is no longer needed once preparation
+passes. Symlinks must be relative and stay within the payload. Preparation failures leave the live
+mirror untouched; the subsequent copy still runs in place, so reader consistency and recovery
+remain pending under #389.
+
+### Deployment and runtime ownership
+
+`scripts/install_verified_snapshot.py` defines the current ownership boundary. It does not
+enumerate all mirror files as deployment input or copy runtime output into its private payload:
+
+| Paths | Owner and publication behavior |
+|---|---|
+| Root `*.py`, `*.sh`; `tests/`, `scripts/`, `.github/` | Deployment-owned. Old entries are removed, including files no longer shipped. Do not store runtime output in these trees. |
+| `docs/` | Merged directory. Only the file or symlink paths listed in `.docs-shipped.txt` are deployment-owned. Parent directories do not grant ownership of their children. Old manifest leaves are removed; new leaves come from the retained snapshot. Unlisted reports remain runtime-owned, including `docs/reports/issue_completion_*`. |
+| `.docs-shipped.txt`, `.gitignore`, `.verify-floor.json`, `.coveragerc`, `pyproject.toml`, `ruff.toml`, `CLAUDE.md`, `IMPROVEMENT_BACKLOG.md`, `repo_review_registry.json` | Named deployment files, removed if absent from the new snapshot. |
+| `experiments/hypotheses.json`, `experiments/features.json`, `experiments/repo_knowledge.json`, `data/feedback-snapshot.json`, `config/coverage-baseline.json` | Named deployment files only. Other children and their parent directories remain runtime-owned. |
+| `experiments/.last-ship-gate`, unlisted docs/reports, other paths outside deployment ownership | Runtime-owned. Publication leaves these in place, preserving open file handles, concurrent updates, and newly created reports. |
+| `~/.codex/orchestrator/repo_review_registry.json` | Separate runtime-registry copy. Validated deployment bytes supply its update after generation publication; there is no atomic transaction across these locations. The file is synced before replacement and its parent directory afterward; failures propagate and a fresh install retries the update. |
+
+Before touching live deployment entries, the installer rejects a file-ownership path that now
+contains a real directory, or a merged parent that is a symlink or a non-directory. This prevents
+an obsolete shipped-doc entry from recursively deleting runtime children and prevents writes
+through parent symlinks into runtime storage. Leaf removal uses `unlink`, so a directory created
+after this check also cannot be removed recursively. A conflicting layout must be resolved before
+retry; it is not permission to delete runtime data. A leaf symlink itself may be removed without
+deleting its target.
+
+The separate runtime-registry destination must be outside both the retained snapshot and the
+mirror. The installer rejects overlapping destinations before removing any live entries,
+including destinations whose parent symlink points into either tree. This prevents a registry
+update from overwriting verified deployment bytes after the digest check or consuming mirror-local
+runtime reports. The update uses the resolved parent path, so retargeting the original parent
+alias during preparation cannot redirect it into the mirror. A registry leaf symlink outside those
+trees is replaced without following its target.
+
+`tests/test_install_verified_snapshot.py` synchronizes a writer with the live copy, including
+handles opened before publication and a report created during it. It checks that the writes
+survive, obsolete deployment docs disappear, and the installed deployment digest still matches
+the receipt. The current publisher prepares and validates a private generation, then exchanges it with
+the live directory under the mirror-specific publication lock. Reader exclusion, runtime backing
+references, and interruption/retry witnesses are described in the PR #390 sections below. The
+installed incumbent copier remains unsafe until its entry guard is installed after merge and pull.
+
+The verifier's exit codes are 0 VERIFIED, 1 NOT VERIFIED, 2 nothing verified, and 3 VOID (`SRC` moved). It
 never writes the live mirror, the live registry copy, the live ledger or the live Brain.
 `tests/test_verify_before_sync.py` covers every exit path, the isolation of the copy, and the
 state copy, with stand-ins for the copy script and `verify.py`. The `verify.py` stand-in writes
@@ -389,7 +435,12 @@ PRE="$SRC/scripts/verify_before_sync.sh"
 if [[ "$RUN_VERIFY" == "0" ]]; then
   echo
   echo "== syncing without a verdict (--no-verify)"
-  "$HOME/.codex/bin/orch-sync-mirror.sh" "$SRC"
+  PUBLISHER="$SRC/scripts/publish_unverified_snapshot.sh"
+  if [[ ! -f "$PUBLISHER" ]]; then
+    echo "NOT SYNCED: no guarded unverified publisher in $SRC." >&2
+    exit 3
+  fi
+  bash "$PUBLISHER" "$SRC" "$MIRROR"
   echo
   echo "== skipped the mirror verify (--no-verify). The copy is NOT a verdict."
   exit 0
@@ -435,7 +486,7 @@ if python3 -I "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
   :
 else
   install_rc=$?
-  printf 'INSTALL FAILED (exit %s): the live mirror may be partially updated; no rollback was performed.\n' \
+  printf 'INSTALL FAILED (exit %s): publication or registry update failed; retain the complete visible generation and retry.\n' \
     "$install_rc" >&2
   printf '  to retry verified installation from a fresh snapshot:' >&2
   printf ' %q' "$0" >&2
@@ -459,7 +510,7 @@ Also change the `--no-verify` help line to say it is the way to copy after a red
 | Red | It does not copy. The live mirror keeps running the code it already ran, and the last line printed is the one command that copies anyway. A false red (a ledger row registered by a sibling session's unmerged branch, say) therefore costs one command, never a blocked sync. |
 | VOID | It does not copy. Re-run once the clone is settled. |
 | Missing pre-verifier | It fails closed before copying and prints the quoted `--no-verify` override. There is no copy-first fallback. |
-| Installer failure | It preserves the installer's status, warns that the in-place mirror may be partial, and prints both the verified retry and explicit `--no-verify` commands. Atomic publication and rollback remain tracked by #389. |
+| Installer failure | It preserves the installer's status and prints both retry paths. The complete old or new generation remains visible; the separate registry may still need retry. Remaining reader/runtime acceptance stays tracked by #389. |
 
 **How to confirm it.** Run the script on its own first. It writes nothing live:
 
@@ -595,3 +646,184 @@ survived; a doc listed in the previous manifest was removed; manifest entries po
 `docs/` were ignored. Deliberate break on a copy of the patched script: with the path guard removed,
 a manifest entry `../outside/victim.txt` DELETED that file outside the mirror; with the guard it
 survived; the copy was reverted to `cmp`-identical bytes.
+
+
+## PR #390 runtime-write recovery status
+
+The generation publisher serializes publication and the separate registry update with a
+mirror-specific advisory lock. Runtime-only directories such as `docs/reports` refer to
+retained storage instead of a copied directory. Runtime leaves in mixed directories use
+symlinks to retained directory entries so both open-file appends and atomic replacement
+through an already-open parent directory remain visible. Retired
+trees are deliberately retained: the publisher must not delete backing storage or trees
+that active readers might still require. Repeated publication preserves these references.
+
+Publication now uses a single native directory exchange (`renamex_np(RENAME_SWAP)` on
+macOS, `renameat2(RENAME_EXCHANGE)` on Linux). The validated generation is first placed
+at the retained pathname, then exchanged with the live directory in one kernel operation.
+The old generation lands at the runtime backing path in the same operation. Unsupported
+platforms or filesystems fail before changing the live directory; there is no two-rename
+fallback. Cleanup identifies the prepared inode so an exception immediately after exchange
+cannot delete the old runtime backing. Failure-injection tests cover both sides of the
+exchange and retry, alongside the production-kernel missing-path witness.
+
+The tick now reopens `orchestrate.sh` through `mirror_reader.py` after acquiring the
+publisher's shared lock. The inherited descriptor stays open in the shell while
+it waits for Python children, including children that close their own descriptors.
+Exec preserves the tick PID; the watchdog arms before any publication-lock wait
+and is retained across the restart. Inherited descriptors
+are checked against the mirror-specific lock inode; stale or other-mirror values
+cannot bypass acquisition. A synchronized production-publisher witness loads an
+old module in a Python child, reaches the installer's exclusive lock, reads again,
+and observes old bytes; publication then resumes and installs new bytes. The same
+witness sees new bytes on its second read with the original unlocked prologue.
+The cost is that a running tick delays publication until it exits.
+
+This is a partial recovery, not an atomic-publication completion claim. Standalone
+Python entries wrapped with `mirror_reader.py run MIRROR python3 ...` now have a paired
+production-publisher witness: the identical child observer crosses executable generations
+without that wrapper and stays on the old generation with it. Installed launchd commands
+that do not use the wrapper still need migration and live verification after merge/pull. A regression
+now covers creating new runtime leaves directly in mixed deployment/runtime directories
+(`experiments/` with both shipped deployment bytes and runtime markers); existing runtime leaves
+retain both append and atomic-replacement writes. The wrapper's
+`--no-verify` route now stages the
+incumbent copier under an isolated HOME and uses the same guarded publisher with
+an explicit UNVERIFIED status. The direct-copier guard, initial real-directory exchange, overlapping publishers, and abrupt
+process-death recovery now have the source witnesses listed below. Installed wrappers remain
+unchanged until merge and pull; reader-command migration and guarded deployment evidence remain
+pending. Source validation does not establish installed deployment completion.
+
+The after-transfer regression test opens report/marker handles before installation, writes
+after runtime transfer and after publication, creates a late report, and repeats installation.
+It fails on the prior copying publisher and passes with shared runtime storage. A second
+regression holds a mixed-directory descriptor and atomically replaces an existing marker
+after transfer, after publication, and after retry. It fails with inode-only hard links
+and passes with retained-entry references. Earlier
+Node witnesses only observe the old tree before the switch and the new tree afterward;
+they do not establish a pinned reader spanning publication.
+
+### Guarded unverified wrapper route
+
+After merge and pull, the wrapper block above invokes the pulled
+`scripts/publish_unverified_snapshot.sh` for `--no-verify`. The helper runs the
+installed legacy copier with a scratch `HOME` and `ORCH_MIRROR`, then hashes and
+structurally validates that complete payload and calls its retained installer.
+A copy failure or invalid payload leaves both live locations untouched. The
+installer keeps the same exclusive publication lock and separate registry update,
+but prints `installed UNVERIFIED snapshot`: the digest is an integrity binding,
+not a verifier receipt. Neither helper nor wrapper runs `verify.py` on this route.
+Direct invocation of the incumbent copier remains outside this protection. An isolated
+real-copier witness pauses its first copy after deletion: a reader loses the live
+module on the direct route, while the guarded unverified route keeps the live module
+available because copying occurs in private staging. Both routes preserve the sampled
+runtime report and marker; neither updates the separate live registry during staging.
+That paired witness does not prove concurrent creation in mixed runtime directories
+or authorize installing wrappers before merge/pull.
+
+
+### Direct incumbent copier entry guard (pending merge and pull)
+
+After merging and pulling #390, insert this immediately after the installed
+`~/.codex/bin/orch-sync-mirror.sh` defines `SRC` and `MIRROR`, before its trap,
+`mkdir`, `find`, or copy commands:
+
+```bash
+[[ -f "$SRC/scripts/incumbent_copy_guard.sh" ]] || {
+  echo "NOT SYNCED: source has no incumbent copy guard; live mirror untouched." >&2
+  exit 2
+}
+source "$SRC/scripts/incumbent_copy_guard.sh"
+```
+
+A direct call execs the guarded UNVERIFIED publisher and cannot fall back into
+live deletion/copy when it returns. The verifier and unverified staging helpers
+provide `ORCH_PRIVATE_COPY_ROOT`; the guard permits in-place copying only when
+both HOME and MIRROR match that existing private root's staging layout. A stray
+flag on the ordinary HOME or live mirror does not bypass the guard. Missing
+publisher code fails before any live write. This does not verify the payload or
+migrate standalone launchd readers. Installed files are unchanged until merge/pull;
+paired source tests and isolated copier evidence must precede deployment claims.
+
+The isolated actual installed copier (SHA256
+`2db903979ab8f52ed151e55b5469da34d0ac7d4cb8ae0b0631e7518f18a52053`)
+was replayed with and without this prologue. At its first copy, after deletion,
+the same observer found `paths.py` missing on the incumbent and present on the
+guarded direct route. Both runs completed and preserved sampled runtime report
+and marker bytes. The registry stayed unchanged during staging. GH was stubbed
+to its local fallback; this run proves registry preservation, not an authenticated
+registry update. No installed copier or wrapper was edited. The source tests cover publication and recovery;
+standalone launchd migration and post-merge deployment remain pending.
+
+### Launchd reader migration (source evidence)
+
+The primary hourly job (`com.stranske.orchestrator`) already runs
+`orchestrate.sh --active` against the exec mirror. That entry re-acquires the
+publisher shared lock through `mirror_reader.py` before reopening executable
+code (see the `mirror-reader-reentry` anchor in `orchestrate.sh`). No plist edit
+is required for that job once this branch merges and the mirror is refreshed.
+
+Any additional LaunchAgent or cron line that executes Python directly against
+`ORCH_MIRROR` must wrap the command as
+`python3 "$ORCH/mirror_reader.py" run "$ORCH_REPO" …` so child imports pin one
+generation. Source tests `test_tick_reader_excludes_real_publisher_across_child_imports`
+and `test_standalone_python_reader_excludes_publisher_across_child_imports` are
+the paired witnesses; post-merge live plist review remains operator-owned.
+
+Overlapping publishers contend on the exclusive `.publish.lock` and never observe
+a partial generation; `test_overlapping_publishers_serialize_on_exclusive_lock`
+covers that serialization path beside the interruption and retry regressions.
+
+
+### Abrupt publisher death and retry (source evidence)
+
+`test_process_death_preserves_generation_runtime_and_retry` exits a real child
+process with `os._exit`, bypassing Python cleanup at three boundaries: private
+generation staging, immediately before the native directory exchange, and
+immediately after exchange. Before exchange the old executable generation
+remains complete; after exchange the new verified generation remains complete.
+An already-open runtime report descriptor remains writable across process death
+and a second publication, and the runtime marker survives both. The separate
+registry remains old until retry writes the validated new registry.
+
+Retry removes the abandoned `.next-<digest>` staging directory while holding the
+publication lock. Retired trees are retained conservatively, including a complete
+prepared tree left by death before exchange: this publisher cannot prove that an
+old tree has no reader or runtime backing references, so it never bulk-deletes
+`.retired-*`. These tests cover process interruption, not machine power loss or
+filesystem durability after reboot. Installed-wrapper and guarded deployment
+evidence remains pending until merge and pull.
+
+
+### Acceptance evidence and remaining deployment boundary
+
+The bootstrap marker `agents/codex-389.md` is not acceptance evidence. Completion of the
+source implementation is established by the production publisher and reader entry points:
+
+| Claim from source #389 | Executable evidence |
+|---|---|
+| Complete payload validation before a reader-visible change | `test_payload_copy_failure_keeps_live_outputs_and_cleans_staging`, `test_corrupt_copy_is_rejected_before_live_mutation`, and `test_install_never_reopens_snapshot_after_staging_validation` use the production installer. |
+| A reader and its child imports stay on one generation | `test_tick_reader_excludes_real_publisher_across_child_imports` covers both active and shadow entry; `test_standalone_python_reader_excludes_publisher_across_child_imports` pairs the same observer with an unguarded entry that crosses generations. |
+| Initial real-directory publication and concurrent runtime writes survive retry | `test_runtime_writes_after_transfer_survive_switch_and_retry`, `test_new_runtime_leaf_in_mixed_directory_survives_publication_and_retry`, and `test_runtime_leaf_atomic_replacement_survives_publication_and_retry` exercise real retained backing paths. |
+| Overlapping publishers and interruption before/after exchange | `test_overlapping_publishers_serialize_on_exclusive_lock`, `test_atomic_publication_has_no_missing_live_path`, and the three `test_process_death_preserves_generation_runtime_and_retry` phases cover lock serialization, syscall boundaries, abrupt death, and cleanup/retry. |
+| Separate registry failure has an explicit retry disposition | The six `test_runtime_registry_sync_order_cleanup_and_retry` cases verify file-sync/replace/directory-sync order, retained old or new registry state, exception propagation, and successful retry. |
+| Copying without verification retains publication safety | `test_unverified_route_stages_copier_and_never_claims_verification` covers success and preparation failures. `test_direct_copier_guard_keeps_live_tree_available` pairs guarded and incumbent entry routes, including copy failure. The actual installed copier replay above supplies an additional local integration witness; GH fallback is not authenticated registry evidence. |
+
+The six-file acceptance command in source #389 currently passes 144 cases; the count
+includes the positive publisher tests and their negative controls, rather than treating an
+incumbent-defect witness as proof of repair. Shell syntax validation covers `orchestrate.sh`,
+`verify_before_sync.sh`, `publish_unverified_snapshot.sh`, and `incumbent_copy_guard.sh`.
+These results establish source behavior and process-interruption recovery, not power-loss
+durability or a full `verify.py` verdict.
+
+Deployment remains pending until all of the following are observed after gated merge and pull:
+
+1. Record the pulled commit and confirm both installed wrappers match the documented
+   publication paths, including the direct copier's entry guard.
+2. Inspect actual launchd/cron commands. The primary `orchestrate.sh --active` entry takes
+   the reader lock; wrap any auxiliary Python command that reads the mirror with
+   `mirror_reader.py run` before claiming universal reader coverage.
+3. Run the guarded verified publication, retain its receipt and exact deployment digest,
+   and check runtime reports/markers and the separate registry at the installed locations.
+4. Inspect durable `verify:compare` output and disposition source #389. Keep the source
+   issue open until deployment and verifier evidence are complete.

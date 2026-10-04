@@ -69,6 +69,14 @@ def wrapper_world(tmp_path: Path) -> dict[str, Path]:
     )
     ordinary.chmod(0o755)
 
+    publisher = source / "scripts" / "publish_unverified_snapshot.sh"
+    publisher.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        '[[ "$1" == "$FAKE_SRC" && "$2" == "$FAKE_MIRROR" ]]\n'
+        'echo guarded-unverified >> "$FAKE_RECORD"\n'
+    )
+
     wrapper = tmp_path / "wrapper.sh"
     wrapper.write_text(
         "#!/usr/bin/env bash\n"
@@ -134,12 +142,12 @@ def test_red_and_missing_preverifier_fail_closed_before_any_copy(wrapper_world):
     assert not wrapper_world["record"].exists()
 
 
-def test_no_verify_is_the_only_path_that_invokes_the_ordinary_copier(wrapper_world):
+def test_no_verify_routes_through_guarded_unverified_publisher(wrapper_world):
     wrapper_world["pre"].unlink()
     result = _run(wrapper_world, RUN_VERIFY="0")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert wrapper_world["record"].read_text().splitlines() == ["ordinary-copy"]
-    assert (wrapper_world["mirror"] / "payload.txt").read_text() == "mutable source\n"
+    assert wrapper_world["record"].read_text().splitlines() == ["guarded-unverified"]
+    assert not (wrapper_world["mirror"] / "payload.txt").exists()
     assert "copy is NOT a verdict" in result.stdout
 
 
