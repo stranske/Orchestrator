@@ -289,7 +289,10 @@ fi
 
 # ORCH-ANCHOR: mirror-reader-reentry -------------------------------------------------------------
 # Reopen the tick only after acquiring the publisher's shared lock. The helper
-# descriptor stays in the tick shell across Python children and exec transitions.
+# resolves the mirror link once and reopens the physical generation, exporting
+# that ORCH_DIR and Python import root to children. Retained generations allow
+# publication while this tick runs. During initial real-directory migration the
+# shared descriptor stays locked across shell children and exec transitions.
 # Bash-c prologue inspection has no script file and must remain read-only.
 # Placed AFTER the gh preflight so a refused or missing token ABORTs before any
 # mirror exec would re-enter the tick on blind state.

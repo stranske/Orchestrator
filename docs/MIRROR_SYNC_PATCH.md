@@ -658,31 +658,34 @@ through an already-open parent directory remain visible. Retired
 trees are deliberately retained: the publisher must not delete backing storage or trees
 that active readers might still require. Repeated publication preserves these references.
 
-Publication now uses a single native directory exchange (`renamex_np(RENAME_SWAP)` on
-macOS, `renameat2(RENAME_EXCHANGE)` on Linux). The validated generation is first placed
-at the retained pathname, then exchanged with the live directory in one kernel operation.
-The old generation lands at the runtime backing path in the same operation. Unsupported
-platforms or filesystems fail before changing the live directory; there is no two-rename
-fallback. Cleanup identifies the prepared inode so an exception immediately after exchange
-cannot delete the old runtime backing. Failure-injection tests cover both sides of the
-exchange and retry, alongside the production-kernel missing-path witness.
+Publication builds a complete `MIRROR.generation-<unique-id>` directory and switches
+the live mirror symlink to it. Its physical executable pathname stays fixed during
+later publications. Initial migration uses a single native directory exchange
+(`renamex_np(RENAME_SWAP)` on macOS, `renameat2(RENAME_EXCHANGE)` on Linux) to replace
+the incumbent real directory with that symlink. The old directory lands at its runtime
+backing path in the same operation. Unsupported platforms or filesystems fail before
+changing the real directory; there is no two-rename fallback. Later publication uses
+atomic symlink replacement. Completed generations and retired real directories are
+retained conservatively, including after an interrupted publication syscall.
 
-The tick now reopens `orchestrate.sh` through `mirror_reader.py` after acquiring the
-publisher's shared lock. The inherited descriptor stays open in the shell while
-it waits for Python children, including children that close their own descriptors.
-Exec preserves the tick PID; the watchdog arms before any publication-lock wait
-and is retained across the restart. Inherited descriptors
-are checked against the mirror-specific lock inode; stale or other-mirror values
-cannot bypass acquisition. A synchronized production-publisher witness loads an
-old module in a Python child, reaches the installer's exclusive lock, reads again,
-and observes old bytes; publication then resumes and installs new bytes. The same
-witness sees new bytes on its second read with the original unlocked prologue.
-The cost is that a running tick delays publication until it exits.
+The tick reopens `orchestrate.sh` through `mirror_reader.py` after selecting the
+physical generation under the publisher's shared lock. The helper exports that
+physical `ORCH_DIR` and Python import path to children; `paths.py` also pins import
+aliases and `checkout_root()` to its module generation. The inherited descriptor
+stays open in the shell while it waits for Python children. For a permanently named
+generation it is unlocked before exec, allowing publication while the tick runs.
+For the incumbent real directory it stays locked until the reader exits, protecting
+initial migration. Exec preserves the tick PID and its already-armed watchdog.
+Inherited descriptors are checked against the mirror-specific lock inode.
+A synchronized observer loads an old module, completes two publications while
+paused, then reads and imports old bytes again, including in a fresh child process.
+Both active and shadow tick entries exercise this observer. The identical observer
+crosses deployment bytes on the incumbent in-place publisher.
 
 This is a partial recovery, not an atomic-publication completion claim. Standalone
 Python entries wrapped with `mirror_reader.py run MIRROR python3 ...` now have a paired
 production-publisher witness: the identical child observer crosses executable generations
-without that wrapper and stays on the old generation with it. Installed launchd commands
+on the incumbent in-place copier and stays on the old generation with the helper. Installed launchd commands
 that do not use the wrapper still need migration and live verification after merge/pull. A regression
 now covers creating new runtime leaves directly in mixed deployment/runtime directories
 (`experiments/` with both shipped deployment bytes and runtime markers); existing runtime leaves
@@ -787,10 +790,10 @@ and a second publication, and the runtime marker survives both. The separate
 registry remains old until retry writes the validated new registry.
 
 Retry removes the abandoned `.next-<digest>` staging directory while holding the
-publication lock. Retired trees are retained conservatively, including a complete
-prepared tree left by death before exchange: this publisher cannot prove that an
+publication lock. Completed generations and retired trees are retained conservatively,
+including a prepared tree left by death before exchange: this publisher cannot prove that an
 old tree has no reader or runtime backing references, so it never bulk-deletes
-`.retired-*`. These tests cover process interruption, not machine power loss or
+`.retired-*` or `.generation-*`. These tests cover process interruption, not machine power loss or
 filesystem durability after reboot. Installed-wrapper and guarded deployment
 evidence remains pending until merge and pull.
 
@@ -803,15 +806,20 @@ source implementation is established by the production publisher and reader entr
 | Claim from source #389 | Executable evidence |
 |---|---|
 | Complete payload validation before a reader-visible change | `test_payload_copy_failure_keeps_live_outputs_and_cleans_staging`, `test_corrupt_copy_is_rejected_before_live_mutation`, and `test_install_never_reopens_snapshot_after_staging_validation` use the production installer. |
-| A reader and its child imports stay on one generation | `test_tick_reader_excludes_real_publisher_across_child_imports` covers both active and shadow entry; `test_standalone_python_reader_excludes_publisher_across_child_imports` pairs the same observer with an unguarded entry that crosses generations. |
+| A reader and its child imports stay on one generation | `test_tick_reader_excludes_real_publisher_across_child_imports` covers both active and shadow entry; `test_standalone_python_reader_excludes_publisher_across_child_imports` pairs the same observer with an incumbent in-place publisher that crosses generations. `tests/test_mirror_generations.py` also asserts late sibling imports and a fresh child remain pinned across two completed publications. |
 | Initial real-directory publication and concurrent runtime writes survive retry | `test_runtime_writes_after_transfer_survive_switch_and_retry`, `test_new_runtime_leaf_in_mixed_directory_survives_publication_and_retry`, and `test_runtime_leaf_atomic_replacement_survives_publication_and_retry` exercise real retained backing paths. |
 | Overlapping publishers and interruption before/after exchange | `test_overlapping_publishers_serialize_on_exclusive_lock`, `test_atomic_publication_has_no_missing_live_path`, and the three `test_process_death_preserves_generation_runtime_and_retry` phases cover lock serialization, syscall boundaries, abrupt death, and cleanup/retry. |
 | Separate registry failure has an explicit retry disposition | The six `test_runtime_registry_sync_order_cleanup_and_retry` cases verify file-sync/replace/directory-sync order, retained old or new registry state, exception propagation, and successful retry. |
 | Copying without verification retains publication safety | `test_unverified_route_stages_copier_and_never_claims_verification` covers success and preparation failures. `test_direct_copier_guard_keeps_live_tree_available` pairs guarded and incumbent entry routes, including copy failure. The actual installed copier replay above supplies an additional local integration witness; GH fallback is not authenticated registry evidence. |
 
-The six-file acceptance command in source #389 currently passes 144 cases; the count
-includes the positive publisher tests and their negative controls, rather than treating an
-incumbent-defect witness as proof of repair. Shell syntax validation covers `orchestrate.sh`,
+The previous six-file acceptance command in source #389 passed 144 cases; the count
+included the positive publisher tests and their negative controls, rather than treating an
+incumbent-defect witness as proof of repair. That result predates the permanent-generation
+recovery and must be rerun. The additional standard-library witness runs with
+`PYTHONPATH=.:src python3 -m unittest discover -s tests -p test_mirror_generations.py -v`.
+Its four tests cover the paired observer, active/shadow tick entry, link-switch
+interruption/retry, and isolation of retained generations from the separate registry.
+Shell syntax validation covers `orchestrate.sh`,
 `verify_before_sync.sh`, `publish_unverified_snapshot.sh`, and `incumbent_copy_guard.sh`.
 These results establish source behavior and process-interruption recovery, not power-loss
 durability or a full `verify.py` verdict.
