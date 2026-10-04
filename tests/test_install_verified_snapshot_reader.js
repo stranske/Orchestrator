@@ -1,8 +1,7 @@
 'use strict';
 
-// Negative control for #389: this exercises the incumbent publisher, whose live
-// copy is still in place. Passing these tests proves the bootstrap finding, not
-// atomic publication. Reuse the observer against a future generation publisher.
+// Reader witness for #389 generation publication: the live mirror path is switched
+// only after a complete staged generation is built; pinned readers keep the prior tree.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -35,10 +34,11 @@ def rendezvous():
         raise RuntimeError("reader did not release publisher")
 
 def copy_with_reader(source, destination, entries):
-    if destination == mirror and phase == "before-copy":
+    is_staging = destination.name.startswith(mirror.name + ".next-")
+    if is_staging and phase == "before-copy":
         rendezvous()
     copy_payload(source, destination, entries)
-    if destination == mirror and phase == "after-copy":
+    if is_staging and phase == "after-copy":
         rendezvous()
 
 installer._copy_payload = copy_with_reader
@@ -130,15 +130,14 @@ test('reader control observes one complete generation without publication', { ti
 });
 
 for (const phase of ['before-copy', 'after-copy']) {
-  test(`incumbent publisher exposes ${phase === 'before-copy' ? 'missing files' : 'mixed generations'} to a pinned reader`, { timeout: 10000 }, async (t) => {
+  test(`generation publisher keeps pinned reader on the prior tree during ${phase}`, { timeout: 10000 }, async (t) => {
     const w = world(t);
-    // Resolving once cannot pin a generation when that same directory is mutated.
     const pinned = fs.realpathSync(w.mirror);
     const first = observe(pinned, 'module.py');
     const p = startPublisher(t, w, phase);
     await p.ready;
     const second = observe(pinned, 'peer.py');
-    assert.deepEqual([first, second], [oldValue, phase === 'before-copy' ? 'MISSING' : newValue]);
+    assert.deepEqual([first, second], [oldValue, oldValue]);
     assert.equal(observe(pinned, 'docs/reports/runtime.md'), 'runtime report\n');
     assert.equal(fs.readFileSync(w.registry, 'utf8'), '{"old": true}\n');
     p.child.stdin.end('resume\n');
@@ -152,15 +151,15 @@ for (const phase of ['before-copy', 'after-copy']) {
   });
 }
 
-test('interrupting incumbent live copy leaves an incomplete mirror until retry', { timeout: 10000 }, async (t) => {
+test('interrupting staged publication leaves the live mirror intact until retry', { timeout: 10000 }, async (t) => {
   const w = world(t);
   const p = startPublisher(t, w, 'before-copy');
   await p.ready;
   p.child.kill('SIGKILL');
   assert.equal((await p.done).signal, 'SIGKILL');
-  assert.equal(observe(w.mirror, 'module.py'), 'MISSING');
-  assert.equal(observe(w.mirror, 'peer.py'), 'MISSING');
-  assert.equal(observe(w.mirror, 'orchestrate.sh'), 'MISSING');
+  assert.equal(observe(w.mirror, 'module.py'), oldValue);
+  assert.equal(observe(w.mirror, 'peer.py'), oldValue);
+  assert.equal(observe(w.mirror, 'orchestrate.sh'), '#!/bin/sh\n');
   assert.equal(observe(w.mirror, 'docs/reports/runtime.md'), 'runtime report\n');
   assert.equal(fs.readFileSync(w.registry, 'utf8'), '{"old": true}\n');
   const result = spawnSync(python, [

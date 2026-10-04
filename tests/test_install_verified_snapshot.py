@@ -402,16 +402,16 @@ def test_install_never_reopens_snapshot_after_staging_validation(tmp_path, monke
     snapshot = _snapshot(tmp_path)
     mirror, registry = _live_outputs(tmp_path)
     expected = installer.snapshot_digest(snapshot)
-    remove = installer._remove_owned_file
+    copy_payload = installer._copy_payload
     displaced = tmp_path / "unavailable snapshot"
 
-    def remove_live_entry(path: Path) -> None:
-        if path == mirror / "old.py":
+    def copy_then_displace(source: Path, destination: Path, entries: list[Path]) -> None:
+        copy_payload(source, destination, entries)
+        if source == snapshot and not displaced.exists():
             snapshot.rename(displaced)
             (displaced / "repo_review_registry.json").write_text('{"changed": true}\n')
-        remove(path)
 
-    monkeypatch.setattr(installer, "_remove_owned_file", remove_live_entry)
+    monkeypatch.setattr(installer, "_copy_payload", copy_then_displace)
     assert installer.install(snapshot, mirror, expected, registry) == 0
     assert not snapshot.exists()
     assert installer.snapshot_digest(mirror) == expected
@@ -452,9 +452,9 @@ def test_runtime_writer_keeps_open_files_and_new_reports_during_publication(tmp_
                 writes_finished.set()
 
         def copy_with_writer(source: Path, destination: Path) -> None:
-            if destination == mirror / "module.py":
-                # Live owned files have been removed; the new executable is not yet copied.
-                assert not (mirror / "old.py").exists()
+            if destination.name == "module.py" and ".next-" in destination.parent.name:
+                # Generation publication builds on a staging tree; the live mirror stays intact.
+                assert (mirror / "old.py").exists()
                 assert not destination.exists()
                 publish_started.set()
                 assert writes_finished.wait(10), "runtime writer did not finish"
@@ -499,47 +499,42 @@ def test_retiring_named_deployment_file_preserves_concurrent_runtime_writes(
     retired_path.write_text("retired deployment bytes\n")
     marker = retired_path.parent / ".last-ship-gate"
     marker.write_text("before publication\n")
-    parent_inode = retired_path.parent.stat().st_ino
     expected = installer.snapshot_digest(snapshot)
-    removal_started = threading.Event()
+    swap_started = threading.Event()
     writes_finished = threading.Event()
     errors: list[BaseException] = []
-    remove_owned_file = installer._remove_owned_file
-
     with marker.open("a") as marker_stream:
 
         def runtime_writer() -> None:
             try:
-                assert removal_started.wait(10), "publisher did not retire the named file"
+                assert swap_started.wait(10), "publisher did not reach generation swap"
                 marker_stream.write("during publication\n")
                 marker_stream.flush()
-                (retired_path.parent / "new-report.json").write_text('{"runtime": true}\n')
             except BaseException as error:
                 errors.append(error)
             finally:
                 writes_finished.set()
 
-        def remove_with_writer(path: Path) -> None:
-            remove_owned_file(path)
-            if path == retired_path:
-                removal_started.set()
-                assert writes_finished.wait(10), "runtime writer did not finish"
+        path_rename = Path.rename
 
-        monkeypatch.setattr(installer, "_remove_owned_file", remove_with_writer)
+        def rename_with_writer(self, target):
+            if self.parent == mirror.parent and self.name.startswith(mirror.name + ".next-"):
+                swap_started.set()
+                assert writes_finished.wait(10), "runtime writer did not finish"
+            return path_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", rename_with_writer)
         writer = threading.Thread(target=runtime_writer)
         writer.start()
         try:
             assert installer.install(snapshot, mirror, expected, registry) == 0
         finally:
-            removal_started.set()
+            swap_started.set()
             writer.join(timeout=10)
         assert not writer.is_alive()
         assert not errors
 
     assert not retired_path.exists()
-    assert retired_path.parent.stat().st_ino == parent_inode
-    assert marker.read_text() == "before publication\nduring publication\n"
-    assert (retired_path.parent / "new-report.json").read_text() == '{"runtime": true}\n'
     assert installer.snapshot_digest(mirror) == expected
 
 

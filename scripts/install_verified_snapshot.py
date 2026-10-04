@@ -263,6 +263,95 @@ def _validate_payload(payload: Path) -> None:
         raise ValueError("snapshot docs do not match .docs-shipped.txt")
 
 
+def _deployment_owned_relative(relative: Path, entries: set[Path]) -> bool:
+    if relative in entries:
+        return True
+    if relative.parts and relative.parts[0] in REPLACED_TREES:
+        return True
+    if len(relative.parts) == 1 and relative.suffix in (".py", ".sh"):
+        return True
+    if str(relative) in OWNED_FILES:
+        return True
+    return False
+
+
+def _merge_runtime_content(
+    live: Path,
+    staging: Path,
+    entries: set[Path],
+    prior_docs: list[Path],
+) -> None:
+    """Bring mirror-local runtime output into a staged generation without touching deployment leaves."""
+
+    if not live.exists():
+        return
+    retired_shipped_docs = set(prior_docs) - set(_shipped_docs(staging / ".docs-shipped.txt"))
+    for path in sorted(live.rglob("*"), key=lambda candidate: (len(candidate.parts), str(candidate))):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        if not path.is_file() and not path.is_symlink():
+            continue
+        relative = path.relative_to(live)
+        if _deployment_owned_relative(relative, entries):
+            continue
+        if relative in retired_shipped_docs:
+            continue
+        destination = staging / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink():
+            if destination.exists():
+                destination.unlink()
+            destination.symlink_to(os.readlink(path))
+            shutil.copystat(path, destination, follow_symlinks=False)
+        else:
+            shutil.copy2(path, destination, follow_symlinks=False)
+
+
+def _publish_generation(
+    payload: Path,
+    mirror: Path,
+    entries: list[Path],
+    expected_digest: str,
+    prior_docs: list[Path],
+) -> None:
+    """Install by building a complete generation, then switching the live mirror path atomically."""
+
+    entries_set = set(entries)
+    _validate_mirror_ownership(payload, mirror, entries, prior_docs)
+    mirror.parent.mkdir(parents=True, exist_ok=True)
+
+    staging = mirror.parent / f"{mirror.name}.next-{expected_digest[:12]}"
+    retired = mirror.parent / f"{mirror.name}.retired-{expected_digest[:12]}"
+    if staging.exists():
+        shutil.rmtree(staging)
+    if retired.exists():
+        shutil.rmtree(retired)
+    staging.mkdir(parents=True)
+
+    swapped = False
+    try:
+        _copy_payload(payload, staging, entries)
+        _merge_runtime_content(mirror, staging, entries_set, prior_docs)
+        installed_digest = snapshot_digest(staging)
+        if installed_digest != expected_digest:
+            raise RuntimeError(
+                f"staged generation digest {installed_digest} != verified snapshot {expected_digest}"
+            )
+        if mirror.exists():
+            mirror.rename(retired)
+        staging.rename(mirror)
+        swapped = True
+    except Exception:
+        if not swapped and retired.exists() and not mirror.exists():
+            retired.rename(mirror)
+        raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+        if retired.exists():
+            shutil.rmtree(retired)
+
+
 def _write_runtime_registry(registry: Path, runtime_registry: Path) -> None:
     """Durably replace the separate registry using the validated deployment bytes.
 
@@ -339,28 +428,7 @@ def install(
         # the separate registry update. Never reopen the retained snapshot after this boundary.
         entries = owned_entries(payload)
         registry = payload / "repo_review_registry.json"
-        _validate_mirror_ownership(payload, mirror, entries, prior_docs)
-        mirror.mkdir(parents=True, exist_ok=True)
-        # Match the legacy ownership contract; runtime content in the merged directories stays.
-        # Publication is still in-place here. Reader pinning and atomic switching are separate
-        # follow-ups; this boundary guarantees that preparation failures cannot damage the mirror.
-        for pattern in ("*.py", "*.sh"):
-            for path in mirror.glob(pattern):
-                _remove_owned_file(path)
-        for tree in REPLACED_TREES:
-            _remove(mirror / tree)
-        for relative_path in prior_docs:
-            _remove_owned_file(mirror / relative_path)
-        for owned_file in OWNED_FILES:
-            _remove_owned_file(mirror / owned_file)
-
-        _copy_payload(payload, mirror, entries)
-
-        installed_digest = snapshot_digest(mirror)
-        if installed_digest != expected_digest:
-            raise RuntimeError(
-                f"installed payload digest {installed_digest} != verified snapshot {expected_digest}"
-            )
+        _publish_generation(payload, mirror, entries, expected_digest, prior_docs)
 
         if runtime_registry is not None and registry.is_file():
             _write_runtime_registry(registry, runtime_registry)
