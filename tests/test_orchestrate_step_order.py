@@ -22,6 +22,8 @@ import paths
 
 ORCHESTRATE = paths.REPO_ROOT / "orchestrate.sh"
 HELPERS = (
+    "_gh_deferred",
+    "_gh_gate",
     "_due",
     "_step_disabled",
     "_step_retired",
