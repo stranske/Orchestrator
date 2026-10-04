@@ -1107,3 +1107,62 @@ def test_tick_reader_rejects_stale_or_wrong_mirror_lock(tmp_path, monkeypatch):
         fcntl.flock(correct.fileno(), fcntl.LOCK_SH)
         monkeypatch.setenv(mirror_reader.LOCK_ENV, str(correct.fileno()))
         assert mirror_reader.inherited_lock(root)
+
+
+@pytest.mark.parametrize("copy_result", ["success", "partial-error", "invalid-payload"])
+def test_unverified_route_stages_copier_and_never_claims_verification(tmp_path, copy_result):
+    snapshot = _snapshot(tmp_path)
+    mirror, registry = _live_outputs(tmp_path)
+    home = tmp_path / "home"
+    (home / ".codex" / "orchestrator").mkdir(parents=True)
+    live_registry = home / ".codex" / "orchestrator" / "repo_review_registry.json"
+    live_registry.write_text("incumbent registry\n")
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    record = tmp_path / "copy-destinations"
+    copier = tmp_path / "copier.sh"
+    copier.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'printf \'%s\\n%s\\n\' "$HOME" "$ORCH_MIRROR" > "$COPY_RECORD"\n'
+        'mkdir -p "$ORCH_MIRROR"\n'
+        'cp -R "$1/." "$ORCH_MIRROR/"\n'
+        # The real copier also writes this separate registry via HOME. Neither
+        # this intermediate value nor a partial copy may reach live state.
+        'echo scratch-registry > "$HOME/.codex/orchestrator/repo_review_registry.json"\n'
+        '[[ "$COPY_RESULT" != partial-error ]] || exit 17\n'
+        '[[ "$COPY_RESULT" != invalid-payload ]] || rm "$ORCH_MIRROR/orchestrate.sh"\n'
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(paths.REPO_ROOT / "scripts/publish_unverified_snapshot.sh"),
+            str(snapshot),
+            str(mirror),
+        ],
+        env={
+            **os.environ,
+            "HOME": str(home),
+            "TMPDIR": str(temporary),
+            "ORCH_SYNC_SCRIPT": str(copier),
+            "COPY_RECORD": str(record),
+            "COPY_RESULT": copy_result,
+        },
+        capture_output=True,
+        text=True,
+    )
+    copied_home, copied_mirror = map(Path, record.read_text().splitlines())
+    assert copied_home.is_relative_to(temporary)
+    assert copied_mirror.is_relative_to(temporary)
+    assert not copied_home.exists() and not copied_mirror.exists()
+    assert list(temporary.iterdir()) == []
+    if copy_result == "success":
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "installed UNVERIFIED snapshot" in result.stdout
+        assert "installed verified snapshot" not in result.stdout
+        assert installer.snapshot_digest(mirror) == installer.snapshot_digest(snapshot)
+        assert live_registry.read_text() == '{"repos": []}\n'
+    else:
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert (mirror / "old.py").read_text() == "still live\n"
+        assert live_registry.read_text() == "incumbent registry\n"
+    assert registry.read_text() == '{"old": true}\n'

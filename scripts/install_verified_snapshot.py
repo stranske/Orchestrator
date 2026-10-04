@@ -456,6 +456,8 @@ def install(
     mirror: Path,
     expected_digest: str,
     runtime_registry: Path | None = None,
+    *,
+    verified: bool = True,
 ) -> int:
     snapshot = snapshot.resolve()
     mirror = mirror.expanduser().resolve()
@@ -510,7 +512,7 @@ def install(
     module_count = len(list(mirror.glob("*.py")))
     test_count = len(list((mirror / "tests").glob("*.py")))
     print(
-        f"installed verified snapshot {expected_digest[:12]}: "
+        f"installed {'verified' if verified else 'UNVERIFIED'} snapshot {expected_digest[:12]}: "
         f"{module_count} modules, {test_count} test files -> {mirror}"
     )
     return 0
@@ -523,6 +525,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--digest", action="store_true")
     parser.add_argument("--expected-digest")
     parser.add_argument("--runtime-registry", type=Path)
+    parser.add_argument(
+        "--unverified", action="store_true", help="digest is integrity only; no verifier verdict"
+    )
     args = parser.parse_args(argv)
     try:
         if args.digest:
@@ -530,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.mirror is not None
                 or args.runtime_registry is not None
                 or args.expected_digest is not None
+                or args.unverified
             ):
                 parser.error("--digest accepts only SNAPSHOT")
             print(snapshot_digest(args.snapshot))
@@ -538,7 +544,13 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("MIRROR is required unless --digest is used")
         if args.expected_digest is None:
             parser.error("--expected-digest is required when installing")
-        return install(args.snapshot, args.mirror, args.expected_digest, args.runtime_registry)
+        return install(
+            args.snapshot,
+            args.mirror,
+            args.expected_digest,
+            args.runtime_registry,
+            verified=not args.unverified,
+        )
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"install-verified-snapshot: {exc}", file=sys.stderr)
         return 2

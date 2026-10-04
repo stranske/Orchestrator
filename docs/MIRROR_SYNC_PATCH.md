@@ -431,7 +431,12 @@ PRE="$SRC/scripts/verify_before_sync.sh"
 if [[ "$RUN_VERIFY" == "0" ]]; then
   echo
   echo "== syncing without a verdict (--no-verify)"
-  "$HOME/.codex/bin/orch-sync-mirror.sh" "$SRC"
+  PUBLISHER="$SRC/scripts/publish_unverified_snapshot.sh"
+  if [[ ! -f "$PUBLISHER" ]]; then
+    echo "NOT SYNCED: no guarded unverified publisher in $SRC." >&2
+    exit 3
+  fi
+  bash "$PUBLISHER" "$SRC" "$MIRROR"
   echo
   echo "== skipped the mirror verify (--no-verify). The copy is NOT a verdict."
   exit 0
@@ -477,7 +482,7 @@ if python3 -I "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
   :
 else
   install_rc=$?
-  printf 'INSTALL FAILED (exit %s): the live mirror may be partially updated; no rollback was performed.\n' \
+  printf 'INSTALL FAILED (exit %s): publication or registry update failed; retain the complete visible generation and retry.\n' \
     "$install_rc" >&2
   printf '  to retry verified installation from a fresh snapshot:' >&2
   printf ' %q' "$0" >&2
@@ -501,7 +506,7 @@ Also change the `--no-verify` help line to say it is the way to copy after a red
 | Red | It does not copy. The live mirror keeps running the code it already ran, and the last line printed is the one command that copies anyway. A false red (a ledger row registered by a sibling session's unmerged branch, say) therefore costs one command, never a blocked sync. |
 | VOID | It does not copy. Re-run once the clone is settled. |
 | Missing pre-verifier | It fails closed before copying and prints the quoted `--no-verify` override. There is no copy-first fallback. |
-| Installer failure | It preserves the installer's status, warns that the in-place mirror may be partial, and prints both the verified retry and explicit `--no-verify` commands. Atomic publication and rollback remain tracked by #389. |
+| Installer failure | It preserves the installer's status and prints both retry paths. The complete old or new generation remains visible; the separate registry may still need retry. Remaining reader/runtime acceptance stays tracked by #389. |
 
 **How to confirm it.** Run the script on its own first. It writes nothing live:
 
@@ -672,8 +677,10 @@ The cost is that a running tick delays publication until it exits.
 This is a partial recovery, not an atomic-publication completion claim. Standalone
 Python/launchd entry points outside this tick still need reader protection. Creation
 or atomic replacement of runtime leaves directly in mixed deployment/runtime directories
-is not covered by shared inodes. Cleanup/migration and the incumbent `--no-verify` copier
-still need the full source #389 acceptance witnesses. Installed wrappers remain unchanged
+is not covered by shared inodes. The wrapper's `--no-verify` route now stages the
+incumbent copier under an isolated HOME and uses the same guarded publisher with
+an explicit UNVERIFIED status. Direct invocation of the installed incumbent copier,
+cleanup/migration, and standalone readers still need the full source #389 witnesses. Installed wrappers remain unchanged
 until merge and pull; guarded deployment evidence remains pending.
 
 The after-transfer regression test opens report/marker handles before installation, writes
@@ -681,3 +688,15 @@ after runtime transfer and after publication, creates a late report, and repeats
 It fails on the prior copying publisher and passes with shared runtime storage. Earlier
 Node witnesses only observe the old tree before the switch and the new tree afterward;
 they do not establish a pinned reader spanning publication.
+
+### Guarded unverified wrapper route
+
+After merge and pull, the wrapper block above invokes the pulled
+`scripts/publish_unverified_snapshot.sh` for `--no-verify`. The helper runs the
+installed legacy copier with a scratch `HOME` and `ORCH_MIRROR`, then hashes and
+structurally validates that complete payload and calls its retained installer.
+A copy failure or invalid payload leaves both live locations untouched. The
+installer keeps the same exclusive publication lock and separate registry update,
+but prints `installed UNVERIFIED snapshot`: the digest is an integrity binding,
+not a verifier receipt. Neither helper nor wrapper runs `verify.py` on this route.
+Direct invocation of the incumbent copier remains outside this protection.
