@@ -65,7 +65,11 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   missing thing named — see `env_prereq.py` — and the floor file caps how many such skips are
   allowed, so quietly checking less is a red. Every skip and its reason is printed, so a green run
   always states what it did not check. On a machine with all prerequisites nothing skips at all.
-  It checks the whole tree it runs in, so a PR's verdict is CI's run on the PR head. This machine's
+  It checks the whole tree it runs in, so a PR's verdict is CI's run on the PR head, and CI runs it
+  in TWO shapes: the checkout, and (the `exec-mirror` job, since 2026-10-04) the flat tree a sync
+  ships, built by `scripts/build_exec_mirror.sh`, the one copy contract the owner's copier also
+  calls, and judged by `scripts/verify_before_sync.sh` itself. A defect that exists only in the flat
+  mirror therefore fails on its PR, not at the owner's sync. This machine's
   verdict on a merged tree is one run per sync, taken before the live mirror changes by
   `scripts/verify_before_sync.sh` in a scratch mirror; the wrapper then installs that exact verified
   snapshot instead of re-reading the mutable checkout (CLAUDE.md §1).
