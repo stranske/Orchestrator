@@ -471,6 +471,12 @@ if [[ ! "$EXPECTED_DIGEST" =~ ^[0-9a-f]{64}$ ]] ||
   print_unverified_override
   exit 3
 fi
+if [[ -n "${ORCH_VERIFIED_RECEIPT_OUT:-}" ]]; then
+  if ! (set -o noclobber; cat "$DIGEST_RECEIPT" > "$ORCH_VERIFIED_RECEIPT_OUT"); then
+    echo "NOT SYNCED: cannot retain verifier receipt; live mirror untouched." >&2
+    exit 3
+  fi
+fi
 INSTALLER="$SNAPSHOT/scripts/install_verified_snapshot.py"
 if [[ ! -f "$INSTALLER" ]]; then
   echo "NOT SYNCED: the verified snapshot has no installer." >&2
@@ -835,3 +841,49 @@ Deployment remains pending until all of the following are observed after gated m
    and check runtime reports/markers and the separate registry at the installed locations.
 4. Inspect durable `verify:compare` output and disposition source #389. Keep the source
    issue open until deployment and verifier evidence are complete.
+
+### Capturing installed observations after merge and pull
+
+The documented verified-wrapper block accepts `ORCH_VERIFIED_RECEIPT_OUT` to retain the
+one-line verifier digest outside its temporary staging directory. It refuses an existing
+receipt path before publication, so each run needs a fresh path. A retained verifier receipt
+alone does not prove that publication succeeded. Install this block only after merge/pull,
+along with the direct copier entry guard above.
+
+After the gated merge, pull, and installed-wrapper update, use a fresh evidence directory:
+
+```bash
+set -o pipefail
+source_root="$HOME/.codex/orchestrator-src"
+evidence_dir="$(mktemp -d "${TMPDIR:-/tmp}/orch-deployment-evidence.XXXXXX")"
+git -C "$source_root" rev-parse HEAD > "$evidence_dir/pulled-commit.txt"
+if ORCH_VERIFIED_RECEIPT_OUT="$evidence_dir/verified-payload.sha256" \
+  bash "$HOME/.codex/bin/orch-mirror-sync.sh" "$source_root" \
+  2>&1 | tee "$evidence_dir/publication.log"; then
+  publication_rc=0
+else
+  publication_rc=$?
+fi
+printf '%s\n' "$publication_rc" > "$evidence_dir/publication-exit.txt"
+[[ "$publication_rc" == 0 ]] || exit "$publication_rc"
+node "$source_root/scripts/capture_mirror_deployment_evidence.js" \
+  "$source_root" "$HOME/.codex/orchestrator-mirror" \
+  "$evidence_dir/verified-payload.sha256" \
+  "$HOME/.codex/orchestrator/repo_review_registry.json" \
+  "$HOME/.codex/bin" "$evidence_dir/publication.log" "$evidence_dir/observations.json"
+```
+
+The Node collector reads installed state and writes only the new observation file. It records
+the checkout commit, both installed-wrapper SHA256 values and presence of their documented
+blocks, the retained receipt and physical-generation digest, publication-log SHA256 and
+success markers, and the separate registry's correspondence with the generation. A mismatch
+returns exit 2. A publication overlapping collection also returns exit 2; collect again using
+the receipt and log for the currently active generation. Existing evidence is never overwritten.
+Move the evidence directory to retained operator storage before clearing temporary files.
+
+Even matching observations carry `deployment_status: pending-operator-review`: block presence
+does not prove wrapper control-flow placement, and log markers do not prove command exit.
+Review the retained exit status, match the checkout commit to the actual merge/pull, inspect
+launchd/cron entries, compare runtime reports/markers before and after publication, and retain
+durable `verify:compare` output before checking the deployment task complete. This repository
+change does not install wrappers or supply those live observations.
