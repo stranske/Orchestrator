@@ -344,8 +344,12 @@ def _gate(resource: str, *, runner=subprocess.run) -> int:
 # 5000/5000 while every real call failed. It has three exits, and only positive evidence that the
 # credentials are missing or refused aborts. Everything it cannot measure defers instead.
 PREFLIGHT_OK = 0
-PREFLIGHT_DEFER = GATE_SHED_EXIT  # token present, GitHub cannot answer now: GitHub-dependent steps defer
-PREFLIGHT_UNAUTHENTICATED = 77  # EX_NOPERM: no token (gh exit 4), HTTP 401, or a 403 that is no rate limit
+PREFLIGHT_DEFER = (
+    GATE_SHED_EXIT  # token present, GitHub cannot answer now: GitHub-dependent steps defer
+)
+PREFLIGHT_UNAUTHENTICATED = (
+    77  # EX_NOPERM: no token (gh exit 4), HTTP 401, or a 403 that is no rate limit
+)
 PREFLIGHT_EXITS = {
     "ok": PREFLIGHT_OK,
     "rate_limited": PREFLIGHT_DEFER,
@@ -400,16 +404,26 @@ def _preflight_call(args: list[str], *, runner, timeout_s: int) -> dict:
     }
 
 
-def _api_message(call: dict) -> str:
-    """GitHub's own words: the REST `message`, else the first GraphQL error, else gh's stderr."""
+def _api_message(call: dict, *, full: bool = False) -> str:
+    """GitHub's own words: the REST `message`, else the first GraphQL error, else gh's stderr.
+
+    Cut after the first full sentence for the log line, because GitHub appends support boilerplate
+    and a request id. A sentence shorter than 24 characters is kept whole with what follows it, so
+    "Sorry. Your account was suspended." survives. `full=True` keeps all of it for the predicate."""
     body = call.get("body")
+    text = ""
     if isinstance(body, dict):
-        if body.get("message"):
-            return _first_line(str(body["message"]))
         errors = body.get("errors")
-        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-            return _first_line(str(errors[0].get("message") or errors[0].get("type") or ""))
-    return _first_line(call.get("stderr", ""))
+        if body.get("message"):
+            text = str(body["message"])
+        elif isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            text = str(errors[0].get("message") or errors[0].get("type") or "")
+    text = text or call.get("stderr", "")
+    if full:
+        return _TOKEN_RE.sub("<redacted>", text)
+    line = _first_line(text, limit=400)
+    cut = line.find(". ", 24)
+    return (line[: cut + 1] if cut != -1 else line)[:160]
 
 
 def _rate_limited(call: dict, *, now: float) -> tuple[bool, int | None]:
@@ -425,9 +439,10 @@ def _rate_limited(call: dict, *, now: float) -> tuple[bool, int | None]:
     graphql_limited = isinstance(errors, list) and any(
         isinstance(e, dict) and str(e.get("type") or "").upper() == "RATE_LIMITED" for e in errors
     )
+    names_limit = "rate limit" in _api_message(call, full=True).lower()
     limited = (
         status == 429
-        or (status == 403 and ("rate limit" in _api_message(call).lower() or retry_after is not None))
+        or (status == 403 and (names_limit or retry_after is not None))
         or (remaining is not None and remaining <= 0)
         or graphql_limited
     )
@@ -723,7 +738,9 @@ def _selftest():
         seen: list = []
         ok = auth_preflight(runner=gh(rest_ok, seen=seen), now=now, record=False)
         assert ok["exit"] == PREFLIGHT_OK and ok["verdict"] == "ok", ok
-        assert ok["line"] == "gh: authenticated as stub-user (core 4321/5000, graphql 4990/5000)", ok
+        assert (
+            ok["line"] == "gh: authenticated as stub-user (core 4321/5000, graphql 4990/5000)"
+        ), ok
         assert [c[:4] for c in seen] == [
             ["gh", "api", "--include", "user"],
             ["gh", "api", "--include", "graphql"],
@@ -733,12 +750,15 @@ def _selftest():
         limit_msg = {"message": "API rate limit exceeded for user ID 1. If you reach out ..."}
         primary = verdict(answer(403, limit_msg, budget(0)))
         assert primary["exit"] == PREFLIGHT_DEFER and primary["verdict"] == "rate_limited", primary
-        assert primary["line"].startswith(
-            f"gh rate-limited until {_iso(reset)}: GitHub-dependent steps defer, local steps run ("
+        assert primary["line"] == (
+            f"gh rate-limited until {_iso(reset)}: GitHub-dependent steps defer, local steps run "
+            "(core 0/5000; HTTP 403: API rate limit exceeded for user ID 1.)"
         ), primary["line"]
         assert "graphql" not in primary["checks"], "a rate-limited REST answer needs no 2nd call"
         secondary = verdict(
-            answer(403, {"message": "You have exceeded a secondary rate limit."}, {"Retry-After": "60"})
+            answer(
+                403, {"message": "You have exceeded a secondary rate limit."}, {"Retry-After": "60"}
+            )
         )
         assert secondary["verdict"] == "rate_limited" and secondary["checks"]["rest"]["reset"] == (
             int(now) + 60
@@ -754,7 +774,11 @@ def _selftest():
         assert g["exit"] == PREFLIGHT_DEFER and "(graphql 0/5000; " in g["line"], g
         for unavailable in (
             answer(502, {"message": "Server Error"}),
-            {"returncode": 1, "stdout": "", "stderr": 'Get "https://api.github.com/user": dial tcp'},
+            {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": 'Get "https://api.github.com/user": dial tcp',
+            },
             FileNotFoundError,
             subprocess.TimeoutExpired("gh", 20),
         ):
@@ -770,6 +794,10 @@ def _selftest():
             v = verdict(refused)
             assert v["exit"] == PREFLIGHT_UNAUTHENTICATED, (refused, v)
             assert v["line"].startswith("gh not authenticated (rest: "), v["line"]
+        # The log keeps GitHub's first full sentence, never a fragment of one.
+        assert v["line"] == (
+            "gh not authenticated (rest: HTTP 403, not a rate limit: Sorry. Your account was suspended.)"
+        ), v["line"]
         bad_gql = verdict(rest_ok, answer(401, {"message": "Bad credentials"}))
         assert bad_gql["exit"] == PREFLIGHT_UNAUTHENTICATED, bad_gql
         # Never a token in the line, whatever an error message carries.
