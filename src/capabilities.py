@@ -166,11 +166,12 @@ EVENT_FIELDS = {
     "offer_amendment": None,
 }
 
-# The ref of every consult-trial event: `capability_propensity` writes an `invocation` under it when
-# an advised candidate is triggered, and the firing monitor reads it to tell a trial from a tick.
-# Defined ONCE, here, because the writer and the reader live in different modules: a reader holding
-# its own copy of the literal would count every trial as a tick firing, silently, the day the two
-# spellings parted.
+# The ref of every consult-trial event. `capability_advisor.experiment_id` mints it; the advisor's
+# `match` (the offer) and `capability_propensity`'s `invocation` and verdicts are recorded under it;
+# `split_invocations` and `capability_outcome_bridge` read it. Defined ONCE, here, because those
+# writers and readers live in different modules: one holding its own copy of the literal would, the
+# day the two spellings parted, silently count every trial as a tick firing, record offers no
+# experiment can find, or stop joining lane verdicts to fleet runs.
 ADVICE_REF_PREFIX = "advice:"
 
 
