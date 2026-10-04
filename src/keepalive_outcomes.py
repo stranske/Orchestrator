@@ -629,7 +629,9 @@ def _fetch_dispatch_times(repo: str, pr_number: int, agent: str) -> list[int] | 
 
 def _export_policy_at(dispatch_ts: int) -> dict | None:
     """Resolve the published export commit in force at dispatch, never today's local shadow."""
-    until = _dt.datetime.fromtimestamp(dispatch_ts, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    until = _dt.datetime.fromtimestamp(dispatch_ts, _dt.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     _gh_throttle("core")
     commits = _run_json(
         [
@@ -721,7 +723,9 @@ def _stamp_existing_dispatch_policy(
         policy["policy_settled_ts"] = settled_ts
     with feedback._conn() as c:
         # Merge against the current row so attribution added during the API read is retained.
-        current = c.execute("SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        current = c.execute(
+            "SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)
+        ).fetchone()
         if current is not None:
             metadata = feedback._routing_metadata_dict(current[0])
             # A PR first ingested while open may cross a policy boundary before it settles.
@@ -1510,11 +1514,10 @@ def _selftest_dispatch_policy(now: int) -> None:
                 _dispatch_times_fn=lambda _repo, _number, _agent: times,
             )
             with feedback._conn() as c:
-                metadata = json.loads(
-                    c.execute("SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)).fetchone()[
-                        0
-                    ]
-                )
+                stored_metadata = c.execute(
+                    "SELECT routing_metadata FROM runs WHERE run_id=?", (run_id,)
+                ).fetchone()
+                metadata = json.loads(stored_metadata[0])
             assert "policy_version" not in metadata, metadata
             if times:
                 assert len(metadata["dispatch_policies"]) == 2, metadata
