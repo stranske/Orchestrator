@@ -596,8 +596,9 @@ python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --
 
 One routing decision selects the backend for the batch. Each item receives its own
 validated output and role-run ID, grouped by `batch_id`; the manifest records rejected
-items too, but no rejected body is exported. Without `--dispatch`, the command previews
-the contract and writes a manifest without authored bodies. `--proposal-json` remains
+items too, but no rejected body is exported. Without `--dispatch` or item replay proposals,
+the command writes and prints a manifest without generated prompts or authored bodies.
+`--proposal-json` remains
 available for single-item replay; a batch item may carry its own `proposal_json`.
 The tool authors local files only; filing issues remains the caller's responsibility
 under the target repository's issue-format gate.

@@ -273,12 +273,13 @@ def _validate_issue_body(proposal: Any) -> list[str]:
     errs = []
     if not isinstance(proposal.get("summary"), str) or not proposal["summary"].strip():
         errs.append("summary must be a non-empty string")
-    if proposal.get("confidence") not in CONFIDENCE:
+    confidence = proposal.get("confidence")
+    if not isinstance(confidence, str) or confidence not in CONFIDENCE:
         errs.append("confidence must be low, medium or high")
     body = proposal.get("issue_body")
     if not isinstance(body, str) or not body.strip():
         return errs + ["issue_body must be a non-empty string"]
-    sections = dict(re.findall(r"^## ([^\n]+)\n(.*?)(?=^## |\Z)", body, re.M | re.S))
+    sections = dict(re.findall(r"^## ([^\r\n]+)\r?\n(.*?)(?=^## |\Z)", body, re.M | re.S))
     for name in ("Why", "Tasks", "Acceptance Criteria", "Non-Goals"):
         if not sections.get(name, "").strip():
             errs.append(f"issue_body requires a non-empty ## {name} section")
@@ -2154,23 +2155,22 @@ def run_prompt_agent(
     backend_error_detail: str | None = None
     backend_model: str | None = None
 
-    if proposal_json is not None:
+    if dispatch and not backend_name:
+        errors.append("no eligible backend has capacity for the prompt role")
+    elif proposal_json is not None:
         proposal = proposal_json
     elif dispatch:
-        if not backend_name:
-            errors.append("no eligible backend has capacity for the prompt role")
-        else:
-            _role_capability_event("prompt", "invocation", metadata={"backend": backend_name})
-            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
-            backend_run_id = res.get("run_id")
-            backend_model = res.get("model")
-            raw_output = res.get("output", "")
-            backend_error_detail = _backend_error_detail(res)
-            if res.get("exit") not in (0, None):
-                errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
-            proposal = _parse_json(raw_output)
-            if proposal is None:
-                errors.append("could not parse a JSON proposal from the backend output")
+        _role_capability_event("prompt", "invocation", metadata={"backend": backend_name})
+        res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
+        backend_run_id = res.get("run_id")
+        backend_model = res.get("model")
+        raw_output = res.get("output", "")
+        backend_error_detail = _backend_error_detail(res)
+        if res.get("exit") not in (0, None):
+            errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
+        proposal = _parse_json(raw_output)
+        if proposal is None:
+            errors.append("could not parse a JSON proposal from the backend output")
 
     if proposal is not None:
         verrs = (
@@ -2279,6 +2279,14 @@ def run_prompt_batch(items: list[dict], *, output: str = "dispatch_prompt", **kw
             raise ValueError("batch item has unknown fields or is not an object")
         if any(not isinstance(item.get(k), str) or not item[k].strip() for k in ("target", "goal")):
             raise ValueError("each batch item requires a non-empty target and goal")
+        for key in ("task_type", "target_detail", "context", "repo", "lane"):
+            if item.get(key) is not None and not isinstance(item[key], str):
+                raise ValueError(f"batch item {key} must be a string or null")
+        for key in ("acceptance_criteria", "constraints", "expected_paths"):
+            if item.get(key) is not None and not isinstance(item[key], list):
+                raise ValueError(f"batch item {key} must be a list or null")
+        if item.get("proposal_json") is not None and not isinstance(item["proposal_json"], dict):
+            raise ValueError("batch item proposal_json must be an object or null")
     batch_id = f"prompt-batch:{uuid.uuid4().hex}"
     common = dict(kwargs)
     backend = common.pop("backend", None)
@@ -2321,22 +2329,29 @@ def write_prompt_batch(result: dict, directory: Path) -> dict:
             else item.get("dispatch_prompt")
         )
         body_file = None
-        if item.get("proposal") is not None and not item["errors"] and text:
+        valid = (
+            item.get("proposal") is not None
+            and not item["errors"]
+            and not item["role_record_error"]
+        )
+        if valid and text:
             # Ordinals are safe regardless of untrusted target names and cannot collide within a batch.
             path = directory / f"{index:03d}.md"
-            path.write_text(text.rstrip() + "\n")
+            path.write_text(text.rstrip() + "\n", encoding="utf-8")
             body_file = str(path)
         manifest["items"].append(
             {
                 "target": item["target"],
                 "role_run_id": item["role_run_id"],
                 "body_file": body_file,
-                "valid": item.get("proposal") is not None and not item["errors"],
+                "valid": valid,
                 "errors": item["errors"],
                 "role_record_error": item["role_record_error"],
             }
         )
-    (directory / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (directory / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
     return manifest
 
 
@@ -3936,7 +3951,7 @@ def main(argv: list[str]) -> int:
                 parser.error("--batch uses item context/target/goal/proposal_json from its JSON")
             try:
                 result = run_prompt_batch(
-                    json.loads(Path(args.batch).read_text()),
+                    json.loads(Path(args.batch).read_text(encoding="utf-8")),
                     output=args.output,
                     backend=(args.backend or None),
                     dispatch=args.dispatch,
@@ -3982,6 +3997,15 @@ def main(argv: list[str]) -> int:
             cwd=args.cwd,
             timeout=args.timeout,
         )
+        if args.output == "issue_body":
+            errors = result["errors"] + (
+                [result["role_record_error"]] if result["role_record_error"] else []
+            )
+            if errors:
+                print("\n".join(errors), file=sys.stderr)
+                if args.as_json:
+                    print(json.dumps(result, indent=2))
+                return 1
         print(
             json.dumps(result, indent=2)
             if args.as_json

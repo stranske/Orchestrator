@@ -29,6 +29,7 @@ def proposal(body=BODY):
 @pytest.fixture
 def private_brain(tmp_path, monkeypatch):
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *a, **kw: None)
     monkeypatch.setattr(roles, "_role_capability_event", lambda *a, **kw: None)
     roles.reset_role_invocation_counts()
     return tmp_path
@@ -329,3 +330,216 @@ def test_batch_export_refuses_overwriting_an_existing_directory(private_brain, m
         roles.main(["prompt", "--batch", "missing.json", "--output-dir", str(directory)])
     assert exc.value.code == 2
     assert (directory / "manifest.json").read_text() == original_manifest
+
+
+def test_issue_body_confidence_errors_do_not_abort_later_batch_items(private_brain):
+    for confidence in ([], {}, None, 1):
+        result = roles.run_prompt_batch(
+            [
+                {
+                    "target": "owner/repo#1",
+                    "goal": "Bad",
+                    "proposal_json": {
+                        **proposal(),
+                        "confidence": confidence,
+                    },
+                },
+                {"target": "owner/repo#2", "goal": "Good", "proposal_json": proposal()},
+            ],
+            output="issue_body",
+            backend="cursor",
+            dispatch=True,
+        )
+        assert result["items"][0]["errors"] == ["confidence must be low, medium or high"]
+        assert result["items"][0]["issue_body"] is None
+        assert result["items"][1]["issue_body"] == BODY
+        assert all(item["role_run_id"] for item in result["items"])
+
+
+def test_issue_body_accepts_crlf_sections():
+    assert roles._validate_issue_body(proposal(BODY.replace("\n", "\r\n"))) == []
+
+
+def test_batch_optional_fields_are_validated_before_any_item_runs(monkeypatch):
+    monkeypatch.setattr(roles, "route_role", lambda *a, **kw: pytest.fail("invalid batch routed"))
+    monkeypatch.setattr(roles, "run_prompt_agent", lambda *a, **kw: pytest.fail("item ran"))
+    invalid = {
+        "task_type": [],
+        "target_detail": [],
+        "context": [],
+        "repo": [],
+        "lane": [],
+        "acceptance_criteria": "text",
+        "constraints": {},
+        "expected_paths": 1,
+        "proposal_json": [],
+    }
+    for output in ("dispatch_prompt", "issue_body"):
+        for key, value in invalid.items():
+            with pytest.raises(ValueError, match=f"batch item {key} must be"):
+                roles.run_prompt_batch(
+                    [
+                        {"target": "owner/repo#1", "goal": "Good"},
+                        {"target": "owner/repo#2", "goal": "Bad", key: value},
+                    ],
+                    output=output,
+                    dispatch=True,
+                )
+
+
+def test_replay_requires_backend_only_when_dispatched(private_brain, monkeypatch):
+    monkeypatch.setattr(roles, "route_role", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        roles.dispatcher, "offload", lambda *a, **kw: pytest.fail("replay offloaded")
+    )
+    items = [{"target": "owner/repo#1", "goal": "Replay", "proposal_json": proposal()}]
+    rejected = roles.run_prompt_batch(items, output="issue_body", dispatch=True)
+    assert rejected["items"][0]["errors"] == [
+        "no eligible backend has capacity for the prompt role"
+    ]
+    manifest = roles.write_prompt_batch(rejected, private_brain / "rejected")
+    assert manifest["items"][0]["valid"] is False
+    assert manifest["items"][0]["body_file"] is None
+    assert manifest["items"][0]["role_run_id"] is None
+    preview = roles.run_prompt_batch(items, output="issue_body")
+    assert preview["items"][0]["errors"] == []
+    assert preview["items"][0]["issue_body"] == BODY
+    replay = roles.run_prompt_batch(items, output="issue_body", dispatch=True, backend="cursor")
+    assert replay["items"][0]["errors"] == []
+    assert replay["items"][0]["role_run_id"]
+
+
+def test_batch_cli_uses_utf8_for_input_bodies_and_manifest(private_brain, monkeypatch, capsys):
+    body = BODY.replace("batch authoring", "café authoring — 日本語")
+    batch = private_brain / "unicode.json"
+    directory = private_brain / "unicode-bodies"
+    batch.write_text(
+        json.dumps(
+            [{"target": "owner/repo#1", "goal": "日本語", "proposal_json": proposal(body)}],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    read_text, write_text = Path.read_text, Path.write_text
+    calls = []
+
+    def read(path, *args, **kwargs):
+        if path == batch:
+            assert kwargs.get("encoding") == "utf-8"
+            calls.append("input")
+        return read_text(path, *args, **kwargs)
+
+    def write(path, *args, **kwargs):
+        if path.parent == directory:
+            assert kwargs.get("encoding") == "utf-8"
+            calls.append(path.name)
+        return write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(Path, "write_text", write)
+    assert (
+        roles.main(
+            [
+                "prompt",
+                "--batch",
+                str(batch),
+                "--output",
+                "issue_body",
+                "--dispatch",
+                "--backend",
+                "cursor",
+                "--output-dir",
+                str(directory),
+            ]
+        )
+        == 0
+    )
+    assert calls == ["input", "001.md", "manifest.json"]
+    assert (directory / "001.md").read_bytes().decode("utf-8") == body
+    assert json.loads(capsys.readouterr().out)["items"][0]["valid"] is True
+
+
+@pytest.mark.parametrize("failure", ["backend", "validation", "recording"])
+def test_single_issue_cli_failure_withholds_body(private_brain, monkeypatch, capsys, failure):
+    monkeypatch.setattr(
+        roles.dispatcher,
+        "offload",
+        lambda *a, **kw: {
+            "run_id": "fake:cli",
+            "output": json.dumps(proposal("Bad" if failure == "validation" else BODY)),
+            "exit": 1 if failure == "backend" else 0,
+        },
+    )
+    if failure == "recording":
+
+        def fail_record(*args, **kwargs):
+            raise RuntimeError("role recording failed")
+
+        monkeypatch.setattr(feedback, "record_role_run", fail_record)
+    args = [
+        "prompt",
+        "--target",
+        "owner/repo#1",
+        "--goal",
+        "Issue",
+        "--output",
+        "issue_body",
+        "--dispatch",
+        "--backend",
+        "cursor",
+    ]
+    assert roles.main(args) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip()
+    assert roles.main(args + ["--json"]) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["errors"] or json.loads(captured.out)["role_record_error"]
+    assert captured.err.strip()
+
+
+def test_batch_recording_failure_withholds_body(private_brain, monkeypatch):
+    def fail_record(*args, **kwargs):
+        raise RuntimeError("role recording failed")
+
+    monkeypatch.setattr(feedback, "record_role_run", fail_record)
+    result = roles.run_prompt_batch(
+        [{"target": "owner/repo#1", "goal": "Issue", "proposal_json": proposal()}],
+        output="issue_body",
+        dispatch=True,
+        backend="cursor",
+    )
+    manifest = roles.write_prompt_batch(result, private_brain / "recording-failed")
+    assert manifest["items"][0]["valid"] is False
+    assert manifest["items"][0]["body_file"] is None
+    assert manifest["items"][0]["role_record_error"] == "role recording failed"
+
+
+def test_batch_cli_without_dispatch_emits_manifest_only(private_brain, monkeypatch, capsys):
+    monkeypatch.setattr(
+        roles.dispatcher, "offload", lambda *a, **kw: pytest.fail("preview offloaded")
+    )
+    batch = private_brain / "preview.json"
+    directory = private_brain / "preview"
+    batch.write_text(json.dumps([{"target": "owner/repo#1", "goal": "Issue"}]), encoding="utf-8")
+    assert (
+        roles.main(
+            [
+                "prompt",
+                "--batch",
+                str(batch),
+                "--output",
+                "issue_body",
+                "--backend",
+                "cursor",
+                "--output-dir",
+                str(directory),
+            ]
+        )
+        == 0
+    )
+    manifest = json.loads(capsys.readouterr().out)
+    assert manifest["items"][0]["body_file"] is None
+    assert manifest["items"][0]["role_run_id"] is None
+    assert "prompt" not in manifest["items"][0]
+    assert list(directory.iterdir()) == [directory / "manifest.json"]
