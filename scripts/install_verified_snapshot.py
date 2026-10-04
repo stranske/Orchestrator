@@ -286,7 +286,9 @@ def _merge_runtime_content(
     if not live.exists():
         return
     retired_shipped_docs = set(prior_docs) - set(_shipped_docs(staging / ".docs-shipped.txt"))
-    for path in sorted(live.rglob("*"), key=lambda candidate: (len(candidate.parts), str(candidate))):
+    for path in sorted(
+        live.rglob("*"), key=lambda candidate: (len(candidate.parts), str(candidate))
+    ):
         if path.is_dir() and not path.is_symlink():
             continue
         if not path.is_file() and not path.is_symlink():
