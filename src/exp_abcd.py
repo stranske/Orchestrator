@@ -1577,16 +1577,21 @@ def followup(
     # discovered in visit order, so an evaluated candidate that sorted before the running one
     # could launch a second synthesis in the same run; the hourly re-touch of the stamp hid that
     # by never letting a launch happen at all.
-    promotions = [
-        (edir, state)
-        for edir in dirs
-        if (state := synthesis_promotion.load_state(edir)) is not None
-    ]
-    if any(
-        s.get("delivery_phase") not in synthesis_promotion.TERMINAL_PHASES
-        and s.get("delivery_phase") != "evaluated"
-        for _, s in promotions
-    ):
+    promotions = []
+    for edir in dirs:
+        try:
+            state = synthesis_promotion.load_state(edir)
+        except Exception as exc:
+            out["promotions"].append({"exp_id": edir.name, "error": str(exc)[:256]})
+            # An unreadable state may hide running synthesis. Preserve the file and reconcile
+            # readable promotions, but no candidate can safely launch during this run.
+            promotion_inflight = True
+            launch_available = False
+            continue
+        if state is not None:
+            promotions.append((edir, state))
+    synthesis_inflight_phases = {"synth_running", "synth_complete", "synth_verified"}
+    if any(s.get("delivery_phase") in synthesis_inflight_phases for _, s in promotions):
         promotion_inflight = True
         launch_available = False
 
@@ -1622,10 +1627,7 @@ def followup(
                 ship_gate["launched"] += 1
                 launch_available = False
             phase_after = state.get("delivery_phase")
-            if (
-                phase_after not in synthesis_promotion.TERMINAL_PHASES
-                and phase_after != "evaluated"
-            ):
+            if phase_after in synthesis_inflight_phases:
                 promotion_inflight = True
                 launch_available = False
             out["promotions"].append(
@@ -1899,10 +1901,7 @@ def followup(
                         if "synthesis_launched" in entry["promotion_actions"]:
                             ship_gate["launched"] += 1
                         launch_available = False
-                        if (
-                            promotion_state["delivery_phase"]
-                            not in synthesis_promotion.TERMINAL_PHASES
-                        ):
+                        if promotion_state["delivery_phase"] in synthesis_inflight_phases:
                             promotion_inflight = True
                     else:
                         entry["ship_gate"] = "queued_evaluated"

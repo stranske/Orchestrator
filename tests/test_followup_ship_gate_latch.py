@@ -228,3 +228,110 @@ def test_the_summary_line_carries_both_numbers_and_never_spells_unmeasured_as_ze
     # followup returns early, before the gate, when there is no experiments directory at all.
     unmeasured = exp_abcd.ship_gate_line({"processed": [], "promotions": []})
     assert "unmeasured" in unmeasured and "evaluated 0" not in unmeasured
+
+
+@pytest.mark.parametrize("payload", ["{", '{"schema_version": -1}', "[]"])
+def test_invalid_promotion_blocks_launches_but_other_promotions_reconcile(payload):
+    now = int(time.time())
+    pending = _promotion_dir("pending", evaluated_at=now - 3600)
+    expired = _promotion_dir("expired", evaluated_at=now - 20 * 86400)
+    broken = _promotion_dir("broken", evaluated_at=now - 3600)
+    state_path = synthesis_promotion.state_path(broken)
+    state_path.write_text(payload)
+    os.utime(pending, (now, now))
+    os.utime(expired, (now - 1, now - 1))
+    _stamp(26 * 3600)
+    calls: list = []
+
+    out = _followup(calls)
+
+    assert calls == [], "an unreadable promotion cannot prove synthesis launch safety"
+    assert synthesis_promotion.load_state(pending)["delivery_phase"] == "evaluated"
+    assert synthesis_promotion.load_state(expired)["delivery_phase"] == "discarded"
+    failures = [row for row in out["promotions"] if row["exp_id"] == "broken"]
+    assert len(failures) == 1 and failures[0]["error"]
+    assert state_path.read_text() == payload, "preserve the invalid state for diagnosis"
+    assert out["ship_gate"]["launchable"] == 0
+
+
+@pytest.mark.parametrize("phase", ["candidate_ready", "delegated_or_pr", "merged"])
+@pytest.mark.parametrize("delivery_first", [True, False])
+def test_delivery_waiting_does_not_hold_synthesis_after_stamp_ages(phase, delivery_first):
+    now = int(time.time())
+    delivery = _promotion_dir("delivery", evaluated_at=now - 3600)
+    state = synthesis_promotion.load_state(delivery)
+    for next_phase in synthesis_promotion.DELIVERY_PHASES[1:]:
+        state, _ = synthesis_promotion.transition(state, next_phase, reason="fixture", now=now)
+        if next_phase == phase:
+            break
+    state["candidate_expires_ts"] = now + 86400
+    state["retry"]["next_retry_ts"] = now + 3600
+    synthesis_promotion.state_path(delivery).write_text(json.dumps(state))
+    (delivery / "ship-gate.json").write_text("{}\n")
+    pending = _promotion_dir("pending", evaluated_at=now - 3600)
+    os.utime(delivery, (now if delivery_first else now - 1,) * 2)
+    os.utime(pending, (now - 1 if delivery_first else now,) * 2)
+    stamp = _stamp(26 * 3600)
+    before = stamp.stat().st_mtime
+    calls: list = []
+
+    gate = _followup(calls)["ship_gate"]
+
+    assert calls == ["pending"], "delivery waiting must not extend the synthesis hold"
+    assert gate["evaluated"] == gate["launchable"] == gate["launched"] == 1
+    assert gate["inflight"] is True
+    assert synthesis_promotion.load_state(delivery)["delivery_phase"] == phase
+    assert stamp.stat().st_mtime == before
+
+
+@pytest.mark.parametrize("held", [False, True])
+def test_new_evaluation_reports_counts_with_open_or_held_gate(held, monkeypatch):
+    edir = exp_abcd.EXP_DIR / "new-evaluation"
+    edir.mkdir()
+    (edir / "meta.json").write_text(
+        json.dumps({"repo": "owner/repo", "exp_id": edir.name, "agents": ["codex"]})
+    )
+    (edir / "spec.md").write_text("Implement a bounded change with a regression check.")
+    log = edir / "codex.log"
+    log.write_text("finished\n")
+    os.utime(log, (time.time() - 3600,) * 2)
+    _stamp(3600 if held else 26 * 3600)
+    monkeypatch.setenv("ORCH_FOLLOWUP_SHIP_GATE", "1")
+    monkeypatch.setenv("ORCH_RESEARCH_ARM", "1")
+    calls: list = []
+    evaluations: list = []
+
+    def evaluate(repo, spec_path, exp_id, evaluators, timeout):
+        evaluations.append(exp_id)
+        return {"evaluators": evaluators, "objective_anchors": None}
+
+    out = exp_abcd.followup(
+        collect_fn=lambda *args: {
+            "diffs": {"codex": {"bytes": 24, "diff": "diff --git a/a b/a\n+x\n"}}
+        },
+        evaluate_fn=evaluate,
+        synthesize_fn=_launcher(calls),
+        subject_lifecycle_fn=lambda *args, **kwargs: None,
+        promotion_completion_fn=lambda state: {"status": "pending"},
+    )
+
+    assert evaluations == [edir.name], out
+    assert out["ship_gate"]["evaluated"] == 1
+    assert out["ship_gate"]["launchable"] == out["ship_gate"]["launched"] == int(not held)
+    assert calls == ([] if held else [edir.name])
+    assert synthesis_promotion.load_state(edir)["delivery_phase"] == (
+        "evaluated" if held else "synth_running"
+    )
+
+
+def test_followup_cli_prints_one_summary_line_or_default_json(monkeypatch, capsys):
+    result = _followup([])
+    monkeypatch.setattr(exp_abcd, "followup", lambda **kwargs: result)
+
+    assert exp_abcd.main(["followup", "--summary-line"]) == 0
+    summary = capsys.readouterr().out
+    assert len(summary.splitlines()) == 1
+    assert "ship-gate: evaluated 0, launchable 0" in summary
+    assert exp_abcd.main(["followup"]) == 0
+    default = json.loads(capsys.readouterr().out)
+    assert default["ship_gate"]["evaluated"] == default["ship_gate"]["launchable"] == 0
