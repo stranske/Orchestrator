@@ -54,7 +54,7 @@ print(json.dumps([
 
 class MirrorGenerationTests(unittest.TestCase):
     def test_contended_publisher_expires_reader_before_command_execution(self):
-        from src import mirror_reader
+        import mirror_reader
 
         marker = self.root / "command-ran"
         with mirror_reader.lock_path(self.mirror).open("a") as publisher:
@@ -62,7 +62,7 @@ class MirrorGenerationTests(unittest.TestCase):
             result = subprocess.run(
                 [
                     sys.executable,
-                    str(REPO / "src/mirror_reader.py"),
+                    str(MODULES / "mirror_reader.py"),
                     "--lock-timeout",
                     "0.15",
                     "run",
