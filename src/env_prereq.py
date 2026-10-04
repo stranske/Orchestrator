@@ -414,6 +414,55 @@ def _flat_layout() -> str | None:
     return f"{module_dir} holds the modules at its root, not under src/"
 
 
+def bare_machine() -> str | None:
+    """Name what makes THIS MACHINE bare of every local prerequisite, or None when any is present.
+
+    `exec_mirror_shape`'s partner. Like it, this is NOT a prerequisite detector: never hand it to
+    `require()`, and nothing skips because of it. `exec_mirror_shape` answers "which TREE is this".
+    This answers "which MACHINE is this", and `verify.py` asks it only of an exec-mirror tree, where
+    the answer selects which of two agreed skip ceilings applies.
+
+    WHY IT EXISTS (2026-10-04). CI now verifies the flat exec-mirror shape too, built by
+    `scripts/build_exec_mirror.sh`, so a mirror-only defect fails on its PR instead of at the owner's
+    sync. That copy is a THIRD deprived shape:
+      - like the owner's mirror, it is flat and not a git repository, so `exec_mirror_shape()`
+        names it and it skips the git family;
+      - like a runner checkout, it lacks every local prerequisite, so it skips the runner family too.
+    Neither agreed number bounds that union. `mirror_skipped_max` was measured with every
+    prerequisite present, so it would be red on every input. Giving the owner's mirror the union's
+    number would let it skip a runner family's worth more without a word. So an exec-mirror tree takes
+    one of two agreements, and the machine decides which.
+
+    BARE MEANS ALL ABSENT, which is how the base agreement defines the machine it was measured on (the
+    floor note: no agent CLIs, no ~/.codex/skills, no ChatGPT.app, no populated ledger). Three marks
+    are checked:
+      - no seat has a CLI or a credential file;
+      - the reference skill resource is not installed;
+      - no version-capable Codex binary exists.
+    If ANY one is present, the machine is provisioned. The mirror then takes `mirror_*`, the smaller
+    agreement, which is the strict direction. The owner's machine has all three, so its mirror can
+    never read as bare. A detector that RAISES also answers "not bare": an unknown never earns the
+    larger agreement.
+
+    THE LEDGER IS DELIBERATELY NOT A MARK. A run copies, bootstraps and repoints it, so the answer
+    would depend on WHEN in the run it was asked. The three marks are facts about the filesystem and
+    PATH that no run changes.
+    """
+    try:
+        seats = _seat_signals()
+        skill = skill_resource_absent()
+        codex = codex_profile_binary_absent()
+    except Exception:  # noqa: BLE001 — cannot tell is not bare; see the docstring
+        return None
+    if any(seats.values()) or skill is None or codex is None:
+        return None
+    return (
+        "this machine has none of this instance's local prerequisites: no agent seat has a CLI or "
+        "a credential file, no reference skill resource is installed, and no version-capable Codex "
+        "binary exists"
+    )
+
+
 def codex_profile_binary_absent() -> str | None:
     """Reason string when the version-capable Codex binary exact profiles require is absent.
 
@@ -468,6 +517,28 @@ def credential_file_absent(*agents: str) -> str | None:
     )
 
 
+def _seat_signals() -> dict[str, bool]:
+    """Every seat `agent_auth_check` knows, and whether this machine gives it a FREE auth signal.
+
+    A free signal is an installed CLI probe or a credential file. One rule with two readers:
+    `seat_has_no_free_signal` names the seats that have none, and `bare_machine` asks whether ANY
+    seat has one. A second copy of the probe rule would be a pair free to drift, and a drifted
+    copy would let a machine with a working seat read as bare.
+    """
+    import adapters
+    import agent_auth_check
+
+    signals = {}
+    for agent in agent_auth_check.AGENTS:
+        probe = (adapters.AUTH_PROBES.get(agent) or {}).get("cmd") or []
+        binary = str(probe[0]) if probe else None
+        has_cli = bool(binary and shutil.which(binary))
+        entry = agent_auth_check.CREDENTIAL_FILES.get(agent)
+        has_file = bool(entry and entry[0].is_file())
+        signals[agent] = has_cli or has_file
+    return signals
+
+
 def seat_has_no_free_signal() -> str | None:
     """Reason string naming every seat that has neither an installed CLI nor a credential file.
 
@@ -476,18 +547,7 @@ def seat_has_no_free_signal() -> str | None:
     is explicitly never treated as a failure there. Asserting the absence of UNKNOWN on such a
     machine tests the machine, not the code.
     """
-    import adapters
-    import agent_auth_check
-
-    blind = []
-    for agent in agent_auth_check.AGENTS:
-        probe = (adapters.AUTH_PROBES.get(agent) or {}).get("cmd") or []
-        binary = str(probe[0]) if probe else None
-        has_cli = bool(binary and shutil.which(binary))
-        entry = agent_auth_check.CREDENTIAL_FILES.get(agent)
-        has_file = bool(entry and entry[0].is_file())
-        if not has_cli and not has_file:
-            blind.append(agent)
+    blind = [agent for agent, has_signal in _seat_signals().items() if not has_signal]
     if not blind:
         return None
     return (
@@ -746,6 +806,50 @@ def _selftest() -> None:
             f"cannot answer: {exec_mirror_shape()}"
         )
 
+    # ---- bare_machine: WHICH MACHINE, and only "bare" when EVERY mark is absent ---------------
+    # ALL, never ANY: a machine with one local prerequisite present is provisioned, and the
+    # exec-mirror tree then takes the smaller `mirror_*` agreement. DELIBERATE-BREAK DEMO: turn
+    # `any(seats.values()) or skill is None or codex is None` into an `and` and all three
+    # one-mark-present cases below go red, because a partly provisioned machine would earn the
+    # larger agreement. A detector that raises must answer "not bare": an unknown never earns it either.
+    _real_seats, _real_skill, _real_codex = (
+        _seat_signals,
+        skill_resource_absent,
+        codex_profile_binary_absent,
+    )
+
+    def _raises() -> None:
+        raise RuntimeError("cannot tell")
+
+    try:
+        for _seat, _skill_gone, _codex_gone, _want_bare in (
+            (False, True, True, True),
+            (True, True, True, False),
+            (False, False, True, False),
+            (False, True, False, False),
+            (True, False, False, False),
+        ):
+            globals()["_seat_signals"] = lambda _s=_seat: {"claude": _s, "codex": False}
+            globals()["skill_resource_absent"] = lambda _g=_skill_gone: (
+                "reference skill resource not installed" if _g else None
+            )
+            globals()["codex_profile_binary_absent"] = lambda _g=_codex_gone: (
+                "no version-capable Codex binary" if _g else None
+            )
+            got_bare = bare_machine()
+            assert bool(got_bare) is _want_bare, (_seat, _skill_gone, _codex_gone, got_bare)
+            if _want_bare:
+                assert got_bare and "none of this instance's local prerequisites" in got_bare
+        globals()["_seat_signals"] = _raises
+        assert bare_machine() is None, "a mark that cannot be read must answer NOT bare"
+    finally:
+        globals()["_seat_signals"] = _real_seats
+        globals()["skill_resource_absent"] = _real_skill
+        globals()["codex_profile_binary_absent"] = _real_codex
+    # THE REAL MACHINE: a present mark must keep it provisioned, whichever machine this is.
+    if codex_profile_binary_absent() is None or skill_resource_absent() is None:
+        assert bare_machine() is None, f"a provisioned machine read as bare: {bare_machine()}"
+
     # A skipped selftest must SPEAK, and its line must carry the shared mark verify.py greps
     # for. A skip that prints nothing is a silent zero-exit by another name.
     import contextlib
@@ -885,6 +989,7 @@ def _selftest() -> None:
     print(
         "env_prereq.py selftest: OK (skip-is-a-skip, every detector names the missing thing, "
         "marked selftest skip speaks, vibe readers, exec-mirror shape needs BOTH marks, "
+        "a bare machine needs EVERY prerequisite absent, "
         "not-live rows named with their status, a recorded pytest verdict replays as the check "
         "would have and an unreadable record replays nothing)"
     )
@@ -903,6 +1008,10 @@ def main(argv: list[str]) -> int:
         f"tree shape: {'EXEC MIRROR' if shape else 'checkout'}"
         + (f"\n    {shape}" if shape else "")
     )
+    # WHICH MACHINE, printed in both answers for the same reason. It decides between the two
+    # exec-mirror agreements, so on a checkout it is reported but decides nothing.
+    bare = bare_machine()
+    print(f"machine:    {'BARE' if bare else 'provisioned'}" + (f"\n    {bare}" if bare else ""))
     checks = {
         "reference skill resource": skill_resource_absent(),
         "exact-profile Codex binary": codex_profile_binary_absent(),
