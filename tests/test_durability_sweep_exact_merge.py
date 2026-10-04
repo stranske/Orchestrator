@@ -385,6 +385,24 @@ def test_missing_recording_time_never_credits_a_later_branch_merge():
     assert result["status"] == "unjudgeable", result
     assert "recording time" in result["reason"], result
 
+    # A known recording time keeps the one-hour ingest skew, with an inclusive boundary.
+    recorded = NOW - 39 * DAY
+    for offset, expected in ((3600, "found"), (3601, "unjudgeable")):
+        merged = _pr(43, merged_at=recorded + offset)
+        result = durability_sweep.find_merge(
+            {**run, "recorded_ts": recorded},
+            _gh=FakeGh(prs={43: merged}, branches={"orchestrator/issue-42": [merged]}),
+            now=NOW,
+        )
+        assert result["status"] == expected, (offset, result)
+
+    # Explicit PR attribution needs no own-branch observation window.
+    for attributable in ({**run, "target": "o/r#43"}, {**run, "notes": "PR #43 merged"}):
+        gh = FakeGh(prs={43: later})
+        result = durability_sweep.find_merge(attributable, _gh=gh, now=NOW)
+        assert result["status"] == "found", result
+        assert gh.heads() == [], gh.calls
+
 
 @pytest.mark.parametrize("bookkeeping", [True, False])
 def test_conclusive_failure_survives_exhausted_revert_search(bookkeeping):
@@ -439,3 +457,11 @@ def test_multi_acting_role_failure_is_not_excluded_in_either_arrival_order(brain
     assert durability == "broke_later", _row(role)
     assert failure_class is None, _row(role)
     assert feedback._has_outcome_evidence(durability, "PASS", None, failure_class=failure_class)
+
+    # A repeated update to either acting run must not reintroduce inherited exclusion debt.
+    for run, _durability, _failure_class in updates:
+        feedback.record_outcome(run, notes="late downstream observation")
+        durability, failure_class, notes = _row(role)
+        assert durability == "broke_later", _row(role)
+        assert failure_class is None, _row(role)
+        assert notes.startswith("automatically influenced failed-acting"), notes
