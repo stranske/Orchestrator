@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import py_compile
@@ -52,6 +53,32 @@ print(json.dumps([
 
 
 class MirrorGenerationTests(unittest.TestCase):
+    def test_contended_publisher_expires_reader_before_command_execution(self):
+        from src import mirror_reader
+
+        marker = self.root / "command-ran"
+        with mirror_reader.lock_path(self.mirror).open("a") as publisher:
+            fcntl.flock(publisher.fileno(), fcntl.LOCK_EX)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO / "src/mirror_reader.py"),
+                    "--lock-timeout",
+                    "0.15",
+                    "run",
+                    str(self.mirror),
+                    sys.executable,
+                    "-c",
+                    f"open({str(marker)!r}, 'w').close()",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertIn("publication reader lock deadline exceeded", result.stderr)
+        self.assertFalse(marker.exists(), "blocked reader executed the tick")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="orch-generations-")
         self.addCleanup(self.temporary.cleanup)

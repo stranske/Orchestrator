@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import fcntl
 import os
+import sys
+import time
 from pathlib import Path
 
 LOCK_ENV = "ORCH_PUBLICATION_READER_FD"
@@ -57,11 +59,20 @@ def inherited_lock(root: Path) -> bool:
         return False
 
 
-def run(root: Path, command: list[str]) -> int:
+def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
     """Select under the publication lock, then reopen code through its retained path."""
     root = mirror_path(root)
     with lock_path(root).open("a") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+        deadline = time.monotonic() + lock_timeout
+        while True:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"publication reader lock deadline exceeded: {root}")
+                time.sleep(min(0.05, remaining))
         pinned = root.resolve(strict=True)
         modules = pinned / "src" if (pinned / "src").is_dir() else pinned
 
@@ -112,15 +123,22 @@ def run(root: Path, command: list[str]) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--lock-timeout", type=float, default=30.0)
     parser.add_argument("mode", choices=("check", "run"))
     parser.add_argument("root", type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if not 0 < args.lock_timeout <= 300:
+        parser.error("lock timeout must be positive and at most 300 seconds")
     if args.mode == "check":
         return 0 if inherited_lock(args.root) else 1
     if not args.command:
         parser.error("run requires a command")
-    return run(args.root, args.command)
+    try:
+        return run(args.root, args.command, args.lock_timeout)
+    except TimeoutError as error:
+        print(str(error), file=sys.stderr)
+        return 75
 
 
 if __name__ == "__main__":
