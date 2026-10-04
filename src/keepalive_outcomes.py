@@ -883,6 +883,9 @@ def _outcome_for_pr(
     now: int | None = None,
     _revert_fn=None,
     revert_cache: dict | None = None,
+    _fix_fn=None,
+    fix_cache: dict | None = None,
+    fix_since: dict | None = None,
 ) -> dict | None:
     oc = outcomes.state_to_outcome(pr)
     if not oc:
@@ -903,7 +906,14 @@ def _outcome_for_pr(
         pr_for_durability.setdefault("repo", repo)
         pr_for_durability.setdefault("number", pr.get("number"))
         verdict = durability_sweep.classify_durability(
-            run, pr_for_durability, now=now, _revert_fn=_revert_fn, revert_cache=revert_cache
+            run,
+            pr_for_durability,
+            now=now,
+            _revert_fn=_revert_fn,
+            revert_cache=revert_cache,
+            _fix_fn=_fix_fn,
+            fix_cache=fix_cache,
+            fix_since=fix_since,
         )
         if verdict.get("durability"):
             oc["durability"] = verdict["durability"]
@@ -941,6 +951,7 @@ def ingest_keepalive_outcomes(
     _closure_context_fn=None,
     _evidence_fetch_fn=None,
     _verifier_fetch_fn=None,
+    _fix_fn=None,
 ) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
@@ -954,7 +965,21 @@ def ingest_keepalive_outcomes(
         def revert_fn(_pr):
             return (None, "dry-run skips live revert scan")
 
+    # The fix-PR read follows the verifier's rule above: injected PRs mean an offline run, which
+    # reads no fix PR (every one read, none names a change), and a dry run skips the live read.
+    fix_fn = _fix_fn
+    if fix_fn is None and _pr_fetch_fn is not None:
+
+        def fix_fn(_repo, _since, _until=None):
+            return [], True
+
+    if fix_fn is None and dry_run:
+
+        def fix_fn(_repo, _since, _until=None):
+            return None, False
+
     revert_cache: dict = {}  # repo -> cached revert search; 1 search/repo across the ingest
+    fix_cache: dict = {}  # repo -> its one fix-PR read across the ingest (read_fix_window)
     summary: IngestSummary = {
         "repos": len(repos),
         "prs_seen": 0,
@@ -985,6 +1010,15 @@ def ingest_keepalive_outcomes(
             continue
         if not isinstance(prs, list):
             prs = []
+        # ONE fix-PR read for this repo, from its oldest merge past grace, never one per PR.
+        fix_since = durability_sweep.fix_search_plan(
+            (
+                (repo, durability_sweep._parse_gh_ts(pr.get("mergedAt")))
+                for pr in prs
+                if str(pr.get("state") or "").upper() == "MERGED"
+            ),
+            now=int(_now or time.time()),
+        )
         verifier_numbers = [
             int(pr["number"])
             for pr in prs
@@ -1027,7 +1061,15 @@ def ingest_keepalive_outcomes(
                     "pr_number": pr_number,
                 }
                 oc = _outcome_for_pr(
-                    repo, pr, run, now=_now, _revert_fn=revert_fn, revert_cache=revert_cache
+                    repo,
+                    pr,
+                    run,
+                    now=_now,
+                    _revert_fn=revert_fn,
+                    revert_cache=revert_cache,
+                    _fix_fn=fix_fn,
+                    fix_cache=fix_cache,
+                    fix_since=fix_since,
                 )
                 # Non-agent rows are process evidence, not active assignments; skip open PRs until
                 # they become terminal so the Brain does not accumulate unlabeled in-flight noise.
@@ -1089,7 +1131,15 @@ def ingest_keepalive_outcomes(
             run = {"run_id": run_id, "target": target, "mode": "remote", "pr_number": pr_number}
             run_already_exists = _run_exists(run_id)
             oc = _outcome_for_pr(
-                repo, pr, run, now=_now, _revert_fn=revert_fn, revert_cache=revert_cache
+                repo,
+                pr,
+                run,
+                now=_now,
+                _revert_fn=revert_fn,
+                revert_cache=revert_cache,
+                _fix_fn=fix_fn,
+                fix_cache=fix_cache,
+                fix_since=fix_since,
             )
             oc = _maybe_mark_process_ignore(repo, pr, work_type, oc, closure_context_fn)
             existing_oc = _existing_outcome(run_id)
