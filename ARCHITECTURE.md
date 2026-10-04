@@ -153,7 +153,8 @@ a PR closed, so it records the run as over with no verdict rather than as a fail
 with a PR only when the PR is its own (the labelled PR, or `{agent}/issue-N`), settled after the label, and
 keepalive's own runner records (`runner-reservation`/`runner-completion`/`runner-dispatch` PR markers from
 trusted writers) show a completed round of the labelled agent on it since the label; otherwise the settled
-run is over with no verdict. Until then ingest credited the first PR on any agent's or lane's branch, and
+run is over with no verdict, and so is a delegation whose issue closed with no PR of its own and no closing PR,
+since its agent never had a PR to run on (a local run, which did run, keeps that case's FAIL). Until then ingest credited the first PR on any agent's or lane's branch, and
 none of the 9 merged delegation PASS rows was the labelled agent's work (no stage, component or surface
 moved, so the loop diagram is unchanged). A local run's candidates start with the branches it pushed from its own worktree, which its completion step reads from git's reflogs (`pushed_branches.py`, the Brain table `run_pushes`): a PR there is credited only if the run opened it (head == branch, created at or after the run started), and a run with no usable record resolves exactly as before (again no stage, component or surface moved). Also since
 2026-10-04 the set holds `unjudgeable_merge`: the durability sweep (`durability_sweep.find_merge`) judges only

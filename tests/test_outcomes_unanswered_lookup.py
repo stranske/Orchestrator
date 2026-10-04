@@ -109,7 +109,10 @@ def test_failed_branch_lookups_on_a_closed_issue_record_no_abandonment(brain, gh
     gh(default=NO_PR)
     second = outcomes.ingest_modes("remote")
     assert (second["recorded"], second["unanswered"]) == (1, 0), second
-    assert _outcome_row("remote:o/r#7:codex") == (0, "FAIL", "abandoned")
+    # The answered verdict for a REMOTE delegation whose issue closed with no PR of its own and no
+    # closing PR: its labelled agent never had a PR to run on, so it is over but not its failure
+    # (owner decision 2026-10-04, amending #411 for delegations; a local run keeps the FAIL).
+    assert _outcome_row("remote:o/r#7:codex") == (None, None, "abandoned")
 
 
 @pytest.mark.parametrize("path", sorted(RESOLVERS))

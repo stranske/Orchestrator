@@ -412,7 +412,9 @@ Do not create a second event log, model registry, or capability inventory.
   PASS or FAIL, only with its own PR — the labelled PR, or the PR on `{agent}/issue-N`, never another
   agent's or lane's branch — when that PR settled after the label and keepalive's runner records
   show a completed round of the labelled agent on it since then; otherwise it is
-  `unattributed_delegation` (none of the 9 merged delegation PASS rows met that bar). Every learner
+  `unattributed_delegation` (none of the 9 merged delegation PASS rows met that bar). So is a
+  delegation whose issue closed with no PR of its own and no closing PR: the labelled agent never
+  had a PR to run on (owner decision 2026-10-04; a LOCAL run keeps that case's FAIL). Every learner
   excludes all three classes through ONE set, `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a
   role run inherits the class with the verdict.
   A LOCAL run's candidates start with the branches it pushed from its own worktree, read from git's
