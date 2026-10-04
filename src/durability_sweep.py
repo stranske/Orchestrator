@@ -5,8 +5,11 @@ A merge is only a provisional success, and a provisional success still SCORES:
 `feedback._is_success('pending', 'PASS')` is True, so every merged row this sweep leaves pending
 counts as a win until it is judged. Days after the merge, the sweep finds THE merge each pending
 row recorded (`find_merge`) and judges whether it held: durable, reverted, reopened, abandoned
-(delivered nothing) or broke_later. A row whose merge cannot be identified as the run's own is
-closed as `unjudgeable` and excluded from learning: never left pending, never called a failure.
+(delivered nothing) or broke_later. broke_later is read from EVERY fix PR merged since the merge,
+one read per repo (`read_fix_window`); a merge that read did not reach is never durable, it waits
+(`DRAIN_FIX_SEARCH`) and is closed unchecked if no run reaches it in time. A row whose merge cannot
+be identified as the run's own is closed as `unjudgeable` and excluded from learning: never left
+pending, never called a failure.
 Every row it does leave pending names what will judge it (`DRAINS`), and every run prints how many
 rows are pending, how many of them something will drain, and how many nothing will.
 
@@ -18,10 +21,12 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -36,9 +41,23 @@ REVERT_WINDOW_DAYS = (
 )
 SECONDS_PER_DAY = 86400
 MAX_REVERT_PRS = 50
-# Fix-titled PRs are far more common than reverts, so the local-match window has to be wider
-# or a busy repo's recent fixes push the relevant one off the end and the check silently misses.
-MAX_FIX_PRS = 200
+# THE FIX-PR READ (broke_later): one search per repo per run, bounded by merge date, read WHOLE.
+# Until 2026-10-04 it was one unbounded `--limit 200`, and GitHub orders an unsorted search by
+# relevance, so a repo with more fix PRs than that (Workflows 1,185 all-time, Trend_Model_Project
+# 538) got 200 drawn from its whole history, and a merge's own weeks were read only by chance:
+# 436 rows were judged durable that way. GitHub returns at most this many results to one query.
+FIX_SEARCH_CAP = 1000
+# A window holding FIX_SEARCH_CAP or more is split by merge date and its halves read newest first.
+# The budget bounds a split that cannot converge, so it can never become a search per PR.
+FIX_SEARCH_MAX_READS = 8
+# Narrower than this a window is not split again: FIX_SEARCH_CAP fix PRs merged inside one minute
+# is not a busy repository, it is a query GitHub did not apply.
+FIX_SEARCH_MIN_SPLIT_S = 60
+# A merge the read did not reach stays pending, re-read by every run, for at most this long from
+# the first run that missed it; then it is closed as feedback.BROKE_LATER_UNCHECKED. Counted per
+# row in FIX_RETRY_STATE, never from the merge, so a backlog row's first failed read cannot close it.
+FIX_SEARCH_RETRY_DAYS = 7
+FIX_RETRY_STATE = "durability-fix-search-retry.json"  # under $ORCH_STATE_DIR
 MAX_BASE_COMMITS = 100
 EXPLICIT_MERGED_PR_RE = re.compile(r"\bPR\s+#(?P<num>\d+)\s+merged\b", re.IGNORECASE)
 # Every field classify_durability reads, so a direct PR target costs ONE `gh pr view`.
@@ -58,8 +77,10 @@ INGEST_CLOCK_SKEW_S = 3600
 # reported as undrainable, which a correct sweep never produces.
 DRAIN_GRACE = "grace"  # the merge is younger than GRACE_DAYS: judged on a known date
 DRAIN_RETRY = "retry"  # GitHub did not answer this run: the next run asks again
+# The fix-PR read did not reach the merge: re-read next run, closed unchecked on a known date.
+DRAIN_FIX_SEARCH = "fix_search"
 DRAIN_ACTING_RUN = "acting_run"  # a role run: its verdict propagates when its acting run's lands
-DRAINS = (DRAIN_GRACE, DRAIN_RETRY, DRAIN_ACTING_RUN)
+DRAINS = (DRAIN_GRACE, DRAIN_RETRY, DRAIN_FIX_SEARCH, DRAIN_ACTING_RUN)
 VERDICTS = ("durable", "reverted", "reopened", "abandoned", "broke_later")
 
 # The revert check's notes that mean nothing answered, so a later run may get an answer. Any other
@@ -466,13 +487,23 @@ def _fetch_repo_revert_prs(repo: str) -> tuple[list | None, bool]:
     return arr, len(arr) >= MAX_REVERT_PRS
 
 
-def _fetch_repo_fix_prs(repo: str) -> tuple[list | None, bool]:
-    """Repo-wide 'fix in:title' SEARCH, cached per repo and matched locally.
+def _search_ts(ts: int) -> str:
+    """A moment in GitHub search syntax: UTC, to the second."""
+    return _dt.datetime.fromtimestamp(int(ts), _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    Same shape and same reason as the revert search above: the result is identical for every PR
-    in the repo, so a bulk sweep costs ONE search rather than N against a 30/min limit.
+
+def _fetch_repo_fix_prs(
+    repo: str, since_ts: int, until_ts: int | None = None
+) -> tuple[list | None, bool]:
+    """ONE search: the fix-titled PRs merged in [since, until], open-ended when until is None.
+
+    Returns (merged_fix_prs, complete); the list is None when the search did not answer. Complete
+    means fewer than FIX_SEARCH_CAP came back, which is the whole window. The window is ONE range
+    qualifier on purpose: GitHub does not AND two `merged:` qualifiers (`merged:>=A merged:<B`
+    returned the repository's all-time count, 1,185, on 2026-10-04).
     """
-    _gh_throttle("search")
+    _gh_throttle("search")  # SEARCH = 30/min, the binding constraint on bulk sweeps
+    until = "*" if until_ts is None else _search_ts(until_ts)
     arr = _run_json(
         [
             "gh",
@@ -483,16 +514,62 @@ def _fetch_repo_fix_prs(repo: str) -> tuple[list | None, bool]:
             "--state",
             "merged",
             "--search",
-            "fix in:title",
+            f"fix in:title merged:{_search_ts(since_ts)}..{until}",
             "--json",
             "number,title,body,mergedAt",
             "--limit",
-            str(MAX_FIX_PRS),
-        ]
+            str(FIX_SEARCH_CAP),
+        ],
+        timeout=180,
     )
     if not isinstance(arr, list):
         return None, False
-    return arr, len(arr) >= MAX_FIX_PRS
+    return arr, len(arr) < FIX_SEARCH_CAP
+
+
+def read_fix_window(repo: str, since_ts: int, *, now: int, _fetch=None) -> dict:
+    """Every fix PR merged from `since_ts` to now, read whole as far back as the search allows.
+
+    `covered_from` is the earliest moment from which EVERY fix PR merged up to now was read, and
+    `_fix_covers` is the one test of a merge against it. Windows are read newest first, so a read
+    that fails costs only the merges older than it; None means not even the newest one was read.
+    """
+    fetch = _fetch or _fetch_repo_fix_prs
+    entry: dict[str, Any] = {
+        "since": int(since_ts),
+        "covered_from": None,
+        "items": {},
+        "reads": 0,
+        "error": None,
+    }
+    windows: list[tuple[int, int | None]] = [(int(since_ts), None)]  # a stack, newest on top
+    while windows:
+        start, end = windows.pop()
+        if entry["reads"] >= FIX_SEARCH_MAX_READS:
+            entry["error"] = f"fix-PR search spent its {FIX_SEARCH_MAX_READS} reads"
+            break
+        arr, complete = fetch(repo, start, end)
+        entry["reads"] += 1
+        if arr is None:
+            entry["error"] = "fix-PR search unavailable"
+            break
+        if not complete:
+            stop = now if end is None else end
+            if stop - start <= FIX_SEARCH_MIN_SPLIT_S:
+                entry["error"] = f"{FIX_SEARCH_CAP}+ fix PRs read as merged within {stop - start}s"
+                break
+            middle = (start + stop) // 2
+            windows += [(start, middle), (middle, end)]  # the newer half is read first
+            continue
+        entry["items"].update({item.get("number"): item for item in arr if isinstance(item, dict)})
+        entry["covered_from"] = start
+    return entry
+
+
+def _fix_covers(entry: dict | None, merged_ts: int) -> bool:
+    """Was every fix PR merged after `merged_ts` read? ONE test, for the verdict and the report."""
+    covered_from = (entry or {}).get("covered_from")
+    return covered_from is not None and covered_from <= merged_ts
 
 
 def _fix_followup_status(
@@ -501,6 +578,9 @@ def _fix_followup_status(
     merged_ts: int,
     fix_cache: dict | None = None,
     _fix_fn=None,
+    *,
+    since_ts: int | None = None,
+    now: int | None = None,
 ) -> tuple[bool | None, str]:
     """Did a LATER merged fix PR explicitly NAME this one? That is `broke_later`.
 
@@ -511,21 +591,30 @@ def _fix_followup_status(
     writes `outcomes.durability`, which the router learns from, so it demands an explicit
     reference: a fix-titled PR that names this PR number and merged AFTER it.
 
-    ADDITIVE, AND THAT IS THE POINT. Anything other than a confident True falls through to the
-    classification this function did not exist to change. A new check that could leave rows
-    permanently pending would be a latch of its own, so an unavailable search costs the refinement
-    and never the result.
+    READ WHOLE, OR UNKNOWN. False means every fix PR merged after this merge was read and none
+    named it. Anything less is None, and None is never durable.
+    Until 2026-10-04 it was: an "additive" rule let an incomplete search fall through to the old
+    verdict so that no row could be stranded pending, and a search cut at 200 best matches left
+    the merge's own weeks unread for 436 durable rows. The stranding is now bounded in the sweep
+    (FIX_SEARCH_RETRY_DAYS), so unknown can stay unknown without becoming a latch.
+
+    `since_ts` is the oldest merge the caller will ask about in this repo, so ONE read covers them
+    all (`fix_search_plan`); `fix_cache` holds that read for the run.
     """
-    fetch = _fix_fn or _fetch_repo_fix_prs
-    if fix_cache is not None and repo in fix_cache:
-        arr, hit_limit = fix_cache[repo]
-    else:
-        arr, hit_limit = fetch(repo)
+    now = int(now or time.time())
+    entry = fix_cache.get(repo) if fix_cache is not None else None
+    if entry is None:
+        start = merged_ts if since_ts is None else min(since_ts, merged_ts)
+        entry = read_fix_window(repo, start, now=now, _fetch=_fix_fn)
         if fix_cache is not None:
-            fix_cache[repo] = (arr, hit_limit)
-    if arr is None:
-        return None, "fix-PR search unavailable"
-    for item in arr:
+            fix_cache[repo] = entry
+    if not _fix_covers(entry, merged_ts):
+        reached = entry["covered_from"]
+        return None, (
+            f"fix-PR search did not reach this merge ({entry['error'] or 'window starts later'}; "
+            f"read whole back to {_search_ts(reached) if reached is not None else 'nothing'})"
+        )
+    for item in sorted(entry["items"].values(), key=lambda item: str(item.get("mergedAt") or "")):
         number = item.get("number")
         if number == pr_number:
             continue  # a change cannot be the follow-up that reports its own breakage
@@ -536,9 +625,10 @@ def _fix_followup_status(
         haystack = f"{title}\n{item.get('body') or ''}"
         if _contains_ref(haystack, pr_number):
             return True, f"later fix PR #{number} names this change"
-    if hit_limit:
-        return None, f"fix-PR search hit limit {MAX_FIX_PRS}"
-    return False, "no later fix PR names this change"
+    return False, (
+        "no later fix PR names this change "
+        f"(read every fix PR merged since {_search_ts(entry['covered_from'])})"
+    )
 
 
 def _revert_pr_status(
@@ -717,9 +807,11 @@ def classify_durability(
     revert_cache: dict | None = None,
     _fix_fn=None,
     fix_cache: dict | None = None,
+    fix_since: dict | None = None,
 ) -> dict:
     """Pure-ish classifier. An undecided result (`durability` None) names its `drain`: what will
-    decide it later (DRAINS), or None when nothing can, which the sweep closes as unjudgeable."""
+    decide it later (DRAINS), or None when nothing can, which the sweep closes as unjudgeable.
+    Wherever the fix check ran, `fix_search` says whether its read reached this merge."""
     now = int(now or time.time())
     if not pr:
         return {"durability": None, "reason": "PR state unavailable", "drain": DRAIN_RETRY}
@@ -782,25 +874,36 @@ def classify_durability(
     # BROKE_LATER: merged, not reverted, delivered real work -- and then a later fix PR named it.
     # Checked here rather than earlier because a reverted or abandoned change is already
     # classified by a stronger signal, and re-labelling it would lose that.
+    fix_repo = pr.get("repo") or repo
     broke, fix_note = _fix_followup_status(
-        pr.get("repo") or repo,
+        fix_repo,
         int(pr.get("number") or target_num or 0),
         merged_ts,
         fix_cache=fix_cache,
         _fix_fn=_fix_fn,
+        since_ts=(fix_since or {}).get(fix_repo),
+        now=now,
     )
+    fix_search = "uncovered" if broke is None else "covered"
     if broke is True:
         return {
             "durability": "broke_later",
             "notes": f"durability_sweep: {fix_note}; held {age}d before that",
+            "fix_search": fix_search,
         }
-    # ADDITIVE BY CONSTRUCTION. `broke is None` means the search could not answer, and that falls
-    # through to the durable verdict this function reached before the check existed -- with the
-    # reason recorded, so an unavailable search is visible rather than mistaken for a clean bill.
-    # Anything else would let a new refinement strand rows in pending forever.
+    if broke is None:
+        # NEVER DURABLE ON AN UNREAD WINDOW. Until 2026-10-04 this fell through to durable. The
+        # sweep keeps the row pending and closes it unchecked if no run reaches it in time.
+        return {
+            "durability": None,
+            "reason": fix_note,
+            "drain": DRAIN_FIX_SEARCH,
+            "fix_search": fix_search,
+        }
     return {
         "durability": "durable",
         "notes": f"durability_sweep: held {age}d; {revert_note}; {fix_note}",
+        "fix_search": fix_search,
     }
 
 
@@ -813,6 +916,7 @@ def sweep_durability(
     _now: int | None = None,
     _verifier_fetch_fn=None,
     _gh=None,
+    _fix_fn=None,
 ) -> dict:
     """Judge every merged+pending outcome, close the ones that can never be judged, and say what
     will judge each one left pending.
@@ -825,6 +929,10 @@ def sweep_durability(
     meanwhile, and the summary read as "busy". Now every row ends one of three ways (judged,
     closed as unjudgeable, or pending with a named drain), and the summary prints the pending count
     beside the drainable one, so a stuck row reads as undrainable on the day it appears.
+
+    Merges are found first and judged second, because the broke-later check reads each repo's fix
+    PRs ONCE, from the oldest merge it will be asked about (`fix_search_plan`); `fix_search` in the
+    summary counts the merges that read covered and the ones it did not.
     """
     # Every class classify_durability() can return starts at ZERO here, so the summary always prints
     # them all — a class that never occurred reads as `0`, not as a missing key. And the increment
@@ -844,6 +952,10 @@ def sweep_durability(
         "undrainable": 0,
         "drains": {drain: 0 for drain in DRAINS},
         "next_grace_drain": None,
+        "next_fix_search_close": None,
+        # Merges the broke-later check was asked about: read whole back to the merge (covered) or
+        # not (uncovered, of which `closed` were closed unchecked this run), and what it took.
+        "fix_search": {"covered": 0, "uncovered": 0, "closed": 0, "reads": 0, "repos": {}},
         "lineage_resolved": 0,
         "skip_reasons": {},
         "details": [],
@@ -854,8 +966,11 @@ def sweep_durability(
         summary.update(refresh_verifier_verdicts(dry_run=dry_run, _fetch_fn=_verifier_fetch_fn))
     now = int(_now or time.time())
     revert_cache: dict = {}  # repo -> cached revert search, so a bulk sweep does 1 search/repo
-    fix_cache: dict = {}  # repo -> cached fix search, same reason: 1 search/repo, matched locally
+    fix_cache: dict = {}  # repo -> its one fix-PR read this run (read_fix_window)
+    fix_retry = _load_fix_retry()  # run_id -> first run whose read did not reach its merge
+    fix_retry_before = dict(fix_retry)
     role_runs: list[dict] = []
+    resolved: list[tuple[dict, dict]] = []
     for run in _pending_merged_runs():
         summary["checked"] += 1
         if _acting_runs(run["run_id"]):
@@ -876,6 +991,19 @@ def sweep_durability(
         if found["status"] != "found":
             _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
             continue
+        resolved.append((run, found))
+    fix_since = fix_search_plan(
+        (
+            (
+                found["pr"].get("repo") or provision.parse_target(run["target"])[0],
+                _parse_gh_ts(found["pr"].get("mergedAt")),
+            )
+            for run, found in resolved
+        ),
+        now=now,
+        grace_days=grace_days,
+    )
+    for run, found in resolved:
         verdict = classify_durability(
             run,
             found["pr"],
@@ -883,11 +1011,31 @@ def sweep_durability(
             now=now,
             _revert_fn=_revert_fn,
             revert_cache=revert_cache,
+            _fix_fn=_fix_fn,
             fix_cache=fix_cache,
+            fix_since=fix_since,
         )
+        if verdict.get("fix_search") in ("covered", "uncovered"):
+            summary["fix_search"][verdict["fix_search"]] += 1
         durability = verdict.get("durability")
         if durability is None:
-            if verdict.get("drain") in DRAINS:
+            if verdict.get("drain") == DRAIN_FIX_SEARCH:
+                # The read did not reach this merge. Pending, so the next run reads again, until
+                # FIX_SEARCH_RETRY_DAYS after the first run that missed it; then closed unchecked.
+                unread_since = fix_retry.setdefault(run["run_id"], now)
+                closes_at = unread_since + FIX_SEARCH_RETRY_DAYS * SECONDS_PER_DAY
+                if now < closes_at:
+                    _leave_pending(summary, run, verdict["reason"], DRAIN_FIX_SEARCH, closes_at)
+                    continue
+                summary["fix_search"]["closed"] += 1
+                _close_unjudgeable(
+                    summary,
+                    run,
+                    f"{verdict['reason']}; unread since {_search_ts(unread_since)}",
+                    dry_run=dry_run,
+                    failure_class=feedback.BROKE_LATER_UNCHECKED,
+                )
+            elif verdict.get("drain") in DRAINS:
                 _leave_pending(
                     summary, run, verdict["reason"], verdict["drain"], verdict.get("drains_at")
                 )
@@ -929,8 +1077,77 @@ def sweep_durability(
             # durability question. Reported, never patched here.
             judged = ", ".join(f"{acting_run}={durability}" for acting_run, durability in acting)
             _leave_pending(summary, run, f"acting runs judged ({judged}) did not propagate", None)
+    summary["fix_search"]["reads"] = sum(entry["reads"] for entry in fix_cache.values())
+    summary["fix_search"]["repos"] = {
+        repo: _fix_read_summary(entry) for repo, entry in sorted(fix_cache.items())
+    }
+    if not dry_run:
+        # A clock lives exactly as long as its row stays pending: judged or closed drops it.
+        pending = {d["run_id"] for d in summary["details"] if d.get("action") == "skip"}
+        kept = {run_id: ts for run_id, ts in fix_retry.items() if run_id in pending}
+        _save_fix_retry(kept, fix_retry_before)
     summary["line"] = summary_line(summary)
     return summary
+
+
+def fix_search_plan(merges, *, now: int, grace_days: int = GRACE_DAYS) -> dict[str, int]:
+    """repo -> the oldest merge past grace among `merges`, the (repo, merged_ts) about to be judged.
+
+    Only a merge past grace reaches the fix check, so a read from the oldest of them reaches every
+    merge the check will be asked about in that repo: ONE window per repo, never one per PR. The
+    sweep and keepalive ingest both plan their reads here.
+    """
+    since: dict[str, int] = {}
+    for repo, merged_ts in merges:
+        if merged_ts is None or not repo or now - merged_ts < grace_days * SECONDS_PER_DAY:
+            continue
+        since[repo] = min(since.get(repo, merged_ts), merged_ts)
+    return since
+
+
+def _fix_read_summary(entry: dict) -> dict:
+    covered_from = entry["covered_from"]
+    return {
+        "since": _search_ts(entry["since"]),
+        "covered_from": _search_ts(covered_from) if covered_from is not None else None,
+        "fix_prs": len(entry["items"]),
+        "reads": entry["reads"],
+        "error": entry["error"],
+    }
+
+
+def _fix_retry_path() -> Path:
+    state_dir = os.environ.get("ORCH_STATE_DIR") or Path.home() / ".codex" / "orchestrator"
+    return Path(state_dir) / FIX_RETRY_STATE
+
+
+def _load_fix_retry() -> dict[str, int]:
+    """run_id -> when a run first could not read the fix PRs back to that row's merge.
+
+    Absent or unreadable reads as empty, which restarts every clock: a row is then retried LONGER,
+    and still closes FIX_SEARCH_RETRY_DAYS later. Losing this file can never close a row early.
+    """
+    try:
+        data = json.loads(_fix_retry_path().read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(run_id): int(ts)
+        for run_id, ts in data.items()
+        if isinstance(ts, (int, float)) and not isinstance(ts, bool)
+    }
+
+
+def _save_fix_retry(state: dict[str, int], previous: dict[str, int]) -> None:
+    if state == previous:
+        return  # a run that moved no clock never touches the state directory
+    path = _fix_retry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
+    tmp.replace(path)
 
 
 def _leave_pending(
@@ -947,7 +1164,8 @@ def _leave_pending(
         summary["undrainable"] += 1
     if drains_at:
         due = _dt.datetime.fromtimestamp(drains_at, _dt.timezone.utc).strftime("%Y-%m-%d")
-        summary["next_grace_drain"] = min(filter(None, (summary["next_grace_drain"], due)))
+        when = "next_fix_search_close" if drain == DRAIN_FIX_SEARCH else "next_grace_drain"
+        summary[when] = min(filter(None, (summary[when], due)))
     summary["details"].append(
         {
             "run_id": run["run_id"],
@@ -959,7 +1177,14 @@ def _leave_pending(
     )
 
 
-def _close_unjudgeable(summary: dict, run: dict, reason: str, *, dry_run: bool) -> None:
+def _close_unjudgeable(
+    summary: dict,
+    run: dict,
+    reason: str,
+    *,
+    dry_run: bool,
+    failure_class: str = feedback.UNJUDGEABLE_MERGE,
+) -> None:
     """Close a row whose merge can never be judged: terminal, excluded from learning, never FAIL."""
     summary[feedback.DURABILITY_UNJUDGEABLE] += 1
     notes = f"durability_sweep: unjudgeable: {reason}"
@@ -968,7 +1193,7 @@ def _close_unjudgeable(summary: dict, run: dict, reason: str, *, dry_run: bool) 
         "target": run["target"],
         "action": "patch",
         "durability": feedback.DURABILITY_UNJUDGEABLE,
-        "failure_class": feedback.UNJUDGEABLE_MERGE,
+        "failure_class": failure_class,
         "notes": notes,
     }
     if dry_run:
@@ -977,7 +1202,7 @@ def _close_unjudgeable(summary: dict, run: dict, reason: str, *, dry_run: bool) 
         feedback.record_outcome(
             run["run_id"],
             durability=feedback.DURABILITY_UNJUDGEABLE,
-            failure_class=feedback.UNJUDGEABLE_MERGE,
+            failure_class=failure_class,
             notes=notes,
         )
     summary["details"].append(detail)
@@ -986,16 +1211,22 @@ def _close_unjudgeable(summary: dict, run: dict, reason: str, *, dry_run: bool) 
 def summary_line(summary: dict) -> str:
     """One line with the blocking number beside the drainable one, and the drained state named."""
     verdicts = ", ".join(f"{verdict} {summary.get(verdict, 0)}" for verdict in VERDICTS)
+    fix = summary["fix_search"]
     head = (
         f"durability_sweep: checked {summary['checked']}; judged {summary['judged']} ({verdicts}); "
-        f"closed unjudgeable {summary[feedback.DURABILITY_UNJUDGEABLE]}"
+        f"closed unjudgeable {summary[feedback.DURABILITY_UNJUDGEABLE]}; "
+        f"fix search covered {fix['covered']}, uncovered {fix['uncovered']}"
     )
+    if fix["closed"]:
+        head += f" ({fix['closed']} closed unchecked)"
     pending = summary["skipped"]
     if pending == 0:
         return f"{head}; pending 0, fully drained"
     drains = ", ".join(f"{drain} {summary['drains'][drain]}" for drain in DRAINS)
     if summary["next_grace_drain"]:
         drains += f", next grace drain {summary['next_grace_drain']}"
+    if summary["next_fix_search_close"]:
+        drains += f", next unread close {summary['next_fix_search_close']}"
     tail = f"{head}; pending {pending}, drainable {summary['drainable']} ({drains})"
     if summary["undrainable"]:
         stuck = next(d for d in summary["details"] if d.get("action") == "skip" and not d["drain"])
@@ -1081,6 +1312,7 @@ def _selftest_live_revert_scan(now: int):
             grace_days=GRACE_DAYS,
             now=_now_ts,
             _revert_fn=lambda *a, **k: (False, "no revert found"),
+            _fix_fn=lambda *_window: ([], True),  # every fix PR read, none names it
         )
 
     ledger_only = _verdict_for([{"path": ".agents/issue-791-ledger.yml"}])
@@ -1152,7 +1384,6 @@ def _selftest_revert_search_cached_per_repo(now: int):
     (REST search = 30/min; the per-PR search hit a rate wall on the keepalive backfill)."""
     import shutil
     import tempfile
-    from pathlib import Path
 
     saved_db = feedback.DB_PATH
     tmp = tempfile.mkdtemp(prefix="durability-sweep-cache-selftest-")
@@ -1231,7 +1462,7 @@ def _selftest_broke_later(now: int):
         return False, "no revert"
 
     # (a) a later fix PR naming this change -> broke_later
-    def _fix_names_it(_repo):
+    def _fix_names_it(_repo, _since, _until=None):
         return [
             {
                 "number": 11,
@@ -1239,7 +1470,7 @@ def _selftest_broke_later(now: int):
                 "body": "Fixes the regression introduced in #10",
                 "mergedAt": _iso_days_ago(now, 5),
             }
-        ], False
+        ], True
 
     got = classify_durability(
         run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_names_it, fix_cache={}
@@ -1248,7 +1479,7 @@ def _selftest_broke_later(now: int):
     assert "#11" in got["notes"], got
 
     # (b) a fix that does NOT name it -> durable, not broke_later. Same file is not enough.
-    def _fix_unrelated(_repo):
+    def _fix_unrelated(_repo, _since, _until=None):
         return [
             {
                 "number": 12,
@@ -1256,7 +1487,7 @@ def _selftest_broke_later(now: int):
                 "body": "no reference at all",
                 "mergedAt": _iso_days_ago(now, 5),
             }
-        ], False
+        ], True
 
     got = classify_durability(
         run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_unrelated, fix_cache={}
@@ -1264,7 +1495,7 @@ def _selftest_broke_later(now: int):
     assert got["durability"] == "durable", got
 
     # (c) a fix that landed BEFORE the merge cannot be repairing it
-    def _fix_earlier(_repo):
+    def _fix_earlier(_repo, _since, _until=None):
         return [
             {
                 "number": 13,
@@ -1272,7 +1503,7 @@ def _selftest_broke_later(now: int):
                 "body": "Refs #10",
                 "mergedAt": _iso_days_ago(now, 60),
             }
-        ], False
+        ], True
 
     got = classify_durability(
         run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_earlier, fix_cache={}
@@ -1280,7 +1511,7 @@ def _selftest_broke_later(now: int):
     assert got["durability"] == "durable", got
 
     # (d) a change cannot be the follow-up that reports its own breakage
-    def _fix_is_self(_repo):
+    def _fix_is_self(_repo, _since, _until=None):
         return [
             {
                 "number": 10,
@@ -1288,32 +1519,33 @@ def _selftest_broke_later(now: int):
                 "body": "Refs #10",
                 "mergedAt": _iso_days_ago(now, 5),
             }
-        ], False
+        ], True
 
     got = classify_durability(
         run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_is_self, fix_cache={}
     )
     assert got["durability"] == "durable", got
 
-    # (e) ADDITIVE: an unavailable search costs the refinement, never the result. A new check
-    # that could strand rows in pending forever would be a latch of its own.
-    def _fix_unavailable(_repo):
+    # (e) UNKNOWN IS NOT DURABLE. An unavailable search leaves the merge unread, so it waits under
+    # DRAIN_FIX_SEARCH (the sweep bounds the wait); until 2026-10-04 it fell through to durable.
+    def _fix_unavailable(_repo, _since, _until=None):
         return None, False
 
     got = classify_durability(
         run, pr, now=now, _revert_fn=_no_revert, _fix_fn=_fix_unavailable, fix_cache={}
     )
-    assert got["durability"] == "durable", got
-    assert "unavailable" in got["notes"], got
+    assert got["durability"] is None and got["drain"] == DRAIN_FIX_SEARCH, got
+    assert got["fix_search"] == "uncovered" and "unavailable" in got["reason"], got
 
 
 def _selftest():
     import shutil
     import tempfile
-    from pathlib import Path
 
     tmp = tempfile.mkdtemp(prefix="durability-sweep-selftest-")
     feedback.DB_PATH = Path(tmp) / "t.db"
+    saved_state_dir = os.environ.get("ORCH_STATE_DIR")
+    os.environ["ORCH_STATE_DIR"] = tmp  # the fix-search retry clocks, never the live ones
     now = int(time.time())
     old = _iso_days_ago(now, 10)
     young = _iso_days_ago(now, 2)
@@ -1438,7 +1670,10 @@ def _selftest():
         }
 
         res = sweep_durability(
-            grace_days=GRACE_DAYS, _state_fn=lambda target: states.get(target), _now=now
+            grace_days=GRACE_DAYS,
+            _state_fn=lambda target: states.get(target),
+            _now=now,
+            _fix_fn=lambda *_window: ([], True),  # every fix PR read, none names a change here
         )
         assert res["checked"] == 7 and res["durable"] == 2 and res["reverted"] == 1, res
         assert res["reopened"] == 1 and res["skipped"] == 2, res
@@ -1461,6 +1696,10 @@ def _selftest():
             "later-fix reference)"
         )
     finally:
+        if saved_state_dir is None:
+            os.environ.pop("ORCH_STATE_DIR", None)
+        else:
+            os.environ["ORCH_STATE_DIR"] = saved_state_dir
         shutil.rmtree(tmp, ignore_errors=True)
 
 
