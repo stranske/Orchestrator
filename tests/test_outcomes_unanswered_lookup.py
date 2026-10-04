@@ -165,8 +165,13 @@ def test_a_find_with_every_earlier_branch_answered_is_credited(gh, path):
 @pytest.mark.parametrize("path", sorted(RESOLVERS))
 @pytest.mark.parametrize(
     "issue",
-    [(1, "", "HTTP 502: Bad Gateway"), (0, "{}", ""), (0, "not json", "")],
-    ids=["gh-failed", "no-state", "unparseable"],
+    [
+        (1, "", "HTTP 502: Bad Gateway"),
+        (0, "{}", ""),
+        (0, "not json", ""),
+        (0, json.dumps({"state": "CLOSD"}), ""),
+    ],
+    ids=["gh-failed", "no-state", "unparseable", "unknown-state"],
 )
 def test_an_unanswered_issue_lookup_is_counted_not_read_as_open(gh, path, issue):
     gh(default=NO_PR, issue=issue)
@@ -175,9 +180,31 @@ def test_an_unanswered_issue_lookup_is_counted_not_read_as_open(gh, path, issue)
     assert outcomes.state_to_outcome(state) is None
 
 
-@pytest.mark.parametrize("stdout", ["{}", "null", '"x"', "[1]"])
+@pytest.mark.parametrize("path", sorted(RESOLVERS))
+@pytest.mark.parametrize("issue_state", ["OPEN", "MERGED"])
+def test_a_known_open_or_merged_state_waits_without_counting(gh, path, issue_state):
+    """OPEN is still in progress, and MERGED is what `gh issue view` prints for a PR number (gh
+    2.94). Both are ANSWERS: the run waits as a no-PR join gap, never as an unanswered lookup."""
+    gh(default=NO_PR, issue=(0, json.dumps({"state": issue_state}), ""))
+    state = RESOLVERS[path]("o/r#7", "codex")
+    assert state["lookup_status"] in {"no_pr_for_remote_issue_branch", "no_pr_for_branch"}, state
+    assert outcomes._skip_reason(state) not in outcomes.UNANSWERED_LOOKUPS
+
+
+def test_a_failed_issue_lookup_counts_as_unanswered_at_ingest(brain, gh):
+    """Every branch answered "no PR" but the issue lookup failed: no outcome row, counted once."""
+    feedback.record_run("remote:o/r#7:codex", "o/r#7", "implement", "codex", mode="remote")
+    gh(default=NO_PR, issue=(1, "", "HTTP 502: Bad Gateway"))
+    summary = outcomes.ingest_modes("remote")
+    assert _outcome_row("remote:o/r#7:codex") is None
+    assert (summary["recorded"], summary["skipped"], summary["unanswered"]) == (0, 1, 1), summary
+    assert summary["skipped_details"][0]["reason"] == "issue_lookup_failed", summary
+
+
+@pytest.mark.parametrize("stdout", ["{}", "null", '"x"', "[1]", "[{}]"])
 def test_only_an_empty_list_means_no_pr_on_the_branch(gh, stdout):
-    """`{}` and `null` are falsy like `[]`; reading them as an answer is the same unknown-as-no."""
+    """`{}` and `null` are falsy like `[]`; reading them as an answer is the same unknown-as-no.
+    And `[{}]` is not a find: a PR record without a state cannot decide anything."""
     gh(default=(0, stdout, ""))
     assert outcomes._pr_list_by_head("o/r", "codex/issue-7") == {
         "lookup_status": "parse_failed",

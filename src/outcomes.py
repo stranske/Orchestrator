@@ -33,6 +33,7 @@ import provision
 # learns from. So an unanswered lookup ends the resolution, the run is skipped with no outcome row,
 # and the next ingest asks again. One set, read by the resolvers and by the summary's count.
 UNANSWERED_LOOKUPS = frozenset({"lookup_failed", "parse_failed", "issue_lookup_failed"})
+ISSUE_VIEW_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
 
 
 def _pr_state(target: str, agent: str | None = None) -> dict | None:
@@ -105,7 +106,10 @@ def _pr_list_by_head(repo: str, branch: str) -> dict | None:
         return {"lookup_status": "parse_failed", "branch": branch}
     # None is reserved for GitHub answering "no PR has this head": only an empty LIST says that.
     # `{}` or `null` is falsy too, and reading it as an answer would be the same unknown-as-no.
-    if not isinstance(arr, list) or (arr and not isinstance(arr[0], dict)):
+    # Likewise "found" needs a PR record with a state; `[{}]` is no more an answer than `{}`.
+    if not isinstance(arr, list) or (
+        arr and not (isinstance(arr[0], dict) and isinstance(arr[0].get("state"), str))
+    ):
         return {"lookup_status": "parse_failed", "branch": branch}
     if not arr:
         return None
@@ -276,9 +280,12 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
         issue = json.loads(r.stdout)
     except Exception:
         issue = None
-    if not isinstance(issue, dict) or not isinstance(issue.get("state"), str):
-        return {**unanswered, "error": "gh issue view printed no issue state"}
-    if issue["state"].upper() != "CLOSED":
+    state = issue.get("state") if isinstance(issue, dict) else None
+    # OPEN waits; MERGED is what `gh issue view` prints for a PR number (gh 2.94), not a closed
+    # issue. Anything else is a state this verdict does not know, so it is not an answer either.
+    if not isinstance(state, str) or state.upper() not in ISSUE_VIEW_STATES:
+        return {**unanswered, "error": f"gh issue view printed no known issue state: {state!r}"}
+    if state.upper() != "CLOSED":
         return None
     return {
         "lookup_status": "closed_issue_no_branch_pr",
