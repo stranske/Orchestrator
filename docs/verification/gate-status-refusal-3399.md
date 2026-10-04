@@ -142,3 +142,27 @@ The source/test commit is saved in `/tmp/gate-head-review.git`, with an applyabl
 `/tmp/gate-head-review.patch`; both changed files remain in the working tree for automation.
 The first two acceptance criteria are locally verified. Fresh exact-head CI, the seven-minute
 review floor, and the repository merge_guard remain outstanding; no merge is claimed.
+
+The rate-limit follow-up exercises all three origins (same repository, fork, deleted fork),
+all four verdicts, and all three rate-limit routes (403 message, 429 status, exhausted headers).
+It asserts the exact non-success failure diagnostic, no permission/fork fallback, and the PR
+head and verdict in every attempted status write. The suite still collects 24 tests.
+Production passes **24 tests**; the Gate/configuration/verdict-replay run passes **48 tests**.
+The unchanged `d326e59` export still yields **3 failed, 21 deselected**. A temporary export
+that drops the rate-limit failure floor only for deleted forks yields **3 failed, 1 passed,
+20 deselected**, proving the expanded checks detect that regression. All runs use
+`-m "not slow"`; production workflows and shared helpers are unchanged by this follow-up.
+
+Reconciliation reviewed the six PR commits through `7e88724`: the PR changes three files,
+and the first two acceptance criteria are verified. PR #413 is open and ready for review.
+The connector refused both the PR-body checkbox update and the `needs-human` label with
+`MCP tool call requires approval, but approval policy is never`. The checkout's `.git` remains
+read-only, so a separate commit and patch in `/tmp` are required for automation to apply.
+Fresh CI on that commit, the seven-minute review floor, and repository merge_guard remain
+required before merging.
+
+Black 26.5.1 formatted the changed test; the required repository-wide check passes for
+**297 files**, with the `/tmp` tools and periodic worker wakeup described above.
+`git diff --check` passes. The source/test commit is prepared in
+`/tmp/gate-rate-limit-review.git`, with its applyable patch at `/tmp/gate-rate-limit-review.patch`;
+the two changed files remain in the working tree for automation to commit on the PR branch.

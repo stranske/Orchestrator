@@ -48,6 +48,11 @@ REFUSED = {"status": 403, "message": "Resource not accessible by integration"}
 # github-api-with-retry.js counts this 404 as a permission refusal exactly like the 403.
 REFUSED_404 = {"status": 404, "message": "Resource not accessible by integration"}
 RATE_LIMITED = {"status": 403, "message": "API rate limit exceeded for installation"}
+RATE_LIMIT_ROUTES = {
+    "message": RATE_LIMITED,
+    "429": {"status": 429, "message": "x"},
+    "header": {"status": 403, "message": "Forbidden", "headers": {"x-ratelimit-remaining": "0"}},
+}
 
 
 def _need_workflow() -> None:
@@ -298,22 +303,20 @@ STATUS_CASES: list[dict[str, Any]] = [
         {"name": f"same_repo_404_{state}", **SAME_REPO, "state": state, "error": REFUSED_404}
         for state in ("success", "failure", "error", "pending")
     ),
-    {"name": "rate_limit_message", **FORK, "state": "success", "error": RATE_LIMITED},
-    {
-        "name": "rate_limit_429",
-        **FORK,
-        "state": "success",
-        "error": {"status": 429, "message": "x"},
-    },
-    {
-        "name": "rate_limit_header",
-        **SAME_REPO,
-        "state": "success",
-        "error": {"status": 403, "message": "Forbidden", "headers": {"x-ratelimit-remaining": "0"}},
-    },
     *(
-        {"name": f"rate_limit_{state}", **SAME_REPO, "state": state, "error": RATE_LIMITED}
-        for state in ("failure", "error", "pending")
+        {
+            "name": f"rate_limit_{origin}_{route}_{state}",
+            **head,
+            "state": state,
+            "error": error,
+        }
+        for origin, head in (
+            ("fork", FORK),
+            ("deleted_fork", DELETED_FORK),
+            ("same_repo", SAME_REPO),
+        )
+        for route, error in RATE_LIMIT_ROUTES.items()
+        for state in ("success", "failure", "error", "pending")
     ),
     {
         "name": "server_error",
@@ -490,19 +493,40 @@ def test_a_same_repo_refusal_fails_loudly(status: dict, cases: list[tuple[str, s
             assert not any("read-only" in w for w in case["warnings"]), (case_name, case)
 
 
+def _assert_rate_limited_post(status: dict, state: str) -> None:
+    """Rate limits preserve the verdict floor independently of the PR's origin."""
+    for origin in ("fork", "deleted_fork", "same_repo"):
+        for route in RATE_LIMIT_ROUTES:
+            name = f"rate_limit_{origin}_{route}_{state}"
+            case = status[name]
+            assert case["threw"] is None, (name, case)
+            expected_failures = (
+                []
+                if state == "success"
+                else [f"Gate verdict for headsha is '{state}': all checks passed"]
+            )
+            assert case["failures"] == expected_failures, (name, case)
+            assert any("Rate limit" in w for w in case["warnings"]), (name, case)
+            assert not any(
+                "read-only" in w or "blocked by permissions" in w for w in case["warnings"]
+            ), (
+                name,
+                case,
+            )
+            assert case["summaryWrites"] == 0 and case["summaryRaw"] == [], (name, case)
+            assert len(case["statusRequests"]) >= 1, (name, case)
+            for request in case["statusRequests"]:
+                assert request["sha"] == "headsha" and request["state"] == state, (name, case)
+                assert request["context"] == "Gate / gate", (name, case)
+
+
 def test_a_rate_limited_post_keeps_its_own_path(status: dict) -> None:
-    for name in ("rate_limit_message", "rate_limit_429", "rate_limit_header"):
-        case = status[name]
-        assert case["threw"] is None and case["failures"] == [], (name, case)
-        assert any("Rate limit" in w for w in case["warnings"]), (name, case)
-        assert case["summaryWrites"] == 0, (name, case)
+    _assert_rate_limited_post(status, "success")
 
 
 @pytest.mark.parametrize("state", ["failure", "error", "pending"])
 def test_a_rate_limited_post_fails_closed_for_any_other_verdict(status: dict, state: str) -> None:
-    case = status[f"rate_limit_{state}"]
-    assert case["threw"] is None, case
-    assert len(case["failures"]) == 1 and f"'{state}'" in case["failures"][0], case
+    _assert_rate_limited_post(status, state)
 
 
 def test_other_post_errors_stay_loud(status: dict) -> None:
