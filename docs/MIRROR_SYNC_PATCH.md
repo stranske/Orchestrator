@@ -938,11 +938,14 @@ only by coincidence. The first change to the builder after that makes this line 
 
 **The copier, whole.** After this change is merged and `~/.codex/orchestrator-src` is pulled,
 replace the contents of `~/.codex/bin/orch-sync-mirror.sh` with the block below. It keeps only what
-is not repository content, the Workflows registry, and calls the builder for everything else. It
-also carries the #390 entry guard byte for byte (the "Direct incumbent copier entry guard" section
-above). If you already inserted that guard, this keeps it; if you have not, this inserts it.
-Install it together with the wrapper block in "The wrapper takes its verdict BEFORE the live copy",
-because the guard sends a direct, non-staging call through the guarded publisher.
+is not repository content, the Workflows registry, and calls the builder for everything else, so a
+sync copies exactly what it copied before and nothing about HOW the copier is called changes.
+
+It deliberately does NOT carry #390's entry guard. That guard routes a direct call through the
+guarded publisher, which is #389's deployment step and belongs with that section's wrapper. If you
+have already inserted the guard ("Direct incumbent copier entry guard" above), keep its five lines
+immediately after the `MIRROR=` line. If you have not, that section's insertion applies to this file
+unchanged when you deploy #389, at the same place.
 
 ```bash
 #!/usr/bin/env bash
@@ -960,11 +963,6 @@ because the guard sends a direct, non-staging call through the guarded publisher
 set -euo pipefail
 SRC="${1:-$HOME/Library/CloudStorage/Dropbox/Learning/Code/Orchestrator}"
 MIRROR="${ORCH_MIRROR:-$HOME/.codex/orchestrator-mirror}"
-[[ -f "$SRC/scripts/incumbent_copy_guard.sh" ]] || {
-  echo "NOT SYNCED: source has no incumbent copy guard; live mirror untouched." >&2
-  exit 2
-}
-source "$SRC/scripts/incumbent_copy_guard.sh"
 trap 'echo "ERR: orch-sync-mirror.sh aborted at line $LINENO (rc $?): $MIRROR is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify." >&2' ERR
 if [[ ! -f "$SRC/orchestrate.sh" ]]; then
   echo "ERR: no orchestrate.sh in $SRC — Dropbox unreadable (launchd context?) or wrong path." >&2
@@ -1001,7 +999,8 @@ fi
 rm -f "$WF_REGISTRY_GH"
 ```
 
-The steps, about two minutes, once:
+The steps, about two minutes, once. Pull, keep a backup, write the block above over the file (the
+one-liner extracts it from this document exactly as the tests do), and check the syntax:
 
 ```bash
 git -C ~/.codex/orchestrator-src pull --ff-only
@@ -1011,14 +1010,21 @@ git -C ~/.codex/orchestrator-src pull --ff-only
 cp ~/.codex/bin/orch-sync-mirror.sh ~/.codex/bin/orch-sync-mirror.sh.bak-2026-10-04
 ```
 
-Then paste the block above over the file's whole contents, and confirm with the next ordinary sync:
-its pre-sync output must carry `copy contract: ... built exactly the tree
-scripts/build_exec_mirror.sh builds, which CI's exec-mirror job verifies`.
-`tests/test_build_exec_mirror.py` extracts the block above and runs it in a scratch world: it builds
-through the builder and adds only the registry; it refuses a source without the builder before
-writing anything; it sends a non-staging call to the guarded publisher; and it contains the #390
-guard block exactly as that section documents it, which is what the deployment-evidence collector
-looks for.
+```bash
+python3 -c 'import pathlib as p; h=p.Path.home(); t=(h/".codex/orchestrator-src/docs/MIRROR_SYNC_PATCH.md").read_text(); i=t.index("**The copier, whole.**"); s=t.index("```bash\n",i)+8; (h/".codex/bin/orch-sync-mirror.sh").write_text(t[s:t.index("\n```",s)]+"\n")'
+```
+
+```bash
+bash -n ~/.codex/bin/orch-sync-mirror.sh && grep -c build_exec_mirror ~/.codex/bin/orch-sync-mirror.sh
+```
+
+Then sync as usual. The pre-sync output carries `copy contract: ... built exactly the tree
+scripts/build_exec_mirror.sh builds, which CI's exec-mirror job verifies`; to undo, copy the backup
+back. `tests/test_build_exec_mirror.py` extracts the block above and runs it in a scratch world: it
+builds through the builder and adds only the registry, and it refuses a source without the builder
+before writing anything. It also inserts #390's documented guard exactly where that section says and
+checks the result: a staging call still builds, a direct call goes to the guarded publisher, and
+the guard block is present byte for byte, which is what the deployment-evidence collector looks for.
 
 **Latched-gate answers for CI's `exec-mirror` job and the `bare_mirror_*` ceilings.**
 

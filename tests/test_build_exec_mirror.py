@@ -349,27 +349,80 @@ def test_the_documented_copier_builds_through_the_builder(source: Path, tmp_path
     assert not (root / "mirror").exists()
 
 
-def test_the_documented_copier_keeps_the_390_entry_guard(source: Path, tmp_path: Path) -> None:
-    # The deployment-evidence collector looks for this block in the installed copier, byte for byte.
-    assert _documented_guard() in _documented_copier()
-    # And it is live: a call that is not staging goes to the guarded publisher, never in place.
+def _with_390_guard(copier: str) -> str:
+    """The copier with #390's guard inserted where that section says: right after `MIRROR=`."""
+    lines = copier.splitlines(keepends=True)
+    (at,) = [i for i, line in enumerate(lines) if line.startswith('MIRROR="${ORCH_MIRROR:-')]
+    return "".join(lines[: at + 1]) + _documented_guard() + "\n" + "".join(lines[at + 1 :])
+
+
+def test_the_390_guard_composes_with_the_documented_copier(source: Path, tmp_path: Path) -> None:
+    """The documented copier leaves #390's guard out (it is #389's deployment step), so inserting
+    it where that section says must still work, and must leave the exact bytes the
+    deployment-evidence collector looks for."""
+    assert _documented_guard() not in _documented_copier(), "the guard is #389's step, not this one"
+    composed = _with_390_guard(_documented_copier())
+    assert _documented_guard() in composed
+    copier = tmp_path / "orch-sync-mirror.sh"
+    copier.write_text(composed)
     _write(
         source / "scripts" / "publish_unverified_snapshot.sh",
         '#!/usr/bin/env bash\nprintf "publisher %s %s\\n" "$1" "$2" > "$FAKE_RECORD"\n',
     )
-    copier = tmp_path / "orch-sync-mirror.sh"
-    copier.write_text(_documented_copier())
     record, live = tmp_path / "record.txt", tmp_path / "live-mirror"
-    proc = subprocess.run(
+    direct = subprocess.run(
         ["bash", str(copier), str(source)],
         env=_env(HOME=str(tmp_path), ORCH_MIRROR=str(live), FAKE_RECORD=str(record)),
         capture_output=True,
         text=True,
         timeout=60,
     )
-    assert proc.returncode == 0, proc.stderr
+    assert direct.returncode == 0, direct.stderr
     assert record.read_text() == f"publisher {source} {live}\n"
     assert not live.exists(), "the guard must route a direct call away from an in-place copy"
+    # A staging call (the verifier's and the publisher's own) still builds through the builder.
+    root = tmp_path / "stage"
+    (root / "home").mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    _gh_stub(bin_dir, '{"repos": []}')
+    staged = subprocess.run(
+        ["bash", str(copier), str(source)],
+        env=_env(
+            PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            HOME=str(root / "home"),
+            ORCH_MIRROR=str(root / "mirror"),
+            ORCH_PRIVATE_COPY_ROOT=str(root),
+        ),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert staged.returncode == 0, staged.stderr
+    assert (root / "mirror" / "base.py").is_file()
+
+
+def test_the_documented_install_command_writes_the_documented_copier(tmp_path: Path) -> None:
+    """The one-liner the doc tells the owner to run must write exactly the block above it."""
+    text = DOC.read_text(encoding="utf-8")
+    heading = text.index("**The copier, whole.**")
+    (command,) = [
+        block.split("\n```", 1)[0]
+        for block in text[heading:].split("```bash\n")[1:]
+        if block.startswith("python3 -c")
+    ]
+    home = tmp_path / "home"
+    (home / ".codex" / "bin").mkdir(parents=True)
+    (home / ".codex" / "orchestrator-src" / "docs").mkdir(parents=True)
+    shutil.copy2(DOC, home / ".codex" / "orchestrator-src" / "docs" / DOC.name)
+    proc = subprocess.run(
+        ["bash", "-c", command],
+        env=_env(HOME=str(home)),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (home / ".codex" / "bin" / "orch-sync-mirror.sh").read_text() == _documented_copier()
 
 
 # --------------------------------------------------------------------------- the pre-sync FYI line
