@@ -3171,6 +3171,7 @@ def record_role_run(
     rationale: str | None = None,
     model: str | None = None,
     ts: int | None = None,
+    batch_id: str | None = None,
 ):
     """Record a role invocation as its own learnable run.
 
@@ -3192,6 +3193,9 @@ def record_role_run(
         "decision_source": decision_source,
         "proposal": proposal,
     }
+    if batch_id is not None:
+        metadata["batch_id"] = batch_id
+
     # Roles are the ONE production path that already knows which capability it is, so they are
     # where capability attribution can start. Until 2026-08-11 the id was passed only into a
     # completion-event payload and never to record_run, so no influence edge was ever tagged with
