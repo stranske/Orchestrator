@@ -135,19 +135,23 @@ fi
 # time (docs/reports/issue_completion_*, untracked here), and a delete-then-extract would destroy it.
 # The paths the previous build shipped are recorded in .docs-shipped.txt, and only those are removed
 # before the new tree lands, so a doc deleted from the repository does not linger either. An entry
-# outside docs/, or one carrying `..`, is never removed.
+# outside docs/, or one carrying `..`, is never removed. The cleanup runs even when HEAD has no
+# docs/ at all, and the manifest then goes too: a manifest left behind would keep naming the old
+# docs, and the installer deploys whatever it names (CodeRabbit on #438).
+if [[ -f "$MIRROR/.docs-shipped.txt" ]]; then
+  while IFS= read -r shipped; do
+    case "$shipped" in
+      docs/*) [[ "$shipped" == *..* ]] || rm -f "$MIRROR/$shipped" ;;
+    esac
+  done < "$MIRROR/.docs-shipped.txt"
+fi
 if git -C "$SRC" rev-parse --verify -q HEAD:docs >/dev/null 2>&1; then
-  if [[ -f "$MIRROR/.docs-shipped.txt" ]]; then
-    while IFS= read -r shipped; do
-      case "$shipped" in
-        docs/*) [[ "$shipped" == *..* ]] || rm -f "$MIRROR/$shipped" ;;
-      esac
-    done < "$MIRROR/.docs-shipped.txt"
-  fi
   git -C "$SRC" -c core.quotePath=false ls-tree -r --name-only HEAD docs > "$MIRROR/.docs-shipped.txt"
   git -C "$SRC" archive --format=tar HEAD docs | { tar -x -C "$MIRROR" && cat >/dev/null; }
   echo "docs/ shipped from git HEAD ($(wc -l < "$MIRROR/.docs-shipped.txt" | tr -d ' ') files, merged beside run-time output)"
   extra=$((extra + 1))
+else
+  rm -f "$MIRROR/.docs-shipped.txt"
 fi
 # pyproject.toml carries the coverage, mypy and pytest configuration (`pythonpath = ["src", "."]`
 # is what resolves the flat modules here). It replaced .coveragerc on 2026-08-23, and a stale

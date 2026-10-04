@@ -271,7 +271,7 @@ def repo_files_absent(*relative_paths: str) -> str | None:
         return None
     return (
         f"not present in this tree: {', '.join(sorted(missing))} — the exec mirror carries only "
-        f"what orch-sync-mirror.sh names, so repository configuration is asserted from a "
+        f"what scripts/build_exec_mirror.sh names, so repository configuration is asserted from a "
         f"checkout. Run this check from the repo, where it is not skipped."
     )
 

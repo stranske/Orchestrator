@@ -901,9 +901,11 @@ after merge.
 
 - `scripts/build_exec_mirror.sh` builds everything the mirror carries FROM THIS REPOSITORY. It is the
   repository part of `~/.codex/bin/orch-sync-mirror.sh`, moved without changing what it does: the
-  same files, the same `git archive` drains, the same `docs/` merge and the same executable bits. It
-  needs a git checkout and an explicit destination, and has no default that could name the live
-  mirror. Witnessed on 2026-10-04 by running the installed copier and the builder on the same source
+  same files, the same `git archive` drains, the same `docs/` merge and the same executable bits.
+  One deliberate exception, reachable only if the repository ever drops `docs/` entirely: the
+  previous manifest's docs and the manifest itself are then removed, where the copier left them for
+  the installer to deploy. It needs a git checkout and an explicit destination, and has no default
+  that could name the live mirror. Witnessed on 2026-10-04 by running the installed copier and the builder on the same source
   into two scratch trees: 2,103 entries each, identical in contents and permissions. The one
   difference is `repo_review_registry.json`, which the copier fetches from Workflows.
 - CI's new `exec-mirror` job runs `scripts/verify_before_sync.sh` itself, with

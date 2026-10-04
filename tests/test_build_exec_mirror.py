@@ -175,6 +175,21 @@ def test_docs_merge_keeps_runtime_output_and_drops_a_deleted_doc(
     assert victim.read_text() == "never the mirror's\n", "a manifest entry escaped docs/"
 
 
+def test_a_source_without_docs_leaves_no_shipped_docs_behind(source: Path, tmp_path: Path) -> None:
+    """With no docs/ at HEAD the previous manifest's docs go, and so does the manifest: the
+    installer deploys whatever a manifest names. Runtime output under docs/ stays."""
+    mirror = tmp_path / "mirror"
+    assert _build(source, mirror).returncode == 0
+    _write(mirror / "docs" / "reports" / "runtime.md", "written at run time\n")
+    _git(source, "rm", "-q", "-r", "docs")
+    _git(source, "commit", "-q", "-m", "no docs")
+    proc = _build(source, mirror)
+    assert proc.returncode == 0, proc.stderr
+    assert not (mirror / "docs" / "guide.md").exists(), "a doc HEAD no longer has must not linger"
+    assert not (mirror / ".docs-shipped.txt").exists(), "a stale manifest would still deploy it"
+    assert (mirror / "docs" / "reports" / "runtime.md").read_text() == "written at run time\n"
+
+
 def test_refusals_name_their_cause_and_write_nothing(source: Path, tmp_path: Path) -> None:
     # No destination: there is deliberately no default that could name the live mirror.
     nowhere = _build(source, None)
