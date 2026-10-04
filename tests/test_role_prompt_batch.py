@@ -39,13 +39,18 @@ def test_issue_body_mode_validates_format_sections_and_needs_no_task_type(
 ):
     routes = []
     calls = []
+    backend_body = BODY
     monkeypatch.setattr(
         roles, "route_role", lambda *a, **kw: routes.append(a) or {"agent": "cursor"}
     )
 
     def offload(backend, prompt, **kwargs):
         calls.append((backend, prompt))
-        return {"run_id": f"fake:{len(calls)}", "output": json.dumps(proposal()), "exit": 0}
+        return {
+            "run_id": f"fake:{len(calls)}",
+            "output": json.dumps(proposal(backend_body)),
+            "exit": 0,
+        }
 
     monkeypatch.setattr(roles.dispatcher, "offload", offload)
     result = roles.run_prompt_agent(
@@ -86,6 +91,30 @@ def test_issue_body_mode_validates_format_sections_and_needs_no_task_type(
     for item in (result, explicit_none):
         assert recorded[item["role_run_id"]]["backend_run_id"] == item["backend_run_id"]
         assert recorded[item["role_run_id"]]["proposal"] == proposal()
+    # Check the format contract through the backend path, not just the validator helper.
+    for section in ("Why", "Tasks", "Acceptance Criteria", "Non-Goals"):
+        backend_body = BODY.replace("## " + section, "## Other")
+        rejected = roles.run_prompt_agent(
+            target="owner/repo#3",
+            goal="Reject an incomplete issue",
+            output="issue_body",
+            dispatch=True,
+        )
+        assert f"issue_body requires a non-empty ## {section} section" in rejected["errors"]
+        assert rejected["proposal"] is None
+        assert rejected["issue_body"] is None
+        assert rejected["dispatch_prompt"] is None
+        assert rejected["role_record_error"] is None
+        assert rejected["role_run_id"]
+        with feedback._conn() as conn:
+            metadata = json.loads(
+                conn.execute(
+                    "SELECT decomposition FROM runs WHERE run_id=?",
+                    (rejected["role_run_id"],),
+                ).fetchone()[0]
+            )
+        assert metadata["backend_run_id"] == rejected["backend_run_id"]
+        assert "proposal" not in metadata
     assert roles._validate_prompt_agent(proposal())  # Dispatch mode retains its stronger contract.
 
 
@@ -137,6 +166,10 @@ def test_batch_routes_once_and_records_one_run_per_item_with_a_shared_batch_id(
     assert routes == [("prompt",)]
     assert len(calls) == 2
     assert all(backend == "cursor" for backend, _ in calls)
+    for index, (_, prompt) in enumerate(calls, 1):
+        context = json.loads(prompt.splitlines()[-1])
+        assert context["target"] == f"owner/repo#{index}"
+        assert context["goal"] == f"Issue {index}"
     ids = [item["role_run_id"] for item in result["items"]]
     assert len(set(ids)) == 2 and all(ids)
     assert all(not item["errors"] for item in result["items"])
