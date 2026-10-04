@@ -166,9 +166,7 @@ def test_export_carries_a_policy_version_and_one_sampled_challenger_per_task_typ
                     } & (router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS - router.BACKUP_AGENTS)
                     assert challenger in allowed - {"cursor"}
                     expected = (
-                        "gemini"
-                        if mode == "thompson-hybrid" and "gemini" in allowed
-                        else "codex"
+                        "gemini" if mode == "thompson-hybrid" and "gemini" in allowed else "codex"
                     )
                     assert challenger == expected
                 assert route_weights_export.write_document(output, document) is True
