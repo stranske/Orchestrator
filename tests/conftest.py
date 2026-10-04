@@ -171,24 +171,39 @@ def arm(tests_dir: Path) -> Guard:
             if staged_additions:
                 # A staged addition normally ships with the commit that starts reading it, but an
                 # export-ignore rule already present in the index will still omit it. Ask Git's
-                # cached attribute view rather than exempting every path absent from HEAD.
+                # cached attribute view rather than exempting every path absent from HEAD -- about
+                # the file AND every directory above it, each with its trailing slash, because
+                # that is how `git archive` asks. A rule naming a directory (`held_dir`,
+                # `held_dir/`) leaves each file inside it `unspecified`; only the directory's own
+                # path reports it, and a `dir/` rule only with the slash (six rule styles measured
+                # against `git archive`, 2026-10-04).
+                asked = {
+                    rel: [rel]
+                    + ["/".join(rel.split("/")[:n]) + "/" for n in range(1, rel.count("/") + 1)]
+                    for rel in staged_additions
+                }
                 proc = git(
                     "check-attr",
                     "-z",
                     "--cached",
                     "export-ignore",
                     "--",
-                    *sorted(staged_additions),
+                    *sorted({path for paths in asked.values() for path in paths}),
                 )
                 if proc.returncode != 0:
                     return failed(proc)
                 attributes = _split(proc.stdout)
                 if len(attributes) % 3:
                     return Guard(False, "`git check-attr` returned malformed NUL-delimited output")
-                for rel, attribute, value in zip(
-                    attributes[0::3], attributes[1::3], attributes[2::3], strict=True
-                ):
-                    if attribute == "export-ignore" and value not in {"unspecified", "unset"}:
+                ignored = {
+                    path
+                    for path, attribute, value in zip(
+                        attributes[0::3], attributes[1::3], attributes[2::3], strict=True
+                    )
+                    if attribute == "export-ignore" and value not in {"unspecified", "unset"}
+                }
+                for rel, paths in asked.items():
+                    if ignored.intersection(paths):
                         found[rel] = "export-ignore"
             proc = git("archive", "--format=tar", "HEAD", "--", ".")
             if proc.returncode != 0:
