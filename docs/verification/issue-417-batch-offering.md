@@ -72,16 +72,17 @@ repair snapshot fails the duplicate-paragraph assertion. Removing the retained
 value-chain sentence also fails the description check. XML parsing is measured
 separately with ElementTree; the JavaScript checks do not implement an XML parser.
 
-This keepalive runner lacks pytest and Black, and package installation failed.
-The real control runner rejected its first baseline with "no pytest report";
-the focused suite and whole-tree Black could not execute. These are prerequisite
-failures, not new baseline/RED/restored or formatting results. All three checkout
-control modules remain byte-identical to HEAD. The earlier observed results above
-are preserved but do not replace current-head validation.
+A prior keepalive environment lacked pytest and Black; its failed prerequisites
+were not acceptance results. The closer independently replayed the current
+767dd35 tree with Python 3.12: all three real baseline/RED/restored controls
+completed, the focused suites passed 29 cases plus six subtests, whole-tree
+Black checked 327 files, and both new Node diagram tests passed. The runtime
+control modules remained byte-identical throughout. XML parsing also passed.
+Current-head CI and the guarded review floor are separate requirements.
 
 - [x] Merged-main SVG XML RED at line 3; repaired XML GREEN, with both descriptions retained.
-- [ ] Re-run all three real baseline/RED/restored pytest controls on the current head.
-- [ ] Re-run the 29-case/six-subtest focused suites and whole-tree Black on the current head.
+- [x] Re-run all three real baseline/RED/restored pytest controls on the current source.
+- [x] Re-run the 29-case/six-subtest focused suites and whole-tree Black on the current source.
 - [ ] Exact-head CI, every review-thread page, expected checkout/mirror topology, and the seven-minute floor before guarded squash.
 - [x] Source417 confirmed open; CONCERNS/NON_PASS preserved, with no live publication or provider PASS claimed.
 
