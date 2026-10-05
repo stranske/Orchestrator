@@ -1537,6 +1537,8 @@ def followup(
     # The gate's two numbers, reported together: how many promotions were waiting in `evaluated`
     # when this run looked, and for how many of them a launch was still available. The second one
     # is what nobody could see while the stamp below was being re-touched every hour.
+    # `stamp_age_s` is measured once at the start of this followup run. A genuine finish below
+    # refreshes it to zero in the returned summary so the line reflects the hold just taken.
     ship_gate: ShipGateSummary = {
         "stamp_age_s": None if stamp_age_s is None else int(stamp_age_s),
         "hold_s": SHIP_GATE_HOLD_S,
@@ -1562,8 +1564,6 @@ def followup(
         # unlaunched after their 14-day TTL, the two launched before that made no commit, and
         # nothing printed a launchable count (the JSON went to /dev/null and the ledger heartbeat
         # fires only from the CLI). Only a promotion that reached this phase during THIS run holds.
-        if phase == phase_before and (edir / "ship-gate.json").exists():
-            return
         verdict = (
             "use" if phase == "candidate_ready" else "durable" if phase == "durable" else "discard"
         )
@@ -1576,10 +1576,18 @@ def followup(
             "reason": ((state.get("phase_history") or [{}])[-1]).get("reason"),
             "promotion_state": str(synthesis_promotion.state_path(edir)),
         }
+        if phase == phase_before:
+            if (edir / "ship-gate.json").exists():
+                return
+            # Legacy promotions may lack a local checkpoint after an earlier finish. Repair the
+            # file without re-holding launches or counting another finish.
+            (edir / "ship-gate.json").write_text(json.dumps(payload, indent=2) + "\n")
+            return
         (edir / "ship-gate.json").write_text(json.dumps(payload, indent=2) + "\n")
         gate_stamp.touch()
         launch_available = False
         ship_gate["finished"] += 1
+        ship_gate["stamp_age_s"] = 0
 
     # Read every promotion state ONCE before deciding anything. `promotion_inflight` used to be
     # discovered in visit order, so an evaluated candidate that sorted before the running one

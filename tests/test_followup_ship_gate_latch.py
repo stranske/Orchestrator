@@ -80,6 +80,22 @@ def _followup(calls: list) -> dict:
     )
 
 
+def test_legacy_missing_local_checkpoint_does_not_rehold_or_recount():
+    """An already-terminal promotion with a missing local ship-gate.json is repaired locally only."""
+    now = int(time.time())
+    edir = _finished_dir("legacy", now=now)
+    (edir / "ship-gate.json").unlink()
+    stamp = _stamp(2 * 86400)
+    before = stamp.stat().st_mtime
+    calls: list = []
+    out = _followup(calls)
+    assert (edir / "ship-gate.json").exists()
+    assert json.loads((edir / "ship-gate.json").read_text())["verdict"] == "discard"
+    assert stamp.stat().st_mtime == before
+    assert out["ship_gate"]["finished"] == 0
+    assert calls == []
+
+
 def test_a_run_that_finishes_nothing_leaves_the_stamp_alone():
     now = int(time.time())
     _finished_dir("done", now=now)
@@ -150,6 +166,7 @@ def test_a_new_finish_holds_the_gate_once():
     out = _followup(calls)
     assert synthesis_promotion.load_state(edir)["delivery_phase"] == "discarded"
     assert out["ship_gate"]["finished"] == 1 and stamp.exists()
+    assert out["ship_gate"]["stamp_age_s"] == 0
     assert json.loads((edir / "ship-gate.json").read_text())["verdict"] == "discard"
     held_at = stamp.stat().st_mtime
     # The same finish, seen again on the next run, does not hold a second time.
