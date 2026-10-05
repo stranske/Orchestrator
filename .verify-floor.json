@@ -1,6 +1,6 @@
 {
-  "collected": 2102,
-  "passed": 2102,
+  "collected": 2112,
+  "passed": 2112,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Integrated issue428 adjudicator shadow recovery with current main ea92f54 (fixture provenance). Exact pytest collection measured on integrated tree; skip/type ceilings unchanged. Previous note histories retained in Git and closer work/20261005T1538Z/476-floor-{branch,main}.json."
+  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.Integrated issue428 adjudicator shadow recovery with current main ea92f54 (fixture provenance). Exact pytest collection measured on integrated tree; skip/type ceilings unchanged. Previous note histories retained in Git and closer work/20261005T1538Z/476-floor-{branch,main}.json."
 }
