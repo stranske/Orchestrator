@@ -478,7 +478,15 @@ def a2a_state(state: str, log_tail: str = "") -> str:
 def _finish_report(report: dict, attempt_history: list[dict] | None) -> dict:
     report["a2a_state"] = a2a_state(report.get("state") or "", report.get("log_tail") or "")
     report["policy_decision"] = redirect_policy.decide(report, attempt_history)
-    report["redirect_plan"] = redirect_plan.plan(report)
+    try:
+        report["redirect_plan"] = redirect_plan.plan(report)
+    except redirect_plan.MissingRedirectAgent as exc:
+        # Classification has no worker/capacity context. Preserve its policy recommendation,
+        # but expose only inspection commands until the role has selected a real worker.
+        inspection = {**report, "policy_decision": {"action": "inspect", "reason": str(exc)}}
+        report["redirect_plan"] = redirect_plan.plan(inspection)
+        report["redirect_plan"]["blocked_action"] = report["policy_decision"]["action"]
+        report["redirect_plan"]["blocker"] = str(exc)
     return report
 
 
@@ -800,10 +808,12 @@ def _selftest() -> None:
         assert repeat_stall["policy_decision"]["action"] == "decompose", repeat_stall[
             "policy_decision"
         ]
-        assert repeat_stall["redirect_plan"]["action"] == "decompose", repeat_stall["redirect_plan"]
-        assert repeat_stall["redirect_plan"]["requires_confirmation"] is True, repeat_stall[
+        assert repeat_stall["redirect_plan"]["blocked_action"] == "decompose", repeat_stall[
             "redirect_plan"
         ]
+        assert repeat_stall["redirect_plan"]["action"] == "inspect"
+        assert not repeat_stall["redirect_plan"]["apply_supported"]
+        assert not repeat_stall["redirect_plan"]["requires_confirmation"]
 
         (wt / "tracked.py").write_text("x = 333\n")
         os.utime(wt / "tracked.py", (now - 900, now - 900))

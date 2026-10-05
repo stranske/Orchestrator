@@ -1,0 +1,27 @@
+{
+  "agent": "cursor",
+  "target": "example/repo#12",
+  "lane": "opener",
+  "task_type": "implement",
+  "state": "exited",
+  "pid": null,
+  "signals": {
+    "pid_alive": false
+  },
+  "policy_decision": {
+    "action": "redirect",
+    "reason": "auth failure",
+    "confidence": "high"
+  },
+  "hints": [
+    {
+      "kind": "auth",
+      "detail": "synthetic expired credential"
+    }
+  ],
+  "log_tail": "HTTP 401 Unauthorized",
+  "drift": {
+    "severity": "none",
+    "findings": []
+  }
+}
