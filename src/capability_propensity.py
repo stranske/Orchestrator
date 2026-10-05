@@ -978,6 +978,12 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
     for trial in trials.values():
         # A fixture contract's matches and invocations are not production selection evidence.
         fixture_ids = set(trial["fixture_passes"]) | set(trial["fixture_failures"])
+        if any(surface.startswith("rail-exercise:") for surface in trial["skills"]):
+            # Rail advice offers every capability bound to the phase, but the runner exercises
+            # just one contract. Unexercised siblings are fixture offers too; counting them as
+            # production non-use could demote a binding solely because other contracts ran.
+            for key in ("candidates", "triggered", "declined"):
+                fixture_ids.update(trial[key])
         for key in ("candidates", "triggered", "declined"):
             trial[key] = [cid for cid in trial[key] if cid not in fixture_ids]
         trial["skills"] = sorted(trial["skills"])

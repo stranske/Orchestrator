@@ -117,6 +117,8 @@ def test_migration_is_idempotent_and_reports_counts(tmp_path):
 
 
 def test_detector_ignores_fixture_selection_and_usefulness(tmp_path, monkeypatch):
+    import capability_advisor as ca
+
     path = _ledger(tmp_path)
     _record(path, "a-fixture", "advice:fixture", "fixture_observed")
     monkeypatch.setattr(cp, "surface_records", lambda surface: [])
@@ -126,6 +128,41 @@ def test_detector_ignores_fixture_selection_and_usefulness(tmp_path, monkeypatch
     assert cp.missed_selection("opener-lane", [], path=path)["rows"] == []
     result = cp.detect(path=path)
     assert not result["promotions"] and not result["demotions"]
+
+    # A rail consult offers a whole phase's bindings, although only one contract runs.
+    # The remaining offers must not become production evidence of silent non-use.
+    surface = "rail-exercise:test"
+    monkeypatch.setattr(ca, "binding_for", lambda *args, **kw: {"a-fixture", "z-production"})
+    for i in range(cp.DEMOTION_MIN_TRIALS):
+        ref = f"advice:rail-phase-{i}"
+        for cid in ("a-fixture", "z-production"):
+            capabilities.heartbeat(
+                cid, "match", ref=ref, path=path, metadata={"surface": surface}
+            )
+        cp.record_trigger("a-fixture", ref, path=path, metadata={"surface": surface})
+        cp.record_usefulness(
+            "a-fixture",
+            ref,
+            path=path,
+            useful=True,
+            provenance="fixture_observed",
+            evidence="one contract in the phase passed",
+        )
+    counts = cp.surface_decline_counts(surface, path=path)
+    assert counts["offered"] == counts["silent"] == counts["triggered"] == {}
+    assert cp.missed_selection(surface, [], path=path)["rows"] == []
+    assert cp.propose_demotions(surface, path=path) == []
+
+    # Genuine production offers still feed the same detector.
+    capabilities.heartbeat(
+        "z-production",
+        "match",
+        ref="advice:production-offer",
+        path=path,
+        metadata={"surface": "opener-lane"},
+    )
+    counts = cp.surface_decline_counts("opener-lane", path=path)
+    assert counts["offered"] == counts["silent"] == {"z-production": 1}
 
 
 def test_rail_exercise_records_fixture_provenance(monkeypatch):
