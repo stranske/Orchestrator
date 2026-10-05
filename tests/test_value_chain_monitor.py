@@ -255,6 +255,25 @@ def test_fleet_population_paginates_and_rejects_partial_evidence():
 
 
 def test_new_capability_has_all_nine_admission_parts(tmp_path):
+    spec = {
+        "capability_id": "value-chain-monitor",
+        **capabilities.KNOWN_DECLARATIONS["value-chain-monitor"],
+    }
+    preflight = capability_admission.preflight(spec)
+    assert preflight["ready_to_build"], preflight
+    assert preflight["declarable_missing"] == []
+    assert set(preflight["checks"]) == {name for name, _ in capability_admission.REQUIREMENTS}
+    assert set(preflight["obligations"]) == {
+        "caller_exists",
+        "heartbeat",
+        "fixture",
+        "findable",
+    }
+    assert all(preflight["checks"][name]["ok"] is None for name in preflight["obligations"])
+    incomplete = capability_admission.preflight({**spec, "notes": ""})
+    assert not incomplete["ready_to_build"], incomplete
+    assert "dedup_recorded" in incomplete["declarable_missing"]
+
     path = ledger(tmp_path)
     capabilities.register(
         "value-chain-monitor", capabilities.KNOWN_DECLARATIONS["value-chain-monitor"], path
