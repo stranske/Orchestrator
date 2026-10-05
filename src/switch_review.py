@@ -1212,6 +1212,7 @@ def review(
     env: Mapping[str, str] | None = None,
     path=None,
     sources: Mapping[str, str] | None = None,
+    value_chain_inputs: dict | None = None,
 ) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why."""
     _capability_heartbeat()
@@ -1225,8 +1226,22 @@ def review(
     # before every mirror write and reports every live process stale. Two real-world quantities must
     # be compared on the real clock; `now` here dates the REVIEW, not the process table.
     runners = stale_runners()
+    value_chain = {"total": 0, "rows": [], "errors": [], "disabled": True}
+    if (env if env is not None else os.environ).get("ORCH_VALUE_CHAIN_MONITOR", "1") != "0":
+        import value_chain_monitor
+
+        try:
+            capabilities.production_heartbeat(
+                "value-chain-monitor", "invocation", ref="switch_review.review"
+            )
+        except Exception as exc:
+            print(f"switch_review: value-chain heartbeat failed: {exc}", file=sys.stderr)
+        value_chain = value_chain_monitor.report(
+            now=now, path=path, env=env, inputs=value_chain_inputs
+        )
     return {
         "generated_at": now,
+        "value_chain": value_chain,
         "review_days": REVIEW_DAYS,
         # The switches this report may name, and the evidence its idle rule counts. Declared so that
         # EDITING either is not graded as a finding: `capability_propensity.tick_evidence`
@@ -1398,6 +1413,10 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    if rep.get("value_chain") and not rep["value_chain"].get("disabled"):
+        import value_chain_monitor
+
+        lines += value_chain_monitor.format_lines(rep["value_chain"])
     if rep["held_off"]:
         lines += ["## Held OFF", ""]
         for row in rep["held_off"]:
@@ -2111,11 +2130,51 @@ def main(argv: list[str]) -> int:
         _selftest()
         return 0
     if args.env == "process":
-        env = {flag: os.environ[flag] for flag in SWITCH_CAPABILITY if flag in os.environ}
+        env = dict(os.environ)
         sources = {flag: "ambient" if flag in env else "unset" for flag in SWITCH_CAPABILITY}
     else:
         env, sources = env_as_the_tick_sees_it()
-    rep = review(env=env, sources=sources)
+    import capability_recurrence_check as recurrence
+
+    if args.env != "process":
+        for flag in ("ORCH_DISPATCH_LANE", "ORCH_VALUE_CHAIN_MONITOR"):
+            value, source = recurrence.as_the_tick_sees_it(flag)
+            sources[flag] = source
+            if value is not None:
+                env[flag] = value
+    # Only the production weekly caller registers the declaration; reports and
+    # branch tests never introduce a row into the shared live ledger.
+    value_chain_inputs = None
+    if env.get("ORCH_VALUE_CHAIN_MONITOR", "1") != "0":
+        import feedback
+        import value_chain_monitor
+        from backlog import SUPPORTED_REPOS
+
+        repos = list(
+            dict.fromkeys(
+                [
+                    *SUPPORTED_REPOS,
+                    "stranske/Orchestrator",
+                    "stranske/Doc-Lineage",
+                    "stranske/Deliverable-Render",
+                    "stranske/Manager-Mosaic",
+                ]
+            )
+        )
+
+        if os.environ.get("ORCH_CAPABILITY_HEARTBEATS") == "1":
+            ledger = capabilities.load_declared(capabilities.REG)
+            if "value-chain-monitor" not in ledger:
+                capabilities.register(
+                    "value-chain-monitor", capabilities.KNOWN_DECLARATIONS["value-chain-monitor"]
+                )
+        value_chain_inputs = value_chain_monitor.collect_inputs(
+            now=int(time.time()),
+            gh_fn=_gh_call,
+            repos=repos,
+            db=feedback.DB_PATH,
+        )
+    rep = review(env=env, sources=sources, value_chain_inputs=value_chain_inputs)
     if args.do_raise:
         if not APPLY_ENABLED:
             print("refusing to raise: set ORCH_SWITCH_REVIEW=1", file=sys.stderr)
