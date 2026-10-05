@@ -141,13 +141,22 @@ def test_no_pr_means_unevaluated_not_declined(tmp_path, facts):
     e = _by_id(result)
     assert not any("auto_declined" in v for v in e.values())
     assert "pr" in result["precondition"]["missing_inputs"]
-    assert any("needs `pr`" in why for why in e["redirect-policy"]["unevaluated_because"])
+    withheld = {row["capability_id"] for row in result["fact_missing"]}
+    assert "redirect-policy" in withheld
+    assert "redirect-policy" not in e
 
 
 def test_fetch_failure_declines_nothing(tmp_path, facts):
     facts["facts"] = None
-    e = _by_id(_consult(tmp_path))
-    assert not any("auto_declined" in v for v in e.values())
+    result = _consult(tmp_path)
+    e = _by_id(result)
+    # Evaluated preconditions may still auto-decline; unevaluated PR-fact ones are withheld.
+    assert result["fact_missing"]
+    assert not any(
+        "auto_declined" in v
+        for cap_id, v in e.items()
+        if cap_id in {row["capability_id"] for row in result["fact_missing"]}
+    )
 
 
 def test_explicit_pr_context_wins_over_text(tmp_path, facts):
