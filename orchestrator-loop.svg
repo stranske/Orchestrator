@@ -93,7 +93,7 @@
 <text class="ts" x="68" y="514">learns via outcomes:</text>
 <rect class="rail" x="118" y="502" width="104" height="18" rx="4"/><text class="ct" x="170" y="514" text-anchor="middle">selection weights</text>
 <rect class="role" x="232" y="502" width="116" height="18" rx="4"/><text class="ct" x="290" y="514" text-anchor="middle">role:&lt;name&gt; fit</text>
-<rect class="rail" x="360" y="502" width="152" height="18" rx="4"/><text class="ct" x="436" y="514" text-anchor="middle">capability fleet edges</text>
+<rect class="rail" x="360" y="502" width="152" height="18" rx="4"/><text class="ct" x="436" y="514" text-anchor="middle">fleet edges · fixtures 0</text>
 
 <!-- return arc -->
 <path class="return" d="M56,500 L32,500 Q28,500 28,496 L28,94 Q28,90 32,90 L56,90" marker-end="url(#ah)"/>
