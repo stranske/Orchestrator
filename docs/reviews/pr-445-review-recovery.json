@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "repository": "stranske/Orchestrator",
+  "pr_number": 445,
+  "inspected_head": "720cd8e873d824c83b8d3862aac954902bb61dfe",
+  "source_head": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+  "findings": [
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529427",
+      "valid_at_inspected_head": true,
+      "repair": "Fresh normalized authenticated export retained with its exact metadata digest; re-capture leaves all 22 file bindings unchanged."
+    },
+    {
+      "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529429",
+      "valid_at_inspected_head": true,
+      "repair": "Exact changed-path set equality against complete same-head PR file records; same-count substitution failed before repair and passed after."
+    }
+  ],
+  "source_retrieval": {
+    "changed_files": 14,
+    "retrieved_changed_files": 14,
+    "unchanged_file_bindings": 22,
+    "source_status": "COMPLETE",
+    "review_status": "PENDING",
+    "deployment_status": "NOT_OBSERVED"
+  },
+  "tests": {
+    "command": "ORCH_CONTRACT_SOURCE_MANIFEST=docs/reviews/pr-438-source-evidence.json ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f node --test --test-isolation=none tests/test_capture_review_source_evidence.js tests/test_review_contract_inputs.js tests/test_capture_mirror_deployment_evidence.js tests/test_exec_mirror_contract_witness.js",
+    "exit_code": 0,
+    "tests": 63,
+    "passed": 63,
+    "failed": 0,
+    "skipped": 0,
+    "output": "docs/reviews/pr-445-review-recovery-tests.txt"
+  },
+  "inputs": [
+    {
+      "path": "scripts/capture_review_source_evidence.js",
+      "sha256": "c026a5c3542790d748d6a692ecb858310c5147885d8278a5066bf5a51598cef5"
+    },
+    {
+      "path": "tests/test_capture_review_source_evidence.js",
+      "sha256": "408c940a60baaf127eccd8d861f1a8630ed92a98819b2a15d58b7ba5442ee0cc"
+    },
+    {
+      "path": "tests/test_review_contract_inputs.js",
+      "sha256": "be69ada86e0f055fe3ee7cf7ecf79955dc3f92882adb8dae27fd52e3ef81e2f7"
+    },
+    {
+      "path": "tests/test_capture_mirror_deployment_evidence.js",
+      "sha256": "f35e651830572a25d858ea67df5938712905996b5c66068e54e4174ea4866ee3"
+    },
+    {
+      "path": "tests/test_exec_mirror_contract_witness.js",
+      "sha256": "ef0a0302158513eb87d47f49d43320d4c7a2e6d8664f28dcadb4d962f27ad0bd"
+    },
+    {
+      "path": "docs/reviews/pr-438-source-metadata.json",
+      "sha256": "aa57c6f9ea3545425d43750738b9658a7ce84d5e9be1961ad44bceb6f4506124"
+    },
+    {
+      "path": "docs/reviews/pr-438-source-evidence.json",
+      "sha256": "e94d4b2b799bae85915d6f0b349ab698dd09b07f28c988460c7d9adbc54b03f5"
+    }
+  ],
+  "originating_reviewer_disposition": {
+    "status": "PENDING",
+    "owner": "coderabbitai",
+    "next_action": "Review the published repair and record disposition in both originating threads; do not self-resolve."
+  },
+  "limitations": [
+    "The original scratch metadata export is unavailable; the retained export is a fresh authenticated normalized receipt.",
+    "Full historical suite, provisioned-machine evidence and independent Sol adjudication remain UNKNOWN."
+  ],
+  "delivery": {
+    "status": "BLOCKED",
+    "owner": "stranske",
+    "workspace_git": "read-only; staging refused",
+    "publication": "GitHub create_tree rejected: MCP tool call requires approval, but approval policy is never",
+    "reviewer_request": "GitHub reply_to_review_comment rejected: MCP tool call requires approval, but approval policy is never",
+    "committed_checkout": "/tmp/pr445-review-recovery",
+    "patch": "/tmp/pr445-review-recovery.patch",
+    "next_action": "Publish the retained source/test/evidence commit and request originating-reviewer disposition in both threads."
+  }
+}

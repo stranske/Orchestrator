@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "repository": "stranske/Orchestrator",
+  "pr_number": 445,
+  "inspected_head": "d9628430daea8cc8244e2d2f46da54f65f408474",
+  "retrieval_transport": "authenticated GitHub connector",
+  "pr": {
+    "state": "open",
+    "isDraft": false,
+    "head_sha": "d9628430daea8cc8244e2d2f46da54f65f408474"
+  },
+  "threads": [
+    {
+      "id": "PRRT_kwDOUAH6nM6o3BL_",
+      "path": "docs/reviews/pr-438-disposition.md",
+      "is_resolved": true,
+      "is_outdated": true,
+      "resolved_by": "coderabbitai[bot]",
+      "comments": [
+        {
+          "database_id": 4179529427,
+          "author": "coderabbitai",
+          "updated_at": "2026-10-04T23:19:33Z",
+          "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529427",
+          "originating_disposition": "✅ Addressed in commits 720cd8e to 187a717"
+        }
+      ]
+    },
+    {
+      "id": "PRRT_kwDOUAH6nM6o3BMB",
+      "path": "scripts/capture_review_source_evidence.js",
+      "is_resolved": true,
+      "is_outdated": false,
+      "resolved_by": "coderabbitai[bot]",
+      "comments": [
+        {
+          "database_id": 4179529429,
+          "author": "coderabbitai",
+          "updated_at": "2026-10-04T23:19:30Z",
+          "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529429",
+          "originating_disposition": "✅ Addressed in commits 720cd8e to 187a717"
+        }
+      ]
+    },
+    {
+      "id": "PRRT_kwDOUAH6nM6o3J2f",
+      "path": "docs/reviews/pr-438-contract-witness.json",
+      "is_resolved": true,
+      "is_outdated": true,
+      "resolved_by": "coderabbitai[bot]",
+      "comments": [
+        {
+          "database_id": 4179590720,
+          "author": "coderabbitai",
+          "updated_at": "2026-10-04T22:32:33Z",
+          "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179590720",
+          "originating_disposition": "✅ Addressed in commit 720cd8e"
+        }
+      ]
+    },
+    {
+      "id": "PRRT_kwDOUAH6nM6o3kKQ",
+      "path": "docs/reviews/pr-438-install-witness.json",
+      "is_resolved": false,
+      "is_outdated": false,
+      "resolved_by": null,
+      "comments": [
+        {
+          "database_id": 4179759913,
+          "author": "coderabbitai",
+          "updated_at": "2026-10-04T23:24:00Z",
+          "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179759913",
+          "originating_disposition": "PENDING"
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "comment_id": 4179529427,
+      "valid_at_inspected_head": false,
+      "validation": "Retained normalized metadata matches the current acquisition manifest digest and replays all 22 bindings.",
+      "originating_reviewer_disposition": "RESOLVED by coderabbitai[bot]"
+    },
+    {
+      "comment_id": 4179529429,
+      "valid_at_inspected_head": false,
+      "validation": "Exact-set checks reject same-count substitutions before source reads or output creation.",
+      "originating_reviewer_disposition": "RESOLVED by coderabbitai[bot]"
+    },
+    {
+      "comment_id": 4179590720,
+      "valid_at_inspected_head": false,
+      "validation": "Current contract receipt and disposition require the full suite; this pass also aligns the installation receipt's UNKNOWN action.",
+      "originating_reviewer_disposition": "PENDING for actual correction; historical addressed disposition predates implementation"
+    },
+    {
+      "comment_id": 4179759913,
+      "valid_at_inspected_head": true,
+      "validation": "Historical installation receipt digest differs from its named, re-exported manifest.",
+      "repair": "Retain original manifest bytes, identify immutable commit/blob, preserve original witness output, pin reproduction to exact digest, and rerun six witnesses.",
+      "originating_reviewer_disposition": "PENDING"
+    }
+  ],
+  "source_head": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+  "historical_manifest": {
+    "path": "docs/reviews/pr-438-install-source-evidence.json",
+    "sha256": "97f48f31fbd8246948b405b376ce7481b3ed8a4e7a575320a30685ec494f46a5",
+    "git_blob": "95c6124f60ccec9c15b5b74ce8aa7d0fa496765e",
+    "published_commit": "720cd8e873d824c83b8d3862aac954902bb61dfe",
+    "source_bindings_unchanged": 22,
+    "original_scratch_metadata": "UNAVAILABLE; retained manifest does not reconstruct the original acquisition metadata"
+  },
+  "reconciliation": {
+    "verified_checkbox_occurrences": 8,
+    "unsupported_checkbox_occurrences": 6,
+    "current_review_task_complete": false,
+    "proposed_body": "/tmp/pr445-manifest-reconciled-body.md",
+    "remote_update": "BLOCKED: MCP tool call requires approval, but approval policy is never"
+  },
+  "limitations": [
+    "Full exact-head suite, provisioned-machine observation and independent Sol adjudication remain UNKNOWN.",
+    "Installed deployment NOT_OBSERVED; synthetic scratch installations only."
+  ],
+  "observed_at": "2026-10-04 23:38:43 UTC",
+  "tests": {
+    "command": "ORCH_CONTRACT_SOURCE_MANIFEST=docs/reviews/pr-438-source-evidence.json ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f node --test --test-isolation=none tests/test_capture_review_source_evidence.js tests/test_review_contract_inputs.js tests/test_capture_mirror_deployment_evidence.js tests/test_exec_mirror_contract_witness.js",
+    "exit_code": 0,
+    "tests": 72,
+    "passed": 72,
+    "failed": 0,
+    "skipped": 0,
+    "output": "docs/reviews/pr-445-manifest-binding-tests.txt"
+  },
+  "historical_witness": {
+    "command": "ORCH_CONTRACT_SOURCE_MANIFEST=docs/reviews/pr-438-install-source-evidence.json ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f ORCH_CONTRACT_EXPECTED_MANIFEST_SHA256=97f48f31fbd8246948b405b376ce7481b3ed8a4e7a575320a30685ec494f46a5 node --test --test-isolation=none tests/test_exec_mirror_contract_witness.js",
+    "exit_code": 0,
+    "tests": 6,
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0,
+    "output": "docs/reviews/pr-445-install-manifest-tests.txt",
+    "bindings_matched_before_and_after": true,
+    "checkout_floor_unchanged": true
+  },
+  "delivery": {
+    "workspace_git": "read-only; staging refused",
+    "commit_checkout": "/tmp/pr445-manifest-binding",
+    "patch": "/tmp/pr445-manifest-binding.patch",
+    "status": "LOCAL_ONLY",
+    "reviewer_requests": "BLOCKED: both reply_to_review_comment calls rejected with MCP tool call requires approval, but approval policy is never",
+    "readiness_rechecked": {
+      "head_sha": "d9628430daea8cc8244e2d2f46da54f65f408474",
+      "state": "open",
+      "isDraft": false
+    },
+    "owner": "stranske",
+    "next_action": "Publish the retained source/test/evidence commit, apply the corrected PR body, and obtain CodeRabbit disposition in threads 4179759913 and 4179590720. Do not self-resolve."
+  },
+  "inputs": [
+    {
+      "path": "scripts/review_contract_inputs.js",
+      "sha256": "6efd5fda61aa38fa33dcf88f37f8484e577aca6f3b431b7975c7b55f96beb6d7"
+    },
+    {
+      "path": "scripts/capture_review_source_evidence.js",
+      "sha256": "c026a5c3542790d748d6a692ecb858310c5147885d8278a5066bf5a51598cef5"
+    },
+    {
+      "path": "tests/test_review_contract_inputs.js",
+      "sha256": "20a01e7a9ead0b0cbe00dc6c0775a1ed62f221a8da12427c9f7a491753688a02"
+    },
+    {
+      "path": "tests/test_exec_mirror_contract_witness.js",
+      "sha256": "3728e9dc673642f49e374fdde28fafd71736d9bca7b6cd8dbd746d3768d29027"
+    },
+    {
+      "path": "tests/test_capture_review_source_evidence.js",
+      "sha256": "d05cfbeeab3932520228ddeaec97ef066d0df268c5c6c0f979ce7edb13632788"
+    },
+    {
+      "path": "tests/test_capture_mirror_deployment_evidence.js",
+      "sha256": "f35e651830572a25d858ea67df5938712905996b5c66068e54e4174ea4866ee3"
+    },
+    {
+      "path": "docs/reviews/pr-438-install-source-evidence.json",
+      "sha256": "97f48f31fbd8246948b405b376ce7481b3ed8a4e7a575320a30685ec494f46a5"
+    },
+    {
+      "path": "docs/reviews/pr-438-install-witness.json",
+      "sha256": "87dd83396fee0367f86f7cba561e658ef009b6bba9eae2eef2bff846e7981426"
+    },
+    {
+      "path": "docs/reviews/pr-438-source-evidence.json",
+      "sha256": "e94d4b2b799bae85915d6f0b349ab698dd09b07f28c988460c7d9adbc54b03f5"
+    },
+    {
+      "path": "docs/reviews/pr-438-source-metadata.json",
+      "sha256": "aa57c6f9ea3545425d43750738b9658a7ce84d5e9be1961ad44bceb6f4506124"
+    },
+    {
+      "path": "docs/reviews/pr-438-contract-witness.json",
+      "sha256": "848944b01be611dee461d24fb987ebdb792417e6be1cb985896d2d37afdc4a70"
+    },
+    {
+      "path": "docs/reviews/pr-438-disposition.md",
+      "sha256": "0d88d6e6076a50b7ee9e17084615da8287b20adbfae273c93b6a2442d4ae847d"
+    },
+    {
+      "path": "docs/reviews/pr-445-manifest-binding-tests.txt",
+      "sha256": "3e30aa891813738437b003b8b63d131e21aec4df580d9a1f50904806e293d18d"
+    },
+    {
+      "path": "docs/reviews/pr-445-install-manifest-tests.txt",
+      "sha256": "0f5b251cb7183ccf3dfd56dad1fd0eb5af08b07c5a44cb75203caedd8262b485"
+    }
+  ]
+}
