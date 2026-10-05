@@ -243,14 +243,14 @@ def test_empty_and_suppressed_consults_return_an_empty_fact_missing_list(tmp_pat
 def test_fact_missing_keeps_event_without_advancing_offer_liveness(
     tmp_path, last_match, last_invocation
 ):
-    ledger = _ledger(tmp_path)
-    rows = capabilities.load(ledger)
-    cap = rows["runtime-ac-checks"]
+    ledger = tmp_path / "liveness-ledger.json"
+    cap = capabilities._blank_capability("missing-fact-fixture")
+    rows = {"missing-fact-fixture": cap}
     cap.update(status="wired", last_match=last_match, last_invocation=last_invocation)
     capabilities.save(rows, ledger)
     before = capabilities.classify_liveness(cap, now=100)
     assert capabilities.heartbeat(
-        "runtime-ac-checks",
+        "missing-fact-fixture",
         "match",
         ref="advice:missing-fact",
         timestamp=100,
@@ -261,11 +261,11 @@ def test_fact_missing_keeps_event_without_advancing_offer_liveness(
         },
         path=ledger,
     )
-    after = capabilities.load(ledger)["runtime-ac-checks"]
+    after = capabilities.load(ledger)["missing-fact-fixture"]
     assert after["last_match"] == last_match
     assert capabilities.classify_liveness(after, now=100) == before
     assert after["event_history"][-1]["metadata"]["source"] == cp.FACT_MISSING_SOURCE
     assert capabilities.heartbeat(
-        "runtime-ac-checks", "match", ref="advice:actual-offer", timestamp=101, path=ledger
+        "missing-fact-fixture", "match", ref="advice:actual-offer", timestamp=101, path=ledger
     )
-    assert capabilities.load(ledger)["runtime-ac-checks"]["last_match"] == 101
+    assert capabilities.load(ledger)["missing-fact-fixture"]["last_match"] == 101
