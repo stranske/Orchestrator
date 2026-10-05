@@ -2159,7 +2159,7 @@ def run_prompt_agent(
         errors.append("no eligible backend has capacity for the prompt role")
     elif proposal_json is not None:
         proposal = proposal_json
-    elif dispatch:
+    elif dispatch and backend_name is not None:
         _role_capability_event("prompt", "invocation", metadata={"backend": backend_name})
         res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
         backend_run_id = res.get("run_id")
