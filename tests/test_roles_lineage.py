@@ -15,6 +15,10 @@ import roles
 def isolated_feedback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     db = tmp_path / "feedback" / "roles.db"
     monkeypatch.setattr(feedback, "DB_PATH", db)
+    # Redirect lineage exercises worker selection without relying on local agent seats.
+    monkeypatch.setattr(
+        roles.router, "load_capacity", lambda: {"agents": {"codex": {"state": "ok"}}}
+    )
     roles.reset_role_invocation_counts()
     return db
 
