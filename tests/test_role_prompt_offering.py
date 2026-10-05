@@ -100,9 +100,7 @@ def test_wrong_moment_declines_never_demote(tmp_path, monkeypatch):
                 path=path,
             )
             trial = next(
-                t
-                for t in propensity.experiments(path=path)
-                if t["experiment_id"] == experiment_id
+                t for t in propensity.experiments(path=path) if t["experiment_id"] == experiment_id
             )
             assert trial["decline_kinds"]["role-prompt"] == "wrong_moment"
             assert trial["declined_demotable"] == []
