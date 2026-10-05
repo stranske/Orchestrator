@@ -3322,14 +3322,9 @@ def format_usage_report(usage: dict[str, Any]) -> str:
         lines.extend(f"- {name}" for name in items)
         lines.append("")
     lines += [
-<<<<<<< HEAD
         "| Capability | State | Liveness | Inv/wk | Fleet edges (all time) | Prod verdicts | "
-        "Durable | Need | Next action |",
-        "|---|---|---|---:|---:|---:|---:|---:|---|",
-=======
-        "| Capability | State | Liveness | Inv/wk | Fleet edges (all time) | Production useful / fixture passes (90d) | Durable | Need | Next action |",
-        "|---|---|---|---:|---:|---|---:|---:|---|",
->>>>>>> origin/main
+        "Production useful / fixture passes (90d) | Durable | Need | Next action |",
+        "|---|---|---|---:|---:|---:|---|---:|---:|---|",
     ]
     for row in usage["rows"]:
         d = row["debt"]
@@ -3337,11 +3332,8 @@ def format_usage_report(usage: dict[str, Any]) -> str:
             f"| {row['capability_id']} | {row['status']} | {row['liveness']} | "
             f"{row['usage']['invocations_per_week']} | "
             f"{row['fleet_edges'] if row['fleet_edges'] is not None else 'unavailable'} | "
-<<<<<<< HEAD
             f"{row.get('production_run_verdicts', 0)} | "
-=======
             f"production useful {row['production_useful']} / fixture passes {row['fixture_passes']} | "
->>>>>>> origin/main
             f"{d['durable_reuses']} | {d['required']} | "
             f"{row['unblock']['action']} |"
         )
