@@ -125,6 +125,29 @@ def test_a_batch_counts_once_against_the_cycle_cap(tmp_path, monkeypatch):
         roles.reset_role_invocation_counts()
         assert roles.run_prompt_batch(items, **kwargs)["selector"]["invoked"]
         assert len(calls) == 6
+
+        # A configured cap must count decisions even when their batch sizes differ.
+        roles.reset_role_invocation_counts()
+        kwargs["env"] = {"ORCH_ROLE_MAX_PER_CYCLE": "2"}
+        run_ids = set()
+        for ordinal, batch in enumerate((items, items[:2]), 1):
+            result = roles.run_prompt_batch(batch, **kwargs)
+            assert result["selector"]["invoked"] is True
+            assert result["selector"]["invocation_ordinal"] == ordinal
+            assert result["selector"]["max_invocations"] == 2
+            assert len(result["items"]) == len(batch)
+            assert all(i["issue_body"] == BODY and not i["errors"] for i in result["items"])
+            run_ids.update(i["role_run_id"] for i in result["items"])
+        assert len(run_ids) == 5
+        assert len(calls) == 11
+        blocked = roles.run_prompt_batch(items, **kwargs)
+        assert blocked["selector"]["invoked"] is False
+        assert blocked["selector"]["reason"] == "per_cycle_invocation_cap"
+        assert blocked["selector"]["invocation_ordinal"] == 2
+        assert len(calls) == 11
+        assert all(i["errors"] == ["per_cycle_invocation_cap"] for i in blocked["items"])
+        manifest = roles.write_prompt_batch(blocked, tmp_path / "blocked-configured")
+        assert all(not i["valid"] and i["body_file"] is None for i in manifest["items"])
     finally:
         roles.reset_role_invocation_counts()
 

@@ -47,3 +47,24 @@ Both floor histories were preserved; measured collection is 1,757. The rebased
 full verifier passed 1,757 tests, 99 selftests, all five gates, and all 115 mypy
 modules. The six new cases account for this branch’s collection delta; all ceilings
 remain unchanged.
+
+## Keepalive follow-up on 2026-10-05
+
+Extended `test_a_batch_counts_once_against_the_cycle_cap` to cover an explicit
+`ORCH_ROLE_MAX_PER_CYCLE=2`: a three-body batch and a two-body batch consume two
+decisions, produce five distinct role runs, and withhold a third batch without
+exporting bodies. The existing test count is unchanged.
+
+The configured-cap scenario passed a separate standard-library behavioral replay
+using temporary Brain state and mocked backend calls. The roles and propensity
+selftests passed; the advisor selftest passed with a temporary ledger, reporting
+its machine-local front-door prerequisite as absent. Syntax validation and
+`git diff --check` passed.
+
+This follow-up is **not acceptance verification**. Every available Python runtime
+lacks pytest and Black; installing them into a temporary virtual environment failed
+because `pypi.org` could not resolve. The named pytest command fails with
+`No module named pytest`; both required Black commands fail with
+`black: command not found`. The updated named tests and deliberate-break controls
+must run in an environment with those tools. No acceptance checkbox was completed,
+and the edits remain uncommitted because the required Black gate could not pass.
