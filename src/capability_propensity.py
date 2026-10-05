@@ -1501,6 +1501,13 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None,
     """The whole denominator, ranked, with the unresolved population named rather than dropped."""
     stats = usefulness(path=path, window_days=window_days, now=now)
     trials = experiments(path=path, window_days=window_days, now=now)
+    production_trials = [
+        trial
+        for trial in trials
+        if any(
+            trial[key] for key in ("candidates", "triggered", "declined", "useful", "not_useful")
+        )
+    ]
     ranked = []
     for cap_id, row in stats["rows"].items():
         prop = propensity(cap_id, path=path, window_days=window_days, now=now)
@@ -1522,7 +1529,8 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None,
     corpus_mix: dict[str, int] = {}
     for row in ranked:
         for prov, n in (row["provenance_mix"] or {}).items():
-            corpus_mix[prov] = corpus_mix.get(prov, 0) + n
+            if provenance_weight(prov) > 0:
+                corpus_mix[prov] = corpus_mix.get(prov, 0) + n
     verdict_total = sum(corpus_mix.values())
     self_total = sum(n for p, n in corpus_mix.items() if provenance_self_assessed(p))
     recorded_finds = finds(path=path, window_days=window_days, now=now)
@@ -1531,8 +1539,12 @@ def report(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = None,
     return {
         "window_days": window_days,
         "capability_count": stats["capability_count"],
-        "experiment_count": len(trials),
-        "resolved_experiment_count": sum(1 for t in trials if t["resolved"]),
+        "experiment_count": len(production_trials),
+        "resolved_experiment_count": sum(1 for t in production_trials if t["resolved"]),
+        "fixture_experiment_count": sum(
+            bool(t["fixture_passes"] or t["fixture_failures"]) for t in trials
+        ),
+        "fixture_verdict_count": sum(r["fixture_passes"] + r["fixture_failures"] for r in ranked),
         # THE HONEST HEADLINE. If this is 0 the loop is not learning yet, and every propensity below
         # is the prior rather than a measurement. Saying so is the difference between this and a
         # dashboard that looks informative while reporting nothing.

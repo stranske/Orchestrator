@@ -185,3 +185,27 @@ def test_rail_exercise_records_fixture_provenance(monkeypatch):
     )
     assert calls[0]["provenance"] == "fixture_observed"
     assert calls[0]["metadata"]["source"] == "rail_exercise"
+
+
+def test_corpus_headlines_exclude_fixture_only_evidence_and_preserve_production(
+    tmp_path, monkeypatch
+):
+    path = _ledger(tmp_path)
+    monkeypatch.setattr(capabilities, "_fleet_edge_counts", lambda **kw: {})
+    _record(path, "a-fixture", "advice:fixture-pass", "fixture_observed")
+    _record(path, "a-fixture", "advice:fixture-fail", "fixture_observed", useful=False)
+    fixture = cp.report(path=path)
+    assert fixture["experiment_count"] == fixture["resolved_experiment_count"] == 0
+    assert fixture["verdict_count"] == fixture["verdicts_outcome_derived"] == 0
+    assert fixture["verdicts_by_provenance"] == {}
+    assert fixture["verdicts_self_reported_share"] is None
+    assert fixture["capabilities_with_evidence"] == 0
+    assert fixture["fixture_experiment_count"] == fixture["fixture_verdict_count"] == 2
+
+    _record(path, "z-production", "advice:production", "machine_observed")
+    mixed = cp.report(path=path)
+    assert mixed["experiment_count"] == mixed["resolved_experiment_count"] == 1
+    assert mixed["verdict_count"] == mixed["verdicts_outcome_derived"] == 1
+    assert mixed["verdicts_by_provenance"] == {"machine_observed": 1}
+    assert mixed["capabilities_with_evidence"] == 1
+    assert mixed["fixture_experiment_count"] == mixed["fixture_verdict_count"] == 2
