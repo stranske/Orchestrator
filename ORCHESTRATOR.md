@@ -102,9 +102,13 @@ cursor-agent live outside the default PATH):
   when stdout is only a progress/deferred-status update (for example, "waiting for pytest; I will inspect
   later" or "waiting for task-85 to finish"); the CLI exits nonzero, records the error in the dispatch
   log/ledger, and the orchestrator must retry or use another lane instead of treating that text as review
-  evidence. On Gemini failures where stdout/stderr hide the real cause, the offload result and dispatch log
-  include a bounded `agent_log_tail` from AGY's log. Interrupted offloads record an `exit=130` completion row
-  before propagating the interrupt so capacity accounting is not left with a start-only run.
+  evidence. An agent that cannot finish prints the `OFFLOAD_INCOMPLETE` marker with its reason, which fails
+  the offload with exit 70. In a codex `exec --json` stream (every mode but `assess`) only the agent's last
+  message counts, because the stream also carries every command it ran and every file it read: until
+  2026-10-05 a doc quoting the marker failed finished runs. On Gemini failures where stdout/stderr hide the
+  real cause, the offload result and dispatch log include a bounded `agent_log_tail` from AGY's log.
+  Interrupted offloads record an `exit=130` completion row before propagating the interrupt so capacity
+  accounting is not left with a start-only run.
   - **If a `codex` or `gemini` offload hangs (~0% CPU, zero output, clean `exit 124` timeout):** the cause
     is almost always a **stray proxy env var inherited by your shell** (`HTTPS_PROXY`/`ALL_PROXY`/…). codex
     (ChatGPT backend) and gemini/agy (Antigravity backend) make outbound HTTPS and block at `connect()` on a
