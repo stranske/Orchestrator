@@ -33,6 +33,7 @@ import re
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -823,6 +824,11 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_influence_edges_capability "
             "ON influence_edges(capability_id,capability_version_id,target_run_id,accepted)"
         )
+        _apply_data_migration_once(
+            c,
+            REFUSAL_ROLE_EDGES_MIGRATION,
+            lambda conn: _delete_refusal_role_edges(conn, tables),
+        )
     if "agent_switches" in tables:
         switch_cols = {row[1] for row in c.execute("PRAGMA table_info(agent_switches)").fetchall()}
         if "source" not in switch_cols:
@@ -886,6 +892,36 @@ DATA_MIGRATIONS_TABLE = (
 AGENT_SWITCHES_UTC_MIGRATION = "agent_switches.switched_ts-utc-2026-09-23"
 
 
+def _apply_data_migration_once(
+    c: sqlite3.Connection, name: str, work: Callable[[sqlite3.Connection], dict[str, Any]]
+) -> None:
+    """Run `work(c)` once per Brain and record its returned detail under `name`.
+
+    The fast path is one indexed read. Otherwise the work runs under BEGIN IMMEDIATE with the marker
+    re-read inside it, because every process that opens the Brain runs this and two must not apply
+    the same change twice; the marker row is written in the same transaction as the change."""
+    c.execute(DATA_MIGRATIONS_TABLE)
+    done = "SELECT 1 FROM data_migrations WHERE name=?"
+    if c.execute(done, (name,)).fetchone():
+        return
+    own_transaction = not c.in_transaction
+    if own_transaction:
+        c.execute("BEGIN IMMEDIATE")
+    try:
+        if not c.execute(done, (name,)).fetchone():
+            detail = work(c)
+            c.execute(
+                "INSERT INTO data_migrations (name, applied_ts, detail) VALUES (?,?,?)",
+                (name, int(time.time()), json.dumps(detail, sort_keys=True)),
+            )
+        if own_transaction:
+            c.execute("COMMIT")
+    except BaseException:
+        if own_transaction and c.in_transaction:
+            c.execute("ROLLBACK")
+        raise
+
+
 def _rebase_agent_switches(c: sqlite3.Connection) -> None:
     """Re-key every `agent_switches` row written before 2026-09-23 onto the true UTC epoch, once.
 
@@ -898,36 +934,11 @@ def _rebase_agent_switches(c: sqlite3.Connection) -> None:
     its rows were written by this machine's tick. agent_switches._record also rewrites every PR the
     daily run still reaches; this is what reaches the ones it no longer does.
 
-    It runs after _widen_agent_switches, so the table always has `source`. The fast path is one
-    indexed read. Otherwise the work runs under BEGIN IMMEDIATE with the marker re-read inside it,
-    because every process that opens the Brain runs this and two must not shift the same rows twice;
-    the marker row is written in the same transaction as the moves. A row whose instant cannot be
-    recovered (the spring-forward hour) keeps its key; two rows that land on one key are one switch
-    recorded twice, and the later-recorded survives. The counts are the marker's `detail`."""
-    c.execute(DATA_MIGRATIONS_TABLE)
-    done = "SELECT 1 FROM data_migrations WHERE name=?"
-    if c.execute(done, (AGENT_SWITCHES_UTC_MIGRATION,)).fetchone():
-        return
-    own_transaction = not c.in_transaction
-    if own_transaction:
-        c.execute("BEGIN IMMEDIATE")
-    try:
-        if not c.execute(done, (AGENT_SWITCHES_UTC_MIGRATION,)).fetchone():
-            detail = _rebase_agent_switch_rows(c)
-            c.execute(
-                "INSERT INTO data_migrations (name, applied_ts, detail) VALUES (?,?,?)",
-                (
-                    AGENT_SWITCHES_UTC_MIGRATION,
-                    int(time.time()),
-                    json.dumps(detail, sort_keys=True),
-                ),
-            )
-        if own_transaction:
-            c.execute("COMMIT")
-    except BaseException:
-        if own_transaction and c.in_transaction:
-            c.execute("ROLLBACK")
-        raise
+    It runs after _widen_agent_switches, so the table always has `source`, and once per Brain
+    (`_apply_data_migration_once`), so no row shifts twice. A row whose instant cannot be recovered
+    (the spring-forward hour) keeps its key; two rows that land on one key are one switch recorded
+    twice, and the later-recorded survives. The counts are the marker's `detail`."""
+    _apply_data_migration_once(c, AGENT_SWITCHES_UTC_MIGRATION, _rebase_agent_switch_rows)
 
 
 def _rebase_agent_switch_rows(c: sqlite3.Connection) -> dict[str, Any]:
@@ -969,6 +980,176 @@ def _rebase_agent_switch_rows(c: sqlite3.Connection) -> dict[str, Any]:
         "zone": list(time.tzname),
         "standard_offset": time.timezone,
     }
+
+
+REFUSAL_ROLE_EDGES_MIGRATION = "influence_edges.refusal-role-edges-2026-10-05"
+# The metadata `tick.remote_tick` passed on every rejected-role edge it wrote. A literal on purpose:
+# it names the rows that were WRITTEN, so a later change to what the tick writes can neither widen
+# nor empty this selection.
+REFUSAL_ROLE_EDGE_METADATA: dict[str, Any] = {"status": "shadow_only", "disagreement": True}
+# A delegation's edge is written in the loop iteration that recorded its run, right after
+# `dispatcher.delegate_remote` returns. On the owner's Brain both such edges sat 0 s after their
+# run's recording, and the nearest edge a refusal wrote sat 3,306 s from any recording: the next tick.
+REFUSAL_EDGE_SAME_TICK_SECONDS = 300
+REFUSAL_EDGE_COLUMNS = (
+    "edge_id",
+    "schema_version",
+    "source_event_id",
+    "source_run_id",
+    "target_event_id",
+    "target_run_id",
+    "influence_type",
+    "influence_id",
+    "accepted",
+    "counterfactual",
+    "acceptance_gate_id",
+    "outcome_verdict",
+    "merged",
+    "durability",
+    "created_ts",
+    "propagated_ts",
+    "metadata_hash",
+    "capability_id",
+    "capability_version_id",
+)
+
+
+def refusal_role_edge_metadata_hash() -> str:
+    """The `metadata_hash` the tick's edges carry, computed the way `_record_influence_edge_in_conn`
+    computes it, so the selection names exactly what that writer stored."""
+    safe, _, _ = _sanitize_completion_payload({"result": REFUSAL_ROLE_EDGE_METADATA})
+    return _completion_hash(safe)
+
+
+def _run_recording_times(c: sqlite3.Connection, run_id: str, tables: set[str]) -> list[int]:
+    """Every recording of `run_id` the Brain still dates. `record_run` writes by INSERT OR REPLACE,
+    so `runs.ts` is the LATEST recording only; the run's trigger and decision completion events have
+    one id per run and phase, so their `created_ts` keeps the FIRST recording and their `updated_ts`
+    the latest. A recording between the first and the latest leaves no date: on the owner's Brain
+    no target of these edges was recorded more than twice (1,902 logged ticks)."""
+    times: set[int] = set()
+    if "runs" in tables:
+        times.update(
+            int(ts)
+            for (ts,) in c.execute(
+                "SELECT ts FROM runs WHERE run_id=? AND ts IS NOT NULL", (run_id,)
+            ).fetchall()
+        )
+    if "completion_events" in tables:
+        for created, updated in c.execute(
+            "SELECT created_ts, updated_ts FROM completion_events "
+            "WHERE run_id=? AND phase IN ('trigger','decision')",
+            (run_id,),
+        ).fetchall():
+            times.update((int(created), int(updated)))
+    return sorted(times)
+
+
+def _delete_refusal_role_edges(c: sqlite3.Connection, tables: set[str]) -> dict[str, Any]:
+    """Delete, once, the rejected-role edges `tick.remote_tick` wrote for delegations it REFUSED.
+
+    Until 2026-10-04 (#455) every active-tick row recorded an `influence_type='role', accepted=0`
+    edge from the tick's triage role run to `remote:<repo>#<n>:<agent>`, refused rows included, and a
+    refusal records no run. On the owner's Brain that left 210 such edges, and the tick logs place
+    208 of them in a tick that refused their target. 78 point at a run nothing ever recorded: 78 of
+    the 298 edges `completion_event_health` counts as orphans, which `dry_seam_audit` fails on. 25
+    were written before their run's first recording, and that recording's back-fill
+    (`_record_completion_event_in_conn`) linked them to it. 105 were written by later ticks that
+    refused a target its delegation had left owned. Each says a role was overruled by a run that
+    never saw it. The other 2 were written in the tick that delegated, and stay.
+
+    An edge stays when it was written within REFUSAL_EDGE_SAME_TICK_SECONDS after a recording of its
+    run (`_run_recording_times`). Nothing outside the tick's rows is read for deletion: another
+    influence type, target kind, acceptance, capability or metadata stays as it is. The rows are
+    deleted rather than flagged: no column marks an edge retracted, and every reader of this table
+    would need to learn one, while a deleted row is gone for all of them at once. The triage advice
+    itself stays on its role run. Every deleted row is kept in the marker's `detail`, and
+    `restore_refusal_role_edges` puts them back."""
+    rows = c.execute(
+        f"SELECT {','.join(REFUSAL_EDGE_COLUMNS)} FROM influence_edges "
+        "WHERE influence_type='role' AND substr(target_run_id,1,7)='remote:' AND accepted=0 "
+        "AND capability_id IS NULL AND metadata_hash=? ORDER BY created_ts, edge_id",
+        (refusal_role_edge_metadata_hash(),),
+    ).fetchall()
+    recordings: dict[str, list[int]] = {}
+    kept: list[str] = []
+    deleted: list[tuple] = []
+    by_reason = {"never_recorded": 0, "before_first_recording": 0, "after_a_recording": 0}
+    for row in rows:
+        target, created = str(row[5]), int(row[14])
+        if target not in recordings:
+            recordings[target] = _run_recording_times(c, target, tables)
+        times = recordings[target]
+        if any(0 <= created - ts <= REFUSAL_EDGE_SAME_TICK_SECONDS for ts in times):
+            kept.append(str(row[0]))
+            continue
+        if not times:
+            by_reason["never_recorded"] += 1
+        elif created < times[0]:
+            by_reason["before_first_recording"] += 1
+        else:
+            by_reason["after_a_recording"] += 1
+        deleted.append(row)
+    for row in deleted:
+        c.execute("DELETE FROM influence_edges WHERE edge_id=?", (row[0],))
+    return {
+        "selector": {
+            "influence_type": "role",
+            "target_prefix": "remote:",
+            "accepted": 0,
+            "capability_id": None,
+            "metadata": REFUSAL_ROLE_EDGE_METADATA,
+            "metadata_hash": refusal_role_edge_metadata_hash(),
+            "same_tick_seconds": REFUSAL_EDGE_SAME_TICK_SECONDS,
+        },
+        "examined": len(rows),
+        "kept_same_tick": len(kept),
+        "kept_edge_ids": kept,
+        "deleted": len(deleted),
+        "deleted_by_reason": by_reason,
+        "deleted_linked": sum(1 for row in deleted if row[4] is not None),
+        "columns": list(REFUSAL_EDGE_COLUMNS),
+        "rows": [list(row) for row in deleted],
+    }
+
+
+def restore_refusal_role_edges(*, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    """Undo `_delete_refusal_role_edges`: put back every row its marker kept, unchanged.
+
+    INSERT OR IGNORE by edge_id, so a row that is already back stays as it is. The marker stays and
+    records the restore, so the next open of the Brain does not delete the rows again."""
+    c = conn or _conn()
+    close = conn is None
+    try:
+        found = c.execute(
+            "SELECT detail FROM data_migrations WHERE name=?", (REFUSAL_ROLE_EDGES_MIGRATION,)
+        ).fetchone()
+        if found is None:
+            return {"restored": 0, "reason": "not applied on this Brain"}
+        detail = json.loads(found[0])
+        if detail.get("restored_ts"):
+            return {
+                "restored": 0,
+                "reason": "already restored",
+                "restored_ts": detail["restored_ts"],
+            }
+        columns = detail["columns"]
+        insert = (
+            f"INSERT OR IGNORE INTO influence_edges ({','.join(columns)}) "
+            f"VALUES ({','.join('?' for _ in columns)})"
+        )
+        restored = sum(c.execute(insert, values).rowcount for values in detail["rows"])
+        detail["restored_ts"] = int(time.time())
+        detail["restored"] = restored
+        c.execute(
+            "UPDATE data_migrations SET detail=? WHERE name=?",
+            (json.dumps(detail, sort_keys=True), REFUSAL_ROLE_EDGES_MIGRATION),
+        )
+        c.commit()
+        return {"restored": restored, "of": len(detail["rows"])}
+    finally:
+        if close:
+            c.close()
 
 
 def _derive_source(run_id: str, mode: str | None, source: str | None = None) -> str | None:
@@ -5718,6 +5899,99 @@ def _selftest_agent_switches_utc() -> None:
                 conn.close()
 
 
+def _selftest_refusal_role_edges() -> None:
+    """The one-time deletion of the tick's refusal edges: an edge written in the tick that recorded
+    its run stays, including one from the FIRST recording of a run recorded again later (whose
+    `runs.ts` moved on); edges from refusing ticks go, whether their target was never recorded,
+    recorded only later, or recorded earlier; other metadata and accepted edges stay; a second open
+    deletes nothing; the restore puts every deleted row back unchanged and is not undone again."""
+    t0 = 1_786_516_882
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(SCHEMA)
+
+        def record(run_id: str, ts: int) -> None:  # what record_run writes for a delegation
+            conn.execute(
+                "INSERT OR REPLACE INTO runs (run_id, ts, target, task_type, agent, mode, source) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    ts,
+                    run_id.split(":")[1],
+                    "implement",
+                    "gemini",
+                    "remote",
+                    "orchestrator_remote",
+                ),
+            )
+            for phase in ("trigger", "decision"):
+                _record_completion_event_in_conn(
+                    conn,
+                    run_id,
+                    event_type="decision",
+                    phase=phase,
+                    producer="orchestrator_remote",
+                    status="recorded",
+                    payload={},
+                    timestamp=ts,
+                )
+
+        def edge(target: str, source: str, ts: int, *, meta=None, accepted=False) -> str:
+            made = _record_influence_edge_in_conn(
+                conn,
+                target_run_id=target,
+                influence_type="role",
+                influence_id=source,
+                source_run_id=source,
+                accepted=accepted,
+                metadata=REFUSAL_ROLE_EDGE_METADATA if meta is None else meta,
+                allow_unlinked=True,
+            )
+            conn.execute(
+                "UPDATE influence_edges SET created_ts=? WHERE edge_id=?", (ts, made["edge_id"])
+            )
+            return str(made["edge_id"])
+
+        twice, never, later = "remote:o/r#1:gemini", "remote:o/r#2:gemini", "remote:o/r#3:gemini"
+        record(twice, t0)
+        first_tick = edge(twice, "role:triage:gemini:1", t0)
+        between = edge(twice, "role:triage:gemini:2", t0 + 86_400)
+        record(twice, t0 + 4 * 86_400)
+        second_tick = edge(twice, "role:triage:gemini:3", t0 + 4 * 86_400 + 1)
+        orphan = edge(never, "role:triage:gemini:4", t0)
+        early = edge(later, "role:triage:gemini:5", t0 - 3600)
+        record(later, t0)  # its back-fill links the earlier refusal's edge to this run
+        other_meta = edge(never, "role:triage:gemini:6", t0, meta={"status": "rejected"})
+        accepted = edge(twice, "role:triage:gemini:7", t0, accepted=True)
+        everything = "SELECT * FROM influence_edges ORDER BY edge_id"
+        before = {row[0]: row for row in conn.execute(everything).fetchall()}
+        assert before[early][4] is not None, "the later recording links the earlier edge"
+        _migrate_schema(conn)
+        after = {row[0]: row for row in conn.execute(everything).fetchall()}
+        gone = set(before) - set(after)
+        assert gone == {between, orphan, early}, gone
+        for kept in (first_tick, second_tick, other_meta, accepted):
+            assert after[kept] == before[kept], kept
+        (raw,) = conn.execute(
+            "SELECT detail FROM data_migrations WHERE name=?", (REFUSAL_ROLE_EDGES_MIGRATION,)
+        ).fetchone()
+        detail = json.loads(raw)
+        assert (detail["examined"], detail["kept_same_tick"], detail["deleted"]) == (5, 2, 3)
+        assert detail["deleted_by_reason"] == {
+            "never_recorded": 1,
+            "before_first_recording": 1,
+            "after_a_recording": 1,
+        }, detail
+        assert detail["deleted_linked"] == 2, detail
+        _migrate_schema(conn)
+        assert {row[0] for row in conn.execute(everything).fetchall()} == set(after)
+        assert restore_refusal_role_edges(conn=conn) == {"restored": 3, "of": 3}
+        _migrate_schema(conn)
+        assert {row[0]: row for row in conn.execute(everything).fetchall()} == before
+    finally:
+        conn.close()
+
+
 def _selftest():
     import tempfile
 
@@ -5797,6 +6071,7 @@ def _selftest():
         finally:
             legacy.close()
         _selftest_agent_switches_utc()
+        _selftest_refusal_role_edges()
 
         priors = {"implement": {"claude": 0.7, "cursor": 0.5}}
         # No data yet -> relearn yields the PRIOR (posterior == prior).
@@ -6939,7 +7214,7 @@ def _selftest():
             "feedback.py selftest: OK (prior→posterior learning, durability/verifier-as-success, late updates, "
             "versioned weights, eval matrix, human calibration, evidence-gap growth+prune+approval, "
             "trace retention, test_evaluator_trace_cannot_resolve_worker_model, conservative legacy migration, "
-            "one-time agent_switches UTC re-key, "
+            "one-time agent_switches UTC re-key, one-time refusal role-edge deletion + restore, "
             "quality-magnitude/outcome learner + effort reward, safe completion lineage + "
             "rejected-edge non-inheritance, named verification gate, json snapshot)"
             + (f" — {len(set(gaps))} section(s) skipped, see above" if gaps else "")
@@ -6957,6 +7232,9 @@ def main(argv):
     if argv and argv[0] == "migrate-execution-attempts":
         report = migrate_legacy_execution_attempts(apply="--apply" in argv[1:])
         print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if argv and argv[0] == "restore-refusal-role-edges":
+        print(json.dumps(restore_refusal_role_edges(), indent=2, sort_keys=True))
         return 0
     if argv and argv[0] == "completion-events":
         limit = 1000
