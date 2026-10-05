@@ -1,6 +1,6 @@
 {
-  "collected": 2093,
-  "passed": 2093,
+  "collected": 2103,
+  "passed": 2103,
   "skipped_max": 26,
   "mirror_skipped_max": 21,
   "bare_mirror_skipped_max": 47,
@@ -9,5 +9,5 @@
   "selftest_skipped_max": 7,
   "gate_skipped_max": 2,
   "mypy_exempt_max": 0,
-  "note": "Bounded source420 corpus reporting repair on mainea92f54: fixture-only verdict/trial totals separated from production; measured collection; all skip/type ceilings retained. Previous floor note history preserved in Git."
+  "note": "Closer repaired pre-existing conflict markers in floor and integrated dispatcher gh-config review fixes with mainea92f54; collection measured; skip/type ceilings unchanged. Original malformed floor retained in round receipts and Git history.Bounded source420 corpus reporting repair on mainea92f54: fixture-only verdict/trial totals separated from production; measured collection; all skip/type ceilings retained. Previous floor note history preserved in Git."
 }
