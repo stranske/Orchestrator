@@ -1674,10 +1674,13 @@ def dispatch(
     try:
         import rate_incidents
 
-        if proc.returncode != 0 or rate_incidents.stdout_carries_capacity_evidence(
-            proc.stdout or ""
-        ):
-            combined_output = f"{proc.stdout or ''}\n{combined_output}"
+        stdout = proc.stdout or ""
+        # The same rule as dispatcher.offload: a failed codex run's own work is not evidence.
+        if proc.returncode != 0:
+            evidence = rate_incidents.failed_stdout_evidence(agent, stdout)
+            combined_output = f"{evidence}\n{combined_output}"
+        elif rate_incidents.stdout_carries_capacity_evidence(stdout):
+            combined_output = f"{stdout}\n{combined_output}"
         evidence_result = rate_incidents.get_structured_evidence(
             error_text=combined_output,
             agent=agent,

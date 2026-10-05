@@ -46,10 +46,6 @@ import rate_incidents
 # the owner's 2026-10-04 decision covers (improvement log item 0), and this rule never rewrites them.
 PROVIDER_LIMIT_INFRA_SINCE = 1791126000  # 2026-10-04T15:00:00Z, after that decision's measurement
 
-# codex `exec --json` events that mean the run DID something. An item whose own type is `error` is the
-# harness's warning (every run prints "Under-development features enabled"), not work.
-_CODEX_WORK_EVENTS = frozenset({"item.started", "item.updated", "item.completed", "turn.completed"})
-
 # Why a run whose own log shows a provider refusal before any work was, or was not, classified.
 # Every run counted in `seen` lands in exactly one of the others, so the counts are a partition.
 PROVIDER_LIMIT_BUCKETS = (
@@ -78,10 +74,10 @@ def provider_limit_before_work(lines: list[str]) -> dict | None:
     """
     failure = None
     for line in lines:
-        event = _json_event(line)
+        event = rate_incidents.json_event(line)
         if event is None:
             continue
-        if _is_codex_work_event(event):
+        if rate_incidents.is_codex_work_event(event):
             return None  # the run did something, so whatever ended it is not this rule's
         if event.get("type") == "turn.failed" and failure is None:
             error = event.get("error")
@@ -90,42 +86,6 @@ def provider_limit_before_work(lines: list[str]) -> dict | None:
             if confidence == "high":
                 failure = {"category": category, "subcategory": subcategory, "message": message}
     return failure
-
-
-def _json_event(line: str) -> dict | None:
-    """The JSON object this log line holds, or None for any other line."""
-    text = line.strip()
-    if not text.startswith("{"):
-        return None
-    try:
-        event = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return event if isinstance(event, dict) else None
-
-
-def _is_codex_work_event(event: dict) -> bool:
-    """A codex `exec --json` event that means the run DID something: the agent's own record of what
-    it ran, read and said. An `error` item is the harness talking, not the agent working."""
-    kind = event.get("type")
-    if kind not in _CODEX_WORK_EVENTS:
-        return False
-    item = event.get("item")
-    return kind == "turn.completed" or not (isinstance(item, dict) and item.get("type") == "error")
-
-
-def _failure_evidence(lines: list[str]) -> list[str]:
-    """A failed run's log segment without the agent's own record of its work.
-
-    A failed run's log is read as error evidence, but a codex `exec --json` transcript is also every
-    command the agent ran and every file it read: a run that `sed`s a doc about quotas carries
-    "quota exhausted" in an `item.completed` event. On 2026-10-04, 11 of the 64 codex dispatch
-    transcripts did, with no refusal anywhere, and the offload path, which reads a failed run's whole
-    stdout, had recorded two such runs (2026-09-19, 09-20) as codex quota incidents, each shedding
-    the seat. Codex's own failure evidence is its harness events (`turn.failed`, `error`) and its
-    stderr lines, which stay. A text-only log has no such structure and stays whole.
-    """
-    return [line for line in lines if not _is_codex_work_event(_json_event(line) or {})]
 
 
 def _settle_provider_limit_death(run_id: str, evidence: dict, *, dry_run: bool) -> str:
@@ -275,9 +235,9 @@ def _classify_run_log_segment(
         if refusal is not None:
             combined_text = refusal["message"]
         # A FAILED run's log is error evidence, less the agent's own record of its work, which is
-        # never the provider talking (_failure_evidence).
+        # never the provider talking (rate_incidents.failure_evidence).
         elif successful is False:
-            combined_text = "\n".join(_failure_evidence(lines))
+            combined_text = "\n".join(rate_incidents.failure_evidence(lines))
         # Successful or provenance-unknown task logs are ordinary model output. Only the strict
         # successful-stdout envelope may promote their text to provider evidence; otherwise test
         # fixtures and reviews that discuss HTTP 429/resource exhaustion become incidents.
