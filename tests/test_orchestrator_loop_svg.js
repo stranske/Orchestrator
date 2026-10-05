@@ -11,7 +11,7 @@ const diagram = process.env.ORCH_TEST_LOOP_SVG || path.resolve(__dirname, '../or
 const source = fs.readFileSync(diagram, 'utf8');
 
 test('loop SVG contains no unresolved conflict markers', () => {
-  assert.doesNotMatch(source, /^(?:<<<<<<<|=======|>>>>>>>)/m);
+  assert.doesNotMatch(source, /^(?:<<<<<<<|\|{7}|=======|>>>>>>>)/m);
 });
 
 test('loop SVG retains one batch and value-chain description', () => {
