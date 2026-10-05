@@ -8,7 +8,9 @@ attention and builds the report artifact a supervised RedirectAgent proposal can
 use next.
 
 Single-authority rule: eligible targets must be open keepalive PRs that already
-carry a human-escalation label (`needs-human` or `agent:needs-attention`). While
+carry human-escalation evidence: a `needs-human` or `agent:needs-attention` label,
+or the keepalive-state `attention.disposition` marker that keepalive_shadow already
+reads as escalation. Either route proves keepalive has given the PR up. While
 keepalive is still actively controlling the PR, this module refuses live action.
 """
 
@@ -57,13 +59,24 @@ def eligibility(signals: dict) -> dict:
         blockers.append("pr_not_open")
     if KEEPALIVE_LABEL not in labels:
         blockers.append("missing_agents_keepalive_label")
-    if not labels.intersection(ESCALATION_LABELS):
+    escalation_labels = sorted(labels.intersection(ESCALATION_LABELS))
+    marker = str(signals.get("escalation_marker") or "").strip().lower() or None
+    if marker not in keepalive_shadow.ESCALATION_DISPOSITIONS:
+        marker = None
+    evidence = list(escalation_labels)
+    if marker:
+        # A marker-only escalation is the same keepalive surrender as the label; the label
+        # may lag or be stripped while the state comment still records the disposition.
+        evidence.append(f"keepalive-state attention.disposition={marker}")
+    if not evidence:
         blockers.append("missing_human_escalation_label")
     return {
         "eligible": not blockers,
         "blockers": blockers,
         "single_authority": not blockers,
-        "escalation_labels": sorted(labels.intersection(ESCALATION_LABELS)),
+        "escalation_labels": escalation_labels,
+        "escalation_marker": marker,
+        "escalation_evidence": evidence,
     }
 
 
