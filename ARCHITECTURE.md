@@ -196,6 +196,13 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
+The weekly `switch_review` also consumes `value_chain_monitor`, a deterministic
+read-only rail beside Monitor and verify. It compares independent situation populations
+with ledger invocations and existing Brain influence edges, naming the earliest broken
+step and input switches held off. Unknown demand never becomes zero. It changes no
+selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
+the section rather than a second audit log or inventory.
+
 ## The feedback loop closes over both surfaces
 
 `feedback.py` learns (1) **router weights** — which agent per task_type — and (2) **role ↔ backend
