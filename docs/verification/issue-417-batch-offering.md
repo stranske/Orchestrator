@@ -15,7 +15,7 @@ this issue does not claim a general natural-language classifier.
 
 ## Current reproducible acceptance
 
-On 2026-10-05, against merge `4f952e3b666b04dd100ed5d698650c3bf7ead87c`,
+The earlier acceptance run on 2026-10-05, against merge `4f952e3b666b04dd100ed5d698650c3bf7ead87c`,
 `/opt/anaconda3/bin/python3.12 scripts/verify_role_prompt_offering.py` completed
 all three real pytest controls below. Each private module starts from the
 checkout bytes, passes its baseline, fails exactly one named assertion after
@@ -33,10 +33,19 @@ The script is the durable replay surface and prints full JSON receipts. Runner
 scratch paths are temporary inputs, not acceptance dependencies. Run it with a
 Python environment containing the pinned pytest prerequisites.
 
-The focused offering/batch/receipt suites pass 29 cases plus six receipt
-subtests. Whole-tree Black passes. Current-head CI remains authoritative for
-checkout and mirror-shape verification; historical no-pytest/no-Black runner
-limitations do not describe the present source or its readiness.
+That run's focused offering/batch/receipt suites passed 29 cases plus six receipt
+subtests, and whole-tree Black passed. Replay with:
+
+```sh
+python3 scripts/verify_role_prompt_offering.py
+python3 -m pytest tests/test_role_prompt_offering.py tests/test_role_prompt_batch.py tests/test_role_prompt_offering_controls.py -q -m "not slow"
+black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+Current-head CI remains authoritative for
+checkout and mirror-shape verification. Check runner prerequisites on every replay;
+neither an earlier successful run nor a missing-tool failure establishes
+current-head readiness.
 
 ## Post-merge comparison disposition
 
@@ -44,7 +53,42 @@ Compare run `37308125678` evaluated the exact merge above and returned
 CONCERNS/CONCERNS, preserved as NON_PASS. Its concrete diagram finding is valid:
 the merged SVG contained conflict markers and XML parsing rejected line 3.
 The follow-up removes the duplicated conflict block while retaining both batch
-bindings and the value-chain description; XML parsing now passes.
+bindings and the value-chain description; XML parsing now passes. The first
+repair removed conflict markers but retained a repeated role paragraph and lost
+the value-chain sentence. The follow-up regression now checks both omissions.
+
+Reproduce the merged-main XML failure (exit 1, line 3), then the repaired parse
+(exit 0) and the two diagram regressions:
+
+```sh
+git show 4f952e3b666b04dd100ed5d698650c3bf7ead87c:orchestrator-loop.svg | python3 -c 'import sys; import xml.etree.ElementTree as ET; ET.parse(sys.stdin)'
+python3 -c 'import xml.etree.ElementTree as ET; ET.parse("orchestrator-loop.svg")'
+node --test --test-isolation=none tests/test_orchestrator_loop_svg.js
+```
+
+Both diagram checks pass on the repaired file. With `ORCH_TEST_LOOP_SVG`
+pointing at an untouched merged-main snapshot, both checks fail; the initial
+repair snapshot fails the duplicate-paragraph assertion. Removing the retained
+value-chain sentence also fails the description check. XML parsing is measured
+separately with ElementTree; the JavaScript checks do not implement an XML parser.
+
+This keepalive runner lacks pytest and Black, and package installation failed.
+The real control runner rejected its first baseline with "no pytest report";
+the focused suite and whole-tree Black could not execute. These are prerequisite
+failures, not new baseline/RED/restored or formatting results. All three checkout
+control modules remain byte-identical to HEAD. The earlier observed results above
+are preserved but do not replace current-head validation.
+
+- [x] Merged-main SVG XML RED at line 3; repaired XML GREEN, with both descriptions retained.
+- [ ] Re-run all three real baseline/RED/restored pytest controls on the current head.
+- [ ] Re-run the 29-case/six-subtest focused suites and whole-tree Black on the current head.
+- [ ] Exact-head CI, every review-thread page, expected checkout/mirror topology, and the seven-minute floor before guarded squash.
+- [x] Source417 confirmed open; CONCERNS/NON_PASS preserved, with no live publication or provider PASS claimed.
+
+Changes are limited to the diagram, this record, and a JavaScript regression
+test. Production code and gates remain unchanged. Any terminal merge must use
+`python3 src/merge_guard.py stranske/Orchestrator#478 --expected-head <sha> --confirm-merge`;
+a blocked guard must not be bypassed.
 
 This compact record supersedes historical interim notes that described missing
 pytest/Black, uncommitted work, and ephemeral evidence paths. It supplies the
