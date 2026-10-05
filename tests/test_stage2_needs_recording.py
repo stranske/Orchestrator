@@ -57,6 +57,9 @@ def stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     monkeypatch.delenv(ra.BOOTSTRAP_FLAG, raising=False)
+    import redirect_sweep
+
+    monkeypatch.setattr(redirect_sweep, "DEFAULT_REPORT", tmp_path / "absent-sweep.json")
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
     return {
@@ -89,23 +92,29 @@ def _planner(stores: dict, targets: list[str]) -> dict:
     )
 
 
-def _lanes(monkeypatch: pytest.MonkeyPatch, lanes: dict[str, str]) -> None:
-    """Serve each target's signals as the live gather would, so the planner's REAL report
-    construction (plan_target -> plan_for_signals -> synthesize_report) produces the lane."""
+def _reported_lanes(monkeypatch: pytest.MonkeyPatch, lanes: dict[str, str]) -> None:
+    """Independent lane reports for the shared refusal predicate.
 
-    def gather(target: str, **_kw) -> dict:
-        return keepalive_shadow.normalize_signals(
-            target,
-            PAYLOAD_FOR[lanes[target]],
-            pr_state="OPEN",
-            labels=[ks.KEEPALIVE_LABEL, "needs-human"],
-        )
-
-    monkeypatch.setattr(keepalive_shadow, "gather_signals", gather)
+    An explicit escalation label now correctly makes a synthesized report escalated.
+    Running/progress refusal cases must use reports that actually state those states.
+    The production post-escalation construction is tested separately below.
+    """
+    _reports(
+        monkeypatch,
+        [
+            {
+                **LANE,
+                "target": target,
+                "state": state,
+                "recommended_action": "wait" if state in {"running", "progress"} else "inspect",
+            }
+            for target, state in lanes.items()
+        ],
+    )
 
 
 def _reports(monkeypatch: pytest.MonkeyPatch, reports: list[dict]) -> None:
-    """Serve arbitrary reports — pid included — as eligible plans, for the exhaustive check."""
+    """Serve explicit report states as eligible plans, including the exhaustive check."""
     by_target = {r["target"]: r for r in reports}
 
     def plan_target(target, *, report_dir=None, acceptance_criteria=ks.DEFAULT_AC, **_kw):
@@ -136,9 +145,9 @@ def _partition(plan: dict) -> tuple[int, int, int, int]:
 
 def test_the_measured_shape_needs_no_recording_and_says_why(stores, monkeypatch):
     """Both live shapes on record, `running`/`wait` and `progress`/`wait`, through the planner's
-    real report construction. Before the fix this plan reported 2 unrecorded and emitted two
+    explicit report fixtures. Before the fix this plan reported 2 unrecorded and emitted two
     record commands, one offload each, for lanes the bootstrap will never judge."""
-    _lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress"})
+    _reported_lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress"})
     plan = _planner(stores, ["o/r#1", "o/r#2"])
     assert _partition(plan) == (2, 0, 0, 2), plan
     assert [c for c in plan["commands"] if c["kind"] == "live_stage2_record"] == [], plan
@@ -218,7 +227,7 @@ def test_the_bootstrap_drains_exactly_what_the_planner_counts(stores, monkeypatc
     need recording, and the planner's next run finds them recorded. Before the fix, the two
     running/progress lanes stayed in the count after the bootstrap ran, and nothing but a manual
     offload could take them out."""
-    _lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress", "o/r#3": "stalled"})
+    _reported_lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress", "o/r#3": "stalled"})
     targets = ["o/r#1", "o/r#2", "o/r#3"]
     plan = _planner(stores, targets)
     assert _partition(plan) == (3, 1, 0, 2), plan
@@ -248,7 +257,7 @@ def test_the_bootstrap_drains_exactly_what_the_planner_counts(stores, monkeypatc
 def test_a_drained_plan_prints_zero_unrecorded_beside_the_refused(stores, monkeypatch, capsys):
     """Question 4 by construction: run the CLI the cadence step runs and read what it prints
     when nothing needs recording, both with refused lanes and with no candidate at all."""
-    _lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress"})
+    _reported_lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress"})
     targets = ["o/r#1", "o/r#2"]
     monkeypatch.setattr(ks, "live_targets", lambda **kw: list(targets))
     argv = [
@@ -280,7 +289,7 @@ def test_unmeasured_is_never_zero_on_the_way_to_the_dashboard(stores, monkeypatc
     monkeypatch.setattr(
         dashboard, "_cadence_health", lambda: cadence_registry.inspect_cadence(stores["tmp"], now=1)
     )
-    _lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress"})
+    _reported_lanes(monkeypatch, {"o/r#1": "running", "o/r#2": "progress"})
     _write_plan(stores, _planner(stores, ["o/r#1", "o/r#2"]))
     current = periodic_report._stage2_live_plan_summary(stores["plan"])
     assert current["lane_refused_live_candidate_count"] == 2, current
@@ -311,3 +320,22 @@ def test_unmeasured_is_never_zero_on_the_way_to_the_dashboard(stores, monkeypatc
     keys, text = built(before)
     assert keys.count("stage2_live_candidates") == 1, keys
     assert "unrecorded=2 lane_refused=unmeasured" in text, text
+
+
+def test_production_escalation_is_a_drainable_recording_candidate(stores, monkeypatch):
+    def gather(target, **kwargs):
+        return keepalive_shadow.normalize_signals(
+            target,
+            {"rounds_without_task_completion": 2},
+            pr_state="OPEN",
+            labels=[ks.KEEPALIVE_LABEL, "needs-human"],
+        )
+
+    monkeypatch.setattr(keepalive_shadow, "gather_signals", gather)
+    plan = _planner(stores, ["o/r#1"])
+    assert _partition(plan) == (1, 1, 0, 0)
+    report = plan["plans"][0]["report"]
+    assert report["state"] == "escalated"
+    assert ra.screen_report(report, gate=OPEN_GATE, applied_targets=set(), applies_today=0)[
+        "passes_screen"
+    ]
