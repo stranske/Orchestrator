@@ -2706,6 +2706,27 @@ def _selftest_checks():
         assert repeated["candidate"]["candidate_id"] == candidate_id
         assert sum(row.get("to") == "candidate_ready" for row in repeated["phase_history"]) == 1
         assert not fu4["processed"], fu4
+        # Legacy checkpoint evidence repair must not masquerade as inflight synthesis.
+        from unittest.mock import patch
+
+        (ftmp / first / "ship-gate.json").unlink()
+        stamp_before = (ftmp / ".last-ship-gate").stat().st_mtime
+        atomic_json = synthesis_promotion._atomic_json
+
+        def fail_legacy_checkpoint(path, payload):
+            if path.name == "ship-gate.json":
+                raise OSError("selftest legacy checkpoint unavailable")
+            return atomic_json(path, payload)
+
+        with patch.object(synthesis_promotion, "_atomic_json", fail_legacy_checkpoint):
+            repaired = followup(max_experiments=0)
+        assert repaired["ship_gate"]["finished"] == 0, repaired
+        assert repaired["ship_gate"]["inflight"] is False, repaired
+        assert (ftmp / ".last-ship-gate").stat().st_mtime == stamp_before
+        assert any(
+            row.get("checkpoint_error") == "selftest legacy checkpoint unavailable"
+            for row in repaired["promotions"]
+        ), repaired
         assert any(
             exp_id == first and lifecycle == "evaluated"
             for exp_id, lifecycle, _reason in calls["subject_lifecycle"]
