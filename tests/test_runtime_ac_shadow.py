@@ -79,7 +79,9 @@ Complete these in order.
     manual = [check["instructions"] for check in checks if check["type"] == "manual"]
     assert "Named test: `::test_orphan` requires an explicit file." in manual
     assert "Inspect the saved receipt." in manual
-    assert all(ac["statement"] != "Complete these in order." for ac in reordered["acceptance_criteria"])
+    assert all(
+        ac["statement"] != "Complete these in order." for ac in reordered["acceptance_criteria"]
+    )
     assert all(0.0 <= check["confidence"] <= 1.0 for check in checks)
 
 
@@ -295,7 +297,10 @@ def test_shadow_execution_requires_exact_checkout(private_brain, monkeypatch):
     )
 
 
-def test_shadow_execution_records_checks_without_outcome_write(private_brain, monkeypatch):
+@pytest.mark.parametrize("without_runtime_context", [False, True])
+def test_shadow_execution_records_checks_without_outcome_write(
+    private_brain, monkeypatch, without_runtime_context
+):
     gate.author_keepalive_spec(
         "owner/repo",
         {"number": 2, "body": "Closes #1", "headRefOid": "a" * 40},
@@ -303,6 +308,11 @@ def test_shadow_execution_records_checks_without_outcome_write(private_brain, mo
         issue_fetch_fn=lambda *_: BODY,
         spec_dir=private_brain,
     )
+    if without_runtime_context:
+        path = gate.spec_path("owner/repo#2", spec_dir=private_brain)
+        spec = json.loads(path.read_text())
+        spec.pop("runtime_context")
+        path.write_text(json.dumps(spec))
     monkeypatch.setattr(
         gate.subprocess,
         "run",

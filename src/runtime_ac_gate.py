@@ -251,7 +251,7 @@ def observe_shadow_spec(
                 check=False,
             )
             if current.returncode == 0 and current.stdout.strip() == head_sha:
-                spec["runtime_context"]["worktree"] = str(worktree)
+                spec.setdefault("runtime_context", {})["worktree"] = str(worktree)
                 run = runtime_ac.run_verification(
                     spec,
                     confirm_run=True,
