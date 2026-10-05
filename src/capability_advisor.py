@@ -1110,6 +1110,8 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         NO_BINDING: "the family key is a label, not a surface anyone should consult: every consult "
         "names a phase so no reasoning context is handed all eighteen rails at once",
     },
+    # Feature discovery shares the Brain exercise phase with feature reflection,
+    # keeping audit at five rails as independent value-chain monitoring joins it.
     "rail-exercise:brain": {
         "feedback-store": "EXERCISE the learning store's spine on a COPY of the feedback db: "
         "integrity_check plus a referential recount (every outcome has its run; outcome counts "
@@ -1122,6 +1124,9 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "feature-reflection-cli": "EXERCISE features.py record_use/summary against a fixture tree "
         "into a temporary registry: recorded use counts equal an independent grep count; break "
         "case: a tree with no reusable structure records nothing. Never touches the live registry",
+        "feature-scan": "EXERCISE the agent-facing scan on a fixture tree into a temporary registry: "
+        "the reusable structures it finds equal an independent count, ranked; break case: a tree of "
+        "single-use helpers ranks nothing. Never touches the live registry",
     },
     "rail-exercise:research": {
         "research-scheduler": "EXERCISE the pure planning functions tick.research_tick consumes: "
@@ -1171,6 +1176,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "uniform coverage yields no prompt. Never dispatches the testgen agent",
     },
     "rail-exercise:audit": {
+        "value-chain-monitor": "EXERCISE independent demand and first-break reporting over a fixture; an unmeasured denominator must never become zero. Never changes gates.",
         "rail-exercise-cadence": "EXERCISE the committed rail contract cadence itself: each fixture-backed read-only or dry-run contract must pass and its counterexample must be detected; never enables recording unless explicitly armed.",
         "capability-activation-audit": "EXERCISE the activation audit against a FIXTURE ledger and "
         "fixture tree: a row whose entrypoint module is absent must be reported with "
@@ -1184,9 +1190,6 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "horizon with an unmoved value and zero drainable is reported SUSPECT with what would clear "
         "it, a moving gate is not; break case: a drainable count above zero must clear the flag. "
         "Report-only; never opens a gate",
-        "feature-scan": "EXERCISE the agent-facing scan on a fixture tree into a temporary registry: "
-        "the reusable structures it finds equal an independent count, ranked; break case: a tree of "
-        "single-use helpers ranks nothing. Never touches the live registry",
     },
     "rail-exercise:routing": {
         "route-weights-export": "EXERCISE route_weights_export.py on a fixture route_weights "
@@ -1374,18 +1377,16 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # genuinely surface-wide: "can it fire / does it fire / was it worth firing / is its switch
     # held" are questions about ANY phase of a self-observing cadence, which is the same reason
     # `offload` is declared surface-wide for `repo-audit`.
+    # Evidence acquisition remains phase-owned at tick:learning. Keep the bare set
+    # bounded as value-chain monitoring joins the existing observation rails.
     "tick": {
+        "value-chain-monitor": "The weekly switch review compares demand, invocation and graded outcome before a capability decision.",
         "switch-review": "already a weekly tick cadence step; bound so the tick can consult rather "
         "than only be scheduled",
         "capability-firing-monitor": "the tick is where does-it-fire is observed",
         "capability-activation-audit": "and where can-it-fire is observed",
         "capability-propensity": "the tick is the highest-volume unattended surface (~91 writes/day), "
         "so it is where propensity evidence should accrue fastest",
-        "evidence-acquisition": "a `tick_phase` matcher whose declared consumer IS the "
-        "`orchestrate.sh:evidence-acquisition` cadence step — the same shape as `switch-review` "
-        "above, bound so the tick can consult it rather than only schedule it. Added 2026-08-23 "
-        "because the findability requirement blocked it: registered after that cutoff and bound "
-        "nowhere, it is the first row the new gate actually drained",
     },
     # RESOLVED 2026-08-23: two sessions disagreed about `ci`. #68's verdict is kept (below); the
     # tick sub-surfaces from the binding work are kept too — they do not overlap. A `verify.py`
@@ -3007,6 +3008,9 @@ def _record_matches(advice: dict, *, skill: str = "", surface: str = "", path=No
                 "skill": skill or None,
                 "surface": surface or None,
                 "task_type": entry.get("matched_task_type"),
+                # Persist the evaluated probe independently of whether the caller invokes
+                # the offer. Historical events without this field remain unmeasured.
+                "precondition_met": entry.get("precondition_met"),
             },
         )
         written += 1 if ok else 0
