@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "retrieval_transport": "authenticated GitHub connector",
+  "scope": "Historical deliberate-break runs on 57a828d, not tests of final head 883ee0b",
+  "runs": [
+    {
+      "run_id": 37228770087,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/37228770087",
+      "head_sha": "0e49a6b527b9a7e1bf074fd0e97c0c7b2f09f45a",
+      "base_sha": "57a828d34a60fd5664b7de086c49eb5c1d5c7987",
+      "event": "workflow_dispatch",
+      "run_attempt": 1,
+      "jobs": [
+        {
+          "id": 111513828436,
+          "name": "combined coverage (pytest + selftests, the honest number)",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 111513828615,
+          "name": "verify.py in the flat exec-mirror shape (the tree a sync ships)",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "id": 111513828644,
+          "name": "verify.py (real pytest counts + selftests + capability gates)",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 111513829244,
+          "name": "reconcile the collection floor (main only)",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ],
+      "log_url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/111513828615/logs",
+      "authenticated_log_excerpts": [
+        "2026-10-04T19:35:27.2217625Z   tree:       BARE EXEC MIRROR — bare_mirror_* ceilings apply",
+        "2026-10-04T19:35:27.2224548Z   pytest:     1416 passed, 1 failed, 47/47 max [bare_mirror_skipped_max] skipped (1464 collected; floor 1464)",
+        "2026-10-04T19:35:27.2225069Z   selftests:  91 of 98 modules ran, 7/7 max [bare_mirror_selftest_skipped_max] skipped",
+        "2026-10-04T19:35:27.2228192Z   gates:      2/2 max [bare_mirror_gate_skipped_max] skipped",
+        "2026-10-04T19:35:27.2297826Z     FAILED tests/test_install_verified_snapshot.py::test_standalone_python_reader_excludes_publisher_across_child_imports[guarded-entry] - AssertionError: ([], \"python3: can't open file '/tmp/verify-before-sync.cobGsv/mirror/src/mirror_reader.py': [Errno 2] No such file or directory",
+        "2026-10-04T19:35:27.5322467Z == verify-before-sync: NOT VERIFIED (verify.py exit 1) for /home/runner/work/Orchestrator/Orchestrator @ 0e49a6b (0 uncommitted)",
+        "2026-10-04T19:35:27.7532523Z ##[error]Process completed with exit code 1."
+      ]
+    },
+    {
+      "run_id": 37228771698,
+      "url": "https://github.com/stranske/Orchestrator/actions/runs/37228771698",
+      "head_sha": "ea7c6e1db1da12e47e86afa600b1d76c744c048d",
+      "base_sha": "57a828d34a60fd5664b7de086c49eb5c1d5c7987",
+      "event": "workflow_dispatch",
+      "run_attempt": 1,
+      "jobs": [
+        {
+          "id": 111513833519,
+          "name": "verify.py (real pytest counts + selftests + capability gates)",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 111513833611,
+          "name": "combined coverage (pytest + selftests, the honest number)",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 111513833680,
+          "name": "verify.py in the flat exec-mirror shape (the tree a sync ships)",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "id": 111513834321,
+          "name": "reconcile the collection floor (main only)",
+          "status": "completed",
+          "conclusion": "skipped"
+        }
+      ],
+      "log_url": "https://api.github.com/repos/stranske/Orchestrator/actions/jobs/111513833680/logs",
+      "authenticated_log_excerpts": [
+        "2026-10-04T19:36:17.5933125Z   tree:       BARE EXEC MIRROR — bare_mirror_* ceilings apply",
+        "2026-10-04T19:36:17.5944879Z   pytest:     1417 passed, 0 failed, 47/47 max [bare_mirror_skipped_max] skipped (1464 collected; floor 1464)",
+        "2026-10-04T19:36:17.5946312Z   selftests:  91 of 98 modules ran, 7/7 max [bare_mirror_selftest_skipped_max] skipped",
+        "2026-10-04T19:36:17.5952460Z   gates:      2/2 max [bare_mirror_gate_skipped_max] skipped",
+        "2026-10-04T19:36:18.1443779Z verify-before-sync: VOID: verification changed deployment-owned bytes in the scratch mirror",
+        "2026-10-04T19:36:18.3143789Z ##[error]Process completed with exit code 3."
+      ]
+    }
+  ]
+}

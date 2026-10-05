@@ -9,9 +9,8 @@ Gate has already decided. Three steps of `.github/workflows/pr-00-gate.yml` hand
 * `Ensure consolidated summary comment` falls back to the job summary when a fork's comment write
   is refused, and stays loud otherwise;
 * `Report Gate commit status` keeps the retry helper's `gate-commit-status` task, under which the
-  helper swallows a permission refusal, warns with the refusing token's name and returns null: the
-  documented rule that a status post must not fail the Gate. On a same-repo pull request that
-  warning is the whole response. For a fork, where no status can ever be written, the step records
+  helper swallows a permission refusal, warns with the refusing token's name and returns null: an expected refusal only for a fork. A same-repository refusal fails loudly instead of
+  leaving a stale commit-status verdict. For a fork, where no status can ever be written, the step records
   the verdict in the job summary and fails a verdict other than `success`.
 
 Each script is extracted from the workflow and run against the REAL `.github/scripts` helpers it
@@ -49,6 +48,11 @@ REFUSED = {"status": 403, "message": "Resource not accessible by integration"}
 # github-api-with-retry.js counts this 404 as a permission refusal exactly like the 403.
 REFUSED_404 = {"status": 404, "message": "Resource not accessible by integration"}
 RATE_LIMITED = {"status": 403, "message": "API rate limit exceeded for installation"}
+RATE_LIMIT_ROUTES = {
+    "message": RATE_LIMITED,
+    "429": {"status": 429, "message": "x"},
+    "header": {"status": 403, "message": "Forbidden", "headers": {"x-ratelimit-remaining": "0"}},
+}
 
 
 def _need_workflow() -> None:
@@ -63,7 +67,14 @@ def _need_harness() -> None:
 
 
 def _workflow_lines() -> list[str]:
-    return (paths.REPO_ROOT / WORKFLOW).read_text(encoding="utf-8").splitlines()
+    """Read production by default, or an exported baseline for the refusal controls.
+
+    GATE_TEST_WORKFLOW lets the same assertions exercise an unchanged historical workflow
+    without replacing the protected production file. An invalid export must fail, not silently
+    fall back to production and make the negative control appear to pass.
+    """
+    workflow = Path(os.environ.get("GATE_TEST_WORKFLOW", str(paths.REPO_ROOT / WORKFLOW)))
+    return workflow.read_text(encoding="utf-8").splitlines()
 
 
 def _step_lines(step_name: str) -> list[str]:
@@ -210,7 +221,7 @@ STATUS_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
         context: {
           repo: { owner: 'stranske', repo: 'Orchestrator' },
           sha: 'basesha',
-          payload: { pull_request: { head: { sha: 'headsha' } } },
+          payload: { pull_request: { head: { sha: spec.sha || 'headsha' } } },
         },
         github,
       }, record);
@@ -278,35 +289,44 @@ ORIGIN_RUNNER = HARNESS_PRELUDE + textwrap.dedent("""
 
 
 STATUS_CASES: list[dict[str, Any]] = [
-    {"name": "fork_success", **FORK, "state": "success", "error": REFUSED},
     *(
-        {"name": f"fork_{state}", **FORK, "state": state, "error": REFUSED}
-        for state in ("failure", "error", "pending")
+        {"name": f"{origin}_{error['status']}_{state}", **head, "state": state, "error": error}
+        for origin, head in (("fork", FORK), ("deleted_fork", DELETED_FORK))
+        for error in (REFUSED, REFUSED_404)
+        for state in ("success", "failure", "error", "pending")
     ),
-    {"name": "deleted_fork", **DELETED_FORK, "state": "success", "error": REFUSED},
     *(
         {"name": f"same_repo_{state}", **SAME_REPO, "state": state, "error": REFUSED}
-        for state in ("success", "failure")
+        for state in ("success", "failure", "error", "pending")
     ),
-    {"name": "same_repo_404", **SAME_REPO, "state": "success", "error": REFUSED_404},
-    {"name": "fork_404", **FORK, "state": "failure", "error": REFUSED_404},
-    {"name": "deleted_fork_404", **DELETED_FORK, "state": "failure", "error": REFUSED_404},
-    {"name": "rate_limit_message", **FORK, "state": "success", "error": RATE_LIMITED},
-    {
-        "name": "rate_limit_429",
-        **FORK,
-        "state": "success",
-        "error": {"status": 429, "message": "x"},
-    },
-    {
-        "name": "rate_limit_header",
-        **SAME_REPO,
-        "state": "success",
-        "error": {"status": 403, "message": "Forbidden", "headers": {"x-ratelimit-remaining": "0"}},
-    },
     *(
-        {"name": f"rate_limit_{state}", **SAME_REPO, "state": state, "error": RATE_LIMITED}
-        for state in ("failure", "error", "pending")
+        {"name": f"same_repo_404_{state}", **SAME_REPO, "state": state, "error": REFUSED_404}
+        for state in ("success", "failure", "error", "pending")
+    ),
+    *(
+        {
+            "name": f"same_repo_{error['status']}_{label}",
+            **SAME_REPO,
+            "state": raw_state,
+            "error": error,
+        }
+        for error in (REFUSED, REFUSED_404)
+        for label, raw_state in (("empty", ""), ("invalid", "unknown-verdict"))
+    ),
+    *(
+        {
+            "name": f"rate_limit_{origin}_{route}_{state}",
+            **head,
+            "state": state,
+            "error": error,
+        }
+        for origin, head in (
+            ("fork", FORK),
+            ("deleted_fork", DELETED_FORK),
+            ("same_repo", SAME_REPO),
+        )
+        for route, error in RATE_LIMIT_ROUTES.items()
+        for state in ("success", "failure", "error", "pending")
     ),
     {
         "name": "server_error",
@@ -329,7 +349,16 @@ STATUS_CASES: list[dict[str, Any]] = [
         "error": {"status": 403, "message": "Forbidden", "headers": {"retry-after": "60"}},
     },
     {"name": "written", **FORK, "state": "success", "error": None},
+    {"name": "same_repo_written", **SAME_REPO, "state": "success", "error": None},
 ]
+
+# A new PR head must appear in both the refused request and the failure diagnostic. Keep the
+# original head controls as well: a hardcoded SHA must not satisfy either side of this check.
+STATUS_CASES.extend(
+    {**case, "name": f"{case['name']}_new_head", "sha": "updated-headsha"}
+    for case in list(STATUS_CASES)
+    if case["fromFork"] == "false" and case["error"] in (REFUSED, REFUSED_404)
+)
 
 COMMENT_CASES: list[dict[str, Any]] = [
     {"name": "fork", **FORK, "error": REFUSED},
@@ -388,67 +417,135 @@ def _verdict_written_to_summary(case: dict[str, Any], state: str) -> bool:
     return case["summaryWrites"] == 1 and "headsha" in summary and f"**{state}**" in summary
 
 
+def _assert_fork_refusal(case: dict[str, Any], state: str) -> None:
+    """Both permission routes must publish the verdict once and preserve its failure floor."""
+    assert case["threw"] is None, case
+    expected_failures = (
+        [] if state == "success" else [f"Gate verdict for headsha is '{state}': all checks passed"]
+    )
+    assert case["failures"] == expected_failures, case
+    assert _verdict_written_to_summary(case, state), case
+    assert "all checks passed" in " ".join(case["summaryRaw"]), case
+    assert any("read-only" in w and f"'{state}'" in w for w in case["warnings"]), case
+    assert any("blocked by permissions" in w for w in case["warnings"]), case
+    assert not any("Rate limit" in w for w in case["warnings"]), case
+    assert len(case["statusRequests"]) == 1, case
+    request = case["statusRequests"][0]
+    assert request["sha"] == "headsha" and request["state"] == state, case
+    assert request["context"] == "Gate / gate", case
+
+
 # ---- the commit-status writer ------------------------------------------------------------------
 
 
 def test_a_fork_refusal_records_a_success_verdict_without_failing(status: dict) -> None:
-    case = status["fork_success"]
-    assert case["threw"] is None and case["failures"] == [], case
-    assert _verdict_written_to_summary(case, "success"), case
-    assert "all checks passed" in " ".join(case["summaryRaw"]), case
-    assert any("read-only" in w and "'success'" in w for w in case["warnings"]), case
+    for origin in ("fork", "deleted_fork"):
+        for code in (403, 404):
+            _assert_fork_refusal(status[f"{origin}_{code}_success"], "success")
 
 
 @pytest.mark.parametrize(
-    "name,state",
+    "cases",
     [
-        ("fork_failure", "failure"),
-        ("fork_error", "error"),
-        ("fork_pending", "pending"),
-        ("fork_404", "failure"),
-        ("deleted_fork_404", "failure"),
+        [(f"{origin}_403_failure", "failure") for origin in ("fork", "deleted_fork")],
+        [(f"{origin}_403_error", "error") for origin in ("fork", "deleted_fork")],
+        [(f"{origin}_403_pending", "pending") for origin in ("fork", "deleted_fork")],
+        [(f"{origin}_404_failure", "failure") for origin in ("fork", "deleted_fork")],
+        [
+            (f"{origin}_404_{state}", state)
+            for origin in ("fork", "deleted_fork")
+            for state in ("error", "pending")
+        ],
     ],
+    ids=["403-failure", "403-error", "403-pending", "404-failure", "404-error-pending"],
 )
 def test_a_fork_refusal_fails_closed_for_any_other_verdict(
-    status: dict, name: str, state: str
+    status: dict, cases: list[tuple[str, str]]
 ) -> None:
-    case = status[name]
-    assert case["threw"] is None, case
-    assert len(case["failures"]) == 1 and f"'{state}'" in case["failures"][0], case
-    assert _verdict_written_to_summary(case, state), case
+    for name, state in cases:
+        _assert_fork_refusal(status[name], state)
 
 
 def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
-    case = status["deleted_fork"]
-    assert case["threw"] is None and case["failures"] == [], case
-    assert any("deleted source repository" in w for w in case["warnings"]), case
-    assert _verdict_written_to_summary(case, "success"), case
+    for code in (403, 404):
+        for state in ("success", "failure", "error", "pending"):
+            case = status[f"deleted_fork_{code}_{state}"]
+            assert any("deleted source repository" in w for w in case["warnings"]), case
+            _assert_fork_refusal(case, state)
 
 
-@pytest.mark.parametrize("name", ["same_repo_success", "same_repo_failure", "same_repo_404"])
-def test_a_same_repo_refusal_only_warns(status: dict, name: str) -> None:
-    """The documented rule, restored: a status post must not fail the Gate. The retry helper warns
-    with the refusing token's name; whether the Gate passes is left to 'Enforce Gate success'.
-    A 404 refusal takes the same path as a 403: the helper counts both as a permission refusal."""
-    case = status[name]
-    assert case["threw"] is None and case["failures"] == [], case
-    assert case["summaryWrites"] == 0, case
-    assert any("blocked by permissions" in w for w in case["warnings"]), case
+@pytest.mark.parametrize(
+    "cases",
+    [
+        [("same_repo_success", "success")],
+        [
+            *[(f"same_repo_{state}", state) for state in ("failure", "error", "pending")],
+            *[(f"same_repo_403_{label}", "pending") for label in ("empty", "invalid")],
+        ],
+        [
+            *[
+                (f"same_repo_404_{state}", state)
+                for state in ("success", "failure", "error", "pending")
+            ],
+            *[(f"same_repo_404_{label}", "pending") for label in ("empty", "invalid")],
+        ],
+    ],
+    ids=["same_repo_success-success", "same_repo_failure-failure", "same_repo_404-success"],
+)
+def test_a_same_repo_refusal_fails_loudly(status: dict, cases: list[tuple[str, str]]) -> None:
+    """Refusals fail after verdict normalization, retaining the three baseline controls."""
+    for name, state in cases:
+        for suffix, sha in (("", "headsha"), ("_new_head", "updated-headsha")):
+            case_name = name + suffix
+            case = status[case_name]
+            assert case["threw"] is not None, (case_name, case)
+            assert case["threw"]["message"] == (
+                f"Same-repository Gate status publication was refused for {sha}; "
+                f"computed verdict '{state}' was not published."
+            ), (case_name, case)
+            assert len(case["statusRequests"]) == 1, (case_name, case)
+            request = case["statusRequests"][0]
+            assert request["sha"] == sha and request["state"] == state, (case_name, case)
+            assert request["context"] == "Gate / gate", (case_name, case)
+            assert case["summaryWrites"] == 0, (case_name, case)
+            assert any("blocked by permissions" in w for w in case["warnings"]), (case_name, case)
+            assert not any("read-only" in w for w in case["warnings"]), (case_name, case)
+
+
+def _assert_rate_limited_post(status: dict, state: str) -> None:
+    """Rate limits preserve the verdict floor independently of the PR's origin."""
+    for origin in ("fork", "deleted_fork", "same_repo"):
+        for route in RATE_LIMIT_ROUTES:
+            name = f"rate_limit_{origin}_{route}_{state}"
+            case = status[name]
+            assert case["threw"] is None, (name, case)
+            expected_failures = (
+                []
+                if state == "success"
+                else [f"Gate verdict for headsha is '{state}': all checks passed"]
+            )
+            assert case["failures"] == expected_failures, (name, case)
+            assert any("Rate limit" in w for w in case["warnings"]), (name, case)
+            assert not any(
+                "read-only" in w or "blocked by permissions" in w for w in case["warnings"]
+            ), (
+                name,
+                case,
+            )
+            assert case["summaryWrites"] == 0 and case["summaryRaw"] == [], (name, case)
+            assert len(case["statusRequests"]) >= 1, (name, case)
+            for request in case["statusRequests"]:
+                assert request["sha"] == "headsha" and request["state"] == state, (name, case)
+                assert request["context"] == "Gate / gate", (name, case)
 
 
 def test_a_rate_limited_post_keeps_its_own_path(status: dict) -> None:
-    for name in ("rate_limit_message", "rate_limit_429", "rate_limit_header"):
-        case = status[name]
-        assert case["threw"] is None and case["failures"] == [], (name, case)
-        assert any("Rate limit" in w for w in case["warnings"]), (name, case)
-        assert case["summaryWrites"] == 0, (name, case)
+    _assert_rate_limited_post(status, "success")
 
 
 @pytest.mark.parametrize("state", ["failure", "error", "pending"])
 def test_a_rate_limited_post_fails_closed_for_any_other_verdict(status: dict, state: str) -> None:
-    case = status[f"rate_limit_{state}"]
-    assert case["threw"] is None, case
-    assert len(case["failures"]) == 1 and f"'{state}'" in case["failures"][0], case
+    _assert_rate_limited_post(status, state)
 
 
 def test_other_post_errors_stay_loud(status: dict) -> None:
@@ -460,20 +557,21 @@ def test_other_post_errors_stay_loud(status: dict) -> None:
 
 
 def test_a_written_status_is_silent(status: dict) -> None:
-    case = status["written"]
-    assert case["threw"] is None and case["failures"] == [] and case["warnings"] == [], case
-    assert case["summaryWrites"] == 0, case
-    assert case["statusRequests"] == [
-        {
-            "owner": "stranske",
-            "repo": "Orchestrator",
-            "sha": "headsha",
-            "state": "success",
-            "context": "Gate / gate",
-            "description": "all checks passed",
-            "target_url": "https://example.invalid/run",
-        }
-    ], case
+    for name in ("written", "same_repo_written"):
+        case = status[name]
+        assert case["threw"] is None and case["failures"] == [] and case["warnings"] == [], case
+        assert case["summaryWrites"] == 0, case
+        assert case["statusRequests"] == [
+            {
+                "owner": "stranske",
+                "repo": "Orchestrator",
+                "sha": "headsha",
+                "state": "success",
+                "context": "Gate / gate",
+                "description": "all checks passed",
+                "target_url": "https://example.invalid/run",
+            }
+        ], case
 
 
 # ---- the summary-comment writer ----------------------------------------------------------------
@@ -529,7 +627,9 @@ def test_the_origin_step_classifies_every_shape(origin: dict) -> None:
         assert case["outputs"] == {"from_fork": from_fork, "head": head}, (name, case)
 
 
-def test_both_writers_read_the_one_fork_definition() -> None:
+def test_both_writers_read_the_one_fork_definition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Fork-ness is decided once. Each writer must read it from the origin step, which must run
     first, and neither may look at the payload's head repository itself -- two definitions of one
     fact drift, and #352's two copies had already diverged when they merged."""
@@ -542,3 +642,18 @@ def test_both_writers_read_the_one_fork_definition() -> None:
         assert block.count("steps.pr_" + "origin.outputs.from_fork") == 1, step
         script = _step_script(step)
         assert script.count("head?.repo") == 0 and script.count("head.repo") == 0, step
+
+    # The baseline control changes only the workflow input, retaining the real helper and
+    # assertions. Exercise selection here without changing this suite's 24-test collection.
+    original = _workflow_lines()
+    status_script = _step_script(STATUS_STEP)
+    exported = tmp_path / "exported-gate.yml"
+    exported.write_text("\n".join(original) + "\n# exported workflow control\n", encoding="utf-8")
+    with monkeypatch.context() as selected:
+        selected.setenv("GATE_TEST_WORKFLOW", str(exported))
+        assert _workflow_lines() == original + ["# exported workflow control"]
+        assert _step_script(STATUS_STEP) == status_script
+        exported.unlink()
+        with pytest.raises(FileNotFoundError):
+            _workflow_lines()
+    assert _workflow_lines() == original
