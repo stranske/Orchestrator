@@ -26,6 +26,10 @@ MAX_EVIDENCE_EXCERPT = 500
 DEFAULT_COOLDOWN_S = 6 * 60 * 60
 MAX_DEDUP_SCAN_BYTES = 1024 * 1024
 
+# codex `exec --json` events that mean the run DID something. An item whose own type is `error` is the
+# harness's warning (every run prints "Under-development features enabled"), not work.
+CODEX_WORK_EVENTS = frozenset({"item.started", "item.updated", "item.completed", "turn.completed"})
+
 
 def _redact_bounded(text: str, max_len: int = MAX_EVIDENCE_EXCERPT) -> str:
     text = str(text or "")
@@ -182,6 +186,60 @@ def stdout_carries_capacity_evidence(text: str) -> bool:
     return _contains_explicit_resource_exhausted(text) or bool(
         re.search(r"(?im)^\s*ActionRequiredError\b[^\n]*(?:out of usage|quota exhausted)", text)
     )
+
+
+def json_event(line: str) -> dict | None:
+    """The JSON object this log line holds, or None for any other line."""
+    text = line.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        event = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def is_codex_work_event(event: dict) -> bool:
+    """A codex `exec --json` event that means the run DID something: the agent's own record of what
+    it ran, read and said. An `error` item is the harness talking, not the agent working."""
+    kind = event.get("type")
+    if kind not in CODEX_WORK_EVENTS:
+        return False
+    item = event.get("item")
+    return kind == "turn.completed" or not (isinstance(item, dict) and item.get("type") == "error")
+
+
+def failure_evidence(lines: list[str]) -> list[str]:
+    """A failed run's output without the agent's own record of its work.
+
+    A failed run's output is read as error evidence, but a codex `exec --json` transcript is also
+    every command the agent ran and every file it read: a run that `sed`s a doc about quotas carries
+    "quota exhausted" in an `item.completed` event. On 2026-10-04, 11 of the 64 codex dispatch
+    transcripts did, with no refusal anywhere, and two codex offloads (2026-09-19, 09-20) that had
+    printed such a doc were recorded as quota incidents, each shedding the seat. Codex's own failure
+    evidence is its harness events (`turn.failed`, `error`) and its stderr lines, which stay. A
+    text-only log has no such structure and stays whole.
+
+    One predicate for every reader of a failed run: the completion reconciler's log segment
+    (`ledger_reconcile`) and a synchronous run's stdout (`failed_stdout_evidence`). Both observers of
+    a run share one incident (`_idempotency_key`), so a rule only one of them applied would let the
+    other record the incident the first had refused.
+    """
+    return [line for line in lines if not is_codex_work_event(json_event(line) or {})]
+
+
+def failed_stdout_evidence(agent: str, stdout: str) -> str:
+    """The part of a FAILED synchronous run's stdout that may be read as provider evidence.
+
+    codex prints its `exec --json` stream on stdout in every mode but `assess`, so its stdout is read
+    less the agent's own work events (`failure_evidence`). Every other agent's stdout is its final
+    text, which has no such structure, and is read whole by design. A successful run's stdout is not
+    this function's to read: it counts only through `stdout_carries_capacity_evidence`.
+    """
+    if agent != "codex":
+        return stdout
+    return "\n".join(failure_evidence(stdout.splitlines()))
 
 
 def get_structured_evidence(
