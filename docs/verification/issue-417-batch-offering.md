@@ -157,3 +157,25 @@ stays unchecked pending the real pytest runner and formatting gates.
 The GitHub connector also blocked adding `needs-human` and posting the blocker
 comment: both mutations require approval, while this run's approval policy is
 `never`. Read-only metadata confirmed PR #457 is open and ready for review.
+
+## Fresh-receipt follow-up
+
+The control runner now deletes any earlier report before each pytest invocation
+and rejects unknown phase names. This prevents a retry from accepting an old
+baseline, broken, or restored receipt when the current child writes no report.
+`tests/test_role_prompt_offering_controls.py` exercises the real parser with
+stale and fresh reports for all three phases, mocking only the pytest child.
+
+`python3 -m unittest discover -s tests -p test_role_prompt_offering_controls.py -v`
+passed one test. Removing report deletion in a private runner copy produced six
+assertion failures within that test; restoring the copy passed. Checkout runner
+bytes remained unchanged during this deliberate-break control.
+
+This is evidence for the receipt regression, not completion of the three required
+pytest controls. Every installed interpreter lacks pytest and Black; PyPI DNS
+resolution failed. The real control runner rejected its missing-pytest baseline,
+and both required Black commands failed because Black is unavailable. These
+changes remain uncommitted under the pre-commit formatting gate. The acceptance
+checkbox remains unchecked. Once pytest is available, measure collection and
+update `.verify-floor.json` for the new test before running the full verifier;
+no floor or ceiling is changed on the basis of the unittest run.

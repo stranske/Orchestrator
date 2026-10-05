@@ -46,7 +46,11 @@ CONTROLS = (
 
 def run_named_test(directory: Path, test_name: str, phase: str) -> dict:
     """Require one named assertion failure or one pass; import/usage errors are not proof."""
+    if phase not in {"baseline", "broken", "restored"}:
+        raise ValueError(f"Unknown control phase: {phase}")
     report = directory / f"{phase}.xml"
+    # A retry must prove this child ran, even if an earlier attempt left a valid report.
+    report.unlink(missing_ok=True)
     command = [
         sys.executable,
         "-B",  # Never reuse a mutated module's bytecode after restoring its source.
