@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import capabilities
 import capability_advisor as ca
 import capability_propensity as cp
@@ -235,3 +237,35 @@ def test_empty_and_suppressed_consults_return_an_empty_fact_missing_list(tmp_pat
         result = ca.advise(text, surface=surface, record=False, path=ledger)
         assert result["capabilities"] == []
         assert result["fact_missing"] == []
+
+
+@pytest.mark.parametrize("last_match,last_invocation", [(None, None), (10, 20)])
+def test_fact_missing_keeps_event_without_advancing_offer_liveness(
+    tmp_path, last_match, last_invocation
+):
+    ledger = _ledger(tmp_path)
+    rows = capabilities.load(ledger)
+    cap = rows["runtime-ac-checks"]
+    cap.update(status="wired", last_match=last_match, last_invocation=last_invocation)
+    capabilities.save(rows, ledger)
+    before = capabilities.classify_liveness(cap, now=100)
+    assert capabilities.heartbeat(
+        "runtime-ac-checks",
+        "match",
+        ref="advice:missing-fact",
+        timestamp=100,
+        metadata={
+            "source": cp.FACT_MISSING_SOURCE,
+            "surface": "closer-lane",
+            "fact": "PR size unknown",
+        },
+        path=ledger,
+    )
+    after = capabilities.load(ledger)["runtime-ac-checks"]
+    assert after["last_match"] == last_match
+    assert capabilities.classify_liveness(after, now=100) == before
+    assert after["event_history"][-1]["metadata"]["source"] == cp.FACT_MISSING_SOURCE
+    assert capabilities.heartbeat(
+        "runtime-ac-checks", "match", ref="advice:actual-offer", timestamp=101, path=ledger
+    )
+    assert capabilities.load(ledger)["runtime-ac-checks"]["last_match"] == 101
