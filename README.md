@@ -500,7 +500,10 @@ safety switch, not dead code.
   before any spend; `ORCH_REPO_PLAYBOOK=0` stops playbook injection into delegation prompts on the
   next dispatch without editing the registry; `ORCH_TICK_EVIDENCE_DISABLED=1` makes the tick's
   capability consult/verdict step inert from any caller (no consult, no ledger event, no state
-  file), which is the module-side twin of `ORCH_DISABLE_STEPS=tick-capability-evidence`.
+  file), which is the module-side twin of `ORCH_DISABLE_STEPS=tick-capability-evidence`;
+  `ORCH_CODEX_WORKTREE_GIT_GRANT_DISABLED=1` stops granting a committing codex run its linked
+  worktree's git dir (`adapters.codex_worktree_git_roots`), so its argv is exactly what it was
+  before the grant, and codex >= 0.158 refuses its `git commit` again.
 - **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
   pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
   result, not a reason to seed synthetic data.
@@ -585,3 +588,25 @@ current inventory with `python3 src/capabilities.py inventory` (or inspect
 `~/.codex/orchestrator/capability-inventory.md` after an active tick). It distinguishes deliberate
 gates, canaries, no matching work, matched-but-not-invoked seams, missing outcomes, and stale active
 capabilities from ordinary code maturity.
+
+### Authoring a batch of issue bodies
+
+PromptAgent accepts `dispatch_prompt` (the default worker contract) or `issue_body`
+(AGENT_ISSUE_FORMAT sections, without a task type). A batch JSON is a list of objects
+with `target` and `goal`, plus optional `target_detail`, `context`, `repo`,
+`acceptance_criteria`, `constraints` and `expected_paths`. Run:
+
+```sh
+python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies
+```
+
+One routing decision selects the backend for the batch. Each item receives its own
+validated output and role-run ID, grouped by `batch_id`; the manifest records rejected
+items too, but no rejected body is exported. Without `--dispatch` or item replay proposals,
+the command writes and prints a manifest without generated prompts or authored bodies.
+`--proposal-json` remains
+available for single-item replay; a batch item may carry its own `proposal_json`.
+The tool authors local files only; filing issues remains the caller's responsibility
+under the target repository's issue-format gate.
+
+Choose a fresh `--output-dir` for each batch; existing directories are refused to preserve prior bodies.

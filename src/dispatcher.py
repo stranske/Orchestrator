@@ -727,6 +727,8 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     if agent == "gemini":
         prompt = _gemini_workspace_prompt(prompt, cwd)
     try:
+        # The provisioned worktree is where this agent commits and pushes (provision.py), so a
+        # sandboxed codex run is granted that worktree's git dir (adapters.codex_worktree_git_roots).
         if selected_profile:
             argv = adapters.build_command(
                 agent,
@@ -738,6 +740,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
                 permission_mode=assignment.get("permission_mode"),
                 reasoning_effort=assignment.get("reasoning_effort"),
                 requested_model=assignment.get("requested_model"),
+                commits_in_worktree=True,
             )
         else:
             argv = adapters.build_command(
@@ -747,6 +750,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
                 cwd=cwd,
                 reasoning_effort=assignment.get("reasoning_effort"),
                 requested_model=assignment.get("requested_model"),
+                commits_in_worktree=True,
             )
     except ValueError:
         return None  # unknown agent — skip gracefully
@@ -2663,6 +2667,7 @@ def _selftest() -> None:
             captured["mode"] = mode
             captured["build_cwd"] = cwd
             captured["profile"] = kwargs.get("profile")
+            captured["commits_in_worktree"] = kwargs.get("commits_in_worktree")
             return ["printf", "OFFLOAD RESULT"]
 
         def fake_run(cmd, cwd=None, **_kwargs):
@@ -2731,6 +2736,8 @@ def _selftest() -> None:
                 (codex_off["run_id"],),
             ).fetchone()
         assert captured.get("profile"), "the selected profile must reach build_command"
+        # An offload is told never to commit, so it must never ask for the worktree git grant.
+        assert not captured.get("commits_in_worktree"), captured
         assert worker and worker[0], (
             "a profiled offload must record a worker execution attempt; without it "
             "resolved_worker_identity_for_run can never return a row",

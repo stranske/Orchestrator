@@ -661,6 +661,13 @@ def _migrate_schema(c: sqlite3.Connection) -> None:
             # by the environment (signal-killed wrapper, env crash) never trains as a capability
             # FAIL. Written by mark_transient_infra() from done-marker rc evidence.
             c.execute("ALTER TABLE outcomes ADD COLUMN failure_class TEXT")
+        if "failure_class_origin" not in outcome_cols:
+            c.execute("ALTER TABLE outcomes ADD COLUMN failure_class_origin TEXT")
+            # Legacy propagation notes cannot prove that a later direct write did not own
+            # the class. Keep ambiguous exclusions until explicit new evidence replaces them.
+            c.execute(
+                "UPDATE outcomes SET failure_class_origin='own' WHERE failure_class IS NOT NULL"
+            )
     if "execution_attempts" in tables:
         attempt_cols = {
             row[1] for row in c.execute("PRAGMA table_info(execution_attempts)").fetchall()
@@ -2546,10 +2553,11 @@ def mark_transient_infra(run_id: str, reason: str = "") -> bool:
     newly classified."""
     with _conn() as c:
         cur = c.execute(
-            "UPDATE outcomes SET failure_class='transient_infra', "
+            "UPDATE outcomes SET failure_class='transient_infra', failure_class_origin='own', "
             "notes=COALESCE(notes,'') || CASE WHEN ?!='' THEN ' [infra: ' || ? || ']' ELSE '' END "
             "WHERE run_id=? AND COALESCE(merged,0)=0 "
-            "AND COALESCE(failure_class,'') != 'transient_infra'",
+            "AND (COALESCE(failure_class,'') != 'transient_infra' "
+            "OR COALESCE(failure_class_origin,'') != 'own')",
             (reason, reason, run_id),
         )
         return cur.rowcount > 0
@@ -2889,6 +2897,41 @@ def _capability_attribution_of(c: sqlite3.Connection, run_id: str) -> list[tuple
     return [(r[0], r[1]) for r in rows]
 
 
+def _role_outcome_aggregate(c: sqlite3.Connection, role_run_id: str):
+    """One attributable failure dominates exclusions/passes, independent of arrival order.
+
+    A role may influence several acting runs. Excluded outcomes cannot hide an attributable
+    failure from another run. Within a tier use run_id for a stable representative; this is
+    an evidence aggregation rule, not a count of independent observations.
+    """
+    rows = c.execute(
+        "SELECT o.verifier_verdict,o.adjudicated_verdict,o.merged,o.ci_status,"
+        "o.durability,o.notes,o.failure_class,e.target_run_id FROM influence_edges e "
+        "JOIN outcomes o ON o.run_id=e.target_run_id WHERE e.source_run_id=? "
+        "AND e.influence_type='role' AND e.accepted=1",
+        (role_run_id,),
+    ).fetchall()
+    failures = {"reverted", "reworked", "reopened", "broke_later", "abandoned"}
+
+    def rank(row):
+        vv, av, _merged, ci, durability, _notes, excluded, run_id = row
+        if excluded in LEARNING_EXCLUDED_FAILURE_CLASSES:
+            tier = 0
+        elif durability in failures or str(av or vv or "").upper() in {
+            "FAIL",
+            "FAILURE",
+            "NON_PASS",
+        }:
+            tier = 3
+        elif durability == "durable":
+            tier = 2
+        else:
+            tier = 1
+        return tier, str(run_id)
+
+    return max(rows, key=rank) if rows else None
+
+
 def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str) -> int:
     """Back-propagate a target's current terminal state over accepted edges only."""
     outcome = c.execute(
@@ -2902,7 +2945,8 @@ def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str
     # A role inherits the acting run's verdict, so it inherits that verdict's exclusion too: copying
     # every other field and dropping this one is how 7 role:triage runs trained on closed-issue
     # labels their acting runs were never judged by. Only an excluded class travels; None writes
-    # nothing, so a role row's own class is never cleared by a propagation.
+    # nothing in a generic patch. Role aggregation below clears only inherited exclusions,
+    # preserving a role's own infrastructure class across subsequent propagation.
     role_failure_class = (
         failure_class if failure_class in LEARNING_EXCLUDED_FAILURE_CLASSES else None
     )
@@ -2985,17 +3029,62 @@ def _propagate_outcome_lineage_in_conn(c: sqlite3.Connection, target_run_id: str
                 role_notes = f"automatically influenced {target_run_id}"
                 if downstream_notes:
                     role_notes += f"; downstream notes: {downstream_notes}"
+                aggregate = _role_outcome_aggregate(c, source_run_id)
+                if aggregate:
+                    (
+                        role_vv,
+                        role_av,
+                        role_merged,
+                        role_ci,
+                        role_durability,
+                        aggregate_notes,
+                        role_class,
+                        aggregate_run,
+                    ) = aggregate
+                    role_notes = f"automatically influenced {aggregate_run}"
+                    if aggregate_notes:
+                        role_notes += f"; downstream notes: {aggregate_notes}"
+                else:
+                    role_vv, role_av, role_merged, role_ci, role_durability = (
+                        vv,
+                        av,
+                        merged,
+                        ci_status,
+                        durability,
+                    )
+                    aggregate_notes, role_class = role_notes, role_failure_class
+                role_class_origin = "inherited" if role_class is not None else None
+                previous = c.execute(
+                    "SELECT failure_class,failure_class_origin FROM outcomes WHERE run_id=?",
+                    (source_run_id,),
+                ).fetchone()
+                if (
+                    previous
+                    and previous[0] in LEARNING_EXCLUDED_FAILURE_CLASSES
+                    and previous[1] != "inherited"
+                ):
+                    # A role's own infrastructure exclusion is not inherited attribution debt.
+                    role_class = previous[0]
+                    role_class_origin = "own"
+                    role_notes = f"role own exclusion {role_class}; {role_notes}"
                 _record_outcome_in_conn(
                     c,
                     source_run_id,
-                    verifier_verdict=vv,
-                    adjudicated_verdict=av,
-                    merged=merged,
-                    ci_status=ci_status,
-                    durability=durability,
+                    verifier_verdict=role_vv,
+                    adjudicated_verdict=role_av,
+                    merged=role_merged,
+                    ci_status=role_ci,
+                    durability=role_durability,
                     notes=role_notes,
                     propagate_lineage=False,
-                    failure_class=role_failure_class,
+                    failure_class=role_class,
+                    failure_class_origin=role_class_origin,
+                )
+                # Generic late updates deliberately ignore None; this role aggregate explicitly
+                # replaces an inherited exclusion when another acting run supplies evidence.
+                c.execute(
+                    "UPDATE outcomes SET failure_class=?,failure_class_origin=? WHERE run_id=?",
+                    (role_class, role_class_origin, source_run_id),
                 )
         propagated += 1
     accepted_role = c.execute(
@@ -3025,6 +3114,7 @@ def _record_outcome_in_conn(
     influenced_by_run_id=None,
     propagate_lineage: bool = True,
     failure_class=None,
+    failure_class_origin="own",
 ):
     row = c.execute("SELECT run_id FROM outcomes WHERE run_id=?", (run_id,)).fetchone()
     values = [
@@ -3036,6 +3126,7 @@ def _record_outcome_in_conn(
         ("notes", notes),
         ("influenced_by_run_id", influenced_by_run_id),
         ("failure_class", failure_class),
+        ("failure_class_origin", failure_class_origin if failure_class is not None else None),
     ]
     if row:  # late-arriving update (e.g. a durability sweep days later) — patch, don't clobber
         sets, vals = [], []
@@ -3054,8 +3145,8 @@ def _record_outcome_in_conn(
         c.execute(
             "INSERT INTO outcomes "
             "(run_id, verifier_verdict, adjudicated_verdict, merged, ci_status, durability, "
-            "durability_checked_ts, notes, influenced_by_run_id, failure_class) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "durability_checked_ts, notes, influenced_by_run_id, failure_class,failure_class_origin) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 run_id,
                 verifier_verdict,
@@ -3067,6 +3158,7 @@ def _record_outcome_in_conn(
                 notes,
                 influenced_by_run_id,
                 failure_class,
+                failure_class_origin if failure_class is not None else None,
             ),
         )
     stored = c.execute(
@@ -3195,6 +3287,7 @@ def record_role_run(
     rationale: str | None = None,
     model: str | None = None,
     ts: int | None = None,
+    batch_id: str | None = None,
 ):
     """Record a role invocation as its own learnable run.
 
@@ -3216,6 +3309,9 @@ def record_role_run(
         "decision_source": decision_source,
         "proposal": proposal,
     }
+    if batch_id is not None:
+        metadata["batch_id"] = batch_id
+
     # Roles are the ONE production path that already knows which capability it is, so they are
     # where capability attribution can start. Until 2026-08-11 the id was passed only into a
     # completion-event payload and never to record_run, so no influence edge was ever tagged with
