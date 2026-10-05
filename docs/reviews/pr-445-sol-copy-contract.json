@@ -1,0 +1,12 @@
+{
+  "head": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+  "copier_sha256": "8733a0b71511c786723725957a9b7e7c318ff3893a80981757cfac686c0d3cd2",
+  "byte_and_permission_equal": true,
+  "files": 1519,
+  "registry_excluded": true,
+  "production_registry_refresh": "Standalone copier also writes instance registry; no mirror installation or Brain/ledger writes. This registry refresh is recorded separately, not claimed absent.",
+  "owner_inventory_sha256": "d4b802e4d9d8a87c7c429231032c4b6d89eb3559d79f9d3c9b66659475782b8d",
+  "builder_inventory_sha256": "d4b802e4d9d8a87c7c429231032c4b6d89eb3559d79f9d3c9b66659475782b8d",
+  "comparison_algorithm": "Enumerate every regular source leaf recursively, excluding repo_review_registry.json; key by relative path and compare SHA256(file bytes) and stat.S_IMODE mode. Canonical inventory JSON uses sorted keys and compact separators.",
+  "mismatched_paths": []
+}

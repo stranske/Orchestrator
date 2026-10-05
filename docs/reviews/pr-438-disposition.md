@@ -279,3 +279,28 @@ GitHub writes require approval and this session's approval policy is `never`. Th
 is retained at `/tmp/pr445-manifest-reconciled-body.md`. Workspace staging was refused because
 `.git` is read-only; the source/test/evidence commit and patch are retained in
 `/tmp/pr445-manifest-binding` and `/tmp/pr445-manifest-binding.patch` for publication.
+
+
+## Independent Sol closeout, 2026-10-05
+
+This section supersedes the remaining UNKNOWN actions above for this audit scope.
+The configured Reviewed Repo Merge Verify Closer independently validated all 22 historical
+source bindings against a clean checkout at `883ee0b84f5bd5b3bbee7c85c586004aafd58e5f`.
+[The full suite](pr-445-sol-full-pytest.txt) ran 1,566 tests: all passed, zero skips, four subtests.
+[Production copier verification](pr-445-sol-copier-verification.txt) on this machine reproduced
+the final-head witness using private copied state: VERIFIED, 1,545 passing tests, 21 named
+git-prerequisite mirror skips within the unchanged ceiling, 99 selftests and five green gates.
+The source identity is `7db69330306b761604dc715614f3850a61962482`.
+[Byte and mode inventory](pr-445-sol-copy-contract.json) compares the installed copier with
+the historical builder: all 1,519 source leaves match, excluding only the instance registry.
+The standalone copier also refreshed the instance registry; it did not install the live mirror
+or write the Brain or capability ledger. This is recorded separately from the isolated verifier.
+
+[Independent adjudication](pr-445-sol-disposition.json) covers builder/installer ownership,
+source identity, copy equivalence and conservative machine classification. The original
+comparison's missing-context finding is dispositioned with complete inputs and measured
+replacement evidence. No product defect was observed in this bounded audit scope.
+Installed deployment was not performed; source #389's actual publication acceptance remains
+with PR #414 and is not closed by this evidence audit. PR #445 still requires current-head
+CI, expected-check reconciliation, zero active threads, the seven-minute floor, guarded
+squash and post-merge comparison before source #444 terminal disposition.
