@@ -334,7 +334,10 @@ safety switch, not dead code.
 - **Two-tier outcomes**: signal-killed/infra failures are classified `transient_infra` and excluded
   from learning, so environment noise never trains as agent incapability. Since 2026-10-04 that
   includes a run the provider refused before any work, read only from codex's own `turn.failed`
-  event (codex exits 0 on it); a text-only log is unknown and left as recorded.
+  event; a text-only log is unknown and left as recorded. A signal death is read from the run's done
+  marker only when the marker says its rc is the agent's (`rc_of`): until 2026-10-04 the dispatch
+  wrapper recorded its claim release's exit status there, and now records it beside the agent's as
+  `release_rc`.
 - **Independent-subject weighting**: explicitly linked research repetitions are down-weighted by
   `(agent, subject_family)` before posterior updates; legacy rows keep agent-level value without
   receiving invented subject provenance.
@@ -585,3 +588,25 @@ current inventory with `python3 src/capabilities.py inventory` (or inspect
 `~/.codex/orchestrator/capability-inventory.md` after an active tick). It distinguishes deliberate
 gates, canaries, no matching work, matched-but-not-invoked seams, missing outcomes, and stale active
 capabilities from ordinary code maturity.
+
+### Authoring a batch of issue bodies
+
+PromptAgent accepts `dispatch_prompt` (the default worker contract) or `issue_body`
+(AGENT_ISSUE_FORMAT sections, without a task type). A batch JSON is a list of objects
+with `target` and `goal`, plus optional `target_detail`, `context`, `repo`,
+`acceptance_criteria`, `constraints` and `expected_paths`. Run:
+
+```sh
+python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies
+```
+
+One routing decision selects the backend for the batch. Each item receives its own
+validated output and role-run ID, grouped by `batch_id`; the manifest records rejected
+items too, but no rejected body is exported. Without `--dispatch` or item replay proposals,
+the command writes and prints a manifest without generated prompts or authored bodies.
+`--proposal-json` remains
+available for single-item replay; a batch item may carry its own `proposal_json`.
+The tool authors local files only; filing issues remains the caller's responsibility
+under the target repository's issue-format gate.
+
+Choose a fresh `--output-dir` for each batch; existing directories are refused to preserve prior bodies.

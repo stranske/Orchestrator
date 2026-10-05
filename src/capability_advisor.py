@@ -3131,7 +3131,11 @@ HOW_TO_USE = {
         "shadow: it decides, and nothing downstream acts on the decision yet"
     ),
     "role-prompt": (
-        "roles.py:run_prompt_agent — authors the dispatch prompt for a task whose type is in "
+        "roles.py:run_prompt_agent — dispatch_prompt keeps the worker contract; issue_body authors "
+        "AGENT_ISSUE_FORMAT material without a task type. Batch: python3 src/roles.py prompt "
+        "--batch items.json --output issue_body --dispatch --output-dir bodies. "
+        "run_prompt_batch routes once and records per-item runs with a shared batch_id. "
+        "Dispatch prompts use a task type in "
         "router.ROUTE_TABLE, so the prompt is written for the backend that will actually receive "
         "it. BOUNDARY: worth invoking for a BATCH whose prompts you would otherwise write one by "
         "one; a single issue body you are already drafting is cheaper by hand, which is what its "

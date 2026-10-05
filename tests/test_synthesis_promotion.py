@@ -470,3 +470,14 @@ def test_stale_candidate_retires_without_remote_mutation(tmp_path: Path) -> None
     assert retired["delivery_phase"] == "discarded"
     assert retired["rollback"]["reason"] == "stale_candidate_retired"
     assert retired["rollback"]["remote_mutation"] is False
+
+
+@pytest.mark.parametrize(
+    "executable", ["/opt/anaconda3/bin/python3.12", "/opt/homebrew/bin/python3.13", "python3.14"]
+)
+def test_versioned_python_accepts_only_test_modules(executable):
+    assert promotion._safe_command([executable, "-m", "unittest", "discover", "-s", "tests"])
+    assert promotion._safe_command([executable, "-m", "pytest", "tests"])
+    assert not promotion._safe_command([executable, "-c", "import os"])
+    assert not promotion._safe_command([executable, "-m", "http.server"])
+    assert not promotion._safe_command([executable + "evil", "-m", "pytest"])

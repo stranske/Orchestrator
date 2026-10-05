@@ -411,6 +411,9 @@ cursor-agent live outside the default PATH):
   It also classifies a run the provider refused before any work (`provider_limit_before_work`: codex's own
   `turn.failed` event, no work event in the segment) as `transient_infra`, for runs started from
   2026-10-04T15:00Z, and counts every such run under `provider_limit_deaths` by why it was or was not.
+  A done marker's rc>128 classes the run `transient_infra` only when the marker says the rc is the
+  agent's (`rc_of`); a marker written before the dispatch wrapper read the agent's status is counted
+  under `infra_unattributed_marker_rc` instead, beside `infra_classified`.
 - **Attribute ccusage sessions to runs (NEW)** — `python3 src/ccusage_reconcile.py reconcile --dry-run --json`
   previews, and `python3 src/ccusage_reconcile.py reconcile [--json]` writes, per-run Codex/Claude usage rows
   into `costs(source=ccusage)`. It joins ccusage `session` totals to dispatcher start/complete windows only

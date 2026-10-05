@@ -1601,22 +1601,36 @@ def record_ledger(agent: str, count: int = 1, cost_usd: float = 0.0, **extra) ->
         f.write(json.dumps(rec) + "\n")
 
 
-def done_marker_cmd(run_id: str, log_file, rc_var: str) -> str:
+# A done marker's "rc_of": whose exit status its "rc" is. ledger_reconcile reads it back to decide
+# whether a marker's rc may say that the agent died by signal.
+MARKER_RC_OF_AGENT = "agent"
+
+
+def done_marker_cmd(
+    run_id: str, log_file, rc_var: str, *, release_rc_var: str | None = None
+) -> str:
     """Shell snippet for a completion marker, placed BEFORE the python ledger step in detached
     wrappers. The python completion (`ledger_reconcile.py complete`) takes seconds to start and has
     been observed SIGKILLed mid-write (522x in experiment logs, 2026-07-03 audit F2) — the agent's
     work survived but its exit/latency telemetry died, starving the Brain's cost plane. printf
     finishes in microseconds and survives; ledger_reconcile.reconcile() backfills a synthetic
     completion from the marker whenever the ndjson complete event is missing.
-    Marker: <log dir>/done/<run_id>.json with {"run_id","rc","ts"}; `rc_var` names the shell
-    variable the wrapper set from the agent command's $? immediately beforehand."""
+    Marker: <log dir>/done/<run_id>.json with {"run_id","rc","rc_of","ts"}; `rc_var` names the
+    shell variable the wrapper set from the AGENT command's $? immediately after it, before
+    anything else ran. `"rc_of":"agent"` says so in the marker itself: until 2026-10-04 the
+    dispatch wrapper read $? after its claim release, so its markers hold the release's status
+    under the same key and nothing else tells the two apart. `release_rc_var`, when given, names
+    the variable holding that release's own status, recorded as "release_rc"."""
     done_dir = Path(str(log_file)).parent / "done"
     marker = done_dir / f"{run_id}.json"
+    fields = f'"run_id":"%s","rc":%s,"rc_of":"{MARKER_RC_OF_AGENT}","ts":%s'
+    values = f'{shlex.quote(run_id)} "${{{rc_var}:-999}}" "$(date +%s)"'
+    if release_rc_var:
+        fields += ',"release_rc":%s'
+        values += f' "${{{release_rc_var}:-999}}"'
     return (
         f"mkdir -p {shlex.quote(str(done_dir))} && "
-        f'printf \'{{"run_id":"%s","rc":%s,"ts":%s}}\\n\' '
-        f'{shlex.quote(run_id)} "${{{rc_var}:-999}}" "$(date +%s)" '
-        f"> {shlex.quote(str(marker))}"
+        f"printf '{{{fields}}}\\n' {values} > {shlex.quote(str(marker))}"
     )
 
 

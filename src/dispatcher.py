@@ -756,7 +756,8 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         return None  # unknown agent — skip gracefully
     # Detached wrapper, in order: (1) PATH fix so local tools (agy, vibe, cursor-agent) resolve
     # without depending on the child agent's HOME; (2) run the agent in a subshell with writable
-    # per-agent state/cache/log dirs; (3) ALWAYS release the claim outside that subshell so
+    # per-agent state/cache/log dirs. The subshell is LAST on purpose: `_spawn` reads the status of
+    # this string as the agent's, and only then releases the claim, outside the subshell, so
     # claims.py still sees the real HOME/HANDOFF defaults.
     path_prefix = _path_prefix()
     # `set -a` auto-EXPORTS what the env file sets — the files are bare KEY=value (no `export`),
@@ -764,9 +765,10 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # the first demo hit). set -a around the source exports CURSOR_API_KEY / tokens to the agent.
     auth_prelude = _auth_prelude(agent)
     agent_prelude = _agent_runtime_prelude(agent)
-    release = shlex.join(["python3", str(CLAIMS_PY), "release", target, agent])
     # _net_hygiene_prelude lives INSIDE the agent subshell (release runs outside it, on the real env).
-    wrapped = f"{path_prefix}; ({_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}); {release}"
+    wrapped = (
+        f"{path_prefix}; ({_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)})"
+    )
     return {
         "agent": agent,
         "mode": mode,
@@ -1002,9 +1004,19 @@ def _spawn(d: dict) -> int:
     )
     # Marker BEFORE the python completion: the python step gets SIGKILLed in the wild (audit F2);
     # the microsecond printf survives and ledger_reconcile backfills latency/exit from it.
-    marker_cmd = adapters.done_marker_cmd(run_id, logf, "orch_dispatch_rc")
+    marker_cmd = adapters.done_marker_cmd(
+        run_id, logf, "orch_dispatch_rc", release_rc_var="orch_release_rc"
+    )
+    # The AGENT's status is read first, straight after `d["wrapped"]` (the agent subshell is its
+    # last command), and only then is the claim released. The release has a status of its own (0
+    # it found the claim, 1 it was gone, 137 it was SIGKILLed), and until 2026-10-04 `$?` was read
+    # AFTER it, so the marker's rc, `complete --exit-code` and this wrapper's exit all reported the
+    # release: 106 of 106 live dispatch markers, 31 of them a release SIGKILLed after the agent had
+    # finished, which reconcile then classed as the agent's signal death. The release still always
+    # runs, and its status rides in the marker as `release_rc`, beside the agent's, never as it.
+    release = shlex.join(["python3", str(CLAIMS_PY), "release", d["target"], d["agent"]])
     wrapped = (
-        f'{d["wrapped"]}; orch_dispatch_rc=$?; {marker_cmd}; '
+        f'{d["wrapped"]}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; '
         f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'
     )
     with logf.open("a") as fh:
@@ -2125,6 +2137,47 @@ def load_decision() -> dict:
 
 
 # ---------------------------------------------------------------------------
+def _selftest_spawn_reads_the_agents_status(plan: dict, root: Path) -> None:
+    """Run `_spawn`'s own wrapper with a stub agent (exit 7), claim release (exit 3) and completion
+    step, and read what it recorded. The marker's rc, `complete --exit-code` and the wrapper's exit
+    are the AGENT's; the release still runs after a failed agent, and its status is `release_rc`."""
+    global CLAIMS_PY, ORCH_DIR
+    stubs = root / "spawn-stubs"
+    stubs.mkdir()
+    calls = stubs / "calls.log"
+    for name, step, rc in (("claims.py", "release", 3), ("ledger_reconcile.py", "complete", 0)):
+        (stubs / name).write_text(
+            f"import sys\nopen({str(calls)!r}, 'a').write({step!r} + ' ' + ' '.join(sys.argv[2:])"
+            f" + '\\n')\nsys.exit({rc})\n"
+        )
+    seen: dict = {}
+
+    class _Proc:
+        pid = 4242
+
+    def _capture(argv, **_kw):
+        seen["wrapped"] = argv[-1]
+        return _Proc()
+
+    real_popen, real_claims, real_orch = subprocess.Popen, CLAIMS_PY, ORCH_DIR
+    setattr(subprocess, "Popen", _capture)  # scoped to the one `_spawn` call below
+    CLAIMS_PY, ORCH_DIR = stubs / "claims.py", stubs
+    try:
+        _spawn({**plan, "run_id": "selftest-agent-rc", "cwd": str(stubs), "wrapped": "(exit 7)"})
+    finally:
+        setattr(subprocess, "Popen", real_popen)
+        CLAIMS_PY, ORCH_DIR = real_claims, real_orch
+    ran = subprocess.run(["bash", "-c", seen["wrapped"]], cwd=stubs, capture_output=True, text=True)
+    marker = json.loads((DISPATCH_LOG_DIR / "done" / "selftest-agent-rc.json").read_text())
+    steps = calls.read_text().splitlines()
+    assert ran.returncode == 7, ("the wrapper exits with the agent's status", ran)
+    assert marker["rc"] == 7 and marker["rc_of"] == adapters.MARKER_RC_OF_AGENT, marker
+    assert marker["release_rc"] == 3, ("the release keeps its own status", marker)
+    assert [s.split()[0] for s in steps] == ["release", "complete"], steps
+    assert steps[0].endswith(f"{plan['target']} {plan['agent']}"), steps
+    assert "--exit-code 7" in steps[1], ("complete is told the agent's status", steps)
+
+
 def _selftest() -> None:
     import tempfile
 
@@ -2315,8 +2368,8 @@ def _selftest() -> None:
         # review prompt is advisory/non-gating
         rev_argv = by_t["stranske/Repo#3"]["argv"]
         assert any("non-gating" in tok.lower() for tok in rev_argv), rev_argv
-        # wrapper prepends a PATH fix (local-bin tools) + always releases the claim afterward
-        # (target is shlex-quoted for the shell, so it ends '... release <target> cursor')
+        # wrapper prepends a PATH fix (local-bin tools) and ENDS with the agent subshell: `_spawn`
+        # reads that status as the agent's and only then releases the claim (checked by running it)
         w = by_t["stranske/Repo#1"]["wrapped"]
         assert f"{REAL_HOME}/.local/bin" in w, w  # PATH fix independent of child HOME
         assert "ORCH_AGENT_RUNTIME" in w and "agent-runtime/cursor" in w, w
@@ -2325,12 +2378,8 @@ def _selftest() -> None:
             "CURSOR_CONFIG_DIR=" in w and "NODE_COMPILE_CACHE=" in w and "export HOME=" not in w
         ), w
         assert "cursor-agent.env" in w and "$HOME/.cursor" not in w and "set -a" in w, w
-        assert (
-            "claims.py" in w
-            and " release " in w
-            and "Repo#1" in w
-            and w.rstrip().endswith("cursor")
-        ), w
+        assert w.rstrip().endswith(")") and f"{CLAIMS_PY}" not in w, w
+        _selftest_spawn_reads_the_agents_status(by_t["stranske/Repo#1"], Path(tmp))
         # net hygiene: the proxy family is unset BEFORE the agent runs (inside the subshell) so a stray
         # *_PROXY can't blackhole the agent's HTTPS (the in-session offload-hang root cause, 2026-06-20).
         assert "unset " in w and "HTTPS_PROXY" in w and "ALL_PROXY" in w, w

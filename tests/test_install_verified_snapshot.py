@@ -20,11 +20,7 @@ _HEARTBEAT_EXPORT = "# ORCH-ANCHOR: heartbeat-export"
 
 
 def _orchestrate_tick_prologue() -> str:
-    """Production tick preamble through mirror_reader, skipping log rotation only.
-
-    mirror_reader re-entry moved below gh-auth-preflight (after log rotation); replay
-    tests must still execute the same reader exclusion the launchd tick uses.
-    """
+    """Production reader pin, watchdog, and auth preflight, skipping log rotation only."""
     text = (paths.REPO_ROOT / "orchestrate.sh").read_text()
     head, _rest = text.split(_LOG_ROTATION, 1)
     tail = text.split(_GH_PREFLIGHT, 1)[1]

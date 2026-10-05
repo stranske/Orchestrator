@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "repository": "stranske/Orchestrator",
+  "pr_number": 445,
+  "inspected_head": "187a717bd590ea1da78e7d11deba9aa5893ee245",
+  "observed_at": "2026-10-04 23:24:24 UTC",
+  "retrieval_transport": "authenticated GitHub connector",
+  "pr": {
+    "state": "open",
+    "isDraft": false,
+    "head_sha": "187a717bd590ea1da78e7d11deba9aa5893ee245"
+  },
+  "threads": [
+    {
+      "id": "PRRT_kwDOUAH6nM6o3BL_",
+      "path": "docs/reviews/pr-438-disposition.md",
+      "is_resolved": true,
+      "is_outdated": true,
+      "resolved_by": "coderabbitai[bot]",
+      "comments": [
+        {
+          "id": "PRRC_kwDOUAH6nM75Ho7T",
+          "database_id": 4179529427,
+          "author": "coderabbitai",
+          "updated_at": "2026-10-04T23:19:33Z",
+          "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529427",
+          "originating_disposition": "✅ Addressed in commits 720cd8e to 187a717"
+        }
+      ]
+    },
+    {
+      "id": "PRRT_kwDOUAH6nM6o3BMB",
+      "path": "scripts/capture_review_source_evidence.js",
+      "is_resolved": true,
+      "is_outdated": false,
+      "resolved_by": "coderabbitai[bot]",
+      "comments": [
+        {
+          "id": "PRRC_kwDOUAH6nM75Ho7V",
+          "database_id": 4179529429,
+          "author": "coderabbitai",
+          "updated_at": "2026-10-04T23:19:30Z",
+          "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179529429",
+          "originating_disposition": "✅ Addressed in commits 720cd8e to 187a717"
+        }
+      ]
+    },
+    {
+      "id": "PRRT_kwDOUAH6nM6o3J2f",
+      "path": "docs/reviews/pr-438-contract-witness.json",
+      "is_resolved": true,
+      "is_outdated": false,
+      "resolved_by": "coderabbitai[bot]",
+      "comments": [
+        {
+          "id": "PRRC_kwDOUAH6nM75H35A",
+          "database_id": 4179590720,
+          "author": "coderabbitai",
+          "updated_at": "2026-10-04T22:32:33Z",
+          "url": "https://github.com/stranske/Orchestrator/pull/445#discussion_r4179590720",
+          "originating_disposition": "✅ Addressed in commit 720cd8e"
+        }
+      ]
+    }
+  ],
+  "source_head": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+  "findings": [
+    {
+      "comment_id": 4179529427,
+      "valid_at_inspected_head": false,
+      "validation": "Committed normalized metadata receipt matches the source manifest digest; complete replay preserves all 22 bindings.",
+      "originating_reviewer_disposition": "RESOLVED by coderabbitai[bot] at inspected head"
+    },
+    {
+      "comment_id": 4179529429,
+      "valid_at_inspected_head": false,
+      "validation": "Exact set validation rejects same-count substitution in fixture and retained 14-file receipt before blob reads or bundle creation.",
+      "originating_reviewer_disposition": "RESOLVED by coderabbitai[bot] at inspected head"
+    },
+    {
+      "comment_id": 4179590720,
+      "valid_at_inspected_head": true,
+      "validation": "Both full-suite UNKNOWN actions still named only the nine-file focused command despite resolved thread state.",
+      "repair": "Both actions now require the entire exact-head regression suite and retained collection/skip counts; nine-file command is explicitly focused.",
+      "originating_reviewer_disposition": "PENDING for this correction; historical addressed disposition at 720cd8e did not match the inspected implementation."
+    }
+  ],
+  "tests": {
+    "command": "ORCH_CONTRACT_SOURCE_MANIFEST=docs/reviews/pr-438-source-evidence.json ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f node --test --test-isolation=none tests/test_capture_review_source_evidence.js tests/test_review_contract_inputs.js tests/test_capture_mirror_deployment_evidence.js tests/test_exec_mirror_contract_witness.js",
+    "exit_code": 0,
+    "tests": 65,
+    "passed": 65,
+    "failed": 0,
+    "skipped": 0,
+    "output": "docs/reviews/pr-445-review-revalidation-tests.txt"
+  },
+  "inputs": [
+    {
+      "path": "scripts/capture_review_source_evidence.js",
+      "sha256": "c026a5c3542790d748d6a692ecb858310c5147885d8278a5066bf5a51598cef5"
+    },
+    {
+      "path": "tests/test_capture_review_source_evidence.js",
+      "sha256": "d05cfbeeab3932520228ddeaec97ef066d0df268c5c6c0f979ce7edb13632788"
+    },
+    {
+      "path": "scripts/review_contract_inputs.js",
+      "sha256": "ada496718a25fc50e178c6d806ae87804f440ecdd11a6f7ae04880365a6d10a3"
+    },
+    {
+      "path": "tests/test_review_contract_inputs.js",
+      "sha256": "be69ada86e0f055fe3ee7cf7ecf79955dc3f92882adb8dae27fd52e3ef81e2f7"
+    },
+    {
+      "path": "tests/test_capture_mirror_deployment_evidence.js",
+      "sha256": "f35e651830572a25d858ea67df5938712905996b5c66068e54e4174ea4866ee3"
+    },
+    {
+      "path": "tests/test_exec_mirror_contract_witness.js",
+      "sha256": "ef0a0302158513eb87d47f49d43320d4c7a2e6d8664f28dcadb4d962f27ad0bd"
+    },
+    {
+      "path": "docs/reviews/pr-438-source-metadata.json",
+      "sha256": "aa57c6f9ea3545425d43750738b9658a7ce84d5e9be1961ad44bceb6f4506124"
+    },
+    {
+      "path": "docs/reviews/pr-438-source-evidence.json",
+      "sha256": "e94d4b2b799bae85915d6f0b349ab698dd09b07f28c988460c7d9adbc54b03f5"
+    },
+    {
+      "path": "docs/reviews/pr-438-contract-witness.json",
+      "sha256": "848944b01be611dee461d24fb987ebdb792417e6be1cb985896d2d37afdc4a70"
+    },
+    {
+      "path": "docs/reviews/pr-438-disposition.md",
+      "sha256": "5e7d86beb2143e9a48a048d6ce064f8cb3395718dc8b2e1ffda1168ab3347c01"
+    }
+  ],
+  "source_replay": {
+    "changed_files": 14,
+    "retrieved_changed_files": 14,
+    "bindings": 22,
+    "manifest_unchanged": true,
+    "review_status": "PENDING",
+    "deployment_status": "NOT_OBSERVED"
+  },
+  "reconciliation": {
+    "prior_verified_checkbox_occurrences": 8,
+    "prior_unsupported_checkbox_occurrences": 6,
+    "current_review_task_complete": false,
+    "proposed_body": "/tmp/pr445-revalidated-body.md",
+    "remote_update": "BLOCKED: MCP tool call requires approval, but approval policy is never"
+  },
+  "delivery": {
+    "workspace_git": "read-only; staging refused",
+    "commit_checkout": "/tmp/pr445-review-revalidation",
+    "patch": "/tmp/pr445-review-revalidation.patch",
+    "status": "LOCAL_ONLY",
+    "reviewer_request": "BLOCKED: reply_to_review_comment rejected with MCP tool call requires approval, but approval policy is never",
+    "readiness_rechecked": {
+      "head_sha": "187a717bd590ea1da78e7d11deba9aa5893ee245",
+      "state": "open",
+      "isDraft": false
+    },
+    "owner": "stranske",
+    "next_action": "Publish the retained commit, apply the verified PR-body reconciliation, and obtain originating-reviewer disposition for the corrected full-suite action."
+  },
+  "limitations": [
+    "Full exact-head suite, provisioned-machine receipt and independent Sol adjudication remain UNKNOWN; focused source replay does not resolve them.",
+    "No installed deployment was performed or observed."
+  ]
+}
