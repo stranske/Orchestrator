@@ -52,6 +52,7 @@ function privateLedger(t) {
   const declarations = run(['-c', initialize]);
   return {
     declarations,
+    run,
     bytes: () => fs.readFileSync(ledger),
     events: () => JSON.parse(fs.readFileSync(ledger, 'utf8'))
       .capabilities['role-prompt'].event_history,
@@ -59,6 +60,103 @@ function privateLedger(t) {
       path.join(modules, 'capability_advisor.py'), '--json', '--surface', surface, task,
     ]),
   };
+}
+
+// Exercise append-only historical reads and new writes in separate processes.
+// A positive demotion control proves that detection ran, rather than merely
+// returning no proposals for every decline.
+const seedDeclines = `
+import json
+import sys
+import capabilities
+import capability_propensity as propensity
+
+case = json.loads(sys.argv[1])
+capability_id = case["capability_id"]
+row = capabilities._blank_capability(capability_id)
+row["status"] = "generated"
+count = max(propensity.DEMOTION_MIN_DECLINES, propensity.DEMOTION_MIN_TRIALS) + 1
+for index in range(count):
+    row["event_history"].append({
+        "type": "match",
+        "ref": f"advice:historical-{index}",
+        "timestamp": capabilities._now(),
+        "metadata": {
+            "source": propensity.DECLINE_SOURCE,
+            "surface": "orchestrate",
+            "decline_kind": case["kind"],
+            "reason": case["reasons"][index % len(case["reasons"])],
+        },
+    })
+capabilities.save({capability_id: row})
+print(json.dumps({"count": count}))
+`;
+
+const readDeclines = `
+import json
+import capability_propensity as propensity
+print(json.dumps({"trials": propensity.experiments(), "report": propensity.detect()}))
+`;
+
+const writeDeclines = `
+import json
+import sys
+import capability_propensity as propensity
+case = json.loads(sys.argv[1])
+written = [propensity.record_decline(
+    case["capability_id"], f"advice:new-{index}",
+    reason=reason, kind=case["kind"], surface="orchestrate",
+) for index, reason in enumerate(case["reasons"])]
+print(json.dumps(written))
+`;
+
+for (const scenario of [
+  {
+    capability_id: 'role-prompt', kind: 'scope_too_small', expected: 'wrong_moment',
+    reasons: ['single-body moment', 'ONE PROMPT request', 'No Batch work'], demotable: false,
+  },
+  {
+    capability_id: 'role-prompt', kind: 'unspecified', expected: 'wrong_moment',
+    reasons: ['Single Body moment', 'one-prompt request', 'no-batch work'], demotable: false,
+  },
+  {
+    capability_id: 'offload', kind: 'scope_too_small', expected: 'scope_too_small',
+    reasons: ['single-body work', 'one-prompt request', 'no-batch work'], demotable: true,
+  },
+  {
+    capability_id: 'role-prompt', kind: 'scope_too_small', expected: 'scope_too_small',
+    reasons: ['single-bodyguard review', 'someone-prompted this', 'no-batching policy'],
+    demotable: true,
+  },
+]) {
+  test(`decline detection preserves ${scenario.capability_id}: ${scenario.kind} -> ${scenario.expected}`,
+    (t) => {
+      const fixture = privateLedger(t);
+      const payload = JSON.stringify(scenario);
+      const { count } = fixture.run(['-c', seedDeclines, payload]);
+      function verify(total) {
+        const before = fixture.bytes();
+        const { trials, report } = fixture.run(['-c', readDeclines]);
+        assert.equal(trials.length, total);
+        for (const trial of trials) {
+          assert.equal(trial.decline_kinds[scenario.capability_id], scenario.expected);
+          assert.deepEqual(trial.declined_demotable,
+            scenario.demotable ? [scenario.capability_id] : []);
+        }
+        const counts = report.surfaces.orchestrate;
+        assert.deepEqual(counts.declines_by_kind[scenario.capability_id],
+          { [scenario.expected]: total });
+        assert.deepEqual(counts.declines_demotable,
+          scenario.demotable ? { [scenario.capability_id]: total } : {});
+        assert.equal(report.demotions.some((row) => row.capability_id === scenario.capability_id),
+          scenario.demotable);
+        assert.deepEqual(fixture.bytes(), before, 'detection must not rewrite historical declines');
+      }
+      verify(count);
+      assert.deepEqual(fixture.run(['-c', writeDeclines, payload]),
+        scenario.reasons.map(() => true));
+      verify(count + scenario.reasons.length);
+    });
 }
 
 for (const surface of ['research-program', 'repo-audit:phase-4']) {
