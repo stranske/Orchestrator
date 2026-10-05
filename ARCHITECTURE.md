@@ -141,7 +141,7 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | role | replaces / upgrades | judgment it adds | status |
 |---|---|---|---|
 | **RedirectAgent** | `redirect_policy` heuristics | read log+diff+AC → action + corrected prompt | **built, shadow (2026-06-19)** |
-| **PromptAgent** | dispatcher generic templates | issue → scoped prompt + definition-of-done | **built, shadow (2026-06-20)** |
+| **PromptAgent** | dispatcher generic templates | issue → dispatch prompt or issue body; batch routes once, per-item scored runs | **built, shadow (2026-06-20)** |
 | **DecomposerAgent** | `epic_lane` planner prompts | vague/large goal → subtask DAG | **built, shadow (2026-06-20)** |
 | **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
@@ -1243,3 +1243,13 @@ python3 src/roles.py route --role adjudicator
 python3 src/roles.py adjudicate --case-json case.json [--proposal-json adjudication.json]
 python3 src/roles.py adjudicate --case-json case.json --dispatch
 ```
+
+### Prompt authoring output contracts
+
+`run_prompt_agent(output="dispatch_prompt")` preserves the worker finish contract.
+`output="issue_body"` instead validates Why, checkbox Tasks, Acceptance Criteria and Non-Goals.
+`run_prompt_batch` chooses one backend for a batch, then records each item as a separate role run
+with a shared `batch_id`; proposal validity and downstream outcomes remain per item.
+`python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies`
+exports valid Markdown files and a manifest containing role-run IDs and all validator verdicts.
+This extends the existing PromptAgent role; no new surface binding or autonomous dispatch is added.
