@@ -35,13 +35,31 @@ from pathlib import Path
 _MODULE_ALIAS = Path(__file__).absolute().parent
 MODULE_DIR = Path(__file__).resolve().parent
 
-# Python normally retains the logical script/PYTHONPATH spelling in sys.path.
-# Once a mirror link moves, a later sibling import would reopen the new tree.
-# Anchor aliases of this module directory to the same physical generation as
-# MODULE_DIR. Other import roots (including synthetic test trees) are untouched.
-for _index, _entry in enumerate(sys.path):
-    if Path(_entry or os.curdir).resolve() == MODULE_DIR:
-        sys.path[_index] = str(MODULE_DIR)
+
+def _pin_import_path(entry: str) -> str:
+    """Anchor this module's logical import roots without moving unrelated roots."""
+    absolute = Path(os.path.abspath(entry or os.curdir))
+    if absolute.is_relative_to(_MODULE_ALIAS):
+        return str(MODULE_DIR / absolute.relative_to(_MODULE_ALIAS))
+    # Python can canonicalize the script directory before importing paths, so
+    # __file__ may already be physical even while PYTHONPATH uses the live link.
+    # Find the module-root alias among ancestors, including nonexistent nested
+    # import roots that could gain files in a subsequent publication.
+    for ancestor in (absolute, *absolute.parents):
+        if ancestor.resolve() == MODULE_DIR:
+            return str(MODULE_DIR / absolute.relative_to(ancestor))
+    return entry
+
+
+# Python retains logical script/PYTHONPATH spellings. Pin both the current
+# interpreter and its future children: subprocesses inherit PYTHONPATH, not
+# sys.path. Descendant roots must also stay pinned so a later-only module cannot
+# enter through a second import root such as mirror/scripts.
+sys.path[:] = [_pin_import_path(_entry) for _entry in sys.path]
+if "PYTHONPATH" in os.environ:
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        _pin_import_path(_entry) for _entry in os.environ["PYTHONPATH"].split(os.pathsep)
+    )
 
 # The checkout root: the directory holding `orchestrate.sh`, `.verify-floor.json`, `.coveragerc`,
 # `pyproject.toml` and the docs. Equal to MODULE_DIR on a flat tree; its parent under `src/`.
