@@ -309,6 +309,13 @@ cost and commit count per shape and agent. It is what lets the advisor's `repeat
 precondition answer from data (codemod-campaign is offered where a shape recurs across repos), and it
 is the population a shape-keyed router would learn from. It feeds no weight table directly.
 
+Sandboxed rail-contract verdicts use `fixture_observed` with ranking weight zero. The existing
+capability ledger retains these passes separately from production useful outcomes; selection
+promotion/demotion ignores the fixture trial's offer and invocation. Historical contract verdicts
+are corrected by `capability_propensity.py migrate-fixture-provenance` with idempotent append-only
+`fixture_provenance_amendment` events. Original events remain available, and the usage report prints
+`production useful N / fixture passes M` in the same 90-day window. This adds no dispatch authority.
+
 Lane-invoked capabilities have a separate explicit bridge to fleet outcomes. `trigger` and `useful`
 can record `--deliverable owner/repo#N`; the positive verdict captures the capability version then.
 `capability_outcome_bridge` joins that structured key to a keepalive run's exact target and writes
