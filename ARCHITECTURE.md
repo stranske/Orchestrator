@@ -204,6 +204,14 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
+PromptAgent is offered at the `research-program` and `repo-audit:phase-4` batch-filing
+surfaces. `run_prompt_batch` consumes one per-cycle prompt-role decision for a whole
+batch; each body retains its own validated role run and outcome lineage. Explicit
+batch authoring does not enable automatic dispatch roles: an unset `ORCH_ROLE_SHADOW`
+still leaves that seam off, and the delegate CLI reports the unset gate once.
+Single-body, one-prompt, and no-batch declines are `wrong_moment`, so they remain
+visible in surface counts without demoting the binding or rewriting past events.
+
 The weekly `switch_review` also consumes `value_chain_monitor`, a deterministic
 read-only rail beside Monitor and verify. It compares independent situation populations
 with ledger invocations and existing Brain influence edges, naming the earliest broken
@@ -1331,7 +1339,9 @@ python3 src/roles.py adjudicate --case-json case.json --dispatch
 with a shared `batch_id`; proposal validity and downstream outcomes remain per item.
 `python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies`
 exports valid Markdown files and a manifest containing role-run IDs and all validator verdicts.
-This extends the existing PromptAgent role; no new surface binding or autonomous dispatch is added.
+This extends the existing PromptAgent role with explicit batch-authoring bindings at
+`research-program` and `repo-audit:phase-4`. Automatic dispatch roles remain shadow-gated;
+these bindings do not enable autonomous dispatch.
 
 ### Redirect routing and provenance (issue #424)
 

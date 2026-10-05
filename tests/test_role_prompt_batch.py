@@ -334,6 +334,8 @@ def test_batch_export_refuses_overwriting_an_existing_directory(private_brain, m
 
 def test_issue_body_confidence_errors_do_not_abort_later_batch_items(private_brain):
     for confidence in ([], {}, None, 1):
+        # These are independent authoring cycles, not four batches in one cycle.
+        roles.reset_role_invocation_counts()
         result = roles.run_prompt_batch(
             [
                 {

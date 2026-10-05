@@ -84,7 +84,14 @@ def situation_count(cap_id: str, inputs: dict[str, Any]) -> int | None:
     # Advisor offers and cadence invocations cannot substitute for that population.
     probes = inputs.get("precondition_probes", {}).get(cap_id)
     if probes is not None:
-        return sum(p["precondition_met"] is True for p in probes)
+        measured = [
+            p["precondition_met"] for p in probes if isinstance(p.get("precondition_met"), bool)
+        ]
+        # A supplied empty population is measured zero; probes with no measured
+        # result cannot establish that the situation never occurred.
+        if probes and not measured:
+            return None
+        return sum(measured)
     return inputs.get("cadence_inputs", {}).get(cap_id)
 
 
@@ -292,10 +299,20 @@ def report(
             ),
         }
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
-        # A row's explicitly default-off ORCH flag is a declaration of its own dependency.
-        for flag, value in cap.get("flags_defaults", {}).items():
-            if flag.startswith("ORCH_") and str(value).lower() in {"0", "false"}:
-                dependencies.add(flag)
+
+        # Declared defaults can be grouped by caller (module/orchestrate/commands).
+        # They identify dependencies; only an observed disabled environment value
+        # below establishes input_off, so missing inputs remain unknown.
+        def default_off_flags(defaults: Mapping[str, Any]) -> set[str]:
+            flags: set[str] = set()
+            for flag, value in defaults.items():
+                if isinstance(value, Mapping):
+                    flags.update(default_off_flags(value))
+                elif flag.startswith("ORCH_") and str(value).lower() in {"0", "false"}:
+                    flags.add(flag)
+            return flags
+
+        dependencies.update(default_off_flags(cap.get("flags_defaults", {})))
         off = [
             flag
             for flag in sorted(dependencies)
