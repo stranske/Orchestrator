@@ -69,6 +69,13 @@ APPLY_ENABLED = os.environ.get("ORCH_SWITCH_REVIEW", "").strip() == "1"
 # them put every expiry in at least one review before it lands, and one after, even with a run missed.
 GATE_EXPIRY_NOTICE_DAYS = 2 * REVIEW_DAYS
 
+# A capacity-shed marker placed by hand states no horizon, so it is named once it has held its seat
+# for the latched-gate default of 14 days, which is also two reviews: it has been seen before.
+SHED_MANUAL_HORIZON_DAYS = 2 * REVIEW_DAYS
+# An expired marker leaves at the first capacity read after its expiry, and the tick reads capacity
+# on every run, before this step (orchestrate.sh). One still on disk a day later is not leaving.
+SHED_EXPIRED_GRACE_S = 86400
+
 # Fleet template-delivery gates (Maint 68 promote + sync-branch canaries). Same horizon as switch
 # review: a chain latched for a week with open canaries is the failure mode observed 2026-09-02.
 FLEET_GATE_DAYS = REVIEW_DAYS
@@ -937,6 +944,96 @@ def gate_expiry(*, now: int | None = None, path=None) -> dict:
     return report
 
 
+def capacity_shed(*, now: float | None = None, shed_dir: Path | None = None) -> dict:
+    """FYI: every capacity-shed marker, what holds its seat and what clears it. Removes nothing.
+
+    The shed gate drains itself: `capacity._shed` removes an expired marker on read, and the tick
+    reads capacity on every run. A marker with no expiry has no drain but its removal. That is the
+    documented way to stand a seat down by hand (`touch capacity-shed/<agent>`), and nothing ever
+    said such a marker was still there: a held switch whose release depends on somebody remembering.
+
+    Each marker is read by `capacity.shed_marker`, the reading the gate itself makes, and described
+    by `capacity.shed_reason`, the sentence its seat prints. SUSPECT, by the latched-gate predicate:
+    a manual or unreadable marker held past SHED_MANUAL_HORIZON_DAYS, or an expired marker still on
+    disk SHED_EXPIRED_GRACE_S after its expiry, so its drain is not running. A marker for a name
+    capacity reads as no seat holds nothing, and is named `inert`.
+
+    `now` is the real clock, never the review's: expiries and file ages are real-world times, the
+    same reason `stale_runners` takes no review clock.
+    """
+    import capacity
+
+    now = time.time() if now is None else now
+    directory = Path(shed_dir) if shed_dir is not None else capacity.SHED_DIR
+    report: dict = {
+        "status": "ok",
+        "dir": str(directory),
+        "horizon_days": SHED_MANUAL_HORIZON_DAYS,
+        "markers": [],
+        "suspect": 0,
+    }
+    try:
+        entries = sorted(directory.iterdir())
+    except FileNotFoundError:
+        entries = []  # no marker was ever written here, and capacity reads that as no seat shed
+    except OSError as exc:
+        return {
+            **report,
+            "status": "unknown",
+            "measurement": f"unmeasured: {directory} could not be listed "
+            f"({type(exc).__name__}: {exc})",
+        }
+    for entry in entries:
+        # Not a write in progress (`rate_incidents.ensure_shed` writes `.<agent>.*`, then renames),
+        # nor a subdirectory such as `archive/`, unless capacity would read it as a seat's marker.
+        if entry.name.startswith(".") or (
+            entry.name not in capacity.AGENTS and not entry.is_file()
+        ):
+            continue
+        marker = capacity.shed_marker(entry.name, now=now, shed_dir=directory)
+        if marker is not None:  # None: removed between the listing and the read
+            report["markers"].append(_shed_row(marker, entry, now=now))
+    report["suspect"] = sum(1 for row in report["markers"] if row["suspect"] is not None)
+    return report
+
+
+def _shed_row(marker: dict, entry: Path, *, now: float) -> dict:
+    import capacity
+
+    since = marker["created_at"]
+    if since is None:
+        try:
+            since = entry.stat().st_mtime
+        except OSError:
+            since = None
+    row = {
+        "agent": marker["agent"],
+        "state": marker["state"],
+        "read_by_capacity": marker["agent"] in capacity.AGENTS,
+        "expires_at": marker["expires_at"],
+        "incident_id": marker["incident_id"],
+        "category": marker["category"],
+        "age_days": None if since is None else round((now - since) / 86400, 1),
+        "reason": capacity.shed_reason(marker),
+        "suspect": None,
+    }
+    age = row["age_days"]
+    if not row["read_by_capacity"]:
+        return row
+    if marker["state"] in ("manual", "unreadable") and age is not None:
+        if age > SHED_MANUAL_HORIZON_DAYS:
+            row["suspect"] = (
+                f"held by hand for {age}d, past the {SHED_MANUAL_HORIZON_DAYS}d horizon; nothing "
+                "clears it but removing it"
+            )
+    elif marker["state"] == "expired" and now - marker["expires_at"] > SHED_EXPIRED_GRACE_S:
+        row["suspect"] = (
+            f"expired {capacity.utc_stamp(marker['expires_at'])} and still on disk: a capacity "
+            "read removes an expired marker, so none has run since or the removal fails"
+        )
+    return row
+
+
 # The gate fields an ON-but-idle bootstrap row carries: what is measured and what is still needed.
 _BOOTSTRAP_GATE_KEYS = (
     "synced_role_outcomes",
@@ -1378,6 +1475,8 @@ def review(
         # Same rule again: a row retired by its expiry with nobody having looked is a decision that
         # never happened. FYI only, so it is not counted in `raise_count` and raises no question.
         "gate_expiry": gate_expiry(now=now, path=path),
+        # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
+        "capacity_shed": capacity_shed(),
         "raise_count": len(due) + len(quiet),
     }
 
@@ -1676,6 +1775,9 @@ def format_report(rep: dict) -> str:
     expiry = rep.get("gate_expiry")
     if expiry is not None:
         lines += format_gate_expiry(expiry)
+    shed = rep.get("capacity_shed")
+    if shed is not None:
+        lines += format_capacity_shed(shed)
     if (
         not rep["raise_count"]
         and not rep.get("stale_runners")
@@ -1686,6 +1788,7 @@ def format_report(rep: dict) -> str:
             expiry is None
             or (expiry.get("status") == "ok" and not expiry["expiring"] and not expiry["lapsed"])
         )
+        and (shed is None or (shed.get("status") == "ok" and shed.get("suspect") == 0))
     ):
         lines += ["  Nothing due. Every switch is either triggering or has a fresh decision.", ""]
     return "\n".join(lines)
@@ -1754,6 +1857,25 @@ def format_gate_expiry(section: dict) -> list[str]:
         "",
     ]
     return lines
+
+
+def format_capacity_shed(section: dict) -> list[str]:
+    """The shed markers in words. It ALWAYS prints, because no seat shed is a statement too."""
+    lines = ["## Capacity shed markers (FYI only; nothing here removes a marker)", ""]
+    if section.get("status") != "ok":
+        return lines + [f"  NOT MEASURED — {section.get('measurement', 'no reason recorded')}", ""]
+    markers = section["markers"]
+    if not markers:
+        return lines + [f"  no seat is shed: no marker in {section['dir']}", ""]
+    lines.append(f"  {len(markers)} marker(s) in {section['dir']}; {section['suspect']} SUSPECT")
+    for row in markers:
+        if not row["read_by_capacity"]:
+            lines.append(f"    {row['agent']}  inert: capacity reads no seat by this name")
+            continue
+        lines.append(f"    {row['agent']}  {row['reason']}")
+        if row["suspect"] is not None:
+            lines.append(f"        SUSPECT — {row['suspect']}")
+    return lines + [""]
 
 
 def _selftest_stale_runners() -> None:
@@ -2003,6 +2125,7 @@ def _selftest() -> None:
     finally:
         _GH_CALL_RUNNER = saved_runner
     _selftest_gate_expiry()
+    _selftest_capacity_shed()
     proof: dict = {
         "status": "ok",
         "generated_at": 1_800_000_000,
@@ -2036,8 +2159,48 @@ def _selftest() -> None:
         "fleet_gates SUSPECT rule, "
         "switch_states is the review's rows without the sweep, review writes no ledger, an idle "
         "bootstrap row carries its drain read from a sandbox, the expiry notice names soon/lapsed "
-        "rows and states its drained and unmeasured states)"
+        "rows and states its drained and unmeasured states, the shed sweep names each marker's "
+        "drain and removes none)"
     )
+
+
+def _selftest_capacity_shed() -> None:
+    """Each marker named with its drain; drained and unmeasured print apart; nothing is removed."""
+    import tempfile
+
+    now, day = 1_800_000_000.0, 86400
+    with tempfile.TemporaryDirectory(prefix="switch-review-shed-") as td:
+        shed_dir = Path(td) / "capacity-shed"
+        # DRAINED, by construction: a directory nothing ever wrote reads as no seat shed...
+        none = capacity_shed(now=now, shed_dir=shed_dir)
+        assert none["status"] == "ok" and none["markers"] == [] and none["suspect"] == 0, none
+        assert "no seat is shed" in "\n".join(format_capacity_shed(none))
+        # ...and one that cannot be listed is NOT MEASURED, never drained.
+        (Path(td) / "a-file").write_text("")
+        unlisted = capacity_shed(now=now, shed_dir=Path(td) / "a-file")
+        assert unlisted["status"] == "unknown", unlisted
+        assert "NOT MEASURED" in "\n".join(format_capacity_shed(unlisted))
+        shed_dir.mkdir()
+        active = {"expires_at": now + 3600, "incident_id": "i1", "category": "quota"}
+        (shed_dir / "codex").write_text(json.dumps({**active, "created_at": now}))
+        (shed_dir / "claude").write_text("")  # stood down by hand, 20 days ago
+        os.utime(shed_dir / "claude", (now - 20 * day, now - 20 * day))
+        (shed_dir / "cursor").write_text(json.dumps({"expires_at": now - 2 * day}))
+        (shed_dir / "claude_code").write_text("")  # no seat by that name
+        (shed_dir / ".codex.tmp").write_text("{}")  # a write in progress
+        (shed_dir / "archive").mkdir()
+        before = sorted(path.name for path in shed_dir.iterdir())
+        rep = capacity_shed(now=now, shed_dir=shed_dir)
+        assert sorted(path.name for path in shed_dir.iterdir()) == before, "the sweep removed one"
+        rows = {row["agent"]: row for row in rep["markers"]}
+        assert sorted(rows) == ["claude", "claude_code", "codex", "cursor"], rows
+        assert rows["codex"]["suspect"] is None and "shed until" in rows["codex"]["reason"], rows
+        assert "held by hand for 20.0d" in (rows["claude"]["suspect"] or ""), rows["claude"]
+        assert "still on disk" in (rows["cursor"]["suspect"] or ""), rows["cursor"]
+        assert rows["claude_code"]["read_by_capacity"] is False, rows["claude_code"]
+        assert rows["claude_code"]["suspect"] is None and rep["suspect"] == 2, rep
+        text = "\n".join(format_capacity_shed(rep))
+        assert "2 SUSPECT" in text and "claude_code  inert" in text, text
 
 
 def _selftest_gate_expiry() -> None:
