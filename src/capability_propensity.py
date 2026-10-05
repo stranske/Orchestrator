@@ -208,6 +208,8 @@ ADVICE_REF_PREFIX = capabilities.ADVICE_REF_PREFIX
 # distinguishes a decline lives in metadata, and no reader of `outcome` events can see it -- which is
 # why a decline cannot reach the usefulness posterior even by accident.
 DECLINE_SOURCE = "capability_decline"
+FACT_MISSING_SOURCE = "fact_missing"
+FACT_MISSING_FACT_KEY = "fact"
 DECLINE_REASON_KEY = "reason"
 DECLINE_KIND_KEY = "decline_kind"
 
@@ -897,6 +899,8 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     "fixture_passes": [],
                     "fixture_failures": [],
                     "declined": [],
+                    "fact_missing": [],
+                    "fact_missing_facts": {},
                     "decline_reasons": {},
                     "decline_kinds": {},
                     # WHEN it was declined, so the re-offer grace window can be measured. Without
@@ -932,6 +936,13 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     trial["skills"].add(str(meta[key]))
             etype = event.get("type") or event.get("event_type")
             if etype == "match":
+                if meta.get("source") == FACT_MISSING_SOURCE:
+                    if cap_id not in trial["fact_missing"]:
+                        trial["fact_missing"].append(cap_id)
+                    fact = str(meta.get(FACT_MISSING_FACT_KEY) or "").strip()
+                    if fact:
+                        trial["fact_missing_facts"].setdefault(cap_id, fact)
+                    continue
                 if cap_id not in trial["candidates"]:
                     trial["candidates"].append(cap_id)
                 # A DECLINE. It is a candidate (it was offered) and it is NOT an outcome. This branch
@@ -3853,6 +3864,50 @@ def record_decline(
             **(metadata or {}),
         },
     )
+
+
+def record_fact_missing(
+    capability_id: str,
+    experiment_id: str,
+    *,
+    fact: str,
+    surface: str = "",
+    path=None,
+    metadata: dict | None = None,
+) -> bool:
+    """A capability was not offered because the consult lacked PR facts the precondition needs.
+
+    Recorded on the surface via the same `match` carrier as offers, but tagged so it never counts
+    as an offer or a decline against the capability.
+    """
+    if not str(fact).strip():
+        raise ValueError("fact_missing requires the missing fact named by the precondition probe")
+    if not experiment_id.startswith(ADVICE_REF_PREFIX):
+        raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
+    return capabilities.heartbeat(
+        capability_id,
+        "match",
+        ref=experiment_id,
+        path=path or capabilities.REG,
+        idempotency_key=f"fact_missing:{capability_id}:{experiment_id}",
+        metadata={
+            "source": FACT_MISSING_SOURCE,
+            "capability": capability_id,
+            FACT_MISSING_FACT_KEY: _capped(fact),
+            SURFACE_KEY: surface or None,
+            **(metadata or {}),
+        },
+    )
+
+
+def surface_fact_missing_total(surface: str, *, path=None, window_days: int = WINDOW_DAYS) -> int:
+    """How many fact_missing events this surface recorded in the window (not offers or declines)."""
+    total = 0
+    for trial in experiments(path=path, window_days=window_days):
+        if surface not in (trial.get("skills") or []):
+            continue
+        total += len(trial.get("fact_missing") or [])
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -7630,6 +7685,8 @@ def main(argv: list[str]) -> int:
                     f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])} "
                     f"finds={info['finds']}"
                 )
+                if info["fact_missing"]:
+                    print(f"    fact_missing {info['fact_missing']} — the lane passed no PR facts")
             print(
                 f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
                 + (
@@ -8025,11 +8082,13 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
         # finds existed. Read here, never acted on: a number about a surface must not become
         # selection pressure on a capability.
         here = [f for f in all_finds if f["surface"] == surface or f["finder"] == surface]
-        if recs or proms or dems or counts["declined"] or here:
+        fact_missing_n = surface_fact_missing_total(surface, path=path)
+        if recs or proms or dems or counts["declined"] or here or fact_missing_n:
             surfaces[surface] = {
                 "records": len(recs),
                 "bound": sorted(capability_advisor.binding_for(surface, path=path)),
                 "finds": len(here),
+                "fact_missing": fact_missing_n,
                 "finds_by_finder_kind": {
                     k: sum(1 for f in here if f["finder_kind"] == k)
                     for k in sorted({f["finder_kind"] for f in here})
