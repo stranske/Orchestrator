@@ -248,6 +248,7 @@ def test_ingest_authors_a_spec_once_per_new_pr(private_brain, monkeypatch, pr_bo
     assert all(event["blocking"] is False and event["shadow_only"] for event in authored_events)
     assert os.environ["ORCH_RUN_RUNTIME_AC"] == "0"
 
+
 def test_shadow_spec_cannot_create_an_implicit_merge_gate(private_brain, monkeypatch):
     authored = gate.author_keepalive_spec(
         "owner/repo",
