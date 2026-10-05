@@ -67,6 +67,8 @@ def _is_failure_outcome(outcome) -> bool:
 
 RATE_LIMIT_LABELS = {"agent:rate-limited", "blocked-on-rate-reset"}
 AUTH_LABELS = {"blocked-on-auth", "needs-human"}
+# Post-escalation keepalive PRs (keepalive_supervisor.ESCALATION_LABELS); must not read as live.
+ESCALATION_LABELS = frozenset({"needs-human", "agent:needs-attention"})
 # keepalive-state marker: `<!-- keepalive-state:<version> {JSON} -->` (keepalive_state.js:5,7)
 STATE_REGEX = re.compile(r"<!--\s*keepalive-state(?::[\w.-]+)?\s+(.*?)\s*-->", re.DOTALL)
 
@@ -164,9 +166,14 @@ def synthesize_report(signals: dict) -> dict:
     last_changes = bool(signals.get("last_has_changes"))
     drift: dict[str, Any] = {"severity": "none", "findings": []}
 
+    escalation_hits = sorted(labels & ESCALATION_LABELS)
     if state_raw in ("closed", "merged"):
         state = "exited"
         recommended = "collect" if last_changes else "inspect"
+    elif escalation_hits:
+        state = "escalated"
+        recommended = "inspect"
+        hints.append({"kind": "escalation", "detail": escalation_hits[0]})
     elif signals.get("consecutive_no_progress", 0) >= KEEPALIVE_STALL_THRESHOLD:
         state = "stalled"
         recommended = "inspect"

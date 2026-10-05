@@ -134,7 +134,7 @@ TERMINAL_VERDICTS = {"PASS", "FAIL"}
 # this vocabulary, and a keepalive report carries NO pid, so for it these words are the only liveness
 # evidence that exists. Only the two states in which the monitor itself says the lane is not
 # progressing let an unknown-pid lane through.
-REPORTED_NOT_LIVE_STATES = frozenset({"stalled", "exited"})
+REPORTED_NOT_LIVE_STATES = frozenset({"stalled", "exited", "escalated"})
 REPORTED_LIVE_STATES = frozenset({"running", "progress"})
 # Recommendations no redirect improves on: `wait` is the monitor seeing an active lane, `collect` is
 # the work already produced. Every one of the 759 judgements of a `wait` report came back `wait`.
@@ -672,6 +672,64 @@ def stage2_population(plan_path: Path | None = None, *, now: int | None = None) 
     return {**out, "status": "current", "reason": "", "candidates": candidates}
 
 
+def format_candidate_counts(counts: dict[str, int] | None) -> str:
+    """Human-readable supervisor/sweep/eligible line printed on every apply/screen run."""
+    if not counts:
+        return "candidates: supervisor ?, sweep ?, eligible ?"
+    return (
+        f"candidates: supervisor {counts.get('supervisor', 0)}, "
+        f"sweep {counts.get('sweep', 0)}, "
+        f"eligible {counts.get('eligible', 0)}"
+    )
+
+
+def sweep_stalled_candidates(sweep_path: Path | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Actionable stalled lanes from the latest redirect-sweep report (apply's second source)."""
+    import redirect_sweep
+
+    path = Path(sweep_path) if sweep_path else redirect_sweep.DEFAULT_REPORT
+    meta: dict[str, Any] = {"path": str(path), "status": "missing", "count": 0}
+    if not path.is_file():
+        return [], meta
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return [], {**meta, "status": "unreadable", "reason": str(exc)[:80]}
+    rows: list[dict[str, Any]] = []
+    for report in data.get("actionable") or []:
+        if not isinstance(report, dict):
+            continue
+        if str(report.get("state") or "") != "stalled":
+            continue
+        target = report.get("target")
+        if not target:
+            continue
+        rows.append(
+            {
+                "report": report,
+                "acceptance_criteria": redirect_sweep._acceptance_criteria_for_report(report),
+                "source": "redirect-sweep-live",
+            }
+        )
+    return rows, {**meta, "status": "current", "count": len(rows)}
+
+
+def _merge_apply_candidates(
+    supervisor: list[dict[str, Any]] | None, sweep: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Supervisor plan first; sweep stalled proposals fill targets not already listed."""
+    sup_list = list(supervisor or [])
+    seen = {str(c["report"].get("target") or "") for c in sup_list}
+    sweep_only: list[dict[str, Any]] = []
+    for cand in sweep:
+        target = str(cand["report"].get("target") or "")
+        if not target or target in seen:
+            continue
+        sweep_only.append(cand)
+        seen.add(target)
+    return sup_list + sweep_only, len(sup_list), len(sweep_only)
+
+
 def _reports_on_disk(report_dir: Path) -> list[dict[str, Any]]:
     """Every report file left in the supervisor's directory, in candidate shape.
 
@@ -776,6 +834,7 @@ def _screen(
     report_dir: Path,
     plan_path: Path | None,
     corpus_path: Path,
+    sweep_path: Path | None = None,
     acceptance_criteria: str = "",
     pid_checker=None,
     now: int | None = None,
@@ -786,14 +845,30 @@ def _screen(
     what passes), so the number a run prints is the number that run acted on.
     """
     population = stage2_population(plan_path, now=now)
+    if population["status"] == "current":
+        sweep_rows, sweep_meta = sweep_stalled_candidates(sweep_path)
+        candidates, supervisor_n, sweep_n = _merge_apply_candidates(
+            population["candidates"], sweep_rows
+        )
+    else:
+        sweep_rows, sweep_meta = (
+            [],
+            {
+                "status": "skipped",
+                "reason": population.get("reason") or "supervisor population not current",
+            },
+        )
+        candidates = population["candidates"]
+        supervisor_n = len(population["candidates"] or [])
+        sweep_n = 0
     on_disk = _reports_on_disk(report_dir)
     gate = gate_state(corpus_path)
     applied_targets, applies_today = _applied_history(corpus_path, now=now)
     judged, last_judged = judged_inputs(corpus_path)
-    candidates = population["candidates"]  # the supervisor's latest run, never the directory
-    current_targets = {str(c["report"].get("target")) for c in candidates or []}
+    cand_list = candidates or []
+    current_targets = {str(c["report"].get("target")) for c in cand_list}
     rows: list[dict[str, Any]] = []
-    for cand in candidates or []:
+    for cand in cand_list:
         report = cand["report"]
         criteria = (
             acceptance_criteria
@@ -822,14 +897,23 @@ def _screen(
         key=lambda row: (row["last_judged"], row["target"]),
     )
     on_disk_targets = (str(row["report"].get("target") or "") for row in on_disk)
+    population_known = population["status"] == "current"
+    eligible_count = len(passing) if population_known else None
+    candidate_counts = {
+        "supervisor": supervisor_n if population["candidates"] is not None else 0,
+        "sweep": sweep_n,
+        "eligible": 0 if eligible_count is None else eligible_count,
+    }
     return {
         "population": {k: v for k, v in population.items() if k != "candidates"},
+        "sweep_population": sweep_meta,
+        "candidate_counts": candidate_counts,
         "gate": gate,
         "reports_on_disk": len(on_disk),
         "stale_targets": sorted(t for t in on_disk_targets if t not in current_targets),
         "rows": rows,
         "passing": passing,
-        "passing_screen": None if candidates is None else len(passing),
+        "passing_screen": eligible_count,
     }
 
 
@@ -866,6 +950,8 @@ def screen_candidates(
         "gate": screen["gate"],
         "passing_screen": screen["passing_screen"],
         "population": screen["population"],
+        "sweep_population": screen.get("sweep_population"),
+        "candidate_counts": screen.get("candidate_counts"),
         "report_dir": str(directory),
         "candidates": [
             {key: row[key] for key in ("target", "passes_screen", "blocks")}
@@ -1005,6 +1091,8 @@ def apply_candidates(
         "authorized": authorized,
         "applied": applied,
         "population": screen["population"],
+        "sweep_population": screen.get("sweep_population"),
+        "candidate_counts": screen.get("candidate_counts"),
         "report_dir": str(directory),
         "results": results,
     }
@@ -1063,6 +1151,7 @@ def status(
         "daily_bound": MAX_APPLIES_PER_DAY,
         "unlinked_applied_outcomes": None if links is None else int(links["pending"]),
         "pending_outcome_links": None if links is None else links["links"],
+        "candidate_counts": drain.get("candidate_counts"),
     }
 
 
@@ -1089,6 +1178,7 @@ def format_status(out: dict) -> list[str]:
     closed = not gate["bootstrap_needed"]
     unlinked = out["unlinked_applied_outcomes"]
     return [
+        format_candidate_counts(out.get("candidate_counts")),
         f"{CAPABILITY_ID}: flag {BOOTSTRAP_FLAG}="
         f"{'1 (ARMED)' if out['flag_on'] else '0 (off)'} "
         f"[as the tick sees it; source: {out['flag_source']}]",
@@ -1126,6 +1216,7 @@ def format_apply(out: dict, *, flag_on: bool) -> list[str]:
             population=out.get("population") or {},
         )
     lines = [
+        format_candidate_counts(out.get("candidate_counts")),
         f"offloads_spent={out['offloads_spent']} authorized={out['authorized']} "
         f"applied={out['applied']} (flag {BOOTSTRAP_FLAG}={'1' if flag_on else '0'})",
         f"  could authorise: {drainable}",
@@ -1811,6 +1902,7 @@ def main(argv: list[str]) -> int:
         if args.json:
             print(json.dumps(out, indent=2))
         else:
+            print(format_candidate_counts(out.get("candidate_counts")))
             print(
                 "screen: "
                 + format_drainable(

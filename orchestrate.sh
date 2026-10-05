@@ -107,10 +107,9 @@ export ORCH_FRONTEND_VERIFY_START_BROWSER="${ORCH_FRONTEND_VERIFY_START_BROWSER:
 # RedirectAgent to PRODUCE advice and records it (caps: max 3 records/tick, 24h dedupe). Backend=cursor
 # (cheapest bucket). Export ORCH_REDIRECT_SWEEP_RECORD_CORPUS=0 to pause. (Was unset → sweep ran
 # shadow-only and recorded NO role:redirect rows since ~2026-06-25; this restores accumulation.)
-# OFF since 2026-09-15: with the corpus on, every tick dispatched a RedirectAgent (gemini) on shadow
-# redirect reports — 202 gemini runs and 187 role-redirect invocations in eleven days, 0 applied,
-# 0 consumers. Set to 1 only with a consumer of the corpus named.
-export ORCH_REDIRECT_SWEEP_RECORD_CORPUS="${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}"
+# Consumer: redirect_apply.py merges stalled sweep proposals (source=redirect-sweep-live) into the
+# apply candidate list beside the keepalive supervisor plan. Export =0 to pause recording.
+export ORCH_REDIRECT_SWEEP_RECORD_CORPUS="${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-1}"
 export ORCH_REDIRECT_SWEEP_BACKEND="${ORCH_REDIRECT_SWEEP_BACKEND:-cursor}"
 # Typed role activation (bounded, shadow/advisory): Prompt and Decomposer can author
 # dispatch context, Triage compares one bounded backlog snapshot, and Adjudicator runs
