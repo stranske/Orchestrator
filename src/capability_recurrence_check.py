@@ -826,7 +826,21 @@ def _check_reference_sync_gate() -> dict:
 
 # Non-routing machinery: these capabilities are entered directly or gated, so "would it fire"
 # means "is it on the executed path / is its switch on".
+def _check_value_chain_monitor() -> dict:
+    import value_chain_monitor
+
+    return {
+        "fires": value_chain_monitor.recurrence_fixture(),
+        "detail": {"proof": "independent demand and earliest-break fixture"},
+    }
+
+
 PREDICATE_FIXTURES: tuple[dict[str, Any], ...] = (
+    {
+        "capability": "value-chain-monitor",
+        "check": _check_value_chain_monitor,
+        "source": "2026-10-04 concept audit: zero invocations cannot measure independent demand.",
+    },
     {
         "capability": "offload",
         "check": lambda: _predicate_heartbeat("offload"),
