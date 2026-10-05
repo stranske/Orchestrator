@@ -546,8 +546,8 @@ def remote_tick(
     discovery labels (`deferral.delegable`, the blocking quantity) beside how many of those wait only
     on this tick's own delegations (`deferral.drainable`). Those drain without help: once a label
     applies, the target is owned, so the next tick's dispatcher refuses it and it takes no slot.
-    In an active tick, every cap-filling attempt must actually apply before these deferrals are
-    called drainable; failed POSTs leave unowned targets that can consume the same slots again. A
+    In an active tick at least one cap-filling label must actually apply: a failed POST leaves its
+    target unowned to take its slot again, so a tick whose every POST failed drains nothing. A
     delegable item deferred by the examination bound waits behind examined items that did not
     delegate, so it is not drainable. A shadow tick applies nothing, so its plan repeats."""
     import os
@@ -586,10 +586,13 @@ def remote_tick(
             (deferred_by_cap if by_cap else deferred_by_examine_cap).append(target)
             if delegable:
                 deferred_delegable.append(target)
-                # Held only by this tick's own delegations, which free their slots once applied. A
-                # Failed active POSTs leave ownership unchanged and may fill the same cap again. A
-                # cap of 0 is reached with none, and nothing frees it but the operator.
-                if by_cap and delegations > 0 and (dry_run or applied_delegations == delegations):
+                # Held only by this tick's own delegations. Each label that APPLIES makes its target
+                # owned and frees its slot for the next tick, so one applied label is enough for every
+                # cap deferral to drain in turn. A failed POST leaves its target unowned to take its
+                # slot again, so an active tick whose every POST failed drains nothing; a shadow tick
+                # counts the labels that would apply. A cap of 0 is reached with none, and nothing
+                # frees it but the operator.
+                if by_cap and (delegations if dry_run else applied_delegations) > 0:
                     deferred_drainable.append(target)
             continue
         examined += 1

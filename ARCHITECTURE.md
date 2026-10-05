@@ -128,8 +128,9 @@ tick examines, so a backlog of owned PRs cannot turn into unbounded label reads.
 refuses on their discovery labels are examined after the rest (`tick.examination_order`), so they
 cannot hold a delegable item behind that bound. The plan and the headline print each bound beside its
 count, and the deferred items' blocking quantity (`delegable`) beside the drainable one.
-Active cap deferrals are drainable only when every cap-filling label application succeeded; failed
-POSTs still consume the spend bound but leave targets unowned and able to fill it again. (No stage,
+In an active tick the cap's deferrals are drainable only when at least one cap-filling label
+applied; a failed POST still consumes the spend bound but leaves its target unowned to take its slot
+again. (No stage,
 component or surface moved; the diagram is unchanged.)
 
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a

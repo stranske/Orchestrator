@@ -201,8 +201,11 @@ def test_items_deferred_by_the_cap_drain_on_the_next_tick(gh, sandbox):
 
 
 @pytest.mark.parametrize("failed_posts", [0, 1, 3])
-def test_active_cap_deferrals_need_successful_label_applications(gh, sandbox, failed_posts):
-    """An attempted delegation still spends a slot, but a failed POST leaves it unowned."""
+def test_active_cap_deferrals_need_a_label_that_applied(gh, sandbox, failed_posts):
+    """An attempted delegation still spends a slot, but a failed POST leaves its target unowned to
+    take that slot again. The cap's deferrals drain while at least one label applied, and not when
+    every POST failed. The second tick is the measured truth behind each first-tick count: with one
+    POST of three failing, the two labels that applied free two slots and both deferred items go."""
     for n in range(1, 6):
         gh.labels(n, [])
         if n <= failed_posts:
@@ -211,11 +214,15 @@ def test_active_cap_deferrals_need_successful_label_applications(gh, sandbox, fa
     assert first["delegations"] == 3 and len(gh.posts()) == 3, first
     assert sum(bool(row["applied"]) for row in first["chosen"]) == 3 - failed_posts
     assert first["deferral"]["delegable"] == 2, first
-    assert first["deferral"]["drainable"] == (0 if failed_posts else 2), first
-    if failed_posts == 3:
-        second = _plan([_item(n, []) for n in range(1, 6)], dry_run=False)
-        assert second["deferred"] == ["o/r#4", "o/r#5"], second
-        assert second["deferral"]["drainable"] == 0, second
+    assert first["deferral"]["drainable"] == (0 if failed_posts == 3 else 2), first
+    applied = [n for n in (1, 2, 3) if n > failed_posts]
+    for n in applied:  # what the next tick reads, live and in discovery, once a label applied
+        gh.labels(n, ["agent:codex"])
+    second = _plan(
+        [_item(n, ["agent:codex"] if n in applied else []) for n in range(1, 6)], dry_run=False
+    )
+    delegated = {row["target"] for row in second["chosen"] if tick.is_delegation(row)}
+    assert ({"o/r#4", "o/r#5"} <= delegated) is (first["deferral"]["drainable"] == 2), second
 
 
 # --------------------------------------------------------------------------- what refusals no longer buy
