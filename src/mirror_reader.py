@@ -87,6 +87,16 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
                 return str(pinned / path.relative_to(root))
             return argument
 
+        def pin_import_path(entry: str) -> str:
+            # PYTHONPATH entries may be relative to the launch directory. Use
+            # that directory before exec (or any cwd change) to identify mirror
+            # aliases, without resolving the movable publication link again.
+            # Preserve unrelated entries, including their relative spelling.
+            absolute = Path(os.path.abspath(entry))
+            if absolute.is_relative_to(root):
+                return str(pinned / absolute.relative_to(root))
+            return entry
+
         command = [pin_argument(argument) for argument in command]
         env = dict(
             os.environ,
@@ -99,7 +109,7 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
                     [
                         str(modules),
                         *(
-                            pin_argument(entry)
+                            pin_import_path(entry)
                             for entry in filter(
                                 None, os.environ.get("PYTHONPATH", "").split(os.pathsep)
                             )

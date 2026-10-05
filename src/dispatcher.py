@@ -1004,9 +1004,12 @@ def _spawn(d: dict) -> int:
         policy_version=d.get("profile_policy_version"),
         propensity=d.get("profile_assignment_probability"),
     )
+    # The steps' interpreter is named, never looked up on the login shell's PATH: that lookup
+    # killed both steps in the rc=137 runs (adapters.wrapper_python has the evidence).
+    step_python = adapters.wrapper_python()
     complete_cmd = shlex.join(
         [
-            "python3",
+            step_python,
             str(ORCH_DIR / "ledger_reconcile.py"),
             "complete",
             "--run-id",
@@ -1037,8 +1040,9 @@ def _spawn(d: dict) -> int:
             str(d.get("cwd") or ""),
         ]
     )
-    # Marker BEFORE the python completion: the python step gets SIGKILLed in the wild (audit F2);
-    # the microsecond printf survives and ledger_reconcile backfills latency/exit from it.
+    # Marker BEFORE the python completion: the python step was SIGKILLed in the wild (audit F2).
+    # Here the cause, found 2026-10-05, was the PATH lookup `step_python` replaces. The marker stays
+    # first so that ANY later death of the step still leaves latency/exit for reconcile to backfill.
     marker_cmd = adapters.done_marker_cmd(
         run_id, logf, "orch_dispatch_rc", release_rc_var="orch_release_rc"
     )
@@ -1049,7 +1053,8 @@ def _spawn(d: dict) -> int:
     # release: 106 of 106 live dispatch markers, 31 of them a release SIGKILLed after the agent had
     # finished, which reconcile then classed as the agent's signal death. The release still always
     # runs, and its status rides in the marker as `release_rc`, beside the agent's, never as it.
-    release = shlex.join(["python3", str(CLAIMS_PY), "release", d["target"], d["agent"]])
+    # `release_rc` 137 is what counts a step killed again from here on.
+    release = shlex.join([step_python, str(CLAIMS_PY), "release", d["target"], d["agent"]])
     wrapped = (
         f'{d["wrapped"]}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; '
         f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'

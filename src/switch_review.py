@@ -805,14 +805,18 @@ def _exploration_gate() -> dict:
         result = exploration_review.build_report(trials=20)
         status = result["status"]
         error = result.get("evidence_error")
+        evidence = result.get("recorded_exploration_evidence") or {}
     except Exception as exc:  # noqa: BLE001
         status = "exploration_report_error"
         error = f"{type(exc).__name__}: {exc}"
+        evidence = {}
     suspect = status in {"direct_mode_evidence_unreadable", "exploration_report_error"}
     return {
         "status": status,
         "suspect": suspect,
         "evidence_error": error,
+        "arms": evidence.get("mode_counts", []),
+        "window_days": evidence.get("window_days"),
         "drainable": (
             "repair the Brain read"
             if status == "direct_mode_evidence_unreadable"
@@ -1509,6 +1513,26 @@ def format_report(rep: dict) -> str:
                 lines.append(f"      {fleet['clear_paths']}")
         lines.append("")
     exploration_gate = rep.get("exploration_gate") or {}
+    if exploration_gate.get("window_days") is not None and not exploration_gate.get("suspect"):
+        arms = {row["mode"]: row for row in exploration_gate.get("arms") or []}
+        lines += [
+            "## Exploration arms",
+            "",
+            f"  window={exploration_gate.get('window_days')}d; "
+            "PASS denominator=graded G; durable denominator=completed durability sweeps D",
+        ]
+        for mode in ("epsilon-greedy", "thompson-hybrid"):
+            arm = arms.get(mode, {})
+            pass_rate = arm.get("pass_rate")
+            durable_rate = arm.get("durable_rate")
+            pass_text = "unmeasured" if pass_rate is None else f"{pass_rate:.1%}"
+            durable_text = "unmeasured" if durable_rate is None else f"{durable_rate:.1%}"
+            lines.append(
+                f"  {mode}: exploration decisions N={arm.get('runs', 0)} "
+                f"graded G={arm.get('graded_runs', 0)} PASS={pass_text} "
+                f"durable={durable_text} D={arm.get('durability_runs', 0)}"
+            )
+        lines.append("")
     if exploration_gate.get("suspect"):
         lines += [
             "## Exploration evidence gate",

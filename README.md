@@ -337,7 +337,10 @@ safety switch, not dead code.
   event; a text-only log is unknown and left as recorded. A signal death is read from the run's done
   marker only when the marker says its rc is the agent's (`rc_of`): until 2026-10-04 the dispatch
   wrapper recorded its claim release's exit status there, and now records it beside the agent's as
-  `release_rc`.
+  `release_rc`. The release and the completion step after it were the SIGKILLed steps: whenever the
+  launcher's environment made the wrapper's login profile resolve `python3` to an unsigned 2016
+  interpreter (every launch from a Codex Desktop command environment). Since 2026-10-05 both run
+  under the dispatcher's own interpreter.
 - **Independent-subject weighting**: explicitly linked research repetitions are down-weighted by
   `(agent, subject_family)` before posterior updates; legacy rows keep agent-level value without
   receiving invented subject provenance.

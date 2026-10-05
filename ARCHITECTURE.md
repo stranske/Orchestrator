@@ -150,6 +150,22 @@ uses the same config; authentication also requires access to that config's crede
 environment, and every other tool keeps the redirect. No stage, component or surface moved, so the
 diagram is unchanged.
 
+**The detached wrappers name the interpreter of their own python steps (2026-10-05).** The dispatch
+and experiment wrappers are `bash -lc` strings that end with python steps: the claim release and the
+completion record. Those steps were spelled `python3`, so the login profile picked the interpreter,
+and its pick depended on the launcher. Codex Desktop exports conda's variables (`CONDA_SHLVL=1`,
+`CONDA_PREFIX`) into every command it runs. With those set, the profile's conda hook took base as
+already active and left an older `~/anaconda/bin` first on PATH. That directory's `python3` is an
+unsigned x86_64 interpreter from 2016, and macOS kills it at exec. All 31 `rc=137` dispatch runs
+show this signature, both steps killed at exec. 27 of the 31 were launched from Codex Desktop
+threads (the other 4, in July, left no launcher record), and 0 of the 35 launched from Claude
+sessions (33) or `codex exec` (2) died. The 3 Codex Desktop launches that went through `launchctl
+submit`, which starts from a clean environment, also survived. The steps now run under the
+interpreter running the dispatcher (`adapters.wrapper_python`), and the marker's `release_rc` counts
+any later kill. The marker still precedes the completion step, so a step that dies for any other
+reason still leaves latency and exit status to backfill. (No stage, component or surface moved; the
+diagram is unchanged.)
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the

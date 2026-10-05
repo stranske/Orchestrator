@@ -1606,6 +1606,30 @@ def record_ledger(agent: str, count: int = 1, cost_usd: float = 0.0, **extra) ->
 MARKER_RC_OF_AGENT = "agent"
 
 
+def wrapper_python() -> str:
+    """The interpreter a detached wrapper's own python steps run under: this process's own.
+
+    The dispatch and experiment wrappers are `bash -lc` strings, so a bare `python3` in them is
+    looked up on the PATH the LOGIN PROFILE builds, not on the PATH that started the dispatcher. On
+    the owner's machine that lookup depends on the launcher's environment, and measured 2026-10-05
+    it is what SIGKILLed the claim release and the completion step in the rc=137 dispatch runs: 27
+    of the 31 were launched from Codex Desktop threads (the other 4, in July, left no launcher
+    record), and none of the 35 launched elsewhere died. Codex Desktop exports conda's own variables
+    (`CONDA_SHLVL=1`, `CONDA_PREFIX`) into every command it runs. With those set, the login
+    profile's conda hook treats base as already active, does not put `/opt/anaconda3/bin` back at
+    the front, and leaves an earlier profile line's `~/anaconda/bin` first. Its `python3` is an
+    unsigned x86_64 2016 interpreter that macOS kills at exec. The same lookup from a clean
+    environment (the tick, a Claude session, `launchctl submit`) finds a working python, which is
+    why fate followed the launcher. The running interpreter already started this process, so it is
+    known to start, and it has the modules the steps import. "python3" remains only for an
+    interpreter that cannot name itself.
+    """
+    exe = sys.executable
+    if exe and os.path.isabs(exe) and os.access(exe, os.X_OK):
+        return exe
+    return "python3"
+
+
 def done_marker_cmd(
     run_id: str, log_file, rc_var: str, *, release_rc_var: str | None = None
 ) -> str:
