@@ -50,6 +50,51 @@ def test_any_differing_applied_action_earns_disagreement_credit(tmp_path, action
     redirect_shadow._append_event(link, corpus)
     assert redirect_shadow.summarize(corpus)["linked_disagreements"] == 1
     assert row["disagreement"] == (action != "redirect")  # historical raw field stays raw
+
+    def record_application(applied_action, *, applied=True):
+        redirect_shadow.record_apply(
+            role_run_id="role-1",
+            target="o/r#1",
+            plan_action=applied_action,
+            authorization={"allowed": True},
+            apply_result={"applied": applied},
+            dry_run=not applied,
+            corpus_path=corpus,
+        )
+
+    # An applied action supersedes the proposal; an unapplied preview cannot replace it.
+    record_application("inspect")
+    assert redirect_shadow.summarize(corpus)["linked_disagreements"] == 0
+    record_application("decompose", applied=False)
+    assert redirect_shadow.summarize(corpus)["linked_disagreements"] == 0
+    record_application("decompose")
+    assert redirect_shadow.summarize(corpus)["linked_disagreements"] == 1
+    record_application("redirect")
+    assert redirect_shadow.summarize(corpus)["linked_disagreements"] == int(agent != "cursor")
+
+    # Redirect also earns action credit against a decompose baseline with the same worker.
+    reverse_corpus = tmp_path / "reverse.jsonl"
+    reverse_row = {
+        **row,
+        "baseline_action": "decompose",
+        "baseline_agent": agent,
+        "baseline": {"action": "decompose"},
+        "disagreement": action != "decompose",
+    }
+    redirect_shadow._append_event(reverse_row, reverse_corpus)
+    redirect_shadow._append_event(link, reverse_corpus)
+    redirect_shadow.record_apply(
+        role_run_id="role-1",
+        target="o/r#1",
+        plan_action="redirect",
+        authorization={"allowed": True},
+        apply_result={"applied": True},
+        dry_run=False,
+        corpus_path=reverse_corpus,
+    )
+    assert redirect_shadow.summarize(reverse_corpus)["linked_disagreements"] == 1
+    assert redirect_shadow._iter_events(corpus)[0] == row
+    assert redirect_shadow._iter_events(reverse_corpus)[0] == reverse_row
     redirect_shadow._append_event({**link, "accepted": False}, corpus)
     assert redirect_shadow.summarize(corpus)["linked_disagreements"] == 0
 
