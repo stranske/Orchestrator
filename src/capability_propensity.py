@@ -380,6 +380,12 @@ VERDICT_PROVENANCE: dict[str, dict] = {
         "means": "computed by code from the capability's own artifacts (a finding-set diff), "
         "not asserted by the agent that used it",
     },
+    "fixture_observed": {
+        "weight": 0.0,
+        "requires_corroboration": False,
+        "self_assessed": False,
+        "means": "a sandboxed contract passed; no production usefulness was established",
+    },
     # THE DEFAULT, and the honest reading of every pre-provenance row: the agent that chose to use
     # the capability also graded it. Kept, discounted, and never presented as measurement.
     "self_reported": {
@@ -494,7 +500,11 @@ def late_outcome_provenances() -> list[str]:
     rejects. Excluding the self-assessed tiers is the whole anti-gaming property of this channel —
     an outcome may correct a verdict, an opinion may not.
     """
-    return sorted(p for p in VERDICT_PROVENANCE if not provenance_self_assessed(p))
+    return sorted(
+        p
+        for p in VERDICT_PROVENANCE
+        if not provenance_self_assessed(p) and provenance_weight(p) > 0
+    )
 
 
 def late_outcome_refusal(reason: str, *, remedy: str) -> str:
@@ -777,8 +787,81 @@ def decline_kind_repairable(kind: str) -> bool:
 SURFACE_KEY = "surface"
 
 
+FIXTURE_PROVENANCE_EVENT = "fixture_provenance_amendment"
+
+
 def _events(cap: dict) -> list[dict]:
-    return list(cap.get("event_history") or [])
+    """Apply fixture provenance corrections on read, retaining original ledger events."""
+    events = list(cap.get("event_history") or [])
+    corrected = {
+        ev.get("ref")
+        for ev in events
+        if ev.get("type") == FIXTURE_PROVENANCE_EVENT
+        and (ev.get("metadata") or {}).get("source") == "migrate-fixture-provenance"
+    }
+    return [
+        (
+            {
+                **ev,
+                "metadata": {
+                    **(ev.get("metadata") or {}),
+                    VERDICT_PROVENANCE_KEY: "fixture_observed",
+                },
+            }
+            if ev.get("type") == "outcome" and ev.get("ref") in corrected
+            else ev
+        )
+        for ev in events
+    ]
+
+
+def _fixture_contract_event(event: dict) -> bool:
+    """Recognize explicit rail contract identities, never a generic mention of a fixture."""
+    import re
+
+    meta = event.get("metadata") or {}
+    ref = str(event.get("ref") or "")
+    evidence = str(meta.get("evidence") or "")
+    return (
+        ref.startswith(("advice:rail-exercise:", "rail-exercise:"))
+        or meta.get("source") == "rail_exercise"
+        or bool(re.match(r"^contract [^\n;]*[/\\]exercises2?[/\\][^\n;]+\.json:", evidence))
+    )
+
+
+def migrate_fixture_provenance(*, path=None) -> dict:
+    """Append idempotent corrections for historical rail contracts; never delete verdicts."""
+    ledger = path or capabilities.REG
+    caps = capabilities.load_declared(ledger)
+    changed = left = 0
+    for cid, cap in sorted(caps.items()):
+        for event in _events(cap):
+            if event.get("type") != "outcome":
+                continue
+            meta = event.get("metadata") or {}
+            if (
+                not _fixture_contract_event(event)
+                or meta.get(VERDICT_PROVENANCE_KEY) == "fixture_observed"
+            ):
+                left += 1
+                continue
+            ref = str(event.get("ref") or "")
+            # All outcomes for one capability/experiment share the recording idempotency key.
+            ok = capabilities.heartbeat(
+                cid,
+                FIXTURE_PROVENANCE_EVENT,
+                ref=ref,
+                path=ledger,
+                idempotency_key=f"fixture-provenance:{cid}:{ref}",
+                metadata={
+                    "source": "migrate-fixture-provenance",
+                    "previous_provenance": verdict_provenance(meta),
+                    VERDICT_PROVENANCE_KEY: "fixture_observed",
+                },
+            )
+            changed += int(ok)
+            left += int(not ok)
+    return {"changed": changed, "left": left, "scanned": changed + left}
 
 
 def _experiment_id(event: dict) -> str | None:
@@ -816,6 +899,8 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     "triggered": [],
                     "useful": [],
                     "not_useful": [],
+                    "fixture_passes": [],
+                    "fixture_failures": [],
                     "declined": [],
                     "fact_missing": [],
                     "fact_missing_facts": {},
@@ -913,7 +998,12 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     }
                 )
             elif etype == "outcome":
-                bucket = "useful" if meta.get(USEFUL_KEY) is True else "not_useful"
+                fixture = verdict_provenance(meta) == "fixture_observed"
+                bucket = (
+                    ("fixture_passes" if meta.get(USEFUL_KEY) is True else "fixture_failures")
+                    if fixture
+                    else ("useful" if meta.get(USEFUL_KEY) is True else "not_useful")
+                )
                 if cap_id not in trial[bucket]:
                     trial[bucket].append(cap_id)
                 # PROVENANCE travels with the verdict, or the weighting has nothing to read. The
@@ -927,6 +1017,16 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
     out = []
     _consult_outcomes_cache = load_consult_outcomes(path)
     for trial in trials.values():
+        # A fixture contract's matches and invocations are not production selection evidence.
+        fixture_ids = set(trial["fixture_passes"]) | set(trial["fixture_failures"])
+        if any(surface.startswith("rail-exercise:") for surface in trial["skills"]):
+            # Rail advice offers every capability bound to the phase, but the runner exercises
+            # just one contract. Unexercised siblings are fixture offers too; counting them as
+            # production non-use could demote a binding solely because other contracts ran.
+            for key in ("candidates", "triggered", "declined"):
+                fixture_ids.update(trial[key])
+        for key in ("candidates", "triggered", "declined"):
+            trial[key] = [cid for cid in trial[key] if cid not in fixture_ids]
         trial["skills"] = sorted(trial["skills"])
         # APPLY THE LATE OUTCOMES. Order-independent by construction: every event has been walked
         # before this runs. An attachment with no verdict to correct is an ORPHAN — reported, never
@@ -1074,6 +1174,8 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
             "triggered": 0,
             "useful": 0,
             "not_useful": 0,
+            "fixture_passes": 0,
+            "fixture_failures": 0,
             "declined": 0,
             "declined_demotable": 0,
             "declines_by_kind": {},
@@ -1113,13 +1215,13 @@ def usefulness(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = N
         for cap_id in trial["not_triggered_silently"]:
             if cap_id in rows:
                 rows[cap_id]["named_not_triggered_silently"] += 1
-        for key in ("useful", "not_useful"):
+        for key in ("useful", "not_useful", "fixture_passes", "fixture_failures"):
             for cap_id in trial[key]:
                 if cap_id in rows:
                     rows[cap_id][key] += 1
                     verdicts[cap_id].append(
                         (
-                            key == "useful",
+                            key in ("useful", "fixture_passes"),
                             trial["verdict_provenance"].get(cap_id, PROVENANCE_DEFAULT),
                             trial["verdict_judges"].get(cap_id, UNATTRIBUTED_JUDGE),
                             trial["verdict_kinds"].get(cap_id, ""),
@@ -1202,10 +1304,14 @@ def _weigh_verdicts(verdicts: list[tuple[bool, str, str, str]]) -> dict:
         # BOTH quantities: which arms spoke, and how many of them were actually distinct. "3
         # verdicts" and "3 verdicts from 1 arm" are opposite readings.
         "judge_arms": sorted({judge for _u, _p, judge, _k in verdicts}),
-        "independent_arms": len(groups),
-        "outcome_derived": len(verdicts) - self_n,
+        "independent_arms": sum(1 for _judge, prov in groups if provenance_weight(prov) > 0),
+        "outcome_derived": len(verdicts) - self_n - mix.get("fixture_observed", 0),
         "self_reported": self_n,
-        "self_reported_share": round(self_n / len(verdicts), 4),
+        "self_reported_share": (
+            round(self_n / (len(verdicts) - mix.get("fixture_observed", 0)), 4)
+            if len(verdicts) > mix.get("fixture_observed", 0)
+            else None
+        ),
         # §2 forbids AVERAGING across verdict kinds. This axis cannot unmix them, so it reports
         # them and flags the mixture rather than letting it pass as one rate.
         "verdict_kinds": dict(sorted(kinds.items())),
@@ -1260,6 +1366,8 @@ def propensity(
         "floored": value > posterior,
         # BLOCKING quantity and DRAINABLE quantity, together, always.
         "evidence_count": resolved,
+        "fixture_passes": row["fixture_passes"],
+        "fixture_failures": row["fixture_failures"],
         # THE SAME EVIDENCE AFTER THE DISCOUNTS, beside the raw count. `evidence_count` 3 with
         # `evidence_weight` 0.25 is the honest shape of "three correlated self-reports"; printing
         # only the first is how 11/12 came to look like a measurement.
@@ -1357,6 +1465,7 @@ def rank(entries: list[dict], *, path=None, window_days: int = WINDOW_DAYS) -> l
         entry["propensity"] = prop["propensity"]
         entry["propensity_basis"] = prop["basis"]
         entry["usefulness_evidence_count"] = prop["evidence_count"]
+        entry["fixture_passes"] = prop["fixture_passes"]
         entry["propensity_floored"] = prop["floored"]
         # PROVENANCE, on the entry the caller actually reads.
         entry["usefulness_evidence_weight"] = prop["evidence_weight"]
@@ -5563,6 +5672,17 @@ def _selftest_declines() -> None:
     )
 
 
+def _selftest_fixture_provenance() -> None:
+    stats = _weigh_verdicts([(True, "fixture_observed", "contract", "")])
+    assert stats["n_eff"] == stats["effective_useful"] == 0
+    assert stats["outcome_derived"] == stats["independent_arms"] == 0
+    assert "fixture_observed" not in late_outcome_provenances()
+    assert _fixture_contract_event({"ref": "advice:rail-exercise:contract"})
+    assert not _fixture_contract_event({"metadata": {"evidence": "production fixture regression"}})
+    assert FIXTURE_PROVENANCE_EVENT in capabilities.EVENT_FIELDS
+    print("capability_propensity fixture provenance selftest: OK (zero weight, separate evidence)")
+
+
 def _selftest_provenance() -> None:
     """A VERDICT IS ONLY AS GOOD AS WHERE IT CAME FROM, and the report must say where.
 
@@ -7349,6 +7469,7 @@ def main(argv: list[str]) -> int:
             "record-repair",
             "detect",
             "tick-evidence",
+            "migrate-fixture-provenance",
         ],
     )
     # A loop that can only be closed from Python cannot be closed by a lane, which runs bash. These
@@ -7499,6 +7620,7 @@ def main(argv: list[str]) -> int:
             _selftest_private_live_state()
             _selftest()
             _selftest_provenance()
+            _selftest_fixture_provenance()
             _selftest_second_verdict_is_dropped_not_appended()
             _selftest_visible_truncation()
             _selftest_late_outcome()
@@ -7598,6 +7720,14 @@ def main(argv: list[str]) -> int:
                 f"  finds: {rep['finds']} {rep['finds_by_finder_kind'] or ''}  "
                 f"subjects: {rep['find_subjects'] or '(none)'}"
             )
+        return 0
+    if args.command == "migrate-fixture-provenance":
+        rep = migrate_fixture_provenance(path=pathlib.Path(args.ledger) if args.ledger else None)
+        print(
+            json.dumps(rep)
+            if args.json
+            else f"fixture provenance migration: changed {rep['changed']} / left {rep['left']}"
+        )
         return 0
     if args.command == "detect":
         rep = detect(apply_promotions=args.apply)
