@@ -150,7 +150,9 @@ def author_keepalive_spec(
             stream.flush()
             os.fsync(stream.fileno())
         try:
-            os.link(staged, path)  # Exclusive, atomic publication; never overwrite an operator spec.
+            os.link(
+                staged, path
+            )  # Exclusive, atomic publication; never overwrite an operator spec.
         except FileExistsError:
             return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
         finally:

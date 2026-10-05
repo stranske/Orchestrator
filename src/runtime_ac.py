@@ -1372,8 +1372,7 @@ def author_issue_spec(
     ]
     nodes_by_line = [_issue_named_test_nodes(line) for line, _ in obligations]
     break_lines = [
-        bool(re.search(r"break\s*(?:→|->|then|and).*revert", line, re.I))
-        for line, _ in obligations
+        bool(re.search(r"break\s*(?:→|->|then|and).*revert", line, re.I)) for line, _ in obligations
     ]
     # A break may precede the named tests, or those tests may live in Tasks.
     named_nodes = list(
