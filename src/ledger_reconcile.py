@@ -268,8 +268,10 @@ def _classify_run_log_segment(
             run_id=run_id,
             shed=shed,
             evidence=combined_text,
-            # The refusal names when the provider will serve again; shed until then, not 6 h.
-            reset_at=(rate_incidents.parse_relay_reset_at(combined_text) if refusal else None),
+            # The provider names when it will serve again; shed until then, not 6 h. Read from
+            # codex's harness events by the one reader every observer of a run uses, so a limit hit
+            # after work carries its reset as a refusal does.
+            reset_at=rate_incidents.provider_reset_at(agent, lines),
             extra={
                 "subcategory": evidence_result["subcategory"],
                 "source": "turn_failed_event" if refusal else "log_segment",

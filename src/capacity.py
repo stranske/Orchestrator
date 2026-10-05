@@ -387,36 +387,165 @@ def _estimate_gemini_units(row: dict) -> float:
     return base * count
 
 
-def _shed(agent: str) -> bool:
-    """Honor legacy empty flags; expire only well-formed JSON cooldown flags."""
-    marker = SHED_DIR / agent
+def _finite_number(value) -> float | None:
+    """`value` when it is a finite number (never a boolean), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return value if math.isfinite(value) else None
+    except OverflowError:  # an integer too large for a float is no clock either
+        return None
+
+
+def shed_marker(
+    agent: str, *, now: float | None = None, shed_dir: Path | None = None
+) -> dict | None:
+    """What `agent`'s shed marker says, read without changing anything. None: there is no marker.
+
+    ONE READING for the gate (`_shed`), the words it prints (`shed_reason`) and the weekly sweep
+    (`switch_review.capacity_shed`), so none of them can disagree with the gate about whether a
+    marker has expired. `state` is one of:
+
+      * ``active``: a finite numeric `expires_at` still ahead. The first capacity read after it
+        removes the marker, which is what ends a cooldown or a provider's stated reset unattended.
+      * ``expired``: a finite numeric `expires_at` at or before `now`. `_shed` removes it.
+      * ``manual``: no expiry anything can act on: an empty legacy `touch` marker, text that is not
+        a JSON object, or an `expires_at` that is absent, boolean or not finite. It holds the seat
+        until someone removes it, deliberately: `touch capacity-shed/<agent>` is the documented way
+        to stand a seat down by hand.
+      * ``unreadable``: the file exists and cannot be read as text. It holds the seat, because a
+        marker nobody can read is still a marker. Unknown is never reported as expired.
+    """
+    marker = (SHED_DIR if shed_dir is None else shed_dir) / agent
     if not marker.exists():
-        return False
+        return None
+    found: dict = {
+        "agent": agent,
+        "path": str(marker),
+        "state": "manual",
+        "why": None,
+        "expires_at": None,
+        "reset_at": None,
+        "incident_id": None,
+        "category": None,
+        "created_at": None,
+    }
     try:
         raw = marker.read_text(encoding="utf-8")
-    except OSError:
-        return True
-    if not raw.strip():  # Legacy touch markers require deliberate manual clearing.
-        return True
+    except (OSError, UnicodeDecodeError) as exc:
+        return {**found, "state": "unreadable", "why": f"{type(exc).__name__}: {exc}"}
+    if not raw.strip():
+        return {**found, "why": "empty, a legacy touch marker"}
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return True
+        return {**found, "why": "not JSON"}
     if not isinstance(payload, dict):
-        return True
-    expires_at = payload.get("expires_at")
-    if (
-        isinstance(expires_at, bool)
-        or not isinstance(expires_at, (int, float))
-        or not math.isfinite(expires_at)
-        or expires_at > time.time()
-    ):
+        return {**found, "why": "JSON that is not an object"}
+    for key in ("incident_id", "category"):
+        if payload.get(key) not in (None, ""):
+            found[key] = str(payload[key])
+    found["reset_at"] = _finite_number(payload.get("reset_at"))
+    found["created_at"] = _finite_number(payload.get("created_at"))
+    expires_at = _finite_number(payload.get("expires_at"))
+    if expires_at is None:
+        if "expires_at" not in payload:
+            return {**found, "why": "no expires_at"}
+        return {**found, "why": f"expires_at {payload['expires_at']!r} is not a finite number"}
+    now = time.time() if now is None else now
+    return {**found, "expires_at": expires_at, "state": "active" if expires_at > now else "expired"}
+
+
+def _shed(agent: str) -> bool:
+    """Honor legacy empty flags; expire only well-formed JSON cooldown flags.
+
+    The gate and its drain: an expired marker is removed here, on read, and a removal that fails
+    leaves the seat shed. Every capacity test patches this name to hold the host's own markers out
+    of its subject (`tests/test_model_tier_resolution.py`), so it stays the one call that decides.
+    """
+    marker = shed_marker(agent)
+    if marker is None:
+        return False
+    if marker["state"] != "expired":
         return True
     try:
-        marker.unlink()
+        Path(marker["path"]).unlink()
     except OSError:
         return True
     return False
+
+
+def utc_stamp(ts: float) -> str:
+    """An epoch time in UTC, or the bare number when it is no calendar date."""
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+    except (OverflowError, OSError, ValueError):
+        return f"epoch {ts!r}"
+
+
+def _shed_cause(marker: dict) -> str:
+    incident, category = marker["incident_id"], marker["category"]
+    if incident is None and category is None:
+        return "a marker that names no incident"
+    if category is None:
+        return f"incident {incident} (no category recorded)"
+    return f"{category} incident {incident or '(no id recorded)'}"
+
+
+def _shed_basis(marker: dict) -> str:
+    reset_at, expires_at = marker["reset_at"], marker["expires_at"]
+    if reset_at is None:
+        return "a cooldown; no provider reset recorded"
+    if reset_at == expires_at:
+        return "the provider's stated reset"
+    if reset_at < expires_at:
+        return f"a cooldown, which outlasts the provider's stated reset {utc_stamp(reset_at)}"
+    return f"before the provider's stated reset {utc_stamp(reset_at)}"
+
+
+def shed_reason(marker: dict) -> str:
+    """What holds a shed seat and what clears it, in one line. `marker` is a `shed_marker` result.
+
+    A gate reports its drain beside its block. Until 2026-10-05 a shed seat printed only "observed
+    429 / rate-limit shed flag set", though the marker held its expiry, incident and category, so a
+    6 h cooldown, a provider's reset four days out and a hand-placed marker nothing will ever clear
+    all read alike.
+    """
+    agent, path, state = marker["agent"], marker["path"], marker["state"]
+    if state == "active":
+        return (
+            f"shed until {utc_stamp(marker['expires_at'])} ({_shed_basis(marker)}) by "
+            f"{_shed_cause(marker)}; the first capacity read after that clears it"
+        )
+    if state == "expired":
+        return (
+            f"shed: its marker expired {utc_stamp(marker['expires_at'])} and is still on disk, so "
+            f"it holds the seat until it is removed (a capacity read removes an expired marker "
+            f"when it can; or remove {path})"
+        )
+    if state == "unreadable":
+        held = f"a marker that cannot be read ({marker['why']})"
+    else:
+        named = marker["incident_id"] is not None or marker["category"] is not None
+        cause = f", from {_shed_cause(marker)}" if named else ""
+        held = f"a manual marker with no expiry ({marker['why']}{cause})"
+    return f"shed by {held}: nothing clears it automatically; remove {path} to re-enable {agent}"
+
+
+def _shed_reason(agent: str) -> str:
+    """The reason a seat `_shed` holds prints, from the marker as it is now.
+
+    A second read rather than the gate's own, because `_shed` must stay the seam. Both go through
+    `shed_marker`, so they can differ only if the file changed between them, and each is then right
+    about its own moment.
+    """
+    marker = shed_marker(agent)
+    if marker is None:
+        return (
+            f"shed, but {SHED_DIR / agent} was gone when this reason was read: something removed "
+            "it after the check, and the next capacity read decides again"
+        )
+    return shed_reason(marker)
 
 
 # NB: `cursor-agent models` lists MODEL AVAILABILITY, not remaining QUOTA — it is NOT a reliable
@@ -539,7 +668,7 @@ def _classify(agent: str, cfg: dict, ccusage_block):
     this function, owns the contract.
     """
     if _shed(agent):
-        return SHED, "observed 429 / rate-limit shed flag set"
+        return SHED, _shed_reason(agent)
     # Dispatchability gate BEFORE any budget math: a seat whose configured model its own CLI does
     # not offer is unusable at ANY headroom. SHED (not WARN) because router._pick drops
     # shed/unknown outright — reporting `ok` here is what hid the 2026-08-08 gemini breakage.
@@ -1064,13 +1193,31 @@ def _selftest_body(blk):
     flag = SHED_DIR / "codex"
     flag.touch()
     try:
-        assert compute("codex", AGENTS["codex"], None)[0] == SHED  # 429-shed wins even with no data
+        state, reason, _meta = compute("codex", AGENTS["codex"], None)
+        assert state == SHED, (state, reason)  # 429-shed wins even with no data
+        # ...and says it is manual and how to clear it, since nothing else will.
+        assert "manual marker" in reason and f"remove {flag}" in reason, reason
+        # A JSON cooldown names its expiry (UTC), its incident and category, and its drain.
+        expires_at = int(time.time()) + 3600
+        flag.write_text(
+            json.dumps(
+                {
+                    "expires_at": expires_at,
+                    "reset_at": expires_at,
+                    "incident_id": "i1",
+                    "category": "quota",
+                }
+            )
+        )
+        state, reason, _meta = compute("codex", AGENTS["codex"], None)
+        assert state == SHED and f"shed until {utc_stamp(expires_at)}" in reason, reason
+        assert "provider's stated reset" in reason and "quota incident i1" in reason, reason
         flag.write_text(json.dumps({"expires_at": time.time() - 1}))
         assert not _shed("codex") and not flag.exists()
     finally:
         pass
     print(
-        "capacity.py selftest: OK (4-state enum, shed override, METERED cursor pool, count/dollar/windowed-prepaid capacity)"
+        "capacity.py selftest: OK (4-state enum, shed override naming its drain, METERED cursor pool, count/dollar/windowed-prepaid capacity)"
     )
 
 
