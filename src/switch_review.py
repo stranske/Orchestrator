@@ -1349,8 +1349,11 @@ def review(
                 ],
                 "disabled": False,
             }
+    import adjudicator_retro
+
     return {
         "generated_at": now,
+        "adjudicator_shadow": adjudicator_retro.weekly_line(),
         "value_chain": value_chain,
         "review_days": REVIEW_DAYS,
         # The switches this report may name, and the evidence its idle rule counts. Declared so that
@@ -1524,6 +1527,8 @@ def format_report(rep: dict) -> str:
         f"  due for a decision: {rep['raise_count']}",
         "",
     ]
+    if rep.get("adjudicator_shadow"):
+        lines += [rep["adjudicator_shadow"], ""]
     if rep.get("value_chain") and not rep["value_chain"].get("disabled"):
         import value_chain_monitor
 

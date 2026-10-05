@@ -637,3 +637,14 @@ The weekly switch-review report also consumes firing-monitor regressions and ove
 the current ledger heartbeat with the declared cadence step's success-stamp age and artifact time,
 so missing heartbeat instrumentation can be distinguished from stopped steps. Missing evidence
 remains UNKNOWN, and this section raises no additional owner questions or automated actions.
+
+### Retrospective adjudicator shadow evidence
+
+`python3 src/adjudicator_retro.py --limit 5` collects real merge-bound verifier packets without
+calling a model. Add `--dispatch` to run the existing router-selected adjudicator in shadow;
+repeat the bounded command to resume, or add `--retry` for failed evidence/dispatch attempts.
+Only role-run evidence and the state report are written; delivery outcomes, labels and merges
+stay under the existing delivery rails. Weekly switch review reports graded agreement against
+later durability, the merged-PASS baseline, and measured versus unknown cost. At the closer
+consult seam supply `context.verifier_verdict` and `context.merge_disposition`; the adjudicator
+is offered only when those recorded values disagree.

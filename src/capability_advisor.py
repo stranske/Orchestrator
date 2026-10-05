@@ -490,6 +490,14 @@ def advise(
     pr_facts = PR_FACTS_FETCH(repository, pr) if (pr and repository) else None
     if pr_facts is not None:
         pr_facts = {**pr_facts, "task_text": text}
+    # The closer supplies the two recorded verdicts at its disposition seam.
+    verdict_facts = {
+        key: (context or {})[key]
+        for key in ("verifier_verdict", "merge_disposition")
+        if key in (context or {})
+    }
+    if verdict_facts:
+        pr_facts = {**(pr_facts or {}), **verdict_facts}
     # THE SURFACE'S OWN STATE, computed once and reported on every branch. Purely additive: it
     # changes neither the candidate set nor its order, exactly like the precondition axis. What it
     # removes is one specific wrong reading — an invented name answering "nothing applies here".
@@ -1120,6 +1128,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # binding is INHERITED from the repo-audit parent, where offload is the whole skill's workhorse;
     # a phase cannot drop one parent entry without NO_BINDING dropping them all, so it stays.
     "closer-lane": {
+        "role-adjudicator": "shadow judgment at verifier disposition only when a recorded verifier verdict differs from the merge disposition",
         "adversarial-review": "its matcher IS {kind: closer_gate, name: high_stakes_review} -- built "
         "for this lane's complex-target selection, 0 invocations in 1,766 rounds",
         "runtime-ac-checks": "sweep classes (b)(c)(d) are merged-but-unverified, verifier non-PASS, "
@@ -2256,6 +2265,7 @@ CAPABILITY_PRECONDITIONS: dict[str, dict] = {
     "runtime-ac-checks": {"requires_pr": "nontrivial_change"},
     "adversarial-review": {"requires_pr": "nontrivial_change"},
     "testgen-lane": {"requires_pr": "nontrivial_change"},
+    "role-adjudicator": {"requires_pr": "contested_verdict"},
 }
 
 # The keepalive's own stall signals, as labels. A PR without one has no stalled worker to redirect.
@@ -2267,6 +2277,16 @@ STALL_LABELS = ("agent:needs-attention", "agent:retry", "agent:rate-limited")
 NONTRIVIAL_MIN_FILES = 2
 NONTRIVIAL_MIN_LINES = 20
 PATTERN_KEYWORDS = ("codemod", "mechanical", "sweep", "campaign", "bulk", "across the fleet")
+
+
+def _probe_contested_verdict(facts: dict) -> tuple[bool | None, str]:
+    verifier = facts.get("verifier_verdict")
+    disposition = facts.get("merge_disposition")
+    if not verifier or not disposition:
+        return None, "verifier verdict or merge disposition unknown"
+    if verifier == disposition:
+        return False, "verifier verdict agrees with merge disposition"
+    return True, f"verifier {verifier} differs from merge disposition {disposition}"
 
 
 def _probe_stalled_worker(facts: dict) -> tuple[bool | None, str]:
@@ -2330,6 +2350,7 @@ def _probe_repeated_pattern(facts: dict) -> tuple[bool | None, str]:
 
 
 PR_FACT_PROBES = {
+    "contested_verdict": _probe_contested_verdict,
     "stalled_worker": _probe_stalled_worker,
     "nontrivial_change": _probe_nontrivial_change,
     "multi_repo_change": _probe_multi_repo_change,
@@ -2761,6 +2782,11 @@ def _annotate_preconditions(
             }
         if verdict["unevaluated_because"]:
             unevaluated[entry["capability_id"]] = list(verdict["unevaluated_because"])
+    entries[:] = [
+        entry
+        for entry in entries
+        if entry["capability_id"] != "role-adjudicator" or entry.get("pr_requirement_met") is True
+    ]
     missing = missing_precondition_inputs(
         declared, repository=repository, repo_path=repo_path, pr=pr
     )
