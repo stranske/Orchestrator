@@ -63,7 +63,12 @@ def test_a_retired_direct_entry_target_is_not_offered(tmp_path):
     # `runtime-ac-checks` is the live control: the same branch must still offer a live target, so
     # the retired assertion cannot pass by the branch never running at all.
     path = _ledger(tmp_path, {"offload": "retired", "runtime-ac-checks": "generated"})
-    got = ca.advise("offload the acceptance criteria runtime check", record=False, path=path)
+    got = ca.advise(
+        "offload the acceptance criteria runtime check",
+        context={"changedFiles": 5, "additions": 120, "deletions": 10},
+        record=False,
+        path=path,
+    )
     assert {"offload", "runtime_ac"} <= set(got["task_types"]), got["task_types"]
     by_id = {m["capability_id"]: m for m in got["capabilities"]}
     assert by_id["runtime-ac-checks"].get("entered_directly") is True, by_id
