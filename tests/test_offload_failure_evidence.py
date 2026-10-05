@@ -107,6 +107,8 @@ def stores(tmp_path, monkeypatch):
     monkeypatch.setattr(rate_incidents, "LOCK_FILE", tmp_path / "rate-limit-incidents.ndjson.lock")
     monkeypatch.setattr(rate_incidents, "SHED_DIR", tmp_path / "capacity-shed")
     monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "logs")
+    # Each agent's runtime home (vibe's carries a config copy) is built per offload; keep it here.
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "agent-runtime")
     monkeypatch.setattr(dispatcher, "_capability_heartbeat", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher, "_default_offload_timeout", lambda *args, **kwargs: 1)
     monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *args: prompt)
