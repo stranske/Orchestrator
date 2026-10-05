@@ -100,7 +100,28 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
                 return argument
             return pin_import_path(argument)
 
-        command = [pin_argument(argument) for argument in command]
+        # Pin code operands; relative data/output arguments must still address
+        # the live logical mirror. Preserve the incumbent absolute-path mapping.
+        code_indices = {0}
+        interpreter = Path(command[0]).name
+        if interpreter.startswith("python") or interpreter in {"bash", "sh", "zsh", "node"}:
+            index = 1
+            while index < len(command) and command[index].startswith("-"):
+                option = command[index]
+                if option in {"-c", "-m", "-e", "--eval", "--print"}:
+                    break
+                index += 2 if option in {"-W", "-X"} else 1
+            else:
+                if index < len(command):
+                    code_indices.add(index)
+        command = [
+            (
+                pin_argument(argument)
+                if index in code_indices or Path(argument).is_absolute()
+                else argument
+            )
+            for index, argument in enumerate(command)
+        ]
         env = dict(
             os.environ,
             **{

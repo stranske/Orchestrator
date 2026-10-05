@@ -54,8 +54,8 @@ for (const { unanchored, incumbent, entry } of scenarios) {
     if (incumbent) {
       // Freeze the old absolute-only mapper as well as removing shell anchoring.
       // The repaired helper now protects the aliased shell open independently.
-      const commandPin = '        command = [pin_argument(argument) for argument in command]';
-      assert.ok(helper.includes(commandPin), 'reader command pin boundary moved');
+      const commandPin = helper.slice(helper.indexOf('        code_indices = {0}'), helper.indexOf('        env = dict(')).trimEnd();
+      assert.ok(commandPin.startsWith('        code_indices = {0}') && commandPin.includes('pin_argument(argument)'), 'reader command pin boundary moved');
       helper = helper.replace(commandPin, [
         '        def incumbent_argument(argument):',
         '            path = Path(argument)',

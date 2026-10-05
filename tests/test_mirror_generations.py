@@ -419,10 +419,11 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
 """
         observer = (
             f"#!{sys.executable}\n"
-            "import json, subprocess, sys\n"
+            "import json, subprocess, sys\nfrom pathlib import Path\n"
             "import module, paths\n"
             "child = subprocess.run([sys.executable, '-c', "
             "'import module; print(module.VALUE)'], capture_output=True, text=True, check=True)\n"
+            "Path(sys.argv[-1]).write_text('created')\n"
             "print(json.dumps([SCRIPT_VALUE, module.VALUE, child.stdout.strip(), "
             "str(paths.REPO_ROOT), sys.argv[1:]]))\n"
         )
@@ -433,7 +434,8 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
             [sys.executable, "./mirror/scripts/../observer.py"],
             [str(parent_alias / "mirror/observer.py")],
         )
-        for command in commands:
+        for index, command in enumerate(commands):
+            output_argument = f"mirror/new-output-{index}.txt"
             with self.subTest(command=command):
                 self.set_value("old")
                 script = self.snapshot / "observer.py"
@@ -442,7 +444,15 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                 self.publish()
                 pinned = self.mirror.resolve()
                 reader = subprocess.Popen(
-                    [sys.executable, "-c", harness, str(self.mirror), *command, *unrelated],
+                    [
+                        sys.executable,
+                        "-c",
+                        harness,
+                        str(self.mirror),
+                        *command,
+                        *unrelated,
+                        output_argument,
+                    ],
                     cwd=self.root,
                     env=dict(os.environ, PYTHONPATH=str(MODULES)),
                     stdin=subprocess.PIPE,
@@ -461,7 +471,8 @@ mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
                     output, error = reader.communicate("resume\n", timeout=10)
                     self.assertEqual(reader.returncode, 0, error)
                     self.assertEqual(
-                        json.loads(output), ["old", "old", "old", str(pinned), unrelated]
+                        json.loads(output),
+                        ["old", "old", "old", str(pinned), [*unrelated, output_argument]],
                     )
                     self.assertNotEqual(self.mirror.resolve(), pinned)
                 finally:
