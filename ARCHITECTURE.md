@@ -1301,4 +1301,5 @@ python3 src/roles.py adjudicate --case-json case.json --dispatch
 with a shared `batch_id`; proposal validity and downstream outcomes remain per item.
 `python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies`
 exports valid Markdown files and a manifest containing role-run IDs and all validator verdicts.
-This extends the existing PromptAgent role; no new surface binding or autonomous dispatch is added.
+This extends the existing PromptAgent role and binds batch authoring at research-program and
+repo-audit:phase-4. Autonomous dispatch remains gated off.

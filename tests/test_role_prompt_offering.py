@@ -54,7 +54,8 @@ def test_research_program_surface_is_declared_and_binds_role_prompt(tmp_path):
             recorded = advisor.advise(record_task, surface=surface, path=path)
             assert recorded["recorded_matches"] >= 1
             trial = next(
-                t for t in propensity.experiments(path=path)
+                t
+                for t in propensity.experiments(path=path)
                 if t["experiment_id"] == recorded["experiment_id"]
             )
             assert "role-prompt" in trial["candidates"]

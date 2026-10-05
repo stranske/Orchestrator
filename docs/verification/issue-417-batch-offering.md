@@ -61,13 +61,9 @@ selftests passed; the advisor selftest passed with a temporary ledger, reporting
 its machine-local front-door prerequisite as absent. Syntax validation and
 `git diff --check` passed.
 
-This follow-up is **not acceptance verification**. Every available Python runtime
-lacks pytest and Black; installing them into a temporary virtual environment failed
-because `pypi.org` could not resolve. The named pytest command fails with
-`No module named pytest`; both required Black commands fail with
-`black: command not found`. The updated named tests and deliberate-break controls
-must run in an environment with those tools. No acceptance checkbox was completed,
-and the edits remain uncommitted because the required Black gate could not pass.
+At that earlier runner attempt, pytest and Black were unavailable and the edits were
+uncommitted. The subsequent keepalive commits include these changes; the current
+closer validation below supersedes that execution limitation.
 
 ## Decline wording follow-up on 2026-10-05
 
@@ -86,12 +82,9 @@ The replay script and output are `/tmp/issue-417-replay.py` and
 `/tmp/issue-417-replay.log` in this runner; these temporary artifacts are not
 durable CI evidence.
 
-This replay is **not pytest acceptance verification**. The named pytest command
-still fails with `No module named pytest`, and both mandatory Black commands fail
-with `black: command not found`. A temporary virtual environment could not install
-the tools because `pypi.org` could not resolve. The acceptance checkboxes remain
-unchecked and this follow-up remains uncommitted until the required Black gate
-and named pytest runs can execute.
+The earlier replay did not establish pytest acceptance. Its runner lacked pytest
+and Black, so it reported uncommitted edits. Those changes are now committed on the
+PR branch and are included in the current closer validation below.
 
 ## Recorded-consult follow-up on 2026-10-05
 
@@ -108,10 +101,16 @@ three checkout modules were unchanged. Output is `/tmp/issue-417-replay.log`;
 these runner-local artifacts are not durable CI evidence. Syntax parsing and
 `git diff --check` also passed.
 
-Acceptance remains unverified: the focused pytest command with `-m "not slow"`
-fails with `No module named pytest`, and both mandatory Black commands fail with
-`black: command not found`. None of the available Python runtimes has either
-tool, the pip cache contains neither tool, and installation in a temporary
-virtual environment failed. The changes remain uncommitted under the required
-Black gate, and both acceptance checkboxes remain unchecked. GitHub API access
-also failed, preventing a PR blocker comment, label, or readiness check.
+The earlier runner could not run pytest or Black, and reported uncommitted changes.
+Keepalive subsequently committed them. The current closer validation uses the
+committed tests and source rather than treating the runner's transient tool limit
+as the PR's current acceptance state.
+
+## Closer recovery on 2026-10-05
+
+Current recovery starts at `fa478f6`, preserves the expanded consult, wording and
+configured-cap regressions, and restores the pinned Black 26.5.1 formatting in the
+consult regression. The architecture statement now names both batch surfaces while
+keeping autonomous dispatch gated off. Focused pytest and deliberate-break/restoration
+receipts are retained by the closer round at `work/20261005T0520Z`; CI's full verifier
+and the seven-minute exact-head review gate still determine merge readiness.
