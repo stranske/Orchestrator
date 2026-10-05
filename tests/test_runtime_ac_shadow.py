@@ -56,6 +56,7 @@ Complete these in order.
 - [ ] Named test: `tests/test_task.py::test_task`.
 - [x] Inspect the saved receipt.
 - [ ] Deliberate-break -> revert: remove the reader; `tests/test_break.py::test_break` FAILS; revert.
+- [ ] Deliberate break: remove X; `tests/test_punct.py::test_punct` fails; revert it.
 ## Acceptance Criteria
 - Deliberate-break → revert: remove the reader → named tests FAIL; revert.
 - Named test: `tests/test_example.py::test_one`, `::test_two`.
@@ -76,6 +77,7 @@ Complete these in order.
     )
     assert breaks[1]["test_paths"] == ["tests/test_break.py"]
     assert breaks[1]["test_cmd"].endswith("tests/test_break.py::test_break")
+    assert breaks[2]["test_cmd"].endswith("tests/test_punct.py::test_punct")
     manual = [check["instructions"] for check in checks if check["type"] == "manual"]
     assert "Named test: `::test_orphan` requires an explicit file." in manual
     assert "Inspect the saved receipt." in manual
