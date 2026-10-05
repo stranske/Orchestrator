@@ -93,7 +93,17 @@ def test_legacy_missing_local_checkpoint_does_not_rehold_or_recount():
     assert json.loads((edir / "ship-gate.json").read_text())["verdict"] == "discard"
     assert stamp.stat().st_mtime == before
     assert out["ship_gate"]["finished"] == 0
+    assert out["ship_gate"]["launch_available_at_start"] is True
+    assert "stamp 48.0h old, holds 24h" in exp_abcd.ship_gate_line(out)
     assert calls == []
+
+    checkpoint = (edir / "ship-gate.json").read_text()
+    _promotion_dir("pending", evaluated_at=now - 3600)
+    again = _followup(calls)
+    assert calls == ["pending"], "local recovery must leave the aged gate available"
+    assert again["ship_gate"]["finished"] == 0
+    assert stamp.stat().st_mtime == before
+    assert (edir / "ship-gate.json").read_text() == checkpoint
 
 
 def test_a_run_that_finishes_nothing_leaves_the_stamp_alone():
@@ -156,17 +166,24 @@ def test_an_old_stamp_releases_exactly_one_launch_and_a_launch_is_not_a_finish()
     assert again["ship_gate"]["inflight"] is True and again["ship_gate"]["launched"] == 0
 
 
-def test_a_new_finish_holds_the_gate_once():
+@pytest.mark.parametrize("initial_stamp_age_s", [None, 2 * 86400])
+def test_a_new_finish_holds_the_gate_once(initial_stamp_age_s):
     now = int(time.time())
     # Evaluated 20 days ago with a 14-day TTL: this run is the one that discards it.
     edir = _promotion_dir("expired", evaluated_at=now - 20 * 86400)
     stamp = exp_abcd.ship_gate_stamp()
     assert not stamp.exists()
+    if initial_stamp_age_s is not None:
+        _stamp(initial_stamp_age_s)
     calls: list = []
     out = _followup(calls)
     assert synthesis_promotion.load_state(edir)["delivery_phase"] == "discarded"
     assert out["ship_gate"]["finished"] == 1 and stamp.exists()
     assert out["ship_gate"]["stamp_age_s"] == 0
+    line = exp_abcd.ship_gate_line(out)
+    assert "finished 1" in line
+    assert "stamp 0.0h old, holds 24h" in line
+    assert "no stamp yet" not in line
     assert json.loads((edir / "ship-gate.json").read_text())["verdict"] == "discard"
     held_at = stamp.stat().st_mtime
     # The same finish, seen again on the next run, does not hold a second time.
