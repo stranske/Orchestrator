@@ -92,6 +92,8 @@ def test_offline_sizing_uses_the_version_in_force_at_each_run():
                 _weight(c, version, ts, "cursor", 0.99, 1000)
                 _weight(c, version, ts, bad, 0.1, 1)
                 _weight(c, version, ts, good, 0.9, 1000)
+                _weight(c, version, ts, "claude", 0.995, 1000)  # reserve seat
+                _weight(c, version, ts, "vibe", 0.2, 0)  # local-only seat
         _run("before-history", 99)
         _run("old", 150)
         _run("at-boundary", 200)
@@ -118,6 +120,36 @@ def test_offline_sizing_uses_the_version_in_force_at_each_run():
         assert "sizing estimate" in exploration_offline.format_human(report)
         assert exploration_offline.build_report(now=300, window_days=1) == report
         assert feedback.DB_PATH.read_bytes() == database_before
+
+        # Ingest reuses several legacy remote-run forms. They must all replay
+        # the same remote challenger pool instead of exploring a local seat.
+        remote_runs = (
+            ("keepalive-source", "keepalive", "local"),
+            ("remote-source", "orchestrator_remote", "local"),
+            ("remote-mode", "legacy", "remote"),
+            ("remote:o/r#1:legacy", "legacy", "local"),
+        )
+        for run_id, source, mode in (*remote_runs, ("local", "legacy", "local")):
+            feedback.record_run(
+                run_id,
+                "o/r#1",
+                "implement",
+                "codex",
+                ts=250,
+                source=source,
+                mode=mode,
+            )
+            feedback.record_outcome(run_id, adjudicated_verdict="PASS")
+        replay = exploration_offline.build_report(now=300, window_days=1)
+        by_run = {row["run_id"]: row for row in replay["runs"]}
+        for run_id, _, _ in remote_runs:
+            result = by_run[run_id]
+            assert result["route_weights_version"] == 2
+            assert result["epsilon_challenger"] == "gemini"
+            assert result["thompson_challenger"] == "codex"
+            assert result["posterior_pass_difference"] == pytest.approx(0.8)
+        assert by_run["local"]["epsilon_challenger"] == "vibe"
+        assert replay["task_types"]["implement"]["compared_runs"] == 8
 
 
 def test_offline_sizing_excludes_ungraded_infra_and_outside_window_runs():

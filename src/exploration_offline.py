@@ -65,7 +65,7 @@ def build_report(
         c.row_factory = sqlite3.Row
         c.execute("BEGIN")  # keep runs and all weight versions in one consistent snapshot
         runs = c.execute(
-            "SELECT r.run_id, r.ts, r.task_type, r.source, o.durability, "
+            "SELECT r.run_id, r.ts, r.task_type, r.source, r.mode, o.durability, "
             "o.adjudicated_verdict, o.verifier_verdict, o.failure_class "
             "FROM runs r JOIN outcomes o ON r.run_id=o.run_id "
             "WHERE r.ts>=? AND r.ts<=? ORDER BY r.ts, r.run_id",
@@ -122,6 +122,14 @@ def build_report(
                     paired_seed = int.from_bytes(
                         hashlib.sha256(f"{seed}:{run['run_id']}".encode()).digest()[:8], "big"
                     )
+                    # Ingest also reuses older orchestrator dispatch rows. Their
+                    # source can differ from keepalive, but local/reserve seats
+                    # must still stay out of hypothetical remote challengers.
+                    remote = (
+                        run["source"] in {"keepalive", "orchestrator_remote"}
+                        or run["mode"] == "remote"
+                        or run["run_id"].startswith("remote:")
+                    )
                     picks: dict[str, Any] = {}
                     for mode in ("epsilon-greedy", "thompson-hybrid"):
                         picks[mode] = router.select_agent(
@@ -129,14 +137,13 @@ def build_report(
                             exploration_review._neutral_capacity(),
                             learned=learned,
                             only=(
-                                router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS
-                                if run["source"] == "keepalive"
-                                else None
+                                router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS if remote else None
                             ),
                             exploration_rate=1.0,
                             exploration_mode=mode,
                             rng=random.Random(paired_seed),
                             simulate=True,
+                            profile_transport="remote" if remote else "local",
                         )
                     epsilon, thompson = picks.values()
                     if not all(pick and pick["exploration"] for pick in picks.values()):
