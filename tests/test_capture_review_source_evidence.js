@@ -99,8 +99,63 @@ test('compares the complete aggregated PR file set independently of ordering', (
   w.metadata.tree.tree.push({ ...w.metadata.tree.tree[0], path: 'alias.py' });
   w.metadata.changed_paths.push('alias.py');
   w.metadata.pull_request.changed_files = 2;
-  w.metadata.pull_request_files.files.unshift({ filename: 'alias.py' });
+  w.metadata.pull_request_files.files.unshift({ filename: 'alias.py', sha: w.sha });
   assert.equal(collect(w).retrieved_changed_files, 2);
+});
+
+for (const defect of ['missing SHA', 'invalid SHA', 'different blob', 'non-blob tree entry']) {
+  test(`rejects ${defect} PR/tree identity before reading source or writing a bundle`, (t) => {
+    const w = world(t);
+    if (defect === 'missing SHA') delete w.metadata.pull_request_files.files[0].sha;
+    if (defect === 'invalid SHA') w.metadata.pull_request_files.files[0].sha = 'invalid';
+    if (defect === 'different blob') {
+      const replacement = Buffer.from('a different complete Git object\n');
+      fs.writeFileSync(path.join(w.repo, 'replacement.py'), replacement);
+      const result = spawnSync('git', ['-C', w.repo, 'hash-object', '-w', 'replacement.py'],
+        { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      Object.assign(w.metadata.tree.tree[0], {
+        sha: result.stdout.trim(), size: replacement.length,
+      });
+    }
+    if (defect === 'non-blob tree entry') w.metadata.tree.tree[0].type = 'tree';
+    let reads = 0;
+    assert.throws(() => collect(w, () => { reads += 1; return w.bytes; }),
+      /authenticated PR file records|PR file blob identity/);
+    assert.equal(reads, 0);
+    assert.equal(fs.existsSync(w.output), false);
+  });
+}
+
+test('retained PR receipt refuses a contradictory blob binding with unchanged filenames', (t) => {
+  const w = world(t);
+  const receipt = JSON.parse(fs.readFileSync(path.join(__dirname,
+    '../docs/reviews/pr-438-source-metadata.json')));
+  const file = receipt.pull_request_files.files.at(-1);
+  const entry = receipt.tree.tree.find((item) => item.path === file.filename);
+  const replacement = receipt.tree.tree.find((item) => item.type === 'blob'
+    && item.sha !== file.sha);
+  Object.assign(entry, { sha: replacement.sha, size: replacement.size });
+  let reads = 0;
+  assert.throws(() => capture(Buffer.from(JSON.stringify(receipt)), w.repo, w.output,
+    receipt.pull_request.head_sha, () => { reads += 1; return Buffer.alloc(0); }),
+  /PR file blob identity/);
+  assert.equal(reads, 0);
+  assert.equal(fs.existsSync(w.output), false);
+});
+
+test('an absent changed-file tree binding remains UNKNOWN with an owner and action', (t) => {
+  const w = world(t);
+  w.metadata.tree.tree = [];
+  let reads = 0;
+  const report = collect(w, () => { reads += 1; return w.bytes; });
+  assert.equal(reads, 0);
+  assert.equal(report.source_status, 'UNKNOWN');
+  assert.equal(report.retrieved_changed_files, 0);
+  assert.equal(report.files[0].owner, 'owner');
+  assert.match(report.files[0].next_action, /authenticated GitHub/);
+  assert.equal(report.review_status, 'PENDING');
+  assert.equal(report.deployment_status, 'NOT_OBSERVED');
 });
 
 test('durable metadata receipt reproduces all manifest path/tree bindings without historical blobs', (t) => {

@@ -1864,12 +1864,14 @@ UNATTRIBUTED_DELEGATION = "unattributed_delegation"
 # the row leaves the pending set for good (DURABILITY_UNJUDGEABLE, a value no verdict uses) and stops
 # counting as a provisional PASS (the class, below). Unknown is not false: it is never a FAIL either.
 # Before 2026-10-04 these rows were re-skipped by every sweep, while `_is_success('pending', 'PASS')`
-# scored 27 of them as successes.
+# scored 27 of them as successes. Since 2026-10-05 the class also closes a merge GitHub did not
+# answer about (its lookup, or its revert check) within `durability_sweep.RETRY_HORIZON_DAYS` of
+# the first run that asked, which until then stayed pending, and scoring, forever.
 DURABILITY_UNJUDGEABLE = "unjudgeable"
 UNJUDGEABLE_MERGE = "unjudgeable_merge"
 
 # What the durability sweep writes for a merge whose broke-later check never read the fix PRs merged
-# after it: no run reached it within `durability_sweep.FIX_SEARCH_RETRY_DAYS` of the first that
+# after it: no run reached it within `durability_sweep.RETRY_HORIZON_DAYS` of the first that
 # tried. Whether it held is unknown, so it closes as DURABILITY_UNJUDGEABLE and trains nothing. Until
 # 2026-10-04 such a merge was recorded `durable`: 436 rows whose read was cut at 200 best matches.
 BROKE_LATER_UNCHECKED = "broke_later_unchecked"

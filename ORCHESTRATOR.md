@@ -53,7 +53,11 @@ cursor-agent live outside the default PATH):
   resource_exhausted, and ActionRequiredError with explicit quota evidence), and provides structured evidence
   for router decisions. `429` is authoritative only as `429 Too Many Requests` or when anchored to HTTP,
   status, error, or response-code context; incidental numeric prose is not a shedding signal. Generic network
-  errors and ambiguous prose are NOT recorded to avoid false shedding.
+  errors and ambiguous prose are NOT recorded to avoid false shedding. A failed run's own codex work events
+  (the commands it ran, the files it read, its messages) are never provider evidence: every reader of a
+  failed run drops them through one filter (`failure_evidence`), leaving the harness's `error`/`turn.failed`
+  events and stderr. Two codex offloads that printed this paragraph were recorded as quota incidents, and
+  shed the seat, before the offload path applied that filter (2026-09-19, 09-20).
 - **Observe fleet health** — `python3 src/observability_dashboard.py [--json] [--write-markdown path]`
   builds a read-only productivity/quality dashboard from the feedback DB plus a live capacity snapshot:
   outcome coverage, merged/durable-success rates, durability failures, capacity warnings, learned
@@ -515,10 +519,13 @@ cursor-agent live outside the default PATH):
   resolves the deterministic `orchestrator/issue-N` branch opened by local delegates. The daily cadence runs
   local ingest fail-open so dry-seam reports surface only runs whose PR state is still unavailable/open.
   If a local delegate's branch never produced a PR and the target issue is already closed, local ingest
-  records an abandoned outcome so stale no-PR branch gaps do not remain permanently actionable. That
+  records an abandoned outcome so stale no-PR branch gaps do not remain permanently actionable, unless
+  one of the issue's closing references MERGED by the time it closed: then someone delivered and the
+  outcome is `unattributed_closing_pr` (a reference that merged later is named, never counted). That
   verdict (and remote ingest's) needs every candidate branch to ANSWER "no PR": a lookup gh could not
-  answer (`lookup_failed`, `parse_failed`, `issue_lookup_failed`) records nothing, is retried at the next
-  ingest, and is counted in the summary's `unanswered` (2026-10-04; an unknown is not an abandonment).
+  answer (any status in `outcomes.UNANSWERED_LOOKUPS`, a closing reference's unread merge time among
+  them) records nothing, is retried at the next ingest, and is counted in the summary's `unanswered`
+  (2026-10-04; an unknown is not an abandonment).
   Dry-run output includes `skipped_details`, distinguishing `open_pr` waits from `no_pr_for_branch` join gaps
   and from unanswered lookups, and `pending_durability_details` for already-recorded merged outcomes
   waiting on the durability sweep.

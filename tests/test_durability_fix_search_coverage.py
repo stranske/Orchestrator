@@ -12,7 +12,7 @@ whole: one `merged:<since>..*` range qualifier, up to GitHub's 1,000-result cap,
 cap is split by merge date and read newest first. A merge the read reached is judged as before. One it
 did not reach is never durable: it stays pending under DRAIN_FIX_SEARCH, read again by every run, and
 is closed as `unjudgeable` / `broke_later_unchecked` (trains nothing, never a FAIL) once
-FIX_SEARCH_RETRY_DAYS have passed since the first run that missed it, so it can never wait forever.
+RETRY_HORIZON_DAYS have passed since the first run that missed it, so it can never wait forever.
 
 No real API: find_merge's gh answers `gh pr view` from a dict, the fix read is an injected fake that
 answers a merge-date window like GitHub (truncated to its cap, newest kept), and the revert search and
@@ -31,7 +31,7 @@ import feedback
 
 NOW = 1_790_000_000  # 2026-09-21T14:13:20Z
 DAY = 86400
-RETRY = durability_sweep.FIX_SEARCH_RETRY_DAYS * DAY
+RETRY = durability_sweep.RETRY_HORIZON_DAYS * DAY
 
 
 def _iso(ts: int) -> str:
@@ -145,7 +145,7 @@ def _row(run_id: str):
 
 
 def _clocks(state_dir) -> dict:
-    return json.loads((state_dir / durability_sweep.FIX_RETRY_STATE).read_text())
+    return json.loads((state_dir / durability_sweep.RETRY_CLOCKS).read_text())
 
 
 def _one_unread_merge(merged_at: int = NOW - 20 * DAY):
@@ -313,7 +313,7 @@ def test_a_backlog_merge_is_not_closed_by_its_first_unread_run(brain):
 
 def test_a_lost_or_corrupt_clock_file_restarts_the_clock_and_never_closes_early(brain):
     view, failing = _one_unread_merge()
-    (brain / durability_sweep.FIX_RETRY_STATE).write_text("{not json")
+    (brain / durability_sweep.RETRY_CLOCKS).write_text("{not json")
     _sweep(view, failing, now=NOW + 30 * DAY)
     assert _row("unread")[0] == "pending" and _clocks(brain) == {"unread": NOW + 30 * DAY}
 
@@ -330,7 +330,7 @@ def test_a_dry_run_starts_no_clock(brain):
     view, failing = _one_unread_merge()
     res = _sweep(view, failing, dry_run=True)
     assert res["drains"]["fix_search"] == 1 and _row("unread")[0] == "pending"
-    assert not (brain / durability_sweep.FIX_RETRY_STATE).exists()
+    assert not (brain / durability_sweep.RETRY_CLOCKS).exists()
 
 
 def test_the_drained_line_states_coverage_by_count(brain):

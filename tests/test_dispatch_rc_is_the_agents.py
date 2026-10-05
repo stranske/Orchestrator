@@ -369,11 +369,13 @@ def test_a_failed_text_only_log_is_still_read_whole(world, agent):
         ("plain stderr line", False),
     ],
 )
-def test_one_work_predicate_serves_both_readers(line, is_work):
-    """The refusal detector and the failure filter must agree on what counts as the agent's work."""
-    event = ledger_reconcile._json_event(line)
-    assert ledger_reconcile._is_codex_work_event(event or {}) is is_work
-    assert (ledger_reconcile._failure_evidence([line]) == []) is is_work
+def test_one_work_predicate_serves_every_reader(line, is_work):
+    """The refusal detector, the log-segment filter and the synchronous stdout filter must agree on
+    what counts as the agent's work, so all three read the one predicate in `rate_incidents`."""
+    event = rate_incidents.json_event(line)
+    assert rate_incidents.is_codex_work_event(event or {}) is is_work
+    assert (rate_incidents.failure_evidence([line]) == []) is is_work
+    assert (rate_incidents.failed_stdout_evidence("codex", line) == "") is is_work
     if is_work:
         refused = [line, _event("turn.failed", error={"message": REFUSAL})]
         assert ledger_reconcile.provider_limit_before_work(refused) is None
