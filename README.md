@@ -623,3 +623,8 @@ The tool authors local files only; filing issues remains the caller's responsibi
 under the target repository's issue-format gate.
 
 Choose a fresh `--output-dir` for each batch; existing directories are refused to preserve prior bodies.
+
+The weekly switch-review report also consumes firing-monitor regressions and overdue rows. It pairs
+the current ledger heartbeat with the declared cadence step's success-stamp age and artifact time,
+so missing heartbeat instrumentation can be distinguished from stopped steps. Missing evidence
+remains UNKNOWN, and this section raises no additional owner questions or automated actions.
