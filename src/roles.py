@@ -1909,6 +1909,7 @@ def run_redirect_agent(
     lane: str | None = None,
     task_type: str | None = None,
     next_agent: str | None = None,
+    source: str | None = None,
     timeout: int = 600,
     exploration_rate: float | None = None,
     record_corpus: bool = False,
@@ -1935,7 +1936,7 @@ def run_redirect_agent(
     prompt = role.build_prompt(ctx)
 
     routing = None
-    backend_name = backend
+    backend_name = None if not backend or backend.strip().lower() == "auto" else backend.strip()
     if backend_name is None:
         routing = route_role(
             "redirect",
@@ -1985,21 +1986,43 @@ def run_redirect_agent(
             errors.extend(verrs)
             proposal = None  # reject invalid; fall back to the baseline policy
 
-    if proposal is not None:
-        report["policy_decision"] = proposal_to_policy(proposal)
-        override = proposal.get("corrected_prompt") or None
+    report["policy_decision"] = proposal_to_policy(proposal) if proposal else dict(baseline)
+    decision_source = "redirect_agent" if proposal else "baseline_policy"
+    selected_agent = (proposal or {}).get("switch_agent") or next_agent
+    agent_source = "proposal" if (proposal or {}).get("switch_agent") else "caller"
+    if report["policy_decision"].get("action") in {"redirect", "decompose"} and not selected_agent:
+        # 'implement' is a task prior, not a role name. Use the existing deterministic
+        # worker router, independently of the redirect judgment backend; reserve seats stay out.
+        worker_type = task_type or report.get("task_type") or "implement"
+        pool = (
+            {row["agent"] for row in router.ROUTE_TABLE.get(worker_type, {}).get("agents", [])}
+            - RESERVE
+            - router.BACKUP_AGENTS
+        )
+        worker_pick = router.select_agent(
+            worker_type,
+            cap if cap is not None else router.load_capacity(),
+            only=pool,
+            learned=(learned or {}).get(worker_type),
+            exploration_rate=exploration_rate,
+        )
+        selected_agent = worker_pick["agent"] if worker_pick else None
+        agent_source = "router" if worker_pick else "unavailable"
+    try:
         plan_obj = redirect_plan.plan(
             report,
-            next_agent=(proposal.get("switch_agent") or next_agent),
+            next_agent=selected_agent,
             lane=lane,
             task_type=task_type,
-            prompt_override=override,
+            prompt_override=(proposal or {}).get("corrected_prompt") or None,
         )
-        decision_source = "redirect_agent"
-    else:
-        report["policy_decision"] = dict(baseline)
-        plan_obj = redirect_plan.plan(report, next_agent=next_agent, lane=lane, task_type=task_type)
-        decision_source = "baseline_policy"
+    except redirect_plan.MissingRedirectAgent as exc:
+        errors.append(str(exc))
+        inspection = {**report, "policy_decision": {"action": "inspect", "reason": str(exc)}}
+        plan_obj = redirect_plan.plan(inspection, lane=lane, task_type=task_type)
+        plan_obj["blocked_action"] = report["policy_decision"]["action"]
+    plan_obj["agent_source"] = agent_source
+    event_source = source or ("live-dispatch" if dispatch else "replay")
 
     role_run_id: str | None = None
     role_record_error: str | None = None
@@ -2025,6 +2048,8 @@ def run_redirect_agent(
                 # fired, the dispatch command carried no --influenced-by-role-run-id, and no
                 # role->outcome edge could ever form on the replay path. (2026-08-21)
                 model=backend_model,
+                source=event_source,
+                report_state=report.get("state"),
             )
         except Exception as exc:
             role_record_error = str(exc)
@@ -2044,6 +2069,7 @@ def run_redirect_agent(
                     backend=backend_name,
                     backend_run_id=backend_run_id,
                     plan=plan_obj,
+                    source=event_source,
                     raw_output=raw_output,
                     backend_error_detail=backend_error_detail,
                     corpus_path=(Path(corpus_path) if corpus_path else redirect_shadow.CORPUS_PATH),

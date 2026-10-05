@@ -42,6 +42,10 @@ APPLY_STEP_IDS = {"stop-process", "release-claim", "delegate-retry", "delegate-s
 # claim path, which is correct BECAUSE it is module-qualified) and `partitioned_review._slug`
 # (partition_id, 48-char capped). Both are also namespace-local; neither was renamed because
 # their names are already reached through their module.
+class MissingRedirectAgent(ValueError):
+    """An applyable redirect must name a real worker before any command is built."""
+
+
 def _prompt_path_slug(value: str) -> str:
     s = value.strip().lower().replace("/", "__")
     s = re.sub(r"[^a-z0-9_.-]+", "_", s)
@@ -206,7 +210,9 @@ def _delegate_commands(
     prompt_file: str | None,
 ) -> list[list[str]]:
     target = report.get("target") or "<target>"
-    selected_agent = next_agent or "<next-agent>"
+    if not next_agent or not next_agent.strip() or "<" in next_agent or ">" in next_agent:
+        raise MissingRedirectAgent("redirect/decompose requires a concrete next agent")
+    selected_agent = next_agent.strip()
     selected_lane = lane or report.get("lane") or "<lane>"
     selected_type = task_type or report.get("task_type") or "implement"
     return [
@@ -617,7 +623,7 @@ def _selftest() -> None:
             ],
         },
     }
-    decompose = plan(decompose_report, prompt_file="/tmp/decompose.md")
+    decompose = plan(decompose_report, next_agent="codex", prompt_file="/tmp/decompose.md")
     assert (
         decompose["action"] == "decompose" and decompose["prompt_file"] == "/tmp/decompose.md"
     ), decompose
@@ -671,7 +677,15 @@ def _selftest() -> None:
         except ValueError as exc:
             assert "confirm-target" in str(exc), exc
 
-        placeholder = plan(redirect_report, prompt_file=prompt_file)
+        try:
+            plan(redirect_report, prompt_file=prompt_file)
+            raise AssertionError("plan construction must reject a missing worker")
+        except MissingRedirectAgent:
+            pass
+        # Apply still rejects malformed plans obtained from an older caller/corpus.
+        placeholder = plan(redirect_report, next_agent="vibe", prompt_file=prompt_file)
+        command = placeholder["steps"][-1]["commands"][0]
+        command[command.index("--agent") + 1] = "<next-agent>"
         try:
             apply_plan(placeholder, confirm_target="stranske/Repo#12", runner=fake_runner)
             raise AssertionError("placeholder next-agent should fail")

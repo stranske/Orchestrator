@@ -38,6 +38,12 @@ def _env_flag(env: Mapping[str, str], name: str) -> bool:
     return str(env.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _selected_backend(backend: str | None) -> str | None:
+    """Unset/auto delegates judgment routing; an explicit backend overrides the environment."""
+    selected = backend if backend is not None else os.environ.get("ORCH_REDIRECT_SWEEP_BACKEND")
+    return None if not selected or selected.strip().lower() == "auto" else selected.strip()
+
+
 def _safe_log_path(target: str, agent: str) -> Path:
     safe = target.replace("/", "__").replace("#", "_")
     return HANDOFF / "dispatch-logs" / f"{safe}.{agent}.log"
@@ -301,7 +307,7 @@ def record_experiment_candidates(
     kwargs: dict = {
         "corpus_path": corpus,
         "dispatch": True,
-        "backend": backend or os.environ.get("ORCH_REDIRECT_SWEEP_BACKEND") or "cursor",
+        "backend": _selected_backend(backend),
     }
     if max_records is not None:
         kwargs["max_records"] = max_records
@@ -400,7 +406,7 @@ def record_shadow_candidates(
             recorded = redirect_shadow.record_redirect(
                 report_for_record,
                 ac,
-                backend=backend,
+                backend=_selected_backend(backend),
                 dispatch=dispatch,
                 proposal_json=proposal_json,
                 lane=report.get("lane") or None,
