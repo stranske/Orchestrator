@@ -506,6 +506,7 @@ def sweep(
             now=now,
             credit=False,
         )
+        report["claim_snapshot"] = {key: meta.get(key) for key in ("target", "agent", "pid", "ts")}
         reports.append(report)
         action = (
             (report.get("policy_decision") or {}).get("action")
