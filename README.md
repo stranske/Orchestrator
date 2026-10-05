@@ -119,7 +119,13 @@ offered at `tick` and `rail-exercise:audit`. Source deployment remains manual.
 
 ## Important functionality (what actually runs, grouped by job)
 
-The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records machine-observed usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.
+The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records zero-weight `fixture_observed` verdicts separately from production usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.
+
+Historical rail-exercise verdicts can be reclassified with
+`python3 src/capability_propensity.py migrate-fixture-provenance --ledger /path/to/capabilities.json`.
+The command prints changed/left counts and appends corrections without deleting prior evidence;
+repeating it adds nothing. `capabilities.py usage` reports production useful outcomes and fixture
+passes separately. Passing a fixture never raises a capability's recommendation weight.
 
 Verdicts (ACTIVE / gated / CLI-only) reflect the 2026-07-08 dormancy re-scan; re-run that scan to
 refresh. "Gated" = code is live but a default-OFF `ORCH_*` flag holds it back — an intentional

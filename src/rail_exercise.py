@@ -304,7 +304,7 @@ def run_contract(path: Path, contract: dict[str, Any]) -> dict[str, Any]:
 
 
 def _record(row: dict[str, Any]) -> str:
-    """Record the old wave's trigger + machine-observed verdict only when explicitly armed."""
+    """Record the old wave's trigger + fixture-observed verdict only when explicitly armed."""
     try:
         import capability_advisor
         import capability_propensity
@@ -335,8 +335,9 @@ def _record(row: dict[str, Any]) -> str:
             experiment,
             useful=row["status"] == "pass",
             evidence=row["reason"],
-            provenance="machine_observed",
+            provenance="fixture_observed",
             judge="rail-exercise cadence",
+            metadata={"source": "rail_exercise", "contract": row.get("contract")},
         )
         return "recorded"
     except Exception as exc:  # evidence failure must be visible, not turn a contract green
