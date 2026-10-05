@@ -9,7 +9,9 @@ row recorded (`find_merge`) and judges whether it held: durable, reverted, reope
 one read per repo (`read_fix_window`); a merge that read did not reach is never durable, it waits
 (`DRAIN_FIX_SEARCH`) and is closed unchecked if no run reaches it in time. A row whose merge cannot
 be identified as the run's own is closed as `unjudgeable` and excluded from learning: never left
-pending, never called a failure.
+pending, never called a failure. So is a row GitHub never answers about: the merge lookup, the
+revert check and the fix-PR read are asked again by every run, for RETRY_HORIZON_DAYS from the
+first run that went unanswered.
 Every row it does leave pending names what will judge it (`DRAINS`), and every run prints how many
 rows are pending, how many of them something will drain, and how many nothing will.
 
@@ -53,11 +55,16 @@ FIX_SEARCH_MAX_READS = 8
 # Narrower than this a window is not split again: FIX_SEARCH_CAP fix PRs merged inside one minute
 # is not a busy repository, it is a query GitHub did not apply.
 FIX_SEARCH_MIN_SPLIT_S = 60
-# A merge the read did not reach stays pending, re-read by every run, for at most this long from
-# the first run that missed it; then it is closed as feedback.BROKE_LATER_UNCHECKED. Counted per
-# row in FIX_RETRY_STATE, never from the merge, so a backlog row's first failed read cannot close it.
-FIX_SEARCH_RETRY_DAYS = 7
-FIX_RETRY_STATE = "durability-fix-search-retry.json"  # under $ORCH_STATE_DIR
+# THE RETRY HORIZON. A row GitHub has not answered about (its merge lookup, its revert check, or a
+# fix-PR read that did not reach its merge) stays pending and is asked again by every run, for at
+# most this long from the first run that left it unanswered; then it is closed as unjudgeable
+# (RETRY_HORIZON_CLOSE). ONE constant for every such close and for the date the summary prints. The
+# clock is per row in RETRY_CLOCKS, never from the merge, so a backlog row's first unanswered run
+# cannot close it. Until 2026-10-05 only the fix-PR read had this bound (FIX_SEARCH_RETRY_DAYS).
+RETRY_HORIZON_DAYS = 7
+# Under $ORCH_STATE_DIR. It replaced durability-fix-search-retry.json; a clock left in that file is
+# never read, so its row only retries longer, which is the safe direction.
+RETRY_CLOCKS = "durability-retry-clocks.json"
 # What the fix-PR read wrote until 2026-10-04 when its 200 best matches did not name the merge, and
 # the row was recorded `durable` anyway. The owner decided (2026-10-04) that every such row is read
 # again over the window its own verdict covered. ONE string: the selection matches it and the
@@ -86,11 +93,31 @@ INGEST_CLOCK_SKEW_S = 3600
 # provisional PASS. It is DRAINABLE only when one of these will judge it; anything else is
 # reported as undrainable, which a correct sweep never produces.
 DRAIN_GRACE = "grace"  # the merge is younger than GRACE_DAYS: judged on a known date
-DRAIN_RETRY = "retry"  # GitHub did not answer this run: the next run asks again
+# GitHub did not answer the merge lookup or the revert check: asked again next run, closed
+# unjudgeable on a known date.
+DRAIN_RETRY = "retry"
 # The fix-PR read did not reach the merge: re-read next run, closed unchecked on a known date.
 DRAIN_FIX_SEARCH = "fix_search"
 DRAIN_ACTING_RUN = "acting_run"  # a role run: its verdict propagates when its acting run's lands
 DRAINS = (DRAIN_GRACE, DRAIN_RETRY, DRAIN_FIX_SEARCH, DRAIN_ACTING_RUN)
+# The drains that wait on GitHub to answer, and how a row in one closes RETRY_HORIZON_DAYS after
+# the first run that left it unanswered: (failure class, what its note says it waited since).
+# Until 2026-10-05 DRAIN_RETRY had no horizon, so a row GitHub never answers about (a renamed or
+# deleted repository, lost access, a query GitHub always rejects) stayed pending forever, scoring
+# as a provisional PASS and counted drainable. An unanswered revert check closes as
+# UNJUDGEABLE_MERGE, the class an answered revert check that cannot decide already closes as
+# (`_revert_drain` None). BROKE_LATER_UNCHECKED would be false there: a revert check is left to
+# retry only after the fix-PR read covered the merge.
+RETRY_HORIZON_CLOSE = {
+    DRAIN_RETRY: (feedback.UNJUDGEABLE_MERGE, "unanswered since"),
+    DRAIN_FIX_SEARCH: (feedback.BROKE_LATER_UNCHECKED, "unread since"),
+}
+# The summary key holding a dated drain's earliest date, and the words the line prints it with.
+DRAIN_DATES = {
+    DRAIN_GRACE: ("next_grace_drain", "next grace drain"),
+    DRAIN_RETRY: ("next_retry_close", "next retry close"),
+    DRAIN_FIX_SEARCH: ("next_fix_search_close", "next unread close"),
+}
 VERDICTS = ("durable", "reverted", "reopened", "abandoned", "broke_later")
 
 # The revert check's notes that mean nothing answered, so a later run may get an answer. Any other
@@ -612,7 +639,7 @@ def _fix_followup_status(
     Until 2026-10-04 it was: an "additive" rule let an incomplete search fall through to the old
     verdict so that no row could be stranded pending, and a search cut at 200 best matches left
     the merge's own weeks unread for 436 durable rows. The stranding is now bounded in the sweep
-    (FIX_SEARCH_RETRY_DAYS), so unknown can stay unknown without becoming a latch.
+    (RETRY_HORIZON_DAYS), so unknown can stay unknown without becoming a latch.
 
     `since_ts` is the oldest merge the caller will ask about in this repo, so ONE read covers them
     all (`fix_search_plan`); `fix_cache` holds that read for the run. `until_ts` bounds the fixes
@@ -762,7 +789,8 @@ def _normalize_revert_status(value) -> tuple[bool | None, str]:
 
 
 def _revert_drain(note: str) -> str | None:
-    """DRAIN_RETRY when part of an undecided revert check went unanswered, else None (closed)."""
+    """DRAIN_RETRY when part of an undecided revert check went unanswered, else None (closed).
+    The sweep retries it for RETRY_HORIZON_DAYS, then closes it as the None case is closed."""
     parts = {part.strip() for part in str(note or "").split(";")}
     return DRAIN_RETRY if parts & UNANSWERED_REVERT_NOTES else None
 
@@ -922,7 +950,12 @@ def classify_durability(
     # Uncertain reversion cannot erase an independently attributable failure above. Its exact
     # subtype may still be refined later, but it must never become a learning exclusion.
     if reverted is None:
-        return {"durability": None, "reason": revert_note, "drain": _revert_drain(revert_note)}
+        return {
+            "durability": None,
+            "reason": revert_note,
+            "drain": _revert_drain(revert_note),
+            "fix_search": fix_search,  # the read ran and covered this merge; the summary counts it
+        }
     return {
         "durability": "durable",
         "notes": f"durability_sweep: held {age}d; {revert_note}; {fix_note}",
@@ -956,6 +989,11 @@ def sweep_durability(
     Merges are found first and judged second, because the broke-later check reads each repo's fix
     PRs ONCE, from the oldest merge it will be asked about (`fix_search_plan`); `fix_search` in the
     summary counts the merges that read covered and the ones it did not.
+
+    A row GitHub has not answered about waits in its drain (RETRY_HORIZON_CLOSE) for at most
+    RETRY_HORIZON_DAYS from the first run that left it unanswered (`_wait_or_close`), and the line
+    prints the date the next one closes. A row that is answered, closed or pending on a known date
+    drops its clock, so a later miss starts a new one rather than inheriting an old one.
     """
     # Every class classify_durability() can return starts at ZERO here, so the summary always prints
     # them all — a class that never occurred reads as `0`, not as a missing key. And the increment
@@ -974,8 +1012,12 @@ def sweep_durability(
         "drainable": 0,
         "undrainable": 0,
         "drains": {drain: 0 for drain in DRAINS},
-        "next_grace_drain": None,
-        "next_fix_search_close": None,
+        # The earliest date each dated drain will drain or close a row: next_grace_drain,
+        # next_retry_close, next_fix_search_close.
+        **{key: None for key, _words in DRAIN_DATES.values()},
+        # Rows closed this run because GitHub had not answered their merge lookup or revert check
+        # for RETRY_HORIZON_DAYS (counted in `unjudgeable` too).
+        "retry_closed": 0,
         # Merges the broke-later check was asked about: read whole back to the merge (covered) or
         # not (uncovered, of which `closed` were closed unchecked this run), and what it took.
         "fix_search": {"covered": 0, "uncovered": 0, "closed": 0, "reads": 0, "repos": {}},
@@ -1000,8 +1042,8 @@ def sweep_durability(
     now = int(_now or time.time())
     revert_cache: dict = {}  # repo -> cached revert search, so a bulk sweep does 1 search/repo
     fix_cache: dict = {}  # repo -> its one fix-PR read this run (read_fix_window)
-    fix_retry = _load_fix_retry()  # run_id -> first run whose read did not reach its merge
-    fix_retry_before = dict(fix_retry)
+    clocks = _load_retry_clocks()  # run_id -> the first run that left the row unanswered
+    clocks_before = dict(clocks)
     role_runs: list[dict] = []
     resolved: list[tuple[dict, dict]] = []
     for run in _pending_merged_runs():
@@ -1011,7 +1053,7 @@ def sweep_durability(
             continue
         found = _find(run, _state_fn=_state_fn, _gh=_gh, now=now)
         if found["status"] == "unanswered":
-            _leave_pending(summary, run, found["reason"], DRAIN_RETRY)
+            _wait_or_close(summary, run, found["reason"], DRAIN_RETRY, clocks, now, dry_run)
             continue
         if found["status"] != "found":
             _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
@@ -1044,7 +1086,7 @@ def sweep_durability(
             continue
         found = _find(run, _state_fn=_state_fn, _gh=_gh, now=now)
         if found["status"] == "unanswered":
-            _recheck_unread(summary, run, found["reason"], fix_retry, now=now, dry_run=dry_run)
+            _recheck_unread(summary, run, found["reason"], clocks, now=now, dry_run=dry_run)
         elif found["status"] != "found":
             summary["truncated"]["closed"] += 1
             _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
@@ -1077,21 +1119,11 @@ def sweep_durability(
             summary["fix_search"][verdict["fix_search"]] += 1
         durability = verdict.get("durability")
         if durability is None:
-            if verdict.get("drain") == DRAIN_FIX_SEARCH:
-                # The read did not reach this merge. Pending, so the next run reads again, until
-                # FIX_SEARCH_RETRY_DAYS after the first run that missed it; then closed unchecked.
-                unread_since = fix_retry.setdefault(run["run_id"], now)
-                closes_at = unread_since + FIX_SEARCH_RETRY_DAYS * SECONDS_PER_DAY
-                if now < closes_at:
-                    _leave_pending(summary, run, verdict["reason"], DRAIN_FIX_SEARCH, closes_at)
-                    continue
-                summary["fix_search"]["closed"] += 1
-                _close_unjudgeable(
-                    summary,
-                    run,
-                    f"{verdict['reason']}; unread since {_search_ts(unread_since)}",
-                    dry_run=dry_run,
-                    failure_class=feedback.BROKE_LATER_UNCHECKED,
+            if verdict.get("drain") in RETRY_HORIZON_CLOSE:
+                # GitHub did not answer: the fix-PR read did not reach this merge, or the revert
+                # check went unanswered. Pending, so the next run asks again, until the horizon.
+                _wait_or_close(
+                    summary, run, verdict["reason"], verdict["drain"], clocks, now, dry_run
                 )
             elif verdict.get("drain") in DRAINS:
                 _leave_pending(
@@ -1126,7 +1158,7 @@ def sweep_durability(
             found["pr"],
             fix_cache=fix_cache,
             fix_since=fix_since,
-            fix_retry=fix_retry,
+            clocks=clocks,
             now=now,
             _fix_fn=_fix_fn,
             dry_run=dry_run,
@@ -1152,12 +1184,17 @@ def sweep_durability(
         repo: _fix_read_summary(entry) for repo, entry in sorted(fix_cache.items())
     }
     if not dry_run:
-        # A clock lives exactly as long as its row stays pending: judged or closed drops it.
-        pending = {
-            d["run_id"] for d in summary["details"] if d.get("action") in ("skip", "recheck-wait")
+        # A clock lives exactly as long as its row stays unanswered. A row judged, closed or left
+        # pending on a known date (grace, its acting run) drops it, so its next miss starts a new
+        # clock: one kept through grace would close the row on its first unanswered run after it.
+        unanswered = {
+            d["run_id"]
+            for d in summary["details"]
+            if d.get("action") == "recheck-wait"
+            or (d.get("action") == "skip" and d.get("drain") in RETRY_HORIZON_CLOSE)
         }
-        kept = {run_id: ts for run_id, ts in fix_retry.items() if run_id in pending}
-        _save_fix_retry(kept, fix_retry_before)
+        kept = {run_id: ts for run_id, ts in clocks.items() if run_id in unanswered}
+        _save_retry_clocks(kept, clocks_before)
     summary["line"] = summary_line(summary)
     return summary
 
@@ -1188,19 +1225,19 @@ def _fix_read_summary(entry: dict) -> dict:
     }
 
 
-def _fix_retry_path() -> Path:
+def _retry_clocks_path() -> Path:
     state_dir = os.environ.get("ORCH_STATE_DIR") or Path.home() / ".codex" / "orchestrator"
-    return Path(state_dir) / FIX_RETRY_STATE
+    return Path(state_dir) / RETRY_CLOCKS
 
 
-def _load_fix_retry() -> dict[str, int]:
-    """run_id -> when a run first could not read the fix PRs back to that row's merge.
+def _load_retry_clocks() -> dict[str, int]:
+    """run_id -> the first run that left that row unanswered (RETRY_HORIZON_CLOSE's drains).
 
     Absent or unreadable reads as empty, which restarts every clock: a row is then retried LONGER,
-    and still closes FIX_SEARCH_RETRY_DAYS later. Losing this file can never close a row early.
+    and still closes RETRY_HORIZON_DAYS later. Losing this file can never close a row early.
     """
     try:
-        data = json.loads(_fix_retry_path().read_text())
+        data = json.loads(_retry_clocks_path().read_text())
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):
@@ -1212,10 +1249,10 @@ def _load_fix_retry() -> dict[str, int]:
     }
 
 
-def _save_fix_retry(state: dict[str, int], previous: dict[str, int]) -> None:
+def _save_retry_clocks(state: dict[str, int], previous: dict[str, int]) -> None:
     if state == previous:
         return  # a run that moved no clock never touches the state directory
-    path = _fix_retry_path()
+    path = _retry_clocks_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
@@ -1266,7 +1303,7 @@ def _truncated_durable_runs() -> list[dict]:
 
 
 def _undo_path() -> Path:
-    return _fix_retry_path().with_name(TRUNCATED_RECHECK_UNDO)
+    return _retry_clocks_path().with_name(TRUNCATED_RECHECK_UNDO)
 
 
 def _snapshot_for_undo(rows: list[dict]) -> int:
@@ -1326,11 +1363,11 @@ def undo_truncated_recheck() -> dict:
 
 
 def _recheck_unread(
-    summary: dict, run: dict, reason: str, fix_retry: dict, *, now: int, dry_run: bool
+    summary: dict, run: dict, reason: str, clocks: dict[str, int], *, now: int, dry_run: bool
 ) -> None:
     """A re-check that got no answer waits on the same clock as an unread pending merge."""
-    unread_since = fix_retry.setdefault(run["run_id"], now)
-    if now < unread_since + FIX_SEARCH_RETRY_DAYS * SECONDS_PER_DAY:
+    unread_since, closes_at = _retry_close_at(clocks, run["run_id"], now)
+    if now < closes_at:
         summary["truncated"]["waiting"] += 1
         summary["details"].append(
             {
@@ -1358,7 +1395,7 @@ def _recheck_truncated(
     *,
     fix_cache: dict,
     fix_since: dict,
-    fix_retry: dict,
+    clocks: dict[str, int],
     now: int,
     _fix_fn=None,
     dry_run: bool,
@@ -1387,7 +1424,7 @@ def _recheck_truncated(
         now=now,
     )
     if broke is None:
-        _recheck_unread(summary, run, fix_note, fix_retry, now=now, dry_run=dry_run)
+        _recheck_unread(summary, run, fix_note, clocks, now=now, dry_run=dry_run)
         return
     reread = f"re-read {_search_ts(now)[:10]} up to this verdict; the first read was cut short"
     detail: dict[str, Any] = {"run_id": run["run_id"], "target": run["target"], "action": "patch"}
@@ -1409,6 +1446,43 @@ def _recheck_truncated(
     summary["details"].append(detail)
 
 
+def _retry_close_at(clocks: dict[str, int], run_id: str, now: int) -> tuple[int, int]:
+    """(since, closes_at) for a row GitHub has not answered about. Its clock starts at the first
+    run that left it unanswered; RETRY_HORIZON_DAYS later the row closes. Every horizon close and
+    every close date the summary prints is computed here, so the two cannot disagree."""
+    since = clocks.setdefault(run_id, now)
+    return since, since + RETRY_HORIZON_DAYS * SECONDS_PER_DAY
+
+
+def _wait_or_close(
+    summary: dict,
+    run: dict,
+    reason: str,
+    drain: str,
+    clocks: dict[str, int],
+    now: int,
+    dry_run: bool,
+) -> None:
+    """Leave a row GitHub has not answered about pending in `drain` until its horizon, then close it
+    as unjudgeable with the class RETRY_HORIZON_CLOSE names for that drain."""
+    since, closes_at = _retry_close_at(clocks, run["run_id"], now)
+    if now < closes_at:
+        _leave_pending(summary, run, reason, drain, closes_at)
+        return
+    failure_class, waited = RETRY_HORIZON_CLOSE[drain]
+    if drain == DRAIN_FIX_SEARCH:
+        summary["fix_search"]["closed"] += 1
+    else:
+        summary["retry_closed"] += 1
+    _close_unjudgeable(
+        summary,
+        run,
+        f"{reason}; {waited} {_search_ts(since)}",
+        dry_run=dry_run,
+        failure_class=failure_class,
+    )
+
+
 def _leave_pending(
     summary: dict, run: dict, reason: str, drain: str | None, drains_at: int | None = None
 ) -> None:
@@ -1421,9 +1495,9 @@ def _leave_pending(
         summary["drains"][drain] += 1
     else:
         summary["undrainable"] += 1
-    if drains_at:
+    if drains_at and drain in DRAIN_DATES:
         due = _dt.datetime.fromtimestamp(drains_at, _dt.timezone.utc).strftime("%Y-%m-%d")
-        when = "next_fix_search_close" if drain == DRAIN_FIX_SEARCH else "next_grace_drain"
+        when = DRAIN_DATES[drain][0]
         summary[when] = min(filter(None, (summary[when], due)))
     summary["details"].append(
         {
@@ -1473,9 +1547,11 @@ def summary_line(summary: dict) -> str:
     fix = summary["fix_search"]
     head = (
         f"durability_sweep: checked {summary['checked']}; judged {summary['judged']} ({verdicts}); "
-        f"closed unjudgeable {summary[feedback.DURABILITY_UNJUDGEABLE]}; "
-        f"fix search covered {fix['covered']}, uncovered {fix['uncovered']}"
+        f"closed unjudgeable {summary[feedback.DURABILITY_UNJUDGEABLE]}"
     )
+    if summary["retry_closed"]:
+        head += f" ({summary['retry_closed']} unanswered for {RETRY_HORIZON_DAYS}d)"
+    head += f"; fix search covered {fix['covered']}, uncovered {fix['uncovered']}"
     if fix["closed"]:
         head += f" ({fix['closed']} closed unchecked)"
     cut = summary["truncated"]
@@ -1491,10 +1567,9 @@ def summary_line(summary: dict) -> str:
     if pending == 0:
         return f"{head}; pending 0, fully drained"
     drains = ", ".join(f"{drain} {summary['drains'][drain]}" for drain in DRAINS)
-    if summary["next_grace_drain"]:
-        drains += f", next grace drain {summary['next_grace_drain']}"
-    if summary["next_fix_search_close"]:
-        drains += f", next unread close {summary['next_fix_search_close']}"
+    for key, words in DRAIN_DATES.values():
+        if summary[key]:
+            drains += f", {words} {summary[key]}"
     tail = f"{head}; pending {pending}, drainable {summary['drainable']} ({drains})"
     if summary["undrainable"]:
         stuck = next(d for d in summary["details"] if d.get("action") == "skip" and not d["drain"])
@@ -1813,7 +1888,7 @@ def _selftest():
     tmp = tempfile.mkdtemp(prefix="durability-sweep-selftest-")
     feedback.DB_PATH = Path(tmp) / "t.db"
     saved_state_dir = os.environ.get("ORCH_STATE_DIR")
-    os.environ["ORCH_STATE_DIR"] = tmp  # the fix-search retry clocks, never the live ones
+    os.environ["ORCH_STATE_DIR"] = tmp  # the retry clocks, never the live ones
     now = int(time.time())
     old = _iso_days_ago(now, 10)
     young = _iso_days_ago(now, 2)
@@ -1953,15 +2028,32 @@ def _selftest():
             assert got[run_id] == expected, (run_id, got, expected)
         assert got["explicit-pr-note"] == "durable", got
 
+        # THE RETRY HORIZON: the ambiguous revert check waits under DRAIN_RETRY from its first run,
+        # and RETRY_HORIZON_DAYS later it is closed, so the sweep drains to zero.
+        assert res["drains"][DRAIN_RETRY] == 1 and res["next_retry_close"] is not None, res
+        later = sweep_durability(
+            grace_days=GRACE_DAYS,
+            _state_fn=lambda target: states.get(target),
+            _now=now + RETRY_HORIZON_DAYS * SECONDS_PER_DAY,
+            _fix_fn=lambda *_window: ([], True),
+        )
+        assert later["retry_closed"] == 1 and later["skipped"] == 0, later
+        assert later["line"].endswith("pending 0, fully drained"), later["line"]
+        with feedback._conn() as c:
+            closed = c.execute(
+                "SELECT durability, failure_class FROM outcomes WHERE run_id='ambiguous'"
+            ).fetchone()
+        assert tuple(closed) == (feedback.DURABILITY_UNJUDGEABLE, feedback.UNJUDGEABLE_MERGE)
+
         _selftest_live_revert_scan(now)
         _selftest_revert_search_cached_per_repo(now)
         _selftest_broke_later(now)
 
         print(
             "durability_sweep.py selftest: OK (old clean->durable, revert->reverted, "
-            "open->reopened, young/ambiguous stay pending, live revert scan covered, "
-            "searches cached per repo not per PR, and broke_later only on an explicit "
-            "later-fix reference)"
+            "open->reopened, young/ambiguous stay pending, ambiguous closes at the retry "
+            "horizon, live revert scan covered, searches cached per repo not per PR, and "
+            "broke_later only on an explicit later-fix reference)"
         )
     finally:
         if saved_state_dir is None:

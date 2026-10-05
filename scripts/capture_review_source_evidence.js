@@ -43,7 +43,8 @@ function validate(metadata, expectedHead) {
   const prFiles = metadata.pull_request_files;
   if (prFiles?.complete !== true || prFiles.head_sha !== expectedHead
     || !Array.isArray(prFiles.files) || prFiles.files.length !== metadata.pull_request.changed_files
-    || prFiles.files.some((file) => !file || typeof file.filename !== 'string' || !file.filename)) {
+    || prFiles.files.some((file) => !file || typeof file.filename !== 'string' || !file.filename
+      || !validSha(file.sha))) {
     throw new Error('complete authenticated PR file records bound to the exact head are required');
   }
   const filenames = new Set(prFiles.files.map((file) => file.filename));
@@ -59,6 +60,15 @@ function validate(metadata, expectedHead) {
       throw new Error('invalid or duplicate recursive tree binding');
     }
     entries.set(entry.path, entry);
+  }
+  // Bind the two authenticated views by object identity as well as filename.
+  // A complete path set can still carry a stale or substituted tree blob.
+  // Absent entries (including deleted files) remain UNKNOWN during capture.
+  for (const file of prFiles.files) {
+    const entry = entries.get(file.filename);
+    if (entry && (entry.type !== 'blob' || entry.sha !== file.sha)) {
+      throw new Error('PR file blob identity must match the exact-head tree binding');
+    }
   }
   const paths = [...new Set([...metadata.changed_paths, ...metadata.required_paths])].sort();
   if (paths.some((name) => typeof name !== 'string' || name.length === 0)) {

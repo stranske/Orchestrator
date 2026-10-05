@@ -426,7 +426,9 @@ remote repo system, with some local coding:
 5. ✅ **tick-wiring** (`tick.py` + `orchestrate.sh --active`): the autonomous tick now uses the REMOTE
    model — for each backlog item, `select_remote_agent` (reserve-aware) → `delegate_remote` (apply
    `agent:X`) → keepalive runs it → `ingest_outcomes`. Heartbeat written so legacy lanes yield. SHADOW
-   (default) is dry-run. Selftested; 14/14 suite green.
+   (default) is dry-run. Selftested; 14/14 suite green. Since 2026-10-04 the per-tick cap counts
+   delegations only (`tick.is_delegation`), never the rows the rails refuse, and a second bound
+   (4 x the cap) limits the items a tick examines.
 
 **Sequencing (owner directive 2026-06-14): build gates ✅ → test phase ✅ (Renovate PR #2384: orchestrator
 chose cursor → keepalive ran it → cursor implemented the preset; validated end-to-end, cleaned up) →

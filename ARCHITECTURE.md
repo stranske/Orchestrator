@@ -116,6 +116,23 @@ claim meta is replaced in one step (`claims._write_meta`). The tick headline pri
 a refusal as soon as GitHub answers. (No stage, component or surface moved; the diagram is
 unchanged.)
 
+**A refusal takes no delegation slot (2026-10-04).** The tick's per-tick cap
+(`ORCH_MAX_REMOTE_PER_TICK`, default 3) used to count every row that reached `delegate_remote`,
+refusals included. Discovery lists a closer item only when its PR already carries an `agent:*`
+label, and lists closer items first, so the cap filled with refusals. Over the live period
+(2026-06-15 to 09-02), 2,826 of its slots went to refusals and 25 to delegations, and 65 targets that
+carried no agent label when first deferred were never examined. `tick.is_delegation` is now the one
+predicate the cap, `production_reserve`, the rejected-role influence edge and the `TICK-PLAN`
+headline consume. A second bound, `EXAMINED_PER_DELEGATION` (4) times the cap, limits the items a
+tick examines, so a backlog of owned PRs cannot turn into unbounded label reads. Items the rail
+refuses on their discovery labels are examined after the rest (`tick.examination_order`), so they
+cannot hold a delegable item behind that bound. The plan and the headline print each bound beside its
+count, and the deferred items' blocking quantity (`delegable`) beside the drainable one.
+In an active tick the cap's deferrals are drainable only when at least one cap-filling label
+applied; a failed POST still consumes the spend bound but leaves its target unowned to take its slot
+again. (No stage,
+component or surface moved; the diagram is unchanged.)
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
@@ -199,7 +216,7 @@ a merge that read did not reach is never `durable`: it waits under the `fix_sear
 `unjudgeable` with that class seven days after the first run that missed it. Until then the read was the 200
 best matches of a repo's whole history, so in the two repos with more fix PRs than that a merge's own weeks were
 read by chance, and 436 rows were judged durable on an unread window; each run now prints how many merges the
-read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. This keeps role learning separate from normal
+read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. Since 2026-10-05 the `retry` drain has the same bound on the same per-row clock: a merge lookup or a revert check GitHub never answers (a renamed or deleted repository, lost access) is asked again by every run for `durability_sweep.RETRY_HORIZON_DAYS` from the first run that went unanswered, then closes as `unjudgeable` with `unjudgeable_merge`, the class an answered revert check that cannot decide already gets. Until then such a row stayed pending forever, scoring as a provisional PASS and counted drainable (latent: no row was in it). A clock lives only while its row stays unanswered, and each run prints the next retry close beside drainable (again no stage moved; the diagram is unchanged). This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
 that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail
