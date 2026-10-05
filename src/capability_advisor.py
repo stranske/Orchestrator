@@ -544,7 +544,16 @@ def _record_fact_missing(
                 surface=surface,
                 path=path,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            # Advice remains usable, but missing measurement must be visible. Do not
+            # copy an exception payload that may contain ledger paths or credentials.
+            advice.setdefault("fact_missing_record_errors", []).append(
+                {
+                    "capability_id": row["capability_id"],
+                    "surface": surface,
+                    "error_type": type(exc).__name__,
+                }
+            )
             ok = False
         written += 1 if ok else 0
     return written

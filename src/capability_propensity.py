@@ -901,6 +901,7 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     "declined": [],
                     "fact_missing": [],
                     "fact_missing_facts": {},
+                    "fact_missing_by_surface": {},
                     "decline_reasons": {},
                     "decline_kinds": {},
                     # WHEN it was declined, so the re-offer grace window can be measured. Without
@@ -937,6 +938,10 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
             etype = event.get("type") or event.get("event_type")
             if etype == "match":
                 if meta.get("source") == FACT_MISSING_SOURCE:
+                    surface = str(meta.get(SURFACE_KEY) or meta.get("skill") or "")
+                    on_surface = trial["fact_missing_by_surface"].setdefault(surface, [])
+                    if cap_id not in on_surface:
+                        on_surface.append(cap_id)
                     if cap_id not in trial["fact_missing"]:
                         trial["fact_missing"].append(cap_id)
                     fact = str(meta.get(FACT_MISSING_FACT_KEY) or "").strip()
@@ -3889,7 +3894,8 @@ def record_fact_missing(
         "match",
         ref=experiment_id,
         path=path or capabilities.REG,
-        idempotency_key=f"fact_missing:{capability_id}:{experiment_id}",
+        idempotency_key=f"fact_missing:{capability_id}:{experiment_id}"
+        + (f":surface:{surface}" if surface else ""),
         metadata={
             "source": FACT_MISSING_SOURCE,
             "capability": capability_id,
@@ -3904,9 +3910,7 @@ def surface_fact_missing_total(surface: str, *, path=None, window_days: int = WI
     """How many fact_missing events this surface recorded in the window (not offers or declines)."""
     total = 0
     for trial in experiments(path=path, window_days=window_days):
-        if surface not in (trial.get("skills") or []):
-            continue
-        total += len(trial.get("fact_missing") or [])
+        total += len((trial.get("fact_missing_by_surface") or {}).get(surface, []))
     return total
 
 

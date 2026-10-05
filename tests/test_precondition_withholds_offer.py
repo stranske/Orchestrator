@@ -12,6 +12,46 @@ import capabilities
 import capability_advisor as ca
 import capability_propensity as cp
 
+
+def test_missing_fact_events_deduplicate_per_surface_without_cross_counting(tmp_path):
+    path = _ledger(tmp_path)
+    exp = ca.experiment_id("same bounded assessment")
+    assert cp.record_fact_missing(
+        "runtime-ac-checks", exp, fact="PR size unknown", surface="one", path=path
+    )
+    assert cp.record_fact_missing(
+        "runtime-ac-checks", exp, fact="PR size unknown", surface="two", path=path
+    )
+    assert not cp.record_fact_missing(
+        "runtime-ac-checks", exp, fact="PR size unknown", surface="two", path=path
+    )
+    assert cp.record_fact_missing(
+        "redirect-policy", exp, fact="history unknown", surface="one", path=path
+    )
+    assert cp.surface_fact_missing_total("one", path=path) == 2
+    assert cp.surface_fact_missing_total("two", path=path) == 1
+    assert cp.surface_fact_missing_total("unseen", path=path) == 0
+    assert all(not t["candidates"] and not t["declined"] for t in cp.experiments(path=path))
+
+
+def test_missing_fact_write_failures_are_visible_without_exception_payload(monkeypatch):
+    def fail(*args, **kwargs):
+        raise OSError("secret=private")
+
+    monkeypatch.setattr(cp, "record_fact_missing", fail)
+    advice = {"experiment_id": ca.experiment_id("bounded assessment")}
+    assert (
+        ca._record_fact_missing(
+            advice, [{"capability_id": "runtime-ac-checks"}], surface="closer-lane"
+        )
+        == 0
+    )
+    assert advice["fact_missing_record_errors"] == [
+        {"capability_id": "runtime-ac-checks", "surface": "closer-lane", "error_type": "OSError"}
+    ]
+    assert "secret=private" not in str(advice)
+
+
 CLOSER_BOUND = (
     "adversarial-review",
     "runtime-ac-checks",
