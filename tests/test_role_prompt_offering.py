@@ -24,17 +24,26 @@ def ledger(tmp_path):
 def test_research_program_surface_is_declared_and_binds_role_prompt(tmp_path):
     path = ledger(tmp_path)
     assert "research-program" in advisor.consult_keys()
-    assert advisor.CONSULT_SITES["research-program"]["caller"].endswith("driver.py")
+    assert (
+        advisor.CONSULT_SITES["research-program"]["caller"]
+        == "~/.codex/automations/research-program/driver.py"
+    )
     for surface in ("research-program", "repo-audit:phase-4"):
-        result = advisor.advise(
+        # The offer must explain this caller's batch, even when task classification misses.
+        binding_reason = advisor.SURFACE_BINDINGS[surface]["role-prompt"]
+        assert "batch" in binding_reason.lower()
+        unclassified_task = "qzxv"
+        assert not advisor.classify_task(unclassified_task)
+        for task in (
             "Author a batch of three issue bodies from verified findings",
-            surface=surface,
-            path=path,
-            record=False,
-        )
-        offered = {row["capability_id"]: row for row in result["capabilities"]}
-        assert "role-prompt" in offered
-        assert "role-prompt" in advisor.binding_for(surface, path=path)
+            unclassified_task,
+        ):
+            result = advisor.advise(task, surface=surface, path=path, record=False)
+            offered = {row["capability_id"]: row for row in result["capabilities"]}
+            assert "role-prompt" in offered
+            assert offered["role-prompt"]["bound"] is True
+            assert offered["role-prompt"]["binding_reason"] == binding_reason
+        assert advisor.binding_for(surface, path=path)["role-prompt"] == binding_reason
 
 
 def test_wrong_moment_declines_never_demote(tmp_path, monkeypatch):
