@@ -91,6 +91,14 @@ The single left arc is the loop closing. What it carries back is the point: `fee
 `feedback` (the learner/store) · gates (`testgen_gate`, `local_verify`, `merge_guard`,
 `runtime_ac_gate`, `frontend_verify` (Gate 1), `ux_review.gate_decision` (Gate 2 pass-requirement)).
 
+The runtime-AC rail also has a non-blocking observation edge: keepalive ingest authors one
+issue-derived shadow spec per new linked PR, and switch review consumes its existing Brain
+completion events. Authoring extracts named tests, retains uncertain obligations as manual,
+and records per-check confidence. Execution still requires the existing runtime/command
+switches and an exact PR checkout; an absent checkout is unmeasured. Shadow specs never
+implicitly enable merge enforcement or patch delivery outcomes. Coverage-only pytest options
+are removed for named acceptance checks so test success and coverage policy cannot disagree.
+
 Codex model and reasoning selection is also a deterministic rail: `execution_profiles` maps
 the task and lane to an immutable profile, `router` records the selected profile, and
 `dispatcher` passes its model and effort to `adapters`. An explicit `--profile-id` on a

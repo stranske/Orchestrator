@@ -157,6 +157,11 @@ safety switch, not dead code.
    archival-only. Runtime AC is a hard opt-in machine gate for labeled/spec-backed closer work:
    active progression requires a target-exact spec, `ORCH_RUN_RUNTIME_AC=1`, and `PASS`. The separate
    adversarial reviewer panel remains advisory.
+   New linked keepalive PRs get an unattended issue-derived shadow spec at the existing
+   `keepalive_outcomes.py` ingest edge. Shadow specs carry confidence and retain unencodable
+   tasks as manual checks; they do not implicitly opt a PR into the hard merge gate. Named
+   pytest checks exclude coverage options. Weekly switch review reports authored/executed PRs,
+   would-FAILs, and the named false-FAIL audit sample, with missing execution/audits unmeasured.
 8. **issue_readiness.py** — daily cadence step that decides which open issues the fleet may work,
    removing the owner from the ready-label queue. Four verdicts (auto_ready / owner_review /
    needs_specification / not_opener_work); only risk-labelled AND actionable issues reach the owner,
