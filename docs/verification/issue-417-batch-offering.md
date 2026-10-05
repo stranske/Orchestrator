@@ -68,3 +68,27 @@ because `pypi.org` could not resolve. The named pytest command fails with
 `black: command not found`. The updated named tests and deliberate-break controls
 must run in an environment with those tools. No acceptance checkbox was completed,
 and the edits remain uncommitted because the required Black gate could not pass.
+
+## Decline wording follow-up on 2026-10-05
+
+Extended the existing named wrong-moment regression without adding collected cases.
+It now checks ten hyphenated, spaced, and mixed-case reasons on historical reads,
+and all ten on new writes with `unspecified`, `scope_too_small`, and explicit
+`wrong_moment` kinds. The detector must report all 60 events as non-demotable
+wrong-moment declines and leave the ledger bytes unchanged on both reads.
+
+Standard-library replay copied the three named test functions into a temporary
+runner and supplied temporary paths and `unittest.mock` patches. Each function
+passed against the current modules, failed with `AssertionError` against its
+required deliberate-break private module copy, and passed after restoring that
+copy. SHA-256 checks confirmed all three checkout source modules were unchanged.
+The replay script and output are `/tmp/issue-417-replay.py` and
+`/tmp/issue-417-replay.log` in this runner; these temporary artifacts are not
+durable CI evidence.
+
+This replay is **not pytest acceptance verification**. The named pytest command
+still fails with `No module named pytest`, and both mandatory Black commands fail
+with `black: command not found`. A temporary virtual environment could not install
+the tools because `pypi.org` could not resolve. The acceptance checkboxes remain
+unchecked and this follow-up remains uncommitted until the required Black gate
+and named pytest runs can execute.

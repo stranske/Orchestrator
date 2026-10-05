@@ -49,9 +49,21 @@ def test_research_program_surface_is_declared_and_binds_role_prompt(tmp_path):
 def test_wrong_moment_declines_never_demote(tmp_path, monkeypatch):
     path = ledger(tmp_path)
     rows = capabilities.load(path, create=False)
-    reasons = ("single-body moment", "one-prompt request", "no-batch work")
+    reasons = (
+        "single-body moment",
+        "Single Body moment",
+        "one-prompt request",
+        "ONE PROMPT request",
+        "no-batch work",
+        "No Batch work",
+        "single-prompt request",
+        "SINGLE PROMPT request",
+        "one-body request",
+        "One Body is cheaper by hand",
+    )
+    decline_count = len(reasons) * (propensity.DEMOTION_MIN_DECLINES + 1)
     # Old events remain byte-identical: only their read-time interpretation changes.
-    for index in range(propensity.DEMOTION_MIN_DECLINES + 1):
+    for index in range(decline_count):
         rows["role-prompt"]["event_history"].append(
             {
                 "type": "match",
@@ -71,23 +83,37 @@ def test_wrong_moment_declines_never_demote(tmp_path, monkeypatch):
     report = propensity.detect(path=path)
     assert not [r for r in report["demotions"] if r["capability_id"] == "role-prompt"]
     counts = report["surfaces"]["orchestrate"]
-    assert counts["declines_by_kind"]["role-prompt"] == {
-        "wrong_moment": propensity.DEMOTION_MIN_DECLINES + 1
-    }
+    assert counts["declines_by_kind"]["role-prompt"] == {"wrong_moment": decline_count}
     assert counts["declines_demotable"] == {}
     assert path.read_bytes() == before
     assert propensity.DECLINE_KINDS["wrong_moment"]["demotable"] is False
-    assert propensity.record_decline(
-        "role-prompt",
-        "advice:new",
-        reason="One body is cheaper by hand",
-        kind="scope_too_small",
-        surface="orchestrate",
-        path=path,
-    )
-    trial = next(t for t in propensity.experiments(path=path) if t["experiment_id"] == "advice:new")
-    assert trial["decline_kinds"]["role-prompt"] == "wrong_moment"
-    assert trial["declined_demotable"] == []
+    # Exercise new writes with both inferred kinds and an explicit wrong-moment kind.
+    for kind in (propensity.DECLINE_KIND_DEFAULT, "scope_too_small", "wrong_moment"):
+        for index, reason in enumerate(reasons):
+            experiment_id = f"advice:new-{kind}-{index}"
+            assert propensity.record_decline(
+                "role-prompt",
+                experiment_id,
+                reason=reason,
+                kind=kind,
+                surface="orchestrate",
+                path=path,
+            )
+            trial = next(
+                t
+                for t in propensity.experiments(path=path)
+                if t["experiment_id"] == experiment_id
+            )
+            assert trial["decline_kinds"]["role-prompt"] == "wrong_moment"
+            assert trial["declined_demotable"] == []
+            decline_count += 1
+    before = path.read_bytes()
+    report = propensity.detect(path=path)
+    assert not [r for r in report["demotions"] if r["capability_id"] == "role-prompt"]
+    counts = report["surfaces"]["orchestrate"]
+    assert counts["declines_by_kind"]["role-prompt"] == {"wrong_moment": decline_count}
+    assert counts["declines_demotable"] == {}
+    assert path.read_bytes() == before
 
 
 def test_a_batch_counts_once_against_the_cycle_cap(tmp_path, monkeypatch):
