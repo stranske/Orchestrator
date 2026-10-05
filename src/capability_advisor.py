@@ -508,9 +508,7 @@ def _apply_withhold_for_missing_pr_facts(
             )
         else:
             offered.append(entry)
-    precondition["withheld_for_missing_facts"] = sorted(
-        row["capability_id"] for row in withheld
-    )
+    precondition["withheld_for_missing_facts"] = sorted(row["capability_id"] for row in withheld)
     return offered, withheld
 
 

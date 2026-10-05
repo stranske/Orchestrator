@@ -65,8 +65,7 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
     assert events[0]["metadata"]["capability"] == "runtime-ac-checks"
     assert events[0]["metadata"]["fact"] == "PR size unknown"
     assert not any(
-        (ev.get("metadata") or {}).get("source") == cp.DECLINE_SOURCE
-        for ev in row["event_history"]
+        (ev.get("metadata") or {}).get("source") == cp.DECLINE_SOURCE for ev in row["event_history"]
     )
     again = ca.advise(
         "closer: sweep the merge queue",
@@ -78,7 +77,9 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
     assert again["recorded_fact_missing"] == 0
 
 
-def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet(tmp_path, monkeypatch):
+def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet(
+    tmp_path, monkeypatch
+):
     ledger = _ledger(tmp_path)
 
     def fetch(repository, pr):
@@ -122,7 +123,9 @@ def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet
     assert not result["fact_missing"]
 
 
-def test_detect_reports_fact_missing_per_surface_and_never_as_a_decline(tmp_path, monkeypatch, capsys):
+def test_detect_reports_fact_missing_per_surface_and_never_as_a_decline(
+    tmp_path, monkeypatch, capsys
+):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(ca, "PR_FACTS_FETCH", lambda *a, **k: None)
     ca.advise(
@@ -214,7 +217,15 @@ def test_help_documents_the_pr_fact_context_fields():
         text=True,
         check=True,
     )
-    for field in ("changedFiles", "additions", "deletions", "paths", "labels", "title", "task_text"):
+    for field in (
+        "changedFiles",
+        "additions",
+        "deletions",
+        "paths",
+        "labels",
+        "title",
+        "task_text",
+    ):
         assert field in proc.stdout
 
 

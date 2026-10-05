@@ -7515,9 +7515,7 @@ def main(argv: list[str]) -> int:
                     f"finds={info['finds']}"
                 )
                 if info["fact_missing"]:
-                    print(
-                        f"    fact_missing {info['fact_missing']} — the lane passed no PR facts"
-                    )
+                    print(f"    fact_missing {info['fact_missing']} — the lane passed no PR facts")
             print(
                 f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
                 + (
