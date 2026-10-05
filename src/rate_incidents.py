@@ -210,6 +210,26 @@ def is_codex_work_event(event: dict) -> bool:
     return kind == "turn.completed" or not (isinstance(item, dict) and item.get("type") == "error")
 
 
+def codex_agent_messages(lines: list[str]) -> list[str]:
+    """What the agent SAID in a codex `exec --json` stream: the text of each completed
+    `agent_message` item, in order. Everything else in the stream is what it ran and read, which can
+    quote anything, or the harness talking. Empty when the agent said nothing.
+
+    The one shape codex prints: 733 of 733 agent messages in the codex offload logs on 2026-10-05
+    were an `item.completed` whose item is `{"type": "agent_message", "text": ...}`, none of them
+    empty."""
+    messages = []
+    for line in lines:
+        event = json_event(line) or {}
+        item = event.get("item")
+        if event.get("type") != "item.completed" or not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if item.get("type") == "agent_message" and isinstance(text, str) and text.strip():
+            messages.append(text)
+    return messages
+
+
 def failure_evidence(lines: list[str]) -> list[str]:
     """A failed run's output without the agent's own record of its work.
 
@@ -488,6 +508,15 @@ def _selftest() -> int:
         assert not is_authoritative_error("implemented rate limit handling")
         assert is_authoritative_error("ActionRequiredError: out of usage")
         assert is_authoritative_error("resource_exhausted") and is_authoritative_error("HTTP 429")
+        stream = [
+            '{"type":"item.completed","item":{"type":"command_execution",'
+            '"aggregated_output":"OFFLOAD_INCOMPLETE: quoted by a doc"}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"Report staged."}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"  "}}',
+            "not an event",
+        ]
+        assert codex_agent_messages(stream) == ["Report staged."]
+        assert codex_agent_messages(["not an event"]) == []
         INCIDENT_FILE.write_text('{"prior":true}\n')
         first = record_incident(
             agent="codex",

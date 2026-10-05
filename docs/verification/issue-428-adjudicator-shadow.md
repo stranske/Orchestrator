@@ -45,3 +45,20 @@ Machine-local transcripts and exact role-run IDs are retained under
 `$ORCH_STATE_DIR/capability-program/adjudicator-retro.json`. These artifacts are not committed
 as portable production evidence. Current-head CI, expected checks, complete review threads,
 seven-minute push floor and postmerge `verify:compare` remain the delivery gates.
+
+
+## Closer review reconciliation, round1320
+
+Nullable mergeCommit now has a distinct merge-evidence unavailable error before any
+verifier selection, so the resumable case records a precise retry condition. The MCP
+capability_advice schema accepts both recorded verdict facts and forwards them as
+context. Annotation preserves its documented membership/order invariant; a named
+post-annotation eligibility step withholds non-contested adjudicator offers and
+reports them separately in precondition.withheld. The summary describes all annotated
+candidates, including the explicitly withheld population. No outcome, model default,
+shadow gate or publication authority changes.
+
+Focused retrospective tests passed12 cases including merge-null refusal, direct
+annotation invariance, MCP forwarding and contested/unknown/equal verdict eligibility.
+Advisor, MCP and retrospective module selftests passed. Current-head CI and private
+mirror/live-state-copy validation are still required after integration and push.

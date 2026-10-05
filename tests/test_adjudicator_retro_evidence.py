@@ -94,6 +94,9 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
             ]["ref"]
             == finding["url"]
         )
+        pr["mergeCommit"] = None
+        with self.assertRaisesRegex(ValueError, "merge commit unavailable"):
+            retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})
 
     def test_evidence_timeout_is_saved_and_the_batch_continues(self):
         temporary = tempfile.TemporaryDirectory()

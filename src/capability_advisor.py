@@ -583,6 +583,7 @@ def advise(
             precondition = _annotate_preconditions(
                 entries, repository, repo_path, pr_facts=pr_facts, pr=pr
             )
+            _filter_contested_verdict_offers(entries, precondition)
             _attach_how_to_use(entries)
             try:
                 import capability_propensity
@@ -801,6 +802,7 @@ def advise(
     # evidence-to-effort finding of a third audit on a repository that has a display surface, so two
     # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
     precondition = _annotate_preconditions(matched, repository, repo_path, pr_facts=pr_facts, pr=pr)
+    _filter_contested_verdict_offers(matched, precondition)
     _attach_how_to_use(matched)
     try:
         import capability_propensity
@@ -2750,6 +2752,22 @@ def missing_precondition_inputs(
     return sorted(needed)
 
 
+def _filter_contested_verdict_offers(entries: list[dict], summary: dict) -> None:
+    """Withhold the adjudicator outside annotation; report its distinct eligibility gate."""
+    withheld = [
+        entry
+        for entry in entries
+        if entry["capability_id"] == "role-adjudicator"
+        and entry.get("pr_requirement_met") is not True
+    ]
+    summary["withheld"] = [
+        {"capability_id": entry["capability_id"], "reason": entry.get("precondition_note")}
+        for entry in withheld
+    ]
+    if withheld:
+        entries[:] = [entry for entry in entries if entry not in withheld]
+
+
 def _annotate_preconditions(
     entries: list[dict],
     repository: str,
@@ -2792,11 +2810,6 @@ def _annotate_preconditions(
             }
         if verdict["unevaluated_because"]:
             unevaluated[entry["capability_id"]] = list(verdict["unevaluated_because"])
-    entries[:] = [
-        entry
-        for entry in entries
-        if entry["capability_id"] != "role-adjudicator" or entry.get("pr_requirement_met") is True
-    ]
     missing = missing_precondition_inputs(
         declared, repository=repository, repo_path=repo_path, pr=pr
     )

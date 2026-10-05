@@ -94,6 +94,10 @@ def fetch_evidence(row: dict) -> dict:
     )["data"]["repository"]["pullRequest"]
     if not pr or pr["state"] != "MERGED":
         raise ValueError("merged PR evidence unavailable")
+    if not (pr.get("mergeCommit") or {}).get("oid"):
+        raise ValueError(
+            "merged PR merge commit unavailable; retry when merge-bound evidence exists"
+        )
     if pr["comments"]["pageInfo"]["hasPreviousPage"] or pr["files"]["pageInfo"]["hasNextPage"]:
         raise ValueError("truncated verifier comment or diff evidence")
     decision = verifier_evidence.decision_from_pr(repo, pr)

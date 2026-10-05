@@ -138,6 +138,33 @@ def test_closer_lane_offers_the_adjudicator_only_on_a_contested_verdict(
         )
         ids = {m["capability_id"] for m in result["capabilities"]}
         assert ("role-adjudicator" in ids) is offered
+        withheld = result["precondition"]["withheld"]
+        assert bool(withheld) is not offered
+        if withheld:
+            assert withheld[0]["capability_id"] == "role-adjudicator"
+
+
+def test_adjudicator_annotation_preserves_membership_when_verdict_is_unknown():
+    entries = [{"capability_id": "role-adjudicator"}]
+    entry = entries[0]
+    summary = advisor._annotate_preconditions(entries, "owner/repo", "", pr_facts={})
+    assert entries == [entry]
+    assert summary["declared"] == ["role-adjudicator"]
+    assert "role-adjudicator" in summary["unevaluated"]
+
+
+def test_mcp_forwards_recorded_verdicts(monkeypatch):
+    import mcp_server
+
+    calls = []
+    monkeypatch.setattr(advisor, "advise", lambda *args, **kwargs: calls.append(kwargs) or {})
+    mcp_server._call_tool(
+        "capability_advice",
+        {"task": "disputed result", "verifier_verdict": "NON_PASS", "merge_disposition": "PASS"},
+    )
+    assert calls[0]["context"] == {"verifier_verdict": "NON_PASS", "merge_disposition": "PASS"}
+    tool = next(tool for tool in mcp_server.TOOLS if tool["name"] == "capability_advice")
+    assert {"verifier_verdict", "merge_disposition"} <= tool["inputSchema"]["properties"].keys()
 
 
 def test_missing_evidence_never_dispatches_or_becomes_agreement(private_brain, tmp_path):
