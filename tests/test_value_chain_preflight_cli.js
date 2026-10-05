@@ -104,3 +104,44 @@ test('value-chain preflight CLI names a missing dedup requirement', (t) => {
   w.assertReadOnly();
   assert.deepEqual(fs.readdirSync(w.root).sort(), ['runtime']);
 });
+
+for (const [label, changes, requirement] of [
+  ['consumer', { downstream_consumer: '' }, 'outcome_path'],
+  ['learning sink', { learning_sink: '', outcome_links: [] }, 'outcome_path'],
+  ['kill switch', { kill_switch: '' }, 'kill_switch'],
+  ['rollback', { rollback: {} }, 'rollback'],
+  ['review cadence', { trigger_cadence: '', expiry: null, activation_deadline: null },
+    'expiry_or_cadence'],
+]) {
+  test(`value-chain preflight CLI rejects a missing ${label}`, (t) => {
+    const w = world(t);
+    const result = w.preflight(JSON.stringify({ ...w.spec, ...changes }));
+    assert.equal(result.ready_to_build, false);
+    assert.deepEqual(result.declarable_missing, [requirement]);
+    assert.equal(result.checks[requirement].ok, false);
+    // A declaration failure must not turn unverified implementation obligations into passes.
+    assert.deepEqual(result.obligations, ['caller_exists', 'findable', 'fixture', 'heartbeat']);
+    for (const obligation of result.obligations) {
+      assert.equal(result.checks[obligation].ok, null, obligation);
+    }
+    w.assertReadOnly();
+    assert.deepEqual(fs.readdirSync(w.root), ['runtime']);
+  });
+}
+
+test('value-chain preflight CLI reports every missing declaration in one result', (t) => {
+  const w = world(t);
+  const result = w.preflight(JSON.stringify({ ...w.spec,
+    notes: '', downstream_consumer: '', learning_sink: '', outcome_links: [],
+    kill_switch: '', rollback: {}, trigger_cadence: '', expiry: null,
+    activation_deadline: null }));
+  assert.equal(result.ready_to_build, false);
+  assert.deepEqual(result.declarable_missing, [
+    'dedup_recorded', 'outcome_path', 'kill_switch', 'rollback', 'expiry_or_cadence',
+  ]);
+  for (const requirement of result.declarable_missing) {
+    assert.equal(result.checks[requirement].ok, false, requirement);
+  }
+  w.assertReadOnly();
+  assert.deepEqual(fs.readdirSync(w.root), ['runtime']);
+});
