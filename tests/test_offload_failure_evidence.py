@@ -99,9 +99,14 @@ REFUSED = [
 ]
 
 
-@pytest.fixture
-def stores(tmp_path, monkeypatch):
-    """Private incident authority, shed markers and offload logs; no agent CLI, Brain or ledger."""
+_REAL_BUILD_COMMAND = adapters.build_command
+
+
+def isolated_offload(tmp_path: Path, monkeypatch) -> Path:
+    """Private incident authority, shed markers and offload logs; no agent CLI, Brain or ledger.
+
+    codex's argv is the real adapter's, so a run asks for its `exec --json` stream exactly when a
+    production run does (every mode but `assess`). Every other agent's argv is a stub."""
     monkeypatch.setattr(rate_incidents, "HANDOFF", tmp_path)
     monkeypatch.setattr(rate_incidents, "INCIDENT_FILE", tmp_path / "rate-limit-incidents.ndjson")
     monkeypatch.setattr(rate_incidents, "LOCK_FILE", tmp_path / "rate-limit-incidents.ndjson.lock")
@@ -117,7 +122,13 @@ def stores(tmp_path, monkeypatch):
     monkeypatch.setattr(
         dispatcher.adapters, "can_report_cli_identity", lambda *args: (False, "test")
     )
-    monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *args, **kwargs: ["agent"])
+    monkeypatch.setattr(
+        dispatcher.adapters,
+        "build_command",
+        lambda agent, *args, **kwargs: (
+            _REAL_BUILD_COMMAND(agent, *args, **kwargs) if agent == "codex" else ["agent"]
+        ),
+    )
     monkeypatch.setattr(dispatcher.adapters, "model_identity", lambda *args, **kwargs: "test-model")
     monkeypatch.setattr(dispatcher.adapters, "record_ledger", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatcher.feedback, "record_run", lambda *args, **kwargs: None)
@@ -126,13 +137,26 @@ def stores(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _offload(monkeypatch, stores, agent: str, returncode: int, stdout: str, stderr: str = ""):
+@pytest.fixture
+def stores(tmp_path, monkeypatch):
+    return isolated_offload(tmp_path, monkeypatch)
+
+
+def _offload(
+    monkeypatch,
+    stores,
+    agent: str,
+    returncode: int,
+    stdout: str,
+    stderr: str = "",
+    mode: str | None = None,
+):
     monkeypatch.setattr(
         dispatcher.subprocess,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(["agent"], returncode, stdout, stderr),
     )
-    return dispatcher.offload(agent, "test", cwd=str(stores))
+    return dispatcher.offload(agent, "test", cwd=str(stores), mode=mode)
 
 
 def _incidents() -> list[dict]:
@@ -147,8 +171,10 @@ def _shed(agent: str) -> bool:
 
 @pytest.mark.parametrize(
     "returncode,exit_code",
-    [(0, 70), (1, 1)],
-    ids=["measured-exit-70-from-the-quoted-marker", "codex-exited-1-after-reading-the-doc"],
+    # The measured runs were recorded as exit 70 from the marker their reads quoted; since
+    # 2026-10-05 such a run exits 0 (tests/test_offload_incomplete_reads_the_agent.py).
+    [(0, 0), (1, 1)],
+    ids=["measured-finished-run-quoting-the-marker", "codex-exited-1-after-reading-the-doc"],
 )
 def test_a_failed_codex_offload_whose_work_quotes_a_limit_is_no_incident(
     monkeypatch, stores, returncode, exit_code
@@ -218,7 +244,9 @@ def test_a_successful_offload_keeps_the_envelope_path(monkeypatch, stores):
     result = _offload(monkeypatch, stores, "codex", 0, "\n".join(clean))
     assert result["exit"] == 0 and result["rate_incident_evidence"]["confidence"] == "none"
     assert _incidents() == []
-    result = _offload(monkeypatch, stores, "codex", 0, "partial answer\n[resource_exhausted]")
+    # Text stdout, so codex's `assess` mode: every other codex mode prints its event stream.
+    text = "partial answer\n[resource_exhausted]"
+    result = _offload(monkeypatch, stores, "codex", 0, text, mode="assess")
     assert result["exit"] == 0 and result["rate_incident_evidence"]["category"] == "capacity"
     assert [r["run_id"] for r in _incidents()] == [result["run_id"]] and _shed("codex")
 
