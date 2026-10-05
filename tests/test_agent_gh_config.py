@@ -314,3 +314,48 @@ def test_both_experiment_paths_pin_gh(sandbox, monkeypatch, tmp_path):
     evaluator = exp_abcd._eval_command("codex", str(tmp_path / "prompt.txt"))
     assert _pins(arm) == expected, arm
     assert _pins(evaluator) == expected, evaluator
+
+
+@pytest.mark.parametrize(
+    "variable,value,suffix",
+    [
+        ("GH_CONFIG_DIR", "config/gh", "config/gh"),
+        ("XDG_CONFIG_HOME", "config", "config/gh"),
+    ],
+)
+def test_relative_config_paths_keep_dispatcher_identity_across_child_cwd(
+    sandbox, monkeypatch, variable, value, suffix
+):
+    parent = sandbox / "dispatcher-cwd"
+    child = sandbox / "child-cwd"
+    parent.mkdir()
+    child.mkdir()
+    monkeypatch.chdir(parent)
+    monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv(variable, value)
+    prelude = dispatcher._agent_runtime_prelude("codex")
+    command = "printf '%s' \"$GH_CONFIG_DIR\""
+    ran = subprocess.run(
+        ["bash", "-c", prelude + command],
+        cwd=child,
+        env=_child_env(sandbox),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert ran.returncode == 0, ran.stderr
+    assert Path(ran.stdout) == parent / suffix
+
+
+def test_dispatcher_selftest_runs_with_the_gh_config_pin_disabled(sandbox):
+    ran = subprocess.run(
+        [sys.executable, str(paths.MODULE_DIR / "dispatcher.py"), "--selftest"],
+        cwd=sandbox,
+        env=_child_env(sandbox, ORCH_AGENT_GH_CONFIG_DISABLED="1"),
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert ran.returncode == 0, (ran.stdout[-2000:], ran.stderr[-2000:])
+    assert "dispatcher.py selftest: OK" in ran.stdout

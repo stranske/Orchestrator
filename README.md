@@ -506,7 +506,8 @@ safety switch, not dead code.
   before the grant, and codex >= 0.158 refuses its `git commit` again;
   `ORCH_AGENT_GH_CONFIG_DISABLED=1` stops pinning a dispatched agent's gh to the config its
   dispatcher's gh reads (`dispatcher.gh_config_dir`), so the prelude is exactly what it was before
-  the pin, and gh in every agent stops at "gh auth login" again.
+  the pin. Inherited explicit config or token authentication remains effective; agents depending
+  on the pin return to the empty runtime config and "gh auth login".
 - **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
   pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
   result, not a reason to seed synthetic data.

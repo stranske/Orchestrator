@@ -568,8 +568,8 @@ def _ensure_agent_runtime(agent: str) -> Path:
 
 
 # Kill switch for the gh config pin in `_agent_runtime_prelude`. Set to 1 and the prelude is built
-# exactly as it was before the pin existed, so gh in every dispatched agent reads the empty runtime
-# config again and stops at "gh auth login".
+# exactly as it was before the pin existed. Inherited explicit config or token authentication still
+# works; otherwise gh reads the empty runtime config and stops at "gh auth login".
 AGENT_GH_CONFIG_DISABLED_ENV = "ORCH_AGENT_GH_CONFIG_DISABLED"
 
 
@@ -581,12 +581,16 @@ def gh_config_dir() -> Path:
     so a dispatched agent's gh resolves the same account as the gh of whoever dispatched it.
     """
     explicit = os.environ.get("GH_CONFIG_DIR")
-    if explicit:
-        return Path(explicit)
     xdg = os.environ.get("XDG_CONFIG_HOME")
-    if xdg:
-        return Path(xdg) / "gh"
-    return REAL_HOME / ".config" / "gh"
+    if explicit:
+        config = Path(explicit)
+    elif xdg:
+        config = Path(xdg) / "gh"
+    else:
+        config = REAL_HOME / ".config" / "gh"
+    # Child wrappers run in a different cwd. Anchor the parent's relative config before export;
+    # absolute() preserves symlink/.. spelling and does not require the directory to exist.
+    return config.absolute()
 
 
 def _agent_runtime_prelude(agent: str) -> str:
@@ -2415,8 +2419,11 @@ def _selftest() -> None:
         ), w
         assert "cursor-agent.env" in w and "$HOME/.cursor" not in w and "set -a" in w, w
         # gh keeps the dispatcher's config through the XDG redirect: a path, never a token.
-        gh_pin = f"export GH_CONFIG_DIR={shlex.quote(str(gh_config_dir()))};"
-        assert w.count(gh_pin) == 1 and w.index(gh_pin) < w.index("cursor-agent -p"), w
+        if os.environ.get(AGENT_GH_CONFIG_DISABLED_ENV) == "1":
+            assert "export GH_CONFIG_DIR=" not in w, w
+        else:
+            gh_pin = f"export GH_CONFIG_DIR={shlex.quote(str(gh_config_dir()))};"
+            assert w.count(gh_pin) == 1 and w.index(gh_pin) < w.index("cursor-agent -p"), w
         assert "GH_TOKEN" not in w and "GITHUB_TOKEN" not in w, w
         assert w.rstrip().endswith(")") and f"{CLAIMS_PY}" not in w, w
         _selftest_spawn_reads_the_agents_status(by_t["stranske/Repo#1"], Path(tmp))

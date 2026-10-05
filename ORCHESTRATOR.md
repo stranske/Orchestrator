@@ -95,7 +95,8 @@ cursor-agent live outside the default PATH):
   Antigravity project/app data to `~/.codex/orchestrator/agent-runtime/gemini/.gemini`; isolated offloads
   pass the isolated copy via absolute `--add-dir`. Every agent's `XDG_CONFIG_HOME` moves into its runtime,
   but its gh keeps the config the dispatcher's gh reads (`GH_CONFIG_DIR`, `dispatcher.gh_config_dir`), so
-  `gh` stays authenticated from the keyring without a token in the agent's environment. Gemini/AGY print mode passes an explicit requested model
+  `gh` uses the same credential source when its credential store is accessible. Relative config
+  paths are anchored to the dispatcher's cwd, and the prelude exports only that path. Gemini/AGY print mode passes an explicit requested model
   (`ORCH_GEMINI_MODEL`, default `gemini-2.5-pro`) because Antigravity 1.0.10 can otherwise exit 0 with no
   stdout and only log "neither PlanModel nor RequestedModel specified". Gemini offloads also fail closed
   when stdout is only a progress/deferred-status update (for example, "waiting for pytest; I will inspect
