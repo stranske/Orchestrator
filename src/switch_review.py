@@ -1627,6 +1627,10 @@ def format_report(rep: dict) -> str:
         import value_chain_monitor
 
         lines += value_chain_monitor.format_lines(rep["value_chain"])
+    if "issue_size_quality" in rep:
+        import issue_size_quality
+
+        lines += issue_size_quality.format_lines(rep["issue_size_quality"])
     if rep["held_off"]:
         lines += ["## Held OFF", ""]
         for row in rep["held_off"]:
@@ -2483,6 +2487,19 @@ def main(argv: list[str]) -> int:
                 "errors": [f"Value-chain setup or input collection failed: {exc}"]
             }
     rep = review(env=env, sources=sources, value_chain_inputs=value_chain_inputs)
+    # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
+    # Pure report/selftest readers keep their no-network and no-state-write contract.
+    if "issue-size-quality" not in env.get("ORCH_DISABLE_STEPS", "").split(","):
+        import issue_size_quality
+
+        try:
+            rep["issue_size_quality"] = issue_size_quality.run(
+                gh_fn=_gh_call, repos=issue_size_quality.fleet_repos()
+            )
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — preserve the weekly report on unavailable evidence
+            rep["issue_size_quality"] = {"status": "unknown", "errors": [str(exc)]}
     if args.do_raise:
         if not APPLY_ENABLED:
             print("refusing to raise: set ORCH_SWITCH_REVIEW=1", file=sys.stderr)
