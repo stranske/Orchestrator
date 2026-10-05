@@ -369,3 +369,71 @@ def test_followup_cli_prints_one_summary_line_or_default_json(monkeypatch, capsy
     assert exp_abcd.main(["followup"]) == 0
     default = json.loads(capsys.readouterr().out)
     assert default["ship_gate"]["evaluated"] == default["ship_gate"]["launchable"] == 0
+
+
+@pytest.mark.parametrize("checkpoint_exists", [False, True])
+def test_legacy_checkpoint_replace_failure_preserves_launch_availability(
+    checkpoint_exists, monkeypatch
+):
+    now = int(time.time())
+    legacy = _finished_dir("legacy", now=now)
+    checkpoint = legacy / "ship-gate.json"
+    if not checkpoint_exists:
+        checkpoint.unlink()
+    _promotion_dir("pending", evaluated_at=now - 3600)
+    os.utime(legacy, (now, now))
+    stamp = _stamp(26 * 3600)
+    before = stamp.stat().st_mtime
+    original_replace = synthesis_promotion.os.replace
+    attempts = []
+
+    def fail_checkpoint_replace(source, destination):
+        if str(destination) == str(checkpoint):
+            attempts.append(destination)
+            raise OSError("injected checkpoint replace failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(synthesis_promotion.os, "replace", fail_checkpoint_replace)
+    calls = []
+    out = _followup(calls)
+
+    assert calls == ["pending"], "legacy checkpoint I/O cannot re-hold unrelated launches"
+    assert out["ship_gate"]["finished"] == 0
+    assert out["ship_gate"]["launched"] == 1
+    assert stamp.stat().st_mtime == before
+    assert attempts == ([] if checkpoint_exists else [checkpoint])
+    if not checkpoint_exists:
+        row = next(row for row in out["promotions"] if row["exp_id"] == "legacy")
+        assert "injected checkpoint replace failure" in row["checkpoint_error"]
+        assert not checkpoint.exists()
+        assert not list(legacy.glob(".ship-gate.json.*.tmp"))
+    else:
+        assert checkpoint.read_text() == "{}\n"
+
+
+def test_new_finish_checkpoint_replace_failure_still_blocks_launches(monkeypatch):
+    now = int(time.time())
+    expired = _promotion_dir("expired", evaluated_at=now - 20 * 86400)
+    pending = _promotion_dir("pending", evaluated_at=now - 3600)
+    os.utime(expired, (now, now))
+    os.utime(pending, (now - 1, now - 1))
+    stamp = _stamp(26 * 3600)
+    before = stamp.stat().st_mtime
+    original_replace = synthesis_promotion.os.replace
+
+    def fail_checkpoint_replace(source, destination):
+        if str(destination) == str(expired / "ship-gate.json"):
+            raise OSError("injected new-finish checkpoint failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(synthesis_promotion.os, "replace", fail_checkpoint_replace)
+    calls = []
+    out = _followup(calls)
+
+    assert calls == []
+    assert out["ship_gate"]["inflight"] is True
+    assert stamp.stat().st_mtime == before
+    assert not (expired / "ship-gate.json").exists()
+    assert not list(expired.glob(".ship-gate.json.*.tmp"))
+    row = next(row for row in out["promotions"] if row["exp_id"] == "expired")
+    assert "injected new-finish checkpoint failure" in row["error"]

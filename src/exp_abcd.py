@@ -1551,7 +1551,9 @@ def followup(
     }
     out["ship_gate"] = ship_gate
 
-    def persist_terminal_checkpoint(edir: Path, state: dict, *, phase_before: str | None) -> None:
+    def persist_terminal_checkpoint(
+        edir: Path, state: dict, *, phase_before: str | None
+    ) -> str | None:
         nonlocal launch_available
         phase = state.get("delivery_phase")
         if phase not in {"candidate_ready", "discarded", "durable"}:
@@ -1581,9 +1583,14 @@ def followup(
                 return
             # Legacy promotions may lack a local checkpoint after an earlier finish. Repair the
             # file without re-holding launches or counting another finish.
-            (edir / "ship-gate.json").write_text(json.dumps(payload, indent=2) + "\n")
+            try:
+                synthesis_promotion._atomic_json(edir / "ship-gate.json", payload)
+            except OSError as exc:
+                # Local legacy evidence repair is independent of synthesis safety.
+                # Report the failed repair without manufacturing inflight work or a hold.
+                return str(exc)[:256]
             return
-        (edir / "ship-gate.json").write_text(json.dumps(payload, indent=2) + "\n")
+        synthesis_promotion._atomic_json(edir / "ship-gate.json", payload)
         gate_stamp.touch()
         launch_available = False
         ship_gate["finished"] += 1
@@ -1637,7 +1644,7 @@ def followup(
                 mirror_fn=promotion_mirror_fn,
             )
             state = promotion["state"]
-            persist_terminal_checkpoint(edir, state, phase_before=phase_before)
+            checkpoint_error = persist_terminal_checkpoint(edir, state, phase_before=phase_before)
             actions = promotion.get("actions") or []
             if "synthesis_launched" in actions:
                 ship_gate["launched"] += 1
@@ -1650,6 +1657,7 @@ def followup(
                 {
                     "exp_id": edir.name,
                     "phase_before": phase_before,
+                    **({"checkpoint_error": checkpoint_error} if checkpoint_error else {}),
                     "delivery_phase": phase_after,
                     "canonical_state": state.get("canonical_state"),
                     "actions": actions,
