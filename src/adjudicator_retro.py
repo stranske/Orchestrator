@@ -103,10 +103,8 @@ def fetch_evidence(row: dict) -> dict:
     finding = next(
         c
         for c in reversed(comments)
-        if (c.get("author") or {}).get("login") in verifier_evidence.TRUSTED_AUTHORS
-        and any(
-            json.loads(raw) == decision for raw in verifier_evidence.MARKER_RE.findall(c["body"])
-        )
+        if verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}})
+        == decision
     )
     rollup = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
     if not rollup:
@@ -274,7 +272,15 @@ def run(
                         "reject_blocker": "PASS",
                     }.get(entry["decision"])
                 entry["cost_usd"] = measured_cost(result.get("backend_run_id"), db)
-        except (ValueError, KeyError, TypeError, RuntimeError, OSError, sqlite3.Error) as exc:
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            RuntimeError,
+            OSError,
+            sqlite3.Error,
+            subprocess.TimeoutExpired,
+        ) as exc:
             entry["error"] = str(exc)
         saved[case_id] = entry
         # Persist every attempt so an interrupted batch does not repeat successful paid calls.
