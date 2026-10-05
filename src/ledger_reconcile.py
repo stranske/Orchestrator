@@ -34,8 +34,11 @@ import rate_incidents
 
 # A RUN THE PROVIDER REFUSED BEFORE IT DID ANYTHING IS INFRASTRUCTURE, NOT CAPABILITY (§2).
 # Measured 2026-10-04: five codex testgen delegates dispatched 2026-09-15 11:31-11:33Z each died in
-# 4-5 s on "You've hit your usage limit" with no command run, and exited 0, so the rc>128 rule below
-# could never see them. Outcome ingest then scored them from whatever their issues' PRs did: two
+# 4-5 s on "You've hit your usage limit" with no command run. A refusal is not a signal death, so the
+# rc>128 rule below could never see them. (Their done markers said rc 0, but that was the claims
+# release's status, which the dispatch wrapper read instead of the agent's until 2026-10-04; codex
+# itself exits 1 on a refused turn, 10 of 10 in the offload ledger, which records the agent's own
+# status.) Outcome ingest then scored them from whatever their issues' PRs did: two
 # abandoned FAILs, and three PASSes credited through `orchestrator/issue-N` PRs another run had
 # merged, two of them a day before the run started.
 #
@@ -75,29 +78,54 @@ def provider_limit_before_work(lines: list[str]) -> dict | None:
     """
     failure = None
     for line in lines:
-        text = line.strip()
-        if not text.startswith("{"):
+        event = _json_event(line)
+        if event is None:
             continue
-        try:
-            event = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        kind = event.get("type")
-        if kind in _CODEX_WORK_EVENTS:
-            item = event.get("item")
-            if kind == "turn.completed" or not (
-                isinstance(item, dict) and item.get("type") == "error"
-            ):
-                return None  # the run did something, so whatever ended it is not this rule's
-        elif kind == "turn.failed" and failure is None:
+        if _is_codex_work_event(event):
+            return None  # the run did something, so whatever ended it is not this rule's
+        if event.get("type") == "turn.failed" and failure is None:
             error = event.get("error")
             message = str(error.get("message") or "") if isinstance(error, dict) else ""
             category, subcategory, confidence = rate_incidents.classify_provider_failure(message)
             if confidence == "high":
                 failure = {"category": category, "subcategory": subcategory, "message": message}
     return failure
+
+
+def _json_event(line: str) -> dict | None:
+    """The JSON object this log line holds, or None for any other line."""
+    text = line.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        event = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def _is_codex_work_event(event: dict) -> bool:
+    """A codex `exec --json` event that means the run DID something: the agent's own record of what
+    it ran, read and said. An `error` item is the harness talking, not the agent working."""
+    kind = event.get("type")
+    if kind not in _CODEX_WORK_EVENTS:
+        return False
+    item = event.get("item")
+    return kind == "turn.completed" or not (isinstance(item, dict) and item.get("type") == "error")
+
+
+def _failure_evidence(lines: list[str]) -> list[str]:
+    """A failed run's log segment without the agent's own record of its work.
+
+    A failed run's log is read as error evidence, but a codex `exec --json` transcript is also every
+    command the agent ran and every file it read: a run that `sed`s a doc about quotas carries
+    "quota exhausted" in an `item.completed` event. On 2026-10-04, 11 of the 64 codex dispatch
+    transcripts did, with no refusal anywhere, and the offload path, which reads a failed run's whole
+    stdout, had recorded two such runs (2026-09-19, 09-20) as codex quota incidents, each shedding
+    the seat. Codex's own failure evidence is its harness events (`turn.failed`, `error`) and its
+    stderr lines, which stay. A text-only log has no such structure and stays whole.
+    """
+    return [line for line in lines if not _is_codex_work_event(_json_event(line) or {})]
 
 
 def _settle_provider_limit_death(run_id: str, evidence: dict, *, dry_run: bool) -> str:
@@ -240,18 +268,20 @@ def _classify_run_log_segment(
     """Classify only this detached run's bounded log segment (fail-open)."""
     try:
         combined_text = "\n".join(lines)
-        # The harness's own refusal event is provider evidence whatever the exit code: codex exits
-        # 0 on a refused turn, so the gate below took all five 2026-09-15 refusals for ordinary
-        # output (exit 0 or unknown), and none of them recorded an incident or shed the seat.
+        # The harness's own refusal event is provider evidence whatever the exit code: the dispatch
+        # wrapper handed the claims release's status (0) to all five 2026-09-15 refusals, so the
+        # gate below took them for ordinary output, and none recorded an incident or shed the seat.
         refusal = provider_limit_before_work(lines)
         if refusal is not None:
             combined_text = refusal["message"]
+        # A FAILED run's log is error evidence, less the agent's own record of its work, which is
+        # never the provider talking (_failure_evidence).
+        elif successful is False:
+            combined_text = "\n".join(_failure_evidence(lines))
         # Successful or provenance-unknown task logs are ordinary model output. Only the strict
         # successful-stdout envelope may promote their text to provider evidence; otherwise test
         # fixtures and reviews that discuss HTTP 429/resource exhaustion become incidents.
-        elif successful is not False and not rate_incidents.stdout_carries_capacity_evidence(
-            combined_text
-        ):
+        elif not rate_incidents.stdout_carries_capacity_evidence(combined_text):
             return None
         evidence_result = rate_incidents.get_structured_evidence(
             error_text=combined_text,
@@ -410,7 +440,8 @@ def _done_marker(log_file: Path | None, run_id: str) -> dict[str, Any] | None:
     """Read the shell-native completion marker (adapters.done_marker_cmd) for a run whose python
     completion step never ran — observed SIGKILLed mid-write 522x (2026-07-03 audit F2). The
     marker's {"run_id","rc","ts"} lets reconcile recover latency/exit instead of dropping the
-    run's telemetry."""
+    run's telemetry; its "rc_of" says whose status "rc" is, and a marker without it predates the
+    dispatch wrapper reading the agent's (see the signal-death rule in reconcile)."""
     if log_file is None:
         return None
     path = log_file.parent / "done" / f"{run_id}.json"
@@ -419,6 +450,16 @@ def _done_marker(log_file: Path | None, run_id: str) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return obj if isinstance(obj, dict) and obj.get("run_id") == run_id else None
+
+
+def _signal_death_rc(marker: dict[str, Any] | None) -> int | None:
+    """The marker's rc when it reads as death by signal (128 + the signal, so 129-255), else None.
+    999 is the marker's own sentinel for an rc variable the wrapper never set, not a signal."""
+    try:
+        rc = int(marker["rc"]) if marker is not None and marker.get("rc") is not None else None
+    except (TypeError, ValueError):
+        return None
+    return rc if rc is not None and 128 < rc < 256 else None
 
 
 def resolve_unresolved_worker_attempts(*, apply: bool = False, limit: int = 5000) -> dict:
@@ -760,6 +801,7 @@ def reconcile(
     profile_unresolved_backfills = 0
     profile_resolved_backfills = 0
     infra_classified = 0
+    infra_unattributed_marker_rc = 0
     resume_tokens_captured = 0
     owner_questions_recorded = 0
     log_costs_harvested = 0
@@ -922,12 +964,16 @@ def reconcile(
         # item 9 two-tier enum: rc>128 means the AGENT process died by SIGNAL — its non-merged
         # outcome is infrastructure noise, not capability evidence; classify so learners skip it.
         # Eventual-consistent: if the outcome row doesn't exist yet, a later daily pass catches it.
-        try:
-            rc_val = int(marker_rc) if marker_rc is not None else None
-        except (TypeError, ValueError):
-            rc_val = None
-        if rc_val is not None and rc_val > 128 and not dry_run:
-            if feedback.mark_transient_infra(run_id, reason=f"marker rc={rc_val}"):
+        # Only a marker that says its rc is the agent's may say so. A dispatch marker written
+        # before 2026-10-04 holds the claims release's status under the same key: all 31 live
+        # rc=137 markers were the release SIGKILLed after its agent had finished, and the six rows
+        # they classified were every row this rule had ever classified. Such a marker is counted,
+        # never classified: unknown is not a signal death.
+        signal_rc = _signal_death_rc(marker)
+        if signal_rc is not None and (marker or {}).get("rc_of") != adapters.MARKER_RC_OF_AGENT:
+            infra_unattributed_marker_rc += 1
+        elif signal_rc is not None and not dry_run:
+            if feedback.mark_transient_infra(run_id, reason=f"marker rc={signal_rc}"):
                 infra_classified += 1
         if not (tokens_in or tokens_out or cost_usd or latency_s):
             skipped["no_measurement"] += 1
@@ -967,6 +1013,9 @@ def reconcile(
         # unresolved 1414` is a coverage statement, while either number alone is not.
         "profile_resolved_backfills": profile_resolved_backfills,
         "infra_classified": infra_classified,
+        # BESIDE it, never instead: markers whose rc reads as a signal death but is not the agent's
+        # (written before the wrapper read the agent's status), so the rule above cannot use them.
+        "infra_unattributed_marker_rc": infra_unattributed_marker_rc,
         # Runs whose own log shows the provider refusing them before any work, partitioned by why
         # each was or was not classified transient_infra (PROVIDER_LIMIT_BUCKETS).
         "provider_limit_deaths": provider_limit_deaths,
@@ -996,6 +1045,10 @@ def _print_summary(summary: dict[str, Any], *, as_json: bool):
     print(
         "provider refusals before any work: "
         + ", ".join(f"{key} {deaths[key]}" for key in ("seen", *PROVIDER_LIMIT_BUCKETS))
+    )
+    print(
+        f"agent signal deaths: classified {summary['infra_classified']}, marker rc not the "
+        f"agent's {summary['infra_unattributed_marker_rc']}"
     )
     if summary["skipped"]:
         print(f"skipped: {json.dumps(summary['skipped'], sort_keys=True)}")
@@ -1115,7 +1168,22 @@ def _selftest():
         done_dir = klog.parent / "done"
         done_dir.mkdir(exist_ok=True)
         (done_dir / "killed-1.json").write_text(
-            json.dumps({"run_id": "killed-1", "rc": 137, "ts": 160})
+            json.dumps({"run_id": "killed-1", "rc": 137, "rc_of": "agent", "ts": 160})
+        )
+        # The same rc in a marker that does not say whose it is: the dispatch wrapper wrote these
+        # until 2026-10-04 with its claim release's status, so it is never read as the agent's.
+        feedback.record_run("released-1", "stranske/Repo#5", "implement", "cursor", mode="local")
+        adapters.record_ledger(
+            "cursor",
+            count=1,
+            event="start",
+            run_id="released-1",
+            target="stranske/Repo#5",
+            log_file=str(klog),
+            ts=100,
+        )
+        (done_dir / "released-1.json").write_text(
+            json.dumps({"run_id": "released-1", "rc": 137, "ts": 170})
         )
 
         # item 9: the killed run's non-merged outcome must get classified transient_infra from
@@ -1123,16 +1191,24 @@ def _selftest():
         feedback.record_outcome(
             "killed-1", adjudicated_verdict="FAIL", merged=False, durability="abandoned"
         )
+        feedback.record_outcome(
+            "released-1", adjudicated_verdict="FAIL", merged=False, durability="abandoned"
+        )
 
         summary = reconcile(adapters.LEDGER)
-        assert summary["written_cost_rows"] == 2, summary
-        assert summary["marker_backfills"] == 1, summary
+        assert summary["written_cost_rows"] == 3, summary
+        assert summary["marker_backfills"] == 2, summary
         assert summary["infra_classified"] == 1, summary
+        assert summary["infra_unattributed_marker_rc"] == 1, summary
         with feedback._conn() as c:
             fc = c.execute(
                 "SELECT failure_class, notes FROM outcomes WHERE run_id='killed-1'"
             ).fetchone()
+            unattributed = c.execute(
+                "SELECT failure_class FROM outcomes WHERE run_id='released-1'"
+            ).fetchone()
         assert fc and fc[0] == "transient_infra" and "marker rc=137" in (fc[1] or ""), fc
+        assert unattributed == (None,), ("a release's rc classified the agent", unattributed)
         with feedback._conn() as c:
             row = c.execute(
                 "SELECT tokens_in, tokens_out, source FROM costs WHERE run_id='local-1'"
