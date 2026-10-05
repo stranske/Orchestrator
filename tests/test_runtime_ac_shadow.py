@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -137,14 +138,25 @@ def test_failed_named_test_still_fails(tmp_path):
     assert "1 failed" in result["stdout_tail"]
 
 
-def test_ingest_authors_a_spec_once_per_new_pr(private_brain, monkeypatch):
+@pytest.mark.parametrize(
+    "pr_body,issue_repo",
+    [
+        ("Closes #1", "owner/repo"),
+        ("Fixes owner/repo#1", "owner/repo"),
+        ("Resolves other/project#1", "other/project"),
+        ("Closes https://github.com/owner/repo/issues/1", "owner/repo"),
+        ("Fixes https://github.com/other/project/issues/1", "other/project"),
+    ],
+)
+def test_ingest_authors_a_spec_once_per_new_pr(private_brain, monkeypatch, pr_body, issue_repo):
     monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "0")
     calls = []
     pr = {
         "number": 2,
         "state": "OPEN",
         "title": "Local delivery",
-        "body": "Closes #1",
+        "body": pr_body,
         "headRefName": "codex/issue-1-test",
         "headRefOid": "a" * 40,
         "labels": [{"name": "agent:codex"}],
@@ -162,9 +174,20 @@ def test_ingest_authors_a_spec_once_per_new_pr(private_brain, monkeypatch):
         "_issue_fetch_fn": issue,
         "_spec_dir": private_brain / "specs",
     }
-    first = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+    preview = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], dry_run=True, **kwargs)
     path = gate.spec_path("owner/repo#2", spec_dir=kwargs["_spec_dir"])
+    assert preview["runtime_ac_specs_authored"] == 0
+    assert calls == []
+    assert not path.exists()
+    assert feedback.runtime_ac_gate_events() == []
+    first = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
     before = path.read_bytes()
+    spec = json.loads(before)
+    assert spec["verification"]["target"] == "owner/repo#2"
+    assert spec["verification"]["repo"] == "owner/repo"
+    assert spec["verification"]["source_issue"] == f"{issue_repo}#1"
+    assert spec["verification"]["shadow_only"] is True
+    assert spec["verification"]["observed_head_sha"] == pr["headRefOid"]
     second = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
     assert first["runtime_ac_specs_authored"] == 1, first
     assert first["runtime_ac_shadow_errors"] == [], first
@@ -173,11 +196,13 @@ def test_ingest_authors_a_spec_once_per_new_pr(private_brain, monkeypatch):
         "owner/repo", pr, "fixture-replay", issue_fetch_fn=issue, spec_dir=kwargs["_spec_dir"]
     )
     assert replay["spec_authored"] is False
-    assert calls == [("owner/repo", 1)]
+    assert calls == [(issue_repo, 1)]
     assert path.read_bytes() == before
     events = feedback.runtime_ac_gate_events()
     assert sum(event["spec_authored"] for event in events) == 1
     assert all(event["blocking"] is False for event in events)
+    assert all(event["shadow_only"] is True for event in events)
+    assert os.environ["ORCH_RUN_RUNTIME_AC"] == "0"
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 0
 
@@ -212,6 +237,29 @@ def test_operator_spec_is_never_overwritten(private_brain):
     )
     assert result["spec_authored"] is False
     assert path.read_text() == "operator contract"
+
+
+def test_competing_spec_is_never_overwritten(private_brain, monkeypatch):
+    path = gate.spec_path("owner/repo#2", spec_dir=private_brain)
+    publish = gate.os.link
+
+    def competing_publish(staged, destination):
+        path.write_bytes(b"competing operator contract")
+        publish(staged, destination)
+
+    monkeypatch.setattr(gate.os, "link", competing_publish)
+    result = gate.author_keepalive_spec(
+        "owner/repo",
+        {"number": 2, "body": "Closes #1"},
+        "fixture",
+        issue_fetch_fn=lambda *_: BODY,
+        spec_dir=private_brain,
+    )
+    assert result["status"] == "existing"
+    assert result["spec_authored"] is False
+    assert path.read_bytes() == b"competing operator contract"
+    assert set(private_brain.iterdir()) == {private_brain / "brain.db", path}
+    assert feedback.runtime_ac_gate_events() == []
 
 
 def test_weekly_line_carries_prs_specs_executed_and_would_fail(private_brain):

@@ -128,18 +128,24 @@ def author_keepalive_spec(
     if path.exists():
         return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
     link = re.search(
-        r"\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#([1-9]\d*)\b",
+        r"\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+"
+        r"(?:(?P<ref_repo>[\w.-]+/[\w.-]+)?#(?P<ref_number>[1-9]\d*)"
+        r"|https://github\.com/(?P<url_repo>[\w.-]+/[\w.-]+)/issues/"
+        r"(?P<url_number>[1-9]\d*))\b",
         str(pr.get("body") or ""),
         re.I,
     )
     if not link:
         return {"status": "unlinked", "spec_authored": False}
-    issue = f"{repo}#{link[1]}"
+    issue_repo = link["ref_repo"] or link["url_repo"] or repo
+    issue_number = int(link["ref_number"] or link["url_number"])
+    issue = f"{issue_repo}#{issue_number}"
     try:
-        body = issue_fetch_fn(repo, int(link[1]))
+        body = issue_fetch_fn(issue_repo, issue_number)
         if not isinstance(body, str) or not body.strip():
             raise ValueError("linked issue body unavailable")
         spec = runtime_ac.author_issue_spec(issue, body, target=target)
+        spec["verification"]["repo"] = repo
         spec["verification"]["observed_head_sha"] = pr.get("headRefOid")
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
