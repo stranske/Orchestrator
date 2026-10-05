@@ -88,9 +88,12 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
 
         # Even without malformed JSON, a matching marker on another PR is not the finding.
         pr["comments"]["nodes"] = [finding, wrong_pr]
-        assert retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})[
-            "disputed_finding"
-        ]["ref"] == finding["url"]
+        assert (
+            retro.fetch_evidence({"target": "owner/repo#1", "verifier_verdict": "NON_PASS"})[
+                "disputed_finding"
+            ]["ref"]
+            == finding["url"]
+        )
 
     def test_evidence_timeout_is_saved_and_the_batch_continues(self):
         temporary = tempfile.TemporaryDirectory()
