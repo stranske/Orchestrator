@@ -124,6 +124,14 @@ worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
 in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
+The dispatcher's agent prelude moves `XDG_CONFIG_HOME` into each agent's runtime, and gh honours
+it, so until 2026-10-04 every dispatched agent's gh read an empty config and stopped at "gh auth
+login" before asking the keyring for a token. The prelude now pins `GH_CONFIG_DIR` to the directory
+the dispatcher's own gh reads, by gh's own lookup order (`dispatcher.gh_config_dir`), so the agent
+authenticates exactly as its dispatcher does. The pin is a path: no token enters the agent's argv or
+environment, and every other tool keeps the redirect. No stage, component or surface moved, so the
+diagram is unchanged.
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the

@@ -503,7 +503,10 @@ safety switch, not dead code.
   file), which is the module-side twin of `ORCH_DISABLE_STEPS=tick-capability-evidence`;
   `ORCH_CODEX_WORKTREE_GIT_GRANT_DISABLED=1` stops granting a committing codex run its linked
   worktree's git dir (`adapters.codex_worktree_git_roots`), so its argv is exactly what it was
-  before the grant, and codex >= 0.158 refuses its `git commit` again.
+  before the grant, and codex >= 0.158 refuses its `git commit` again;
+  `ORCH_AGENT_GH_CONFIG_DISABLED=1` stops pinning a dispatched agent's gh to the config its
+  dispatcher's gh reads (`dispatcher.gh_config_dir`), so the prelude is exactly what it was before
+  the pin, and gh in every agent stops at "gh auth login" again.
 - **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
   pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
   result, not a reason to seed synthetic data.
