@@ -1973,7 +1973,7 @@ def _selftest() -> None:
     finally:
         _GH_CALL_RUNNER = saved_runner
     _selftest_gate_expiry()
-    proof = {
+    proof: dict = {
         "status": "ok",
         "generated_at": 1_800_000_000,
         "rows": [
