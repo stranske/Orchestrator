@@ -298,11 +298,15 @@ print(json.dumps([
         outside.mkdir()
         sibling = self.root / "mirror-other"
         sibling.mkdir()
+        parent_alias = self.root / "parent-alias"
+        parent_alias.symlink_to(self.root, target_is_directory=True)
         inherited = [
             str(outside),
             str(self.mirror / "plugins"),
             "mirror/scripts",
             "./mirror/scripts/../scripts",
+            str(parent_alias / "mirror/scripts"),
+            "parent-alias/mirror/scripts",
             str(self.mirror / "plugins" / ".."),
             str(self.mirror / ".." / "mirror"),
             str(self.mirror / ".." / "external"),
@@ -351,6 +355,8 @@ print(json.dumps([
                     str(pinned),
                     str(outside),
                     str(pinned / "plugins"),
+                    str(pinned / "scripts"),
+                    str(pinned / "scripts"),
                     str(pinned / "scripts"),
                     str(pinned / "scripts"),
                     str(pinned),
