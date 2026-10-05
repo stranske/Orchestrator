@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping
@@ -76,7 +77,20 @@ def _all_label_names(item: dict) -> list[str]:
 def required(item: dict, path: Path) -> bool:
     labels = {label.lower() for label in _all_label_names(item)}
     normalized = labels | {label.split(":", 1)[1].strip() for label in labels if ":" in label}
-    return bool(normalized & RUNTIME_AC_REQUIRED_LABELS) or path.exists()
+    return bool(normalized & RUNTIME_AC_REQUIRED_LABELS) or _enforcing_spec(path)
+
+
+def _enforcing_spec(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        return (
+            json.loads(path.read_text(encoding="utf-8")).get("verification", {}).get("shadow_only")
+            is not True
+        )
+    except (OSError, ValueError, AttributeError):
+        # A broken existing hard-gate spec remains required and fails closed.
+        return True
 
 
 def eligibility(item: dict, path: Path) -> dict:
@@ -89,7 +103,7 @@ def eligibility(item: dict, path: Path) -> dict:
         if normalized in RUNTIME_AC_REQUIRED_LABELS:
             matched_labels.append(raw)
     by_label = bool(matched_labels)
-    by_spec = path.exists()
+    by_spec = _enforcing_spec(path)
     source = (
         "label+spec"
         if by_label and by_spec
@@ -103,6 +117,208 @@ def eligibility(item: dict, path: Path) -> dict:
         "source": source,
         "refs": refs,
     }
+
+
+def author_keepalive_spec(
+    repo: str, pr: dict, run_id: str, *, issue_fetch_fn, spec_dir=None, env=None
+) -> dict:
+    """Materialize once at the existing ingest edge, with no merge/outcome writes."""
+    target = f"{repo}#{int(pr['number'])}"
+    path = spec_path(target, spec_dir=spec_dir, env=env)
+    if path.exists():
+        return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
+    link = re.search(
+        r"\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#([1-9]\d*)\b",
+        str(pr.get("body") or ""),
+        re.I,
+    )
+    if not link:
+        return {"status": "unlinked", "spec_authored": False}
+    issue = f"{repo}#{link[1]}"
+    try:
+        body = issue_fetch_fn(repo, int(link[1]))
+        if not isinstance(body, str) or not body.strip():
+            raise ValueError("linked issue body unavailable")
+        spec = runtime_ac.author_issue_spec(issue, body, target=target)
+        spec["verification"]["observed_head_sha"] = pr.get("headRefOid")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as stream:
+            staged = Path(stream.name)
+            json.dump(spec, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(
+                staged, path
+            )  # Exclusive, atomic publication; never overwrite an operator spec.
+        except FileExistsError:
+            return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
+        finally:
+            staged.unlink(missing_ok=True)
+        event = feedback.record_runtime_ac_gate_event(
+            target=target,
+            gate_status="materialized",
+            required=False,
+            dry_run=True,
+            eligibility_source="spec",
+            eligibility_refs=[str(path)],
+            spec_path=str(path),
+            spec_hash=spec_sha256(path),
+            spec_path_matches_target=True,
+            blocking=False,
+            closer_run_id=run_id,
+            materialization_source="keepalive_issue_author",
+            materialization_status="spec_authored",
+            shadow_only=True,
+            spec_authored=True,
+            observed_head_sha=pr.get("headRefOid"),
+            terminal_reason="shadow_spec_authored",
+        )
+        return {
+            "status": "authored",
+            "spec_authored": True,
+            "spec_path": str(path),
+            "gate_event": event,
+        }
+    except Exception as exc:
+        return {"status": "error", "spec_authored": False, "error": str(exc)}
+
+
+def shadow_summary(*, now: int, events=None) -> dict:
+    """Count distinct PRs; retain unknown execution/audit evidence as unknown."""
+    try:
+        rows = (
+            events
+            if events is not None
+            else feedback.runtime_ac_gate_events(cutoff_ts=now - 7 * 86400, limit=10000)
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+    rows = [row for row in rows if row.get("shadow_only")]
+    targets = {row["target"] for row in rows}
+    authored = {row["target"] for row in rows if row.get("spec_authored")}
+    latest = {}
+    for row in sorted(rows, key=lambda row: row.get("created_ts", 0)):
+        if row.get("gate_status") == "executed":
+            latest[row["target"]] = row
+    executed = set(latest)
+    failed = {target for target, row in latest.items() if row.get("verifier_verdict") == "FAIL"}
+    audited = [row for row in latest.values() if row.get("false_fail_audit") is not None]
+    return {
+        "prs": len(targets),
+        "specs_authored": len(authored),
+        "executed": len(executed),
+        "would_fail": len(failed),
+        "merged_with_unmet": len(
+            {
+                row["target"]
+                for row in rows
+                if row["target"] in failed and row.get("downstream_merged") is True
+            }
+        ),
+        "false_fail_count": sum(row["false_fail_audit"] is True for row in audited),
+        "audit_sample": sorted({row["target"] for row in audited}),
+        "execution_unmeasured": len(targets - executed),
+    }
+
+
+def observe_shadow_spec(
+    target: str, run_id: str, *, spec_dir=None, env=None, worktree=None, head_sha=None
+) -> dict:
+    """Shadow execution needs the existing opt-in and an exact PR checkout.
+
+    An ingest's mirror checkout is never a substitute for the delivered PR.
+    No outcome is patched, and no result feeds merge guard.
+    """
+    resolved = os.environ if env is None else env
+    path = spec_path(target, spec_dir=spec_dir, env=resolved)
+    if not path.exists():
+        return {"status": "missing_spec", "blocks": False}
+    spec = runtime_ac.parse_spec_json(path.read_text(encoding="utf-8"))
+    if spec.get("verification", {}).get("shadow_only") is not True:
+        return {"status": "operator_spec", "blocks": False}
+    status, reason, verdict, audit = "planned", "shadow_execution_disabled", None, None
+    evidence = []
+    if env_flag(resolved, "ORCH_RUN_RUNTIME_AC"):
+        reason = "shadow_exact_checkout_missing"
+        if worktree and head_sha and spec["verification"].get("observed_head_sha") == head_sha:
+            current = subprocess.run(
+                ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if current.returncode == 0 and current.stdout.strip() == head_sha:
+                spec["runtime_context"]["worktree"] = str(worktree)
+                run = runtime_ac.run_verification(
+                    spec,
+                    confirm_run=True,
+                    allow_command_checks=env_flag(resolved, "ORCH_RUNTIME_AC_ALLOW_COMMANDS"),
+                )
+                verdict = run["gate"]["verdict"]
+                status, reason = "executed", "shadow_only_no_merge_authority"
+                results = [
+                    row for row in run["check_results"] if "pytest" in str(row.get("command", ""))
+                ]
+                passed = [
+                    row
+                    for row in results
+                    if re.search(r"\b[1-9]\d* passed\b", str(row.get("stdout_tail", "")))
+                    and not re.search(
+                        r"\b[1-9]\d* (?:failed|errors?)\b", str(row.get("stdout_tail", ""))
+                    )
+                ]
+                if passed:
+                    audit = any(row["status"] == "FAIL" for row in passed)
+                # Only identifiers/counts travel to the canonical event, never raw stdout.
+                evidence = [
+                    {
+                        "command": row.get("command"),
+                        "status": row.get("status"),
+                        "returncode": row.get("returncode"),
+                        "passing_named_test": row in passed,
+                    }
+                    for row in results
+                ]
+    event = feedback.record_runtime_ac_gate_event(
+        target=target,
+        gate_status=status,
+        required=False,
+        dry_run=True,
+        eligibility_source="spec",
+        eligibility_refs=[str(path)],
+        spec_path=str(path),
+        spec_hash=spec_sha256(path),
+        spec_path_matches_target=True,
+        blocking=False,
+        closer_run_id=run_id,
+        verifier_verdict=verdict,
+        shadow_only=True,
+        observed_head_sha=head_sha,
+        false_fail_audit=audit,
+        audit_evidence=evidence,
+        terminal_reason=reason,
+    )
+    return {"status": status, "blocks": False, "gate_event": event}
+
+
+def format_shadow_summary(section: dict) -> str:
+    if section.get("error"):
+        return f"runtime-AC shadow: unmeasured — {section['error']}"
+    sample = section["audit_sample"]
+    audit = (
+        f"{section['false_fail_count']} of {len(sample)} ({', '.join(sample)})"
+        if sample
+        else "unmeasured (0 audited PRs)"
+    )
+    return (
+        f"runtime-AC shadow: PRs {section['prs']}, specs authored {section['specs_authored']}, "
+        f"executed {section['executed']}, would-FAIL {section['would_fail']} (unmet ACs), "
+        f"merged with unmet ACs {section['merged_with_unmet']}, false-FAIL audit {audit}; "
+        f"execution unmeasured {section['execution_unmeasured']}"
+    )
 
 
 def spec_sha256(path: Path) -> str | None:

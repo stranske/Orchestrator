@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -650,7 +651,7 @@ def _local_verify_command(check: dict[str, Any], runtime_context: dict[str, Any]
         "--base-ref",
         base_ref,
         "--test-cmd",
-        check["test_cmd"],
+        shlex.join(_pytest_without_coverage(shlex.split(check["test_cmd"]))),
     ]
     for path in check.get("test_paths") or []:
         parts.extend(["--test-path", path])
@@ -1150,10 +1151,19 @@ def _completed_result(
 
 def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dict[str, Any]:
     started = time.time()
+    argv = shlex.split(check["command"])
+    normalized = _pytest_without_coverage(argv)
+    run_env = os.environ.copy()
+    if normalized != argv or _is_pytest(argv):
+        run_env["PYTEST_ADDOPTS"] = shlex.join(
+            _strip_coverage_options(shlex.split(run_env.get("PYTEST_ADDOPTS", "")))
+        )
+        argv = normalized
     try:
         completed = subprocess.run(
-            shlex.split(check["command"]),
+            argv,
             cwd=str(cwd),
+            env=run_env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1181,7 +1191,45 @@ def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dic
             "stdout_tail": "",
             "stderr_tail": "",
         }
-    return _completed_result(check, completed, time.time() - started)
+    return _completed_result(
+        {**check, "command": shlex.join(argv)}, completed, time.time() - started
+    )
+
+
+def _is_pytest(argv: list[str]) -> bool:
+    return bool(argv) and (
+        Path(argv[0]).name in {"pytest", "pytest.exe"}
+        or (
+            len(argv) > 2
+            and argv[1:3] == ["-m", "pytest"]
+            and Path(argv[0]).name.startswith("python")
+        )
+    )
+
+
+def _strip_coverage_options(argv: list[str]) -> list[str]:
+    result = []
+    skip_value = False
+    for arg in argv:
+        if skip_value:
+            skip_value = False
+            if not arg.startswith("-"):
+                continue
+        if arg in {"--cov", "--cov-report", "--cov-fail-under", "--cov-config", "--cov-context"}:
+            skip_value = True
+        elif arg.startswith("--cov") or arg in {"--no-cov", "--no-cov-on-fail"}:
+            continue
+        else:
+            result.append(arg)
+    return result
+
+
+def _pytest_without_coverage(argv: list[str]) -> list[str]:
+    if not _is_pytest(argv):
+        return argv
+    result = _strip_coverage_options(argv)
+    offset = 3 if result[1:3] == ["-m", "pytest"] else 1
+    return result[:offset] + ["-p", "no:cov", "-o", "addopts="] + result[offset:]
 
 
 def _planned_checks_for_run(
@@ -1281,7 +1329,195 @@ def _valid_spec() -> dict[str, Any]:
     return json.loads(json.dumps(RUNTIME_AC_SCHEMA_EXAMPLE))
 
 
+def author_issue_spec(
+    issue: str, body: str, *, target: str | None = None, worktree: str | None = None
+) -> dict[str, Any]:
+    """Encode named pytest nodes; retain unencodable obligations as manual evidence.
+
+    This is deterministic authoring, not authority to execute an issue's prose. Only
+    literal test paths/nodes become commands; shell snippets never do.
+    """
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+#[1-9]\d*", issue):
+        raise ValueError("issue must be owner/repo#number")
+    repo = issue.split("#")[0]
+    sections: dict[str, list[str]] = {"tasks": [], "acceptance criteria": []}
+    section = ""
+    for raw in body.splitlines():
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", raw)
+        if heading:
+            section = heading[1].lower()
+        elif section in sections and raw.strip():
+            line = re.sub(r"^\s*[-*]\s*(?:\[[ xX]\]\s*)?", "", raw).strip()
+            sections[section].append(line)
+    criteria: list[dict[str, Any]] = []
+    previous_path = ""
+    named_nodes: list[str] = []
+    for line in sections["acceptance criteria"]:
+        checks: list[dict[str, Any]] = []
+        # Shorthand ::test_* inherits only the path on this same named-test line.
+        nodes = []
+        for match in re.finditer(
+            r"(?<![\w/])(?:(tests/[\w./-]+\.py)(::[\w:]+)?|(::test_[\w:]+))", line
+        ):
+            if match[1]:
+                previous_path = match[1]
+                nodes.append(previous_path + (match[2] or ""))
+            elif previous_path:
+                nodes.append(previous_path + match[3])
+        ac_id = f"AC{len(criteria) + 1}"
+        is_break = bool(re.search(r"break\s*(?:→|->|then|and).*revert", line, re.I))
+        if is_break and named_nodes:
+            checks.append(
+                {
+                    "id": f"{ac_id}-BREAK",
+                    "type": "deliberate_break",
+                    "name": line,
+                    "test_cmd": "python3 -m pytest -p no:cov " + " ".join(named_nodes),
+                    "test_paths": sorted({node.split("::")[0] for node in named_nodes}),
+                    "base_ref": "origin/main",
+                    "confidence": 0.7,
+                }
+            )
+            # A base comparison does not prove a prose-only mutation was performed.
+            checks.append(
+                {
+                    "id": f"{ac_id}-MUTATION",
+                    "type": "manual",
+                    "name": line,
+                    "instructions": line,
+                    "confidence": 0.0,
+                }
+            )
+        elif nodes:
+            for idx, node in enumerate(dict.fromkeys(nodes)):
+                checks.append(
+                    {
+                        "id": f"{ac_id}-TEST{idx + 1}",
+                        "type": "command",
+                        "name": node,
+                        "command": "python3 -m pytest -p no:cov " + node,
+                        "expected": "exit_0",
+                        "confidence": 1.0,
+                    }
+                )
+                named_nodes.append(node)
+        else:
+            checks.append(
+                {
+                    "id": f"{ac_id}-MANUAL",
+                    "type": "manual",
+                    "name": line,
+                    "instructions": line,
+                    "confidence": 0.0,
+                }
+            )
+        evidence = sorted(set().union(*(_evidence_for_check(c) for c in checks)))
+        criteria.append(
+            {"id": ac_id, "statement": line, "evidence_required": evidence, "checks": checks}
+        )
+    for line in sections["tasks"]:
+        ac_id = f"AC{len(criteria) + 1}"
+        criteria.append(
+            {
+                "id": ac_id,
+                "statement": line,
+                "evidence_required": ["manual_review"],
+                "checks": [
+                    {
+                        "id": f"{ac_id}-TASK",
+                        "type": "manual",
+                        "name": line,
+                        "instructions": line,
+                        "confidence": 0.0,
+                    }
+                ],
+            }
+        )
+    if not criteria:
+        criteria = [
+            {
+                "id": "AC1",
+                "statement": "Issue needs explicit acceptance evidence",
+                "evidence_required": ["manual_review"],
+                "checks": [
+                    {
+                        "id": "AC1-MANUAL",
+                        "type": "manual",
+                        "name": "Unencodable issue",
+                        "confidence": 0.0,
+                        "instructions": body or "Obtain the missing issue body.",
+                    }
+                ],
+            }
+        ]
+    spec: dict[str, Any] = {
+        "verification": {
+            "id": re.sub(r"[^a-z0-9]+", "-", (target or issue).lower()).strip("-"),
+            "title": f"Shadow acceptance for {target or issue}",
+            "goal": issue,
+            "target": target or issue,
+            "repo": repo,
+            "risk_level": "low",
+            "shadow_only": True,
+            "source_issue": issue,
+        },
+        "runtime_context": {"notes": ["No merge authority; manual checks remain unmeasured."]},
+        "acceptance_criteria": criteria,
+        "verdict_policy": {
+            "require_runtime_evidence": False,
+            "require_deliberate_break_for_tests": False,
+            "fail_on_missing_checks": True,
+            "min_pass_ratio": 1.0,
+            "advisory_only": True,
+        },
+    }
+    if worktree:
+        spec["runtime_context"]["worktree"] = worktree
+    errors = validate_spec(spec)
+    if errors:
+        raise ValueError("invalid authored spec: " + "; ".join(errors))
+    return spec
+
+
+def _author_cli(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(description="Author a non-blocking shadow spec from an issue")
+    parser.add_argument("--issue", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--body-file")
+    parser.add_argument("--worktree")
+    args = parser.parse_args(list(argv))
+    if args.body_file:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+    else:
+        repo, number = args.issue.split("#")
+        detached = Path.home() / ".codex/bin/detached-net.sh"
+        command = ([str(detached)] if detached.exists() else []) + [
+            "gh",
+            "issue",
+            "view",
+            number,
+            "--repo",
+            repo,
+            "--json",
+            "body",
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        body = json.loads(result.stdout)["body"]
+    spec = author_issue_spec(args.issue, body, worktree=args.worktree)
+    destination = Path(args.out)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Never silently overwrite a hand-authored or already ingested contract.
+    with destination.open("x", encoding="utf-8") as stream:
+        json.dump(spec, stream, indent=2)
+        stream.write("\n")
+    print(f"Shadow spec authored: {destination}")
+    return 0
+
+
 def _selftest() -> None:
+    authored = author_issue_spec("owner/repo#1", "## Acceptance Criteria\n- Inspect the receipt.")
+    assert validate_spec(authored) == [] and authored["verification"]["shadow_only"] is True
+    assert authored["acceptance_criteria"][0]["checks"][0]["confidence"] == 0.0
     prompt = build_authoring_prompt(
         goal="Verify course progress end to end",
         repo="owner/repo",
@@ -1611,6 +1847,8 @@ def _selftest() -> None:
 
 
 def main(argv: Sequence[str]) -> int:
+    if argv and argv[0] == "author":
+        return _author_cli(argv[1:])
     parser = argparse.ArgumentParser(
         description="Build or validate an Orchestrator runtime AC verification spec."
     )
