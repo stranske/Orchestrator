@@ -254,7 +254,7 @@ def test_fleet_population_paginates_and_rejects_partial_evidence():
     assert monitor.fleet_issues(broken, 0, NOW, ["a/b"]) is None
 
 
-def test_new_capability_has_all_nine_admission_parts(tmp_path):
+def test_new_capability_has_all_nine_admission_parts(tmp_path, monkeypatch, capsys):
     spec = {
         "capability_id": "value-chain-monitor",
         **capabilities.KNOWN_DECLARATIONS["value-chain-monitor"],
@@ -274,10 +274,61 @@ def test_new_capability_has_all_nine_admission_parts(tmp_path):
     assert not incomplete["ready_to_build"], incomplete
     assert "dedup_recorded" in incomplete["declarable_missing"]
 
-    path = ledger(tmp_path)
-    capabilities.register(
-        "value-chain-monitor", capabilities.KNOWN_DECLARATIONS["value-chain-monitor"], path
+    # Exercise the weekly caller: direct registration cannot prove it introduces
+    # the row before collection, credits the real run, or tolerates the next week.
+    path = ledger(tmp_path, ("switch-review",))
+    monkeypatch.setattr(capabilities, "REG", path)
+    register = capabilities.register
+    heartbeat = capabilities.heartbeat
+    registrations = []
+    registered_at_collection = []
+
+    def private_register(capability_id, record):
+        registrations.append(capability_id)
+        register(capability_id, record, path)
+
+    def private_heartbeat(capability_id, event_type, **kwargs):
+        return heartbeat(capability_id, event_type, path=path, **kwargs)
+
+    def collect_inputs(**kwargs):
+        registered_at_collection.append("value-chain-monitor" in capabilities.load_declared(path))
+        return {"fleet_issues": [], "completion_events": [], "edges": []}
+
+    monkeypatch.setattr(capabilities, "register", private_register)
+    monkeypatch.setattr(capabilities, "heartbeat", private_heartbeat)
+    monkeypatch.setattr(monitor, "collect_inputs", collect_inputs)
+    monkeypatch.setattr(
+        switch_review, "switch_states", lambda **kw: {"held_off": [], "on_but_idle": []}
     )
+    monkeypatch.setattr(switch_review, "stale_runners", lambda: [])
+    monkeypatch.setattr(switch_review, "mirror_drift", lambda: {"status": "ok"})
+    monkeypatch.setattr(switch_review, "fleet_gates", lambda **kw: {})
+    monkeypatch.setattr(switch_review, "_exploration_gate", lambda: {})
+    monkeypatch.setattr(switch_review, "gate_expiry", lambda **kw: {})
+    monkeypatch.setenv("ORCH_VALUE_CHAIN_MONITOR", "1")
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "0")
+    # A report outside production must not register or mutate the private ledger.
+    before = path.read_bytes()
+    assert switch_review.main(["--env", "process", "--json"]) == 0
+    section = json.loads(capsys.readouterr().out)["value_chain"]
+    assert not section["errors"], section
+    assert all(r["capability"] != "value-chain-monitor" for r in section["rows"])
+    assert path.read_bytes() == before
+    assert registrations == []
+
+    monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+    for invocation_count in (1, 2):
+        assert switch_review.main(["--env", "process", "--json"]) == 0
+        section = json.loads(capsys.readouterr().out)["value_chain"]
+        assert not section["errors"], section
+        monitored = next(r for r in section["rows"] if r["capability"] == "value-chain-monitor")
+        assert monitored["invocation_count"] == invocation_count
+    assert registrations == ["value-chain-monitor"]
+    assert registered_at_collection == [False, True, True]
+    events = capabilities.load_declared(path)["value-chain-monitor"]["event_history"]
+    assert sum(e["type"] == "invocation" for e in events) == 2
+    assert all(e["ref"] == "switch_review.review" for e in events if e["type"] == "invocation")
+
     report = capability_admission.report(path=path)
     row = next(r for r in report["rows"] if r["capability_id"] == "value-chain-monitor")
     assert row["admitted"], row
