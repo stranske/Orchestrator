@@ -148,19 +148,21 @@ def author_keepalive_spec(
         spec["verification"]["repo"] = repo
         spec["verification"]["observed_head_sha"] = pr.get("headRefOid")
         path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
+        stream = tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=path.parent, delete=False
-        ) as stream:
-            staged = Path(stream.name)
-            json.dump(spec, stream, indent=2)
-            stream.flush()
-            os.fsync(stream.fileno())
+        )
+        staged = Path(stream.name)
         try:
-            os.link(
-                staged, path
-            )  # Exclusive, atomic publication; never overwrite an operator spec.
-        except FileExistsError:
-            return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
+            with stream:
+                json.dump(spec, stream, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(
+                    staged, path
+                )  # Exclusive, atomic publication; never overwrite an operator spec.
+            except FileExistsError:
+                return {"status": "existing", "spec_authored": False, "spec_path": str(path)}
         finally:
             staged.unlink(missing_ok=True)
         event = feedback.record_runtime_ac_gate_event(

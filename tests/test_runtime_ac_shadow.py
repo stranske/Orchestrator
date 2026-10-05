@@ -12,6 +12,7 @@ import pytest
 
 import feedback
 import keepalive_outcomes
+import merge_guard
 import runtime_ac
 import runtime_ac_gate as gate
 import switch_review
@@ -206,8 +207,47 @@ def test_ingest_authors_a_spec_once_per_new_pr(private_brain, monkeypatch, pr_bo
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 0
 
+    # Exercise the unattended defaults too: ingest fetches the linked issue itself,
+    # rather than requiring the caller to supply an issue-body callback.
+    next_pr = {**pr, "number": 3}
+    issue_commands = []
 
-def test_shadow_spec_cannot_create_an_implicit_merge_gate(private_brain):
+    def fetch_json(args, **_kwargs):
+        issue_commands.append(args)
+        assert args[-8:] == [
+            "gh",
+            "issue",
+            "view",
+            "1",
+            "--repo",
+            issue_repo,
+            "--json",
+            "body",
+        ]
+        return {"body": BODY}
+
+    monkeypatch.setattr(keepalive_outcomes, "_fetch_prs", lambda *_: [next_pr])
+    monkeypatch.setattr(keepalive_outcomes, "_fetch_dispatch_times", lambda *_: None)
+    monkeypatch.setattr(keepalive_outcomes, "_run_json", fetch_json)
+    live = keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/repo"], _spec_dir=kwargs["_spec_dir"]
+    )
+    repeated = keepalive_outcomes.ingest_keepalive_outcomes(
+        ["owner/repo"], _spec_dir=kwargs["_spec_dir"]
+    )
+    assert live["runtime_ac_specs_authored"] == 1, live
+    assert live["runtime_ac_shadow_errors"] == [], live
+    assert repeated["runtime_ac_specs_authored"] == 0
+    assert len(issue_commands) == 1
+    next_path = gate.spec_path("owner/repo#3", spec_dir=kwargs["_spec_dir"])
+    assert json.loads(next_path.read_text())["verification"]["source_issue"] == f"{issue_repo}#1"
+    authored_events = [event for event in feedback.runtime_ac_gate_events() if event["spec_authored"]]
+    assert {event["target"] for event in authored_events} == {"owner/repo#2", "owner/repo#3"}
+    assert all(event["blocking"] is False and event["shadow_only"] for event in authored_events)
+    assert os.environ["ORCH_RUN_RUNTIME_AC"] == "0"
+
+
+def test_shadow_spec_cannot_create_an_implicit_merge_gate(private_brain, monkeypatch):
     authored = gate.author_keepalive_spec(
         "owner/repo",
         {"number": 2, "body": "Closes #1"},
@@ -218,6 +258,22 @@ def test_shadow_spec_cannot_create_an_implicit_merge_gate(private_brain):
     path = Path(authored["spec_path"])
     assert not gate.required({"labels": []}, path)
     assert gate.eligibility({"labels": []}, path)["required"] is False
+    monkeypatch.setattr(
+        runtime_ac, "run_verification", lambda *_a, **_k: pytest.fail("shadow spec executed by merge")
+    )
+    monkeypatch.setattr(
+        runtime_ac, "record_gate_verdict", lambda *_a, **_k: pytest.fail("shadow verdict consumed")
+    )
+    for execution_flag in ("0", "1"):
+        result = merge_guard.evaluate_merge_gate(
+            "owner/repo#2",
+            dry_run=False,
+            env={"ORCH_RUN_RUNTIME_AC": execution_flag},
+            spec_dir=private_brain,
+            metadata_fn=lambda _: {"state": "OPEN", "is_draft": False, "labels": []},
+        )
+        assert result["gate"] is None
+        assert result["blocked"] is False
     assert gate.required({"labels": ["runtime-ac"]}, path)
     spec = json.loads(path.read_text())
     spec["verification"].pop("shadow_only")
@@ -260,6 +316,39 @@ def test_competing_spec_is_never_overwritten(private_brain, monkeypatch):
     assert path.read_bytes() == b"competing operator contract"
     assert set(private_brain.iterdir()) == {private_brain / "brain.db", path}
     assert feedback.runtime_ac_gate_events() == []
+
+    # A failure before publication must also clean its staged file. The next attempt
+    # can author the spec, and only that successful attempt records an authored event.
+    failed_path = gate.spec_path("owner/repo#3", spec_dir=private_brain)
+    with monkeypatch.context() as failure:
+
+        def fail_flush(_fd):
+            raise OSError("staged spec flush failed")
+
+        failure.setattr(gate.os, "fsync", fail_flush)
+        result = gate.author_keepalive_spec(
+            "owner/repo",
+            {"number": 3, "body": "Closes #1"},
+            "fixture",
+            issue_fetch_fn=lambda *_: BODY,
+            spec_dir=private_brain,
+        )
+    assert result["status"] == "error"
+    assert result["spec_authored"] is False
+    assert not failed_path.exists()
+    assert set(private_brain.iterdir()) == {private_brain / "brain.db", path}
+    assert feedback.runtime_ac_gate_events() == []
+    monkeypatch.setattr(gate.os, "link", publish)
+    retry = gate.author_keepalive_spec(
+        "owner/repo",
+        {"number": 3, "body": "Closes #1"},
+        "fixture-retry",
+        issue_fetch_fn=lambda *_: BODY,
+        spec_dir=private_brain,
+    )
+    assert retry["spec_authored"] is True
+    assert runtime_ac.validate_spec(json.loads(failed_path.read_text())) == []
+    assert len(feedback.runtime_ac_gate_events()) == 1
 
 
 def test_weekly_line_carries_prs_specs_executed_and_would_fail(private_brain):
