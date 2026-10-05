@@ -567,6 +567,32 @@ def _ensure_agent_runtime(agent: str) -> Path:
     return base
 
 
+# Kill switch for the gh config pin in `_agent_runtime_prelude`. Set to 1 and the prelude is built
+# exactly as it was before the pin existed. Inherited explicit config or token authentication still
+# works; otherwise gh reads the empty runtime config and stops at "gh auth login".
+AGENT_GH_CONFIG_DISABLED_ENV = "ORCH_AGENT_GH_CONFIG_DISABLED"
+
+
+def gh_config_dir() -> Path:
+    """The directory gh reads its hosts file from in THIS process, by gh's own rule.
+
+    `GH_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gh`, else `~/.config/gh` (gh `config.ConfigDir`). The
+    dispatcher reads it from its own environment, before the agent prelude moves `XDG_CONFIG_HOME`,
+    so a dispatched agent's gh resolves the same account as the gh of whoever dispatched it.
+    """
+    explicit = os.environ.get("GH_CONFIG_DIR")
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if explicit:
+        config = Path(explicit)
+    elif xdg:
+        config = Path(xdg) / "gh"
+    else:
+        config = REAL_HOME / ".config" / "gh"
+    # Child wrappers run in a different cwd. Anchor the parent's relative config before export;
+    # absolute() preserves symlink/.. spelling and does not require the directory to exist.
+    return config.absolute()
+
+
 def _agent_runtime_prelude(agent: str) -> str:
     """Shell exports for the child agent only; run this inside a subshell."""
     base = _ensure_agent_runtime(agent)
@@ -578,6 +604,15 @@ def _agent_runtime_prelude(agent: str) -> str:
         f"export XDG_DATA_HOME={shlex.quote(str(base / '.local/share'))}",
         f"export TMPDIR={shlex.quote(str(base / 'tmp'))}",
     ]
+    # gh honours XDG_CONFIG_HOME, so the redirect above hid its hosts file from every dispatched
+    # agent: gh printed "gh auth login" and exited 4 before it asked the keyring for the token.
+    # Measured 2026-10-04 over 90 days of dispatch logs: 58 of the 58 delegated codex runs that
+    # called gh failed that way on their first call, and 25 then read the token through
+    # `git credential fill` instead. The pin is a PATH, never a token. gh still reads the token
+    # where that config says, the keyring here, which codex's workspace-write sandbox (network on)
+    # reaches; the agent gets no credential it could not already read.
+    if os.environ.get(AGENT_GH_CONFIG_DISABLED_ENV) != "1":
+        exports.append(f"export GH_CONFIG_DIR={shlex.quote(str(gh_config_dir()))}")
     if agent == "cursor":
         # Cursor's login-keychain probe fails in restricted Codex subprocesses. Keep HOME real for
         # shell semantics, source CURSOR_API_KEY from the real auth file, and force Cursor to keep
@@ -2388,6 +2423,13 @@ def _selftest() -> None:
             "CURSOR_CONFIG_DIR=" in w and "NODE_COMPILE_CACHE=" in w and "export HOME=" not in w
         ), w
         assert "cursor-agent.env" in w and "$HOME/.cursor" not in w and "set -a" in w, w
+        # gh keeps the dispatcher's config through the XDG redirect: a path, never a token.
+        if os.environ.get(AGENT_GH_CONFIG_DISABLED_ENV) == "1":
+            assert "export GH_CONFIG_DIR=" not in w, w
+        else:
+            gh_pin = f"export GH_CONFIG_DIR={shlex.quote(str(gh_config_dir()))};"
+            assert w.count(gh_pin) == 1 and w.index(gh_pin) < w.index("cursor-agent -p"), w
+        assert "GH_TOKEN" not in w and "GITHUB_TOKEN" not in w, w
         assert w.rstrip().endswith(")") and f"{CLAIMS_PY}" not in w, w
         _selftest_spawn_reads_the_agents_status(by_t["stranske/Repo#1"], Path(tmp))
         # net hygiene: the proxy family is unset BEFORE the agent runs (inside the subshell) so a stray
