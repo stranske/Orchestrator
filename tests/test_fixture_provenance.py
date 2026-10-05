@@ -137,7 +137,11 @@ def test_detector_ignores_fixture_selection_and_usefulness(tmp_path, monkeypatch
         ref = f"advice:rail-phase-{i}"
         for cid in ("a-fixture", "z-production"):
             capabilities.heartbeat(
-                cid, "match", ref=ref, path=path, metadata={"surface": surface}
+                cid,
+                "match",
+                ref=ref,
+                path=path,
+                metadata={"surface": surface},
             )
         cp.record_trigger("a-fixture", ref, path=path, metadata={"surface": surface})
         cp.record_usefulness(
