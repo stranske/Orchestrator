@@ -445,12 +445,20 @@ def _spawn(
     if agent == "gemini":
         prompt = dispatcher._gemini_workspace_prompt(prompt, cwd)
     profile = execution_profiles.get_profile(profile_id) if profile_id else None
+    # An arm's deliverable is the diff it COMMITS in its linked worktree (implement_prompt), so a
+    # sandboxed codex arm is granted that worktree's git dir (adapters.codex_worktree_git_roots).
     argv = (
         adapters.build_command(
-            agent, prompt, mode, cwd=cwd, profile=profile, transport="experiment"
+            agent,
+            prompt,
+            mode,
+            cwd=cwd,
+            profile=profile,
+            transport="experiment",
+            commits_in_worktree=True,
         )
         if profile
-        else adapters.build_command(agent, prompt, mode, cwd=cwd)
+        else adapters.build_command(agent, prompt, mode, cwd=cwd, commits_in_worktree=True)
     )
     run_id = run_id or f"exp:{log.stem}:{agent}:{time.time_ns()}"
     target = target or f"exp:{cwd.name}"
@@ -2845,8 +2853,14 @@ def _selftest_checks():
         adapters.LEDGER = tmp / "capacity-ledger.ndjson"
         captured = {}
 
-        def fake_build_command(agent, prompt, mode, cwd=None):
-            captured["build"] = {"agent": agent, "prompt": prompt, "mode": mode, "cwd": cwd}
+        def fake_build_command(agent, prompt, mode, cwd=None, **kwargs):
+            captured["build"] = {
+                "agent": agent,
+                "prompt": prompt,
+                "mode": mode,
+                "cwd": cwd,
+                "commits_in_worktree": kwargs.get("commits_in_worktree"),
+            }
             return ["printf", "fake-agent"]
 
         adapters.build_command = fake_build_command
@@ -2879,6 +2893,8 @@ def _selftest_checks():
             task_type="implement",
         )
         assert pid == 4900 and "run_id=e1:codex" in log.read_text(), log.read_text()
+        # The arm commits its diff, so codex must be built with the worktree git grant.
+        assert captured["build"]["commits_in_worktree"] is True, captured["build"]
         wrapped_cmd = " ".join(str(part) for part in captured["popen_cmds"][-1])
         assert "ledger_reconcile.py" in wrapped_cmd and " complete " in wrapped_cmd, wrapped_cmd
         gemini_log = tmp / "gemini.log"

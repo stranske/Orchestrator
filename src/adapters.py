@@ -243,6 +243,63 @@ def codex_bypass_inner_sandbox() -> bool:
     return bool(os.environ.get("CODEX_SANDBOX"))
 
 
+# Kill switch for the linked-worktree git grant below. Set to 1 and a codex run is built exactly as
+# it was before the grant existed, so codex >= 0.158 refuses its `git commit` again.
+CODEX_GIT_GRANT_DISABLED_ENV = "ORCH_CODEX_WORKTREE_GIT_GRANT_DISABLED"
+# What one commit and one push write in a linked worktree's COMMON git dir: new objects, the branch
+# and remote-tracking refs, and their reflogs (pushed_branches.py reads those reflogs). The common
+# dir itself is never granted. It holds `config` and `hooks/`, which git EXECUTES later, outside any
+# sandbox, and keeping them read-only is what codex's git-metadata protection is for.
+WORKTREE_SHARED_GIT_DIRS = ("objects", "refs", "logs")
+
+
+def codex_worktree_git_roots(cwd: str | Path | None) -> list[str]:
+    """The git paths a codex run must write to commit and push from the LINKED worktree `cwd`.
+
+    WHY. A linked worktree's `.git` is a FILE naming its private git dir, `<common>/worktrees/<name>`,
+    which holds `index`, `HEAD` and the HEAD reflog. Since 0.158, codex (`include_resolved_gitdirs`,
+    codex-rs `protocol/src/permissions.rs`) carves the dir that file names out of EVERY writable
+    root, so `--sandbox workspace-write` refuses `git commit` with `index.lock: Operation not
+    permitted` even where a broader root such as `~/.codex` covers the canonical clone. Measured on
+    the dispatch logs: in-place commits succeeded in 31 runs from 2026-08-16 to 2026-09-14 (codex
+    0.147.0 to 0.153.4) and failed in the first codex 0.160.0 batch (2026-10-04T19:18Z), two of whose
+    runs then pushed from a clone in /tmp, where `pushed_branches.py` cannot see the push.
+
+    WHAT. An explicit writable root for that exact path drops the carve-out, so the first root is
+    the private git dir spelled the way codex spells it: the `.git` file's `gitdir:` value, resolved
+    against the worktree. The shared dirs follow, for a sandbox whose other roots do not already
+    cover the canonical clone; without them `git add` cannot write an object.
+
+    NOT GRANTED, and each returns []: the common dir itself (`config`, `hooks/`, `info/`,
+    `packed-refs`); a regular clone's `.git` DIRECTORY, because the only grant that commits there is
+    all of it; and any `.git` file that does not name `<common>/worktrees/<name>`, such as a
+    submodule's, which names a whole repository. One residue `--add-dir` cannot avoid: the private
+    dir's `commondir` and `gitdir` pointer files become writable with it.
+    """
+    if os.environ.get(CODEX_GIT_GRANT_DISABLED_ENV) == "1" or cwd is None:
+        return []
+    workspace = Path(cwd).expanduser().resolve()
+    pointer = workspace / ".git"
+    try:
+        if not pointer.is_file():
+            return []
+        key, colon, value = pointer.read_text().strip().partition(":")
+        if not colon or key.strip() != "gitdir" or not value.strip():
+            return []
+        # Absolute as git writes it by default; relative under worktree.useRelativePaths.
+        gitdir = Path(os.path.normpath(workspace / value.strip()))
+        commondir = gitdir / "commondir"
+        if not commondir.is_file():
+            return []
+        common = Path(os.path.normpath(gitdir / commondir.read_text().strip()))
+    except (OSError, UnicodeDecodeError):
+        return []
+    if gitdir.parent != common / "worktrees" or not gitdir.is_dir():
+        return []
+    shared = [common / name for name in WORKTREE_SHARED_GIT_DIRS if (common / name).is_dir()]
+    return [str(gitdir), *map(str, shared)]
+
+
 def parse_model_catalog(text: str) -> list[str]:
     """Model ids from a CLI catalog listing.
 
@@ -1343,11 +1400,16 @@ def build_command(
     permission_mode: str | None = None,
     reasoning_effort: str | None = None,
     requested_model: str | None = None,
+    commits_in_worktree: bool = False,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
 
     cursor: mode None/'composer' -> Composer/Auto (free, no --model);
             'frontier:<model>'   -> draws the metered mid-tier pool with that frontier model.
+
+    commits_in_worktree: the run's job is to commit from `cwd`, a linked worktree. A codex run
+    under workspace-write then also gets exactly the git paths that needs
+    (`codex_worktree_git_roots`). Offloads are told never to commit, so they never pass it.
     """
     selected_profile = execution_profiles.get_profile(profile) if profile is not None else None
     if selected_profile:
@@ -1390,6 +1452,11 @@ def build_command(
         else:
             sandbox = "read-only" if mode == "assess" else (permission_mode or "workspace-write")
             cmd += ["--sandbox", sandbox]
+            # Only under workspace-write: a read-only run must stay read-only, and full access and
+            # the bypass above have no sandbox to widen.
+            if commits_in_worktree and sandbox == "workspace-write":
+                for root in codex_worktree_git_roots(cwd):
+                    cmd += ["--add-dir", root]
         if mode != "assess":
             cmd += ["--json"]
         if requested_model:
@@ -1795,6 +1862,31 @@ def _selftest_inner(*, gaps: list[str] | None = None):
     ), forced_sandbox
     os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
     os.environ.pop("CODEX_SANDBOX", None)
+    # A linked worktree's git dir is granted only to a committing workspace-write codex run.
+    # Real git, the chmod-simulated sandbox and plan_dispatch: tests/test_codex_worktree_git_grant.py.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        common = Path(td).resolve() / "canon" / ".git"
+        gitdir = common / "worktrees" / "wt1"
+        gitdir.mkdir(parents=True)
+        (gitdir / "commondir").write_text("../..\n")
+        for name in WORKTREE_SHARED_GIT_DIRS + ("hooks",):
+            (common / name).mkdir()
+        linked = Path(td).resolve() / "wt1"
+        linked.mkdir()
+        (linked / ".git").write_text(f"gitdir: {gitdir}\n")
+        roots = codex_worktree_git_roots(linked)
+        assert roots == [str(gitdir)] + [str(common / n) for n in WORKTREE_SHARED_GIT_DIRS], roots
+        committing = build_command("codex", "x", cwd=linked, commits_in_worktree=True)
+        granted = [committing[i + 1] for i, a in enumerate(committing) if a == "--add-dir"]
+        assert granted == roots, committing
+        for kept in (
+            build_command("codex", "x", cwd=linked),
+            build_command("codex", "x", mode="assess", cwd=linked, commits_in_worktree=True),
+        ):
+            assert "--add-dir" not in kept, kept
+        assert codex_worktree_git_roots(common.parent) == [], "a .git DIRECTORY is never granted"
     # Claude 5 family: Haiku 4.5 (cheap) / Sonnet 5.5 (mid) / Opus 5.5 (full) — but the seat is CAPPED
     # at mid (scarce weekly), so the `full` lane really dispatches Sonnet 5.5. Expectations are
     # written post-ceiling because that is what reaches the CLI.
@@ -2090,7 +2182,8 @@ def _selftest_inner(*, gaps: list[str] | None = None):
         pass
     print(
         "adapters.py selftest: OK (cursor composer/explicit-frontier/safe-bare-frontier, "
-        "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready)"
+        "vibe subscription, codex/claude cheap-model map, aider venv, gemini lane-ready, "
+        "codex linked-worktree git grant)"
     )
 
 
