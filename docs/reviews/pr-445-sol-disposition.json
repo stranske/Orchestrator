@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-10-05T00:39:24.611013+00:00",
+  "reviewed_source_head": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+  "source_manifest": "pr-438-source-evidence.json",
+  "manifest_sha256": "e94d4b2b799bae85915d6f0b349ab698dd09b07f28c988460c7d9adbc54b03f5",
+  "binding_checks": 22,
+  "reviewer": "Configured Sol closer lane",
+  "original_comparison": "https://github.com/stranske/Orchestrator/pull/438#issuecomment-5984380511",
+  "full_exact_suite": {
+    "command": "python3 -m pytest -m 'not slow' -q",
+    "passed": 1566,
+    "failed": 0,
+    "skipped": 0,
+    "subtests": 4,
+    "seconds": 153.28
+  },
+  "production_copier_private_state": {
+    "passed": 1545,
+    "failed": 0,
+    "collected": 1566,
+    "skipped": 21,
+    "selftests": 99,
+    "gates": 5,
+    "verdict": "VERIFIED",
+    "source_identity": "7db69330306b761604dc715614f3850a61962482"
+  },
+  "byte_mode_equivalence": {
+    "equal": true,
+    "leaves": 1519,
+    "registry_excluded": "Workflows registry is instance-owned and is not builder source; standalone copier refreshed instance registry as documented"
+  },
+  "independent_review": {
+    "builder_installer_ownership": "All tracked builder trees plus flat modules and named config leaves are installer-owned; mode/symlink metadata included in payload digest; shipped docs are manifest-bound; runtime-owned leaves remain linked to retained generation",
+    "source_identity": "Deployment sources, HEAD-tracked trees and permission modes participate; pre/post source and payload checks refuse VOID; registry state is isolated during verification",
+    "bare_machine": "Historical floor26/21/47 and bare selftest/gate7/2 are explicitly bound; unreadable probes remain conservative in existing tests",
+    "finding_disposition": "Original truncation is resolved by complete22file bindings, fullsuite and realcopier replay; no new product defect observed in this scope. Historical artifact absence does not invalidate the replacement witness. Source389 deployment remains independent."
+  },
+  "review_status": "ACCEPTED_FOR_THIS_SCOPE",
+  "deployment_status": "NOT_PERFORMED",
+  "limitations": [
+    "No live mirror installation or Brain/ledger publication",
+    "Standalone copier writes instance registry; that refresh is separate from private verify and retained explicitly",
+    "Historical process-death artifacts remain historical evidence, not final-head CI"
+  ]
+}

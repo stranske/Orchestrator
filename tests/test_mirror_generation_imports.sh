@@ -18,6 +18,9 @@ from unittest.mock import patch
 
 repo = Path(sys.argv[1])
 sys.path.insert(0, str(repo))
+sys.path.insert(0, str(repo / "src" if (repo / "src").is_dir() else repo))
+import paths
+modules = paths.MODULE_DIR
 from scripts import install_verified_snapshot as installer
 
 # Both modes use this exact observer and the production reader wrapper. Pause
@@ -76,7 +79,7 @@ def witness(incumbent):
         (snapshot / 'scripts').mkdir(parents=True)
         shutil.copy2(installer.__file__, snapshot / 'scripts/install_verified_snapshot.py')
         for name in ('paths.py', 'mirror_reader.py'):
-            shutil.copy2(repo / 'src' / name, snapshot / name)
+            shutil.copy2(modules / name, snapshot / name)
         (snapshot / 'orchestrate.sh').write_text('#!/bin/sh\n')
         (snapshot / 'observer.py').write_text(observer)
         (snapshot / 'old_only.py').write_text("VALUE = 'old'\n")
@@ -109,7 +112,7 @@ def witness(incumbent):
         ):
             env.pop(name, None)
         reader = subprocess.Popen(
-            [sys.executable, str(repo / 'src/mirror_reader.py'), 'run', str(mirror),
+            [sys.executable, str(modules / 'mirror_reader.py'), 'run', str(mirror),
              sys.executable, str(mirror / 'observer.py')],
             cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True,

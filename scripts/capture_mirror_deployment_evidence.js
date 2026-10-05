@@ -33,7 +33,7 @@ function inside(candidate, root) {
     && !path.isAbsolute(relative));
 }
 
-function capture(source, mirror, receipt, registry, bin, publicationLog) {
+function capture(source, mirror, receipt, registry, bin, publicationLog, publicationExit) {
   source = fs.realpathSync(source);
   mirror = path.join(fs.realpathSync(path.dirname(mirror)), path.basename(mirror));
   if (!fs.lstatSync(mirror).isSymbolicLink()) throw new Error('mirror is not a published generation link');
@@ -41,6 +41,13 @@ function capture(source, mirror, receipt, registry, bin, publicationLog) {
   const receiptBytes = fs.readFileSync(receipt, 'utf8');
   if (!/^[0-9a-f]{64}\n$/.test(receiptBytes)) throw new Error('invalid one-line verifier receipt');
   const expected = receiptBytes.trim();
+  const exitBytes = fs.readFileSync(publicationExit);
+  const exitText = exitBytes.toString('utf8');
+  const exitStatus = Number(exitText);
+  if (!Number.isInteger(exitStatus) || exitStatus < 0 || exitStatus > 255
+    || exitText !== `${exitStatus}\n`) {
+    throw new Error('invalid one-line publication exit status');
+  }
   // Use the pulled checkout's inspector, never execute code selected by the mirror.
   const actual = run(process.env.PYTHON || 'python3', [
     '-I', path.join(source, 'scripts', 'install_verified_snapshot.py'), generation, '--digest',
@@ -68,7 +75,7 @@ function capture(source, mirror, receipt, registry, bin, publicationLog) {
     && log.includes('== the exact deployment snapshot above received the verdict; no second run');
   const stillActive = fs.realpathSync(mirror) === generation;
   const observationsMatch = clean && actual === expected && stillActive
-    && registryBytes.equals(shippedRegistry) && successMarkers
+    && registryBytes.equals(shippedRegistry) && successMarkers && exitStatus === 0
     && wrappers.every((wrapper) => wrapper.documented_block_present);
   return {
     schema_version: 1,
@@ -81,6 +88,8 @@ function capture(source, mirror, receipt, registry, bin, publicationLog) {
       generation_still_active: stillActive,
       log: path.resolve(publicationLog), log_sha256: sha256(logBytes),
       success_markers_present: successMarkers,
+      exit_status_file: path.resolve(publicationExit), exit_status_sha256: sha256(exitBytes),
+      exit_status: exitStatus, command_succeeded: exitStatus === 0,
     },
     installed_wrappers: wrappers,
     runtime_registry: {
@@ -90,7 +99,7 @@ function capture(source, mirror, receipt, registry, bin, publicationLog) {
     observations_match: observationsMatch,
     remaining_evidence: [
       'gated merge and pull correspondence',
-      'installed wrapper control flow and successful command exit',
+      'installed wrapper control flow',
       'actual launchd/cron reader commands',
       'runtime reports and markers before and after publication',
       'durable verify:compare output and source issue disposition',
@@ -99,13 +108,14 @@ function capture(source, mirror, receipt, registry, bin, publicationLog) {
 }
 
 function main(args) {
-  if (args.length !== 7) throw new Error(
-    'usage: capture_mirror_deployment_evidence.js SOURCE MIRROR RECEIPT REGISTRY BIN PUBLICATION_LOG OUTPUT',
+  if (args.length !== 8) throw new Error(
+    'usage: capture_mirror_deployment_evidence.js SOURCE MIRROR RECEIPT REGISTRY BIN PUBLICATION_LOG PUBLICATION_EXIT OUTPUT',
   );
-  const [source, mirrorArgument, receipt, registry, bin, log, output] = args.map((value) => path.resolve(value));
+  const [source, mirrorArgument, receipt, registry, bin, log, publicationExit, output] = args
+    .map((value) => path.resolve(value));
   const mirror = path.join(fs.realpathSync(path.dirname(mirrorArgument)), path.basename(mirrorArgument));
   const target = path.join(fs.realpathSync(path.dirname(output)), path.basename(output));
-  const inputs = [receipt, registry, log, ...['orch-mirror-sync.sh', 'orch-sync-mirror.sh']
+  const inputs = [receipt, registry, log, publicationExit, ...['orch-mirror-sync.sh', 'orch-sync-mirror.sh']
     .map((name) => path.join(bin, name))].map((filename) => fs.realpathSync(filename));
   // Evidence must not change the checkout, live tree, or any retained backing tree.
   const roots = [fs.realpathSync(source), mirror, fs.realpathSync(mirror)];
@@ -115,7 +125,7 @@ function main(args) {
       || part.startsWith(`${path.basename(mirror)}.retired-`))) {
     throw new Error('evidence output overlaps deployment or observation inputs');
   }
-  const report = capture(source, mirror, receipt, registry, bin, log);
+  const report = capture(source, mirror, receipt, registry, bin, log, publicationExit);
   // Exclusive creation preserves earlier evidence, including a dangling leaf link.
   fs.writeFileSync(target, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
   console.log(`deployment pending operator review; evidence: ${target}`);
