@@ -36,25 +36,55 @@ def test_workflow_and_auth_path_changes_are_high_stakes_and_docs_only_is_not():
         ".github/scripts/guard.js",
         "src/auth/session.py",
         "src/auth_tokens.py",
+        "src/Authentication/session.py",
+        "src/authorization/policy.py",
+        "src/security/check.py",
         "src/db/store.py",
+        "src/data/load.py",
+        "src/database/connect.py",
+        "src/migrations/upgrade.py",
+        "src/persistence/save.py",
+        "src/storage/write.py",
+        "src/schema/validate.py",
     ):
         assert adv.high_stakes_from_shape(facts([path])), path
-    assert adv.high_stakes_from_shape({"path_classes": ["workflows"]})
-    assert adv.high_stakes_from_shape(facts(["docs/auth.md"], additions=1000)) is None
-    assert adv.high_stakes_from_shape(facts(["tests/test_auth.py"])) is None
-
-
-def test_large_code_change_uses_one_boundary_and_label_route_survives():
-    assert adv.high_stakes_from_shape(
-        facts(["src/util.py"], additions=adv.HIGH_STAKES_MIN_CHANGED_LINES)
-    )
+    for path_class in ("workflows", "github-meta", "auth", "data"):
+        assert adv.high_stakes_from_shape({"path_classes": [path_class]}), path_class
     assert (
         adv.high_stakes_from_shape(
-            facts(["src/util.py"], additions=adv.HIGH_STAKES_MIN_CHANGED_LINES - 1)
+            facts(["docs/auth.md", "docs/database.rst"], additions=1000, deletions=1000)
         )
         is None
     )
+    for path in ("tests/test_auth.py", ".agents/data.json", "src/author.py", "src/metadata.py"):
+        assert adv.high_stakes_from_shape(facts([path])) is None, path
+    assert adv.high_stakes_from_shape(facts(["docs/auth.md", "src/auth/session.py"]))
+
+
+def test_large_code_change_uses_one_boundary_and_label_route_survives():
+    boundary = adv.HIGH_STAKES_MIN_CHANGED_LINES
+    for additions, deletions in (
+        (boundary, 0),
+        (0, boundary),
+        (boundary // 2, boundary - boundary // 2),
+    ):
+        assert adv.high_stakes_from_shape(
+            facts(["src/util.py"], additions=additions, deletions=deletions)
+        )
+        if additions:
+            additions -= 1
+        else:
+            deletions -= 1
+        assert (
+            adv.high_stakes_from_shape(
+                facts(["src/util.py"], additions=additions, deletions=deletions)
+            )
+            is None
+        )
     assert adv.high_stakes_label_reason(facts(["docs/readme.md"], labels=["risk:major"]))
+    assert adv.high_stakes_label_reason(
+        {**facts(["docs/readme.md"]), "source_labels": [{"name": " HIGH_STAKES "}]}
+    )
     assert adv.high_stakes_reason({"lane": "closer", "labels": ["risk:major"]})
 
 
