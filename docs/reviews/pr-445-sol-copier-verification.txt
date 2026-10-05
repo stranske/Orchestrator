@@ -1,0 +1,36 @@
+== scratch mirror of . @ 883ee0b (0 uncommitted) -> /private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/verify-before-sync.nnJeiY/mirror
+tests/ shipped from git HEAD 883ee0b (1070 files) — uncommitted test edits are NOT shipped
+scripts/ shipped from git HEAD (31 entries)
+.github/ shipped from git HEAD (225 files) with .gitignore ruff.toml
+docs/ shipped from git HEAD (37 files, merged beside run-time output)
+built 115 .py (from ./src) + orchestrate.sh + 119 test file(s) + 10 data/config entries -> /private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/verify-before-sync.nnJeiY/mirror
+repo_review_registry.json from GitHub main
+   copy contract: /Users/teacher/.codex/bin/orch-sync-mirror.sh built exactly the tree scripts/build_exec_mirror.sh builds, which CI's exec-mirror job verifies
+== scratch copy of the live state (/Users/teacher/.codex/orchestrator), which verify.py may read AND write
+   not copied, over 50 MB (checks that need them see nothing): agent-runtime (7444 MB) backups (186 MB) frontend-verify (3179 MB) langsmith-artifacts (266 MB) repos (1233 MB) reviews (1105 MB) worktrees (1781 MB)
+== verify.py in the scratch mirror, on the state copy (HOME stays real for the installed CLIs)
+# verify.py
+
+  tree:       EXEC MIRROR — mirror_* ceilings apply
+              /private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/verify-before-sync.nnJeiY/mirror is the exec mirror, not a checkout: its modules sit at the root rather than under src/, and git reports no repository here. orch-sync-mirror.sh copies files, flat, not a checkout, so the tests that ask git a question cannot run in this tree
+  state:      private copy, deleted after the run — ledger 19.4 MB; Brain 79.6 MB
+  time:       pytest 2m32s, selftests 21s (8 at a time), gates 21s
+  pytest:     1545 passed, 0 failed, 21/21 max [mirror_skipped_max] skipped (1566 collected; floor 1566)
+  selftests:  99 of 99 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   47 of 47 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  46 of 52
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 48 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 13 admission checks passed — 11 enforced, 3 legacy debt, commitments clean (13 of 13 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  mypy ratchet: 0/0 max of 115 module(s) exempt, 115 checked — fully drained
+
+  SKIPPED (prerequisite absent on this machine — nothing here was checked):
+    pytest   SKIPPED [21] ../../../../../../../../opt/anaconda3/lib/python3.12/site-packages/_pytest/unittest.py:523: /private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/verify-before-sync.nnJeiY/mirror is not a git repository (git rev-parse --git-dir failed), so git cannot be asked whether a path is ignored or tracked — the exec mirror is a file copy, not a checkout. Run this check from the repo, where it is not skipped.
+
+  VERIFIED — 1545 tests actually executed and passed, 99 selftests spoke, 5 of 5 gates green; 21 test(s), 0 selftest(s) and 0 gate(s) SKIPPED for a named missing prerequisite, listed above
+
+== verify-before-sync: VERIFIED for . @ 883ee0b (0 uncommitted)
+   scratch mirror built by /Users/teacher/.codex/bin/orch-sync-mirror.sh, verified on a copy of /Users/teacher/.codex/orchestrator; the live mirror,
+   the live registry copy, the live ledger and the live Brain were not written
+   copy contract: /Users/teacher/.codex/bin/orch-sync-mirror.sh built exactly the tree scripts/build_exec_mirror.sh builds, which CI's exec-mirror job verifies
+   verified source identity: 7db69330306b761604dc715614f3850a61962482

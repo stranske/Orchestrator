@@ -497,7 +497,7 @@ def _safe_command(argv: list[str]) -> bool:
         return True
     if argv[:3] == ["python3", "-m", "pytest"]:
         return True
-    if Path(argv[0]).name in {"python", "python3"} and len(argv) >= 3:
+    if re.fullmatch(r"python(?:3(?:\.[0-9]+)?)?", Path(argv[0]).name) and len(argv) >= 3:
         return argv[1] == "-m" and argv[2] in {"pytest", "unittest"}
     if argv[:3] == ["uv", "run", "pytest"]:
         return True

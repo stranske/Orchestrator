@@ -681,7 +681,10 @@ aliases and `checkout_root()` to its module generation. The inherited descriptor
 stays open in the shell while it waits for Python children. For a permanently named
 generation it is unlocked before exec, allowing publication while the tick runs.
 For the incumbent real directory it stays locked until the reader exits, protecting
-initial migration. Exec preserves the tick PID and its already-armed watchdog.
+initial migration. Exec preserves the tick PID; the pinned tick arms its watchdog
+before running steps. Generation selection runs before the watchdog, cadence registry,
+and authentication preflight read executable modules. Authentication still precedes
+heartbeat activation and dispatch. Bootstrap lock acquisition precedes watchdog arming.
 Inherited descriptors are checked against the mirror-specific lock inode.
 A synchronized observer loads an old module, completes two publications while
 paused, then reads and imports old bytes again, including in a fresh child process.
@@ -823,8 +826,13 @@ included the positive publisher tests and their negative controls, rather than t
 incumbent-defect witness as proof of repair. That result predates the permanent-generation
 recovery and must be rerun. The additional standard-library witness runs with
 `PYTHONPATH=.:src python3 -m unittest discover -s tests -p test_mirror_generations.py -v`.
-Its four tests cover the paired observer, active/shadow tick entry, link-switch
-interruption/retry, and isolation of retained generations from the separate registry.
+Its witnesses cover the paired observer, active/shadow tick entry (including startup
+modules), refusal of authentication after pinning, link-switch interruption/retry,
+and isolation of retained generations from the separate registry. Python bytecode
+(`__pycache__/`, `.pyc`, and `.pyo`) stays with its old generation rather than becoming
+shared runtime storage: a timestamp/size-valid cache can otherwise override changed
+verified source bytes. The cache witness forces that collision and checks both new
+imports and the retained reader's old code, alongside preserved runtime reports.
 Shell syntax validation covers `orchestrate.sh`,
 `verify_before_sync.sh`, `publish_unverified_snapshot.sh`, and `incumbent_copy_guard.sh`.
 These results establish source behavior and process-interruption recovery, not power-loss
@@ -870,20 +878,24 @@ node "$source_root/scripts/capture_mirror_deployment_evidence.js" \
   "$source_root" "$HOME/.codex/orchestrator-mirror" \
   "$evidence_dir/verified-payload.sha256" \
   "$HOME/.codex/orchestrator/repo_review_registry.json" \
-  "$HOME/.codex/bin" "$evidence_dir/publication.log" "$evidence_dir/observations.json"
+  "$HOME/.codex/bin" "$evidence_dir/publication.log" \
+  "$evidence_dir/publication-exit.txt" "$evidence_dir/observations.json"
 ```
 
 The Node collector reads installed state and writes only the new observation file. It records
 the checkout commit, both installed-wrapper SHA256 values and presence of their documented
 blocks, the retained receipt and physical-generation digest, publication-log SHA256 and
-success markers, and the separate registry's correspondence with the generation. A mismatch
-returns exit 2. A publication overlapping collection also returns exit 2; collect again using
+success markers, the retained publication exit status and its SHA256, and the separate
+registry's correspondence with the generation. A nonzero publication exit status or other
+mismatch returns exit 2. Missing or malformed exit evidence is rejected without writing an
+observation file. A publication overlapping collection also returns exit 2; collect again using
 the receipt and log for the currently active generation. Existing evidence is never overwritten.
 Move the evidence directory to retained operator storage before clearing temporary files.
 
 Even matching observations carry `deployment_status: pending-operator-review`: block presence
-does not prove wrapper control-flow placement, and log markers do not prove command exit.
-Review the retained exit status, match the checkout commit to the actual merge/pull, inspect
+does not prove wrapper control-flow placement. The collector requires a retained zero exit
+status as well as success log markers; that status is an operator-supplied observation, not an
+independent replay of the command. Match the checkout commit to the actual merge/pull, inspect
 launchd/cron entries, compare runtime reports/markers before and after publication, and retain
 durable `verify:compare` output before checking the deployment task complete. This repository
 change does not install wrappers or supply those live observations.

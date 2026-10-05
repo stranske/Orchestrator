@@ -33,6 +33,7 @@ function world(t) {
   const bin = path.join(root, 'bin');
   const receipt = path.join(root, 'verified-payload.sha256');
   const log = path.join(root, 'publication.log');
+  const publicationExit = path.join(root, 'publication-exit.txt');
   const output = path.join(root, 'evidence.json');
   for (const dir of [path.join(source, 'scripts'), path.join(source, 'docs'),
     path.join(snapshot, 'scripts'), path.join(mirror, 'docs', 'reports'), bin]) {
@@ -55,18 +56,20 @@ function world(t) {
   const publication = run(python, [installer, snapshot, mirror, '--expected-digest', digest,
     '--runtime-registry', registry]);
   fs.writeFileSync(log, `${publication}\n== the exact deployment snapshot above received the verdict; no second run\n`);
+  fs.writeFileSync(publicationExit, '0\n');
   run('git', ['-C', source, 'init', '-q']);
   run('git', ['-C', source, 'add', '.']);
   run('git', ['-C', source, '-c', 'user.name=Test', '-c', 'user.email=test@example.com',
     '-c', 'commit.gpgsign=false', 'commit', '-qm', 'pulled source fixture']);
-  return { root, source, snapshot, mirror, registry, bin, receipt, log, output, installer, digest };
+  return { root, source, snapshot, mirror, registry, bin, receipt, log, publicationExit,
+    output, installer, digest };
 }
 
 function collect(w, output = w.output) {
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   return spawnSync(process.execPath, [collector, w.source, w.mirror, w.receipt, w.registry,
-    w.bin, w.log, output], { encoding: 'utf8', timeout: 10000, env });
+    w.bin, w.log, w.publicationExit, output], { encoding: 'utf8', timeout: 10000, env });
 }
 
 test('captures real publisher observations without declaring deployment complete', (t) => {
@@ -80,6 +83,10 @@ test('captures real publisher observations without declaring deployment complete
   assert.equal(evidence.publication.generation, fs.realpathSync(w.mirror));
   assert.equal(evidence.publication.expected_digest, w.digest);
   assert.equal(evidence.publication.observed_digest, w.digest);
+  assert.equal(evidence.publication.exit_status, 0);
+  assert.equal(evidence.publication.command_succeeded, true);
+  assert.equal(evidence.publication.exit_status_file, w.publicationExit);
+  assert.match(evidence.publication.exit_status_sha256, /^[0-9a-f]{64}$/);
   assert.equal(evidence.runtime_registry.matches, true);
   assert.equal(evidence.installed_wrappers.length, 2);
   for (const wrapper of evidence.installed_wrappers) {
@@ -111,6 +118,42 @@ for (const defect of ['digest', 'permissions', 'registry', 'wrapper', 'copier gu
   });
 }
 
+for (const status of [1, 3, 137, 255]) {
+  test(`records failed publication exit ${status} despite matching success markers`, (t) => {
+    const w = world(t);
+    fs.writeFileSync(w.publicationExit, `${status}\n`);
+    const evidence = capture(w.source, w.mirror, w.receipt, w.registry, w.bin, w.log,
+      w.publicationExit);
+    assert.equal(evidence.observations_match, false);
+    assert.equal(evidence.publication.exit_status, status);
+    assert.equal(evidence.publication.command_succeeded, false);
+    assert.equal(evidence.publication.success_markers_present, true);
+    assert.equal(evidence.deployment_status, 'pending-operator-review');
+    const result = collect(w);
+    assert.equal(result.status, 2, result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(w.output)).publication, evidence.publication);
+  });
+}
+
+for (const status of ['', '0', '00\n', '-1\n', '256\n', '0\n1\n', '0\n\n', '0\r\n', 'ok\n']) {
+  test(`rejects malformed publication exit ${JSON.stringify(status)}`, (t) => {
+    const w = world(t);
+    fs.writeFileSync(w.publicationExit, status);
+    assert.throws(() => capture(w.source, w.mirror, w.receipt, w.registry, w.bin, w.log,
+      w.publicationExit), /invalid one-line publication exit status/);
+    const result = collect(w);
+    assert.equal(result.status, 2);
+    assert.equal(fs.existsSync(w.output), false);
+  });
+}
+
+test('requires retained exit evidence even when the publication log indicates success', (t) => {
+  const w = world(t);
+  fs.unlinkSync(w.publicationExit);
+  assert.equal(collect(w).status, 2);
+  assert.equal(fs.existsSync(w.output), false);
+});
+
 for (const receipt of ['', 'a'.repeat(64), 'A'.repeat(64) + '\n', 'a'.repeat(64) + '\nextra\n']) {
   test(`rejects malformed verifier receipt ${JSON.stringify(receipt)}`, (t) => {
     const w = world(t);
@@ -128,7 +171,7 @@ test('refuses to replace earlier evidence or write into deployment and input pat
   const retired = path.join(w.root, 'mirror.retired-saved');
   fs.mkdirSync(retired);
   for (const output of [path.join(w.source, 'evidence.json'), path.join(w.mirror, 'evidence.json'),
-    path.join(retired, 'evidence.json'), w.receipt, w.registry, w.log,
+    path.join(retired, 'evidence.json'), w.receipt, w.registry, w.log, w.publicationExit,
     path.join(w.bin, 'orch-sync-mirror.sh')]) {
     const before = fs.existsSync(output) ? fs.readFileSync(output) : null;
     const result = collect(w, output);
@@ -150,7 +193,8 @@ test('flags a publication overlapping evidence collection instead of mixing obse
   };
   let evidence;
   try {
-    evidence = capture(w.source, w.mirror, w.receipt, w.registry, w.bin, w.log);
+    evidence = capture(w.source, w.mirror, w.receipt, w.registry, w.bin, w.log,
+      w.publicationExit);
   } finally {
     fs.readFileSync = readFile;
   }
