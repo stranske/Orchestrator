@@ -99,8 +99,11 @@ def test_small_quiet_pr_auto_declines_by_kind(tmp_path, facts):
     assert e["runtime-ac-checks"]["how_to_use"].startswith(
         "AUTO-DECLINED by the advisor (scope_too_small)"
     )
-    assert e["adversarial-review"]["pr_requirement_met"] is None
-    assert "shape route held in shadow" in e["adversarial-review"]["pr_requirement_evidence"]
+    assert "adversarial-review" not in e
+    assert any(
+        row["capability_id"] == "adversarial-review" and "shape route held in shadow" in row["fact"]
+        for row in result["fact_missing"]
+    )
     assert result["precondition"]["pr"] == 1234
     assert set(result["precondition"]["auto_declined"]) == {
         "runtime-ac-checks",
@@ -116,7 +119,6 @@ def test_big_stalled_pr_is_offered_plainly(tmp_path, facts):
     e = _by_id(_consult(tmp_path))
     for cid in (
         "runtime-ac-checks",
-        "adversarial-review",
         "offload",
         "redirect-policy",
         "redirect-plan",
@@ -133,7 +135,8 @@ def test_nothing_is_removed_or_reordered(tmp_path, facts):
     declined = [e["capability_id"] for e in _consult(tmp_path)["capabilities"]]
     facts["facts"] = BIG_STALLED_PR
     plain = [e["capability_id"] for e in _consult(tmp_path)["capabilities"]]
-    assert declined == plain and set(CLOSER_BOUND) <= set(plain)
+    assert declined == plain and (set(CLOSER_BOUND) - {"adversarial-review"}) <= set(plain)
+    assert "adversarial-review" not in plain  # weekly shadow population is not mature
 
 
 def test_no_pr_means_unevaluated_not_declined(tmp_path, facts):
@@ -142,13 +145,22 @@ def test_no_pr_means_unevaluated_not_declined(tmp_path, facts):
     e = _by_id(result)
     assert not any("auto_declined" in v for v in e.values())
     assert "pr" in result["precondition"]["missing_inputs"]
-    assert any("needs `pr`" in why for why in e["redirect-policy"]["unevaluated_because"])
+    withheld = {row["capability_id"] for row in result["fact_missing"]}
+    assert "redirect-policy" in withheld
+    assert "redirect-policy" not in e
 
 
 def test_fetch_failure_declines_nothing(tmp_path, facts):
     facts["facts"] = None
-    e = _by_id(_consult(tmp_path))
-    assert not any("auto_declined" in v for v in e.values())
+    result = _consult(tmp_path)
+    e = _by_id(result)
+    # Evaluated preconditions may still auto-decline; unevaluated PR-fact ones are withheld.
+    assert result["fact_missing"]
+    assert not any(
+        "auto_declined" in v
+        for cap_id, v in e.items()
+        if cap_id in {row["capability_id"] for row in result["fact_missing"]}
+    )
 
 
 def test_explicit_pr_context_wins_over_text(tmp_path, facts):

@@ -281,16 +281,37 @@ def _fact_from_graphql(pr: dict[str, Any]) -> dict[str, Any]:
         for n in (labels_node or {}).get("nodes") or []
         if isinstance(n, dict) and n.get("name")
     ]
+    source_node = pr.get("closingIssuesReferences") or {}
+    sources = source_node.get("nodes") or []
+    source_labels = sorted(
+        {
+            str(label["name"])
+            for issue in sources
+            for label in (issue.get("labels") or {}).get("nodes") or []
+            if isinstance(label, dict) and label.get("name")
+        }
+    )
+    source_labels_complete = (
+        "closingIssuesReferences" in pr
+        and not source_node.get("pageInfo", {}).get("hasNextPage", False)
+        and all(
+            "labels" in issue
+            and not (issue.get("labels") or {}).get("pageInfo", {}).get("hasNextPage", False)
+            for issue in sources
+        )
+    )
     files_node = pr.get("files") if isinstance(pr.get("files"), dict) else {}
     file_rows = [n for n in (files_node or {}).get("nodes") or [] if isinstance(n, dict)]
     commits_node = pr.get("commits") if isinstance(pr.get("commits"), dict) else {}
     return {
         "title": str(pr.get("title") or ""),
         "labels": labels,
+        "source_labels": source_labels,
+        "source_labels_complete": source_labels_complete,
         "paths": [str(n.get("path")) for n in file_rows if n.get("path")],
         "files_total": (files_node or {}).get("totalCount"),
-        "additions": sum(int(n.get("additions") or 0) for n in file_rows),
-        "deletions": sum(int(n.get("deletions") or 0) for n in file_rows),
+        "additions": pr.get("additions", sum(int(n.get("additions") or 0) for n in file_rows)),
+        "deletions": pr.get("deletions", sum(int(n.get("deletions") or 0) for n in file_rows)),
         "created_ts": _epoch(pr.get("createdAt")),
         "merged_ts": _epoch(pr.get("mergedAt")),
         "commits": (commits_node or {}).get("totalCount"),
@@ -310,8 +331,10 @@ def fetch_facts(
     for i in range(0, len(numbers), GRAPHQL_CHUNK):
         chunk = numbers[i : i + GRAPHQL_CHUNK]
         fields = " ".join(
-            f"p{n}: pullRequest(number:{n}){{ number title createdAt mergedAt "
+            f"p{n}: pullRequest(number:{n}){{ number title createdAt mergedAt additions deletions "
             f"labels(first:30){{nodes{{name}}}} "
+            f"closingIssuesReferences(first:20){{pageInfo{{hasNextPage}} nodes{{"
+            f"labels(first:100){{pageInfo{{hasNextPage}} nodes{{name}}}}}}}} "
             f"files(first:100){{totalCount nodes{{path additions deletions}}}} "
             f"commits{{totalCount}} }}"
             for n in chunk
@@ -354,6 +377,9 @@ def _read_facts(state_dir: Path) -> tuple[dict[str, dict[str, Any]], int, int]:
         return {}, 0, 0
     facts = payload.get("facts") if isinstance(payload, dict) else None
     loaded = {str(k): v for k, v in (facts or {}).items() if isinstance(v, dict)}
+    for fact in loaded.values():
+        if not fact.get("unavailable") and "source_labels" not in fact:
+            fact["source_labels_complete"] = False
     return utc_epoch.rebase_cache(loaded, _rebase_fact)
 
 
@@ -498,10 +524,12 @@ def aggregate(
             high_stakes["unknown"] += 1
             continue
         with_facts += 1
-        if adversarial.high_stakes_from_shape(fact):
-            high_stakes["shape_candidates"] += 1
-        elif not adversarial.shape_facts_complete(fact):
+        if not adversarial.shape_facts_complete(fact) or not fact.get(
+            "source_labels_complete", True
+        ):
             high_stakes["unknown"] += 1
+        elif adversarial.high_stakes_from_shape(fact):
+            high_stakes["shape_candidates"] += 1
         if adversarial.high_stakes_label_reason(fact):
             high_stakes["label_candidates"] += 1
         sig = shape_signature(fact.get("title"), fact.get("labels"), fact.get("paths"))
@@ -608,7 +636,8 @@ def run(
     facts, rebased, dropped = _read_facts(state_dir)
     missing_by_repo: dict[str, list[int]] = {}
     for pr in prs:
-        if pr["ref"] not in facts:
+        cached = facts.get(pr["ref"])
+        if cached is None or (not cached.get("unavailable") and "source_labels" not in cached):
             missing_by_repo.setdefault(pr["repo"], []).append(pr["number"])
     fetch = fetch_fn or fetch_facts
     budget = max(0, int(fetch_limit))

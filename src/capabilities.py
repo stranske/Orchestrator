@@ -405,6 +405,9 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "joined dispatch and durable outcome evidence supports extending the trial",
     },
     "runtime-ac-checks": {
+        "notes": "dedup: runtime_ac authoring prompt, gate, ingest and weekly report already exist; "
+        "extend those edges with unattended issue-derived shadow specs and coverage-free named "
+        "checks. Shadow events never update outcomes or implicitly require a merge gate.",
         "status": "canary",
         "entrypoint": "runtime_ac_gate.py",
         "matcher": {"kind": "env", "name": "ORCH_RUN_RUNTIME_AC", "equals": "1"},
@@ -2195,7 +2198,10 @@ def heartbeat(
         ):
             return False
         field = EVENT_FIELDS[event_type]
-        if field:
+        # Missing PR facts are surface evidence, not a capability offer. Keep the
+        # event for propensity accounting without manufacturing matching-work liveness.
+        fact_missing = event_type == "match" and (metadata or {}).get("source") == "fact_missing"
+        if field and not fact_missing:
             cap[field] = max(int(cap.get(field) or 0), ts)
         if event_type == "outcome" and ref not in cap["outcome_links"]:
             cap["outcome_links"].append(ref)

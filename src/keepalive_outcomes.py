@@ -66,7 +66,7 @@ def _resolve_registry_path() -> Path:
 # cheaper resolvers could not attribute (`_attach_commit_identities`).
 PR_LIST_FIELDS = (
     "number,state,title,labels,createdAt,updatedAt,mergedAt,closedAt,"
-    "headRefName,baseRefName,mergeCommit,author,body,url"
+    "headRefName,headRefOid,baseRefName,mergeCommit,author,body,url"
 )
 PR_CONTEXT_FIELDS = "body,comments"
 PROCESS_WORK_TYPES = {"renovate", "sync", "tooling", "docs"}
@@ -354,6 +354,24 @@ class IngestSummary(TypedDict):
     fetch_failed_repos: list[str]
     commit_identity_enriched: int
     verifier_verdicts_seen: int
+    runtime_ac_specs_authored: int
+    runtime_ac_shadow_errors: list[str]
+
+
+def _fetch_issue_body(repo: str, number: int) -> str | None:
+    detached = Path.home() / ".codex/bin/detached-net.sh"
+    args = ([str(detached)] if detached.exists() else []) + [
+        "gh",
+        "issue",
+        "view",
+        str(number),
+        "--repo",
+        repo,
+        "--json",
+        "body",
+    ]
+    issue = _run_json(args)
+    return str(issue["body"]) if isinstance(issue, dict) and issue.get("body") else None
 
 
 def _agent_from_labels(labels: list[str]) -> tuple[str, str] | None:
@@ -1100,6 +1118,8 @@ def ingest_keepalive_outcomes(
     _fix_fn=None,
     _dispatch_times_fn=None,
     _policy_at_dispatch_fn=None,
+    _issue_fetch_fn=None,
+    _spec_dir=None,
 ) -> IngestSummary:
     repos = repos or _active_repos()
     pr_fetch_fn = _pr_fetch_fn or _fetch_prs
@@ -1152,6 +1172,8 @@ def ingest_keepalive_outcomes(
         "fetch_failed_repos": [],
         "commit_identity_enriched": 0,
         "verifier_verdicts_seen": 0,
+        "runtime_ac_specs_authored": 0,
+        "runtime_ac_shadow_errors": [],
     }
 
     for repo in repos:
@@ -1344,6 +1366,34 @@ def ingest_keepalive_outcomes(
                 summary["runs_recorded"] += 1
             elif dry_run:
                 summary["runs_recorded"] += 1
+
+            if not dry_run and not run_already_exists:
+                # The older issue names keepalive_ingest.py; this is the deployed ingest edge.
+                # Source authoring/observation cannot alter the PR outcome or the hard merge gate.
+                import runtime_ac_gate
+
+                try:
+                    authored = runtime_ac_gate.author_keepalive_spec(
+                        repo,
+                        pr,
+                        run_id,
+                        spec_dir=_spec_dir,
+                        issue_fetch_fn=_issue_fetch_fn
+                        or (_fetch_issue_body if _pr_fetch_fn is None else lambda _r, _n: None),
+                    )
+                    if authored.get("spec_authored"):
+                        summary["runtime_ac_specs_authored"] += 1
+                        runtime_ac_gate.observe_shadow_spec(
+                            target,
+                            run_id,
+                            spec_dir=_spec_dir,
+                            worktree=pr.get("_worktree"),
+                            head_sha=pr.get("headRefOid"),
+                        )
+                    elif authored.get("error"):
+                        summary["runtime_ac_shadow_errors"].append(f"{target}: {authored['error']}")
+                except Exception as exc:
+                    summary["runtime_ac_shadow_errors"].append(f"{target}: {exc}")
 
             if oc is not None and _should_record_outcome(existing_oc, oc):
                 if not dry_run:

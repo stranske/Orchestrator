@@ -144,6 +144,15 @@ def shape_facts_complete(facts: dict) -> bool:
     )
 
 
+def high_stakes_title_reason(facts: dict) -> str | None:
+    """Preserve the closer title signal without recording a review invocation."""
+    title = str(facts.get("title") or "")
+    for pattern in HIGH_STAKES_TITLE_PATTERNS:
+        if re.search(pattern, title, flags=re.IGNORECASE):
+            return f"high-stakes title match: {pattern}"
+    return None
+
+
 def high_stakes_label_reason(facts: dict) -> str | None:
     """The existing label vocabulary, without matching/recording a review invocation."""
     for label in _label_names(facts):

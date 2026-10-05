@@ -602,6 +602,11 @@ COMPLETION_NESTED_FIELDS = {
         "materialization_source",
         "materialization_status",
         "materialization_run_id",
+        "shadow_only",
+        "spec_authored",
+        "observed_head_sha",
+        "false_fail_audit",
+        "audit_evidence",
     },
 }
 COMPLETION_RETRY_FIELDS = {
@@ -1505,6 +1510,11 @@ def _record_runtime_ac_gate_event_in_conn(
     materialization_source: str | None = None,
     materialization_status: str | None = None,
     materialization_run_id: str | None = None,
+    shadow_only: bool = False,
+    spec_authored: bool = False,
+    observed_head_sha: str | None = None,
+    false_fail_audit: bool | None = None,
+    audit_evidence: list[dict] | None = None,
     event_id: str | None = None,
     timestamp: int | None = None,
 ) -> dict:
@@ -1569,6 +1579,11 @@ def _record_runtime_ac_gate_event_in_conn(
         "materialization_source": materialization_source,
         "materialization_status": materialization_status,
         "materialization_run_id": materialization_run_id,
+        "shadow_only": bool(shadow_only),
+        "spec_authored": bool(spec_authored),
+        "observed_head_sha": observed_head_sha,
+        "false_fail_audit": false_fail_audit,
+        "audit_evidence": audit_evidence or [],
     }
     event = _record_completion_event_in_conn(
         c,

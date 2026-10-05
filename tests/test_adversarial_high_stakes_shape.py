@@ -252,3 +252,66 @@ def test_explicit_advisor_ledger_cannot_borrow_live_shadow_evidence(tmp_path, mo
     )
     assert verdict["pr_requirement_met"] is None
     assert "0/2" in verdict["pr_requirement_evidence"]
+
+
+def test_truncated_positive_workflow_fact_cannot_record_a_complete_week():
+    row = facts([".github/workflows/gate.yml"])
+    row["files_total"] = row["changedFiles"] = 2
+    section = population([row])["adversarial_shape"]
+    assert section["status"] == "partial"
+    assert section["unknown"] == 1
+    assert section["shape_candidates"] == 0
+
+
+def test_mature_probe_preserves_security_title_without_review_heartbeat(monkeypatch):
+    monkeypatch.setattr(adv, "shape_shadow_readiness", lambda **kw: (True, "two weeks"))
+    monkeypatch.setattr(
+        adv,
+        "_capability_heartbeat",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("review invocation")),
+    )
+    row = {**facts(["src/util.py"], additions=30), "title": "security fix"}
+    verdict, reason = advisor._probe_high_stakes_shape(row)
+    assert verdict is True and "title match" in reason
+
+
+def test_shared_graphql_fact_preserves_source_risk_labels(monkeypatch):
+    queries = []
+    raw = {
+        "number": 4,
+        "title": "small utility fix",
+        "labels": {"nodes": []},
+        "files": {
+            "totalCount": 1,
+            "nodes": [{"path": "src/util.py", "additions": 3, "deletions": 0}],
+        },
+        "closingIssuesReferences": {
+            "pageInfo": {"hasNextPage": False},
+            "nodes": [
+                {"labels": {"pageInfo": {"hasNextPage": False}, "nodes": [{"name": "risk:major"}]}}
+            ],
+        },
+    }
+
+    def fetch(args):
+        queries.append(args[-1])
+        return {"data": {"repository": {"p4": raw}}}
+
+    original = fleet_shapes.fetch_facts
+    monkeypatch.setattr(
+        fleet_shapes, "fetch_facts", lambda repo, nums: original(repo, nums, gh_json=fetch)
+    )
+    row = advisor._fetch_pr_facts("o/r", 4)
+    assert row["source_labels"] == ["risk:major"]
+    assert row["source_labels_complete"] is True
+    assert "closingIssuesReferences" in queries[0]
+    assert population([row])["adversarial_shape"]["label_candidates"] == 1
+    monkeypatch.setattr(adv, "shape_shadow_readiness", lambda **kw: (True, "two weeks"))
+    assert advisor._probe_high_stakes_shape(row)[0] is True
+
+
+def test_incomplete_source_labels_keep_negative_advisor_verdict_unknown(monkeypatch):
+    monkeypatch.setattr(adv, "shape_shadow_readiness", lambda **kw: (True, "two weeks"))
+    row = {**facts(["src/util.py"]), "source_labels_complete": False}
+    assert advisor._probe_high_stakes_shape(row)[0] is None
+    assert population([row])["adversarial_shape"]["status"] == "partial"
