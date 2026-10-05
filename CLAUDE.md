@@ -424,6 +424,10 @@ Do not create a second event log, model registry, or capability inventory.
   reflogs when it completes (`pushed_branches.py`, Brain table `run_pushes`), never from the
   transcript. A PR there counts only if the run opened it inside its window, and a run without a
   usable record resolves exactly as before: unknown is not false.
+  An issue was closed through a PR only if that PR MERGED by the time the issue closed
+  (`outcomes.CLOSING_PR_MERGE_SLACK_SECONDS`). GitHub also lists every PR that links the issue
+  later, which cannot have closed it: those are named in the notes and never counted, and a
+  reference whose merge time cannot be read leaves the run unanswered, retried at the next ingest.
 - Missing cost/effort telemetry must never read as "free" — impute it (see feedback.relearn_quality).
   And a PARTIAL or sparse number is UNMEASURED, not cheap: cost enters the learners on one scale only
   (`feedback.COST_SCALE`, from `COMPLETE_COST_SOURCES` at `MIN_COST_COVERAGE` coverage); a LangSmith
