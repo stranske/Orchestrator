@@ -2384,7 +2384,8 @@ def main(argv: list[str]) -> int:
 
     try:
         rep["adversarial_shape_measurement_recorded"] = adversarial.record_shape_measurement(
-            rep["adversarial_shape"], now=rep["generated_at"]
+            rep.get("adversarial_shape", {"status": "unknown"}),
+            now=rep.get("generated_at", int(time.time())),
         )
     except (OSError, ValueError) as exc:
         rep["adversarial_shape_measurement_error"] = str(exc)

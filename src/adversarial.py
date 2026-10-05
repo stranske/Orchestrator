@@ -197,7 +197,7 @@ def record_shape_measurement(section: dict, *, now: int, path: Path | None = Non
     if (
         section.get("rule") != shape_rule_id()
         or any(type(n) is not int or n < 0 for n in counts)
-        or any(n > counts[2] for n in counts[:2])
+        or any(section[k] > section["population"] for k in ("shape_candidates", "label_candidates"))
     ):
         return False
     return capabilities.heartbeat(
