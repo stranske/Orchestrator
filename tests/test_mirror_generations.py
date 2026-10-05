@@ -301,6 +301,8 @@ print(json.dumps([
         inherited = [
             str(outside),
             str(self.mirror / "plugins"),
+            "mirror/scripts",
+            "./mirror/scripts/../scripts",
             str(self.mirror / "plugins" / ".."),
             str(self.mirror / ".." / "mirror"),
             str(self.mirror / ".." / "external"),
@@ -332,6 +334,10 @@ print(json.dumps([
             self.assertTrue(ready, "reader did not report its inherited import paths")
             paths = json.loads(reader.stdout.readline())
             (self.snapshot / "later_only.py").write_text("VALUE = 'new generation only'\n")
+            # Root imports are already pinned. A relative subdirectory must not
+            # provide a second route into a later executable generation, in
+            # either the paused reader or a child started after publication.
+            (self.snapshot / "scripts/later_only.py").write_text("VALUE = 'new generation only'\n")
             self.set_value("new")
             self.publish_with_deadline()
             output, error = reader.communicate("resume\n", timeout=15)
@@ -345,6 +351,8 @@ print(json.dumps([
                     str(pinned),
                     str(outside),
                     str(pinned / "plugins"),
+                    str(pinned / "scripts"),
+                    str(pinned / "scripts"),
                     str(pinned),
                     str(pinned),
                     str(self.mirror / ".." / "external"),
