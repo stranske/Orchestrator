@@ -43,3 +43,5 @@ This source change does not enable the recording flag or publish an execution mi
 the pushed PR head in checkout and flat mirror shapes; later guarded publication is a separate step.
 
 Final verification after the measured floor update: `python3 src/verify.py` exited 0, with 1,857/1,857 tests, 99/99 selftests, all five gates green, and 116 modules checked by mypy with zero exemptions. The original floor history and every skip/exemption ceiling are preserved. The final log is in the opener receipt `evidence/20261005T0501Z/verify420-green.log`.
+
+Current-main integration after concurrent PR #465 merged: only `.verify-floor.json` conflicted. Both branch histories and all ceilings were preserved, collection was measured at 1,859, and `python3 src/verify.py` exited 0 with 1,859 tests, 99 selftests, five green gates, and 116 mypy modules with zero exemptions. The concurrent fixture follow-up is retained. Final receipt: `evidence/20261005T0501Z/verify420-integrated.log`.
