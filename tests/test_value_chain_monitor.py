@@ -32,6 +32,34 @@ def test_unmeasured_demand_never_prints_as_zero(tmp_path):
     assert "demand 0" not in text
     assert "no_situation" not in text
 
+    path = ledger(tmp_path / "lanes", ("testgen-lane",))
+    for probes in ([{"precondition_met": None}], [{}]):
+        section = monitor.report(
+            now=NOW,
+            path=path,
+            env={},
+            inputs={"precondition_probes": {"testgen-lane": probes}},
+        )
+        row = section["rows"][0]
+        assert row["situation_count"] is None
+        assert row["first_break"] is None
+        text = "\n".join(monitor.format_lines(section))
+        assert "demand unmeasured" in text
+        assert "demand 0" not in text
+        assert "no_situation" not in text
+
+    for probes in ([], [{"precondition_met": False}]):
+        section = monitor.report(
+            now=NOW,
+            path=path,
+            env={},
+            inputs={"precondition_probes": {"testgen-lane": probes}},
+        )
+        row = section["rows"][0]
+        assert row["situation_count"] == 0
+        assert row["first_break"] == "no_situation"
+        assert "demand 0" in "\n".join(monitor.format_lines(section))
+
 
 def test_first_break_is_the_earliest_failed_step():
     row = complete_row()
@@ -415,3 +443,29 @@ def test_weekly_registration_and_collection_errors_remain_visible(monkeypatch, c
             )
             assert switch_review.main(["--env", "process", "--json"]) == 0
             assert "fixture " + failed_stage + " failure" in capsys.readouterr().out
+
+
+def test_input_off_reads_nested_declared_defaults(tmp_path):
+    path = ledger(tmp_path, ("runtime-ac-checks", "range-lane-rollout"))
+    rows = {
+        row["capability"]: row
+        for row in monitor.report(
+            now=NOW,
+            path=path,
+            env={"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0", "ORCH_RANGE_LANE_ROLLOUT": "0"},
+            inputs={"edges": []},
+        )["rows"]
+    }
+    assert rows["runtime-ac-checks"]["input_off"] == ["input_off:ORCH_RUNTIME_AC_ALLOW_COMMANDS"]
+    assert rows["range-lane-rollout"]["input_off"] == ["input_off:ORCH_RANGE_LANE_ROLLOUT"]
+
+
+def test_nested_default_off_flag_requires_observed_disabled_input(tmp_path):
+    path = ledger(tmp_path, ("runtime-ac-checks",))
+    for env in ({}, {"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "1"}):
+        assert (
+            monitor.report(now=NOW, path=path, env=env, inputs={"edges": []})["rows"][0][
+                "input_off"
+            ]
+            == []
+        )
