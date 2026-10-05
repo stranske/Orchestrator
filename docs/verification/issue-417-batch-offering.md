@@ -47,6 +47,53 @@ checkout and mirror-shape verification. Check runner prerequisites on every repl
 neither an earlier successful run nor a missing-tool failure establishes
 current-head readiness.
 
+## Current keepalive reconciliation
+
+The four implementation tasks landed in `4f952e3`; the two later commits repaired
+the diagram and added its regression. This round verified the existing behavior
+with production imports and private-ledger/Brain checks using Python's standard
+library. The required named pytest run remains blocked by missing prerequisites.
+
+- [x] `research-program` is a declared consult caller; both requested surfaces bind
+  `role-prompt` with batch reasons and offer it even when classification misses.
+- [x] Historical and newly recorded single-body, one-prompt, and no-batch declines
+  become non-demotable `wrong_moment`; detection preserves historical ledger bytes.
+- [x] Three valid batch outputs consume one capped decision; a second batch is
+  blocked without another backend call. The shell documents the cap per decision.
+- [x] Delegate prints the activation-off notice exactly once when unset, stays
+  silent for explicit `0`/`1`, and preserves the default-off shadow gate.
+- [ ] Run the three required named pytest tests on this head.
+- [ ] Run their required deliberate-break/restoration controls on this head.
+
+The new `tests/test_role_prompt_offering_cli.js` adds four real CLI cases, covering
+both surfaces with classified and unclassified work. Each uses a private ledger,
+checks persisted surface attribution, and repeats the consult in another process
+to require byte-identical ledger state rather than duplicate match events.
+Removing the CLI's `surface=args.surface` forwarding in a private source copy
+produced four assertion failures; restoring its bytes produced four passes.
+This additional CLI control does not replace the three required pytest controls.
+
+```sh
+node --test --test-isolation=none tests/test_role_prompt_offering_cli.js tests/test_orchestrator_loop_svg.js
+python3 -m unittest discover -s tests -p test_role_prompt_offering_controls.py -v
+```
+
+The CLI suite passed four cases; the existing diagram suite passed two cases and
+the receipt-parser unittest passed its six subtests. The required control script
+still exits 1 at the first baseline with `No module named pytest` and no report.
+PyPI installation failed because DNS resolution is unavailable; Black is also
+absent. No Python files were changed or committed in this round.
+
+The attempted PR checkbox update was rejected by automatic approval review with
+`MCP tool call requires approval, but approval policy is never`. These verified
+implementation checkboxes are retained here for reconciliation; the two pytest
+acceptance checkboxes remain pending. PR #478 was observed open and ready for
+review (`draft=false`); no merge was attempted.
+
+The workspace's `.git` is read-only, so staging there failed before mutation.
+The tested JavaScript and this record are prepared for a commit in an isolated
+local checkout; they have not been pushed to the PR branch.
+
 ## Post-merge comparison disposition
 
 Compare run `37308125678` evaluated the exact merge above and returned
@@ -86,8 +133,8 @@ Current-head CI and the guarded review floor are separate requirements.
 - [ ] Exact-head CI, every review-thread page, expected checkout/mirror topology, and the seven-minute floor before guarded squash.
 - [x] Source417 confirmed open; CONCERNS/NON_PASS preserved, with no live publication or provider PASS claimed.
 
-Changes are limited to the diagram, this record, and a JavaScript regression
-test. Production code and gates remain unchanged. Any terminal merge must use
+Changes are limited to the diagram, this record, and JavaScript regression
+tests. Production code and gates remain unchanged. Any terminal merge must use
 `python3 src/merge_guard.py stranske/Orchestrator#478 --expected-head <sha> --confirm-merge`;
 a blocked guard must not be bypassed.
 
