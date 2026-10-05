@@ -1296,6 +1296,10 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "comment is a hard blocker even on a green PR — and this role's whole "
         "contract is weighing ONE blocker/veto against cited ground truth",
     },
+    "research-program": {
+        "role-prompt": "filing units author batches of issue bodies; route the batch once "
+        "and retain independently validated, scored outputs for each issue",
+    },
     "file-agent-issue": {
         "deliberate-break-verifier": "AGENT_ISSUE_FORMAT requires a named test gate with a "
         "deliberate-break→revert demonstration in every filed issue",
@@ -1543,6 +1547,8 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "the shape; the 2026-08-22 audit of Trend used it for exactly this",
     },
     "repo-audit:phase-4": {
+        "role-prompt": "phase 4 authors a batch of issue bodies from verified findings; "
+        "PromptAgent routes once and validates each body's filing contract",
         "deliberate-break-verifier": "phase 4 REQUIRES 'a named test gate + deliberate-break→revert' "
         "on every filed issue — it appears in 56 of 177 audit "
         "documents, the dominant pattern, and never as an invocation",
@@ -1698,6 +1704,10 @@ def _promoted_bindings(surface: str, *, path=None, index: dict | None = None) ->
 # findability gate inert exactly where it has to bite.
 # ---------------------------------------------------------------------------
 CONSULT_SITES: dict[str, dict] = {
+    "research-program": {
+        "caller": "~/.codex/automations/research-program/driver.py",
+        "how": "the driver consults research-program before filing units that author issue batches",
+    },
     # THE RAIL-EXERCISE FAMILY (2026-09-02). The skill names the family literally and passes one of
     # the phase surfaces per consult; the phases are enumerated here so `consulting_surfaces` can
     # count each as reached. The caller is a skill file outside the tree: verified on this machine,
@@ -5201,6 +5211,10 @@ def _selftest_findability() -> None:
 def _selftest() -> None:
     import tempfile
     from pathlib import Path
+
+    assert "research-program" in consult_keys()
+    for surface in ("research-program", "repo-audit:phase-4"):
+        assert "role-prompt" in SURFACE_BINDINGS[surface]
 
     # Classification is deterministic and evidence-bearing.
     c = classify_task("please add unit tests for the retry helper")
