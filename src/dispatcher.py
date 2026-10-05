@@ -389,16 +389,33 @@ def _is_transient_network_failure(
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in _TRANSIENT_NETWORK_PATTERNS)
 
 
-def _offload_incomplete_reason(output: str, *, progress_only: bool = True) -> str | None:
+def _offload_incomplete_reason(
+    output: str, *, progress_only: bool = True, codex_stream: bool = False
+) -> str | None:
     """Detect offload responses that are statuses, not deliverables.
 
     The confirmed Gemini failure was a short stdout-only promise to inspect test results later while the
     process exited 0. Treat explicit OFFLOAD_INCOMPLETE markers from any agent as failures, and treat
     short progress-only prose as failures for lanes where that heuristic is enabled.
+
+    `codex_stream` says `output` is codex's `exec --json` stream, which is also every command the
+    agent ran and every file it read, so the marker is read only from what the agent SAID LAST: the
+    rule tells it to print the marker and stop. Read whole, a doc that quotes the marker failed a
+    finished run. On 2026-10-05, 30 of the 51 codex offloads recorded as exit 70 carried it only in
+    command output, all 30 with `turn.completed`; the repo-audit skill's references quote it. The 12
+    that said it in a message said it in their last one. A stream in which the agent said nothing
+    has no deliverable, as empty stdout has none, and says so in its own words.
     """
     text = (output or "").strip()
     if not text:
         return "agent returned no stdout"
+    if codex_stream:
+        import rate_incidents
+
+        said = rate_incidents.codex_agent_messages(text.splitlines())
+        if not said:
+            return "agent returned no message"
+        text = said[-1]
     normalized = re.sub(r"\s+", " ", text.lower())
     if "offload_incomplete:" in normalized:
         return "agent reported OFFLOAD_INCOMPLETE"
@@ -1896,7 +1913,12 @@ def offload(
             error = f"agent exited {raw_exit}"
         else:
             incomplete = _offload_incomplete_reason(
-                proc.stdout or "", progress_only=(agent == "gemini")
+                proc.stdout or "",
+                progress_only=(agent == "gemini"),
+                # From the argv, never the text: codex prints its `exec --json` stream whenever the
+                # run asked for one (every mode but `assess`, `adapters.build_command`), while a
+                # text deliverable may itself hold JSON lines (91 of 321 codex text stdouts did).
+                codex_stream=(agent == "codex" and "--json" in argv),
             )
             if incomplete:
                 error = incomplete
@@ -1961,6 +1983,7 @@ def offload(
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None
+    reset_at = None
     try:
         import rate_incidents
 
@@ -1982,6 +2005,10 @@ def offload(
             target=target,
         )
         out["rate_incident_evidence"] = evidence_result
+        # The provider's stated reset, from codex's harness events alone. Without it the two
+        # refusals of 2026-09-25 that named Sep 28 shed for the 6 h cooldown, and this record, the
+        # first of a run's two observers, is the one whose shed stands.
+        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -1994,6 +2021,7 @@ def offload(
                 target=target,
                 run_id=run_id,
                 evidence=combined_output,
+                reset_at=reset_at,
                 extra={
                     "subcategory": evidence_result["subcategory"],
                     "exit_code": out.get("exit"),
@@ -2670,6 +2698,33 @@ def _selftest() -> None:
         assert (
             _offload_incomplete_reason("Reviewed three files and found no actionable issues.")
             is None
+        )
+        # A codex stream: the marker counts only in what the agent said last.
+        read_doc = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "aggregated_output": "OFFLOAD_INCOMPLETE: cannot write outside the roots",
+                },
+            }
+        )
+
+        def said(text: str) -> str:
+            return json.dumps(
+                {"type": "item.completed", "item": {"type": "agent_message", "text": text}}
+            )
+
+        finished = "\n".join([read_doc, said("Audit complete; report staged.")])
+        assert _offload_incomplete_reason(finished) is not None, "text reading is unchanged"
+        assert _offload_incomplete_reason(finished, codex_stream=True) is None
+        stopped = "\n".join([read_doc, said("OFFLOAD_INCOMPLETE: gh is unauthenticated")])
+        assert (
+            _offload_incomplete_reason(stopped, codex_stream=True)
+            == "agent reported OFFLOAD_INCOMPLETE"
+        )
+        assert _offload_incomplete_reason(read_doc, codex_stream=True) == (
+            "agent returned no message"
         )
         assert _is_transient_network_failure("connection reset by peer", "", "")
         assert not _is_transient_network_failure("401 unauthorized", "", "")

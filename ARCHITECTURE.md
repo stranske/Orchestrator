@@ -166,6 +166,31 @@ any later kill. The marker still precedes the completion step, so a step that di
 reason still leaves latency and exit status to backfill. (No stage, component or surface moved; the
 diagram is unchanged.)
 
+**An offload's verdict comes from what the agent said, not what it read (2026-10-05).** An offload
+fails with exit 70 when the agent reports the `OFFLOAD_INCOMPLETE` marker, and the dispatcher looked
+for it anywhere in stdout. A codex run's stdout is its `exec --json` stream in every mode but
+`assess`, so it also holds every command the agent ran and every file it read, and the repo-audit
+skill's references quote the marker. 30 of the 51 codex offloads recorded as exit 70 carried it
+only in command output, all 30 ending `turn.completed`. 16 of them reached the learners as FAILs
+and 6 as not-useful `offload` verdicts, and the research program retried their units. For a run
+whose argv asked for the stream, the dispatcher now reads only the agent's last message
+(`rate_incidents.codex_agent_messages`), where the 12 runs that said the marker said it. A stream
+with no message fails as `agent returned no message`. Text output is read as before. Recorded rows
+are not rewritten. (No stage, component or surface moved; the diagram is unchanged.)
+
+**A shed seat names what clears it (2026-10-05).** A seat is shed by a marker that
+`rate_incidents.ensure_shed` writes with an expiry, an incident and a category, and until this date
+`capacity` printed "observed 429 / rate-limit shed flag set" whatever the marker held. One pure
+reader, `capacity.shed_marker`, now serves the gate, its reason and the weekly `switch_review`. The
+reason names the expiry (UTC), the incident and its category, and says the first capacity read
+after the expiry clears the seat. A marker with no readable expiry says it is manual and names the
+path to remove, and an unreadable one still holds. A codex refusal's stated reset sets the expiry,
+read only from codex's harness error events (`rate_incidents.provider_reset_at`, used by every
+recorder of a run). Until then the offload recorded no reset, and two refusals of 2026-09-25 that
+named Sep 28 shed for the 6 h cooldown. `switch_review` names every marker, FYI only, and flags one
+placed by hand that has held its seat past 14 days, or an expired one still on disk. (No stage,
+component or surface moved; the diagram is unchanged.)
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
