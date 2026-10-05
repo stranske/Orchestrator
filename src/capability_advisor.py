@@ -3489,7 +3489,9 @@ HOW_TO_USE = {
         "cannot decay into a silent revert. Its `gate_expiry` block names every ledger row within "
         "two review windows of its expiry, or retired by it that recently, with the "
         "`capabilities.py renew --name <id> --reason ... --evidence-ref ...` command that holds it. "
-        "Reports only; it never flips a switch or renews a row"
+        "Its `capacity_shed` block names every capacity-shed marker with what clears it, SUSPECT "
+        "when one placed by hand has held its seat past 14 days or an expired one is still on "
+        "disk. Reports only; it never flips a switch, renews a row or removes a marker"
     ),
     # ---- AND THE THREE WITH NO PRECONDITION AT ALL, which the same audit also saw as null. Their
     # `precondition_met` was unset, so the note said nothing either: no verdict AND no guidance.

@@ -1983,6 +1983,7 @@ def offload(
     _record_complete(exit_code=out.get("exit"), error=out.get("error"))
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None
+    reset_at = None
     try:
         import rate_incidents
 
@@ -2004,6 +2005,10 @@ def offload(
             target=target,
         )
         out["rate_incident_evidence"] = evidence_result
+        # The provider's stated reset, from codex's harness events alone. Without it the two
+        # refusals of 2026-09-25 that named Sep 28 shed for the 6 h cooldown, and this record, the
+        # first of a run's two observers, is the one whose shed stands.
+        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -2016,6 +2021,7 @@ def offload(
                 target=target,
                 run_id=run_id,
                 evidence=combined_output,
+                reset_at=reset_at,
                 extra={
                     "subcategory": evidence_result["subcategory"],
                     "exit_code": out.get("exit"),
