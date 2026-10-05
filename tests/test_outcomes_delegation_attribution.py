@@ -348,13 +348,13 @@ def test_its_own_pr_closed_after_a_completed_round_is_its_fail(gh):
     [
         (issue("OPEN"), "pending"),
         (issue(refs=[{"number": 9}]), feedback.UNATTRIBUTED_CLOSING_PR),
-        (issue(refs=[]), "FAIL"),
+        (issue(refs=[]), feedback.UNATTRIBUTED_DELEGATION),
     ],
     ids=["issue-open", "issue-closed-by-a-pr", "issue-closed-by-no-pr"],
 )
 def test_an_own_branch_pr_settled_before_the_label_is_passed_over(gh, issue_answer, expected):
     """An earlier delegation's PR on the same branch is not this run's: the run is judged as one
-    with no PR of its own, by the closed-issue rules (#411), never credited with the old PR."""
+    with no PR of its own, and never credited with the old PR."""
     old = pr_json(60, "gemini/issue-7", "MERGED", settled=-86400)
     calls = gh(
         {
@@ -368,10 +368,36 @@ def test_an_own_branch_pr_settled_before_the_label_is_passed_over(gh, issue_answ
     assert state["passed_over_pr"] == "#60", state
     if expected == "pending":
         assert outcome is None and state["lookup_status"] == "no_pr_for_remote_issue_branch"
-    elif expected == "FAIL":
-        assert outcome is not None and outcome["adjudicated_verdict"] == "FAIL", outcome
     else:
         assert_unattributed(outcome, expected)
+
+
+def test_a_delegation_whose_issue_closed_with_no_pr_at_all_is_not_its_fail(gh):
+    """Workflows#2729 (cursor), #2521 and #2819 (gemini): the label never got a bootstrap PR, so the
+    labelled agent never ran, and the issues were closed by hand. A remote delegation's agent runs
+    only on the PR its label bootstraps, so this is not its failure (owner decision 2026-10-04,
+    amending #411 for remote delegations only)."""
+    calls = gh({"pr view": NOT_A_PR, "list:cursor/issue-2729": NO_PR, "issue view": issue(refs=[])})
+    state, outcome = resolve("o/r#2729", "cursor")
+    assert calls == ["pr view", "list:cursor/issue-2729", "issue view"], calls
+    assert state["delegation_without_own_pr"] is True, state
+    assert_unattributed(outcome, feedback.UNATTRIBUTED_DELEGATION)
+    assert "cursor/issue-2729" in outcome["notes"] and "never had a PR" in outcome["notes"]
+
+
+@pytest.mark.parametrize("path", ["remote", "local"])
+def test_only_a_delegation_reads_a_closed_issue_with_no_pr_as_not_its_failure(gh, path):
+    """The keepalive-row resolver and a LOCAL run keep #411's abandoned FAIL: a local run did run,
+    and produced nothing that landed."""
+    gh({"pr view": NOT_A_PR, "issue view": issue(refs=[]), **_no_pr_on_every_branch(7)})
+    resolver = outcomes._pr_state if path == "remote" else outcomes._local_pr_state
+    outcome = outcomes.state_to_outcome(resolver("o/r#7", "codex"))
+    assert outcome is not None and outcome["adjudicated_verdict"] == "FAIL", outcome
+
+
+def _no_pr_on_every_branch(num: int) -> dict:
+    names = ["codex", "cursor", "claude", "gemini", "vibe", "orchestrator"]
+    return {f"list:{name}/issue-{num}": NO_PR for name in names}
 
 
 def test_a_labelled_pr_settled_before_the_label_is_not_its_work(gh):

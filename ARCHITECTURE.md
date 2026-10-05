@@ -153,7 +153,8 @@ a PR closed, so it records the run as over with no verdict rather than as a fail
 with a PR only when the PR is its own (the labelled PR, or `{agent}/issue-N`), settled after the label, and
 keepalive's own runner records (`runner-reservation`/`runner-completion`/`runner-dispatch` PR markers from
 trusted writers) show a completed round of the labelled agent on it since the label; otherwise the settled
-run is over with no verdict. Until then ingest credited the first PR on any agent's or lane's branch, and
+run is over with no verdict, and so is a delegation whose issue closed with no PR of its own and no closing PR,
+since its agent never had a PR to run on (a local run, which did run, keeps that case's FAIL). Until then ingest credited the first PR on any agent's or lane's branch, and
 none of the 9 merged delegation PASS rows was the labelled agent's work (no stage, component or surface
 moved, so the loop diagram is unchanged). The merge guard's own outcome patch keeps to that rule: it
 credits the latest remote run on the merged PR only if that run is not a delegation (a keepalive run is
@@ -173,7 +174,7 @@ a merge that read did not reach is never `durable`: it waits under the `fix_sear
 `unjudgeable` with that class seven days after the first run that missed it. Until then the read was the 200
 best matches of a repo's whole history, so in the two repos with more fix PRs than that a merge's own weeks were
 read by chance, and 436 rows were judged durable on an unread window; each run now prints how many merges the
-read covered and how many it did not (again no stage moved; the diagram is unchanged). This keeps role learning separate from normal
+read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
 that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail

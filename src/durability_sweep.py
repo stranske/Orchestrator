@@ -58,6 +58,16 @@ FIX_SEARCH_MIN_SPLIT_S = 60
 # row in FIX_RETRY_STATE, never from the merge, so a backlog row's first failed read cannot close it.
 FIX_SEARCH_RETRY_DAYS = 7
 FIX_RETRY_STATE = "durability-fix-search-retry.json"  # under $ORCH_STATE_DIR
+# What the fix-PR read wrote until 2026-10-04 when its 200 best matches did not name the merge, and
+# the row was recorded `durable` anyway. The owner decided (2026-10-04) that every such row is read
+# again over the window its own verdict covered. ONE string: the selection matches it and the
+# re-check rewrites it away, so the population drains to a printed zero.
+TRUNCATED_FIX_READ = "fix-PR search hit limit"
+TRUNCATED_FIX_READ_RE = re.compile(re.escape(TRUNCATED_FIX_READ) + r"(?: \d+)?")
+# Each re-checked row's state before the re-check, once per row; `--undo-truncated-recheck` restores
+# it. Under $ORCH_STATE_DIR. "0" in the switch stops the selection, which an undo needs to stick.
+TRUNCATED_RECHECK_UNDO = "durability-truncated-recheck-undo.jsonl"
+TRUNCATED_RECHECK_SWITCH = "ORCH_DURABILITY_TRUNCATED_RECHECK"
 MAX_BASE_COMMITS = 100
 EXPLICIT_MERGED_PR_RE = re.compile(r"\bPR\s+#(?P<num>\d+)\s+merged\b", re.IGNORECASE)
 # Every field classify_durability reads, so a direct PR target costs ONE `gh pr view`.
@@ -580,6 +590,7 @@ def _fix_followup_status(
     _fix_fn=None,
     *,
     since_ts: int | None = None,
+    until_ts: int | None = None,
     now: int | None = None,
 ) -> tuple[bool | None, str]:
     """Did a LATER merged fix PR explicitly NAME this one? That is `broke_later`.
@@ -599,7 +610,8 @@ def _fix_followup_status(
     (FIX_SEARCH_RETRY_DAYS), so unknown can stay unknown without becoming a latch.
 
     `since_ts` is the oldest merge the caller will ask about in this repo, so ONE read covers them
-    all (`fix_search_plan`); `fix_cache` holds that read for the run.
+    all (`fix_search_plan`); `fix_cache` holds that read for the run. `until_ts` bounds the fixes
+    that count to those merged by then: a re-check asks what the verdict should have seen.
     """
     now = int(now or time.time())
     entry = fix_cache.get(repo) if fix_cache is not None else None
@@ -621,6 +633,8 @@ def _fix_followup_status(
         later = _parse_gh_ts(item.get("mergedAt"))
         if later is None or later <= merged_ts:
             continue  # a fix that landed FIRST cannot be repairing this
+        if until_ts is not None and later > until_ts:
+            continue  # landed after the verdict this answer is about
         title = item.get("title") or ""
         haystack = f"{title}\n{item.get('body') or ''}"
         if _contains_ref(haystack, pr_number):
@@ -956,6 +970,16 @@ def sweep_durability(
         # Merges the broke-later check was asked about: read whole back to the merge (covered) or
         # not (uncovered, of which `closed` were closed unchecked this run), and what it took.
         "fix_search": {"covered": 0, "uncovered": 0, "closed": 0, "reads": 0, "repos": {}},
+        # Rows recorded `durable` on a cut-short read (TRUNCATED_FIX_READ), read again this run.
+        "truncated": {
+            "selected": 0,
+            "broke_later": 0,
+            "confirmed": 0,
+            "closed": 0,
+            "waiting": 0,
+            "role_runs": 0,
+            "stuck": 0,
+        },
         "lineage_resolved": 0,
         "skip_reasons": {},
         "details": [],
@@ -976,15 +1000,7 @@ def sweep_durability(
         if _acting_runs(run["run_id"]):
             role_runs.append(run)  # judged after every acting run has had its chance, below
             continue
-        if _state_fn is not None:
-            state = _state_fn(_state_lookup_target(run))
-            found = (
-                _found(state, provision.parse_target(run["target"])[0], "injected state")
-                if isinstance(state, dict)
-                else _unanswered("PR state unavailable")
-            )
-        else:
-            found = find_merge(run, _gh=_gh, now=now)
+        found = _find(run, _state_fn=_state_fn, _gh=_gh, now=now)
         if found["status"] == "unanswered":
             _leave_pending(summary, run, found["reason"], DRAIN_RETRY)
             continue
@@ -992,13 +1008,46 @@ def sweep_durability(
             _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
             continue
         resolved.append((run, found))
+    # The owner's decision on rows judged `durable` on a cut-short read (2026-10-04): find each
+    # one's merge again and read it over the window its own verdict covered, in the same reads.
+    rechecks: list[tuple[dict, dict]] = []
+    truncated = _truncated_durable_runs()
+    if truncated and not dry_run:
+        _snapshot_for_undo(truncated)
+    selected = {run["run_id"] for run in truncated}
+    for run in truncated:
+        summary["truncated"]["selected"] += 1
+        acting = _acting_runs(run["run_id"])
+        if acting:
+            # A role run's note is its acting run's, copied by propagation when that one is read.
+            if any(acting_run in selected for acting_run, _durability in acting):
+                summary["truncated"]["role_runs"] += 1
+            else:
+                summary["truncated"]["stuck"] += 1
+                summary["details"].append(
+                    {
+                        "run_id": run["run_id"],
+                        "target": run["target"],
+                        "action": "recheck-stuck",
+                        "reason": "its acting runs carry no cut-short read; the note never propagated",
+                    }
+                )
+            continue
+        found = _find(run, _state_fn=_state_fn, _gh=_gh, now=now)
+        if found["status"] == "unanswered":
+            _recheck_unread(summary, run, found["reason"], fix_retry, now=now, dry_run=dry_run)
+        elif found["status"] != "found":
+            summary["truncated"]["closed"] += 1
+            _close_unjudgeable(summary, run, found["reason"], dry_run=dry_run)
+        else:
+            rechecks.append((run, found))
     fix_since = fix_search_plan(
         (
             (
                 found["pr"].get("repo") or provision.parse_target(run["target"])[0],
                 _parse_gh_ts(found["pr"].get("mergedAt")),
             )
-            for run, found in resolved
+            for run, found in resolved + rechecks
         ),
         now=now,
         grace_days=grace_days,
@@ -1061,6 +1110,18 @@ def sweep_durability(
         else:
             feedback.record_outcome(run["run_id"], durability=durability, notes=notes)
         summary["details"].append(detail)
+    for run, found in rechecks:
+        _recheck_truncated(
+            summary,
+            run,
+            found["pr"],
+            fix_cache=fix_cache,
+            fix_since=fix_since,
+            fix_retry=fix_retry,
+            now=now,
+            _fix_fn=_fix_fn,
+            dry_run=dry_run,
+        )
     for run in role_runs:
         acting = _acting_runs(run["run_id"])
         if _current_durability(run["run_id"]) != "pending":
@@ -1083,7 +1144,9 @@ def sweep_durability(
     }
     if not dry_run:
         # A clock lives exactly as long as its row stays pending: judged or closed drops it.
-        pending = {d["run_id"] for d in summary["details"] if d.get("action") == "skip"}
+        pending = {
+            d["run_id"] for d in summary["details"] if d.get("action") in ("skip", "recheck-wait")
+        }
         kept = {run_id: ts for run_id, ts in fix_retry.items() if run_id in pending}
         _save_fix_retry(kept, fix_retry_before)
     summary["line"] = summary_line(summary)
@@ -1148,6 +1211,193 @@ def _save_fix_retry(state: dict[str, int], previous: dict[str, int]) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(state, indent=1, sort_keys=True))
     tmp.replace(path)
+
+
+def _find(run: dict, *, _state_fn=None, _gh=None, now: int) -> dict:
+    """THE merge a row recorded (`find_merge`), or the injected PR state of an offline run."""
+    if _state_fn is None:
+        return find_merge(run, _gh=_gh, now=now)
+    state = _state_fn(_state_lookup_target(run))
+    if isinstance(state, dict):
+        return _found(state, provision.parse_target(run["target"])[0], "injected state")
+    return _unanswered("PR state unavailable")
+
+
+def _truncated_durable_runs() -> list[dict]:
+    """Merged rows recorded `durable` on a fix-PR read cut short before their merge."""
+    if os.environ.get(TRUNCATED_RECHECK_SWITCH, "1") == "0":
+        return []
+    with feedback._conn() as c:
+        rows = c.execute(
+            "SELECT r.run_id, r.target, r.mode, r.pr_number, o.notes, r.agent, r.ts, "
+            "o.durability_checked_ts, o.durability, o.failure_class "
+            "FROM runs r JOIN outcomes o ON r.run_id=o.run_id "
+            "WHERE o.merged=1 AND o.durability='durable' AND instr(COALESCE(o.notes,''), ?) > 0 "
+            "ORDER BY r.ts ASC",
+            (TRUNCATED_FIX_READ,),
+        ).fetchall()
+    return [
+        {
+            "run_id": run_id,
+            "target": target,
+            "mode": mode,
+            "pr_number": pr_number,
+            "notes": notes,
+            "agent": agent,
+            "ts": ts,
+            # The verdict's own moment. The re-check reads up to it, and since the verdict
+            # overwrote the ingest time it is also the latest the recorded merge can have landed.
+            "recorded_ts": checked_ts,
+            "judged_ts": checked_ts,
+            "durability": durability,
+            "failure_class": failure_class,
+        }
+        for run_id, target, mode, pr_number, notes, agent, ts, checked_ts, durability, failure_class in rows
+    ]
+
+
+def _undo_path() -> Path:
+    return _fix_retry_path().with_name(TRUNCATED_RECHECK_UNDO)
+
+
+def _snapshot_for_undo(rows: list[dict]) -> int:
+    """Append each selected row's stored state before the re-check touches it, once per row."""
+    path = _undo_path()
+    try:
+        seen = {
+            json.loads(line).get("run_id") for line in path.read_text().splitlines() if line.strip()
+        }
+    except (OSError, ValueError, AttributeError):
+        seen = set()  # unreadable: snapshot again; the restore keeps each row's FIRST entry
+    fresh = [row for row in rows if row["run_id"] not in seen]
+    if fresh:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as log:
+            for row in fresh:
+                entry = {
+                    key: row[key] for key in ("run_id", "durability", "failure_class", "notes")
+                }
+                log.write(json.dumps({**entry, "durability_checked_ts": row["judged_ts"]}) + "\n")
+    return len(fresh)
+
+
+def undo_truncated_recheck() -> dict:
+    """Restore every row the re-check touched to the state snapshotted before it did."""
+    path = _undo_path()
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return {"restored": 0, "reason": f"no undo log at {path}"}
+    first: dict[str, dict] = {}
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("run_id") and entry["run_id"] not in first:
+            first[entry["run_id"]] = entry
+    with feedback._conn() as c:
+        for entry in first.values():
+            c.execute(
+                "UPDATE outcomes SET durability=?, failure_class=?, notes=?, "
+                "durability_checked_ts=? WHERE run_id=?",
+                (
+                    entry.get("durability"),
+                    entry.get("failure_class"),
+                    entry.get("notes"),
+                    entry.get("durability_checked_ts"),
+                    entry["run_id"],
+                ),
+            )
+    return {
+        "restored": len(first),
+        "log": str(path),
+        "keep_it": f"export {TRUNCATED_RECHECK_SWITCH}=0, or the next sweep reads these rows again",
+    }
+
+
+def _recheck_unread(
+    summary: dict, run: dict, reason: str, fix_retry: dict, *, now: int, dry_run: bool
+) -> None:
+    """A re-check that got no answer waits on the same clock as an unread pending merge."""
+    unread_since = fix_retry.setdefault(run["run_id"], now)
+    if now < unread_since + FIX_SEARCH_RETRY_DAYS * SECONDS_PER_DAY:
+        summary["truncated"]["waiting"] += 1
+        summary["details"].append(
+            {
+                "run_id": run["run_id"],
+                "target": run["target"],
+                "action": "recheck-wait",
+                "reason": reason,
+            }
+        )
+        return
+    summary["truncated"]["closed"] += 1
+    _close_unjudgeable(
+        summary,
+        run,
+        f"{reason}; unread since {_search_ts(unread_since)}",
+        dry_run=dry_run,
+        failure_class=feedback.BROKE_LATER_UNCHECKED,
+    )
+
+
+def _recheck_truncated(
+    summary: dict,
+    run: dict,
+    pr: dict,
+    *,
+    fix_cache: dict,
+    fix_since: dict,
+    fix_retry: dict,
+    now: int,
+    _fix_fn=None,
+    dry_run: bool,
+) -> None:
+    """Read a cut-short row again over the window its own verdict covered, and say so in place.
+
+    A fix that named the merge by the verdict's moment makes it broke_later. None makes the verdict
+    stand: only the note changes, without a new judgement time, and it no longer carries
+    TRUNCATED_FIX_READ, which is what drains the population.
+    """
+    repo = pr.get("repo") or provision.parse_target(run["target"])[0]
+    merged_ts = _parse_gh_ts(pr.get("mergedAt"))
+    if not repo or merged_ts is None or pr.get("number") is None:
+        summary["truncated"]["closed"] += 1
+        _close_unjudgeable(summary, run, "the re-found merge has no merge time", dry_run=dry_run)
+        return
+    judged_ts = int(run["judged_ts"] or now)
+    broke, fix_note = _fix_followup_status(
+        repo,
+        int(pr["number"]),
+        merged_ts,
+        fix_cache=fix_cache,
+        _fix_fn=_fix_fn,
+        since_ts=fix_since.get(repo),
+        until_ts=judged_ts,
+        now=now,
+    )
+    if broke is None:
+        _recheck_unread(summary, run, fix_note, fix_retry, now=now, dry_run=dry_run)
+        return
+    reread = f"re-read {_search_ts(now)[:10]} up to this verdict; the first read was cut short"
+    detail: dict[str, Any] = {"run_id": run["run_id"], "target": run["target"], "action": "patch"}
+    if broke:
+        summary["truncated"]["broke_later"] += 1
+        held = _age_days(merged_ts, judged_ts)
+        notes = f"durability_sweep: {fix_note}; held {held}d before that; {reread}"
+        detail.update(durability="broke_later", notes=notes)
+        if not dry_run:
+            feedback.record_outcome(run["run_id"], durability="broke_later", notes=notes)
+    else:
+        summary["truncated"]["confirmed"] += 1
+        notes = TRUNCATED_FIX_READ_RE.sub(f"{fix_note}; {reread}", run["notes"], count=1)
+        detail.update(durability="durable", notes=notes)
+        if not dry_run:
+            feedback.record_outcome(run["run_id"], notes=notes)  # the verdict stands
+    if dry_run:
+        detail["dry_run"] = True
+    summary["details"].append(detail)
 
 
 def _leave_pending(
@@ -1219,6 +1469,15 @@ def summary_line(summary: dict) -> str:
     )
     if fix["closed"]:
         head += f" ({fix['closed']} closed unchecked)"
+    cut = summary["truncated"]
+    if cut["selected"] == 0:
+        head += "; truncated 0"
+    else:
+        head += (
+            f"; truncated re-read {cut['selected']} (broke_later {cut['broke_later']}, "
+            f"confirmed {cut['confirmed']}, closed {cut['closed']}, waiting {cut['waiting']}, "
+            f"role runs {cut['role_runs']}" + (f", STUCK {cut['stuck']})" if cut["stuck"] else ")")
+        )
     pending = summary["skipped"]
     if pending == 0:
         return f"{head}; pending 0, fully drained"
@@ -1708,10 +1967,18 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--grace-days", type=int, default=GRACE_DAYS)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument(
+        "--undo-truncated-recheck",
+        action="store_true",
+        help="restore every row the truncated-read re-check changed to its snapshot",
+    )
     args = parser.parse_args(argv)
 
     if args.selftest:
         _selftest()
+        return 0
+    if args.undo_truncated_recheck:
+        print(json.dumps(undo_truncated_recheck(), indent=2))
         return 0
 
     res = sweep_durability(grace_days=args.grace_days, dry_run=args.dry_run)

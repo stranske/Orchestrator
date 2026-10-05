@@ -55,12 +55,20 @@ def _fix(number: int, merged_at: int, body: str = "no reference at all") -> dict
 
 
 class PrView:
-    """find_merge's gh: `gh pr view N -R repo` answers from `prs`, keyed (repo, N)."""
+    """find_merge's gh: `gh pr view N -R repo` answers from `prs`, keyed (repo, N), and
+    `gh pr list --head B` from `branches`, keyed by branch."""
 
-    def __init__(self, prs: dict):
+    def __init__(self, prs: dict, branches: dict | None = None):
         self.prs = prs
+        self.branches = branches or {}
 
     def __call__(self, args, **_kw):
+        if args[1:3] == ["pr", "list"]:
+            branch = args[args.index("--head") + 1]
+            return [
+                {key: pr[key] for key in ("number", "state", "mergedAt")}
+                for pr in self.branches.get(branch, [])
+            ], None
         assert args[1:3] == ["pr", "view"], args
         number = int(args[3])
         pr = self.prs.get((args[args.index("-R") + 1], number))
@@ -336,12 +344,12 @@ def test_the_drained_line_states_coverage_by_count(brain):
         "repos": {},
     }
     assert empty["line"].endswith(
-        "fix search covered 0, uncovered 0; pending 0, fully drained"
+        "fix search covered 0, uncovered 0; truncated 0; pending 0, fully drained"
     ), empty["line"]
     _merged("judged", "o/r", 101, NOW - 20 * DAY)
     judged = _sweep(PrView({("o/r", 101): _pr(101, NOW - 20 * DAY)}), FixSearch())
     assert judged["line"].endswith(
-        "fix search covered 1, uncovered 0; pending 0, fully drained"
+        "fix search covered 1, uncovered 0; truncated 0; pending 0, fully drained"
     ), judged["line"]
     read = judged["fix_search"]["repos"]["o/r"]
     assert (read["since"], read["covered_from"], read["reads"], read["error"]) == (
@@ -393,3 +401,152 @@ def test_keepalive_ingest_reads_each_repo_once_from_its_oldest_merge(brain):
     assert search.calls == [("o/r", NOW - 25 * DAY, None)], search.calls
     judged = {n: _row(f"keepalive:o/r#{n}:codex")[0] for n in (301, 302, 303)}
     assert judged == {301: "durable", 302: "broke_later", 303: "pending"}, judged
+
+
+# --- the owner's decision on rows already judged on a cut-short read: A, 2026-10-04 -------------
+#
+# Re-read each one over the window its own verdict covered (merge -> the verdict's moment). A fix
+# named by then makes it broke_later; otherwise the verdict stands and only its note changes, which
+# drains the population, and a merge that is not the run's own closes as unjudgeable.
+
+CUT = "fix-PR search hit limit 200"
+
+
+def _truncated(run_id: str, repo: str, number: int, merged_at: int, judged_at: int) -> None:
+    """A row the old sweep recorded `durable` while its read stopped short of the merge."""
+    feedback.record_run(
+        run_id, f"{repo}#{number}", "implement", "codex", mode="remote", ts=merged_at - 3600
+    )
+    feedback.record_outcome(
+        run_id,
+        adjudicated_verdict="PASS",
+        merged=True,
+        durability="durable",
+        notes=(
+            f"durability_sweep: held {(judged_at - merged_at) // DAY}d; "
+            f"no revert PR or base-branch revert commit found; {CUT}"
+        ),
+    )
+    with feedback._conn() as c:
+        c.execute("UPDATE outcomes SET durability_checked_ts=? WHERE run_id=?", (judged_at, run_id))
+
+
+def _checked_ts(run_id: str) -> int:
+    with feedback._conn() as c:
+        return c.execute(
+            "SELECT durability_checked_ts FROM outcomes WHERE run_id=?", (run_id,)
+        ).fetchone()[0]
+
+
+def test_a_fix_inside_the_verdicts_window_makes_the_row_broke_later(brain):
+    """Workflows#3251's shape: the fix that names it merged an hour later, the read never saw it."""
+    _truncated("cut", "o/r", 3251, NOW - 40 * DAY, NOW - 33 * DAY)
+    naming = _fix(3253, NOW - 40 * DAY + 3600, "A regression I introduced in #3251")
+    view = PrView({("o/r", 3251): _pr(3251, NOW - 40 * DAY)})
+    res = _sweep(view, FixSearch({"o/r": [naming]}))
+    durability, _failure_class, notes = _row("cut")
+    assert durability == "broke_later" and "#3253" in notes and "re-read" in notes, notes
+    cut = res["truncated"]
+    assert (cut["selected"], cut["broke_later"], cut["confirmed"]) == (1, 1, 0), cut
+    assert "truncated re-read 1 (broke_later 1, confirmed 0" in res["line"], res["line"]
+    again = _sweep(view, FixSearch({"o/r": [naming]}))
+    assert again["truncated"]["selected"] == 0 and "; truncated 0;" in again["line"], again["line"]
+
+
+def test_a_fix_after_the_verdict_leaves_it_durable_and_the_note_drains(brain):
+    """The verdict counted fixes up to its own moment, so a later one does not reopen it."""
+    _truncated("cut", "o/r", 3402, NOW - 40 * DAY, NOW - 32 * DAY)
+    later = _fix(3553, NOW - 20 * DAY, "The opening PR-meta run for #3402 reported no context")
+    view = PrView({("o/r", 3402): _pr(3402, NOW - 40 * DAY)})
+    res = _sweep(view, FixSearch({"o/r": [later]}))
+    durability, _failure_class, notes = _row("cut")
+    assert durability == "durable" and durability_sweep.TRUNCATED_FIX_READ not in notes, notes
+    assert "no later fix PR names this change" in notes and "re-read" in notes, notes
+    assert _checked_ts("cut") == NOW - 32 * DAY  # the verdict stands, so its moment does too
+    assert (res["truncated"]["confirmed"], res["truncated"]["broke_later"]) == (1, 0)
+    assert _sweep(view, FixSearch({"o/r": [later]}))["truncated"]["selected"] == 0
+
+
+def test_a_re_found_merge_that_is_not_the_runs_own_closes_unjudgeable(brain):
+    feedback.record_run("local-cut", "o/r#77", "testgen", "codex", mode="local", ts=NOW - 30 * DAY)
+    feedback.record_outcome(
+        "local-cut", adjudicated_verdict="PASS", merged=True, durability="durable", notes=CUT
+    )
+    earlier = _pr(78, NOW - 31 * DAY)  # the only merge on its branch predates the run
+    view = PrView({("o/r", 78): earlier}, branches={"orchestrator/issue-77": [earlier]})
+    res = _sweep(view, FixSearch())
+    assert _row("local-cut")[:2] == (feedback.DURABILITY_UNJUDGEABLE, feedback.UNJUDGEABLE_MERGE)
+    assert res["truncated"]["closed"] == 1
+
+
+def test_a_role_runs_note_follows_its_acting_runs_re_check(brain):
+    feedback.record_role_run("role:triage:gemini:1", "triage", "triage:1-items", "gemini")
+    feedback.record_run(
+        "acting",
+        "o/r#20",
+        "testgen",
+        "gemini",
+        mode="remote",
+        ts=NOW - 41 * DAY,
+        influenced_by_role_run_ids=["role:triage:gemini:1"],
+    )
+    feedback.record_outcome(
+        "acting", adjudicated_verdict="PASS", merged=True, durability="durable", notes=CUT
+    )
+    assert CUT in _row("role:triage:gemini:1")[2]  # propagation copied the cut-short note
+    view = PrView({("o/r", 20): _pr(20, NOW - 40 * DAY)})
+    res = _sweep(view, FixSearch())
+    cut = res["truncated"]
+    assert (cut["selected"], cut["role_runs"], cut["confirmed"], cut["stuck"]) == (2, 1, 1, 0)
+    assert durability_sweep.TRUNCATED_FIX_READ not in _row("role:triage:gemini:1")[2]
+    assert _sweep(view, FixSearch())["truncated"]["selected"] == 0
+
+
+def test_an_unread_re_check_waits_then_closes_unchecked(brain):
+    _truncated("cut", "o/r", 3251, NOW - 40 * DAY, NOW - 33 * DAY)
+    view = PrView({("o/r", 3251): _pr(3251, NOW - 40 * DAY)})
+    failing = FixSearch(fail=_never_answers)
+    first = _sweep(view, failing)
+    assert first["truncated"]["waiting"] == 1 and CUT in _row("cut")[2]
+    assert _clocks(brain) == {"cut": NOW}
+    closed = _sweep(view, failing, now=NOW + RETRY)
+    assert _row("cut")[:2] == (feedback.DURABILITY_UNJUDGEABLE, feedback.BROKE_LATER_UNCHECKED)
+    assert closed["truncated"]["closed"] == 1 and _clocks(brain) == {}
+
+
+def test_the_re_check_shares_the_one_read_per_repo(brain):
+    _merged("pending", "o/r", 101, NOW - 10 * DAY)
+    _truncated("cut", "o/r", 3251, NOW - 40 * DAY, NOW - 33 * DAY)
+    view = PrView(
+        {("o/r", 101): _pr(101, NOW - 10 * DAY), ("o/r", 3251): _pr(3251, NOW - 40 * DAY)}
+    )
+    search = FixSearch()
+    _sweep(view, search)
+    assert search.calls == [("o/r", NOW - 40 * DAY, None)], search.calls
+
+
+def test_undo_restores_each_snapshot_and_the_switch_keeps_it(brain, monkeypatch):
+    _truncated("cut", "o/r", 3251, NOW - 40 * DAY, NOW - 33 * DAY)
+    before = _row("cut")
+    naming = _fix(3253, NOW - 40 * DAY + 3600, "A regression I introduced in #3251")
+    view = PrView({("o/r", 3251): _pr(3251, NOW - 40 * DAY)})
+    _sweep(view, FixSearch({"o/r": [naming]}))
+    assert _row("cut")[0] == "broke_later"
+    assert durability_sweep.undo_truncated_recheck()["restored"] == 1
+    assert _row("cut") == before and _checked_ts("cut") == NOW - 33 * DAY
+    monkeypatch.setenv(durability_sweep.TRUNCATED_RECHECK_SWITCH, "0")
+    off = _sweep(view, FixSearch({"o/r": [naming]}))
+    assert off["truncated"]["selected"] == 0 and _row("cut") == before
+
+
+def test_a_dry_run_re_check_changes_nothing_and_snapshots_nothing(brain):
+    _truncated("cut", "o/r", 3251, NOW - 40 * DAY, NOW - 33 * DAY)
+    before = _row("cut")
+    naming = _fix(3253, NOW - 40 * DAY + 3600, "A regression I introduced in #3251")
+    res = _sweep(
+        PrView({("o/r", 3251): _pr(3251, NOW - 40 * DAY)}),
+        FixSearch({"o/r": [naming]}),
+        dry_run=True,
+    )
+    assert res["truncated"]["broke_later"] == 1 and _row("cut") == before
+    assert not (brain / durability_sweep.TRUNCATED_RECHECK_UNDO).exists()
