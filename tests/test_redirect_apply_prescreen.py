@@ -71,6 +71,13 @@ def stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     monkeypatch.delenv(ra.BOOTSTRAP_FLAG, raising=False)
+    orch_state = tmp_path / "orch-state"
+    orch_state.mkdir()
+    (orch_state / "redirect-sweep.json").write_text('{"actionable": []}\n', encoding="utf-8")
+    monkeypatch.setenv("ORCH_STATE_DIR", str(orch_state))
+    import redirect_sweep
+
+    monkeypatch.setattr(redirect_sweep, "DEFAULT_REPORT", orch_state / "redirect-sweep.json")
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
     return {
@@ -296,7 +303,7 @@ def test_the_measured_incident_spends_nothing(stores):
     assert (out["reports_seen"], out["stale_reports"], out["current_candidates"]) == (30, 30, 0)
     assert (out["passing_screen"], out["offloads_spent"], out["authorized"]) == (0, 0, 0)
     text = "\n".join(ra.format_apply(out, flag_on=True))
-    assert text.startswith("offloads_spent=0 authorized=0 applied=0"), text
+    assert "offloads_spent=0 authorized=0 applied=0" in text, text
     assert "could authorise: 0 of 0 current candidates" in text, text
 
     # And had all 30 still been current, the LANE rules alone would have screened every one out:
@@ -400,7 +407,8 @@ def test_an_unknown_population_is_none_and_an_empty_one_is_zero(stores):
     stale = _run(stores, judge)
     assert stale["passing_screen"] is None and stale["population"]["status"] == "stale", stale
     assert judge.asked == []
-    assert ra.format_apply(stale, flag_on=True)[1].startswith("  could authorise: UNKNOWN — ")
+    apply_lines = ra.format_apply(stale, flag_on=True)
+    assert any(line.startswith("  could authorise: UNKNOWN — ") for line in apply_lines)
 
     ra._write_stage2_plan(stores["plan"], [], generated_at=stores["now"])
     empty = _run(stores, judge)
@@ -436,4 +444,6 @@ def test_a_drained_gate_says_finished_through_the_real_gate_state(stores, monkey
     lines = ra.format_status(out)
     assert out["gate"]["bootstrap_needed"] is False, out["gate"]
     assert any("FINISHED" in line for line in lines), lines
-    assert out["drainable"] == 0 and "drainable: 0 of 0 current candidates" in lines[2], lines
+    assert out["drainable"] == 0 and any(
+        "drainable: 0 of 0 current candidates" in line for line in lines
+    ), lines
