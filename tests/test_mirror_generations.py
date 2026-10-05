@@ -682,6 +682,48 @@ installer.install(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
             installer.snapshot_digest(self.mirror), installer.snapshot_digest(self.snapshot)
         )
 
+    def test_direct_python_reader_pins_child_imports_across_publications(self):
+        # Direct Python entry points also import paths, but do not pass through
+        # mirror_reader.run(). A child inherits PYTHONPATH rather than sys.path.
+        observation, pinned = self.observe_across_publications(guarded=False)
+        self.assertEqual(observation[:4], ["old", "old", "VALUE = 'old'", "old"])
+        self.assertEqual(observation[4:], [str(pinned), str(pinned)])
+        self.assertNotEqual(self.mirror.resolve(), pinned)
+
+    def test_direct_python_reader_pins_nested_import_roots_for_parent_and_child(self):
+        external = self.root / "external"
+        external.mkdir()
+        (external / "unrelated.py").write_text("VALUE = 'external'\n")
+        checks = (
+            "import importlib.util; import unrelated; "
+            "assert unrelated.VALUE == 'external'; "
+            "assert importlib.util.find_spec('later_only') is None; "
+        )
+        observer = OBSERVER.replace("import peer\n", checks + "import peer\n").replace(
+            "'import peer; print(peer.VALUE)'", repr(checks + "import peer; print(peer.VALUE)")
+        )
+        (self.snapshot / "observer.py").write_text(observer)
+        original = self.set_value
+
+        def add_later_module(value):
+            original(value)
+            (self.snapshot / "scripts/later_only.py").write_text("VALUE = 'new'\n")
+
+        self.set_value = add_later_module
+        observation, pinned = self.observe_across_publications(
+            guarded=False,
+            extra_import_paths=(
+                self.mirror / "scripts",
+                "mirror/scripts",
+                "mirror/scripts/../scripts",
+                external,
+                "",
+            ),
+        )
+        self.assertTrue((self.mirror / "scripts/later_only.py").is_file())
+        self.assertEqual(observation[:4], ["old", "old", "VALUE = 'old'", "old"])
+        self.assertEqual(observation[4:], [str(pinned), str(pinned)])
+
     def test_interrupting_link_switch_preserves_pinned_generation_and_runtime_on_retry(self):
         for phase in ("before", "after"):
             with self.subTest(phase=phase):
