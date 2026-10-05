@@ -287,6 +287,16 @@ CONTEXT_FIELDS = (
     "issue_readiness",
     "tick_preflight",
 )
+# PR facts a lane may pass in `context=` so ITEM preconditions can be evaluated without gh.
+PR_CONTEXT_FIELDS = (
+    "changedFiles",
+    "additions",
+    "deletions",
+    "paths",
+    "labels",
+    "title",
+    "task_text",
+)
 
 
 def reachable_set(*, path=None) -> dict:
@@ -453,6 +463,93 @@ def _live_binding(declared: dict[str, str], caps: dict[str, dict]) -> dict:
     }
 
 
+def _merge_pr_facts_from_context(
+    context: dict | None,
+    pr_facts: dict | None,
+    text: str,
+    *,
+    pr: int | None,
+) -> dict | None:
+    """Overlay consult `context` PR fields onto fetched facts so probes can answer."""
+    ctx = context or {}
+    has_ctx = any(ctx.get(field) not in (None, "") for field in PR_CONTEXT_FIELDS)
+    if pr_facts is None and not has_ctx and pr is None:
+        return None
+    merged = dict(pr_facts or {})
+    for field in PR_CONTEXT_FIELDS:
+        value = ctx.get(field)
+        if value not in (None, ""):
+            merged[field] = value
+    if text and not merged.get("task_text"):
+        merged["task_text"] = text
+    return merged or None
+
+
+def _withhold_for_missing_pr_facts(entry: dict) -> bool:
+    """True when a PR-fact precondition cannot be evaluated and must not be offered."""
+    if not entry.get("requires_pr"):
+        return False
+    return entry.get("pr_requirement_met") is None
+
+
+def _apply_withhold_for_missing_pr_facts(
+    entries: list[dict], precondition: dict, *, surface: str = ""
+) -> tuple[list[dict], list[dict]]:
+    withheld: list[dict] = []
+    offered: list[dict] = []
+    for entry in entries:
+        if _withhold_for_missing_pr_facts(entry):
+            withheld.append(
+                {
+                    "capability_id": entry["capability_id"],
+                    "fact": _fact_missing_note(entry),
+                    "surface": surface or None,
+                }
+            )
+        else:
+            offered.append(entry)
+    precondition["withheld_for_missing_facts"] = sorted(row["capability_id"] for row in withheld)
+    return offered, withheld
+
+
+def _fact_missing_note(entry: dict) -> str:
+    evidence = entry.get("pr_requirement_evidence")
+    if evidence:
+        return str(evidence)
+    for line in entry.get("unevaluated_because") or []:
+        if line:
+            return str(line)
+    return "PR size unknown"
+
+
+def _record_fact_missing(
+    advice: dict,
+    rows: list[dict],
+    *,
+    surface: str = "",
+    path=None,
+) -> int:
+    try:
+        import capability_propensity
+    except Exception:  # noqa: BLE001
+        return 0
+    written = 0
+    ref = str(advice.get("experiment_id") or experiment_id(str(advice.get("task") or "")))
+    for row in rows:
+        try:
+            ok = capability_propensity.record_fact_missing(
+                row["capability_id"],
+                ref,
+                fact=str(row.get("fact") or "PR facts unknown"),
+                surface=surface,
+                path=path,
+            )
+        except Exception:  # noqa: BLE001
+            ok = False
+        written += 1 if ok else 0
+    return written
+
+
 def advise(
     text: str,
     *,
@@ -488,8 +585,7 @@ def advise(
     # and nothing below is auto-declined — the failure mode is "offered as before", never "hidden".
     pr = _pr_number_from(text, repository, context)
     pr_facts = PR_FACTS_FETCH(repository, pr) if (pr and repository) else None
-    if pr_facts is not None:
-        pr_facts = {**pr_facts, "task_text": text}
+    pr_facts = _merge_pr_facts_from_context(context, pr_facts, text, pr=pr)
     # The closer supplies the two recorded verdicts at its disposition seam.
     verdict_facts = {
         key: (context or {})[key]
@@ -532,6 +628,7 @@ def advise(
             "contraindicated": [],
             "task_types": [],
             "capabilities": [],
+            "fact_missing": [],
             "dispatch_ready_count": 0,
             "bound_count": 0,
             "bound_capabilities": [],
@@ -584,6 +681,9 @@ def advise(
                 entries, repository, repo_path, pr_facts=pr_facts, pr=pr
             )
             _filter_contested_verdict_offers(entries, precondition)
+            entries, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
+                entries, precondition, surface=surface or skill
+            )
             _attach_how_to_use(entries)
             try:
                 import capability_propensity
@@ -602,7 +702,7 @@ def advise(
             result = {
                 "task": text,
                 "experiment_id": experiment_id(text),
-                "useful": True,
+                "useful": bool(entries),
                 "confidence": "binding_only",
                 "skill": skill or None,
                 "surface": (surface or skill) or None,
@@ -617,6 +717,7 @@ def advise(
                 "bound_unregistered": binding["unregistered"],
                 "not_applicable": [],
                 "precondition": precondition,
+                "fact_missing": list(withheld_fact_missing),
                 "guidance": guidance_summary(entries),
                 "surface_template": unsubstituted_surface(surface or skill) or None,
                 "surface_status": surface_state,
@@ -632,6 +733,13 @@ def advise(
                     f"classification"
                 ),
             }
+            if record and withheld_fact_missing:
+                result["recorded_fact_missing"] = _record_fact_missing(
+                    result,
+                    withheld_fact_missing,
+                    surface=surface or skill,
+                    path=path,
+                )
             if record and entries:
                 # A BINDING-ONLY ANSWER IS STILL AN OBSERVATION. This branch used to return real
                 # capabilities with `useful: true` and record NOTHING, so the fix that made a
@@ -667,6 +775,7 @@ def advise(
             "contraindicated": [],
             "task_types": [],
             "capabilities": [],
+            "fact_missing": [],
             "dispatch_ready_count": 0,
             "not_applicable": [],
             "surface": (surface or skill) or None,
@@ -803,6 +912,9 @@ def advise(
     # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
     precondition = _annotate_preconditions(matched, repository, repo_path, pr_facts=pr_facts, pr=pr)
     _filter_contested_verdict_offers(matched, precondition)
+    matched, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
+        matched, precondition, surface=surface or skill
+    )
     _attach_how_to_use(matched)
     try:
         import capability_propensity
@@ -859,6 +971,7 @@ def advise(
         # paid. `unevaluated` names what could not be checked AND the input that was missing, so
         # "nothing failed" and "nothing was checked" can never read alike.
         "precondition": precondition,
+        "fact_missing": list(withheld_fact_missing),
         "guidance": guidance_summary(matched),
         "surface_template": unsubstituted_surface(surface or skill) or None,
         "surface_status": surface_state,
@@ -889,6 +1002,13 @@ def advise(
         )
         result["recorded_auto_declines"] = _record_auto_declines(
             result, surface=surface or skill, path=path
+        )
+    if record and withheld_fact_missing:
+        result["recorded_fact_missing"] = _record_fact_missing(
+            result,
+            withheld_fact_missing,
+            surface=surface or skill,
+            path=path,
         )
     return result
 
@@ -2693,6 +2813,11 @@ def evaluate_precondition(
         if probe_pr is None:
             out["unevaluated_because"].append(f"no PR probe is registered for {needs_pr!r}")
         elif pr_facts is None:
+            # Preserve the probe's missing-fact note even when no PR was named. A probe that
+            # answers false from an empty dict has not evaluated this consult's PR facts.
+            value, evidence = probe_pr({})
+            if value is None:
+                out["pr_requirement_evidence"] = evidence
             out["unevaluated_because"].append(
                 f"{needs_pr!r} is a fact about the PR and needs `pr` — name it (`--pr N`, or "
                 f"`owner/repo#N` in the task)"
@@ -2711,7 +2836,10 @@ def evaluate_precondition(
         for v in (out["scope_match"], out["requirement_met"], out["pr_requirement_met"])
         if v is not None
     ]
-    out["precondition_met"] = all(verdicts) if verdicts else None
+    if needs_pr and out["pr_requirement_met"] is None:
+        out["precondition_met"] = None
+    else:
+        out["precondition_met"] = all(verdicts) if verdicts else None
     # THE DECLINE KIND THIS IMPLIES, handed to the caller so the RIGHT correction gets recorded.
     # `capability_propensity` marks `precondition_unmet` non-demotable on purpose: the fix is to
     # evaluate the condition, never to unbind a capability that fires where the condition holds.
@@ -3779,6 +3907,9 @@ def _selftest_front_door() -> None:
     ):
         env_prereq.report_gaps("capability_advisor.py front-door", gaps)
         return
+    # This reachability probe describes known substantive PR work; unknown
+    # facts are tested separately and must continue to withhold offers.
+    pr_context = {"changedFiles": 12, "additions": 600, "deletions": 100}
     cases = [
         ("summarise these 200 pages of docs", "offload"),
         ("offload this big read to a cheap agent", "offload"),
@@ -3787,15 +3918,15 @@ def _selftest_front_door() -> None:
         ("add pytest coverage for the retry helper", "testgen-lane"),
     ]
     for text, expected in cases:
-        r = advise(text, record=False)
+        r = advise(text, context=pr_context, record=False)
         ids = [c["capability_id"] for c in r["capabilities"]]
         assert r["useful"], f"front door said NO to real work: {text!r}"
         assert expected in ids, f"{text!r} -> {ids}, expected {expected}"
     # It must still be able to say NO.
     for text in ("what did I eat for lunch", "book a flight to Lisbon"):
-        assert not advise(text, record=False)["useful"], text
+        assert not advise(text, context=pr_context, record=False)["useful"], text
     # And the advice must be actionable, not a lifecycle instruction.
-    text = format_advice(advise("summarise these 200 pages", record=False))
+    text = format_advice(advise("summarise these 200 pages", context=pr_context, record=False))
     assert "how to use:" in text and "dispatcher.offload" in text, text
     assert "entered directly" in text, text
     print(
@@ -4669,9 +4800,16 @@ def _selftest_preconditions() -> None:
         evaluate_precondition("switch-review", repository=SELF_REPOSITORY)["precondition_met"]
         is True
     )
-    # `both` matches either target; declaring it is behaviourally identical to declaring nothing.
+    # `both` matches either target, but offload still needs known PR-size facts.
     for repo in (SELF_REPOSITORY, "stranske/Workflows"):
-        assert evaluate_precondition("offload", repository=repo)["precondition_met"] is True, repo
+        unknown = evaluate_precondition("offload", repository=repo)
+        assert unknown["scope_match"] is True and unknown["precondition_met"] is None, unknown
+        known = evaluate_precondition(
+            "offload",
+            repository=repo,
+            pr_facts={"changedFiles": 5, "additions": 120, "deletions": 10},
+        )
+        assert known["precondition_met"] is True, known
     # NO REPOSITORY NAMED must be UNEVALUATED, never a mismatch -- guessing `self` here would make
     # every bare consult report failures against every `audited_repo` capability.
     bare = evaluate_precondition("switch-review", repository="")
@@ -5179,7 +5317,12 @@ def _selftest() -> None:
         retired["matcher"] = {"field": "task_type", "operator": "in", "value": ["testgen"]}
         capabilities.save({"testgen-lane": lane, "some-other": unrelated, "gone": retired}, ledger)
 
-        hit = advise("add unit tests for the retry helper", path=ledger)
+        hit = advise(
+            "add unit tests for the retry helper stranske/Example#1",
+            repository="stranske/Example",
+            context={"changedFiles": 5, "additions": 120, "deletions": 10, "paths": ["a.py"]},
+            path=ledger,
+        )
         assert hit["useful"] is True, hit
         ids = [m["capability_id"] for m in hit["capabilities"]]
         assert ids == ["testgen-lane"], ids  # only the matching, non-retired one
@@ -5257,17 +5400,24 @@ def _selftest() -> None:
 
         # --- LEARNED skill -> capability association ---------------------------------------
         assert learned_associations(path=ledger)["observations"] == 0, "nothing learned yet"
-        advise("add unit tests for the parser", skill="repo-audit", path=ledger)
-        advise("write tests for the loader", skill="repo-audit", path=ledger)
+        pr_context = {"changedFiles": 5, "additions": 120, "deletions": 10}
+        advise("add unit tests for the parser", skill="repo-audit", context=pr_context, path=ledger)
+        advise("write tests for the loader", skill="repo-audit", context=pr_context, path=ledger)
         assoc = learned_associations(path=ledger)
         assert assoc["by_skill"]["repo-audit"]["testgen-lane"] == 2, assoc
         assert assoc["by_task_type"]["testgen"]["testgen-lane"] == 2, assoc
         # Repeating the SAME task must not inflate frequency; a distinct task must count.
-        advise("write tests for the loader", skill="repo-audit", path=ledger)
+        advise("write tests for the loader", skill="repo-audit", context=pr_context, path=ledger)
         assert learned_associations(path=ledger)["by_skill"]["repo-audit"]["testgen-lane"] == 2
         # record=False stays a pure query.
         before = learned_associations(path=ledger)["observations"]
-        advise("add tests for the writer", skill="repo-audit", path=ledger, record=False)
+        advise(
+            "add tests for the writer",
+            skill="repo-audit",
+            context=pr_context,
+            path=ledger,
+            record=False,
+        )
         assert learned_associations(path=ledger)["observations"] == before, "record=False wrote"
         # Recording a match moves the capability out of no_matching_work — the honest reading of
         # "work of your kind occurred and you still did not run".
@@ -5280,7 +5430,7 @@ def _selftest() -> None:
         # match with no skill attributed vanished from the count while still being counted in
         # by_task_type. Every skill-wiring claim measured with that number was unfalsifiable.
         # An advisory call with NO skill — exactly what a session that forgets `skill=` produces.
-        advise("add unit tests for the anonymous caller", path=ledger)
+        advise("add unit tests for the anonymous caller", context=pr_context, path=ledger)
         d = learned_associations(path=ledger)
         # by_skill is blind to it, by design; the totals are not, and they reconcile.
         assert "" not in d["by_skill"] and None not in d["by_skill"], d["by_skill"]
@@ -5329,7 +5479,8 @@ def main(argv: list[str]) -> int:
         "--context",
         default="",
         help="JSON of trigger context you actually know, e.g. "
-        '\'{"closer_gate":"high_stakes_review"}\'',
+        '\'{"closer_gate":"high_stakes_review"}\'. PR-fact fields for ITEM preconditions: '
+        "changedFiles, additions, deletions, paths, labels, title, task_text (plus pr via --pr).",
     )
     ap.add_argument(
         "--pr",
