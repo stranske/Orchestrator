@@ -203,6 +203,9 @@ PRIOR_USEFUL, PRIOR_TOTAL = 1.0, 2.0
 USEFUL_KEY = "useful"
 # One definition, in `capabilities`, because the firing monitor reads it too.
 ADVICE_REF_PREFIX = capabilities.ADVICE_REF_PREFIX
+# Aliases, not copies: one definition in `capabilities`, read here and by the usage report.
+PRODUCTION_RUN_SOURCE = capabilities.PRODUCTION_RUN_SOURCE
+PRODUCTION_RUN_REF_PREFIXES = capabilities.PRODUCTION_RUN_REF_PREFIXES
 # A DECLINE rides on a `match` event, tagged by source. `match` is the honest carrier: the capability
 # genuinely WAS offered, which is the only claim the event type itself makes. Everything that
 # distinguishes a decline lives in metadata, and no reader of `outcome` events can see it -- which is
@@ -1574,6 +1577,43 @@ def record_trigger(
     )
 
 
+def verdict_source(experiment_id: str, source: str = "") -> str:
+    """The `source` stamp this verdict carries, or raise when the id fits no accepted population.
+
+    Two populations, told apart by the caller's declaration and checked against the id's shape:
+
+    * no `source` — a consult trial; the id must carry `ADVICE_REF_PREFIX` (`advice:<digest>`);
+    * `PRODUCTION_RUN_SOURCE` — a production run the advisor never offered; the id must carry one
+      of `PRODUCTION_RUN_REF_PREFIXES` (`role:<...>` / `run:<...>`), and the stamp is the string
+      `capabilities.production_run_verdicts` counts.
+
+    A bare id — neither prefix — is refused under BOTH declarations, so declaring `production_run`
+    cannot launder an unprefixed id into a verdict. Returned, not just checked, so the caller
+    writes exactly the tag that was validated.
+    """
+    src = str(source or "").strip()
+    ref = str(experiment_id or "")
+    if src == PRODUCTION_RUN_SOURCE:
+        if not ref.startswith(PRODUCTION_RUN_REF_PREFIXES):
+            raise ValueError(
+                f"source={PRODUCTION_RUN_SOURCE!r} names a run the advisor never offered, so "
+                f"experiment_id must start with one of {list(PRODUCTION_RUN_REF_PREFIXES)}: "
+                f"{experiment_id!r}"
+            )
+        return PRODUCTION_RUN_SOURCE
+    if src:
+        raise ValueError(
+            f"unknown verdict source {source!r}; expected {PRODUCTION_RUN_SOURCE!r} for a "
+            "production run, or none for a consult trial"
+        )
+    if not ref.startswith(ADVICE_REF_PREFIX):
+        raise ValueError(
+            f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r} (a production "
+            f"run's role:/run: id is accepted only with source={PRODUCTION_RUN_SOURCE!r})"
+        )
+    return "capability_propensity"
+
+
 def record_usefulness(
     capability_id: str,
     experiment_id: str,
@@ -1587,8 +1627,17 @@ def record_usefulness(
     path=None,
     timestamp: int | None = None,
     metadata: dict | None = None,
+    source: str = "",
 ) -> bool:
     """Did triggering it help? `evidence` is required: an unevidenced verdict is an opinion.
+
+    `source` names the POPULATION the verdict belongs to. Empty (the default) is a consult trial
+    and the id must be the `advice:<digest>` the advisor minted. `PRODUCTION_RUN_SOURCE` is a real
+    role or runner invocation the advisor never offered; the id must then be that run's own
+    `role:<...>`/`run:<...>` id, and the verdict is stamped `source=production_run` so the usage
+    report can count it in the production column. A bare id fits neither and is refused either
+    way: before this, the only path to a verdict for un-offered real use was a post-hoc consult,
+    which fabricated an offer, and the funnel saw only what the advisor offered.
 
     The verdict must describe what the capability CHANGED, not that it ran. "It fired" is the
     un-gameable-label failure this project's learning rules exist to prevent.
@@ -1618,8 +1667,7 @@ def record_usefulness(
     """
     if not str(evidence).strip():
         raise ValueError("a usefulness verdict requires evidence naming what changed")
-    if not experiment_id.startswith(ADVICE_REF_PREFIX):
-        raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
+    source_tag = verdict_source(experiment_id, source)
     if str(provenance) == PROVENANCE_UNSTATED:
         raise ValueError(unstated_provenance_refusal())
     if str(provenance) not in VERDICT_PROVENANCE:
@@ -1656,7 +1704,7 @@ def record_usefulness(
         # that when the seam was put there first.
         timestamp=timestamp,
         metadata={
-            "source": "capability_propensity",
+            "source": source_tag,
             USEFUL_KEY: bool(useful),
             "evidence": _capped(evidence),
             **extra,
@@ -7345,6 +7393,16 @@ def main(argv: list[str]) -> int:
         "treated as ONE correlated arm, so naming it is how a capability escapes that discount",
     )
     ap.add_argument(
+        "--source",
+        default="",
+        choices=["", PRODUCTION_RUN_SOURCE],
+        help=(
+            f"useful: {PRODUCTION_RUN_SOURCE} accepts a role:<...>/run:<...> id for a production "
+            "run the advisor never offered and stamps the verdict with that source. Without it "
+            "the id must be the advice:<digest> the advisor minted; a bare id is refused either way"
+        ),
+    )
+    ap.add_argument(
         "--direction",
         choices=sorted(LATE_OUTCOME_DIRECTIONS) + sorted(CONSULT_OUTCOME_DIRECTIONS),
         default="",
@@ -7570,6 +7628,16 @@ def main(argv: list[str]) -> int:
             print(f"  DEMOTIONS proposed: {len(rep['demotions'])} (never auto-applied)")
             for de in rep["demotions"]:
                 print(f"    - {de['surface']} -> {de['capability_id']}: {de['reason'][:88]}")
+            nsd = rep["not_selected_by_design"]
+            print(
+                f"  NOT SELECTED BY DESIGN: {nsd['count']} capability(ies), {nsd['withheld']} "
+                "proposal(s) withheld (observers and tick-cadence rails no surface can trigger)"
+            )
+            for cap_id, info in nsd["capabilities"].items():
+                print(
+                    f"    ~ {cap_id}: {info['reason']} at {','.join(info['surfaces'])} "
+                    f"(-{info['promotions_withheld']} promotion, -{info['demotions_withheld']} demotion)"
+                )
             if rep["applied"]:
                 print(f"  APPLIED: {rep['applied']}")
         return 0
@@ -7721,6 +7789,7 @@ def main(argv: list[str]) -> int:
                     corroboration=args.corroboration,
                     deliverable=args.deliverable,
                     path=ledger,
+                    source=args.source,
                 )
             except ValueError as exc:
                 ap.error(str(exc))
@@ -7745,6 +7814,9 @@ def main(argv: list[str]) -> int:
                     "judge": args.judge or UNATTRIBUTED_JUDGE,
                     "judge_attributed": bool(args.judge.strip()),
                     "correlated_with_same_arm_verdicts": not args.judge.strip(),
+                    # WHICH POPULATION the verdict joined. A production-run verdict is counted
+                    # by the usage report's production column and never by `experiments()`.
+                    "source": args.source or "capability_propensity",
                 }
             )
             if not ok:
@@ -7933,6 +8005,31 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
     demotions: list[dict] = []
     applied: list[dict] = []
     all_finds = finds(path=path)
+    # NOT SELECTED BY DESIGN. Observers (a cadence report, the Brain recording its own events)
+    # and rails whose `trigger_cadence` names a tick step run on the clock, so no caller at any
+    # surface can trigger them and "offered, never triggered" is not a statement about a binding.
+    # On 2026-10-01 the live detect output held 54 demotions, most against exactly these, and the
+    # two real proposals were buried in them. They are withheld from both proposal lists and
+    # NAMED, with the count, so the drain is visible rather than silent.
+    ledger_rows = _ledger_rows_for_detect(path)
+    by_design: dict[str, dict] = {}
+
+    def _selectable(rows: list[dict], kind: str) -> list[dict]:
+        kept: list[dict] = []
+        for row in rows:
+            why = not_selected_by_design_reason(ledger_rows.get(row["capability_id"]))
+            if why is None:
+                kept.append(row)
+                continue
+            entry = by_design.setdefault(
+                row["capability_id"],
+                {"reason": why, "surfaces": [], "promotions_withheld": 0, "demotions_withheld": 0},
+            )
+            if row["surface"] not in entry["surfaces"]:
+                entry["surfaces"].append(row["surface"])
+            entry[f"{kind}_withheld"] += 1
+        return kept
+
     # EVERY SURFACE THAT HAS EITHER A DECLARATION OR EVIDENCE. Enumerating only the declared keys
     # missed the inherited ones entirely: `repo-audit:dimension-1` has no table entry of its own --
     # it inherits `offload` surface-wide -- so three independent audits declining `offload` there
@@ -7944,8 +8041,10 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
         | observed_surfaces(path=path)
     ):
         recs = surface_records(surface)
-        proms = propose_bindings(surface, recs, path=path) if recs else []
-        dems = propose_demotions(surface, path=path)
+        proms = _selectable(
+            propose_bindings(surface, recs, path=path) if recs else [], "promotions"
+        )
+        dems = _selectable(propose_demotions(surface, path=path), "demotions")
         counts = surface_decline_counts(surface, path=path)
         # BINDING QUALITY, reported per surface. A surface that triggers nothing while its consults
         # keep surfacing defects is not an idle surface, and the two were indistinguishable before
@@ -7999,7 +8098,60 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
         "applied": applied,
         "finds": finds_count,
         "finds_by_finder_kind": finds_by_finder_kind,
+        "not_selected_by_design": {
+            "count": len(by_design),
+            "withheld": sum(
+                e["promotions_withheld"] + e["demotions_withheld"] for e in by_design.values()
+            ),
+            "capabilities": dict(sorted(by_design.items())),
+        },
     }
+
+
+def _ledger_rows_for_detect(path) -> dict[str, dict]:
+    """The ledger as declared, read once per detect; an unreadable ledger withholds nothing."""
+    try:
+        return capabilities.load_declared(path or capabilities.REG)
+    except Exception:  # noqa: BLE001
+        try:
+            return capabilities.load(path or capabilities.REG, create=False)
+        except Exception:  # noqa: BLE001
+            return {}
+
+
+def names_tick_step(trigger_cadence) -> bool:
+    """Does this `trigger_cadence` name a tick step (a `cadence_registry` key) as a whole token?
+
+    `"weekly switch-review"` does; `"daily"` and `"per route decision"` do not. Token-exact so a
+    cadence that merely contains a step's letters cannot match by accident.
+    """
+    import re
+
+    text = str(trigger_cadence or "").strip().lower()
+    if not text:
+        return False
+    import cadence_registry
+
+    tokens = set(re.split(r"[^a-z0-9-]+", text))
+    return any(key in tokens for key in cadence_registry.STEP_BY_KEY)
+
+
+def not_selected_by_design_reason(cap: dict | None) -> str | None:
+    """Why no surface can SELECT this capability, or None when selection pressure applies to it.
+
+    `"observer"`: `capabilities.is_observer()` — it emits a report or a record and never a delivery,
+    the same exemption the verdict axis already grants. `"tick_cadence"`: its `trigger_cadence`
+    names a tick step, so the clock runs it and a surface cannot. Either way an offer at a
+    `tick:*` phase is an offer nothing could have taken up, and a demotion built on it would
+    describe the offer, not the binding.
+    """
+    if not cap:
+        return None
+    if capabilities.is_observer(cap):
+        return "observer"
+    if names_tick_step(cap.get("trigger_cadence")):
+        return "tick_cadence"
+    return None
 
 
 def _under_use(*, path=None) -> dict[str, int]:

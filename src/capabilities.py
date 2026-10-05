@@ -173,6 +173,14 @@ EVENT_FIELDS = {
 # day the two spellings parted, silently count every trial as a tick firing, record offers no
 # experiment can find, or stop joining lane verdicts to fleet runs.
 ADVICE_REF_PREFIX = "advice:"
+# A usefulness verdict recorded from a PRODUCTION run the advisor never offered: a real role or
+# runner invocation (`role:<...>` / `run:<...>` ids) rather than a consult trial. Defined ONCE here,
+# beside the advice prefix it is the alternative to, and aliased by `capability_propensity`, so the
+# writer that stamps `source=production_run` on the verdict and the usage report that counts it
+# cannot drift apart. Until 2026-10-05 the only way to credit such a run was a post-hoc consult,
+# which fabricated an offer the advisor never made.
+PRODUCTION_RUN_SOURCE = "production_run"
+PRODUCTION_RUN_REF_PREFIXES: tuple[str, ...] = ("role:", "run:")
 
 
 def split_invocations(cap: dict[str, Any]) -> dict[str, Any]:
@@ -3112,6 +3120,21 @@ def _fleet_edge_counts(*, conn=None) -> dict[str, int] | None:
             c.close()
 
 
+def production_run_verdicts(cap: dict[str, Any]) -> int:
+    """Usefulness verdicts this capability earned from production runs the advisor never offered.
+
+    Counted from the verdict's own `source` stamp (`PRODUCTION_RUN_SOURCE`), never inferred from
+    the ref shape: the stamp is what `capability_propensity.record_usefulness` writes when a
+    `role:`/`run:` id is accepted, so the count and the acceptance rule share one definition.
+    """
+    return sum(
+        1
+        for event in cap.get("event_history") or []
+        if event.get("type") == "outcome"
+        and (event.get("metadata") or {}).get("source") == PRODUCTION_RUN_SOURCE
+    )
+
+
 def usage_report(
     report: dict[str, Any], *, now: int | None = None, conn=None, path: Path | None = None
 ) -> dict[str, Any]:
@@ -3132,6 +3155,10 @@ def usage_report(
                 "gate": gate_readiness(cap, now=current),
                 "unblock": unblock(cap, liveness=live, now=current),
                 "fleet_edges": None if fleet_counts is None else fleet_counts.get(name, 0),
+                # THE PRODUCTION COLUMN: verdicts on runs the advisor never offered. A consult
+                # verdict says the offer helped; this says the capability helped when it ran for
+                # real, and the funnel saw only the first until the source stamp existed.
+                "production_run_verdicts": production_run_verdicts(cap),
             }
         )
     # TWO ACCOUNTINGS OF "DID THIS CAPABILITY PAY OFF", NEVER MERGED (2026-09-22). The per-row
@@ -3158,6 +3185,9 @@ def usage_report(
         "fleet_edges_scope": "all_time_versioned_edges_to_keepalive_runs",
         "total": len(rows),
         "capabilities_with_verdict": capabilities_with_verdict,
+        "capabilities_with_production_run_verdict": sum(
+            1 for row in rows if row["production_run_verdicts"]
+        ),
         "capabilities_with_outcome_link": capabilities_with_outcome_link,
         "ready_to_lift": [
             r["capability_id"] for r in rows if r["unblock"]["action"].startswith("READY TO LIFT")
@@ -3220,6 +3250,12 @@ def format_usage_report(usage: dict[str, Any]) -> str:
         f"verdicts: {usage['capabilities_with_verdict']} of {usage['total']} capabilities carry a "
         f"usefulness verdict (ledger)",
         f"outcome links: {outcome_link_text} carry a Brain outcome edge (lifecycle)",
+        # THE THIRD ACCOUNTING, also never merged: verdicts on production runs the advisor never
+        # offered. Zero here beside a non-zero verdict count means the funnel still sees only
+        # what the advisor offered.
+        f"production runs: {usage.get('capabilities_with_production_run_verdict', 0)} of "
+        f"{usage['total']} carry a verdict recorded from an un-offered production run "
+        f"(source={PRODUCTION_RUN_SOURCE})",
         "",
     ]
     # READY TO LIFT has a DENOMINATOR. Reported bare it is a permanently-zero number that reads as
@@ -3269,8 +3305,9 @@ def format_usage_report(usage: dict[str, Any]) -> str:
         lines.extend(f"- {name}" for name in items)
         lines.append("")
     lines += [
-        "| Capability | State | Liveness | Inv/wk | Fleet edges (all time) | Durable | Need | Next action |",
-        "|---|---|---|---:|---:|---:|---:|---|",
+        "| Capability | State | Liveness | Inv/wk | Fleet edges (all time) | Prod verdicts | "
+        "Durable | Need | Next action |",
+        "|---|---|---|---:|---:|---:|---:|---:|---|",
     ]
     for row in usage["rows"]:
         d = row["debt"]
@@ -3278,6 +3315,7 @@ def format_usage_report(usage: dict[str, Any]) -> str:
             f"| {row['capability_id']} | {row['status']} | {row['liveness']} | "
             f"{row['usage']['invocations_per_week']} | "
             f"{row['fleet_edges'] if row['fleet_edges'] is not None else 'unavailable'} | "
+            f"{row.get('production_run_verdicts', 0)} | "
             f"{d['durable_reuses']} | {d['required']} | "
             f"{row['unblock']['action']} |"
         )
