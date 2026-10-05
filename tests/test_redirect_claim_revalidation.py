@@ -143,3 +143,30 @@ def test_reclaimed_target_refuses_delegation(tmp_path, monkeypatch):
             pid_checker=lambda _: False,
         )
     assert calls == []
+
+
+def test_claim_replaced_after_step_validation_refuses_runner(tmp_path, monkeypatch):
+    old = {"target": "o/r#1", "agent": "codex", "pid": 10, "ts": 1}
+    replacement = dict(old, ts=2, pid=20)
+    reads = iter([old, old, replacement])
+    monkeypatch.setattr(redirect_plan.claims, "holder", lambda _: next(reads))
+    monkeypatch.setattr(redirect_plan.capabilities, "production_heartbeat", lambda *a, **k: None)
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    plan = {
+        "action": "redirect",
+        "target": "o/r#1",
+        "prompt_text": "retry",
+        "prompt_file": str(tmp_path / "prompt.md"),
+        "lane_guard": {"claim_snapshot": old, "pid": 10},
+        "steps": [{"id": "release-claim", "commands": [["release", "o/r#1"]]}],
+    }
+    with pytest.raises(ValueError, match="identity changed"):
+        redirect_plan.apply_plan(
+            plan, confirm_target="o/r#1", runner=runner, pid_checker=lambda _: False
+        )
+    assert calls == []

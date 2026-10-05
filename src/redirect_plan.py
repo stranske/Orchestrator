@@ -555,6 +555,12 @@ def apply_plan(
                     )
                     continue
 
+            # Recheck at the runner boundary, after command preparation/PID checks.
+            if step_id in {"delegate-retry", "delegate-subtasks"}:
+                if plan_obj.get("lane_guard") is not None and claims.holder(target):
+                    raise ValueError("target was reclaimed before delegation")
+            else:
+                _revalidate_lane(plan_obj, pid_checker)
             proc = runner(command, capture_output=True, text=True, check=False)
             item = _command_result(proc, step_id=step_id, command=command)
             result["executed"].append(item)

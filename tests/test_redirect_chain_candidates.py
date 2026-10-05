@@ -117,7 +117,7 @@ def test_an_escalated_pr_is_not_live_and_is_eligible(tmp_path):
             assert keepalive_shadow.synthesize_report(signals)["state"] == "running"
 
         # Deliberate-break: escalated read as running again must fail the live-state contract.
-        broken = dict(report, state="running")
+        broken = _report("o/r#1", state="running")
         live_blocks = ra.lane_refusals(broken, pid_checker=lambda _pid: None)
         assert any("live lane" in b for b in live_blocks)
 
