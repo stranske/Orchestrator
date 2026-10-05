@@ -32,6 +32,34 @@ def test_unmeasured_demand_never_prints_as_zero(tmp_path):
     assert "demand 0" not in text
     assert "no_situation" not in text
 
+    path = ledger(tmp_path / "lanes", ("testgen-lane",))
+    for probes in ([{"precondition_met": None}], [{}]):
+        section = monitor.report(
+            now=NOW,
+            path=path,
+            env={},
+            inputs={"precondition_probes": {"testgen-lane": probes}},
+        )
+        row = section["rows"][0]
+        assert row["situation_count"] is None
+        assert row["first_break"] is None
+        text = "\n".join(monitor.format_lines(section))
+        assert "demand unmeasured" in text
+        assert "demand 0" not in text
+        assert "no_situation" not in text
+
+    for probes in ([], [{"precondition_met": False}]):
+        section = monitor.report(
+            now=NOW,
+            path=path,
+            env={},
+            inputs={"precondition_probes": {"testgen-lane": probes}},
+        )
+        row = section["rows"][0]
+        assert row["situation_count"] == 0
+        assert row["first_break"] == "no_situation"
+        assert "demand 0" in "\n".join(monitor.format_lines(section))
+
 
 def test_first_break_is_the_earliest_failed_step():
     row = complete_row()

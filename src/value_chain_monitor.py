@@ -84,7 +84,14 @@ def situation_count(cap_id: str, inputs: dict[str, Any]) -> int | None:
     # Advisor offers and cadence invocations cannot substitute for that population.
     probes = inputs.get("precondition_probes", {}).get(cap_id)
     if probes is not None:
-        return sum(p["precondition_met"] is True for p in probes)
+        measured = [
+            p["precondition_met"] for p in probes if isinstance(p.get("precondition_met"), bool)
+        ]
+        # A supplied empty population is measured zero; probes with no measured
+        # result cannot establish that the situation never occurred.
+        if probes and not measured:
+            return None
+        return sum(measured)
     return inputs.get("cadence_inputs", {}).get(cap_id)
 
 
