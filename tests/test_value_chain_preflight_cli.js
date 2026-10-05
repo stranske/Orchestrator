@@ -145,3 +145,32 @@ test('value-chain preflight CLI reports every missing declaration in one result'
   w.assertReadOnly();
   assert.deepEqual(fs.readdirSync(w.root), ['runtime']);
 });
+
+for (const [label, changes, cause] of [
+  ['exercise category', { findability_category: '' }, 'bound_nowhere'],
+  ['exercise rationale', { findability_rationale: '' }, 'bound_nowhere'],
+  ['obsolete exemption', { findability_category: 'no_surface' }, 'declared_no_surface'],
+]) {
+  test(`value-chain preflight CLI rejects findability with a missing ${label}`, (t) => {
+    const w = world(t);
+    const result = w.preflight(JSON.stringify({ ...w.spec, ...changes }));
+    assert.equal(result.ready_to_build, false);
+    assert.deepEqual(result.declarable_missing, ['findable']);
+    assert.equal(result.checks.findable.ok, false);
+    assert.ok(result.checks.findable.detail.startsWith(cause + ':'),
+      result.checks.findable.detail);
+    // Without justified exercise intent, findability must be checked against the
+    // empty ledger instead of being deferred as an implementation obligation.
+    assert.deepEqual(result.obligations, ['caller_exists', 'fixture', 'heartbeat']);
+    for (const obligation of result.obligations) {
+      assert.equal(result.checks[obligation].ok, null, obligation);
+    }
+    for (const declaration of [
+      'dedup_recorded', 'outcome_path', 'kill_switch', 'rollback', 'expiry_or_cadence',
+    ]) {
+      assert.equal(result.checks[declaration].ok, true, declaration);
+    }
+    w.assertReadOnly();
+    assert.deepEqual(fs.readdirSync(w.root), ['runtime']);
+  });
+}
