@@ -3755,6 +3755,7 @@ def record_fact_missing(
         idempotency_key=f"fact_missing:{capability_id}:{experiment_id}",
         metadata={
             "source": FACT_MISSING_SOURCE,
+            "capability": capability_id,
             FACT_MISSING_FACT_KEY: _capped(fact),
             SURFACE_KEY: surface or None,
             **(metadata or {}),
@@ -7513,6 +7514,10 @@ def main(argv: list[str]) -> int:
                     f"  {s_:26s} records={info['records']:5d} bound={len(info['bound'])} "
                     f"finds={info['finds']}"
                 )
+                if info["fact_missing"]:
+                    print(
+                        f"    fact_missing {info['fact_missing']} — the lane passed no PR facts"
+                    )
             print(
                 f"\n  PROMOTIONS proposed: {len(rep['promotions'])}"
                 + (

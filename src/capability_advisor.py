@@ -493,7 +493,7 @@ def _withhold_for_missing_pr_facts(entry: dict) -> bool:
 
 
 def _apply_withhold_for_missing_pr_facts(
-    entries: list[dict], precondition: dict
+    entries: list[dict], precondition: dict, *, surface: str = ""
 ) -> tuple[list[dict], list[dict]]:
     withheld: list[dict] = []
     offered: list[dict] = []
@@ -503,6 +503,7 @@ def _apply_withhold_for_missing_pr_facts(
                 {
                     "capability_id": entry["capability_id"],
                     "fact": _fact_missing_note(entry),
+                    "surface": surface or None,
                 }
             )
         else:
@@ -514,12 +515,12 @@ def _apply_withhold_for_missing_pr_facts(
 
 
 def _fact_missing_note(entry: dict) -> str:
-    for line in entry.get("unevaluated_because") or []:
-        if line:
-            return str(line)
     evidence = entry.get("pr_requirement_evidence")
     if evidence:
         return str(evidence)
+    for line in entry.get("unevaluated_because") or []:
+        if line:
+            return str(line)
     return "PR size unknown"
 
 
@@ -621,6 +622,7 @@ def advise(
             "contraindicated": [],
             "task_types": [],
             "capabilities": [],
+            "fact_missing": [],
             "dispatch_ready_count": 0,
             "bound_count": 0,
             "bound_capabilities": [],
@@ -673,7 +675,7 @@ def advise(
                 entries, repository, repo_path, pr_facts=pr_facts, pr=pr
             )
             entries, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
-                entries, precondition
+                entries, precondition, surface=surface or skill
             )
             _attach_how_to_use(entries)
             try:
@@ -693,7 +695,7 @@ def advise(
             result = {
                 "task": text,
                 "experiment_id": experiment_id(text),
-                "useful": True,
+                "useful": bool(entries),
                 "confidence": "binding_only",
                 "skill": skill or None,
                 "surface": (surface or skill) or None,
@@ -766,6 +768,7 @@ def advise(
             "contraindicated": [],
             "task_types": [],
             "capabilities": [],
+            "fact_missing": [],
             "dispatch_ready_count": 0,
             "not_applicable": [],
             "surface": (surface or skill) or None,
@@ -901,7 +904,9 @@ def advise(
     # evidence-to-effort finding of a third audit on a repository that has a display surface, so two
     # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
     precondition = _annotate_preconditions(matched, repository, repo_path, pr_facts=pr_facts, pr=pr)
-    matched, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(matched, precondition)
+    matched, withheld_fact_missing = _apply_withhold_for_missing_pr_facts(
+        matched, precondition, surface=surface or skill
+    )
     _attach_how_to_use(matched)
     try:
         import capability_propensity
@@ -2776,6 +2781,11 @@ def evaluate_precondition(
         if probe_pr is None:
             out["unevaluated_because"].append(f"no PR probe is registered for {needs_pr!r}")
         elif pr_facts is None:
+            # Preserve the probe's missing-fact note even when no PR was named. A probe that
+            # answers false from an empty dict has not evaluated this consult's PR facts.
+            value, evidence = probe_pr({})
+            if value is None:
+                out["pr_requirement_evidence"] = evidence
             out["unevaluated_because"].append(
                 f"{needs_pr!r} is a fact about the PR and needs `pr` — name it (`--pr N`, or "
                 f"`owner/repo#N` in the task)"
@@ -4734,9 +4744,16 @@ def _selftest_preconditions() -> None:
         evaluate_precondition("switch-review", repository=SELF_REPOSITORY)["precondition_met"]
         is True
     )
-    # `both` matches either target; declaring it is behaviourally identical to declaring nothing.
+    # `both` matches either target, but offload still needs known PR-size facts.
     for repo in (SELF_REPOSITORY, "stranske/Workflows"):
-        assert evaluate_precondition("offload", repository=repo)["precondition_met"] is True, repo
+        unknown = evaluate_precondition("offload", repository=repo)
+        assert unknown["scope_match"] is True and unknown["precondition_met"] is None, unknown
+        known = evaluate_precondition(
+            "offload",
+            repository=repo,
+            pr_facts={"changedFiles": 5, "additions": 120, "deletions": 10},
+        )
+        assert known["precondition_met"] is True, known
     # NO REPOSITORY NAMED must be UNEVALUATED, never a mismatch -- guessing `self` here would make
     # every bare consult report failures against every `audited_repo` capability.
     bare = evaluate_precondition("switch-review", repository="")
@@ -5323,17 +5340,24 @@ def _selftest() -> None:
 
         # --- LEARNED skill -> capability association ---------------------------------------
         assert learned_associations(path=ledger)["observations"] == 0, "nothing learned yet"
-        advise("add unit tests for the parser", skill="repo-audit", path=ledger)
-        advise("write tests for the loader", skill="repo-audit", path=ledger)
+        pr_context = {"changedFiles": 5, "additions": 120, "deletions": 10}
+        advise("add unit tests for the parser", skill="repo-audit", context=pr_context, path=ledger)
+        advise("write tests for the loader", skill="repo-audit", context=pr_context, path=ledger)
         assoc = learned_associations(path=ledger)
         assert assoc["by_skill"]["repo-audit"]["testgen-lane"] == 2, assoc
         assert assoc["by_task_type"]["testgen"]["testgen-lane"] == 2, assoc
         # Repeating the SAME task must not inflate frequency; a distinct task must count.
-        advise("write tests for the loader", skill="repo-audit", path=ledger)
+        advise("write tests for the loader", skill="repo-audit", context=pr_context, path=ledger)
         assert learned_associations(path=ledger)["by_skill"]["repo-audit"]["testgen-lane"] == 2
         # record=False stays a pure query.
         before = learned_associations(path=ledger)["observations"]
-        advise("add tests for the writer", skill="repo-audit", path=ledger, record=False)
+        advise(
+            "add tests for the writer",
+            skill="repo-audit",
+            context=pr_context,
+            path=ledger,
+            record=False,
+        )
         assert learned_associations(path=ledger)["observations"] == before, "record=False wrote"
         # Recording a match moves the capability out of no_matching_work — the honest reading of
         # "work of your kind occurred and you still did not run".
@@ -5346,7 +5370,7 @@ def _selftest() -> None:
         # match with no skill attributed vanished from the count while still being counted in
         # by_task_type. Every skill-wiring claim measured with that number was unfalsifiable.
         # An advisory call with NO skill — exactly what a session that forgets `skill=` produces.
-        advise("add unit tests for the anonymous caller", path=ledger)
+        advise("add unit tests for the anonymous caller", context=pr_context, path=ledger)
         d = learned_associations(path=ledger)
         # by_skill is blind to it, by design; the totals are not, and they reconcile.
         assert "" not in d["by_skill"] and None not in d["by_skill"], d["by_skill"]

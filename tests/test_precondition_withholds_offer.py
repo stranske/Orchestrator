@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import capabilities
@@ -47,6 +49,10 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
     assert "redirect-policy" not in offered
     assert result["fact_missing"]
     assert result["recorded_fact_missing"] >= 1
+    missing = {e["capability_id"]: e for e in result["fact_missing"]}
+    assert missing["runtime-ac-checks"]["fact"] == "PR size unknown"
+    assert missing["runtime-ac-checks"]["surface"] == "closer-lane"
+    assert not (offered & missing.keys())
     row = capabilities.load(ledger)["runtime-ac-checks"]
     events = [
         ev
@@ -54,7 +60,22 @@ def test_unknown_precondition_withholds_the_offer_and_records_fact_missing_on_th
         if (ev.get("metadata") or {}).get("source") == cp.FACT_MISSING_SOURCE
     ]
     assert events
+    assert events[0]["type"] == "match"
     assert events[0]["metadata"]["surface"] == "closer-lane"
+    assert events[0]["metadata"]["capability"] == "runtime-ac-checks"
+    assert events[0]["metadata"]["fact"] == "PR size unknown"
+    assert not any(
+        (ev.get("metadata") or {}).get("source") == cp.DECLINE_SOURCE
+        for ev in row["event_history"]
+    )
+    again = ca.advise(
+        "closer: sweep the merge queue",
+        surface="closer-lane",
+        repository="stranske/Repo",
+        record=True,
+        path=ledger,
+    )
+    assert again["recorded_fact_missing"] == 0
 
 
 def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet(tmp_path, monkeypatch):
@@ -82,10 +103,26 @@ def test_known_precondition_true_offers_and_false_declines_as_precondition_unmet
     by_id = {e["capability_id"]: e for e in result["capabilities"]}
     assert "runtime-ac-checks" in by_id
     assert by_id["runtime-ac-checks"]["auto_declined"]["kind"] == "scope_too_small"
+    assert by_id["redirect-policy"]["precondition_met"] is False
+    assert by_id["redirect-policy"]["auto_declined"]["kind"] == "precondition_unmet"
+    assert not result["fact_missing"]
+
+    result = ca.advise(
+        "closer: stranske/Repo#1234 merge and verify",
+        surface="closer-lane",
+        repository="stranske/Repo",
+        context={"changedFiles": 5, "labels": ["agent:retry"]},
+        record=False,
+        path=ledger,
+    )
+    by_id = {e["capability_id"]: e for e in result["capabilities"]}
+    for name in ("runtime-ac-checks", "redirect-policy"):
+        assert by_id[name]["precondition_met"] is True
+        assert "auto_declined" not in by_id[name]
     assert not result["fact_missing"]
 
 
-def test_detect_reports_fact_missing_per_surface_and_never_as_a_decline(tmp_path, monkeypatch):
+def test_detect_reports_fact_missing_per_surface_and_never_as_a_decline(tmp_path, monkeypatch, capsys):
     ledger = _ledger(tmp_path)
     monkeypatch.setattr(ca, "PR_FACTS_FETCH", lambda *a, **k: None)
     ca.advise(
@@ -100,3 +137,90 @@ def test_detect_reports_fact_missing_per_surface_and_never_as_a_decline(tmp_path
     assert surf["fact_missing"] >= 1
     counts = cp.surface_decline_counts("closer-lane", path=ledger)
     assert counts["offered"].get("runtime-ac-checks", 0) == 0
+    withheld = set(cp.experiments(path=ledger)[0]["fact_missing"])
+    assert not (withheld & counts["offered"].keys())
+    assert not (withheld & counts["declined"].keys())
+    assert not (withheld & surf["declines"].keys())
+    assert not (withheld & counts["declined_demotable"].keys())
+    assert not any(d["capability_id"] in withheld for d in det["demotions"])
+
+    monkeypatch.setattr(cp, "detect", lambda **kwargs: det)
+    monkeypatch.setattr(cp, "_capability_heartbeat", lambda *args: None)
+    assert cp.main(["detect"]) == 0
+    output = capsys.readouterr().out
+    assert "closer-lane" in output
+    assert f"fact_missing {surf['fact_missing']} — the lane passed no PR facts" in output
+
+
+def test_classification_miss_withholds_all_unknown_offers(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    monkeypatch.setitem(ca.SURFACE_BINDINGS, "test-missing-facts", {"runtime-ac-checks": "test"})
+    result = ca.advise(
+        "xyzzy plugh frobnicate",
+        skill="test-missing-facts",
+        record=True,
+        path=ledger,
+    )
+    assert result["task_types"] == []
+    assert result["capabilities"] == []
+    assert result["useful"] is False
+    assert result["fact_missing"] == [
+        {
+            "capability_id": "runtime-ac-checks",
+            "surface": "test-missing-facts",
+            "fact": "PR size unknown",
+        }
+    ]
+    assert result["recorded_fact_missing"] == 1
+    assert cp.surface_fact_missing_total("test-missing-facts", path=ledger) == 1
+
+
+def test_context_facts_evaluate_without_a_pr_number(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+
+    def unexpected_fetch(*args):
+        raise AssertionError("a consult without a PR number must use its context facts")
+
+    monkeypatch.setattr(ca, "PR_FACTS_FETCH", unexpected_fetch)
+    # Empty lists and zero counts are known facts; they must not become unknown values.
+    context = {
+        "changedFiles": 0,
+        "additions": 0,
+        "deletions": 0,
+        "paths": [],
+        "labels": [],
+        "title": "tiny",
+        "task_text": "coordinate stranske/Repo#1 and stranske/Other#2",
+    }
+    result = ca.advise(
+        "closer: merge and verify",
+        surface="closer-lane",
+        repository="stranske/Repo",
+        context=context,
+        record=False,
+        path=ledger,
+    )
+    by_id = {e["capability_id"]: e for e in result["capabilities"]}
+    assert not result["fact_missing"]
+    assert by_id["runtime-ac-checks"]["auto_declined"]["kind"] == "scope_too_small"
+    assert by_id["redirect-policy"]["auto_declined"]["kind"] == "precondition_unmet"
+    assert by_id["cross-repo-coordination"]["precondition_met"] is True
+
+
+def test_help_documents_the_pr_fact_context_fields():
+    proc = subprocess.run(
+        [sys.executable, str(Path(ca.__file__)), "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for field in ("changedFiles", "additions", "deletions", "paths", "labels", "title", "task_text"):
+        assert field in proc.stdout
+
+
+def test_empty_and_suppressed_consults_return_an_empty_fact_missing_list(tmp_path):
+    ledger = _ledger(tmp_path)
+    for text, surface in (("xyzzy plugh", ""), ("add unit tests", "repo-audit:phase-1")):
+        result = ca.advise(text, surface=surface, record=False, path=ledger)
+        assert result["capabilities"] == []
+        assert result["fact_missing"] == []
