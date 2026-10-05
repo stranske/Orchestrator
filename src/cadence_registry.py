@@ -71,6 +71,7 @@ _DATE_RE = re.compile(r"20\d\d-\d\d-\d\d")
 CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     {
         "key": "rail-exercise",
+        "capabilities": ("rail-exercise-cadence",),
         "success_stamp": ".last-rail-exercise",
         "cadence_days": 6,
         "artifact": "rail-exercise-report.json",
@@ -169,6 +170,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
         # because redirect_plan.apply_plan had zero callers and the Stage-2 gate can only be fed by
         # applied advice, which made it a structural deadlock (2026-08-21).
         "key": "redirect-apply-link",
+        "capabilities": ("redirect-apply-bootstrap",),
         "success_stamp": ".last-redirect-apply-link",
         "cadence_days": 0,
         "artifact": None,
@@ -372,6 +374,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "research-usage-guard",
+        "capabilities": ("research-usage-guard",),
         "success_stamp": ".last-research-usage-guard",
         "cadence_days": 0,
         "artifact": "research-usage-report.json",
@@ -382,6 +385,7 @@ CADENCE_STEPS: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "route-weights-export",
+        "capabilities": ("route-weights-export",),
         "success_stamp": ".last-route-weights-export",
         "cadence_days": 0,
         "artifact": "route-weights-export.json",
