@@ -400,6 +400,75 @@ print(json.dumps([
         self.assertEqual(observed[0], "old")
         self.assertNotEqual(pinned, self.mirror.resolve())
 
+    def test_command_aliases_stay_pinned_when_publication_precedes_exec(self):
+        """Pause after selection and unlock, before the real exec reopens the script."""
+        parent_alias = self.root / "parent-alias"
+        parent_alias.symlink_to(self.root, target_is_directory=True)
+        harness = """
+import os
+import sys
+from pathlib import Path
+import mirror_reader
+execvpe = os.execvpe
+def paused_exec(executable, command, env):
+    print('SELECTED', file=sys.stderr, flush=True)
+    assert sys.stdin.readline() == 'resume\\n'
+    execvpe(executable, command, env)
+mirror_reader.os.execvpe = paused_exec
+mirror_reader.run(Path(sys.argv[1]), sys.argv[2:])
+"""
+        observer = (
+            f"#!{sys.executable}\n"
+            "import json, subprocess, sys\n"
+            "import module, paths\n"
+            "child = subprocess.run([sys.executable, '-c', "
+            "'import module; print(module.VALUE)'], capture_output=True, text=True, check=True)\n"
+            "print(json.dumps([SCRIPT_VALUE, module.VALUE, child.stdout.strip(), "
+            "str(paths.REPO_ROOT), sys.argv[1:]]))\n"
+        )
+        unrelated = ["relative-entry", str(self.root / "external"), "--flag"]
+        commands = (
+            [sys.executable, str(parent_alias / "mirror/observer.py")],
+            [sys.executable, "parent-alias/mirror/observer.py"],
+            [sys.executable, "./mirror/scripts/../observer.py"],
+            [str(parent_alias / "mirror/observer.py")],
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.set_value("old")
+                script = self.snapshot / "observer.py"
+                script.write_text(observer.replace("SCRIPT_VALUE", "'old'"))
+                script.chmod(0o751)
+                self.publish()
+                pinned = self.mirror.resolve()
+                reader = subprocess.Popen(
+                    [sys.executable, "-c", harness, str(self.mirror), *command, *unrelated],
+                    cwd=self.root,
+                    env=dict(os.environ, PYTHONPATH=str(MODULES)),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                try:
+                    ready, _, _ = select.select([reader.stderr], [], [], 10)
+                    self.assertTrue(ready, "reader did not select a generation")
+                    self.assertEqual(reader.stderr.readline().strip(), "SELECTED")
+                    self.set_value("new")
+                    script.write_text(observer.replace("SCRIPT_VALUE", "'new'"))
+                    self.publish_with_deadline()
+                    output, error = reader.communicate("resume\n", timeout=10)
+                    self.assertEqual(reader.returncode, 0, error)
+                    self.assertEqual(
+                        json.loads(output), ["old", "old", "old", str(pinned), unrelated]
+                    )
+                    self.assertNotEqual(self.mirror.resolve(), pinned)
+                finally:
+                    with suppress(ProcessLookupError):
+                        os.killpg(reader.pid, signal.SIGKILL)
+                    reader.communicate(timeout=10)
+
     def test_tick_and_child_imports_remain_pinned_while_publication_completes(self):
         text = (REPO / "orchestrate.sh").read_text()
         prefix = text.split("# --- Log rotation (every tick, cheap, fail-open)", 1)[0]

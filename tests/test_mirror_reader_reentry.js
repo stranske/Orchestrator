@@ -22,11 +22,16 @@ function checkedPython(args) {
   return result.stdout.trim();
 }
 
-const scenarios = [true, false].flatMap((unanchored) =>
-  ['absolute-alias', 'relative-alias', 'self-locating-alias'].map((entry) => ({ unanchored, entry })));
+const scenarios = [
+  { unanchored: true, incumbent: true },
+  { unanchored: true, incumbent: false },
+  { unanchored: false, incumbent: false },
+].flatMap((scenario) =>
+  ['absolute-alias', 'relative-alias', 'self-locating-alias'].map((entry) => ({ ...scenario, entry })));
 
-for (const { unanchored, entry } of scenarios) {
-  const mode = unanchored ? 'unanchored negative control' : 'production reentry';
+for (const { unanchored, incumbent, entry } of scenarios) {
+  const mode = incumbent ? 'incumbent negative control' :
+    unanchored ? 'repaired reader with unanchored entry' : 'production reentry';
   test(`${mode} through ${entry}`, { timeout: 15000 }, async (t) => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'orch-reentry-')));
     let reader;
@@ -45,7 +50,23 @@ for (const { unanchored, entry } of scenarios) {
     fs.mkdirSync(path.join(snapshot, 'scripts'), { recursive: true });
     fs.copyFileSync(installer, path.join(snapshot, 'scripts', path.basename(installer)));
     fs.copyFileSync(path.join(modules, 'paths.py'), path.join(snapshot, 'paths.py'));
-    const helper = fs.readFileSync(path.join(modules, 'mirror_reader.py'), 'utf8');
+    let helper = fs.readFileSync(path.join(modules, 'mirror_reader.py'), 'utf8');
+    if (incumbent) {
+      // Freeze the old absolute-only mapper as well as removing shell anchoring.
+      // The repaired helper now protects the aliased shell open independently.
+      const commandPin = '        command = [pin_argument(argument) for argument in command]';
+      assert.ok(helper.includes(commandPin), 'reader command pin boundary moved');
+      helper = helper.replace(commandPin, [
+        '        def incumbent_argument(argument):',
+        '            path = Path(argument)',
+        '            if path.is_absolute():',
+        '                path = Path(os.path.abspath(path))',
+        '            if path.is_absolute() and path.is_relative_to(root):',
+        '                return str(pinned / path.relative_to(root))',
+        '            return argument',
+        '        command = [incumbent_argument(argument) for argument in command]',
+      ].join('\n'));
+    }
     const exec = '        os.execvpe(command[0], command, env)';
     assert.ok(helper.includes(exec), 'reader exec boundary moved');
     fs.writeFileSync(path.join(snapshot, 'mirror_reader.py'), helper.replace(exec,
@@ -54,8 +75,8 @@ for (const { unanchored, entry } of scenarios) {
     let prologue = fs.readFileSync(path.join(repo, 'orchestrate.sh'), 'utf8')
       .split('# gh auth for the launchd/cron context:')[0];
     assert.ok(prologue.includes(parentPin), 'shell parent anchoring moved');
-    // Remove only the repair: the same publisher, reader, rendezvous, and
-    // observer must expose the before-code defect and pass with production code.
+    // Keep the publisher, rendezvous, and observer identical across all modes.
+    // The unanchored positive case isolates the helper's protection.
     if (unanchored) prologue = prologue.replace(parentPin, '');
     fs.writeFileSync(path.join(snapshot, 'observer.py'),
       'import json, subprocess, sys\nimport module, paths\n' +
@@ -106,8 +127,8 @@ for (const { unanchored, entry } of scenarios) {
     assert.notEqual(fs.realpathSync(mirror), pinned);
     reader.stdin.end('resume\n');
     assert.equal(await done, 0, errors);
-    assert.equal(output[0], unanchored ? 'SHELL:new' : 'SHELL:old',
-      unanchored ? 'observer did not detect the before-code defect' :
+    assert.equal(output[0], incumbent ? 'SHELL:new' : 'SHELL:old',
+      incumbent ? 'observer did not detect the before-code defect' :
         'shell reopened through the publication link');
     assert.deepEqual(JSON.parse(output[1]), ['old', 'old', pinned]);
   });

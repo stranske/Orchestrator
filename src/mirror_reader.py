@@ -76,17 +76,6 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
         pinned = root.resolve(strict=True)
         modules = pinned / "src" if (pinned / "src").is_dir() else pinned
 
-        def pin_argument(argument: str) -> str:
-            # Rewrite only path arguments inside the mirror, without interpreting
-            # shell strings or changing unrelated arguments containing its name.
-            path = Path(argument)
-            if path.is_absolute():
-                # Normalize dot segments without resolving the live publication link.
-                path = Path(os.path.abspath(path))
-            if path.is_absolute() and path.is_relative_to(root):
-                return str(pinned / path.relative_to(root))
-            return argument
-
         def pin_import_path(entry: str) -> str:
             # PYTHONPATH entries may be relative to the launch directory. Use
             # that directory before exec (or any cwd change) to identify mirror
@@ -101,6 +90,15 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
                 if ancestor.name == root.name and ancestor.parent.resolve() == root.parent:
                     return str(pinned / absolute.relative_to(ancestor))
             return entry
+
+        def pin_argument(argument: str) -> str:
+            # Executables and script arguments can use the same relative paths
+            # and parent aliases as PYTHONPATH. Rebase them before unlocking,
+            # so exec cannot reopen a newer generation through the live link.
+            # Keep bare PATH commands, flags and ordinary argument text intact.
+            if "/" not in argument:
+                return argument
+            return pin_import_path(argument)
 
         command = [pin_argument(argument) for argument in command]
         env = dict(
