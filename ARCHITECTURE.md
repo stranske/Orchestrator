@@ -102,6 +102,20 @@ Determinism here is load-bearing: the claims/capacity/provision rails are what t
 delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An
 LLM verifier (a review panel) is a *supplement* to a gate, never a replacement for it.
 
+**The guarantee's two ownership reads answer three ways, and unknown refuses (2026-10-04).** Before
+`delegate_remote` labels a target, the tick asks `claims.holder` whether a local claim holds it and
+`dispatcher._target_labels` whether GitHub shows it paused or carrying an `agent:*` label. Each read
+can say "owned", "free", or "could not tell". Until this date "could not tell" came back as "free".
+A failed `gh` read returned an empty label set, and the rail labelled two PRs that had carried
+`agent:codex` for hours (Trend_Model_Project#5913, #5944), each in a tick that skipped a neighbour
+for the same label. A held claim with unreadable meta returned None, and claim meta was rewritten
+in place, so a read caught between truncation and write made an old live claim look stale. Now an
+unknown answer refuses the target, with the reason in the plan, in shadow and live ticks alike, and
+claim meta is replaced in one step (`claims._write_meta`). The tick headline prints
+`label reads A answered, U unanswered (refused)`. Nothing is cached, so the next tick's read clears
+a refusal as soon as GitHub answers. (No stage, component or surface moved; the diagram is
+unchanged.)
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
@@ -146,8 +160,11 @@ lands. `feedback.join_role_to_outcome()` is the manual equivalent for links made
 Attribution is to the ACTING run: only an `accepted=1` edge back-propagates, so a role whose proposal was
 rejected records the disagreement and inherits no PASS. The role inherits the acting run's exclusion as well:
 an outcome in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` trains neither surface. That set holds an infra
-death (`transient_infra`: a signal-killed run, or since 2026-10-04 one the provider refused before any
-work, read only from codex's own `turn.failed` event because it exits 0) and, since 2026-10-04,
+death (`transient_infra`: a run whose done marker says the AGENT died by signal, or since 2026-10-04 one
+the provider refused before any work, read only from codex's own `turn.failed` event, the one log that
+can show nothing ran. Until 2026-10-04 the dispatch wrapper wrote its claim release's exit status into
+that marker instead of the agent's, so a marker without `rc_of` is never read as a death; no stage,
+component or surface moved, so the loop diagram is unchanged) and, since 2026-10-04,
 `unattributed_closing_pr`: outcome ingest found no PR on any candidate branch of a delegate whose issue
 a PR closed, so it records the run as over with no verdict rather than as a failure. The same day it gained `unattributed_delegation`: a remote delegation is credited
 with a PR only when the PR is its own (the labelled PR, or `{agent}/issue-N`), settled after the label, and
