@@ -128,3 +128,32 @@ cap each fail their named test; exact private-module restoration passes. An addi
 classification-removal control also fails and restores. Current-head CI and the
 populated-state scratch-mirror verdict remain explicit separate gates; no live
 publication is claimed. Receipts: closer `work/20261005T0520Z`.
+
+## Reproducible control runner follow-up
+
+`python3 scripts/verify_role_prompt_offering.py` now reproduces all three required
+mutations using private module copies. It requires a baseline pass, exactly one
+named assertion failure under the mutation, and a restoration pass. Pytest's JUnit
+report confirms the test actually ran; missing reports, usage/import errors, skips,
+and unrelated failures cannot satisfy the control. The private copy is restored
+even on failure, bytecode reuse is disabled for each child, and checkout source
+bytes are checked throughout. Successful runs print JSON receipts with pytest output.
+
+This runner lacks pytest and Black across its installed Python interpreters.
+Installing the tools failed because PyPI DNS resolution is unavailable. The runner
+correctly rejects its missing-pytest baseline rather than reporting acceptance.
+The required Black format and repository-wide check cannot execute, so these Python
+changes must remain uncommitted until that gate passes.
+
+Interim standard-library validation directly invoked all three existing named test
+functions: each passed, failed with `AssertionError` under its exact private-module
+mutation, and passed after restoration. Report-validation checks also rejected
+missing reports, import errors, unrelated failures, unexpected exits, and skips.
+Checkout source remained byte-identical. Replay and logs are runner-local at
+`/tmp/issue-417-control-replay.py` and `/tmp/issue-417-control-replay.log`; this is
+not a pytest receipt or durable CI evidence. The remaining acceptance checkbox
+stays unchecked pending the real pytest runner and formatting gates.
+
+The GitHub connector also blocked adding `needs-human` and posting the blocker
+comment: both mutations require approval, while this run's approval policy is
+`never`. Read-only metadata confirmed PR #457 is open and ready for review.
