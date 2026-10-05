@@ -88,7 +88,7 @@ def test_small_quiet_pr_auto_declines_by_kind(tmp_path, facts):
     result = _consult(tmp_path)
     assert facts["calls"] == [("stranske/Repo", 1234)]  # the PR came from the task text, read once
     e = _by_id(result)
-    for cid in ("runtime-ac-checks", "adversarial-review", "offload"):
+    for cid in ("runtime-ac-checks", "offload"):
         assert e[cid]["auto_declined"]["kind"] == "scope_too_small", cid
         assert "1 file(s), 4 changed line(s)" in e[cid]["auto_declined"]["reason"]
     for cid in ("redirect-policy", "redirect-plan"):
@@ -99,10 +99,11 @@ def test_small_quiet_pr_auto_declines_by_kind(tmp_path, facts):
     assert e["runtime-ac-checks"]["how_to_use"].startswith(
         "AUTO-DECLINED by the advisor (scope_too_small)"
     )
+    assert e["adversarial-review"]["pr_requirement_met"] is None
+    assert "shape route held in shadow" in e["adversarial-review"]["pr_requirement_evidence"]
     assert result["precondition"]["pr"] == 1234
     assert set(result["precondition"]["auto_declined"]) == {
         "runtime-ac-checks",
-        "adversarial-review",
         "offload",
         "redirect-policy",
         "redirect-plan",
@@ -159,7 +160,7 @@ def test_auto_declines_are_recorded_once_with_judge_machine(tmp_path, facts):
     ledger = _ledger(tmp_path)
     kw = dict(surface="closer-lane", repository="stranske/Repo", record=True, path=ledger)
     first = ca.advise("closer: stranske/Repo#1234 merge and verify", **kw)
-    assert first["recorded_auto_declines"] == 6
+    assert first["recorded_auto_declines"] == 5
     second = ca.advise("closer: stranske/Repo#1234 merge and verify", **kw)
     assert second["recorded_auto_declines"] == 0  # idempotent per (capability, experiment)
     row = capabilities.load(ledger)["redirect-policy"]

@@ -537,7 +537,7 @@ def advise(
                 "by_entry_mode": {},
             },
             "precondition": _annotate_preconditions(
-                [], repository, repo_path, pr_facts=pr_facts, pr=pr
+                [], repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             ),
             "surface_template": unsubstituted_surface(surface) or None,
             "surface_status": surface_state,
@@ -573,7 +573,7 @@ def advise(
                 for cid, why in live
             ]
             precondition = _annotate_preconditions(
-                entries, repository, repo_path, pr_facts=pr_facts, pr=pr
+                entries, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             )
             _attach_how_to_use(entries)
             try:
@@ -668,7 +668,7 @@ def advise(
             "bound_not_live": binding["not_live"],
             "bound_unregistered": binding["unregistered"],
             "precondition": _annotate_preconditions(
-                [], repository, repo_path, pr_facts=pr_facts, pr=pr
+                [], repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
             ),
             "surface_template": unsubstituted_surface(surface or skill) or None,
             "surface_status": surface_state,
@@ -792,7 +792,9 @@ def advise(
     # capability that was noise on two frontend-less repositories produced the highest
     # evidence-to-effort finding of a third audit on a repository that has a display surface, so two
     # negatives are not a verdict on a binding. The sort key below is deliberately unchanged.
-    precondition = _annotate_preconditions(matched, repository, repo_path, pr_facts=pr_facts, pr=pr)
+    precondition = _annotate_preconditions(
+        matched, repository, repo_path, pr_facts=pr_facts, pr=pr, ledger_path=path
+    )
     _attach_how_to_use(matched)
     try:
         import capability_propensity
@@ -2264,7 +2266,7 @@ CAPABILITY_PRECONDITIONS: dict[str, dict] = {
     "cross-repo-coordination": {"requires_pr": "multi_repo_change"},
     "codemod-campaign": {"requires_pr": "repeated_pattern"},
     "runtime-ac-checks": {"requires_pr": "nontrivial_change"},
-    "adversarial-review": {"requires_pr": "nontrivial_change"},
+    "adversarial-review": {"requires_pr": "high_stakes_shape"},
     "testgen-lane": {"requires_pr": "nontrivial_change"},
 }
 
@@ -2339,7 +2341,27 @@ def _probe_repeated_pattern(facts: dict) -> tuple[bool | None, str]:
     )
 
 
+def _probe_high_stakes_shape(facts: dict, *, path=None) -> tuple[bool | None, str]:
+    import adversarial
+
+    ready, evidence = adversarial.shape_shadow_readiness(path=path)
+    if not ready:
+        return None, f"shape route held in shadow: {evidence}"
+    reason = adversarial.high_stakes_from_shape(facts) or adversarial.high_stakes_label_reason(
+        facts
+    )
+    if reason:
+        return True, reason
+    if not adversarial.shape_facts_complete(facts):
+        return None, "PR paths or changed-line count incomplete"
+    return (
+        False,
+        "measured PR has no workflow, metadata, auth/data, size or high-stakes label signal",
+    )
+
+
 PR_FACT_PROBES = {
+    "high_stakes_shape": _probe_high_stakes_shape,
     "stalled_worker": _probe_stalled_worker,
     "nontrivial_change": _probe_nontrivial_change,
     "multi_repo_change": _probe_multi_repo_change,
@@ -2576,6 +2598,7 @@ def evaluate_precondition(
     repo_path: str = "",
     facts: dict | None = None,
     pr_facts: dict | None = None,
+    ledger_path=None,
 ) -> dict:
     """Does this capability's declared precondition hold for this consult?
 
@@ -2675,7 +2698,11 @@ def evaluate_precondition(
                 f"`owner/repo#N` in the task)"
             )
         else:
-            value, evidence = probe_pr(pr_facts)
+            value, evidence = (
+                _probe_high_stakes_shape(pr_facts, path=ledger_path)
+                if needs_pr == "high_stakes_shape"
+                else probe_pr(pr_facts)
+            )
             out["pr_requirement_met"] = value
             out["pr_requirement_evidence"] = evidence
             if value is None:
@@ -2736,6 +2763,7 @@ def _annotate_preconditions(
     *,
     pr_facts: dict | None = None,
     pr: int | None = None,
+    ledger_path=None,
 ) -> dict:
     """Stamp every entry with its precondition verdict. ORDER AND MEMBERSHIP ARE UNTOUCHED.
 
@@ -2756,6 +2784,7 @@ def _annotate_preconditions(
             repo_path=repo_path,
             facts=facts,
             pr_facts=pr_facts,
+            ledger_path=ledger_path,
         )
         entry.update(verdict)
         if verdict["applies_to"] or verdict["requires"] or verdict["requires_pr"]:
@@ -4908,6 +4937,9 @@ def _selftest_preconditions() -> None:
                 SURFACE_BINDINGS["t-precond"] = real
             CAPABILITY_PRECONDITIONS.clear()
             CAPABILITY_PRECONDITIONS.update(real_pre)
+    assert required_pr_fact("adversarial-review") == "high_stakes_shape"
+    assert PR_FACT_PROBES["high_stakes_shape"] is _probe_high_stakes_shape
+
     print(
         "capability_advisor precondition selftest: OK (applies_to explains an offer and changes "
         "neither the set nor the order; undeclared and unevaluated are never failures)"

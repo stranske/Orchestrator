@@ -478,15 +478,32 @@ def _new_cell() -> dict[str, Any]:
 def aggregate(
     prs: list[dict], facts: dict[str, dict[str, Any]], *, now: int, window_days: int
 ) -> dict[str, Any]:
+    import adversarial
+
     shapes: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
     with_facts = 0
+    high_stakes: dict[str, Any] = {
+        "rule": adversarial.shape_rule_id(),
+        "status": "ok",
+        "shape_candidates": 0,
+        "label_candidates": 0,
+        "population": len(prs),
+        "unknown": 0,
+    }
     for pr in prs:
         fact = facts.get(pr["ref"])
         if not fact or fact.get("unavailable"):
             missing.append(pr["ref"])
+            high_stakes["unknown"] += 1
             continue
         with_facts += 1
+        if adversarial.high_stakes_from_shape(fact):
+            high_stakes["shape_candidates"] += 1
+        elif not adversarial.shape_facts_complete(fact):
+            high_stakes["unknown"] += 1
+        if adversarial.high_stakes_label_reason(fact):
+            high_stakes["label_candidates"] += 1
         sig = shape_signature(fact.get("title"), fact.get("labels"), fact.get("paths"))
         shape = shapes.setdefault(sig["key"], _new_shape(sig))
         shape["prs"] += 1
@@ -544,11 +561,14 @@ def aggregate(
             }
         )
     rows.sort(key=lambda r: (-r["prs"], r["key"]))
+    if high_stakes["unknown"]:
+        high_stakes["status"] = "partial"
     return {
         "schema": SCHEMA,
         "version": VERSION,
         "generated_at": now,
         "window_days": window_days,
+        "adversarial_shape": high_stakes,
         "counts": {
             "prs": len(prs),
             "with_facts": with_facts,
@@ -896,6 +916,9 @@ def _selftest() -> int:
     if failures:
         print("fleet_shapes.py selftest: FAIL — " + "; ".join(failures))
         return 1
+    assert payload["adversarial_shape"]["population"] == len(prs)
+    assert payload["adversarial_shape"]["unknown"] >= payload["counts"]["missing_facts"]
+
     print(
         "fleet_shapes.py selftest: OK (path classes, signature with dropped queue labels, a "
         "DST-spanning PR's hours read in UTC and cached legacy times convert back, cross-repo "
