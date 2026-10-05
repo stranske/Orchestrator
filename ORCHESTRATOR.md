@@ -47,6 +47,9 @@ cursor-agent live outside the default PATH):
 
 - **Assess capacity** — `python3 src/capacity.py` → per-agent `{ok|warn|shed}`. Who has headroom right
   now? (codex/claude default OK + 429-shed; cursor=free/unlimited; vibe=subscription; aider=paygo (LOCAL_POLICY.md).)
+  A shed seat's reason says what clears it: the expiry (UTC), incident and category of a cooldown or
+  a provider's stated reset, or, for a marker with no readable expiry, that it is manual and the path
+  to remove. The weekly `switch_review` names every marker the same way.
 - **Rate-limit incidents** — `python3 src/rate_incidents.py [record|summary|classify] [--selftest]` → NDJSON
   authority for rate-limit/quota/capacity incidents. Classifies provider failure text, records incidents,
   creates `~/.codex/handoff/capacity-shed/<agent>` markers for authoritative errors (quota exhausted,
@@ -57,7 +60,10 @@ cursor-agent live outside the default PATH):
   (the commands it ran, the files it read, its messages) are never provider evidence: every reader of a
   failed run drops them through one filter (`failure_evidence`), leaving the harness's `error`/`turn.failed`
   events and stderr. Two codex offloads that printed this paragraph were recorded as quota incidents, and
-  shed the seat, before the offload path applied that filter (2026-09-19, 09-20).
+  shed the seat, before the offload path applied that filter (2026-09-19, 09-20). A refusal that states
+  when the provider will serve again ("try again at …") sheds until then rather than for the 6 h
+  cooldown, and that reset is read only from those harness `error`/`turn.failed` events
+  (`provider_reset_at`), never from a plain line, which may be the agent's own work.
 - **Observe fleet health** — `python3 src/observability_dashboard.py [--json] [--write-markdown path]`
   builds a read-only productivity/quality dashboard from the feedback DB plus a live capacity snapshot:
   outcome coverage, merged/durable-success rates, durability failures, capacity warnings, learned
