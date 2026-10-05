@@ -181,19 +181,25 @@ def test_the_run_prints_supervisor_sweep_and_eligible_counts(tmp_path):
         for mode in ("--screen", "--status", "--apply"):
             output = io.StringIO()
             with redirect_stdout(output):
-                assert ra.main(
-                    [
-                        mode,
-                        "--stage2-plan",
-                        str(stores["plan"]),
-                        "--corpus",
-                        str(stores["corpus"]),
-                        "--report-dir",
-                        str(stores["reports"]),
-                        "--max-offloads",
-                        "0",
-                    ]
-                ) == 0
-            assert output.getvalue().splitlines().count(
-                "candidates: supervisor 0, sweep 1, eligible 1"
-            ) == 1
+                assert (
+                    ra.main(
+                        [
+                            mode,
+                            "--stage2-plan",
+                            str(stores["plan"]),
+                            "--corpus",
+                            str(stores["corpus"]),
+                            "--report-dir",
+                            str(stores["reports"]),
+                            "--max-offloads",
+                            "0",
+                        ]
+                    )
+                    == 0
+                )
+            assert (
+                output.getvalue()
+                .splitlines()
+                .count("candidates: supervisor 0, sweep 1, eligible 1")
+                == 1
+            )
