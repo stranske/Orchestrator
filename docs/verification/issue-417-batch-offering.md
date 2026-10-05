@@ -61,9 +61,9 @@ selftests passed; the advisor selftest passed with a temporary ledger, reporting
 its machine-local front-door prerequisite as absent. Syntax validation and
 `git diff --check` passed.
 
-At that earlier runner attempt, pytest and Black were unavailable and the edits were
-uncommitted. The subsequent keepalive commits include these changes; the current
-closer validation below supersedes that execution limitation.
+That keepalive runner lacked pytest and Black and could not install them. Its
+standard-library replay was an interim check. The follow-up is now committed;
+the focused pytest and full Black results below supersede that tool limitation.
 
 ## Decline wording follow-up on 2026-10-05
 
@@ -82,9 +82,9 @@ The replay script and output are `/tmp/issue-417-replay.py` and
 `/tmp/issue-417-replay.log` in this runner; these temporary artifacts are not
 durable CI evidence.
 
-The earlier replay did not establish pytest acceptance. Its runner lacked pytest
-and Black, so it reported uncommitted edits. Those changes are now committed on the
-PR branch and are included in the current closer validation below.
+The replay was an interim check from a runner without pytest or Black. The
+follow-up is now committed and its named regressions execute under pytest in
+the opener recovery below; current-head CI remains the full acceptance gate.
 
 ## Recorded-consult follow-up on 2026-10-05
 
@@ -101,16 +101,30 @@ three checkout modules were unchanged. Output is `/tmp/issue-417-replay.log`;
 these runner-local artifacts are not durable CI evidence. Syntax parsing and
 `git diff --check` also passed.
 
-The earlier runner could not run pytest or Black, and reported uncommitted changes.
-Keepalive subsequently committed them. The current closer validation uses the
-committed tests and source rather than treating the runner's transient tool limit
-as the PR's current acceptance state.
+The earlier runner could not run pytest or Black or reach the GitHub API. That
+checkpoint is superseded by the committed follow-up and the verified recovery
+below; it does not describe the current checkout or PR readiness.
 
-## Closer recovery on 2026-10-05
+## Opener recovery on 2026-10-05
 
-Current recovery starts at `fa478f6`, preserves the expanded consult, wording and
-configured-cap regressions, and restores the pinned Black 26.5.1 formatting in the
-consult regression. The architecture statement now names both batch surfaces while
-keeping autonomous dispatch gated off. Focused pytest and deliberate-break/restoration
-receipts are retained by the closer round at `work/20261005T0520Z`; CI's full verifier
-and the seven-minute exact-head review gate still determine merge readiness.
+Current-head Gate run `37267192621` failed only Black formatting in
+`tests/test_role_prompt_offering.py`. The exact full formatter command was
+reproduced red, then passed after formatting that file. Its parsed AST stayed
+identical. The focused named pytest suite and `git diff --check` passed.
+Architecture prose and the SVG now agree on explicit batch-authoring bindings
+while automatic dispatch remains shadow-gated. Full current-head CI must run
+again after this recovery push; historical full-verifier receipts above remain
+identified by the checkout on which they were measured.
+
+## Closer integration and acceptance controls
+
+The closer retained opener recovery `d347a50`, including the diagram correction,
+and integrated merged reader repair #465 at main `1c80a69`. Current collection is
+1,861 with every skip and exemption ceiling retained. Before integration, 28 focused
+batch/offering cases, propensity and dispatcher selftests, Black/Ruff and focused
+mypy passed. Current named controls independently observed: removing the consulted
+research surface, making wrong_moment demotable, and counting each body against the
+cap each fail their named test; exact private-module restoration passes. An additional
+classification-removal control also fails and restores. Current-head CI and the
+populated-state scratch-mirror verdict remain explicit separate gates; no live
+publication is claimed. Receipts: closer `work/20261005T0520Z`.
