@@ -14,8 +14,13 @@ issue is already closed, the run is terminal instead of staying a permanent no-P
 issue's closing PRs decide which terminal verdict it gets. No closing PR: abandoned, a FAIL. A closing
 PR: someone delivered, and no candidate branch says it was this run, so the run records NO verdict and
 `feedback.UNATTRIBUTED_CLOSING_PR`, a class no learner scores (counted in the summary's `unattributed`).
-Either verdict needs every candidate branch to have ANSWERED "no PR here": a lookup that could not
-answer leaves the run pending, retried at the next ingest, and counted in the summary's `unanswered`.
+A closing PR is a reference that MERGED by the time the issue closed (`_merged_by_close`): GitHub
+also lists every PR that links the issue with a closing keyword AFTER it closed, and those are named
+in the notes without counting. Until 2026-10-04 any listed reference counted, so an issue closed by
+hand weeks before its references existed read as delivered by them (Workflows#2819).
+Either verdict needs every candidate branch to have ANSWERED "no PR here", and the merge times of
+the issue's references to have been read: a lookup that could not answer leaves the run pending,
+retried at the next ingest, and counted in the summary's `unanswered`.
 
 A REMOTE DELEGATION (an `orchestrator_remote` run: the tick applied `agent:<X>` to an issue or PR)
 is credited with a PR only when the PR can be shown to be that delegation's work, and three exact
@@ -67,12 +72,36 @@ PUSHED_BRANCH = "pushed_branch"
 # learns from. So an unanswered lookup ends the resolution, the run is skipped with no outcome row,
 # and the next ingest asks again. One set, read by the resolvers and by the summary's count.
 UNANSWERED_LOOKUPS = frozenset(
-    {"lookup_failed", "parse_failed", "issue_lookup_failed", "runner_rounds_lookup_failed"}
+    {
+        "lookup_failed",
+        "parse_failed",
+        "issue_lookup_failed",
+        "closing_pr_lookup_failed",
+        "runner_rounds_lookup_failed",
+    }
 )
 ISSUE_VIEW_STATES = frozenset({"OPEN", "CLOSED", "MERGED"})
 # A closed target issue with every candidate branch answered "no PR". Which verdict it gets is decided
 # by the issue's closing PRs, in `state_to_outcome`.
 CLOSED_ISSUE_LOOKUPS = frozenset({"closed_issue_no_branch_pr", "closed_issue_no_remote_pr"})
+# A closing reference counts only if it MERGED at or before the issue closed, plus this many seconds.
+# GitHub writes a merge and the close it causes in the same second or the next: over 1,600 closed
+# fleet issues (2026-10-04) the PR that closed one merged 0-2 s before its closedAt, once 460 s
+# before, never after, and the nearest reference that merged AFTER a close did so 113 s later. ONE
+# constant, read only by `_merged_by_close`.
+CLOSING_PR_MERGE_SLACK_SECONDS = 10
+# The issue's close time and every closing reference with its merge time, in ONE read, so the two
+# times compared always come from the same answer and a reference in the list carries its own merge
+# time: no second lookup per reference exists to fail. It resolves the number through
+# `issueOrPullRequest` and reads `first: 100` with no `includeClosedPrs`, exactly as `gh issue view`
+# does (gh 2.94), so it answers whenever the issue view answered; `--paginate` follows `$endCursor`.
+CLOSING_PR_QUERY = (
+    "query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {"
+    " repository(owner: $owner, name: $name) { issueOrPullRequest(number: $number) {"
+    " ... on Issue { closedAt closedByPullRequestsReferences(first: 100, after: $endCursor) {"
+    " pageInfo { hasNextPage endCursor }"
+    " nodes { number url state mergedAt repository { nameWithOwner } } } } } } }"
+)
 # The verdict classes that mean "terminal, but not this run's work", counted as `unattributed`.
 UNATTRIBUTED_CLASSES = frozenset(
     {feedback.UNATTRIBUTED_CLOSING_PR, feedback.UNATTRIBUTED_DELEGATION}
@@ -627,7 +656,9 @@ def _local_pr_state(
 
 
 def _closing_pr_name(ref: object, repo: str) -> str:
-    """`#N` for a closing PR in the issue's own repo, `owner/name#N` for one elsewhere."""
+    """`#N` for a closing PR in the issue's own repo, `owner/name#N` for one elsewhere. Reads both
+    shapes a reference arrives in: `gh issue view`'s `repository {name owner {login}}` and the
+    merge-time read's `repository {nameWithOwner}`."""
     if not isinstance(ref, dict):
         return str(ref)
     number = ref.get("number")
@@ -636,21 +667,135 @@ def _closing_pr_name(ref: object, repo: str) -> str:
     owner = where.get("owner")
     owner = owner if isinstance(owner, dict) else {}
     ref_repo = f"{owner.get('login')}/{where.get('name')}" if owner and where.get("name") else repo
+    if isinstance(where.get("nameWithOwner"), str):
+        ref_repo = where["nameWithOwner"]
     if number is None:
         return str(ref.get("url") or ref)
     return f"#{number}" if ref_repo == repo else f"{ref_repo}#{number}"
+
+
+def _merged_by_close(ref: object, closed_ts: int) -> bool | None:
+    """Pure: did this closing reference MERGE at or before the issue closed, within
+    `CLOSING_PR_MERGE_SLACK_SECONDS`? Three answers, because a reference can be read three ways.
+    True: it merged by the close, so it can have closed the issue. False: GitHub answered that it
+    merged after the close, or that it has not merged at all (`mergedAt` null on an OPEN or CLOSED
+    PR); either way it did not close this issue. None: its merge time cannot be read, which is an
+    unknown and never "it did not close it"."""
+    if not isinstance(ref, dict) or not isinstance(ref.get("number"), int) or "mergedAt" not in ref:
+        return None
+    merged_at = ref.get("mergedAt")
+    if merged_at is None:
+        return False if ref.get("state") in ("OPEN", "CLOSED") else None
+    merged_ts = utc_epoch.from_iso(merged_at)
+    if merged_ts is None:
+        return None
+    return merged_ts <= closed_ts + CLOSING_PR_MERGE_SLACK_SECONDS
+
+
+def _closing_pr_merges(repo: str, num: int) -> dict:
+    """Live: `CLOSING_PR_QUERY`, every page. `{"closedAt": iso, "refs": [node, ...]}`, or
+    `{"error": why}` when GitHub did not answer in full: gh failed, a page does not parse, the pages
+    disagree on the close time, or the last page says more exist."""
+    owner, _, name = repo.partition("/")
+    r = subprocess.run(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "--paginate",
+            "--slurp",
+            "-f",
+            f"query={CLOSING_PR_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={num}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return {"error": (r.stderr or r.stdout or "").strip()[:500]}
+    try:
+        pages = json.loads(r.stdout)
+    except Exception:
+        pages = None
+    if not isinstance(pages, list) or not pages:
+        return {"error": "the closing-PR read printed no pages"}
+    closed_at: set = set()
+    refs: list = []
+    more: object = None
+    for page in pages:
+        data = page.get("data") if isinstance(page, dict) else None
+        repository = data.get("repository") if isinstance(data, dict) else None
+        issue = repository.get("issueOrPullRequest") if isinstance(repository, dict) else None
+        conn = issue.get("closedByPullRequestsReferences") if isinstance(issue, dict) else None
+        nodes = conn.get("nodes") if isinstance(conn, dict) else None
+        info = conn.get("pageInfo") if isinstance(conn, dict) else None
+        if not isinstance(issue, dict) or not isinstance(nodes, list) or not isinstance(info, dict):
+            return {"error": "a closing-PR page has no reference list"}
+        closed_at.add(issue.get("closedAt"))
+        refs.extend(nodes)
+        more = info.get("hasNextPage")
+    if more is not False:
+        return {"error": f"the closing-PR read stopped with hasNextPage={more!r}"}
+    if len(closed_at) != 1:
+        return {
+            "error": f"the closing-PR pages disagree on the close time: {sorted(map(str, closed_at))}"
+        }
+    return {"closedAt": closed_at.pop(), "refs": refs}
+
+
+def _judge_closing_prs(repo: str, num: int) -> dict:
+    """Live: which of the issue's references closed it. `closing_prs` names the ones that merged by
+    the close (`_merged_by_close`) and `late_closing_prs` the ones that did not, each with its merge
+    time, so a FAIL or an unattributed note can say what it did not count. `{"error": why}` when the
+    merge times could not all be read: one unread reference could be the one that closed it."""
+    merges = _closing_pr_merges(repo, num)
+    if "error" in merges:
+        return merges
+    closed_ts = utc_epoch.from_iso(merges["closedAt"])
+    if closed_ts is None:
+        # A CLOSED issue has a close time; none means it reopened after `gh issue view` read it,
+        # and the next ingest reads it OPEN and waits.
+        return {"error": f"the closing-PR read has no close time: {merges['closedAt']!r}"}
+    counted: list[str] = []
+    late: list[str] = []
+    for ref in merges["refs"]:
+        verdict = _merged_by_close(ref, closed_ts)
+        if verdict is None:
+            return {"error": f"a closing PR's merge time cannot be read: {ref!r}"[:500]}
+        name = _closing_pr_name(ref, repo)
+        if verdict:
+            counted.append(name)
+        else:
+            merged = ref.get("mergedAt")
+            late.append(f"{name} ({f'merged {merged}' if merged else 'not merged'})")
+    return {
+        "closedAt": merges["closedAt"],
+        "closing_pr_count": len(counted),
+        "closing_prs": counted,
+        "late_closing_prs": late,
+    }
 
 
 def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | None:
     """When a delegate never opened a PR on any candidate branch but the issue is now closed, the
     run is terminal: no future PR state can arrive for those branches, so the outcome gap must not
     remain permanently actionable. The issue's closing PRs (`closing_prs`) decide the verdict in
-    `state_to_outcome`, so they are part of the answer.
+    `state_to_outcome`, so they are part of the answer: the references that MERGED by the time the
+    issue closed. The ones that merged later or not at all are `late_closing_prs`, named and not
+    counted. GitHub lists a PR that links the issue after it closed too, and that PR cannot have
+    closed it.
 
     Three answers: the closed-issue dict, None when GitHub answered and the issue is not closed, or
-    an `issue_lookup_failed` dict when gh could not say. The last carries no state, so it is skipped.
-    A CLOSED issue whose closing-PR list did not come back is the third answer too: whether someone
-    delivered is the question the verdict turns on, and a missing list cannot say "nobody did".
+    an unanswered dict when gh could not say. That carries no state, so it is skipped. A CLOSED
+    issue whose closing-PR list did not come back is unanswered too (`issue_lookup_failed`): whether
+    someone delivered is the question the verdict turns on, and a missing list cannot say "nobody
+    did". So is one whose references' merge times did not all come back
+    (`closing_pr_lookup_failed`): an unread reference may be the one that closed it.
     """
     unanswered = {
         "lookup_status": "issue_lookup_failed",
@@ -687,7 +832,7 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
     refs = issue.get("closedByPullRequestsReferences") if isinstance(issue, dict) else None
     if not isinstance(refs, list):
         return {**unanswered, "error": f"gh issue view printed no closing-PR list: {refs!r}"}
-    return {
+    answer = {
         "lookup_status": "closed_issue_no_branch_pr",
         "target": f"{repo}#{num}",
         "branch": branch,
@@ -696,9 +841,17 @@ def _closed_issue_without_branch_pr(repo: str, num: int, branch: str) -> dict | 
         "title": issue.get("title"),
         "url": issue.get("url"),
         "closedAt": issue.get("closedAt"),
-        "closing_pr_count": len(refs),
-        "closing_prs": [_closing_pr_name(ref, repo) for ref in refs],
+        "closing_pr_count": 0,
+        "closing_prs": [],
+        "late_closing_prs": [],
     }
+    if not refs:
+        return answer  # no reference at all: nothing to time, and no second read
+    judged = _judge_closing_prs(repo, num)
+    if "error" in judged:
+        return {**unanswered, "lookup_status": "closing_pr_lookup_failed", "error": judged["error"]}
+    answer.update(judged)
+    return answer
 
 
 def state_to_outcome(pr: dict | None) -> dict | None:
@@ -706,14 +859,15 @@ def state_to_outcome(pr: dict | None) -> dict | None:
     later). MERGED -> success with durability='pending' (a later sweep confirms it actually held).
     CLOSED-unmerged -> abandoned failure. A lookup that could not answer maps to nothing.
 
-    A closed issue with no PR on any candidate branch is terminal, and its closing PRs decide how.
-    None: the run delivered nothing that landed, an abandoned FAIL. Some: the issue was delivered,
-    and nothing says by this run, so the row records NO verdict and no merge state, only that the
-    run is over (durability 'abandoned', the lifecycle end) and why it is not evidence
-    (`feedback.UNATTRIBUTED_CLOSING_PR`, which every learner excludes). Reading it as FAIL trained
-    the runs whose own PR closed the issue as failures; reading it as PASS would credit a run with a
-    PR it cannot be shown to have produced; and leaving it pending would re-ask GitHub about an issue
-    that can never change, with nothing to drain it.
+    A closed issue with no PR on any candidate branch is terminal, and its closing PRs decide how:
+    the references that merged by the time it closed (`closing_pr_count`; the rest are named in the
+    notes and decide nothing). None: the run delivered nothing that landed, an abandoned FAIL. Some:
+    the issue was delivered, and nothing says by this run, so the row records NO verdict and no
+    merge state, only that the run is over (durability 'abandoned', the lifecycle end) and why it
+    is not evidence (`feedback.UNATTRIBUTED_CLOSING_PR`, which every learner excludes). Reading it
+    as FAIL trained the runs whose own PR closed the issue as failures; reading it as PASS would
+    credit a run with a PR it cannot be shown to have produced; and leaving it pending would re-ask
+    GitHub about an issue that can never change, with nothing to drain it.
 
     A remote delegation's own settled PR (`delegation`) is credited, PASS or FAIL, only when its
     `attribution` says the delegation can be shown to have produced it (`_delegation_outcome`)."""
@@ -749,6 +903,14 @@ def state_to_outcome(pr: dict | None) -> dict | None:
                 if pr.get("lookup_status") == "closed_issue_no_remote_pr"
                 else "local delegate"
             )
+            # The references GitHub lists that did not merge by the close: named, never counted.
+            late = pr.get("late_closing_prs") or []
+            late_note = (
+                f"; references that merged after the close at {pr.get('closedAt')} or never "
+                f"merged, not counted: {', '.join(late)}"
+                if late
+                else ""
+            )
             if closing_pr_count:
                 closing = ", ".join(pr.get("closing_prs") or []) or f"{closing_pr_count} PR(s)"
                 return {
@@ -759,9 +921,11 @@ def state_to_outcome(pr: dict | None) -> dict | None:
                     "notes": (
                         f"{kind} issue closed by a PR no candidate branch produced ({closing}); "
                         f"not attributed to this run; closing_pr_count={closing_pr_count}"
+                        + late_note
                         + (rejected_note if rejected else "")
                     ),
                 }
+            no_closing = "no closing PR merged by the close" if late else "no closing PR references"
             if pr.get("delegation_without_own_pr"):
                 # A remote delegation's agent runs only on the PR its label bootstraps, so with none
                 # the labelled agent never ran: not its failure (owner decision 2026-10-04, amending
@@ -774,13 +938,14 @@ def state_to_outcome(pr: dict | None) -> dict | None:
                     "durability": "abandoned",
                     "failure_class": feedback.UNATTRIBUTED_DELEGATION,
                     "notes": (
-                        f"remote delegation's issue closed with no PR on {branches} and no closing "
-                        "PR references: the labelled agent never had a PR to run on"
+                        f"remote delegation's issue closed with no PR on {branches} and "
+                        f"{no_closing}: the labelled agent never had a PR to run on"
                         + (f" ({passed} there settled before the label)" if passed else "")
+                        + late_note
                         + "; not attributed to this run"
                     ),
                 }
-            notes = f"{kind} issue closed without matching branch PR; no closing PR references"
+            notes = f"{kind} issue closed without matching branch PR; {no_closing}" + late_note
             notes += rejected_note if rejected else ""
         elif own:
             notes = f"{own_pr} closed unmerged {own_branch}"
@@ -1223,6 +1388,43 @@ def _selftest():
     assert rate_limited["skipped_details"][0]["reason"] == "lookup_failed", rate_limited
     assert (answered["recorded"], answered["unanswered"]) == (1, 0), answered
     assert answered["details"][0]["durability"] == "abandoned", answered
+    # A reference that merged AFTER the issue closed did not close it (Workflows#2819, closed by
+    # hand; its references merged 23 to 48 days later): named, not counted, so the closed issue
+    # keeps the abandoned FAIL. A reference whose merge time cannot be read decides nothing: the
+    # run is unanswered, never "no closing PR".
+    closed_2819 = {
+        "state": "CLOSED",
+        "closedAt": "2026-08-15T13:18:25Z",
+        "closedByPullRequestsReferences": [{"number": 3402}],
+    }
+
+    def _gh_late(closing: tuple):
+        def fake_run(argv, **_kw):
+            if argv[1:3] == ["issue", "view"]:
+                return subprocess.CompletedProcess(argv, 0, json.dumps(closed_2819), "")
+            if argv[1:3] == ["api", "graphql"]:
+                return subprocess.CompletedProcess(argv, *closing)
+            raise AssertionError(f"unexpected gh call: {argv}")
+
+        return fake_run
+
+    try:
+        subprocess.run = _gh_late(
+            _closing_read("2026-08-15T13:18:25Z", (3402, "2026-09-07T14:58:30Z"))
+        )
+        late = _closed_issue_without_branch_pr("o/r", 2819, "orchestrator/issue-2819")
+        subprocess.run = _gh_late(_closing_read("2026-08-15T13:18:25Z", (3402, "not a time")))
+        unread = _closed_issue_without_branch_pr("o/r", 2819, "orchestrator/issue-2819")
+    finally:
+        subprocess.run = real_run
+    late_outcome = state_to_outcome(late)
+    assert late_outcome and late_outcome["adjudicated_verdict"] == "FAIL", (
+        "a reference that merged after the issue closed was counted as the PR that closed it",
+        late_outcome,
+    )
+    assert "#3402 (merged 2026-09-07T14:58:30Z)" in late_outcome["notes"], late_outcome
+    assert unread and unread["lookup_status"] == "closing_pr_lookup_failed", unread
+    assert state_to_outcome(unread) is None, "an unread merge time decided the verdict"
     _selftest_delegation_attribution()
     # A branch the run pushed (its push record) is asked FIRST, and the PR the run opened there is
     # its delivery: credited, and named `PR #N merged` for the durability sweep. A PR on that branch
@@ -1280,10 +1482,30 @@ def _selftest():
         "outcomes.py selftest: OK (state->outcome mapping, ingest records merged/abandoned, "
         "open skipped, merged stays pending for durability sweep, unanswered lookups skipped "
         "and retried rather than abandoned, a closing PR no candidate branch produced recorded "
-        "as unattributed rather than failed, a delegation credited only with its own PR and its "
+        "as unattributed rather than failed, a reference that merged after the close not "
+        "counted and an unread merge time unanswered, a delegation credited only with its own "
+        "PR and its "
         "agent's completed runner rounds, a PR the run opened on a branch it pushed credited "
         "and one that predates the run rejected)"
     )
+
+
+def _closing_read(closed: str | None, *refs: tuple) -> tuple:
+    """What `_closing_pr_merges`'s `gh api graphql --paginate --slurp` prints, as a stub answer: one
+    page holding the issue's close time and each `(number, mergedAt)` reference in `o/r`."""
+    nodes = [
+        {
+            "number": number,
+            "url": f"https://github.com/o/r/pull/{number}",
+            "state": "MERGED" if merged else "OPEN",
+            "mergedAt": merged,
+            "repository": {"nameWithOwner": "o/r"},
+        }
+        for number, merged in refs
+    ]
+    conn = {"pageInfo": {"hasNextPage": False, "endCursor": "MQ"}, "nodes": nodes}
+    issue = {"closedAt": closed, "closedByPullRequestsReferences": conn}
+    return (0, json.dumps([{"data": {"repository": {"issueOrPullRequest": issue}}}]), "")
 
 
 def _runner_comment(kind: str, provider: str, pr: int, payload: dict, login: str) -> dict:
@@ -1333,13 +1555,16 @@ def _selftest_delegation_attribution() -> None:
     assert runner_rounds(comments, provider="cursor", pr_number=5, since_ts=label)["credited"] == 0
 
     def gh(answers: dict):
-        """Answers keyed `pr view`, `issue view`, `comments` and `list:<head branch>`."""
+        """Answers keyed `pr view`, `issue view`, `comments`, `closing` (the merge-time read) and
+        `list:<head branch>`."""
 
         def fake_run(argv, **_kw):
             if argv[1:3] == ["pr", "list"]:
                 key = f"list:{argv[argv.index('--head') + 1]}"
+            elif argv[1] == "api":
+                key = "closing" if argv[2] == "graphql" else "comments"
             else:
-                key = "comments" if argv[1] == "api" else " ".join(argv[1:3])
+                key = " ".join(argv[1:3])
             calls.append(key)
             if key not in answers:
                 raise AssertionError(f"unexpected gh call: {argv}")
@@ -1366,6 +1591,7 @@ def _selftest_delegation_attribution() -> None:
             "pr view": not_a_pr,
             "list:gemini/issue-2620": (0, "[]", ""),
             "issue view": (0, json.dumps(closed_by_other), ""),
+            "closing": _closing_read(before, (2627, _iso(label - 601))),
         },
     )
     assert outcome and outcome.get("failure_class") == feedback.UNATTRIBUTED_CLOSING_PR, outcome

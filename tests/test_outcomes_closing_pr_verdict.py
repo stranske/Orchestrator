@@ -46,6 +46,9 @@ def _issue(state: str = "CLOSED", **fields) -> tuple:
 
 CLOSED_BY_PR = _issue(closedByPullRequestsReferences=[CLOSING_REF])
 CLOSED_NO_PR = _issue(closedByPullRequestsReferences=[])
+# The closing references' merge-time read: #3067 merged one second before the issue closed, the
+# real Workflows#3050 timing. A reference counts only if it merged by the close.
+MERGED_BY_CLOSE = outcomes._closing_read("2026-08-13T06:49:48Z", (3067, "2026-08-13T06:49:47Z"))
 RESOLVERS = {"remote": outcomes._pr_state, "local": outcomes._local_pr_state}
 
 
@@ -58,9 +61,10 @@ def brain(monkeypatch, tmp_path):
 
 @pytest.fixture
 def gh(monkeypatch):
-    """Install a stub gh: every candidate branch answers `branch`, the issue view answers `issue`."""
+    """Install a stub gh: every candidate branch answers `branch`, the issue view answers `issue`,
+    and the closing references' merge-time read answers `closing`."""
 
-    def install(*, issue=CLOSED_BY_PR, branch=NO_PR):
+    def install(*, issue=CLOSED_BY_PR, branch=NO_PR, closing=MERGED_BY_CLOSE):
         def fake_run(argv, capture_output=True, text=True, **_kw):
             verb = tuple(argv[1:3])
             if verb == ("pr", "view"):  # the target is an issue number, not a PR
@@ -69,6 +73,8 @@ def gh(monkeypatch):
                 return subprocess.CompletedProcess(argv, *branch)
             if verb == ("issue", "view"):
                 return subprocess.CompletedProcess(argv, *issue)
+            if verb == ("api", "graphql"):
+                return subprocess.CompletedProcess(argv, *closing)
             raise AssertionError(f"unexpected gh call: {argv}")
 
         monkeypatch.setattr(outcomes.subprocess, "run", fake_run)

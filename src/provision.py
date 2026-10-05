@@ -9,6 +9,12 @@ canonical checkouts (~/Library/CloudStorage/Dropbox/.../Code/<Repo>) FAIL —
 So we keep a LOCAL-disk canonical clone per repo under ~/.codex/orchestrator/repos/ (normal
 fs) and add worktrees off THAT — both worktree add and push work on normal fs.
 
+A linked worktree's git dir lives in that clone, outside the worktree, and codex >= 0.158 refuses
+writes there under `--sandbox workspace-write`. A codex run that commits is therefore granted
+exactly that dir plus the clone's objects/, refs/ and logs/ (adapters.codex_worktree_git_roots).
+The clone's config and hooks stay read-only. A standalone clone per target would not avoid it:
+codex protects a clone's own `.git` too, and only a grant of all of it would let the run commit.
+
   - closer target (PR repo#N): worktree on the PR's head branch (push updates the PR).
   - opener target (issue repo#N): worktree on a NEW branch off the repo's live default branch,
     unless that repo has an explicit non-default base override.

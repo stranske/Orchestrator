@@ -355,9 +355,10 @@ def _merged(number: int, head: str, created: str | None, state: str = "MERGED") 
     return pr
 
 
-def _gh(monkeypatch, *, prs=None, unanswered=(), issue=None):
+def _gh(monkeypatch, *, prs=None, unanswered=(), issue=None, closing=None):
     """Stub gh: `pr list --head B` answers prs[B] (or no PR, or a rate limit for `unanswered`),
-    `issue view` answers `issue` (default OPEN), and `pr view <issue#>` is not a PR."""
+    `issue view` answers `issue` (default OPEN), `pr view <issue#>` is not a PR, and the closing
+    references' merge-time read answers `closing` when one is given."""
     asked: list[str] = []
 
     def fake_run(argv, capture_output=True, text=True, **_kw):
@@ -375,6 +376,8 @@ def _gh(monkeypatch, *, prs=None, unanswered=(), issue=None):
         if verb == ("issue", "view"):
             body = issue or {"state": "OPEN", "closedByPullRequestsReferences": []}
             return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+        if verb == ("api", "graphql") and closing is not None:
+            return subprocess.CompletedProcess(argv, *closing)
         raise AssertionError(f"unexpected gh call: {argv}")
 
     monkeypatch.setattr(outcomes.subprocess, "run", fake_run)
@@ -430,6 +433,8 @@ def test_a_pr_on_a_pushed_branch_that_predates_the_run_is_not_credited(brain, mo
         monkeypatch,
         prs={"orchestrator/issue-7": _merged(8, "orchestrator/issue-7", _iso(1_699_999_000))},
         issue={"state": "CLOSED", "closedByPullRequestsReferences": [closing]},
+        # #8 merged at 12:00:00Z and the issue closed a second later: it counts.
+        closing=outcomes._closing_read("2026-10-04T12:00:01Z", (8, "2026-10-04T12:00:00Z")),
     )
     result = outcomes.ingest_modes("local")
     assert result["push_records"]["rejected"] == 1 and result["push_records"]["credited"] == 0
