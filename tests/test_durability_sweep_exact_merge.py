@@ -367,3 +367,101 @@ def test_legacy_local_modes_are_one_definition_for_ingest_and_sweep(brain):
         if outcomes.is_local_delegate(mode, target)
     }
     assert selected == expected and len(expected) == 5, (selected, expected)
+
+
+def test_missing_recording_time_never_credits_a_later_branch_merge():
+    run = {
+        "target": "o/r#42",
+        "mode": "local",
+        "agent": "codex",
+        "ts": NOW - 40 * DAY,
+        "recorded_ts": None,
+        "notes": "merged",
+    }
+    later = _pr(43, merged_at=NOW - DAY)
+    result = durability_sweep.find_merge(
+        run, _gh=FakeGh(prs={43: later}, branches={"orchestrator/issue-42": [later]}), now=NOW
+    )
+    assert result["status"] == "unjudgeable", result
+    assert "recording time" in result["reason"], result
+
+    # A known recording time keeps the one-hour ingest skew, with an inclusive boundary.
+    recorded = NOW - 39 * DAY
+    for offset, expected in ((3600, "found"), (3601, "unjudgeable")):
+        merged = _pr(43, merged_at=recorded + offset)
+        result = durability_sweep.find_merge(
+            {**run, "recorded_ts": recorded},
+            _gh=FakeGh(prs={43: merged}, branches={"orchestrator/issue-42": [merged]}),
+            now=NOW,
+        )
+        assert result["status"] == expected, (offset, result)
+
+    # Explicit PR attribution needs no own-branch observation window.
+    for attributable in ({**run, "target": "o/r#43"}, {**run, "notes": "PR #43 merged"}):
+        gh = FakeGh(prs={43: later})
+        result = durability_sweep.find_merge(attributable, _gh=gh, now=NOW)
+        assert result["status"] == "found", result
+        assert gh.heads() == [], gh.calls
+
+
+@pytest.mark.parametrize("bookkeeping", [True, False])
+def test_conclusive_failure_survives_exhausted_revert_search(bookkeeping):
+    pr = _pr(
+        42,
+        merged_at=NOW - 30 * DAY,
+        files=(".agents/issue-42-ledger.yml",) if bookkeeping else ("src/app.py",),
+    )
+    result = durability_sweep.classify_durability(
+        {"target": "o/r#42", "mode": "remote"},
+        pr,
+        now=NOW,
+        _revert_fn=lambda _pr: (None, "revert PR search limit; revert commit search limit"),
+        _fix_fn=lambda _repo, _start, _end: (
+            [
+                {
+                    "number": 43,
+                    "title": "fix PR42 regression",
+                    "body": "Fixes #42",
+                    "mergedAt": _iso(NOW - DAY),
+                }
+            ],
+            True,
+        ),
+    )
+    assert result["durability"] == ("abandoned" if bookkeeping else "broke_later"), result
+    if not bookkeeping:
+        assert "revert" in result["notes"], result
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_multi_acting_role_failure_is_not_excluded_in_either_arrival_order(brain, reverse):
+    role = "role:triage:gemini:multi"
+    feedback.record_role_run(role, "triage", "triage:2-items", "gemini")
+    for run in ("unjudgeable-acting", "failed-acting"):
+        feedback.record_run(
+            run, "o/r#42", "testgen", "gemini", mode="remote", influenced_by_role_run_ids=[role]
+        )
+    updates = [
+        ("unjudgeable-acting", "unjudgeable", feedback.UNJUDGEABLE_MERGE),
+        ("failed-acting", "broke_later", None),
+    ]
+    for run, durability, failure_class in reversed(updates) if reverse else updates:
+        feedback.record_outcome(
+            run,
+            merged=True,
+            adjudicated_verdict="PASS",
+            durability=durability,
+            failure_class=failure_class,
+        )
+    durability, failure_class, _notes = _row(role)
+    assert durability == "broke_later", _row(role)
+    assert failure_class is None, _row(role)
+    assert feedback._has_outcome_evidence(durability, "PASS", None, failure_class=failure_class)
+
+    # A repeated update to either acting run must not reintroduce inherited exclusion debt.
+    for run, _durability, _failure_class in updates:
+        feedback.record_outcome(run, notes="late downstream observation")
+        durability, failure_class, notes = _row(role)
+        assert durability == "broke_later", _row(role)
+        assert failure_class is None, _row(role)
+        assert notes.startswith("automatically influenced failed-acting"), notes
