@@ -121,6 +121,7 @@ def _reports(monkeypatch: pytest.MonkeyPatch, reports: list[dict]) -> None:
         return {
             "target": target,
             "eligible": True,
+            "next_step": "operator_inspect",
             "report": by_target[target],
             "acceptance_criteria": acceptance_criteria,
             "stage2_record_command": ["python3", "roles.py", "redirect", "--record-corpus"],
