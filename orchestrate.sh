@@ -19,6 +19,11 @@ set -euo pipefail
 # check replays this prologue; 3.2 and 5.2 returned "". The fallback keeps the replay evaluating and
 # changes nothing for a real run, where BASH_SOURCE[0] is this file.
 ORCH_REPO="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)}"
+# Canonicalize the parent while preserving the publication link itself. The
+# reader helper rewrites command paths under this logical root to its selected
+# generation. Relative paths and parent aliases must use that same spelling,
+# otherwise exec could reopen a newer shell after the helper releases its lock.
+ORCH_REPO="$(cd "$(dirname "$ORCH_REPO")" && pwd -P)/$(basename "$ORCH_REPO")"
 # ORCH points at the MODULES, which are not the checkout root any more: a checkout keeps them under
 # src/, while the exec mirror is FLAT (orch-sync-mirror.sh copies root-level .py only). Detected,
 # never assumed — the same rule paths.py applies in Python, for the same reason: a hardcoded path
