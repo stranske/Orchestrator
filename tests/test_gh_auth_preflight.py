@@ -307,15 +307,12 @@ with open(os.environ["STUB_CALLS"], "a") as f:
 if "--json" in sys.argv or "validate" in sys.argv:
     print("{}")
 """
-GH_CAPACITY_STUB = (
-    MODULE_STUB
-    + """if "--auth-preflight" in sys.argv:
+GH_CAPACITY_STUB = MODULE_STUB + """if "--auth-preflight" in sys.argv:
     print(os.environ["STUB_PREFLIGHT_LINE"])
     raise SystemExit(int(os.environ["STUB_PREFLIGHT_RC"]))
 if "--gate" in sys.argv:
     raise SystemExit(75)
 """
-)
 PREFLIGHT = {
     "ok": (0, "gh: authenticated as stub-user (core 4321/5000, graphql 4990/5000)"),
     "deferred": (75, RATE_LIMITED_LINE),

@@ -74,9 +74,7 @@ def test_research_usage_guard_cadence_branch_stamps_and_artifacts(tmp_path, guar
 
     fake_orch = tmp_path / "fake-orch"
     fake_orch.mkdir()
-    (fake_orch / "research_usage_guard.py").write_text(
-        textwrap.dedent(
-            """
+    (fake_orch / "research_usage_guard.py").write_text(textwrap.dedent("""
             import json
             import os
             import sys
@@ -87,14 +85,11 @@ def test_research_usage_guard_cadence_branch_stamps_and_artifacts(tmp_path, guar
             output.write_text(json.dumps({"health_status": "OK"}) + "\\n")
             print("fake deterministic usage guard")
             raise SystemExit(int(os.environ["FAKE_GUARD_EXIT"]))
-            """
-        ).lstrip()
-    )
+            """).lstrip())
     state_dir = tmp_path / "state"
     stamp_dir = tmp_path / "stamps"
     stamp_dir.mkdir()
-    harness = textwrap.dedent(
-        f"""
+    harness = textwrap.dedent(f"""
         set -euo pipefail
         ORCH={fake_orch!s}
         STAMP_DIR={stamp_dir!s}
@@ -103,8 +98,7 @@ def test_research_usage_guard_cadence_branch_stamps_and_artifacts(tmp_path, guar
         _mark_success() {{ touch "$STAMP_DIR/.last-$1"; rm -f "$STAMP_DIR/.fail-$1"; }}
         _mark_fail() {{ echo 1 > "$STAMP_DIR/.fail-$1"; }}
         {cadence_branch}
-        """
-    )
+        """)
     env = dict(os.environ, ORCH_STATE_DIR=str(state_dir), FAKE_GUARD_EXIT=str(guard_exit))
     completed = subprocess.run(["bash", "-c", harness], env=env, text=True, capture_output=True)
     assert completed.returncode == 0, completed.stderr
