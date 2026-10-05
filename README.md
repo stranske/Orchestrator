@@ -500,7 +500,10 @@ safety switch, not dead code.
   before any spend; `ORCH_REPO_PLAYBOOK=0` stops playbook injection into delegation prompts on the
   next dispatch without editing the registry; `ORCH_TICK_EVIDENCE_DISABLED=1` makes the tick's
   capability consult/verdict step inert from any caller (no consult, no ledger event, no state
-  file), which is the module-side twin of `ORCH_DISABLE_STEPS=tick-capability-evidence`.
+  file), which is the module-side twin of `ORCH_DISABLE_STEPS=tick-capability-evidence`;
+  `ORCH_CODEX_WORKTREE_GIT_GRANT_DISABLED=1` stops granting a committing codex run its linked
+  worktree's git dir (`adapters.codex_worktree_git_roots`), so its argv is exactly what it was
+  before the grant, and codex >= 0.158 refuses its `git commit` again.
 - **Daily compiler cadence** — the active tick atomically publishes completion-event JSONL plus
   pattern-miner status/inventory artifacts. Empty output is a healthy “no eligible history yet”
   result, not a reason to seed synthetic data.
