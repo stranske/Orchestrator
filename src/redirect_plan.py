@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import capabilities
+import claims
 
 ORCH_DIR = Path(__file__).resolve().parent
 PROMPT_DIR = Path.home() / ".codex" / "handoff" / "redirect-prompts"
@@ -450,6 +451,28 @@ def _command_result(
     }
 
 
+def _revalidate_lane(plan_obj: dict[str, Any], pid_checker) -> None:
+    """Refuse stale automatic reports before any prompt or lane mutation."""
+    guard = plan_obj.get("lane_guard")
+    if guard is None:
+        return  # Explicit operator plans retain their existing confirmation contract.
+    current = claims.holder(str(plan_obj.get("target") or ""))
+    identity_keys = ("target", "agent", "pid", "ts")
+    identity = {key: current.get(key) for key in identity_keys} if current else None
+    if identity != guard.get("claim_snapshot"):
+        raise ValueError("lane claim identity changed since the sweep report")
+    current_pid = current.get("pid") if current else guard.get("pid")
+    if current and current_pid != guard.get("pid"):
+        raise ValueError("lane claim PID differs from the sweep report")
+    if current_pid is not None:
+        try:
+            number = int(current_pid)
+        except (TypeError, ValueError):
+            raise ValueError("lane claim PID is unknown") from None
+        if number <= 0 or pid_checker(number):
+            raise ValueError("lane claim PID is live or unknown; automatic redirect refused")
+
+
 def apply_plan(
     plan_obj: dict[str, Any],
     *,
@@ -488,6 +511,7 @@ def apply_plan(
         rendered = "; ".join(shlex.join(cmd) for cmd in placeholder_cmds)
         raise ValueError(f"apply refused placeholder command(s): {rendered}")
 
+    _revalidate_lane(plan_obj, pid_checker)
     prompt_path = Path(str(plan_obj["prompt_file"])).expanduser()
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text(str(plan_obj["prompt_text"]))
@@ -510,6 +534,12 @@ def apply_plan(
     for step in mutating_steps:
         step_id = step.get("id") or ""
         for command in step.get("commands") or []:
+            # Claim release removes the expected snapshot; only delegation follows it.
+            if step_id in {"delegate-retry", "delegate-subtasks"}:
+                if plan_obj.get("lane_guard") is not None and claims.holder(target):
+                    raise ValueError("target was reclaimed before delegation")
+            else:
+                _revalidate_lane(plan_obj, pid_checker)
             if step_id == "stop-process":
                 try:
                     pid = int(command[1])
@@ -525,6 +555,12 @@ def apply_plan(
                     )
                     continue
 
+            # Recheck at the runner boundary, after command preparation/PID checks.
+            if step_id in {"delegate-retry", "delegate-subtasks"}:
+                if plan_obj.get("lane_guard") is not None and claims.holder(target):
+                    raise ValueError("target was reclaimed before delegation")
+            else:
+                _revalidate_lane(plan_obj, pid_checker)
             proc = runner(command, capture_output=True, text=True, check=False)
             item = _command_result(proc, step_id=step_id, command=command)
             result["executed"].append(item)

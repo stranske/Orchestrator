@@ -9,6 +9,15 @@ const { test } = require('node:test');
 const repo = path.resolve(__dirname, '..');
 const python = process.env.PYTHON || 'python3';
 
+test('shell sweep corpus recording defaults on and preserves the operator kill switch', () => {
+  // Include the existing shell regression in the Node suite: it replays only
+  // the sweep settings and checks an exported value in a child for all four cases.
+  const result = spawnSync('bash', [path.join(repo, 'tests/check_redirect_sweep_defaults.sh')], {
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+});
+
 // Exercise the real Python normalization and role boundary without dispatching,
 // writing a corpus, or touching the Brain. Only the backend picker is substituted.
 const routeBackend = `
