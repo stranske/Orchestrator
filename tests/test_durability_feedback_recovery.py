@@ -151,7 +151,7 @@ class DurabilityFeedbackRecoveryTests(unittest.TestCase):
             "body": "Fixes #42",
         }
         # Exercise the sweep's real cached repair matcher, rather than injecting its verdict.
-        with patch.object(durability_sweep, "_fetch_repo_fix_prs", return_value=([repair], False)):
+        with patch.object(durability_sweep, "_fetch_repo_fix_prs", return_value=([repair], True)):
             summary = self.sweep(
                 _state_fn=lambda _target: _pr(42, merged_at=NOW - 30 * DAY),
                 _revert_fn=lambda _pr: (None, EXHAUSTED_REVERT),
