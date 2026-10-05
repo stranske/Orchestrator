@@ -102,6 +102,20 @@ Determinism here is load-bearing: the claims/capacity/provision rails are what t
 delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An
 LLM verifier (a review panel) is a *supplement* to a gate, never a replacement for it.
 
+**The guarantee's two ownership reads answer three ways, and unknown refuses (2026-10-04).** Before
+`delegate_remote` labels a target, the tick asks `claims.holder` whether a local claim holds it and
+`dispatcher._target_labels` whether GitHub shows it paused or carrying an `agent:*` label. Each read
+can say "owned", "free", or "could not tell". Until this date "could not tell" came back as "free".
+A failed `gh` read returned an empty label set, and the rail labelled two PRs that had carried
+`agent:codex` for hours (Trend_Model_Project#5913, #5944), each in a tick that skipped a neighbour
+for the same label. A held claim with unreadable meta returned None, and claim meta was rewritten
+in place, so a read caught between truncation and write made an old live claim look stale. Now an
+unknown answer refuses the target, with the reason in the plan, in shadow and live ticks alike, and
+claim meta is replaced in one step (`claims._write_meta`). The tick headline prints
+`label reads A answered, U unanswered (refused)`. Nothing is cached, so the next tick's read clears
+a refusal as soon as GitHub answers. (No stage, component or surface moved; the diagram is
+unchanged.)
+
 The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
 dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
 worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
