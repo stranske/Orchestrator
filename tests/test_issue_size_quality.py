@@ -144,3 +144,14 @@ def test_weekly_caller_collects_and_persists_the_curve(tmp_path, monkeypatch, ca
     stored = json.loads((tmp_path / "capability-program/size-quality.json").read_text())
     assert stored["decision"] == "collect_two_weeks"
     assert len(stored["observations"]) == 1
+
+
+def test_missing_outcome_for_a_second_closing_pr_cannot_grade_the_issue():
+    node = issue(1, 2)
+    other = copy.deepcopy(node["closedByPullRequestsReferences"]["nodes"][0])
+    other["number"] = 9
+    node["closedByPullRequestsReferences"]["nodes"].append(other)
+    rep = quality.curve([node], {"o/r#8": [{"verifier_verdict": "PASS"}]}, {}, now=NOW)
+    assert rep["missing_outcomes"] == ["o/r#1"]
+    assert rep["bands"][1]["joined"] == 0
+    assert rep["bands"][1]["pass"]["rate"] is None

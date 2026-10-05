@@ -158,7 +158,7 @@ def curve(issues: list[dict], outcomes_by_pr: dict, facts: dict, *, now: int, er
                 if outcomes._merged_by_close(p, closed) is True
             ]
         rows = [row for pr in refs for row in outcomes_by_pr.get(pr, [])]
-        if not rows:
+        if not rows or any(not outcomes_by_pr.get(pr) for pr in refs):
             missing.append(ref)
             continue
         cell["joined"] += 1
