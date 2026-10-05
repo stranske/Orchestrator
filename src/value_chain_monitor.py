@@ -87,9 +87,9 @@ def situation_count(cap_id: str, inputs: dict[str, Any]) -> int | None:
         measured = [
             p["precondition_met"] for p in probes if isinstance(p.get("precondition_met"), bool)
         ]
-        # A supplied empty population is measured zero; probes with no measured
-        # result cannot establish that the situation never occurred.
-        if probes and not measured:
+        # A supplied empty population is measured zero. Any unknown member
+        # makes the population incomplete, even alongside measured results.
+        if len(measured) != len(probes):
             return None
         return sum(measured)
     return inputs.get("cadence_inputs", {}).get(cap_id)
@@ -269,7 +269,6 @@ def report(
                 e["metadata"]
                 for e in events
                 if e.get("metadata", {}).get("source") == "capability_advisor"
-                and e["metadata"].get("precondition_met") is not None
             ]
             if probes:
                 row_inputs["precondition_probes"] = {
@@ -350,6 +349,20 @@ def format_lines(section: dict) -> list[str]:
 
 
 def recurrence_fixture() -> bool:
+    assert (
+        situation_count(
+            "generic-probe",
+            {
+                "precondition_probes": {
+                    "generic-probe": [
+                        {"precondition_met": False},
+                        {"precondition_met": None},
+                    ]
+                }
+            },
+        )
+        is None
+    )
     row = {
         "situation_count": None,
         "offered": 0,
