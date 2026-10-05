@@ -103,8 +103,10 @@ def fetch_evidence(row: dict) -> dict:
     finding = next(
         c
         for c in reversed(comments)
-        if verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}})
-        == decision
+        if (
+            verifier_evidence.decision_from_pr(repo, {**pr, "comments": {"nodes": [c]}})
+            == decision
+        )
     )
     rollup = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
     if not rollup:
