@@ -416,7 +416,7 @@ def test_conclusive_failure_survives_exhausted_revert_search(bookkeeping):
         pr,
         now=NOW,
         _revert_fn=lambda _pr: (None, "revert PR search limit; revert commit search limit"),
-        _fix_fn=lambda _repo: (
+        _fix_fn=lambda _repo, _start, _end: (
             [
                 {
                     "number": 43,
@@ -425,7 +425,7 @@ def test_conclusive_failure_survives_exhausted_revert_search(bookkeeping):
                     "mergedAt": _iso(NOW - DAY),
                 }
             ],
-            False,
+            True,
         ),
     )
     assert result["durability"] == ("abandoned" if bookkeeping else "broke_later"), result
