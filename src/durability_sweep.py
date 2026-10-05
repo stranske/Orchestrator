@@ -567,6 +567,8 @@ def read_fix_window(repo: str, since_ts: int, *, now: int, _fetch=None) -> dict:
         if arr is None:
             entry["error"] = "fix-PR search unavailable"
             break
+        # A returned positive linked repair remains evidence even if pagination is incomplete.
+        entry["items"].update({item.get("number"): item for item in arr if isinstance(item, dict)})
         if not complete:
             stop = now if end is None else end
             if stop - start <= FIX_SEARCH_MIN_SPLIT_S:
@@ -575,7 +577,6 @@ def read_fix_window(repo: str, since_ts: int, *, now: int, _fetch=None) -> dict:
             middle = (start + stop) // 2
             windows += [(start, middle), (middle, end)]  # the newer half is read first
             continue
-        entry["items"].update({item.get("number"): item for item in arr if isinstance(item, dict)})
         entry["covered_from"] = start
     return entry
 
@@ -624,12 +625,6 @@ def _fix_followup_status(
         entry = read_fix_window(repo, start, now=now, _fetch=_fix_fn)
         if fix_cache is not None:
             fix_cache[repo] = entry
-    if not _fix_covers(entry, merged_ts):
-        reached = entry["covered_from"]
-        return None, (
-            f"fix-PR search did not reach this merge ({entry['error'] or 'window starts later'}; "
-            f"read whole back to {_search_ts(reached) if reached is not None else 'nothing'})"
-        )
     for item in sorted(entry["items"].values(), key=lambda item: str(item.get("mergedAt") or "")):
         number = item.get("number")
         if number == pr_number:
@@ -643,6 +638,12 @@ def _fix_followup_status(
         haystack = f"{title}\n{item.get('body') or ''}"
         if _contains_ref(haystack, pr_number):
             return True, f"later fix PR #{number} names this change"
+    if not _fix_covers(entry, merged_ts):
+        reached = entry["covered_from"]
+        return None, (
+            f"fix-PR search did not reach this merge ({entry['error'] or 'window starts later'}; "
+            f"read whole back to {_search_ts(reached) if reached is not None else 'nothing'})"
+        )
     return False, (
         "no later fix PR names this change "
         f"(read every fix PR merged since {_search_ts(entry['covered_from'])})"

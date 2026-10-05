@@ -151,7 +151,7 @@ class DurabilityFeedbackRecoveryTests(unittest.TestCase):
             "body": "Fixes #42",
         }
         # Exercise the sweep's real cached repair matcher, rather than injecting its verdict.
-        with patch.object(durability_sweep, "_fetch_repo_fix_prs", return_value=([repair], True)):
+        with patch.object(durability_sweep, "_fetch_repo_fix_prs", return_value=([repair], False)):
             summary = self.sweep(
                 _state_fn=lambda _target: _pr(42, merged_at=NOW - 30 * DAY),
                 _revert_fn=lambda _pr: (None, EXHAUSTED_REVERT),
@@ -165,6 +165,39 @@ class DurabilityFeedbackRecoveryTests(unittest.TestCase):
         self.assertIn(EXHAUSTED_REVERT, notes)
         self.assert_learning(observations=1)
         self.assertEqual(self.sweep(_state_fn=lambda _target: None)["checked"], 0)
+
+    def test_ci_only_pending_outcome_cannot_displace_durable_role_evidence(self):
+        for order in (("durable", "ci-only"), ("ci-only", "durable")):
+            with self.subTest(order=order):
+                role = "role:triage:gemini:" + "-".join(order)
+                feedback.record_role_run(role, "triage", "triage:two-items", "gemini")
+                for kind in order:
+                    run = role + ":" + kind
+                    feedback.record_run(
+                        run,
+                        "o/r#42",
+                        "implement",
+                        "codex",
+                        mode="remote",
+                        influenced_by_role_run_ids=[role],
+                    )
+                    feedback.record_outcome(
+                        run,
+                        merged=kind == "durable",
+                        durability="durable" if kind == "durable" else "pending",
+                        ci_status="SUCCESS" if kind == "durable" else "FAILURE",
+                    )
+                self.assertEqual(self.row(role)[0], "durable")
+                for learner in (feedback.relearn, feedback.relearn_quality):
+                    version = learner({"role:triage": {"gemini": 0.5}}, window_days=90)
+                    with feedback._conn() as conn:
+                        posterior, observations = conn.execute(
+                            "SELECT posterior,n_obs FROM route_weights WHERE version=? "
+                            "AND task_type=? AND agent=?",
+                            (version, "role:triage", "gemini"),
+                        ).fetchone()
+                    self.assertGreater(observations, 0)
+                    self.assertGreater(posterior, 0.5)
 
     def assert_role_failure_survives(self, order):
         role = "role:triage:gemini:multi"

@@ -2917,7 +2917,7 @@ def _role_outcome_aggregate(c: sqlite3.Connection, role_run_id: str):
         vv, av, _merged, ci, durability, _notes, excluded, run_id = row
         if excluded in LEARNING_EXCLUDED_FAILURE_CLASSES:
             tier = 0
-        elif durability in failures or str(av or vv or ci or "").upper() in {
+        elif durability in failures or str(av or vv or "").upper() in {
             "FAIL",
             "FAILURE",
             "NON_PASS",
