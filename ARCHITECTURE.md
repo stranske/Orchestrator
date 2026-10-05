@@ -141,6 +141,15 @@ worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
 in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
+The dispatcher's agent prelude moves `XDG_CONFIG_HOME` into each agent's runtime, and gh honours
+it, so until 2026-10-04 every dispatched agent's gh read an empty config and stopped at "gh auth
+login" before asking the keyring for a token. The prelude now pins `GH_CONFIG_DIR` to the directory
+the dispatcher's own gh reads, by gh's own lookup order (`dispatcher.gh_config_dir`). Relative
+paths are anchored to the dispatcher's cwd before the child changes directory. The agent therefore
+uses the same config; authentication also requires access to that config's credential store. The pin is a path: no token enters the agent's argv or
+environment, and every other tool keeps the redirect. No stage, component or surface moved, so the
+diagram is unchanged.
+
 **The detached wrappers name the interpreter of their own python steps (2026-10-05).** The dispatch
 and experiment wrappers are `bash -lc` strings that end with python steps: the claim release and the
 completion record. Those steps were spelled `python3`, so the login profile picked the interpreter,
