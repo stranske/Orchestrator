@@ -118,24 +118,17 @@ def _claimed_ns(result: dict) -> int:
     return int(ns)
 
 
-def _agy_log_in(argv: list[str]) -> str:
-    tokens = shlex.split(argv[-1])
-    index = len(tokens) - 1 - tokens[::-1].index("--log-file")
-    return tokens[index + 1]
-
-
 @pytest.mark.parametrize("agent", ["codex", "cursor", "gemini"])
 def test_two_offloads_in_one_microsecond_get_a_log_and_a_run_id_each(monkeypatch, stores, agent):
     """The measured interleaving: both runs' headers are on disk before either prints anything."""
     workspaces = [_workspace(stores, "audit-a"), _workspace(stores, "audit-b")]
     both_started = threading.Barrier(2, timeout=20)
-    agy_logs: dict[str, str] = {}
+    commands: dict[str, str] = {}
 
     def run(argv, *, cwd, **kwargs):
         both_started.wait()
         name = Path(cwd).name
-        if agent == "gemini":
-            agy_logs[name] = _agy_log_in(argv)
+        commands[name] = argv[-1]  # the shell command each run actually executed
         return subprocess.CompletedProcess(argv, 0, f"report from {name}\n", "")
 
     monkeypatch.setattr(dispatcher.subprocess, "run", run)
@@ -171,11 +164,13 @@ def test_two_offloads_in_one_microsecond_get_a_log_and_a_run_id_each(monkeypatch
         assert {row["log_file"] for row in rows} == {result["log"]}, rows
     assert sorted(stores["brain_runs"]) == sorted([a["run_id"], b["run_id"]])
     if agent == "gemini":
-        # agy's per-run log is derived from the dispatch log, so it is as private as that log.
-        assert agy_logs == {
-            name: str(adapters.agy_log_for(result["log"])) for name, result in results.items()
-        }, agy_logs
-        assert agy_logs["audit-a"] != agy_logs["audit-b"], agy_logs
+        # agy's per-run log is derived from the dispatch log, so it is as private as that log. Read
+        # from the command each run executed, which is where an argv rewrite has to land.
+        own = {name: adapters.agy_log_for(result["log"]) for name, result in results.items()}
+        assert own["audit-a"] != own["audit-b"], own
+        for name, command in commands.items():
+            assert f"--log-file {shlex.quote(str(own[name]))}" in command, (name, command)
+            assert "agy-default.log" not in command, (name, command)
 
 
 def test_a_name_another_process_holds_is_never_written(monkeypatch, stores):
