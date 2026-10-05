@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
+import random
 import sqlite3
 import subprocess
 import sys
@@ -20,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import capabilities
+import exploration_collection
 import feedback
 import provision
 import router
@@ -28,6 +31,7 @@ SCHEMA = "orchestrator.route-weights/v1"
 DEFAULT_MIN_OBSERVATIONS = 20
 EXPORT_BRANCH = "exports/route-weights"
 EXPORT_PATH = Path("config/route-weights.json")
+WEEK_SECONDS = 7 * 86400
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
 # explicit cross-repository consumer-contract change, not an accidental export.
@@ -65,7 +69,7 @@ def _read_rows(db_path: Path) -> tuple[int, list[sqlite3.Row]]:
         if version == 0:
             return 0, []
         rows = connection.execute(
-            "SELECT task_type, agent, posterior, n_obs, success_rate "
+            "SELECT task_type, agent, posterior, score, n_obs, success_rate "
             "FROM route_weights WHERE version=?",
             (version,),
         ).fetchall()
@@ -88,8 +92,69 @@ def _ranking(rows: list[sqlite3.Row], minimum: int) -> list[dict[str, Any]]:
     return sorted(ranking, key=lambda row: (-row["posterior"], -row["success_rate"], row["agent"]))
 
 
-def build_document(db_path: Path, minimum: int = DEFAULT_MIN_OBSERVATIONS) -> dict[str, Any]:
-    """Build a deterministic public snapshot from only the latest weight version."""
+def _exploration_block(
+    version: int,
+    by_task: dict[str, list[sqlite3.Row]],
+    task_types: dict[str, dict[str, Any]],
+    timestamp: int,
+) -> dict[str, Any]:
+    week = timestamp // WEEK_SECONDS
+    # The public export balances arms by week, without consulting the local
+    # supervised-window deficits (which could change the arm within a week).
+    mode = exploration_collection.choose_mode({}, now=timestamp)
+    eligible = router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS - router.BACKUP_AGENTS
+    capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
+    challengers: dict[str, str | None] = {}
+    for task_type in CONSUMER_TASK_TYPES:
+        ranking = task_types[task_type]["ranking"]
+        ranks = {row["agent"]: index for index, row in enumerate(ranking)}
+        # Exploitation must agree with the consumer's thresholded ranking.
+        # Low-observation rows still inform challenger selection, so exploration
+        # can collect evidence from seats absent from the public ranking.
+        rows = sorted(
+            (row for row in by_task[task_type] if row["agent"] in eligible),
+            key=lambda row: (
+                ranks.get(row["agent"], len(ranks)),
+                -float(row["posterior"]),
+                -float(row["success_rate"]),
+                row["agent"],
+            ),
+        )
+        learned = {
+            str(row["agent"]): {
+                "rank": index,
+                "posterior": row["posterior"],
+                "score": row["score"],
+                "n_obs": row["n_obs"],
+            }
+            for index, row in enumerate(rows)
+        }
+        pick = router.select_agent(
+            task_type,
+            capacity,
+            only=eligible,
+            learned=learned or None,
+            exploration_rate=1.0,
+            exploration_mode=mode,
+            rng=random.Random(f"route-exploration/v1:{week}:{version}:{mode}:{task_type}"),
+            simulate=True,
+            profile_transport="remote",
+        )
+        # Never describe the exploitation winner as a challenger when the
+        # router cannot find another eligible seat in the same policy tier.
+        challengers[task_type] = pick["agent"] if pick and pick["exploration"] else None
+    return {
+        "mode": mode,
+        "rate": router.EXPLORATION_RATE_DEFAULT,
+        "week_start": week * WEEK_SECONDS,
+        "challengers": challengers,
+    }
+
+
+def build_document(
+    db_path: Path, minimum: int = DEFAULT_MIN_OBSERVATIONS, *, now: int | None = None
+) -> dict[str, Any]:
+    """Build a snapshot with repeatable samples for this week and weight version."""
     if minimum < 1:
         raise ValueError("min_observations must be at least 1")
     missing = sorted(set(CONSUMER_TASK_TYPES) - set(router.ROUTE_TABLE))
@@ -122,14 +187,27 @@ def build_document(db_path: Path, minimum: int = DEFAULT_MIN_OBSERVATIONS) -> di
         if reserve_ranking:
             reserve[task_type] = reserve_ranking
 
-    return {
+    generated_at = (
+        _now()
+        if now is None
+        else dt.datetime.fromtimestamp(now, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    )
+    timestamp = int(dt.datetime.fromisoformat(generated_at.replace("Z", "+00:00")).timestamp())
+    document: dict[str, Any] = {
         "schema": SCHEMA,
-        "generated_at": _now(),
+        "generated_at": generated_at,
         "source_version": version,
         "min_observations": minimum,
         "task_types": task_types,
         "reserve": reserve,
+        "exploration": _exploration_block(version, by_task, task_types, timestamp),
     }
+    # Bind the tag to the exported policy, including rankings and the sampled
+    # challengers. A timestamp-only refresh retains the same join identity.
+    semantic = {key: value for key, value in document.items() if key != "generated_at"}
+    digest = hashlib.sha256(_canonical_bytes(semantic)).hexdigest()
+    document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
+    return document
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
