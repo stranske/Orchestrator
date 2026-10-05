@@ -28,7 +28,9 @@ def test_research_program_surface_is_declared_and_binds_role_prompt(tmp_path):
         advisor.CONSULT_SITES["research-program"]["caller"]
         == "~/.codex/automations/research-program/driver.py"
     )
-    for surface_index, surface in enumerate(("research-program", "repo-audit:phase-4")):
+    for surface_index, surface in enumerate(
+        ("research-program", "repo-audit:phase-4"),
+    ):
         # The offer must explain this caller's batch, even when task classification misses.
         binding_reason = advisor.SURFACE_BINDINGS[surface]["role-prompt"]
         assert "batch" in binding_reason.lower()
