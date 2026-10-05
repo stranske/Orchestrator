@@ -1540,6 +1540,8 @@ def followup(
     # The gate's two numbers, reported together: how many promotions were waiting in `evaluated`
     # when this run looked, and for how many of them a launch was still available. The second one
     # is what nobody could see while the stamp below was being re-touched every hour.
+    # `stamp_age_s` is measured once at the start of this followup run. A genuine finish below
+    # refreshes it to zero in the returned summary so the line reflects the hold just taken.
     ship_gate: ShipGateSummary = {
         "stamp_age_s": None if stamp_age_s is None else int(stamp_age_s),
         "hold_s": SHIP_GATE_HOLD_S,
@@ -1552,11 +1554,13 @@ def followup(
     }
     out["ship_gate"] = ship_gate
 
-    def persist_terminal_checkpoint(edir: Path, state: dict, *, phase_before: str | None) -> None:
+    def persist_terminal_checkpoint(
+        edir: Path, state: dict, *, phase_before: str | None
+    ) -> str | None:
         nonlocal launch_available
         phase = state.get("delivery_phase")
         if phase not in {"candidate_ready", "discarded", "durable"}:
-            return
+            return None
         # A FINISH HOLDS THE GATE ONCE; A FINISH THAT ALREADY HELD IT MAY NOT (2026-10-04). This
         # used to run for every promotion that was ALREADY terminal, on every tick, and the
         # `gate_stamp.touch()` below is the one-a-day hold on launches. With 256 finished
@@ -1565,8 +1569,6 @@ def followup(
         # unlaunched after their 14-day TTL, the two launched before that made no commit, and
         # nothing printed a launchable count (the JSON went to /dev/null and the ledger heartbeat
         # fires only from the CLI). Only a promotion that reached this phase during THIS run holds.
-        if phase == phase_before and (edir / "ship-gate.json").exists():
-            return
         verdict = (
             "use" if phase == "candidate_ready" else "durable" if phase == "durable" else "discard"
         )
@@ -1579,10 +1581,24 @@ def followup(
             "reason": ((state.get("phase_history") or [{}])[-1]).get("reason"),
             "promotion_state": str(synthesis_promotion.state_path(edir)),
         }
-        (edir / "ship-gate.json").write_text(json.dumps(payload, indent=2) + "\n")
+        if phase == phase_before:
+            if (edir / "ship-gate.json").exists():
+                return None
+            # Legacy promotions may lack a local checkpoint after an earlier finish. Repair the
+            # file without re-holding launches or counting another finish.
+            try:
+                synthesis_promotion._atomic_json(edir / "ship-gate.json", payload)
+            except OSError as exc:
+                # Local legacy evidence repair is independent of synthesis safety.
+                # Report the failed repair without manufacturing inflight work or a hold.
+                return str(exc)[:256]
+            return None
+        synthesis_promotion._atomic_json(edir / "ship-gate.json", payload)
         gate_stamp.touch()
         launch_available = False
         ship_gate["finished"] += 1
+        ship_gate["stamp_age_s"] = 0
+        return None
 
     # Read every promotion state ONCE before deciding anything. `promotion_inflight` used to be
     # discovered in visit order, so an evaluated candidate that sorted before the running one
@@ -1632,7 +1648,7 @@ def followup(
                 mirror_fn=promotion_mirror_fn,
             )
             state = promotion["state"]
-            persist_terminal_checkpoint(edir, state, phase_before=phase_before)
+            checkpoint_error = persist_terminal_checkpoint(edir, state, phase_before=phase_before)
             actions = promotion.get("actions") or []
             if "synthesis_launched" in actions:
                 ship_gate["launched"] += 1
@@ -1645,6 +1661,7 @@ def followup(
                 {
                     "exp_id": edir.name,
                     "phase_before": phase_before,
+                    **({"checkpoint_error": checkpoint_error} if checkpoint_error else {}),
                     "delivery_phase": phase_after,
                     "canonical_state": state.get("canonical_state"),
                     "actions": actions,
@@ -2690,6 +2707,27 @@ def _selftest_checks():
         assert repeated["candidate"]["candidate_id"] == candidate_id
         assert sum(row.get("to") == "candidate_ready" for row in repeated["phase_history"]) == 1
         assert not fu4["processed"], fu4
+        # Legacy checkpoint evidence repair must not masquerade as inflight synthesis.
+        from unittest.mock import patch
+
+        (ftmp / first / "ship-gate.json").unlink()
+        stamp_before = (ftmp / ".last-ship-gate").stat().st_mtime
+        atomic_json = synthesis_promotion._atomic_json
+
+        def fail_legacy_checkpoint(path, payload):
+            if path.name == "ship-gate.json":
+                raise OSError("selftest legacy checkpoint unavailable")
+            return atomic_json(path, payload)
+
+        with patch.object(synthesis_promotion, "_atomic_json", fail_legacy_checkpoint):
+            repaired = followup(max_experiments=0)
+        assert repaired["ship_gate"]["finished"] == 0, repaired
+        assert repaired["ship_gate"]["inflight"] is False, repaired
+        assert (ftmp / ".last-ship-gate").stat().st_mtime == stamp_before
+        assert any(
+            row.get("checkpoint_error") == "selftest legacy checkpoint unavailable"
+            for row in repaired["promotions"]
+        ), repaired
         assert any(
             exp_id == first and lifecycle == "evaluated"
             for exp_id, lifecycle, _reason in calls["subject_lifecycle"]
