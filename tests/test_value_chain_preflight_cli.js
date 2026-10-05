@@ -77,7 +77,7 @@ test('value-chain preflight CLI accepts the stated task and all nine admission p
   assertReady(w.preflight(JSON.stringify(w.spec)));
   // Preflight is a design check; it must not register a capability or create state.
   w.assertReadOnly();
-  assert.deepEqual(fs.readdirSync(w.root), ['runtime']);
+  assert.deepEqual(fs.readdirSync(w.root).sort(), ['runtime']);
 });
 
 test('value-chain preflight CLI accepts a spec file without modifying its bytes', (t) => {
@@ -91,7 +91,7 @@ test('value-chain preflight CLI accepts a spec file without modifying its bytes'
   assert.deepEqual(fromFile, inline);
   assert.equal(fs.readFileSync(file, 'utf8'), bytes);
   w.assertReadOnly();
-  assert.deepEqual(fs.readdirSync(w.root), ['runtime', 'spec with spaces.json']);
+  assert.deepEqual(fs.readdirSync(w.root).sort(), ['runtime', 'spec with spaces.json']);
 });
 
 test('value-chain preflight CLI names a missing dedup requirement', (t) => {
@@ -102,5 +102,5 @@ test('value-chain preflight CLI names a missing dedup requirement', (t) => {
   assert.equal(result.checks.dedup_recorded.ok, false);
   assert.equal(result.checks.kill_switch.ok, true);
   w.assertReadOnly();
-  assert.deepEqual(fs.readdirSync(w.root), ['runtime']);
+  assert.deepEqual(fs.readdirSync(w.root).sort(), ['runtime']);
 });
