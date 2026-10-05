@@ -5,11 +5,13 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import time
 from contextlib import ExitStack, contextmanager, redirect_stdout
 from unittest.mock import patch
 
 import keepalive_shadow
+import keepalive_supervisor
 import redirect_apply as ra
 import redirect_sweep
 
@@ -60,7 +62,7 @@ def _write(path, data):
 
 
 def test_an_escalated_pr_is_not_live_and_is_eligible(tmp_path):
-    with _stores(tmp_path):
+    with _stores(tmp_path) as stores:
         for labels, payload, details in [
             (["needs-human"], {}, ["needs-human"]),
             ([" Agent:Needs-Attention "], {}, ["agent:needs-attention"]),
@@ -80,14 +82,34 @@ def test_an_escalated_pr_is_not_live_and_is_eligible(tmp_path):
                 ["keepalive-state attention.disposition=challenge-due"],
             ),
         ]:
-            signals = keepalive_shadow.normalize_signals(
-                "o/r#1",
-                {**payload, "last_files_changed": 2, "rounds_without_task_completion": 2},
-                pr_state="open",
-                labels=[*labels, "agents:keepalive"],
+            state_payload = {
+                **payload,
+                "last_files_changed": 2,
+                "rounds_without_task_completion": 2,
+            }
+            responses = iter(
+                [
+                    json.dumps(
+                        {
+                            "state": "OPEN",
+                            "labels": [{"name": label} for label in [*labels, "agents:keepalive"]],
+                        }
+                    ),
+                    '<!-- keepalive-state:v1 {"attention":{"disposition":"automation-retry"}} -->'
+                    + "\n<!-- keepalive-state:v1 "
+                    + json.dumps(state_payload)
+                    + " -->",
+                ]
             )
+
+            def read_pr(command, **_kwargs):
+                return subprocess.CompletedProcess(command, 0, stdout=next(responses), stderr="")
+
+            signals = keepalive_shadow.gather_signals("o/r#1", runner=read_pr)
             assert signals["outcome"] == "needs_human"
-            report = keepalive_shadow.synthesize_report(signals)
+            assert signals["has_marker"]
+            plan = keepalive_supervisor.plan_for_signals(signals)
+            report = plan["report"]
             assert report["state"] == "escalated"
             evidence = sorted(h["detail"] for h in report["hints"] if h["kind"] == "escalation")
             assert evidence == sorted(details)
@@ -99,6 +121,25 @@ def test_an_escalated_pr_is_not_live_and_is_eligible(tmp_path):
                 applies_today=0,
             )
             assert screened["passes_screen"], screened
+            if labels:
+                # Persist the real supervisor output, then use apply's public candidate reader.
+                assert plan["eligible"], plan
+                _write(stores["plan"], {"generated_at": stores["now"], "plans": [plan]})
+                candidates = ra.screen_candidates(
+                    report_dir=stores["reports"],
+                    plan_path=stores["plan"],
+                    sweep_path=stores["sweep"],
+                    corpus_path=stores["corpus"],
+                    now=stores["now"],
+                )
+                assert candidates["candidate_counts"] == {
+                    "supervisor": 1,
+                    "sweep": 0,
+                    "eligible": 1,
+                }
+                assert candidates["candidates"] == [
+                    {"target": "o/r#1", "passes_screen": True, "blocks": []}
+                ]
             # An escalation cannot override a process that is demonstrably still alive.
             assert ra.LIVE_PID_BLOCK in ra.lane_refusals(
                 {**report, "pid": 123}, pid_checker=lambda _pid: True
