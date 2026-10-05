@@ -1414,6 +1414,7 @@ def _selftest_prescreen(tmp: Path) -> None:
     run: dict[str, Any] = {
         "report_dir": report_dir,
         "plan_path": plan_path,
+        "sweep_path": tmp / "absent-sweep.json",
         "corpus_path": corpus,
         "env": {BOOTSTRAP_FLAG: "1"},
         "role_runner": judge("inspect"),
