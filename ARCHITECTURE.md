@@ -116,6 +116,14 @@ claim meta is replaced in one step (`claims._write_meta`). The tick headline pri
 a refusal as soon as GitHub answers. (No stage, component or surface moved; the diagram is
 unchanged.)
 
+The adapter also decides each codex run's writable boundary. A run whose job is to commit (a
+dispatch from `plan_dispatch`, or an experiment arm) gets `--add-dir` for exactly its linked
+worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
+(`adapters.codex_worktree_git_roots`). Since codex 0.158 that git dir is read-only under
+`workspace-write` even inside a broader writable root, and the 2026-10-04 batch could not commit
+in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
+and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
