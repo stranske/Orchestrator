@@ -105,6 +105,16 @@ def _read_meta(path: Path) -> dict | None:
         return None
 
 
+def _write_meta(path: Path, meta: dict) -> None:
+    """Replace a claim's meta in one step, so a reader finds the old record or the new one.
+
+    Writing in place truncates first, and `_is_held` ages an unreadable meta by the dir's mtime, so a
+    read in between called an OLD live claim stale: free to the tick, reapable by `reap_stale`."""
+    tmp = path / f".meta.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(meta))
+    os.replace(tmp, path / "meta")
+
+
 def _is_held(path: Path, ttl: int, now: float) -> bool:
     """Is this claim dir still held?
 
@@ -145,9 +155,7 @@ def claim(target: str, agent: str, *, ttl: int = CLAIM_TTL_DEFAULT, pid: int | N
     pid = os.getpid() if pid is None else pid
 
     def _stamp() -> None:
-        (path / "meta").write_text(
-            json.dumps({"target": target, "agent": agent, "pid": pid, "ts": time.time()})
-        )
+        _write_meta(path, {"target": target, "agent": agent, "pid": pid, "ts": time.time()})
 
     try:
         path.mkdir()  # atomic on POSIX — exactly one concurrent caller wins
@@ -262,16 +270,29 @@ def update_metadata(
     if refresh_ts:
         meta["ts"] = time.time()
     meta["updated_ts"] = time.time()
-    (path / "meta").write_text(json.dumps(meta))
+    _write_meta(path, meta)
     return True
 
 
+# The `meta` that `holder()` reports for a claim that is HELD but whose meta cannot be read: a dir
+# mkdir'd and not yet stamped (or crashed before `_stamp`), or a meta file that does not parse.
+UNREADABLE_META = "unreadable"
+
+
 def holder(target: str, *, ttl: int = CLAIM_TTL_DEFAULT) -> dict | None:
-    """Live holder meta for `target`, or None if free/stale."""
+    """Live holder meta for `target`, or None if free/stale.
+
+    A claim `_is_held` calls held is never None here, even when its meta cannot be read: it answers
+    `{"target": target, "agent": None, "meta": UNREADABLE_META}`, a holder that is unknown. Until
+    2026-10-04 it answered None, the word for "free", so the tick's check before a remote delegation
+    called a held claim free in exactly the window the no-meta TOCTOU guard above exists for."""
     path = _claims_dir() / _slug(target)
     if not path.exists() or not _is_held(path, ttl, time.time()):
         return None
-    return _read_meta(path)
+    meta = _read_meta(path)
+    if meta is None:
+        return {"target": target, "agent": None, "meta": UNREADABLE_META}
+    return meta
 
 
 def active_claims(*, ttl: int = CLAIM_TTL_DEFAULT, include_meta: bool = False) -> dict:
@@ -356,6 +377,7 @@ def _selftest() -> None:
             update_metadata(T1, "codex", lane="opener", task_type="implement", pid=os.getpid())
             is True
         )
+        assert not list((_claims_dir() / _slug(T1)).glob(".meta.*")), "no tmp outlives a write"
         meta_claims = active_claims(include_meta=True)
         assert (
             meta_claims[T1]["lane"] == "opener" and meta_claims[T1]["task_type"] == "implement"
@@ -465,6 +487,19 @@ def _selftest() -> None:
         assert (
             _is_held(nm, CLAIM_TTL_DEFAULT, time.time()) is True
         ), "unstamped fresh dir must be held"
+        # ...and the READER callers use must say so too: None is "free", so a held claim it cannot
+        # read answers an unknown holder (the predicate above held while this reader said free).
+        assert holder("nometa/T") == {
+            "target": "nometa/T",
+            "agent": None,
+            "meta": UNREADABLE_META,
+        }, holder("nometa/T")
+        (nm / "meta").write_text('{"target": "nometa/T", "ag')  # a meta that does not parse
+        assert holder("nometa/T") is not None, "a torn meta on a fresh claim is still held"
+        old = time.time() - CLAIM_TTL_DEFAULT - 5
+        os.utime(nm, (old, old))
+        assert holder("nometa/T") is None, "past the TTL an unreadable claim is stale, as before"
+        shutil.rmtree(nm)
 
         _concurrent_tests()
         print(

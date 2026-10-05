@@ -102,6 +102,20 @@ Determinism here is load-bearing: the claims/capacity/provision rails are what t
 delegations" guarantee rests on, and the gates guard terminal merges and must stay auditable. An
 LLM verifier (a review panel) is a *supplement* to a gate, never a replacement for it.
 
+**The guarantee's two ownership reads answer three ways, and unknown refuses (2026-10-04).** Before
+`delegate_remote` labels a target, the tick asks `claims.holder` whether a local claim holds it and
+`dispatcher._target_labels` whether GitHub shows it paused or carrying an `agent:*` label. Each read
+can say "owned", "free", or "could not tell". Until this date "could not tell" came back as "free".
+A failed `gh` read returned an empty label set, and the rail labelled two PRs that had carried
+`agent:codex` for hours (Trend_Model_Project#5913, #5944), each in a tick that skipped a neighbour
+for the same label. A held claim with unreadable meta returned None, and claim meta was rewritten
+in place, so a read caught between truncation and write made an old live claim look stale. Now an
+unknown answer refuses the target, with the reason in the plan, in shadow and live ticks alike, and
+claim meta is replaced in one step (`claims._write_meta`). The tick headline prints
+`label reads A answered, U unanswered (refused)`. Nothing is cached, so the next tick's read clears
+a refusal as soon as GitHub answers. (No stage, component or surface moved; the diagram is
+unchanged.)
+
 **The tick watchdog is infrastructure around the loop, not a stage of it** (`tick_watchdog.py`,
 2026-10-02). launchd starts no tick while one runs, so a tick that never ends is a gate with no
 drain, and everything that could report it runs inside the tick: for 5d20h from 2026-09-26 the
@@ -153,7 +167,8 @@ a PR closed, so it records the run as over with no verdict rather than as a fail
 with a PR only when the PR is its own (the labelled PR, or `{agent}/issue-N`), settled after the label, and
 keepalive's own runner records (`runner-reservation`/`runner-completion`/`runner-dispatch` PR markers from
 trusted writers) show a completed round of the labelled agent on it since the label; otherwise the settled
-run is over with no verdict. Until then ingest credited the first PR on any agent's or lane's branch, and
+run is over with no verdict, and so is a delegation whose issue closed with no PR of its own and no closing PR,
+since its agent never had a PR to run on (a local run, which did run, keeps that case's FAIL). Until then ingest credited the first PR on any agent's or lane's branch, and
 none of the 9 merged delegation PASS rows was the labelled agent's work (no stage, component or surface
 moved, so the loop diagram is unchanged). The merge guard's own outcome patch keeps to that rule: it
 credits the latest remote run on the merged PR only if that run is not a delegation (a keepalive run is
@@ -173,7 +188,7 @@ a merge that read did not reach is never `durable`: it waits under the `fix_sear
 `unjudgeable` with that class seven days after the first run that missed it. Until then the read was the 200
 best matches of a repo's whole history, so in the two repos with more fix PRs than that a merge's own weeks were
 read by chance, and 436 rows were judged durable on an unread window; each run now prints how many merges the
-read covered and how many it did not (again no stage moved; the diagram is unchanged). This keeps role learning separate from normal
+read covered and how many it did not (again no stage moved; the diagram is unchanged). The rows already recorded `durable` on the cut-short read are read again by the same sweep, by the owner's decision: each one up to its own verdict's moment, so a fix named by then makes it `broke_later` and otherwise only the note changes. Each run prints `truncated N` until none remain; `durability_sweep.py --undo-truncated-recheck` restores the snapshot it took first, and `ORCH_DURABILITY_TRUNCATED_RECHECK=0` stops it. This keeps role learning separate from normal
 implement/review weights while still using the same `relearn_quality()` machinery. Since 2026-09-21
 that machinery reads the fleet's keepalive outcomes (`assignment` `assigned`/`none`) as well as the
 tool's own `experimental` rows, under the 2026-08-29 broke-later detection floor the receiver rail
