@@ -25,7 +25,9 @@ branch is never this run's. A PR merged or closed before the label was applied c
 And a PASS or a FAIL needs at least one COMPLETED round of the delegated agent's keepalive runner
 on that PR since the label, not measured unproductive, read from the runner's own trusted markers.
 A settled PR without that evidence records no verdict, `feedback.UNATTRIBUTED_DELEGATION`, a class
-no learner scores. Until 2026-10-04 the resolver walked every agent's branch and
+no learner scores, and so does a delegation whose issue closed with no PR of its own and no closing
+PR: its agent runs only on the PR its label bootstraps, so it never ran (owner decision 2026-10-04,
+amending #411 for delegations; a local run keeps that FAIL). Until 2026-10-04 the resolver walked every agent's branch and
 `orchestrator/issue-N` and credited the first PR found, and a labelled PR's merge went to whatever
 agent the label named.
 
@@ -114,6 +116,16 @@ LEGACY_LOCAL_MODES = ("composer", "full", "cheap")
 def is_local_delegate(mode: str | None, target: str | None) -> bool:
     """Did a LOCAL delegate record this run? Its own work lands on orchestrator/issue-N."""
     return mode == "local" or (mode in LEGACY_LOCAL_MODES and "#" in str(target or ""))
+
+
+def needs_delegation_guard(source: str | None) -> bool:
+    """May only `_delegated_pr_state` decide this run's PR credit? True for a remote delegation.
+
+    ONE predicate, two callers. Ingest routes such a run through the guard, and merge_guard never
+    credits one, because ingest does not re-decide a run already recorded as merged and pending
+    durability. Until 2026-10-04 merge_guard credited the latest remote run on the merged target,
+    delegations included, and that PASS bypassed the guard for good."""
+    return source == DELEGATION_SOURCE
 
 
 def _pr_state(target: str, agent: str | None = None) -> dict | None:
@@ -430,7 +442,9 @@ def _delegated_pr_state(target: str, agent: str | None, started_ts: int | None) 
     `orchestrator/issue-N` holds that lane's work, and the old first-found walk over them credited
     a gemini label with a local vibe run's PR merged 39 days before the label. An own-branch PR
     settled before the label belongs to an earlier delegation and is passed over too. With no PR of
-    its own the run gets the closed-issue verdicts, which the issue's closing PRs decide."""
+    its own and the issue closed, the run is over and never this agent's verdict: a closing PR is
+    #411's unattributed case, and no closing PR means the labelled agent never had a PR to run on
+    (`delegation_without_own_pr`), where a LOCAL run, which did run, keeps #411's FAIL."""
     repo, num = provision.parse_target(target)
     if num is None:
         return {"lookup_status": "invalid_target", "target": target}
@@ -471,6 +485,7 @@ def _delegated_pr_state(target: str, agent: str | None, started_ts: int | None) 
             # `gh pr view` failed on a PR number, so this is a PR nobody read, not a closed issue.
             return {"lookup_status": "lookup_failed", **context, "error": view_error}
         terminal_issue["lookup_status"] = "closed_issue_no_remote_pr"
+        terminal_issue["delegation_without_own_pr"] = True
     terminal_issue.update(context)
     return terminal_issue
 
@@ -743,6 +758,24 @@ def state_to_outcome(pr: dict | None) -> dict | None:
                         + (rejected_note if rejected else "")
                     ),
                 }
+            if pr.get("delegation_without_own_pr"):
+                # A remote delegation's agent runs only on the PR its label bootstraps, so with none
+                # the labelled agent never ran: not its failure (owner decision 2026-10-04, amending
+                # #411 for remote delegations; a local run did run, and keeps the FAIL below).
+                branches = ", ".join(pr.get("candidateBranches") or []) or "its own branch"
+                passed = pr.get("passed_over_pr")
+                return {
+                    "merged": None,
+                    "adjudicated_verdict": None,
+                    "durability": "abandoned",
+                    "failure_class": feedback.UNATTRIBUTED_DELEGATION,
+                    "notes": (
+                        f"remote delegation's issue closed with no PR on {branches} and no closing "
+                        "PR references: the labelled agent never had a PR to run on"
+                        + (f" ({passed} there settled before the label)" if passed else "")
+                        + "; not attributed to this run"
+                    ),
+                }
             notes = f"{kind} issue closed without matching branch PR; no closing PR references"
             notes += rejected_note if rejected else ""
         elif own:
@@ -917,7 +950,7 @@ def ingest_outcomes(mode: str = "remote", dry_run: bool = False, _state_fn=None)
             pr = _state_fn(run["target"])
         elif mode == "local":
             pr = _local_pr_state(run["target"], run.get("agent"), pushes=pushes)
-        elif run.get("source") == DELEGATION_SOURCE:
+        elif needs_delegation_guard(run.get("source")):
             pr = _delegated_pr_state(run["target"], run.get("agent"), run.get("ts"))
         else:
             pr = _pr_state(run["target"], run.get("agent"))

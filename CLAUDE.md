@@ -412,9 +412,14 @@ Do not create a second event log, model registry, or capability inventory.
   PASS or FAIL, only with its own PR — the labelled PR, or the PR on `{agent}/issue-N`, never another
   agent's or lane's branch — when that PR settled after the label and keepalive's runner records
   show a completed round of the labelled agent on it since then; otherwise it is
-  `unattributed_delegation` (none of the 9 merged delegation PASS rows met that bar). Every learner
-  excludes all three classes through ONE set, `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a
-  role run inherits the class with the verdict.
+  `unattributed_delegation` (none of the 9 merged delegation PASS rows met that bar). So is a
+  delegation whose issue closed with no PR of its own and no closing PR: the labelled agent never
+  had a PR to run on (owner decision 2026-10-04; a LOCAL run keeps that case's FAIL). A merge the
+  durability sweep cannot judge closes as `unjudgeable`: `unjudgeable_merge` when it is not the
+  run's own, `broke_later_unchecked` when no fix-PR read reached it. An unread window is never
+  `durable`, because a durable label trains as a success. Every learner excludes all these classes
+  through ONE set, `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES`, and a role run inherits the class
+  with the verdict.
   A LOCAL run's candidates start with the branches it pushed from its own worktree, read from git's
   reflogs when it completes (`pushed_branches.py`, Brain table `run_pushes`), never from the
   transcript. A PR there counts only if the run opened it inside its window, and a run without a

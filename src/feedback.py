@@ -1861,18 +1861,31 @@ UNATTRIBUTED_DELEGATION = "unattributed_delegation"
 DURABILITY_UNJUDGEABLE = "unjudgeable"
 UNJUDGEABLE_MERGE = "unjudgeable_merge"
 
+# What the durability sweep writes for a merge whose broke-later check never read the fix PRs merged
+# after it: no run reached it within `durability_sweep.FIX_SEARCH_RETRY_DAYS` of the first that
+# tried. Whether it held is unknown, so it closes as DURABILITY_UNJUDGEABLE and trains nothing. Until
+# 2026-10-04 such a merge was recorded `durable`: 436 rows whose read was cut at 200 best matches.
+BROKE_LATER_UNCHECKED = "broke_later_unchecked"
+
 # Failure classes whose outcome says nothing about the agent that ran, so NO learner may score them:
 # the environment killed the run (`transient_infra`, from `mark_transient_infra`), the target
 # closed through a PR the run cannot be shown to have produced, a delegation's PR settled without
-# the delegated agent's work on it, or the merge a row recorded cannot be identified as the run's
-# own (`UNJUDGEABLE_MERGE`). ONE set: relearn's SQL reads it, relearn_quality and
+# the delegated agent's work on it, the merge a row recorded cannot be identified as the run's
+# own (`UNJUDGEABLE_MERGE`), or no fix-PR read reached it (`BROKE_LATER_UNCHECKED`). ONE set:
+# relearn's SQL reads it, relearn_quality and
 # exploration_review read it through `_has_outcome_evidence`, and the capability tally reads it
 # inside NONATTRIBUTABLE_FAILURE_CLASSES. The route learners named `transient_infra`
 # alone until 2026-10-04, so 15 closed-issue rows whose issue a merged PR had closed were labelled
 # full failures (3 inside the scored population then), at least 4 of them the runs' own merged PRs.
 # "" is deliberately absent: an unclassified FAIL is an attributed verdict to these learners.
 LEARNING_EXCLUDED_FAILURE_CLASSES = frozenset(
-    {"transient_infra", UNATTRIBUTED_CLOSING_PR, UNATTRIBUTED_DELEGATION, UNJUDGEABLE_MERGE}
+    {
+        "transient_infra",
+        UNATTRIBUTED_CLOSING_PR,
+        UNATTRIBUTED_DELEGATION,
+        UNJUDGEABLE_MERGE,
+        BROKE_LATER_UNCHECKED,
+    }
 )
 
 # Failure classes that must never train as capability incapability (§2): the classes above and the
@@ -4894,6 +4907,26 @@ def latest_run_id_for_target(target: str, mode: str | None = None) -> str | None
     return row[0] if row else None
 
 
+def runs_for_target(target: str, mode: str | None = None) -> list[dict]:
+    """Every run recorded for a target, newest first (the later-recorded row wins a tie), with the
+    `source` that decides how its PR may be credited (`outcomes.needs_delegation_guard`) and
+    whether an outcome row already exists for it (`has_outcome`)."""
+    with _conn() as c:
+        q = (
+            "SELECT r.run_id, r.source, r.ts, o.run_id IS NOT NULL FROM runs r "
+            "LEFT JOIN outcomes o ON o.run_id=r.run_id WHERE r.target=?"
+        )
+        params: list = [target]
+        if mode:
+            q += " AND r.mode=?"
+            params.append(mode)
+        rows = c.execute(q + " ORDER BY r.ts DESC, r.rowid DESC", params).fetchall()
+    return [
+        {"run_id": run_id, "source": source, "ts": ts, "has_outcome": bool(has_outcome)}
+        for run_id, source, ts, has_outcome in rows
+    ]
+
+
 def snapshot_json(path=None) -> dict:
     """Dump the live store to a human-readable JSON snapshot for the Code/Orchestrator project. The live
     SQLite stays on local disk (Dropbox-safe); THIS is the reviewable, version-controllable copy of the
@@ -5731,6 +5764,13 @@ def _selftest():
         record_run("local-target", "o/r#target", "implement", "vibe", mode="local", ts=300)
         assert latest_run_id_for_target("o/r#target") == "local-target"
         assert latest_run_id_for_target("o/r#target", mode="remote") == "newer-target"
+        assert [
+            (run["run_id"], run["source"], run["has_outcome"])
+            for run in runs_for_target("o/r#target", mode="remote")
+        ] == [
+            ("newer-target", "orchestrator_remote", False),
+            ("older-target", "orchestrator_remote", False),
+        ]
         with _conn() as c:
             sources = {
                 rid: (source, assignment)
