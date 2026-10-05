@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-05T01:07:42.381Z",
+  "repository": "stranske/Orchestrator",
+  "pr_number": 438,
+  "head_sha": "883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+  "tree_sha": "94bdda87c056fc7d8d07497fbb5c6915ed83ae82",
+  "original_comparison": "https://github.com/stranske/Orchestrator/pull/438#issuecomment-5984380511",
+  "metadata": {
+    "artifact": "pr-438-source-metadata.json",
+    "sha256": "aa57c6f9ea3545425d43750738b9658a7ce84d5e9be1961ad44bceb6f4506124",
+    "authentication": "fresh read through authenticated GitHub connector",
+    "source_urls": [
+      "https://github.com/stranske/Orchestrator/pull/438",
+      "https://api.github.com/repos/stranske/Orchestrator/git/commits/883ee0b84f5bd5b3bbee7c85c586004aafd58e5f",
+      "https://api.github.com/repos/stranske/Orchestrator/git/trees/94bdda87c056fc7d8d07497fbb5c6915ed83ae82?recursive=1",
+      "https://api.github.com/repos/stranske/Orchestrator/pulls/438/files?per_page=100&page=1"
+    ],
+    "tree_entries_compared": 2165,
+    "pr_file_records_compared": 14,
+    "result": "exact equality of PR/head, commit/tree, complete recursive tree records and PR-file filename/blob/status records"
+  },
+  "source": {
+    "artifact": "pr-438-source-evidence.json",
+    "sha256": "e94d4b2b799bae85915d6f0b349ab698dd09b07f28c988460c7d9adbc54b03f5",
+    "retained_files": 22,
+    "retrieved_changed_files": 14,
+    "retained_bytes": 689871,
+    "result": "fresh complete Git object capture is byte-identical to retained manifest",
+    "command": "node scripts/capture_review_source_evidence.js docs/reviews/pr-438-source-metadata.json . OUTPUT_DIR 883ee0b84f5bd5b3bbee7c85c586004aafd58e5f"
+  },
+  "run_metadata_revalidation": [
+    {
+      "id": 37228770087,
+      "head_sha": "0e49a6b527b9a7e1bf074fd0e97c0c7b2f09f45a",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/37228770087"
+    },
+    {
+      "id": 37228771698,
+      "head_sha": "ea7c6e1db1da12e47e86afa600b1d76c744c048d",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/stranske/Orchestrator/actions/runs/37228771698"
+    }
+  ],
+  "implementation_change": "Require valid PR-file blob IDs and refuse contradictory PR-file/tree blob bindings before source reads or bundle creation; preserve UNKNOWN for absent bindings.",
+  "tests": {
+    "artifact": "pr-438-source-binding-tests.txt",
+    "sha256": "3b26cae9f4eedbd3382a1594ced2a69fb6b8647cfce049a613997fc45b63de6e",
+    "passed": 86,
+    "failed": 0,
+    "skipped": 0,
+    "commands": [
+      {
+        "command": "ORCH_CONTRACT_SOURCE_MANIFEST=\"$PWD/docs/reviews/pr-438-source-evidence.json\" ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f node tests/test_capture_review_source_evidence.js",
+        "passed": 32,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "command": "node tests/test_review_contract_inputs.js",
+        "passed": 22,
+        "failed": 0,
+        "skipped": 0
+      },
+      {
+        "command": "node tests/test_capture_mirror_deployment_evidence.js",
+        "passed": 32,
+        "failed": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "tested_inputs": [
+    {
+      "path": "scripts/capture_review_source_evidence.js",
+      "sha256": "e17826b03cf74285988a5347e1bf402bc34ea1d7d1a44f0c24c9371984cf015e"
+    },
+    {
+      "path": "tests/test_capture_review_source_evidence.js",
+      "sha256": "e742e6aea9b89ced7dcb7628a103c57656ec3fb409c5fa66478b8b14d5c87fb9"
+    },
+    {
+      "path": "scripts/review_contract_inputs.js",
+      "sha256": "6efd5fda61aa38fa33dcf88f37f8484e577aca6f3b431b7975c7b55f96beb6d7"
+    },
+    {
+      "path": "tests/test_review_contract_inputs.js",
+      "sha256": "20a01e7a9ead0b0cbe00dc6c0775a1ed62f221a8da12427c9f7a491753688a02"
+    },
+    {
+      "path": "scripts/capture_mirror_deployment_evidence.js",
+      "sha256": "93fc4ef19eee0aa2f8b6ecce27af2effc9627fe1f379dcac60c0c9250c123051"
+    },
+    {
+      "path": "tests/test_capture_mirror_deployment_evidence.js",
+      "sha256": "c5b59e4592184c3562081eee88fb5df141b0ee038060e8d3d0b76563e64b2aad"
+    }
+  ],
+  "source_status": "COMPLETE",
+  "review_status": "PENDING",
+  "deployment_status": "NOT_OBSERVED",
+  "existing_independent_closeout": "pr-445-sol-disposition.json",
+  "limitations": [
+    "This pass revalidates source acquisition and collector tests; it does not repeat the separately recorded Sol full-suite or provisioned-machine review.",
+    "Fresh deliberate-break reads validate run metadata only; job/log evidence remains in pr-438-break-evidence.json.",
+    "No installed deployment was performed or observed."
+  ]
+}
