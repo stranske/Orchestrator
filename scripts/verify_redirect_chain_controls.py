@@ -19,6 +19,12 @@ controls = [
         "for cand in sweep:",
         "for cand in []:",
     ),
+    (
+        "keepalive_supervisor.py",
+        "test_an_escalated_pr_is_not_live_and_is_eligible",
+        'evidence.append(f"keepalive-state attention.disposition={marker}")',
+        "pass  # marker-only escalation evidence dropped",
+    ),
 ]
 rows = []
 for module, test, anchor, broken in controls:

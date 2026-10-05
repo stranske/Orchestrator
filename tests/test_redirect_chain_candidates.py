@@ -121,25 +121,24 @@ def test_an_escalated_pr_is_not_live_and_is_eligible(tmp_path):
                 applies_today=0,
             )
             assert screened["passes_screen"], screened
-            if labels:
-                # Persist the real supervisor output, then use apply's public candidate reader.
-                assert plan["eligible"], plan
-                _write(stores["plan"], {"generated_at": stores["now"], "plans": [plan]})
-                candidates = ra.screen_candidates(
-                    report_dir=stores["reports"],
-                    plan_path=stores["plan"],
-                    sweep_path=stores["sweep"],
-                    corpus_path=stores["corpus"],
-                    now=stores["now"],
-                )
-                assert candidates["candidate_counts"] == {
-                    "supervisor": 1,
-                    "sweep": 0,
-                    "eligible": 1,
-                }
-                assert candidates["candidates"] == [
-                    {"target": "o/r#1", "passes_screen": True, "blocks": []}
-                ]
+            # Every escalation route, label or marker-only, must reach apply's public candidate reader.
+            assert plan["eligible"], plan
+            _write(stores["plan"], {"generated_at": stores["now"], "plans": [plan]})
+            candidates = ra.screen_candidates(
+                report_dir=stores["reports"],
+                plan_path=stores["plan"],
+                sweep_path=stores["sweep"],
+                corpus_path=stores["corpus"],
+                now=stores["now"],
+            )
+            assert candidates["candidate_counts"] == {
+                "supervisor": 1,
+                "sweep": 0,
+                "eligible": 1,
+            }
+            assert candidates["candidates"] == [
+                {"target": "o/r#1", "passes_screen": True, "blocks": []}
+            ]
             # An escalation cannot override a process that is demonstrably still alive.
             assert ra.LIVE_PID_BLOCK in ra.lane_refusals(
                 {**report, "pid": 123}, pid_checker=lambda _pid: True
