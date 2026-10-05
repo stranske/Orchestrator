@@ -160,8 +160,11 @@ lands. `feedback.join_role_to_outcome()` is the manual equivalent for links made
 Attribution is to the ACTING run: only an `accepted=1` edge back-propagates, so a role whose proposal was
 rejected records the disagreement and inherits no PASS. The role inherits the acting run's exclusion as well:
 an outcome in `feedback.LEARNING_EXCLUDED_FAILURE_CLASSES` trains neither surface. That set holds an infra
-death (`transient_infra`: a signal-killed run, or since 2026-10-04 one the provider refused before any
-work, read only from codex's own `turn.failed` event because it exits 0) and, since 2026-10-04,
+death (`transient_infra`: a run whose done marker says the AGENT died by signal, or since 2026-10-04 one
+the provider refused before any work, read only from codex's own `turn.failed` event, the one log that
+can show nothing ran. Until 2026-10-04 the dispatch wrapper wrote its claim release's exit status into
+that marker instead of the agent's, so a marker without `rc_of` is never read as a death; no stage,
+component or surface moved, so the loop diagram is unchanged) and, since 2026-10-04,
 `unattributed_closing_pr`: outcome ingest found no PR on any candidate branch of a delegate whose issue
 a PR closed, so it records the run as over with no verdict rather than as a failure. The same day it gained `unattributed_delegation`: a remote delegation is credited
 with a PR only when the PR is its own (the labelled PR, or `{agent}/issue-N`), settled after the label, and

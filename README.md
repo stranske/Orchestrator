@@ -334,7 +334,10 @@ safety switch, not dead code.
 - **Two-tier outcomes**: signal-killed/infra failures are classified `transient_infra` and excluded
   from learning, so environment noise never trains as agent incapability. Since 2026-10-04 that
   includes a run the provider refused before any work, read only from codex's own `turn.failed`
-  event (codex exits 0 on it); a text-only log is unknown and left as recorded.
+  event; a text-only log is unknown and left as recorded. A signal death is read from the run's done
+  marker only when the marker says its rc is the agent's (`rc_of`): until 2026-10-04 the dispatch
+  wrapper recorded its claim release's exit status there, and now records it beside the agent's as
+  `release_rc`.
 - **Independent-subject weighting**: explicitly linked research repetitions are down-weighted by
   `(agent, subject_family)` before posterior updates; legacy rows keep agent-level value without
   receiving invented subject provenance.

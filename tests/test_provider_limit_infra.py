@@ -1,12 +1,14 @@
 """A run the provider refused before it did any work is infrastructure, not capability (2026-10-04).
 
 THE DEFECT. Five codex testgen delegates dispatched 2026-09-15 11:31-11:33Z each died in 4-5 s on
-"You've hit your usage limit" before running a single command. codex exits 0 on a refused turn, so
+"You've hit your usage limit" before running a single command. A refusal is not a signal death, so
 the only infra classifier (`ledger_reconcile`, keyed on a done marker's rc>128) never saw them, and
 outcome ingest scored them from whatever their issues' PRs did: Counter_Risk#1072 stayed a plain FAIL
-inside `relearn_quality`'s population, and three were credited as PASSes. The same exit 0 kept the
-rate-incident gate shut, so none of the five recorded an incident or shed codex, and the next three
-were dispatched into the same wall two minutes later.
+inside `relearn_quality`'s population, and three were credited as PASSes. The exit status the
+completion step was handed, 0, kept the rate-incident gate shut, so none of the five recorded an
+incident or shed codex, and the next three were dispatched into the same wall two minutes later.
+(That 0 was the claims release's status, not codex's, which exits 1 on a refused turn: see
+test_dispatch_rc_is_the_agents.py.)
 
 THE RULE. `ledger_reconcile.provider_limit_before_work` reads codex's `exec --json` stream, the
 only log in the fleet that can show nothing ran. It needs the harness's own terminal `turn.failed`
