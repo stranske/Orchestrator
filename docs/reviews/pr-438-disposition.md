@@ -326,3 +326,30 @@ independent Sol closeout above is separate evidence. Fresh reads also confirmed 
 deliberate-break run heads and failure conclusions; their detailed historical job/log
 evidence remains in the original receipt. This pass did not repeat the full pytest suite
 or perform an installed deployment.
+
+## Source-retention CLI revalidation, 2026-10-05
+
+Fresh authenticated connector reads again confirmed the requested head and tree, all
+2,165 recursive tree bindings, and all 14 PR-file filename/blob/status records against
+the retained metadata export. Complete local object acquisition reproduced the
+22-file source manifest byte for byte. The first retrieval task remains verified.
+
+The collector now reports total-file retention alongside changed-file retention.
+An unavailable required supporting blob therefore prints `UNKNOWN`, `1/1 changed files`
+and `1/2 total files`, and exits 2. New CLI regressions also retain a 128 KiB binary
+blob, an executable alias with distinct modes, and a dangling symlink's own bytes.
+[Retained test output](pr-438-retention-tests.txt) records 94 passing tests with no skips:
+34 acquisition tests (including complete historical source replay), 22 binding tests,
+32 deployment-collector tests and six current-checkout contract witnesses.
+
+A separate attempt to execute historical contract witnesses in this newer checkout
+was refused at `CLAUDE.md` by the source-binding guard. The floor, README, copier docs,
+installer, mirror reader and two tests also differ from their historical blobs.
+The six current-checkout witnesses do not replace the independent historical Sol
+closeout above. If another historical contract replay is needed, the existing
+`imi-merge-verify-closer` lane owner must use a clean exact-head checkout with the
+retained manifest. This run observed source retention; deployment remains NOT_OBSERVED.
+
+The workspace's read-only `.git` directory refused staging. The source, tests and
+evidence are retained in an isolated `/tmp/pr438-retention-commit` commit and an
+apply-ready `/tmp/pr438-retention.patch`; publication remains with the repository owner.
