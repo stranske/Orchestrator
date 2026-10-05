@@ -293,6 +293,7 @@ def record_redirect(
         )
     import roles
 
+    event_source = source or ("live-dispatch" if dispatch else "replay")
     result = roles.run_redirect_agent(
         report,
         acceptance_criteria,
@@ -304,9 +305,9 @@ def record_redirect(
         lane=lane,
         task_type=task_type,
         next_agent=next_agent,
+        source=event_source,
         timeout=timeout,
     )
-    event_source = source or ("live-dispatch" if dispatch else "replay")
     entry = build_entry(result, report, acceptance_criteria, source=event_source)
     rec = _append_event(entry, corpus_path)
     return {"entry": entry, **rec}
@@ -977,6 +978,7 @@ def collect_historical_from_keepalive(
             dispatch=True,
             lane="closer",
             task_type="implement",
+            source=HISTORICAL_SOURCE,
             timeout=timeout,
         )
         entry = build_entry(result, report, ac, source=HISTORICAL_SOURCE)

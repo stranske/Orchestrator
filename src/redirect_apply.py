@@ -574,7 +574,17 @@ def apply_one(
         kwargs = {"confirm_target": authorization["target"], "pid_checker": pid_alive_fn}
         if apply_runner is not None:
             kwargs["runner"] = apply_runner
-        apply_result = redirect_plan.apply_plan(plan_obj, **kwargs)
+        plan_obj["lane_guard"] = {
+            "claim_snapshot": report.get("claim_snapshot"),
+            "pid": report.get("pid"),
+        }
+        try:
+            apply_result = redirect_plan.apply_plan(plan_obj, **kwargs)
+        except ValueError as exc:
+            authorization["allowed"] = False
+            authorization["would_mutate"] = False
+            authorization["blocks"].append(str(exc))
+            apply_result = {"applied": False, "refused": str(exc), "executed": []}
         if apply_result.get("applied"):
             _heartbeat(
                 "success", ref=authorization["target"], metadata={"role_run_id": role_run_id}

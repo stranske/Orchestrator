@@ -110,7 +110,8 @@ export ORCH_FRONTEND_VERIFY_START_BROWSER="${ORCH_FRONTEND_VERIFY_START_BROWSER:
 # Consumer: redirect_apply.py merges stalled sweep proposals (source=redirect-sweep-live) into the
 # apply candidate list beside the keepalive supervisor plan. Export =0 to pause recording.
 export ORCH_REDIRECT_SWEEP_RECORD_CORPUS="${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-1}"
-export ORCH_REDIRECT_SWEEP_BACKEND="${ORCH_REDIRECT_SWEEP_BACKEND:-cursor}"
+# Unset/auto lets the redirect role router choose its judgment backend.
+export ORCH_REDIRECT_SWEEP_BACKEND="${ORCH_REDIRECT_SWEEP_BACKEND:-auto}"
 # Typed role activation (bounded, shadow/advisory): Prompt and Decomposer can author
 # dispatch context, Triage compares one bounded backlog snapshot, and Adjudicator runs
 # only on genuine persisted-evidence disagreement. Deterministic routing/gates remain

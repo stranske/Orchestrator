@@ -196,6 +196,13 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
+The weekly `switch_review` also consumes `value_chain_monitor`, a deterministic
+read-only rail beside Monitor and verify. It compares independent situation populations
+with ledger invocations and existing Brain influence edges, naming the earliest broken
+step and input switches held off. Unknown demand never becomes zero. It changes no
+selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
+the section rather than a second audit log or inventory.
+
 ## The feedback loop closes over both surfaces
 
 `feedback.py` learns (1) **router weights** — which agent per task_type — and (2) **role ↔ backend
@@ -1317,3 +1324,15 @@ with a shared `batch_id`; proposal validity and downstream outcomes remain per i
 `python3 src/roles.py prompt --batch items.json --output issue_body --dispatch --output-dir bodies`
 exports valid Markdown files and a manifest containing role-run IDs and all validator verdicts.
 This extends the existing PromptAgent role; no new surface binding or autonomous dispatch is added.
+
+### Redirect routing and provenance (issue #424)
+
+Unset/`auto` sweep backends let `route_role("redirect")` select the judgment backend.
+Explicit backends remain overrides. A redirect/decompose proposal lacking a worker uses
+`router.select_agent(task_type or "implement")`, excluding reserve and backup seats:
+`implement` is a task prior, not a registered role. The plan records `agent_source=router`.
+No available worker produces a named error and inspection-only commands; direct plan
+construction refuses a missing or placeholder agent. Watch classification retains its
+recommendation while withholding apply commands until a real worker is selected.
+Role-run Brain metadata retains caller `source` and `report_state`, distinguishing
+real sweep stalls, live dispatch and historical replay without changing apply authority.

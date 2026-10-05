@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import capabilities
+import claims
 
 ORCH_DIR = Path(__file__).resolve().parent
 PROMPT_DIR = Path.home() / ".codex" / "handoff" / "redirect-prompts"
@@ -42,6 +43,10 @@ APPLY_STEP_IDS = {"stop-process", "release-claim", "delegate-retry", "delegate-s
 # claim path, which is correct BECAUSE it is module-qualified) and `partitioned_review._slug`
 # (partition_id, 48-char capped). Both are also namespace-local; neither was renamed because
 # their names are already reached through their module.
+class MissingRedirectAgent(ValueError):
+    """An applyable redirect must name a real worker before any command is built."""
+
+
 def _prompt_path_slug(value: str) -> str:
     s = value.strip().lower().replace("/", "__")
     s = re.sub(r"[^a-z0-9_.-]+", "_", s)
@@ -206,7 +211,9 @@ def _delegate_commands(
     prompt_file: str | None,
 ) -> list[list[str]]:
     target = report.get("target") or "<target>"
-    selected_agent = next_agent or "<next-agent>"
+    if not next_agent or not next_agent.strip() or "<" in next_agent or ">" in next_agent:
+        raise MissingRedirectAgent("redirect/decompose requires a concrete next agent")
+    selected_agent = next_agent.strip()
     selected_lane = lane or report.get("lane") or "<lane>"
     selected_type = task_type or report.get("task_type") or "implement"
     return [
@@ -444,6 +451,28 @@ def _command_result(
     }
 
 
+def _revalidate_lane(plan_obj: dict[str, Any], pid_checker) -> None:
+    """Refuse stale automatic reports before any prompt or lane mutation."""
+    guard = plan_obj.get("lane_guard")
+    if guard is None:
+        return  # Explicit operator plans retain their existing confirmation contract.
+    current = claims.holder(str(plan_obj.get("target") or ""))
+    identity_keys = ("target", "agent", "pid", "ts")
+    identity = {key: current.get(key) for key in identity_keys} if current else None
+    if identity != guard.get("claim_snapshot"):
+        raise ValueError("lane claim identity changed since the sweep report")
+    current_pid = current.get("pid") if current else guard.get("pid")
+    if current and current_pid != guard.get("pid"):
+        raise ValueError("lane claim PID differs from the sweep report")
+    if current_pid is not None:
+        try:
+            number = int(current_pid)
+        except (TypeError, ValueError):
+            raise ValueError("lane claim PID is unknown") from None
+        if number <= 0 or pid_checker(number):
+            raise ValueError("lane claim PID is live or unknown; automatic redirect refused")
+
+
 def apply_plan(
     plan_obj: dict[str, Any],
     *,
@@ -482,6 +511,7 @@ def apply_plan(
         rendered = "; ".join(shlex.join(cmd) for cmd in placeholder_cmds)
         raise ValueError(f"apply refused placeholder command(s): {rendered}")
 
+    _revalidate_lane(plan_obj, pid_checker)
     prompt_path = Path(str(plan_obj["prompt_file"])).expanduser()
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text(str(plan_obj["prompt_text"]))
@@ -504,6 +534,9 @@ def apply_plan(
     for step in mutating_steps:
         step_id = step.get("id") or ""
         for command in step.get("commands") or []:
+            # Claim release removes the expected snapshot; only delegation follows it.
+            if step_id != "delegate-retry" and step_id != "delegate-subtasks":
+                _revalidate_lane(plan_obj, pid_checker)
             if step_id == "stop-process":
                 try:
                     pid = int(command[1])
@@ -617,7 +650,7 @@ def _selftest() -> None:
             ],
         },
     }
-    decompose = plan(decompose_report, prompt_file="/tmp/decompose.md")
+    decompose = plan(decompose_report, next_agent="codex", prompt_file="/tmp/decompose.md")
     assert (
         decompose["action"] == "decompose" and decompose["prompt_file"] == "/tmp/decompose.md"
     ), decompose
@@ -671,7 +704,15 @@ def _selftest() -> None:
         except ValueError as exc:
             assert "confirm-target" in str(exc), exc
 
-        placeholder = plan(redirect_report, prompt_file=prompt_file)
+        try:
+            plan(redirect_report, prompt_file=prompt_file)
+            raise AssertionError("plan construction must reject a missing worker")
+        except MissingRedirectAgent:
+            pass
+        # Apply still rejects malformed plans obtained from an older caller/corpus.
+        placeholder = plan(redirect_report, next_agent="vibe", prompt_file=prompt_file)
+        command = placeholder["steps"][-1]["commands"][0]
+        command[command.index("--agent") + 1] = "<next-agent>"
         try:
             apply_plan(placeholder, confirm_target="stranske/Repo#12", runner=fake_runner)
             raise AssertionError("placeholder next-agent should fail")

@@ -75,6 +75,9 @@ def stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     orch_state.mkdir()
     (orch_state / "redirect-sweep.json").write_text('{"actionable": []}\n', encoding="utf-8")
     monkeypatch.setenv("ORCH_STATE_DIR", str(orch_state))
+    import redirect_sweep
+
+    monkeypatch.setattr(redirect_sweep, "DEFAULT_REPORT", orch_state / "redirect-sweep.json")
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
     return {
