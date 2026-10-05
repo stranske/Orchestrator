@@ -49,8 +49,10 @@ for module, test, anchor, broken in controls:
                 capture_output=True,
             )
             assert r.returncode == (1 if phase == "broken" else 0), (phase, r.stdout, r.stderr)
-            assert test in r.stdout and (
-                "AssertionError" in r.stdout if phase == "broken" else "1 passed" in r.stdout
+            assert (
+                test in r.stdout and "AssertionError" in r.stdout
+                if phase == "broken"
+                else "1 passed" in r.stdout
             )
             runs.append(dict(phase=phase, exit=r.returncode, output=r.stdout + r.stderr))
         rows.append(
