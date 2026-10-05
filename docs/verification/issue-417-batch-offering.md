@@ -61,13 +61,9 @@ selftests passed; the advisor selftest passed with a temporary ledger, reporting
 its machine-local front-door prerequisite as absent. Syntax validation and
 `git diff --check` passed.
 
-This follow-up is **not acceptance verification**. Every available Python runtime
-lacks pytest and Black; installing them into a temporary virtual environment failed
-because `pypi.org` could not resolve. The named pytest command fails with
-`No module named pytest`; both required Black commands fail with
-`black: command not found`. The updated named tests and deliberate-break controls
-must run in an environment with those tools. No acceptance checkbox was completed,
-and the edits remain uncommitted because the required Black gate could not pass.
+That keepalive runner lacked pytest and Black and could not install them. Its
+standard-library replay was an interim check. The follow-up is now committed;
+the focused pytest and full Black results below supersede that tool limitation.
 
 ## Decline wording follow-up on 2026-10-05
 
@@ -86,12 +82,9 @@ The replay script and output are `/tmp/issue-417-replay.py` and
 `/tmp/issue-417-replay.log` in this runner; these temporary artifacts are not
 durable CI evidence.
 
-This replay is **not pytest acceptance verification**. The named pytest command
-still fails with `No module named pytest`, and both mandatory Black commands fail
-with `black: command not found`. A temporary virtual environment could not install
-the tools because `pypi.org` could not resolve. The acceptance checkboxes remain
-unchecked and this follow-up remains uncommitted until the required Black gate
-and named pytest runs can execute.
+The replay was an interim check from a runner without pytest or Black. The
+follow-up is now committed and its named regressions execute under pytest in
+the opener recovery below; current-head CI remains the full acceptance gate.
 
 ## Recorded-consult follow-up on 2026-10-05
 
@@ -108,10 +101,17 @@ three checkout modules were unchanged. Output is `/tmp/issue-417-replay.log`;
 these runner-local artifacts are not durable CI evidence. Syntax parsing and
 `git diff --check` also passed.
 
-Acceptance remains unverified: the focused pytest command with `-m "not slow"`
-fails with `No module named pytest`, and both mandatory Black commands fail with
-`black: command not found`. None of the available Python runtimes has either
-tool, the pip cache contains neither tool, and installation in a temporary
-virtual environment failed. The changes remain uncommitted under the required
-Black gate, and both acceptance checkboxes remain unchecked. GitHub API access
-also failed, preventing a PR blocker comment, label, or readiness check.
+The earlier runner could not run pytest or Black or reach the GitHub API. That
+checkpoint is superseded by the committed follow-up and the verified recovery
+below; it does not describe the current checkout or PR readiness.
+
+## Opener recovery on 2026-10-05
+
+Current-head Gate run `37267192621` failed only Black formatting in
+`tests/test_role_prompt_offering.py`. The exact full formatter command was
+reproduced red, then passed after formatting that file. Its parsed AST stayed
+identical. The focused named pytest suite and `git diff --check` passed.
+Architecture prose and the SVG now agree on explicit batch-authoring bindings
+while automatic dispatch remains shadow-gated. Full current-head CI must run
+again after this recovery push; historical full-verifier receipts above remain
+identified by the checkout on which they were measured.
