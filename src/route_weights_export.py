@@ -364,17 +364,22 @@ def main() -> int:
     target = args.state_dir / "route-weights-export.json"
     changed = write_document(target, document)
     print(f"{'wrote' if changed else 'unchanged'} {target}")
-    capabilities.daily_heartbeat(
-        "route-weights-export",
-        "success",
-        ref=str(target),
-        metadata={"source_version": document["source_version"], "changed": changed},
-    )
     if args.publish:
         if os.environ.get("ORCH_ROUTE_WEIGHTS_PUBLISH") != "1":
             print("publish blocked: ORCH_ROUTE_WEIGHTS_PUBLISH!=1; local export retained")
         else:
-            publish_document(document)
+            if publish_document(document):
+                try:
+                    capabilities.daily_heartbeat(
+                        "route-weights-export",
+                        "success",
+                        ref=EXPORT_BRANCH,
+                        metadata={"source_version": document["source_version"], "published": True},
+                    )
+                except Exception as exc:  # noqa: BLE001 — telemetry cannot undo publication
+                    print(
+                        f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr
+                    )
     return 0
 
 

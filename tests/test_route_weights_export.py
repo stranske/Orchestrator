@@ -72,3 +72,32 @@ def test_challenger_excludes_the_thresholded_consumer_winner(tmp_path: Path) -> 
     document = export.build_document(database, now=2 * export.WEEK_SECONDS)
     assert document["task_types"]["implement"]["ranking"][0]["agent"] == "codex"
     assert document["exploration"]["challengers"]["implement"] == "gemini"
+
+
+def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "route_weights_export.py",
+            "--feedback-db",
+            str(tmp_path / "absent.db"),
+            "--state-dir",
+            str(tmp_path),
+            "--publish",
+        ],
+    )
+    published = []
+    monkeypatch.setattr(
+        export, "publish_document", lambda document: published.append(document) or True
+    )
+
+    def heartbeat(capability, event, **kwargs):
+        if event == "success":
+            raise OSError("fixture ledger unavailable")
+
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", heartbeat)
+    assert export.main() == 0
+    assert len(published) == 1
+    assert (tmp_path / "route-weights-export.json").exists()
+    assert "capability heartbeat failed: fixture ledger unavailable" in capsys.readouterr().err

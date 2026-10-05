@@ -141,6 +141,15 @@ worktree's git dir, plus the canonical clone's `objects/`, `refs/` and `logs/`
 in place. Offloads, read-only runs and the outer-seat bypass get nothing, and the clone's `config`
 and `hooks/` are never granted. No stage, component or surface moved, so the diagram is unchanged.
 
+The dispatcher's agent prelude moves `XDG_CONFIG_HOME` into each agent's runtime, and gh honours
+it, so until 2026-10-04 every dispatched agent's gh read an empty config and stopped at "gh auth
+login" before asking the keyring for a token. The prelude now pins `GH_CONFIG_DIR` to the directory
+the dispatcher's own gh reads, by gh's own lookup order (`dispatcher.gh_config_dir`). Relative
+paths are anchored to the dispatcher's cwd before the child changes directory. The agent therefore
+uses the same config; authentication also requires access to that config's credential store. The pin is a path: no token enters the agent's argv or
+environment, and every other tool keeps the redirect. No stage, component or surface moved, so the
+diagram is unchanged.
+
 **The detached wrappers name the interpreter of their own python steps (2026-10-05).** The dispatch
 and experiment wrappers are `bash -lc` strings that end with python steps: the claim release and the
 completion record. Those steps were spelled `python3`, so the login profile picked the interpreter,
@@ -877,6 +886,20 @@ annotates: every finding list is unchanged when the histories are emptied, and t
 findings to their ids, so the edit mints no verdict. `redirect-apply-bootstrap` stays silent on
 purpose. Its invocation is an authorised apply, and `switch_review` raises its ON-but-idle drain
 from its invocations, so a pass that applies nothing must record nothing.
+
+**Firing findings reach switch review with separate step evidence (2026-10-05).**
+`switch_review.firing_regressions` consumes the persisted weekly `capability-firing-monitor.json`,
+then reads the current ledger and the cadence registry's declared capability carriers. Each
+regressed or overdue row carries the ledger's last invocation, success-stamp age and artifact mtime.
+A fresh success stamp later than the heartbeat reads `heartbeat silent, step ran`; a stale stamp
+reads `step last ran`. An artifact alone does not prove successful execution, and a cadence stamp
+for redirect linking does not prove an authorised apply. Missing or unreadable evidence stays
+UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
+No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
+Route export records invocation on every daily run and success only after an actual publication;
+rail exercise records invocation without `--record`, which governs exercise verdicts only.
+Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
+and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
 
 **And a consult trial is not a switch doing anything (2026-10-02).** The switch review's idle rule
 read `last_invocation`, which a trial moves from any session, so one rail-exercise round on a
