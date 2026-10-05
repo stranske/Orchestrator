@@ -1422,6 +1422,9 @@ def review(
     # before every mirror write and reports every live process stale. Two real-world quantities must
     # be compared on the real clock; `now` here dates the REVIEW, not the process table.
     runners = stale_runners()
+    import runtime_ac_gate
+
+    runtime_ac_shadow = runtime_ac_gate.shadow_summary(now=now)
     value_chain = {"total": 0, "rows": [], "errors": [], "disabled": True}
     if (env if env is not None else os.environ).get("ORCH_VALUE_CHAIN_MONITOR", "1") != "0":
         import value_chain_monitor
@@ -1449,6 +1452,7 @@ def review(
     return {
         "generated_at": now,
         "value_chain": value_chain,
+        "runtime_ac_shadow": runtime_ac_shadow,
         "review_days": REVIEW_DAYS,
         # The switches this report may name, and the evidence its idle rule counts. Declared so that
         # EDITING either is not graded as a finding: `capability_propensity.tick_evidence`
@@ -1773,6 +1777,10 @@ def format_report(rep: dict) -> str:
             "",
         ]
     expiry = rep.get("gate_expiry")
+    if rep.get("runtime_ac_shadow") is not None:
+        import runtime_ac_gate
+
+        lines += [runtime_ac_gate.format_shadow_summary(rep["runtime_ac_shadow"]), ""]
     if expiry is not None:
         lines += format_gate_expiry(expiry)
     shed = rep.get("capacity_shed")

@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
@@ -11,11 +12,36 @@ const python = process.env.PYTHON || 'python3';
 
 test('shell sweep corpus recording defaults on and preserves the operator kill switch', () => {
   // Include the existing shell regression in the Node suite: it replays only
-  // the sweep settings and checks an exported value in a child for all four cases.
+  // the sweep settings and argument builder for all four switch cases.
   const result = spawnSync('bash', [path.join(repo, 'tests/check_redirect_sweep_defaults.sh')], {
     encoding: 'utf8', timeout: 10000,
   });
   assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+
+  // Prove the regression fails when either the default or its actual CLI gate
+  // breaks. Mutate private copies; never run the tick or invoke a role backend.
+  const source = fs.readFileSync(path.join(repo, 'orchestrate.sh'), 'utf8');
+  const controls = [
+    ['${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-1}', '${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}',
+      'setting=unset expected=1 actual=0'],
+    ['if [[ "${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}" == "1" ]]; then', 'if true; then',
+      'setting=0 sweep arguments do not honor the recording switch'],
+  ];
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'redirect-sweep-controls-'));
+  try {
+    const tick = path.join(temporary, 'orchestrate.sh');
+    for (const [anchor, broken, failure] of controls) {
+      assert.equal(source.split(anchor).length - 1, 1, `expected one mutation anchor: ${anchor}`);
+      fs.writeFileSync(tick, source.replace(anchor, broken));
+      const control = spawnSync('bash', [
+        path.join(repo, 'tests/check_redirect_sweep_defaults.sh'), tick,
+      ], { encoding: 'utf8', timeout: 10000 });
+      assert.equal(control.status, 1, control.error?.message || control.stdout || control.stderr);
+      assert.ok(control.stderr.includes(failure), control.stderr);
+    }
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 // Exercise the real Python normalization and role boundary without dispatching,

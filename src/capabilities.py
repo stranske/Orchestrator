@@ -158,6 +158,7 @@ EVENT_FIELDS = {
     # `useful if metadata["useful"] is True else not_useful`, and an amendment carries no `useful`
     # key, so every CORROBORATION would have been read as a REFUTATION.
     "outcome_amendment": None,
+    "fixture_provenance_amendment": None,
     # A SECOND OFFER answering a recorded decline, carrying only declared facts the first offer
     # omitted. Distinct from `match` for the same forward-compatibility reason as
     # `outcome_amendment`: a reader that predates it has no branch for the type and ignores it, so
@@ -405,6 +406,9 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "joined dispatch and durable outcome evidence supports extending the trial",
     },
     "runtime-ac-checks": {
+        "notes": "dedup: runtime_ac authoring prompt, gate, ingest and weekly report already exist; "
+        "extend those edges with unattended issue-derived shadow specs and coverage-free named "
+        "checks. Shadow events never update outcomes or implicitly require a merge gate.",
         "status": "canary",
         "entrypoint": "runtime_ac_gate.py",
         "matcher": {"kind": "env", "name": "ORCH_RUN_RUNTIME_AC", "equals": "1"},
@@ -1673,7 +1677,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "rollback": "disable rail-exercise cadence step and remove its report artifact",
         "findability_category": "exercise_bound",
         "findability_rationale": "read-only or dry-run contracts exercise deterministic rails against committed fixtures",
-        "notes": "dedup: PR #191/#197 supplied contracts but no scheduled runner; capability_activation_audit audits activation evidence, not contract behavior.",
+        "notes": "dedup: PR #191/#197 supplied contracts but no scheduled runner; capability_activation_audit audits activation evidence, not contract behavior. "
+        "Fixture provenance extends the existing propensity/event/usage paths; historical contract verdicts receive append-only corrections, not a parallel store.",
     },
     "agy-runtime-isolation": {
         "findability_category": "exercise_bound",
@@ -2179,7 +2184,15 @@ def heartbeat(
         raise ValueError(f"invalid capability event type: {event_type}")
     if (
         event_type
-        in {"output", "consumer", "failure", "outcome", "outcome_amendment", "offer_amendment"}
+        in {
+            "output",
+            "consumer",
+            "failure",
+            "outcome",
+            "outcome_amendment",
+            "offer_amendment",
+            "fixture_provenance_amendment",
+        }
         and not ref
     ):
         raise ValueError(f"{event_type} heartbeat requires ref")
@@ -2195,7 +2208,10 @@ def heartbeat(
         ):
             return False
         field = EVENT_FIELDS[event_type]
-        if field:
+        # Missing PR facts are surface evidence, not a capability offer. Keep the
+        # event for propensity accounting without manufacturing matching-work liveness.
+        fact_missing = event_type == "match" and (metadata or {}).get("source") == "fact_missing"
+        if field and not fact_missing:
             cap[field] = max(int(cap.get(field) or 0), ts)
         if event_type == "outcome" and ref not in cap["outcome_links"]:
             cap["outcome_links"].append(ref)
@@ -3144,6 +3160,10 @@ def usage_report(
     import capability_propensity  # lazy: that module imports THIS one at load time
 
     verdict_stats = capability_propensity.usefulness(path=verdict_path, now=current)
+    for row in rows:
+        verdict = verdict_stats["rows"].get(row["capability_id"], {})
+        row["production_useful"] = verdict.get("useful", 0)
+        row["fixture_passes"] = verdict.get("fixture_passes", 0)
     capabilities_with_verdict = sum(1 for row in verdict_stats["rows"].values() if row["resolved"])
     capabilities_with_outcome_link = (
         None
@@ -3266,8 +3286,8 @@ def format_usage_report(usage: dict[str, Any]) -> str:
         lines.extend(f"- {name}" for name in items)
         lines.append("")
     lines += [
-        "| Capability | State | Liveness | Inv/wk | Fleet edges (all time) | Durable | Need | Next action |",
-        "|---|---|---|---:|---:|---:|---:|---|",
+        "| Capability | State | Liveness | Inv/wk | Fleet edges (all time) | Production useful / fixture passes (90d) | Durable | Need | Next action |",
+        "|---|---|---|---:|---:|---|---:|---:|---|",
     ]
     for row in usage["rows"]:
         d = row["debt"]
@@ -3275,6 +3295,7 @@ def format_usage_report(usage: dict[str, Any]) -> str:
             f"| {row['capability_id']} | {row['status']} | {row['liveness']} | "
             f"{row['usage']['invocations_per_week']} | "
             f"{row['fleet_edges'] if row['fleet_edges'] is not None else 'unavailable'} | "
+            f"production useful {row['production_useful']} / fixture passes {row['fixture_passes']} | "
             f"{d['durable_reuses']} | {d['required']} | "
             f"{row['unblock']['action']} |"
         )

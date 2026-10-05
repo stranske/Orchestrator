@@ -682,14 +682,15 @@ def stage2_population(plan_path: Path | None = None, *, now: int | None = None) 
     return {**out, "status": "current", "reason": "", "candidates": candidates}
 
 
-def format_candidate_counts(counts: dict[str, int] | None) -> str:
+def format_candidate_counts(counts: dict[str, int | None] | None) -> str:
     """Human-readable supervisor/sweep/eligible line printed on every apply/screen run."""
     if not counts:
         return "candidates: supervisor ?, sweep ?, eligible ?"
+    eligible = counts.get("eligible", 0)
     return (
         f"candidates: supervisor {counts.get('supervisor', 0)}, "
         f"sweep {counts.get('sweep', 0)}, "
-        f"eligible {counts.get('eligible', 0)}"
+        f"eligible {'UNKNOWN' if eligible is None else eligible}"
     )
 
 
@@ -920,7 +921,7 @@ def _screen(
     candidate_counts = {
         "supervisor": supervisor_n if population["candidates"] is not None else 0,
         "sweep": sweep_n,
-        "eligible": 0 if eligible_count is None else eligible_count,
+        "eligible": eligible_count,
     }
     return {
         "population": {k: v for k, v in population.items() if k != "candidates"},

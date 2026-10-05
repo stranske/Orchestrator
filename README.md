@@ -111,7 +111,13 @@ offered at `tick` and `rail-exercise:audit`. Source deployment remains manual.
 
 ## Important functionality (what actually runs, grouped by job)
 
-The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records machine-observed usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.
+The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records zero-weight `fixture_observed` verdicts separately from production usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.
+
+Historical rail-exercise verdicts can be reclassified with
+`python3 src/capability_propensity.py migrate-fixture-provenance --ledger /path/to/capabilities.json`.
+The command prints changed/left counts and appends corrections without deleting prior evidence;
+repeating it adds nothing. `capabilities.py usage` reports production useful outcomes and fixture
+passes separately. Passing a fixture never raises a capability's recommendation weight.
 
 Verdicts (ACTIVE / gated / CLI-only) reflect the 2026-07-08 dormancy re-scan; re-run that scan to
 refresh. "Gated" = code is live but a default-OFF `ORCH_*` flag holds it back — an intentional
@@ -149,6 +155,11 @@ safety switch, not dead code.
    archival-only. Runtime AC is a hard opt-in machine gate for labeled/spec-backed closer work:
    active progression requires a target-exact spec, `ORCH_RUN_RUNTIME_AC=1`, and `PASS`. The separate
    adversarial reviewer panel remains advisory.
+   New linked keepalive PRs get an unattended issue-derived shadow spec at the existing
+   `keepalive_outcomes.py` ingest edge. Shadow specs carry confidence and retain unencodable
+   tasks as manual checks; they do not implicitly opt a PR into the hard merge gate. Named
+   pytest checks exclude coverage options. Weekly switch review reports authored/executed PRs,
+   would-FAILs, and the named false-FAIL audit sample, with missing execution/audits unmeasured.
 8. **issue_readiness.py** — daily cadence step that decides which open issues the fleet may work,
    removing the owner from the ready-label queue. Four verdicts (auto_ready / owner_review /
    needs_specification / not_opener_work); only risk-labelled AND actionable issues reach the owner,

@@ -91,6 +91,14 @@ The single left arc is the loop closing. What it carries back is the point: `fee
 `feedback` (the learner/store) · gates (`testgen_gate`, `local_verify`, `merge_guard`,
 `runtime_ac_gate`, `frontend_verify` (Gate 1), `ux_review.gate_decision` (Gate 2 pass-requirement)).
 
+The runtime-AC rail also has a non-blocking observation edge: keepalive ingest authors one
+issue-derived shadow spec per new linked PR, and switch review consumes its existing Brain
+completion events. Authoring extracts named tests, retains uncertain obligations as manual,
+and records per-check confidence. Execution still requires the existing runtime/command
+switches and an exact PR checkout; an absent checkout is unmeasured. Shadow specs never
+implicitly enable merge enforcement or patch delivery outcomes. Coverage-only pytest options
+are removed for named acceptance checks so test success and coverage policy cannot disagree.
+
 Codex model and reasoning selection is also a deterministic rail: `execution_profiles` maps
 the task and lane to an immutable profile, `router` records the selected profile, and
 `dispatcher` passes its model and effort to `adapters`. An explicit `--profile-id` on a
@@ -306,6 +314,13 @@ commit type, label family and the path classes they touched, and measures broke-
 cost and commit count per shape and agent. It is what lets the advisor's `repeated_pattern`
 precondition answer from data (codemod-campaign is offered where a shape recurs across repos), and it
 is the population a shape-keyed router would learn from. It feeds no weight table directly.
+
+Sandboxed rail-contract verdicts use `fixture_observed` with ranking weight zero. The existing
+capability ledger retains these passes separately from production useful outcomes; selection
+promotion/demotion ignores the fixture trial's offer and invocation. Historical contract verdicts
+are corrected by `capability_propensity.py migrate-fixture-provenance` with idempotent append-only
+`fixture_provenance_amendment` events. Original events remain available, and the usage report prints
+`production useful N / fixture passes M` in the same 90-day window. This adds no dispatch authority.
 
 Lane-invoked capabilities have a separate explicit bridge to fleet outcomes. `trigger` and `useful`
 can record `--deliverable owner/repo#N`; the positive verdict captures the capability version then.
