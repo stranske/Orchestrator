@@ -48,6 +48,26 @@ function collect(w, reader) {
   return capture(Buffer.from(JSON.stringify(w.metadata)), w.repo, w.output, w.head, reader);
 }
 
+function runCollector(w, input) {
+  const stdoutPath = path.join(w.root, 'cli.stdout');
+  const stderrPath = path.join(w.root, 'cli.stderr');
+  const stdout = fs.openSync(stdoutPath, 'w');
+  const stderr = fs.openSync(stderrPath, 'w');
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  let result;
+  try {
+    result = spawnSync(process.execPath, [path.resolve(__dirname,
+      '../scripts/capture_review_source_evidence.js'), input, w.repo, w.output, w.head],
+    { env, timeout: 10000, stdio: ['ignore', stdout, stderr] });
+  } finally {
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+  }
+  return { ...result, stdout: fs.readFileSync(stdoutPath, 'utf8'),
+    stderr: fs.readFileSync(stderrPath, 'utf8') };
+}
+
 test('retains complete exact-head bytes and bindings despite working-tree drift', (t) => {
   const w = world(t);
   fs.writeFileSync(path.join(w.repo, 'module.py'), 'different working tree\n');
@@ -66,6 +86,96 @@ test('retains complete exact-head bytes and bindings despite working-tree drift'
   assert.equal(crypto.createHash('sha256').update(retainedMetadata).digest('hex'),
     report.metadata_sha256);
   assert.equal(fs.readFileSync(path.join(w.repo, 'module.py'), 'utf8'), 'different working tree\n');
+});
+
+test('CLI retains complete binary, executable, alias and symlink blobs from the exact head', (t) => {
+  const w = world(t);
+  // Exceed the original comparison's entire supplied-code budget and include
+  // every byte value: retention must not decode, trim or truncate blob bytes.
+  const bytes = Buffer.alloc(128 * 1024);
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = i % 256;
+  fs.writeFileSync(path.join(w.repo, 'program.bin'), bytes, { mode: 0o755 });
+  fs.writeFileSync(path.join(w.repo, 'alias.bin'), bytes, { mode: 0o644 });
+  const linkBytes = Buffer.from('../absent-external-file');
+  fs.symlinkSync(linkBytes.toString(), path.join(w.repo, 'reference'));
+  function git(...args) {
+    const result = spawnSync('git', ['-C', w.repo, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+  git('add', '.');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false',
+    'commit', '-qm', 'binary and symlink acquisition fixture');
+  w.head = git('rev-parse', 'HEAD');
+  w.metadata.pull_request.head_sha = w.head;
+  w.metadata.pull_request_files.head_sha = w.head;
+  w.metadata.commit.sha = w.head;
+  w.metadata.commit.tree.sha = git('rev-parse', 'HEAD^{tree}');
+  w.metadata.tree.sha = w.metadata.commit.tree.sha;
+  for (const [name, mode, content] of [
+    ['program.bin', '100755', bytes], ['alias.bin', '100644', bytes],
+    ['reference', '120000', linkBytes],
+  ]) {
+    w.metadata.required_paths.push(name);
+    w.metadata.tree.tree.push({ path: name, type: 'blob', mode,
+      sha: git('rev-parse', `HEAD:${name}`), size: content.length });
+  }
+  // The CLI must read committed objects, including a dangling link's own
+  // content, rather than dereferencing or consuming drifted working-tree files.
+  fs.writeFileSync(path.join(w.repo, 'program.bin'), 'working-tree drift\n');
+  fs.unlinkSync(path.join(w.repo, 'reference'));
+  const input = path.join(w.root, 'authenticated-fixture.json');
+  const metadataBytes = Buffer.from(`${JSON.stringify(w.metadata)}\n`);
+  fs.writeFileSync(input, metadataBytes);
+  const result = runCollector(w, input);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /COMPLETE: 1\/1 changed files retained; 4\/4 total files retained; review PENDING/);
+  const report = JSON.parse(fs.readFileSync(path.join(w.output, 'manifest.json')));
+  assert.equal(report.files.length, 4);
+  assert.equal(report.review_status, 'PENDING');
+  assert.equal(report.deployment_status, 'NOT_OBSERVED');
+  assert.deepEqual(fs.readFileSync(path.join(w.output, 'metadata.json')), metadataBytes);
+  assert.equal(report.metadata_sha256,
+    crypto.createHash('sha256').update(metadataBytes).digest('hex'));
+  for (const file of report.files) {
+    const entry = w.metadata.tree.tree.find((item) => item.path === file.path);
+    const expected = file.path === 'module.py' ? w.bytes
+      : file.path === 'reference' ? linkBytes : bytes;
+    const artifact = path.join(w.output, file.artifact);
+    assert.equal(file.status, 'RETRIEVED');
+    assert.equal(file.git_mode, entry.mode);
+    assert.equal(file.blob_sha, entry.sha);
+    assert.equal(file.retained_bytes, expected.length);
+    assert.equal(file.sha256, crypto.createHash('sha256').update(expected).digest('hex'));
+    assert.deepEqual(fs.readFileSync(artifact), expected);
+    assert.ok(fs.lstatSync(artifact).isFile());
+    assert.equal(fs.statSync(artifact).mode & 0o777, 0o600);
+  }
+  // Identical bytes share one retained object while keeping distinct file modes.
+  assert.equal(fs.readdirSync(path.join(w.output, 'blobs')).length, 3);
+});
+
+test('CLI reports UNKNOWN when all changed files are retained but a supporting blob is unavailable', (t) => {
+  const w = world(t);
+  w.metadata.required_paths.push('supporting.py');
+  w.metadata.tree.tree.push({ path: 'supporting.py', type: 'blob', mode: '100644',
+    sha: 'f'.repeat(40), size: 100 });
+  const input = path.join(w.root, 'authenticated-fixture.json');
+  fs.writeFileSync(input, JSON.stringify(w.metadata));
+  const result = runCollector(w, input);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stdout, /UNKNOWN: 1\/1 changed files retained; 1\/2 total files retained; review PENDING/);
+  const report = JSON.parse(fs.readFileSync(path.join(w.output, 'manifest.json')));
+  assert.equal(report.source_status, 'UNKNOWN');
+  assert.equal(report.retrieved_changed_files, report.changed_files);
+  assert.equal(report.review_status, 'PENDING');
+  assert.equal(report.deployment_status, 'NOT_OBSERVED');
+  const missing = report.files.find((file) => file.path === 'supporting.py');
+  assert.equal(missing.status, 'UNKNOWN');
+  assert.equal(missing.blob_sha, 'f'.repeat(40));
+  assert.equal(missing.owner, 'owner');
+  assert.match(missing.next_action, /authenticated GitHub/);
+  assert.ok(!Object.hasOwn(missing, 'artifact'));
 });
 
 test('rejects a same-count changed-path substitution with another real tree file', (t) => {

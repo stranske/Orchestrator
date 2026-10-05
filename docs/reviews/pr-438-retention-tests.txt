@@ -1,0 +1,155 @@
+Authenticated GitHub connector revalidation: PR head 883ee0b84f5bd5b3bbee7c85c586004aafd58e5f; tree 94bdda87c056fc7d8d07497fbb5c6915ed83ae82; 2165 tree path/mode/type/blob/size bindings and 14 PR-file filename/blob/status records match retained metadata. GitHub response-only URL fields were excluded from the tree comparison. Complete local object recapture produced a byte-identical 22-file manifest. Review and deployment are separate dispositions.
+
+$ ORCH_CONTRACT_SOURCE_MANIFEST=docs/reviews/pr-438-source-evidence.json ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f node tests/test_capture_review_source_evidence.js
+UNKNOWN: 1/1 changed files retained; 1/2 total files retained; review PENDING
+✔ retains complete exact-head bytes and bindings despite working-tree drift (26.816651ms)
+✔ CLI retains complete binary, executable, alias and symlink blobs from the exact head (86.070074ms)
+✔ CLI reports UNKNOWN when all changed files are retained but a supporting blob is unavailable (54.979509ms)
+✔ rejects a same-count changed-path substitution with another real tree file (19.343924ms)
+✔ rejects absent PR file records before writing a bundle (18.33738ms)
+✔ rejects incomplete PR file records before writing a bundle (18.424421ms)
+✔ rejects wrong head PR file records before writing a bundle (18.51414ms)
+✔ rejects omitted PR file records before writing a bundle (18.741418ms)
+✔ rejects duplicate PR file records before writing a bundle (18.507722ms)
+✔ rejects invalid filename PR file records before writing a bundle (18.524662ms)
+✔ compares the complete aggregated PR file set independently of ordering (23.117134ms)
+✔ rejects missing SHA PR/tree identity before reading source or writing a bundle (18.899696ms)
+✔ rejects invalid SHA PR/tree identity before reading source or writing a bundle (18.612233ms)
+✔ rejects different blob PR/tree identity before reading source or writing a bundle (20.318592ms)
+✔ rejects non-blob tree entry PR/tree identity before reading source or writing a bundle (18.348817ms)
+✔ retained PR receipt refuses a contradictory blob binding with unchanged filenames (24.279383ms)
+✔ an absent changed-file tree binding remains UNKNOWN with an owner and action (18.528297ms)
+✔ durable metadata receipt reproduces all manifest path/tree bindings without historical blobs (24.22752ms)
+✔ retained PR receipt rejects substituting its last changed file with a supporting tree file (22.811724ms)
+✔ replays the retained exact-head receipt into a complete byte-identical source bundle (79.679636ms)
+✔ rejects head metadata before writing a bundle (18.897513ms)
+✔ rejects commit metadata before writing a bundle (18.160453ms)
+✔ rejects tree metadata before writing a bundle (18.799615ms)
+✔ rejects truncated metadata before writing a bundle (18.79603ms)
+✔ rejects duplicates metadata before writing a bundle (18.575498ms)
+✔ rejects traversal metadata before writing a bundle (18.523816ms)
+✔ rejects omitted file metadata before writing a bundle (18.274685ms)
+✔ records truncation as UNKNOWN with an owner and action (19.593996ms)
+✔ records same-length corruption as UNKNOWN with an owner and action (18.94222ms)
+✔ records missing object as UNKNOWN with an owner and action (18.61687ms)
+✔ records missing binding as UNKNOWN with an owner and action (21.114029ms)
+✔ retains aliases by blob identity and preserves executable mode bindings (23.447687ms)
+✔ refuses to overwrite retained evidence or write inside the source via a symlink (21.769626ms)
+✔ CLI reports incomplete retrieval with a nonzero exit and durable manifest (21.407611ms)
+ℹ tests 34
+ℹ suites 0
+ℹ pass 34
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 849.281256
+
+$ node tests/test_review_contract_inputs.js
+✔ reads the historical floor from its bound object without rewriting the current floor (26.30121ms)
+✔ pins the exact manifest bytes used by a witness receipt (19.578604ms)
+✔ refuses an invalid or mismatched receipt digest (empty) before reading source (12.323729ms)
+✔ refuses an invalid or mismatched receipt digest (invalid) before reading source (12.15186ms)
+✔ refuses an invalid or mismatched receipt digest (0000000000000000000000000000000000000000000000000000000000000000) before reading source (11.973051ms)
+✔ retained installation manifest reproduces its receipt despite the later metadata re-export (1.014103ms)
+✔ witness runner refuses a receipt with replaced manifest before executing contract tests (36.153892ms)
+✔ witness runner refuses a receipt with missing manifest before executing contract tests (30.880097ms)
+✔ refuses bytes drift after the witness runs (21.514466ms)
+✔ refuses executable mode drift after the witness runs (20.46798ms)
+✔ refuses leaf symlink drift after the witness runs (20.294289ms)
+✔ refuses parent symlink drift after the witness runs (18.445923ms)
+✔ rejects head bindings before running a witness (9.739698ms)
+✔ rejects incomplete bindings before running a witness (9.714119ms)
+✔ rejects count bindings before running a witness (9.337373ms)
+✔ rejects duplicate bindings before running a witness (12.128505ms)
+✔ rejects traversal bindings before running a witness (11.870958ms)
+✔ rejects hash bindings before running a witness (13.978273ms)
+✔ rejects size bindings before running a witness (13.35031ms)
+✔ rejects blob bindings before running a witness (13.524552ms)
+✔ rejects floor bindings before running a witness (13.842209ms)
+✔ refuses a manifest omitting a required executable input (14.115249ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 22
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 361.037231
+
+$ node tests/test_capture_mirror_deployment_evidence.js
+✔ captures real publisher observations without declaring deployment complete (280.305474ms)
+✔ records digest mismatch and returns failure (243.412006ms)
+✔ records permissions mismatch and returns failure (241.73663ms)
+✔ records registry mismatch and returns failure (245.876427ms)
+✔ records wrapper mismatch and returns failure (245.383317ms)
+✔ records copier guard mismatch and returns failure (247.397647ms)
+✔ records unverified mismatch and returns failure (248.395375ms)
+✔ records unfinished wrapper mismatch and returns failure (240.056818ms)
+✔ records dirty checkout mismatch and returns failure (343.45943ms)
+✔ records failed publication exit 1 despite matching success markers (321.184947ms)
+✔ records failed publication exit 3 despite matching success markers (304.900482ms)
+✔ records failed publication exit 137 despite matching success markers (305.516839ms)
+✔ records failed publication exit 255 despite matching success markers (307.520028ms)
+✔ rejects malformed publication exit "" (171.763671ms)
+✔ rejects malformed publication exit "0" (174.219861ms)
+✔ rejects malformed publication exit "00\n" (174.503517ms)
+✔ rejects malformed publication exit "-1\n" (177.697094ms)
+✔ rejects malformed publication exit "256\n" (173.136293ms)
+✔ rejects malformed publication exit "0\n1\n" (171.252804ms)
+✔ rejects malformed publication exit "0\n\n" (175.112762ms)
+✔ rejects malformed publication exit "0\r\n" (171.141817ms)
+✔ rejects malformed publication exit "ok\n" (170.612131ms)
+✔ requires retained exit evidence even when the publication log indicates success (170.55819ms)
+✔ rejects malformed verifier receipt "" (171.629149ms)
+✔ rejects malformed verifier receipt "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (173.125437ms)
+✔ rejects malformed verifier receipt "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n" (170.637159ms)
+✔ rejects malformed verifier receipt "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nextra\n" (176.820342ms)
+✔ refuses to replace earlier evidence or write into deployment and input paths (465.176196ms)
+✔ flags a publication overlapping evidence collection instead of mixing observations (276.806497ms)
+✔ documented verified wrapper retains evidence safely with new receipt (224.85434ms)
+✔ documented verified wrapper retains evidence safely with existing receipt (154.039629ms)
+✔ documented verified wrapper retains evidence safely with missing parent (158.407456ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7285.302776
+
+$ node tests/test_exec_mirror_contract_witness.js (current checkout; historical binding variables unset)
+✔ installer owns every builder-shipped leaf in a superset of source inputs (246.021025ms)
+✔ scratch installer publishes every builder byte and mode and preserves runtime output (389.406102ms)
+✔ scratch installer refuses a changed snapshot before publication or registry update (369.65553ms)
+✔ each input that changes builder output also changes the pre-sync source identity (3266.514291ms)
+✔ documented copier matches builder bytes and modes and refuses a missing builder (291.260336ms)
+✔ every unreadable machine mark keeps strict mirror ceilings; verdict and rendering agree (242.782616ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4815.147733
+
+$ Historical contract attempt in current checkout (REFUSED; not included in passing count)
+/home/runner/work/Orchestrator/Orchestrator/scripts/review_contract_inputs.js:79
+        throw new Error(`executed source differs from exact-head binding: ${file.path}`);
+        ^
+
+Error: executed source differs from exact-head binding: CLAUDE.md
+    at check (/home/runner/work/Orchestrator/Orchestrator/scripts/review_contract_inputs.js:79:15)
+    at bindReviewInputs (/home/runner/work/Orchestrator/Orchestrator/scripts/review_contract_inputs.js:84:3)
+    at Object.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_exec_mirror_contract_witness.js:25:59)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.21.0

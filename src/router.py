@@ -453,6 +453,7 @@ def select_agent(
     profile_scores: dict[str, float] | None = None,
     causal_context: dict | None = None,
     profile_transport: str = "local",
+    simulate: bool = False,
 ):
     """Pick the best available agent entry for a task, or None if none have capacity.
 
@@ -467,6 +468,7 @@ def select_agent(
     With exploration enabled, occasionally pick a same-policy-tier challenger. The default
     epsilon-greedy mode refreshes least-observed eligible agents inside the same ε cap; Thompson-hybrid
     remains available as an override for posterior-sampling challenger reviews.
+    `simulate=True` suppresses routing-use heartbeats for offline policy analysis.
     """
     spec = _ROUTE_TABLE_TYPED.get(task_type)
     if not spec:
@@ -535,7 +537,7 @@ def select_agent(
         if challenger is not None:
             picked = challenger
             explored = True
-            if mode == "thompson-hybrid":
+            if mode == "thompson-hybrid" and not simulate:
                 # Records when Thompson sampling ACTUALLY chose a challenger — not merely when the
                 # flag is set — so the capability's evidence reflects real use. Daily-coalesced:
                 # routing runs many times per tick. (2026-08-09)

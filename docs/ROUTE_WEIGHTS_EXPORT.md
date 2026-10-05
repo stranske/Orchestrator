@@ -40,3 +40,17 @@ Publishing is deliberately double-gated. `--publish` has no remote effect unless
 `stranske/Orchestrator`, commits only `config/route-weights.json` on `exports/route-weights`, and
 pushes that branch. It never modifies `main`. A semantic no-op prints `unchanged` and creates no
 commit. Disable its daily shadow cadence with `ORCH_DISABLE_STEPS=route-weights-export`.
+
+The additive `exploration` block carries the weekly mode, sampled challengers, and a
+`policy_version` identifying the exported policy. `keepalive_outcomes.py` joins trusted runner
+dispatch timestamps to the export branch's commit history and records that tag, mode, weight
+version, and commit SHA in each ingested agent run's `routing_metadata`. It uses neither PR
+creation/merge time nor the current local shadow export. Existing keepalive rows with missing
+provenance are retried without changing their run IDs, timestamps, or outcome lineage.
+At settlement, ingest refreshes the runner history to include rounds added while the PR was open.
+
+Missing runner timestamps or export history leave policy attribution unknown. A PR with rounds
+under multiple policies retains a `dispatch_policies` list and has no single `policy_version`.
+These tags identify the export available at dispatch according to its commit timestamp; they do
+not prove the consumer fetched it or made an exploration decision. Ingest does not infer an
+`exploration` flag from a matching agent or challenger.
