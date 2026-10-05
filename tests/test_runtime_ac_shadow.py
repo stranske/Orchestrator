@@ -492,3 +492,88 @@ def test_shadow_execution_records_checks_without_outcome_write(
     assert result["gate_event"]["validation_status"] == "accepted"
     with feedback._conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 0
+
+
+def test_existing_ingested_run_refreshes_shadow_observation(private_brain, monkeypatch):
+    monkeypatch.setattr(keepalive_outcomes, "_gh_throttle", lambda _: None)
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "0")
+    pr = {
+        "number": 20,
+        "state": "OPEN",
+        "title": "Delivery",
+        "body": "Closes #1",
+        "headRefName": "codex/issue-1",
+        "headRefOid": "a" * 40,
+        "labels": [{"name": "agent:codex"}],
+        "author": {"login": "stranske"},
+        "createdAt": "2026-10-05T10:00:00Z",
+        "updatedAt": "2026-10-05T10:00:00Z",
+    }
+    calls = []
+    original = gate.observe_shadow_spec
+
+    def observe(*args, **kwargs):
+        calls.append(kwargs["head_sha"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gate, "observe_shadow_spec", observe)
+    kwargs = {
+        "_pr_fetch_fn": lambda *_: [pr],
+        "_issue_fetch_fn": lambda *_: BODY,
+        "_spec_dir": private_brain / "specs",
+    }
+    first = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+    path = gate.spec_path("owner/repo#20", spec_dir=kwargs["_spec_dir"])
+    before = path.read_bytes()
+    second = keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], **kwargs)
+    assert first["runtime_ac_specs_authored"] == 1
+    assert second["runtime_ac_specs_authored"] == 0
+    assert calls == ["a" * 40, "a" * 40]
+    assert path.read_bytes() == before
+    keepalive_outcomes.ingest_keepalive_outcomes(["owner/repo"], dry_run=True, **kwargs)
+    assert len(calls) == 2
+
+
+def test_existing_shadow_spec_observes_new_exact_head(private_brain, monkeypatch):
+    authored = gate.author_keepalive_spec(
+        "owner/repo",
+        {"number": 21, "body": "Closes #1", "headRefOid": "a" * 40},
+        "fixture",
+        issue_fetch_fn=lambda *_: BODY,
+        spec_dir=private_brain,
+    )
+    path = Path(authored["spec_path"])
+    before = path.read_bytes()
+    current = "b" * 40
+    monkeypatch.setattr(
+        gate.subprocess,
+        "run",
+        lambda *_a, **_k: subprocess.CompletedProcess([], 0, stdout=current + "\n", stderr=""),
+    )
+    monkeypatch.setattr(
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_k: {"gate": {"verdict": "PASS"}, "check_results": []},
+    )
+    result = gate.observe_shadow_spec(
+        "owner/repo#21",
+        "fixture",
+        spec_dir=private_brain,
+        env={"ORCH_RUN_RUNTIME_AC": "1"},
+        worktree=private_brain,
+        head_sha=current,
+    )
+    assert result["status"] == "executed"
+    assert result["blocks"] is False
+    assert path.read_bytes() == before
+    # A caller-supplied SHA still cannot substitute for the actual checkout.
+    current = "c" * 40
+    stale = gate.observe_shadow_spec(
+        "owner/repo#21",
+        "fixture",
+        spec_dir=private_brain,
+        env={"ORCH_RUN_RUNTIME_AC": "1"},
+        worktree=private_brain,
+        head_sha="b" * 40,
+    )
+    assert stale["status"] != "executed"
