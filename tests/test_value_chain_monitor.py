@@ -144,7 +144,7 @@ def test_situation_registry_counts_input_not_invocations():
                 }
             },
         )
-        == 1
+        is None
     )
     assert monitor.situation_count("capacity", {"cadence_inputs": {"capacity": 2}}) == 2
 
@@ -469,3 +469,62 @@ def test_nested_default_off_flag_requires_observed_disabled_input(tmp_path):
             ]
             == []
         )
+
+
+def test_partial_probe_population_stays_unmeasured_in_weekly_report(tmp_path):
+    path = ledger(tmp_path, ("deliberate-break-verifier",))
+    for probes in (
+        [{"precondition_met": False}, {"precondition_met": None}],
+        [{"precondition_met": True}, {}],
+        [{"precondition_met": False}, {"precondition_met": "false"}],
+    ):
+        section = monitor.report(
+            path=path,
+            env={},
+            inputs={"edges": [], "precondition_probes": {"deliberate-break-verifier": probes}},
+        )
+        row = section["rows"][0]
+        assert row["situation_count"] is None
+        assert row["first_break"] is None
+        text = "\n".join(monitor.format_lines(section))
+        assert "demand unmeasured" in text
+        assert "no_situation" not in text
+    assert (
+        monitor.situation_count("testgen-lane", {"precondition_probes": {"testgen-lane": []}}) == 0
+    )
+    assert (
+        monitor.situation_count(
+            "testgen-lane",
+            {"precondition_probes": {"testgen-lane": [{"precondition_met": False}]}},
+        )
+        == 0
+    )
+    assert (
+        monitor.situation_count(
+            "testgen-lane",
+            {
+                "precondition_probes": {
+                    "testgen-lane": [{"precondition_met": True}, {"precondition_met": False}]
+                }
+            },
+        )
+        == 1
+    )
+
+
+def test_historical_unknown_advisor_probe_prevents_measured_demand(tmp_path):
+    path = ledger(tmp_path, ("deliberate-break-verifier",))
+    for result in (False, None):
+        capability_advisor._record_matches(
+            {
+                "task": f"bounded repair {result}",
+                "capabilities": [
+                    {"capability_id": "deliberate-break-verifier", "precondition_met": result}
+                ],
+            },
+            surface="opener-lane",
+            path=path,
+        )
+    row = monitor.report(path=path, env={}, inputs={"edges": []})["rows"][0]
+    assert row["situation_count"] is None
+    assert row["first_break"] is None
