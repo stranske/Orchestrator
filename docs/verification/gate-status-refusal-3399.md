@@ -166,3 +166,27 @@ Black 26.5.1 formatted the changed test; the required repository-wide check pass
 `git diff --check` passes. The source/test commit is prepared in
 `/tmp/gate-rate-limit-review.git`, with its applyable patch at `/tmp/gate-rate-limit-review.patch`;
 the two changed files remain in the working tree for automation to commit on the PR branch.
+
+The 2026-10-05 follow-up covers empty and invalid verdict inputs, which the production step
+normalizes to `pending`. Both 403 and 404 same-repository refusals must still throw with that
+computed verdict and the selected PR head. The existing three refusal controls now include
+these cases, keeping collection at 24 tests. The unchanged baseline yields **3 failed, 21
+deselected**; production yields **24 passed**; the Gate/configuration/verdict-replay run yields
+**48 passed**, all with `-m "not slow"`. A temporary export whose refusal guard only handles
+recognized raw verdicts yields **2 failed, 1 passed, 21 deselected**, detecting the new regression.
+Production workflows, helpers, permissions and events are unchanged in this follow-up.
+
+Reconciliation reviewed the seven PR commits through `816ca8e`; the PR changes three files.
+Its published head passes Python 3.12/3.13, lint, format, typecheck, verification, mirror
+verification and combined coverage checks. PR #413 is open and ready for review. Its acceptance
+criteria are plain bullets; the first two are verified and should be checked. Updating the PR
+body, adding `needs-human`, and posting the reconciliation comment were rejected with
+`MCP tool call requires approval, but approval policy is never`. Remote tracking is unchanged.
+Fresh CI for this change, the seven-minute floor and repository merge_guard remain required.
+
+Black 26.5.1 formatted the changed test and the required repository-wide check passed:
+**297 files would be left unchanged**. The tools were staged from upstream GitHub sources in
+`/tmp/gate-tools`, using the worker-wakeup workaround above; `git diff --check` passes.
+The checkout's read-only `.git` prevents staging or committing on the branch. The source/test
+commit is prepared in `/tmp/gate-normalized-verdict-review.git`, with an applyable patch at
+`/tmp/gate-normalized-verdict-review.patch`; the same changes remain in the working tree.

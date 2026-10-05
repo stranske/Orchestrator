@@ -305,6 +305,16 @@ STATUS_CASES: list[dict[str, Any]] = [
     ),
     *(
         {
+            "name": f"same_repo_{error['status']}_{label}",
+            **SAME_REPO,
+            "state": raw_state,
+            "error": error,
+        }
+        for error in (REFUSED, REFUSED_404)
+        for label, raw_state in (("empty", ""), ("invalid", "unknown-verdict"))
+    ),
+    *(
+        {
             "name": f"rate_limit_{origin}_{route}_{state}",
             **head,
             "state": state,
@@ -468,13 +478,22 @@ def test_a_deleted_fork_is_named_for_what_it_is(status: dict) -> None:
     "cases",
     [
         [("same_repo_success", "success")],
-        [(f"same_repo_{state}", state) for state in ("failure", "error", "pending")],
-        [(f"same_repo_404_{state}", state) for state in ("success", "failure", "error", "pending")],
+        [
+            *[(f"same_repo_{state}", state) for state in ("failure", "error", "pending")],
+            *[(f"same_repo_403_{label}", "pending") for label in ("empty", "invalid")],
+        ],
+        [
+            *[
+                (f"same_repo_404_{state}", state)
+                for state in ("success", "failure", "error", "pending")
+            ],
+            *[(f"same_repo_404_{label}", "pending") for label in ("empty", "invalid")],
+        ],
     ],
     ids=["same_repo_success-success", "same_repo_failure-failure", "same_repo_404-success"],
 )
 def test_a_same_repo_refusal_fails_loudly(status: dict, cases: list[tuple[str, str]]) -> None:
-    """Both refusal routes fail for every verdict, retaining the three baseline controls."""
+    """Refusals fail after verdict normalization, retaining the three baseline controls."""
     for name, state in cases:
         for suffix, sha in (("", "headsha"), ("_new_head", "updated-headsha")):
             case_name = name + suffix
