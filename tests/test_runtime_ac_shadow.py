@@ -79,7 +79,9 @@ Complete these in order.
     manual = [check["instructions"] for check in checks if check["type"] == "manual"]
     assert "Named test: `::test_orphan` requires an explicit file." in manual
     assert "Inspect the saved receipt." in manual
-    assert all(ac["statement"] != "Complete these in order." for ac in reordered["acceptance_criteria"])
+    assert all(
+        ac["statement"] != "Complete these in order." for ac in reordered["acceptance_criteria"]
+    )
     assert all(0.0 <= check["confidence"] <= 1.0 for check in checks)
 
 
