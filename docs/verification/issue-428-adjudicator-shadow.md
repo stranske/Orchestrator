@@ -21,7 +21,7 @@ and local replay are distinct from runtime publication, which remains manual.
 
 ## Real replay
 
-The live 90-day Brain population contains 106 dispute rows; the issue's 71-row count is an older
+The live 90-day Brain population contains 95 dispute rows; the issue's 71-row count is an older
 snapshot. Seven bounded replay packets have real router-selected Gemini role runs, all tagged
 `source=retrospective`, for Orchestrator #458, #446, #443, #456, #414, Workflows #3748 and
 Manager-Database #1751. Initial packet collection refused truncated check evidence; reading
