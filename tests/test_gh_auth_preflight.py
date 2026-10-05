@@ -118,17 +118,17 @@ def _code(text: str) -> str:
 
 
 def _preflight_block() -> str:
-    """The real preflight, ending before mirror-reader reentry, with both above heartbeat."""
+    """The pinned tick's real preflight, ending before heartbeat activation."""
     text = _text()
     assert text.count(ANCHOR) == 1, f"expected exactly one {ANCHOR!r} in orchestrate.sh"
     assert text.count(HEARTBEAT_ANCHOR) == 1, f"expected exactly one {HEARTBEAT_ANCHOR!r}"
     assert (
         text.count(MIRROR_READER_ANCHOR) == 1
     ), f"expected exactly one {MIRROR_READER_ANCHOR!r} in orchestrate.sh"
-    start, end = text.index(ANCHOR), text.index(MIRROR_READER_ANCHOR)
+    start, end = text.index(ANCHOR), text.index(HEARTBEAT_ANCHOR)
     assert (
-        start < end < text.index(HEARTBEAT_ANCHOR)
-    ), "the gh preflight and mirror-reader reentry must run above the heartbeat export"
+        text.index(MIRROR_READER_ANCHOR) < start < end
+    ), "pin executable reads before the auth preflight, and authenticate before heartbeats"
     return text[start:end]
 
 
@@ -198,15 +198,15 @@ def test_the_preflight_sits_above_the_heartbeat_export() -> None:
     assert needle in block, "the classifier call must sit inside the preflight block"
 
 
-def test_active_preflight_precedes_mirror_reader_reentry() -> None:
-    """A refused credential must abort before a mirror can exec a second tick."""
+def test_mirror_reader_pins_the_active_preflight() -> None:
+    """Authentication itself must read code from the selected tick generation."""
     text = _text()
     assert (
         text.count(MIRROR_READER_ANCHOR) == 1
     ), "expected exactly one mirror-reader reentry anchor"
-    assert text.index(ANCHOR) < text.index(
-        MIRROR_READER_ANCHOR
-    ), "the GitHub auth preflight must run before mirror_reader can re-enter orchestrate.sh"
+    assert text.index(MIRROR_READER_ANCHOR) < text.index(
+        ANCHOR
+    ), "the tick must select its executable generation before loading the auth preflight"
 
 
 def test_gh_auth_status_is_not_the_preflight() -> None:
@@ -438,9 +438,17 @@ def test_a_refused_token_still_aborts_the_whole_tick(tmp_path: Path) -> None:
     proc, calls = _run_tick(tmp_path, "refused", lane_live=False)
     assert proc.returncode == 1, proc.stdout
     assert "  ABORT: gh not authenticated (rest: HTTP 401: Bad credentials);" in proc.stderr
+    # mirror_reader pins the tick generation before the auth preflight; it is not dispatch.
     after = [
         c
         for c in calls
-        if not c.startswith(("tick_watchdog.py", "cadence_registry.py", "gh_capacity.py"))
+        if not c.startswith(
+            (
+                "tick_watchdog.py",
+                "cadence_registry.py",
+                "gh_capacity.py",
+                "mirror_reader.py",
+            )
+        )
     ]
     assert not after, f"steps ran after a refused token: {after}"

@@ -29,6 +29,22 @@ ORCH="$ORCH_REPO/src"
 # in homebrew, vibe/cursor-agent in ~/.local|.cursor/bin. Without this, capacity.py can't see
 # ccusage → codex/claude read 'unknown' and never get routed.
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
+
+# ORCH-ANCHOR: mirror-reader-reentry -------------------------------------------------------------
+# Reopen the tick only after acquiring the publisher's shared lock. The helper
+# resolves the mirror link once and reopens the physical generation, exporting
+# that ORCH_DIR and Python import root to children. Retained generations allow
+# publication while this tick runs. During initial real-directory migration the
+# shared descriptor stays locked across shell children and exec transitions.
+# Bash-c prologue inspection has no script file and must remain read-only.
+# Pin before the watchdog, cadence registry, or auth preflight loads any module.
+# The pinned tick still checks authentication before heartbeats or dispatch.
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  if ! python3 "$ORCH/mirror_reader.py" check "$ORCH_REPO"; then
+    exec python3 "$ORCH/mirror_reader.py" run "$ORCH_REPO" /bin/bash "$ORCH_REPO/orchestrate.sh" "$@"
+  fi
+fi
+
 # gh auth for the launchd/cron context: gh stores its token in the macOS KEYRING, which a
 # launchd-spawned process CANNOT read (it works in an interactive Terminal only). Without this,
 # every gh call fails silently -> backlog.py falls back to STALE cache and dispatcher's label
@@ -286,21 +302,6 @@ if [[ "$mode" == "active" ]]; then
       echo "  $gh_defer_reason"
       ;;
   esac
-fi
-
-# ORCH-ANCHOR: mirror-reader-reentry -------------------------------------------------------------
-# Reopen the tick only after acquiring the publisher's shared lock. The helper
-# resolves the mirror link once and reopens the physical generation, exporting
-# that ORCH_DIR and Python import root to children. Retained generations allow
-# publication while this tick runs. During initial real-directory migration the
-# shared descriptor stays locked across shell children and exec transitions.
-# Bash-c prologue inspection has no script file and must remain read-only.
-# Placed AFTER the gh preflight so a refused or missing token ABORTs before any
-# mirror exec would re-enter the tick on blind state.
-if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-  if ! python3 "$ORCH/mirror_reader.py" check "$ORCH_REPO"; then
-    exec python3 "$ORCH/mirror_reader.py" run "$ORCH_REPO" /bin/bash "$ORCH_REPO/orchestrate.sh" "$@"
-  fi
 fi
 
 # ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
