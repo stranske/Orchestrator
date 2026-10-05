@@ -887,6 +887,20 @@ findings to their ids, so the edit mints no verdict. `redirect-apply-bootstrap` 
 purpose. Its invocation is an authorised apply, and `switch_review` raises its ON-but-idle drain
 from its invocations, so a pass that applies nothing must record nothing.
 
+**Firing findings reach switch review with separate step evidence (2026-10-05).**
+`switch_review.firing_regressions` consumes the persisted weekly `capability-firing-monitor.json`,
+then reads the current ledger and the cadence registry's declared capability carriers. Each
+regressed or overdue row carries the ledger's last invocation, success-stamp age and artifact mtime.
+A fresh success stamp later than the heartbeat reads `heartbeat silent, step ran`; a stale stamp
+reads `step last ran`. An artifact alone does not prove successful execution, and a cadence stamp
+for redirect linking does not prove an authorised apply. Missing or unreadable evidence stays
+UNKNOWN. The snapshot date remains visible; a newer heartbeat marks an old finding as history.
+No alarm is cleared, no regression rule changes, and no owner question or automated action is added.
+Route export records invocation on every daily run and success only after an actual publication;
+rail exercise records invocation without `--record`, which governs exercise verdicts only.
+Dedup: firing history and its ledger-only silence annotation already existed; the weekly reader
+and independent cadence evidence were missing. Existing heartbeat repairs from main are retained.
+
 **And a consult trial is not a switch doing anything (2026-10-02).** The switch review's idle rule
 read `last_invocation`, which a trial moves from any session, so one rail-exercise round on a
 switch-mapped capability made an idle ON switch read active for `REVIEW_DAYS` and hid the drain its

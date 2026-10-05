@@ -123,7 +123,7 @@ def test_the_route_weights_export_records_its_run_as_an_invocation(tick, monkeyp
     assert route_weights_export.main() == 0
     invocation = _one(tick, "route-weights-export", "invocation")
     assert invocation["ref"] == "route_weights_export.main", invocation
-    _one(tick, "route-weights-export", "success")
+    assert _events(tick, "route-weights-export", "success") == []
     assert _silences(tick, monkeypatch, "route-weights-export") == []
 
 
