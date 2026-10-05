@@ -30,6 +30,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -210,7 +211,7 @@ def test_a_dispatched_agents_gh_authenticates_from_the_dispatchers_config(sandbo
     assert "gh auth login" in unpinned.stdout + unpinned.stderr, unpinned.stderr
 
 
-def _child_env(sandbox: Path, **extra: str) -> dict[str, str]:
+def _child_env(sandbox: Path, *, module_dir: Path | None = None, **extra: str) -> dict[str, str]:
     """A child interpreter that imports the dispatcher with every runtime path in the sandbox.
 
     It inherits no ORCH_* variable, so nothing points it back at live state, and the registries
@@ -232,7 +233,7 @@ def _child_env(sandbox: Path, **extra: str) -> dict[str, str]:
         ORCH_OFFLOAD_DIR=str(runtime / "offloads"),
         ORCH_MODEL_PROBE="0",
         ORCH_CODEX_BYPASS_INNER_SANDBOX="0",
-        PYTHONPATH=str(paths.MODULE_DIR),
+        PYTHONPATH=str(module_dir or paths.MODULE_DIR),
         **extra,
     )
     env.update(
@@ -243,24 +244,33 @@ def _child_env(sandbox: Path, **extra: str) -> dict[str, str]:
 
 @contextmanager
 def _no_registry_seeded():
-    """Fail if a child seeded a registry inside MODULE_DIR, the directory the mirror deploys.
+    """Attribute registry writes to this child, not another xdist worker.
 
-    Every child launched from this file goes through it: an unguarded launch that seeds first also
-    disarms a guarded one after it, because each computes what was absent when it started.
+    Import unchanged private source files; an accidental default registry write still
+    fails the guard, while concurrent tests cannot create files in this child's tree.
     """
-    seeded = [paths.MODULE_DIR / "experiments" / n for n in paths.SEEDED_REGISTRY_ENV.values()]
-    absent = [path for path in seeded if not path.exists()]
-    yield
-    created = [str(path) for path in absent if path.exists()]
-    assert not created, f"the child seeded a registry inside MODULE_DIR: {created}"
+    with tempfile.TemporaryDirectory(prefix="agent-gh-child-") as temp:
+        module_dir = Path(temp) / "src"
+        shutil.copytree(
+            paths.MODULE_DIR,
+            module_dir,
+            ignore=shutil.ignore_patterns("__pycache__", "experiments"),
+        )
+        yield module_dir
+        created = [
+            str(module_dir / "experiments" / name)
+            for name in paths.SEEDED_REGISTRY_ENV.values()
+            if (module_dir / "experiments" / name).exists()
+        ]
+        assert not created, f"the child seeded a registry inside MODULE_DIR: {created}"
 
 
 def _run_child(sandbox: Path, script: str, *args: str, **extra: str) -> dict:
-    with _no_registry_seeded():
+    with _no_registry_seeded() as module_dir:
         proc = subprocess.run(
             [sys.executable, "-c", script, *args],
             cwd=sandbox,
-            env=_child_env(sandbox, **extra),
+            env=_child_env(sandbox, module_dir=module_dir, **extra),
             capture_output=True,
             text=True,
             timeout=180,
@@ -378,11 +388,11 @@ def test_relative_config_paths_keep_dispatcher_identity_across_child_cwd(
 
 
 def test_dispatcher_selftest_runs_with_the_gh_config_pin_disabled(sandbox):
-    with _no_registry_seeded():
+    with _no_registry_seeded() as module_dir:
         ran = subprocess.run(
-            [sys.executable, str(paths.MODULE_DIR / "dispatcher.py"), "--selftest"],
+            [sys.executable, str(module_dir / "dispatcher.py"), "--selftest"],
             cwd=sandbox,
-            env=_child_env(sandbox, ORCH_AGENT_GH_CONFIG_DISABLED="1"),
+            env=_child_env(sandbox, module_dir=module_dir, ORCH_AGENT_GH_CONFIG_DISABLED="1"),
             capture_output=True,
             text=True,
             timeout=180,
