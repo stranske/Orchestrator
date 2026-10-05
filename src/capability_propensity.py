@@ -787,8 +787,8 @@ SURFACE_KEY = "surface"
 FIXTURE_PROVENANCE_EVENT = "fixture_provenance_amendment"
 
 
-def _events(cap: dict) -> list[dict]:
-    """Apply fixture provenance corrections on read, retaining original ledger events."""
+def _events(cap: dict, *, infer_fixture: bool = True) -> list[dict]:
+    """Classify explicit fixture identities on read without changing ledger history."""
     events = list(cap.get("event_history") or [])
     corrected = {
         ev.get("ref")
@@ -805,7 +805,8 @@ def _events(cap: dict) -> list[dict]:
                     VERDICT_PROVENANCE_KEY: "fixture_observed",
                 },
             }
-            if ev.get("type") == "outcome" and ev.get("ref") in corrected
+            if ev.get("type") == "outcome"
+            and (ev.get("ref") in corrected or (infer_fixture and _fixture_contract_event(ev)))
             else ev
         )
         for ev in events
@@ -832,7 +833,9 @@ def migrate_fixture_provenance(*, path=None) -> dict:
     caps = capabilities.load_declared(ledger)
     changed = left = 0
     for cid, cap in sorted(caps.items()):
-        for event in _events(cap):
+        # Maintenance must inspect recorded provenance, even when read-only reports
+        # already recognize the contract as fixture evidence.
+        for event in _events(cap, infer_fixture=False):
             if event.get("type") != "outcome":
                 continue
             meta = event.get("metadata") or {}
@@ -7342,6 +7345,8 @@ def _fmt(rep: dict) -> str:
         f"capability propensity — {rep['window_days']}d window",
         f"  experiments: {rep['experiment_count']} "
         f"({rep['resolved_experiment_count']} resolved)",
+        f"  fixture evidence: {rep['fixture_experiment_count']} experiments / "
+        f"{rep['fixture_verdict_count']} verdict events",
         # TWO ACCOUNTINGS, SIDE BY SIDE, NEVER MERGED — see report()'s comment. A verdict is this
         # module's own 90-day-windowed ledger read; an outcome link is an all-time, versioned Brain
         # edge to a keepalive run. Different sources, different windows, both real; do not average.
