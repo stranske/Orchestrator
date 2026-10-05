@@ -22,6 +22,21 @@ def _date(timestamp):
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
 
 
+def _render_section(section):
+    """Exercise the report a reader sees, including the section's formatter wiring."""
+    return switches.format_report(
+        {
+            "review_days": switches.REVIEW_DAYS,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+            "firing_regressions": section,
+        }
+    )
+
+
 def _private_ledger(tmp_path, monkeypatch, cap_id):
     """Run the real daily writer against a private ledger with a fixed clock."""
     ledger = tmp_path / "capabilities.json"
@@ -66,7 +81,7 @@ def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY):
 
 def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(tmp_path, monkeypatch):
     section = _section(tmp_path, monkeypatch)
-    text = "\n".join(switches._firing_lines(section))
+    text = _render_section(section)
     assert f"heartbeat silent, step ran {_date(NOW - 3600)}" in text
     assert f"ledger last heartbeat: {_date(NOW - 30 * DAY)}" in text
     assert "stamp age seconds=3600" in text
@@ -79,7 +94,7 @@ def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(
 
 def test_a_real_stop_prints_step_last_ran(tmp_path, monkeypatch):
     section = _section(tmp_path, monkeypatch, stamp_age=25 * DAY)
-    text = "\n".join(switches._firing_lines(section))
+    text = _render_section(section)
     assert f"step last ran {_date(NOW - 25 * DAY)}" in text
     assert f"ledger last heartbeat: {_date(NOW - 30 * DAY)}" in text
     assert f"stamp age seconds={25 * DAY}" in text
@@ -168,7 +183,6 @@ def test_review_and_formatter_consume_the_firing_section(monkeypatch):
 def _export(tmp_path, monkeypatch, *, publish=False, published=False):
     _, beats = _private_ledger(tmp_path, monkeypatch, "route-weights-export")
     monkeypatch.setattr(export, "build_document", lambda *_a: {"source_version": 2})
-    monkeypatch.setattr(export, "write_document", lambda *_a: False)
     monkeypatch.setattr(export, "publish_document", lambda *_a: published)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(
@@ -181,14 +195,26 @@ def _export(tmp_path, monkeypatch, *, publish=False, published=False):
     return beats
 
 
-def test_route_weights_export_heartbeats_invocation_without_a_publish(tmp_path, monkeypatch):
+def test_route_weights_export_heartbeats_invocation_without_a_publish(tmp_path, monkeypatch, capsys):
+    # An unchanged artifact is the original failure case: use the real writer and
+    # preserve its old timestamp while the ledger records today's invocation.
+    artifact = tmp_path / "route-weights-export.json"
+    document = {"source_version": 2}
+    assert export.write_document(artifact, document)
+    os.utime(artifact, (NOW - 10 * DAY, NOW - 10 * DAY))
     beats = _export(tmp_path, monkeypatch)
-    assert [a[1] for a, _ in beats] == ["invocation"]
+    assert capsys.readouterr().out == f"unchanged {artifact}\n"
+    monkeypatch.setattr(capabilities, "_now", lambda: NOW + DAY)
+    assert export.main() == 0
+    assert capsys.readouterr().out == f"unchanged {artifact}\n"
+    assert [a[1] for a, _ in beats] == ["invocation", "invocation"]
     row = capabilities.load(tmp_path / "capabilities.json", create=False)["route-weights-export"]
-    assert row["last_invocation"] == NOW
+    assert row["last_invocation"] == NOW + DAY
     assert not row["last_success"]
-    assert [event["type"] for event in row["event_history"]] == ["invocation"]
+    assert [event["type"] for event in row["event_history"]] == ["invocation", "invocation"]
     assert row["event_history"][0]["ref"] == "route_weights_export.main"
+    assert row["event_history"][1]["timestamp"] == NOW + DAY
+    assert artifact.stat().st_mtime == NOW - 10 * DAY
 
 
 @pytest.mark.parametrize("published", [False, True])
