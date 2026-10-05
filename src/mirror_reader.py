@@ -95,6 +95,11 @@ def run(root: Path, command: list[str], lock_timeout: float = 30.0) -> int:
             absolute = Path(os.path.abspath(entry))
             if absolute.is_relative_to(root):
                 return str(pinned / absolute.relative_to(root))
+            # Canonicalize only ancestors ABOVE the logical publication link.
+            # Resolving the entry itself would follow a newly published generation.
+            for ancestor in (absolute, *absolute.parents):
+                if ancestor.name == root.name and ancestor.parent.resolve() == root.parent:
+                    return str(pinned / absolute.relative_to(ancestor))
             return entry
 
         command = [pin_argument(argument) for argument in command]
