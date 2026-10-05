@@ -3290,6 +3290,8 @@ def record_role_run(
     model: str | None = None,
     ts: int | None = None,
     batch_id: str | None = None,
+    source: str | None = None,
+    report_state: str | None = None,
 ):
     """Record a role invocation as its own learnable run.
 
@@ -3310,6 +3312,8 @@ def record_role_run(
         "action": action,
         "decision_source": decision_source,
         "proposal": proposal,
+        "source": source,
+        "report_state": report_state,
     }
     if batch_id is not None:
         metadata["batch_id"] = batch_id

@@ -25,6 +25,7 @@
 
 <rect class="bg" x="1" y="1" width="678" height="540" rx="12"/>
 
+<!-- Issue424: auto judgment routing; deterministic non-reserve worker selection; no placeholder plans. -->
 <!-- legend -->
 <rect class="rail" x="40" y="26" width="14" height="14" rx="3"/>
 <text class="ts" x="60" y="37">deterministic rail</text>
@@ -46,7 +47,7 @@
 <rect class="stage" x="56" y="130" width="584" height="52" rx="8"/>
 <text class="th" x="68" y="161">Check in-flight first</text>
 <rect class="rail" x="250" y="144" width="46" height="24" rx="4"/><text class="ct" x="273" y="160" text-anchor="middle">watch</text>
-<rect class="role" x="306" y="144" width="100" height="24" rx="4"/><text class="ct" x="356" y="160" text-anchor="middle">redirect agent</text>
+<rect class="role" x="306" y="144" width="100" height="24" rx="4"/><text class="ct" x="356" y="160" text-anchor="middle">redirect (auto)</text>
 <rect class="rail" x="412" y="144" width="118" height="24" rx="4"/><text class="ct" x="471" y="160" text-anchor="middle">redirect apply (gated)</text>
 
 <!-- stage 3 -->
@@ -67,7 +68,7 @@
 <rect class="stage" x="56" y="328" width="584" height="52" rx="8"/>
 <text class="th" x="68" y="359">Monitor + verify</text>
 <rect class="rail" x="250" y="342" width="46" height="24" rx="4"/><text class="ct" x="273" y="358" text-anchor="middle">watch</text>
-<rect class="role" x="306" y="342" width="100" height="24" rx="4"/><text class="ct" x="356" y="358" text-anchor="middle">redirect agent</text>
+<rect class="role" x="306" y="342" width="100" height="24" rx="4"/><text class="ct" x="356" y="358" text-anchor="middle">redirect (auto)</text>
 <rect class="rail" x="416" y="342" width="46" height="24" rx="4"/><text class="ct" x="439" y="358" text-anchor="middle">gates</text>
 <rect class="role" x="472" y="342" width="82" height="24" rx="4"/><text class="ct" x="513" y="358" text-anchor="middle">adjudicator</text>
 <rect class="role" x="560" y="342" width="76" height="24" rx="4"/><text class="ct" x="598" y="358" text-anchor="middle">ux_review</text>
@@ -93,10 +94,10 @@
 
 <!-- feedback band -->
 <rect class="stage" x="56" y="470" width="584" height="52" rx="8"/>
-<text class="th" x="68" y="489">feedback.py · record → ingest → relearn (beta-binomial)</text>
+<text class="th" x="68" y="489">feedback.py · record source/state → ingest → relearn</text>
 <text class="ts" x="68" y="514">learns via outcomes:</text>
 <rect class="rail" x="118" y="502" width="104" height="18" rx="4"/><text class="ct" x="170" y="514" text-anchor="middle">selection weights</text>
-<rect class="role" x="232" y="502" width="116" height="18" rx="4"/><text class="ct" x="290" y="514" text-anchor="middle">role:&lt;name&gt; fit</text>
+<rect class="role" x="232" y="502" width="116" height="18" rx="4"/><text class="ct" x="290" y="514" text-anchor="middle">role fit + source</text>
 <rect class="rail" x="360" y="502" width="152" height="18" rx="4"/><text class="ct" x="436" y="514" text-anchor="middle">capability fleet edges</text>
 
 <!-- return arc -->

@@ -111,7 +111,8 @@ export ORCH_FRONTEND_VERIFY_START_BROWSER="${ORCH_FRONTEND_VERIFY_START_BROWSER:
 # redirect reports — 202 gemini runs and 187 role-redirect invocations in eleven days, 0 applied,
 # 0 consumers. Set to 1 only with a consumer of the corpus named.
 export ORCH_REDIRECT_SWEEP_RECORD_CORPUS="${ORCH_REDIRECT_SWEEP_RECORD_CORPUS:-0}"
-export ORCH_REDIRECT_SWEEP_BACKEND="${ORCH_REDIRECT_SWEEP_BACKEND:-cursor}"
+# Unset/auto lets the redirect role router choose its judgment backend.
+export ORCH_REDIRECT_SWEEP_BACKEND="${ORCH_REDIRECT_SWEEP_BACKEND:-auto}"
 # Typed role activation (bounded, shadow/advisory): Prompt and Decomposer can author
 # dispatch context, Triage compares one bounded backlog snapshot, and Adjudicator runs
 # only on genuine persisted-evidence disagreement. Deterministic routing/gates remain

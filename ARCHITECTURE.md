@@ -196,7 +196,6 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
-<<<<<<< HEAD
 PromptAgent is offered at the `research-program` and `repo-audit:phase-4` batch-filing
 surfaces. `run_prompt_batch` consumes one per-cycle prompt-role decision for a whole
 batch; each body retains its own validated role run and outcome lineage. Explicit
@@ -204,14 +203,13 @@ batch authoring does not enable automatic dispatch roles: an unset `ORCH_ROLE_SH
 still leaves that seam off, and the delegate CLI reports the unset gate once.
 Single-body, one-prompt, and no-batch declines are `wrong_moment`, so they remain
 visible in surface counts without demoting the binding or rewriting past events.
-=======
+
 The weekly `switch_review` also consumes `value_chain_monitor`, a deterministic
 read-only rail beside Monitor and verify. It compares independent situation populations
 with ledger invocations and existing Brain influence edges, naming the earliest broken
 step and input switches held off. Unknown demand never becomes zero. It changes no
 selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
 the section rather than a second audit log or inventory.
->>>>>>> origin/main
 
 ## The feedback loop closes over both surfaces
 
@@ -1336,3 +1334,15 @@ exports valid Markdown files and a manifest containing role-run IDs and all vali
 This extends the existing PromptAgent role with explicit batch-authoring bindings at
 `research-program` and `repo-audit:phase-4`. Automatic dispatch roles remain shadow-gated;
 these bindings do not enable autonomous dispatch.
+
+### Redirect routing and provenance (issue #424)
+
+Unset/`auto` sweep backends let `route_role("redirect")` select the judgment backend.
+Explicit backends remain overrides. A redirect/decompose proposal lacking a worker uses
+`router.select_agent(task_type or "implement")`, excluding reserve and backup seats:
+`implement` is a task prior, not a registered role. The plan records `agent_source=router`.
+No available worker produces a named error and inspection-only commands; direct plan
+construction refuses a missing or placeholder agent. Watch classification retains its
+recommendation while withholding apply commands until a real worker is selected.
+Role-run Brain metadata retains caller `source` and `report_state`, distinguishing
+real sweep stalls, live dispatch and historical replay without changing apply authority.
