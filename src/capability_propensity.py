@@ -1704,11 +1704,11 @@ def record_usefulness(
         # that when the seam was put there first.
         timestamp=timestamp,
         metadata={
-            "source": source_tag,
             USEFUL_KEY: bool(useful),
             "evidence": _capped(evidence),
             **extra,
             **(metadata or {}),
+            "source": source_tag,
             **_fleet_metadata(capability_id, deliverable, path),
         },
     )
@@ -8109,14 +8109,14 @@ def detect(*, path=None, apply_promotions: bool = False) -> dict:
 
 
 def _ledger_rows_for_detect(path) -> dict[str, dict]:
-    """The ledger as declared, read once per detect; an unreadable ledger withholds nothing."""
+    """Read classification once; without it detection cannot safely promote or demote."""
     try:
         return capabilities.load_declared(path or capabilities.REG)
     except Exception:  # noqa: BLE001
         try:
             return capabilities.load(path or capabilities.REG, create=False)
-        except Exception:  # noqa: BLE001
-            return {}
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("cannot detect without the classification ledger") from exc
 
 
 def names_tick_step(trigger_cadence) -> bool:

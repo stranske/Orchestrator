@@ -232,3 +232,69 @@ def test_record_usefulness_still_refuses_an_unprefixed_id(tmp_path):
     with pytest.raises(ValueError, match="unknown verdict source"):
         cp.record_usefulness("offload", "role:decomposer:gemini:1", source="shadow", **common)
     assert _outcomes(ledger, "offload") == [], "a refused verdict must write nothing"
+
+
+@pytest.mark.parametrize(
+    ("source", "experiment", "caller_source", "expected_source", "production_count"),
+    [
+        ("production_run", "role:decomposer:1", "capability_propensity", "production_run", 1),
+        ("", "advice:0123456789ab", "production_run", "capability_propensity", 0),
+    ],
+)
+def test_caller_metadata_cannot_change_validated_verdict_source(
+    tmp_path, source, experiment, caller_source, expected_source, production_count
+):
+    ledger = _ledger(tmp_path, _cap("role-decomposer"))
+    assert cp.record_usefulness(
+        "role-decomposer",
+        experiment,
+        useful=True,
+        evidence=EVIDENCE,
+        provenance=cp.PROVENANCE_DEFAULT,
+        source=source,
+        metadata={"source": caller_source, "verdict_kind": "delivery"},
+        path=ledger,
+    )
+    (verdict,) = _outcomes(ledger, "role-decomposer")
+    assert verdict["metadata"]["source"] == expected_source
+    assert verdict["metadata"]["verdict_kind"] == "delivery"
+    row = capabilities.load(ledger, create=False)["role-decomposer"]
+    assert capabilities.production_run_verdicts(row) == production_count
+
+
+def test_detect_refuses_apply_when_classification_ledger_is_unreadable(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path, _cap("obs-report"))
+    calls = []
+
+    def transient_failure(reader):
+        failed = False
+
+        def read(*args, **kwargs):
+            nonlocal failed
+            if not failed:
+                failed = True
+                raise OSError("classification ledger temporarily unavailable")
+            return reader(*args, **kwargs)
+
+        return read
+
+    monkeypatch.setattr(
+        capabilities, "load_declared", transient_failure(capabilities.load_declared)
+    )
+    monkeypatch.setattr(capabilities, "load", transient_failure(capabilities.load))
+    monkeypatch.setattr(cp, "finds", lambda **kwargs: [])
+    monkeypatch.setattr(cp, "SURFACE_RECORD_GLOBS", {})
+    monkeypatch.setattr(capability_advisor, "SURFACE_BINDINGS", {})
+    monkeypatch.setattr(cp, "observed_surfaces", lambda **kwargs: {SURFACE})
+    monkeypatch.setattr(cp, "surface_records", lambda surface: ["one record"])
+    monkeypatch.setattr(
+        cp,
+        "propose_bindings",
+        lambda *args, **kwargs: calls.append("proposal") or [_proposal("obs-report", "promote")],
+    )
+    monkeypatch.setattr(
+        cp, "record_promotion", lambda *args, **kwargs: calls.append("write") or True
+    )
+    with pytest.raises(RuntimeError, match="classification ledger"):
+        cp.detect(path=ledger, apply_promotions=True)
+    assert calls == [], "no proposal evaluation or promotion may run without classification"
