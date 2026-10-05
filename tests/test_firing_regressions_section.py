@@ -79,7 +79,9 @@ def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY):
     return switches.firing_regressions(now=NOW)
 
 
-def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(tmp_path, monkeypatch):
+def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(
+    tmp_path, monkeypatch
+):
     section = _section(tmp_path, monkeypatch)
     text = _render_section(section)
     assert f"heartbeat silent, step ran {_date(NOW - 3600)}" in text

@@ -369,12 +369,17 @@ def main() -> int:
             print("publish blocked: ORCH_ROUTE_WEIGHTS_PUBLISH!=1; local export retained")
         else:
             if publish_document(document):
-                capabilities.daily_heartbeat(
-                    "route-weights-export",
-                    "success",
-                    ref=EXPORT_BRANCH,
-                    metadata={"source_version": document["source_version"], "published": True},
-                )
+                try:
+                    capabilities.daily_heartbeat(
+                        "route-weights-export",
+                        "success",
+                        ref=EXPORT_BRANCH,
+                        metadata={"source_version": document["source_version"], "published": True},
+                    )
+                except Exception as exc:  # noqa: BLE001 — telemetry cannot undo publication
+                    print(
+                        f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr
+                    )
     return 0
 
 
