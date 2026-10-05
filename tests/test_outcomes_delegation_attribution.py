@@ -114,16 +114,19 @@ def brain(monkeypatch, tmp_path):
 
 @pytest.fixture
 def gh(monkeypatch):
-    """Install a stub gh answering `pr view`, `issue view`, `comments` and `list:<head branch>`.
-    Returns the list of keys asked, in order; an unexpected call fails the test."""
+    """Install a stub gh answering `pr view`, `issue view`, `comments`, `closing` (the closing
+    references' merge-time read) and `list:<head branch>`. Returns the list of keys asked, in
+    order; an unexpected call fails the test."""
     calls: list[str] = []
 
     def install(answers: dict) -> list[str]:
         def fake_run(argv, capture_output=True, text=True, **_kw):
             if argv[1:3] == ["pr", "list"]:
                 key = f"list:{argv[argv.index('--head') + 1]}"
+            elif argv[1] == "api":
+                key = "closing" if argv[2] == "graphql" else "comments"
             else:
-                key = "comments" if argv[1] == "api" else " ".join(argv[1:3])
+                key = " ".join(argv[1:3])
             calls.append(key)
             if key not in answers:
                 raise AssertionError(f"unexpected gh call: {argv}")
@@ -237,10 +240,12 @@ def test_another_lanes_pr_on_a_fallback_branch_is_never_asked_about_or_credited(
             "pr view": NOT_A_PR,
             "list:gemini/issue-2620": NO_PR,
             "issue view": issue(refs=[{"number": 2627}]),
+            # #2627 merged 39 days before the label, long before the issue closed: it counts.
+            "closing": outcomes._closing_read(iso(6000), (2627, iso(-39 * 86400))),
         }
     )
     state, outcome = resolve("o/r#2620", "gemini")
-    assert calls == ["pr view", "list:gemini/issue-2620", "issue view"], calls
+    assert calls == ["pr view", "list:gemini/issue-2620", "issue view", "closing"], calls
     assert state["candidateBranches"] == ["gemini/issue-2620"], state
     assert_unattributed(outcome, feedback.UNATTRIBUTED_CLOSING_PR)
 
@@ -361,6 +366,7 @@ def test_an_own_branch_pr_settled_before_the_label_is_passed_over(gh, issue_answ
             "pr view": NOT_A_PR,
             "list:gemini/issue-7": (0, json.dumps([old]), ""),
             "issue view": issue_answer,
+            "closing": outcomes._closing_read(iso(3000), (9, iso(2999))),
         }
     )
     state, outcome = resolve("o/r#7", "gemini")
