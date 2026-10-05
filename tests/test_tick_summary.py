@@ -8,11 +8,27 @@ import tick
 
 
 def test_summary_prints_one_headline_and_writes_the_plan(monkeypatch, tmp_path, capsys):
+    owned = "already in agent pipeline (agent:codex) — not re-delegating"
     plan = {
-        "chosen": [{"target": "stranske/Ready#1", "applied": False}],
+        "chosen": [
+            {"target": "stranske/Ready#1", "applied": None, "skip": owned, "labels_read": True}
+        ],
         "no_capacity": [{"target": "stranske/Ready#2"}],
-        "deferred": [],
+        "deferred": ["stranske/Ready#3"],
         "blocked": [],
+        "cap": 3,
+        "examine_cap": 12,
+        "delegations": 0,
+        "refused": 1,
+        "errors": 0,
+        "examined": 2,
+        "deferral": {
+            "delegable": 1,
+            "drainable": 0,
+            "by_cap": [],
+            "by_examine_cap": ["stranske/Ready#3"],
+            "delegable_targets": ["stranske/Ready#3"],
+        },
     }
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(tick.router, "load_capacity", lambda: {})
@@ -23,8 +39,8 @@ def test_summary_prints_one_headline_and_writes_the_plan(monkeypatch, tmp_path, 
     assert tick.main(["--summary"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 1 and lines[0].startswith("TICK-PLAN:")
-    assert "1 targets chosen, 0 applied, 1 skipped (shadow)" in lines[0]
-    assert "1 no capacity" in lines[0]
+    assert "delegations 0/3 would apply (shadow); 1 refused; examined 2/12;" in lines[0]
+    assert "1 no capacity, 0 blocked; deferred 1 (delegable 1, drainable 0)" in lines[0]
     assert str(tmp_path / "tick-plan.json") in lines[0]
     assert json.loads((tmp_path / "tick-plan.json").read_text()) == plan
 
