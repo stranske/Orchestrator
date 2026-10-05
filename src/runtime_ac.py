@@ -1371,9 +1371,7 @@ def author_issue_spec(
         (line, True) for line in sections["tasks"]
     ]
     nodes_by_line = [_issue_named_test_nodes(line) for line, _ in obligations]
-    break_lines = [
-        bool(re.search(r"\bbreak\b.*\brevert\b", line, re.I)) for line, _ in obligations
-    ]
+    break_lines = [bool(re.search(r"\bbreak\b.*\brevert\b", line, re.I)) for line, _ in obligations]
     # A break may precede the named tests, or those tests may live in Tasks.
     named_nodes = list(
         dict.fromkeys(
