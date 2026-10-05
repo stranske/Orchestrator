@@ -241,11 +241,12 @@ def test_ingest_authors_a_spec_once_per_new_pr(private_brain, monkeypatch, pr_bo
     assert len(issue_commands) == 1
     next_path = gate.spec_path("owner/repo#3", spec_dir=kwargs["_spec_dir"])
     assert json.loads(next_path.read_text())["verification"]["source_issue"] == f"{issue_repo}#1"
-    authored_events = [event for event in feedback.runtime_ac_gate_events() if event["spec_authored"]]
+    authored_events = [
+        event for event in feedback.runtime_ac_gate_events() if event["spec_authored"]
+    ]
     assert {event["target"] for event in authored_events} == {"owner/repo#2", "owner/repo#3"}
     assert all(event["blocking"] is False and event["shadow_only"] for event in authored_events)
     assert os.environ["ORCH_RUN_RUNTIME_AC"] == "0"
-
 
 def test_shadow_spec_cannot_create_an_implicit_merge_gate(private_brain, monkeypatch):
     authored = gate.author_keepalive_spec(
@@ -259,7 +260,9 @@ def test_shadow_spec_cannot_create_an_implicit_merge_gate(private_brain, monkeyp
     assert not gate.required({"labels": []}, path)
     assert gate.eligibility({"labels": []}, path)["required"] is False
     monkeypatch.setattr(
-        runtime_ac, "run_verification", lambda *_a, **_k: pytest.fail("shadow spec executed by merge")
+        runtime_ac,
+        "run_verification",
+        lambda *_a, **_k: pytest.fail("shadow spec executed by merge"),
     )
     monkeypatch.setattr(
         runtime_ac, "record_gate_verdict", lambda *_a, **_k: pytest.fail("shadow verdict consumed")
