@@ -154,6 +154,14 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
+PromptAgent is offered at the `research-program` and `repo-audit:phase-4` batch-filing
+surfaces. `run_prompt_batch` consumes one per-cycle prompt-role decision for a whole
+batch; each body retains its own validated role run and outcome lineage. Explicit
+batch authoring does not enable automatic dispatch roles: an unset `ORCH_ROLE_SHADOW`
+still leaves that seam off, and the delegate CLI reports the unset gate once.
+Single-body, one-prompt, and no-batch declines are `wrong_moment`, so they remain
+visible in surface counts without demoting the binding or rewriting past events.
+
 ## The feedback loop closes over both surfaces
 
 `feedback.py` learns (1) **router weights** — which agent per task_type — and (2) **role ↔ backend

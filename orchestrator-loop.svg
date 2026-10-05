@@ -56,7 +56,7 @@
 <!-- stage 4 -->
 <rect class="stage" x="56" y="262" width="584" height="52" rx="8"/>
 <text class="th" x="68" y="293">Delegate</text>
-<rect class="role" x="246" y="276" width="100" height="24" rx="4"/><text class="ct" x="296" y="292" text-anchor="middle">prompt agent</text>
+<rect class="role" x="246" y="276" width="100" height="24" rx="4"/><text class="ct" x="296" y="292" text-anchor="middle"><title>Batch filing: research-program and repo-audit:phase-4; one capped decision per batch, independent scored body outputs. Automatic dispatch roles remain shadow-gated.</title>prompt agent</text>
 <rect class="rail" x="348" y="276" width="148" height="24" rx="4"/><text class="ct" x="422" y="292" text-anchor="middle">dispatcher + provision</text>
 
 <!-- stage 5 -->

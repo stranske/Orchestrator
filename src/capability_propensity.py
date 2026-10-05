@@ -541,6 +541,13 @@ def verdict_judge(metadata: dict | None) -> str:
 # unevaluated precondition is a defect in the capability), so before `repairable` existed it was
 # recorded and INERT FOREVER — 11 of them on the live ledger with no channel that could act on any.
 DECLINE_KINDS: dict[str, dict] = {
+    "wrong_moment": {
+        "demotable": False,
+        "repairable": False,
+        "offer_improvable": False,
+        "fix": "offer at the batch authoring decision, not at a single-body moment",
+        "task_shape": "A batch of issue bodies or prompts authored at one decision point.",
+    },
     # It does not fit this work. The binding or the matcher is wrong -- and "the matcher is wrong" is
     # a defect in the capability, so this is the one kind that is BOTH.
     "wrong_match": {
@@ -727,6 +734,19 @@ DECLINE_KINDS: dict[str, dict] = {
 DECLINE_KIND_DEFAULT = "unspecified"
 
 
+def classify_decline_kind(kind: str, reason: str) -> str:
+    """Read old single-body declines without rewriting their append-only events."""
+    import re
+
+    if kind in {DECLINE_KIND_DEFAULT, "scope_too_small"} and re.search(
+        r"\b(?:single[ -]body|one[ -]prompt|single[ -]prompt|one[ -]body|no[ -]batch)\b",
+        reason,
+        re.IGNORECASE,
+    ):
+        return "wrong_moment"
+    return kind
+
+
 def decline_kind_demotable(kind: str) -> bool:
     """Whether a decline of this kind may drive a demotion. One lookup, so it cannot drift."""
     return bool((DECLINE_KINDS.get(str(kind)) or DECLINE_KINDS[DECLINE_KIND_DEFAULT])["demotable"])
@@ -835,7 +855,10 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     if reason:
                         trial["decline_reasons"].setdefault(cap_id, reason)
                     trial["decline_kinds"].setdefault(
-                        cap_id, str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT)
+                        cap_id,
+                        classify_decline_kind(
+                            str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT), reason
+                        ),
                     )
                     ts = event.get("timestamp") or 0
                     if ts and ts > trial["declined_at"].get(cap_id, 0):
@@ -3700,6 +3723,7 @@ def record_decline(
         )
     if str(kind) not in DECLINE_KINDS:
         raise ValueError(f"unknown decline kind {kind!r}; expected one of {sorted(DECLINE_KINDS)}")
+    kind = classify_decline_kind(str(kind), str(reason))
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
     return capabilities.heartbeat(
@@ -6961,6 +6985,9 @@ def _selftest_detection() -> None:
 
 
 def _selftest() -> None:
+    assert not decline_kind_demotable("wrong_moment")
+    assert classify_decline_kind("scope_too_small", "a single-body moment") == "wrong_moment"
+    assert classify_decline_kind("scope_too_small", "one small function") == "scope_too_small"
     import tempfile
     from pathlib import Path
 
@@ -7567,6 +7594,7 @@ def main(argv: list[str]) -> int:
                     "--reason is required: an unexplained decline is indistinguishable from "
                     "inattention, which is the state this verb exists to replace"
                 )
+            args.kind = classify_decline_kind(args.kind, args.reason)
             ok = record_decline(
                 args.capability,
                 args.experiment,

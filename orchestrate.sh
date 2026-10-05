@@ -126,6 +126,8 @@ export ORCH_ROLE_SHADOW="${ORCH_ROLE_SHADOW:-1}"
 # judged 30 closed PRs, all "wait". Kill switch: ORCH_REDIRECT_APPLY_BOOTSTRAP=0.
 # Arming criterion (machine-checkable) lives in capability_recurrence_check.SWITCH_ON_CRITERIA.
 export ORCH_REDIRECT_APPLY_BOOTSTRAP="${ORCH_REDIRECT_APPLY_BOOTSTRAP:-1}"
+# Per authoring decision, not per body: run_prompt_batch consumes one prompt-role
+# invocation for the whole batch while each body keeps its own scored role run.
 export ORCH_ROLE_MAX_PER_CYCLE="${ORCH_ROLE_MAX_PER_CYCLE:-1}"
 # Closer runtime-AC gate (2026-07-08 dormancy disposition: ACTIVATE trial). HARD OPT-IN machine gate —
 # fires ONLY on items already carrying a runtime-AC required label OR with a runtime-AC spec file

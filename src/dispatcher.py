@@ -3521,6 +3521,8 @@ def main(argv: list[str]) -> int:
         )
         g.add_argument("--prompt-file", help="path to a large or reusable prompt brief")
         ns = p.parse_args(argv[1:])
+        if "ORCH_ROLE_SHADOW" not in os.environ:
+            print("role activation off (ORCH_ROLE_SHADOW unset)", file=sys.stderr)
         prompt = ns.prompt if ns.prompt is not None else Path(ns.prompt_file).read_text()
         out = delegate(
             ns.agent,
