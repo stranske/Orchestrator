@@ -396,16 +396,20 @@ def test_an_unknown_population_is_none_and_an_empty_one_is_zero(stores):
 
     missing = _run(stores, judge, plan_path=stores["tmp"] / "absent.json")
     assert missing["passing_screen"] is None and missing["population"]["status"] == "missing"
+    assert missing["candidate_counts"]["eligible"] is None
+    assert "eligible UNKNOWN" in ra.format_candidate_counts(missing["candidate_counts"])
 
     stores["plan"].write_text("{not json")
     unreadable = _run(stores, judge)
     assert unreadable["passing_screen"] is None, unreadable
+    assert unreadable["candidate_counts"]["eligible"] is None
     assert unreadable["population"]["status"] == "unreadable", unreadable
 
     max_age = ra.stage2_population(stores["plan"])["max_age_s"]
     ra._write_stage2_plan(stores["plan"], [current], generated_at=stores["now"] - max_age - 1)
     stale = _run(stores, judge)
     assert stale["passing_screen"] is None and stale["population"]["status"] == "stale", stale
+    assert stale["candidate_counts"]["eligible"] is None
     assert judge.asked == []
     apply_lines = ra.format_apply(stale, flag_on=True)
     assert any(line.startswith("  could authorise: UNKNOWN — ") for line in apply_lines)
@@ -413,6 +417,8 @@ def test_an_unknown_population_is_none_and_an_empty_one_is_zero(stores):
     ra._write_stage2_plan(stores["plan"], [], generated_at=stores["now"])
     empty = _run(stores, judge)
     assert empty["passing_screen"] == 0 and empty["population"]["status"] == "current", empty
+    assert empty["candidate_counts"]["eligible"] == 0
+    assert "eligible 0" in ra.format_candidate_counts(empty["candidate_counts"])
 
 
 def test_the_stale_bound_is_the_cadence_registrys_own_rule():
