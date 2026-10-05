@@ -17,3 +17,5 @@ Validation:
 - Black, Ruff, touched-file mypy and shell syntax checks passed.
 
 Full `python3 src/verify.py`: 1912 passed, zero skips, 99/99 selftests, 5/5 gates, and 116 checked mypy modules with zero exemptions. Two legacy selftests were updated to assert constructor refusal and inspection-only classification; the existing apply-time malformed-plan guard remains tested. The exact pushed head is recorded in the PR and relocated lane state. CI supplies the exact-head source and flat-mirror verdict. Passing source tests do not establish installed runtime behavior; reviewed mirror publication remains manual.
+
+The first CI run exposed two existing lineage tests relying on installed worker capacity. With `roles.router.load_capacity` forced to an empty agent map, the unchanged lineage suite reproduces both failures. Its private feedback fixture now supplies an explicit available Codex worker to the real router. The same empty-capacity outer environment then passes all 50 focused cases; this isolates test prerequisites without changing production routing or relaxing any skip ceiling. CI must validate the repaired head independently.
