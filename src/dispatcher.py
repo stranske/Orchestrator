@@ -571,6 +571,15 @@ def _ensure_agent_runtime(agent: str) -> Path:
 # exactly as it was before the pin existed. Inherited explicit config or token authentication still
 # works; otherwise gh reads the empty runtime config and stops at "gh auth login".
 AGENT_GH_CONFIG_DISABLED_ENV = "ORCH_AGENT_GH_CONFIG_DISABLED"
+# A token ASSIGNMENT, the one thing an agent's wrapper must never contain. A bare mention is allowed:
+# `unset GH_TOKEN GITHUB_TOKEN` removes a token, and a guard that forbade the name would refuse it.
+# The prelude and its selftest read this one pattern, so the two checks cannot drift apart.
+TOKEN_ASSIGNMENT = re.compile(r"\b(?:GH_TOKEN|GITHUB_TOKEN)=")
+
+
+def agent_gh_config_disabled() -> bool:
+    """The kill switch, read the way ORCH_OFFLOAD_DISABLED is: a CRLF env file's `1\\r` counts."""
+    return os.environ.get(AGENT_GH_CONFIG_DISABLED_ENV, "").strip() == "1"
 
 
 def gh_config_dir() -> Path:
@@ -604,14 +613,18 @@ def _agent_runtime_prelude(agent: str) -> str:
         f"export XDG_DATA_HOME={shlex.quote(str(base / '.local/share'))}",
         f"export TMPDIR={shlex.quote(str(base / 'tmp'))}",
     ]
-    # gh honours XDG_CONFIG_HOME, so the redirect above hid its hosts file from every dispatched
-    # agent: gh printed "gh auth login" and exited 4 before it asked the keyring for the token.
+    # gh honours XDG_CONFIG_HOME, so the redirect above hid its hosts file from every agent whose
+    # dispatcher exported neither GH_CONFIG_DIR nor GH_TOKEN (a delegate or offload started from a
+    # session, a lane or the check-in runner; the tick's orchestrate.sh exports both, and its
+    # children inherit them): gh printed "gh auth login" and exited 4 before it asked the keyring.
     # Measured 2026-10-04 over 90 days of dispatch logs: 58 of the 58 delegated codex runs that
     # called gh failed that way on their first call, and 25 then read the token through
     # `git credential fill` instead. The pin is a PATH, never a token. gh still reads the token
     # where that config says, the keyring here, which codex's workspace-write sandbox (network on)
-    # reaches; the agent gets no credential it could not already read.
-    if os.environ.get(AGENT_GH_CONFIG_DISABLED_ENV) != "1":
+    # reaches; the agent gets no credential it could not already read. It works both ways, though:
+    # gh's own writes (`auth logout`, `auth switch`, `config set`) now reach that config and that
+    # keyring entry too, exactly as they would from the dispatcher's shell.
+    if not agent_gh_config_disabled():
         exports.append(f"export GH_CONFIG_DIR={shlex.quote(str(gh_config_dir()))}")
     if agent == "cursor":
         # Cursor's login-keychain probe fails in restricted Codex subprocesses. Keep HOME real for
@@ -2424,12 +2437,13 @@ def _selftest() -> None:
         ), w
         assert "cursor-agent.env" in w and "$HOME/.cursor" not in w and "set -a" in w, w
         # gh keeps the dispatcher's config through the XDG redirect: a path, never a token.
-        if os.environ.get(AGENT_GH_CONFIG_DISABLED_ENV) == "1":
+        if agent_gh_config_disabled():
             assert "export GH_CONFIG_DIR=" not in w, w
         else:
             gh_pin = f"export GH_CONFIG_DIR={shlex.quote(str(gh_config_dir()))};"
             assert w.count(gh_pin) == 1 and w.index(gh_pin) < w.index("cursor-agent -p"), w
-        assert "GH_TOKEN" not in w and "GITHUB_TOKEN" not in w, w
+        # Never echo `w` here: a failure means it may hold a live token.
+        assert not TOKEN_ASSIGNMENT.search(w), "a token is assigned in the wrapped command"
         assert w.rstrip().endswith(")") and f"{CLAIMS_PY}" not in w, w
         _selftest_spawn_reads_the_agents_status(by_t["stranske/Repo#1"], Path(tmp))
         # net hygiene: the proxy family is unset BEFORE the agent runs (inside the subshell) so a stray
