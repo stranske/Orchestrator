@@ -154,3 +154,65 @@ def test_watch_classification_preserves_redirect_without_placeholder():
     assert result["policy_decision"]["action"] == "redirect"
     assert result["redirect_plan"]["blocked_action"] == "redirect"
     assert not result["redirect_plan"]["apply_supported"]
+
+
+@pytest.mark.parametrize("backend", ["auto", "AUTO"])
+def test_experiment_auto_reaches_final_router_despite_cursor_environment(
+    tmp_path, monkeypatch, backend
+):
+    monkeypatch.setenv("ORCH_REDIRECT_SWEEP_BACKEND", "cursor")
+    (tmp_path / "codex.log").write_text("synthetic auth failure")
+    picked = []
+    monkeypatch.setattr(
+        roles, "route_role", lambda name, **kw: picked.append(name) or {"agent": "gemini"}
+    )
+    monkeypatch.setattr(
+        roles.dispatcher,
+        "offload",
+        lambda agent, *a, **kw: {
+            "exit": 0,
+            "run_id": "offline",
+            "output": json.dumps(proposal(agent="codex")),
+        },
+    )
+    corpus = tmp_path / "experiment-corpus.jsonl"
+    result = redirect_sweep.record_experiment_candidates(
+        "test-exp",
+        {"repo": "owner/repo", "agents": ["codex"]},
+        tmp_path,
+        corpus_path=corpus,
+        backend=backend,
+        classify_fn=lambda **kw: report(),
+    )
+    assert result["recorded_count"] == 1, result
+    assert picked == ["redirect"]
+    assert json.loads(corpus.read_text())["backend"] == "gemini"
+
+
+@pytest.mark.parametrize("backend", [" ", "\t"])
+def test_whitespace_backend_uses_role_router(monkeypatch, backend):
+    picked = []
+    monkeypatch.setattr(
+        roles, "route_role", lambda name, **kw: picked.append(name) or {"agent": "gemini"}
+    )
+    assert redirect_sweep._selected_backend(backend) is None
+    result = roles.run_redirect_agent(
+        report(), "gate", backend=backend, proposal_json=proposal(agent="codex")
+    )
+    assert picked == ["redirect"]
+    assert result["backend"] == "gemini"
+
+
+@pytest.mark.parametrize("next_agent", [" ", "\t"])
+def test_whitespace_caller_worker_uses_worker_router(monkeypatch, next_agent):
+    picked = []
+    monkeypatch.setattr(
+        roles.router, "select_agent", lambda *a, **kw: picked.append(a[0]) or {"agent": "codex"}
+    )
+    result = roles.run_redirect_agent(
+        report(), "gate", backend="codex", proposal_json=proposal(), next_agent=next_agent
+    )
+    assert picked == ["implement"]
+    assert result["plan"]["action"] == "redirect"
+    assert result["plan"]["agent_source"] == "router"
+    assert "codex" in result["plan"]["steps"][-1]["commands"][0]

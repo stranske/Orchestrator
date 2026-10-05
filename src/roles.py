@@ -1936,7 +1936,9 @@ def run_redirect_agent(
     prompt = role.build_prompt(ctx)
 
     routing = None
-    backend_name = None if not backend or backend.strip().lower() == "auto" else backend.strip()
+    backend_name = backend.strip() if backend else None
+    if not backend_name or backend_name.lower() == "auto":
+        backend_name = None
     if backend_name is None:
         routing = route_role(
             "redirect",
@@ -1988,8 +1990,10 @@ def run_redirect_agent(
 
     report["policy_decision"] = proposal_to_policy(proposal) if proposal else dict(baseline)
     decision_source = "redirect_agent" if proposal else "baseline_policy"
-    selected_agent = (proposal or {}).get("switch_agent") or next_agent
-    agent_source = "proposal" if (proposal or {}).get("switch_agent") else "caller"
+    proposal_agent = str((proposal or {}).get("switch_agent") or "").strip()
+    caller_agent = str(next_agent or "").strip()
+    selected_agent = proposal_agent or caller_agent or None
+    agent_source = "proposal" if proposal_agent else "caller"
     if report["policy_decision"].get("action") in {"redirect", "decompose"} and not selected_agent:
         # 'implement' is a task prior, not a role name. Use the existing deterministic
         # worker router, independently of the redirect judgment backend; reserve seats stay out.

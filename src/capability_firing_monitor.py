@@ -310,6 +310,46 @@ def silence_evidence(cap: dict[str, Any], tolerance_days: float | None, now: int
     }
 
 
+def step_evidence(
+    cap_id: str,
+    *,
+    now: int,
+    state_dir: pathlib.Path | None = None,
+    registry: tuple[dict[str, Any], ...] | None = None,
+) -> list[dict[str, Any]]:
+    """Declared step evidence, never a name guess or proof that an apply occurred.
+
+    A success stamp proves the enclosing cadence completed; an artifact alone can
+    be unchanged for months or written by a failed run. Keep both times separate.
+    """
+    root = STATE_DIR if state_dir is None else state_dir
+    rows = cadence_registry.CADENCE_STEPS if registry is None else registry
+    result = []
+    for row in rows:
+        if cap_id not in cadence_registry.carried_capabilities(row):
+            continue
+        evidence: dict[str, Any] = {"step": row["key"], "gate": row.get("gate")}
+        for kind, field in (("stamp", "success_stamp"), ("artifact", "artifact")):
+            name = row.get(field)
+            target = root / name if name else None
+            timestamp = None
+            error = None
+            if target is not None:
+                try:
+                    timestamp = int(target.stat().st_mtime)
+                except FileNotFoundError:
+                    error = "missing"
+                except OSError as exc:
+                    error = str(exc)
+            evidence[f"{kind}_path"] = str(target) if target else None
+            evidence[f"{kind}_mtime"] = timestamp
+            evidence[f"{kind}_age_seconds"] = now - timestamp if timestamp is not None else None
+            evidence[f"{kind}_error"] = error
+        evidence["stale_after_seconds"] = cadence_registry.stale_after_seconds(row)
+        result.append(evidence)
+    return result
+
+
 def _load_history() -> list[dict]:
     if not HISTORY.exists():
         return []
@@ -466,6 +506,16 @@ def review(
                 found[key].append(silence[key])
         if silence:
             evidence[cap_id] = silence_evidence(cap, tolerance, now)
+            try:
+                evidence[cap_id]["step_evidence"] = step_evidence(
+                    cap_id, now=now, registry=registry
+                )
+            except ValueError as exc:
+                evidence[cap_id]["step_evidence"] = []
+                evidence[cap_id]["step_evidence_error"] = str(exc)
+            for key in SILENCE_FINDINGS:
+                if isinstance(silence.get(key), dict):
+                    silence[key]["step_evidence"] = evidence[cap_id]["step_evidence"]
 
     live = [r for r in rows if r["monitored"]]
     return {
@@ -720,6 +770,26 @@ def format_report(rep: dict) -> str:
 
 def _selftest() -> None:
     now = 1_800_000_000
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        stamp = root / ".last-test"
+        stamp.touch()
+        os.utime(stamp, (now - 60, now - 60))
+        declared = (
+            {
+                "key": "test",
+                "capabilities": ("test-cap",),
+                "success_stamp": ".last-test",
+                "artifact": "absent.json",
+                "cadence_days": 0,
+            },
+        )
+        proof = step_evidence("test-cap", now=now, state_dir=root, registry=declared)
+        assert proof[0]["stamp_age_seconds"] == 60
+        assert proof[0]["artifact_error"] == "missing"
+        assert step_evidence("undeclared", now=now, state_dir=root, registry=declared) == []
 
     # Cadence parsing must handle the prose actually in the ledger, and must refuse to invent a
     # deadline for an on-demand trigger.

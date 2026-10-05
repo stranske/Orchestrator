@@ -23,8 +23,8 @@ const mutations = [
     tests: [0],
     edits: [{
       file: 'src/redirect_sweep.py',
-      before: 'return None if not selected or selected.strip().lower() == "auto" else selected.strip()',
-      after: 'return "cursor" if not selected or selected.strip().lower() == "auto" else selected.strip()',
+      before: 'return None if not selected or selected.lower() == "auto" else selected',
+      after: 'return "cursor" if not selected or selected.lower() == "auto" else selected',
     }],
   },
   {
