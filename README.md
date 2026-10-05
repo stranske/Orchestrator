@@ -94,6 +94,21 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   validates the ledger and writes `capability-validation.json` plus `capability-inventory.md` under
   the local state directory.
 
+The weekly switch review includes a read-only **value chain** for every live capability:
+independently measured situation count beside production invocation, usable output,
+accepted influence and graded outcome, with the first broken step named. Missing or
+incomplete populations print `demand unmeasured`; a complete empty population prints
+`demand 0`. The CLI counts fleet issue batches and task-heavy open issues from all
+GitHub pages and reads persisted verifier disputes and influence edges from the
+existing Brain. Newly evaluated advisor preconditions are retained in existing match
+metadata; historical probes and cadence input counts without evidence stay unmeasured.
+`input_off:ORCH_DISPATCH_LANE` names silence caused by a disabled input. This report
+opens no gates. `ORCH_VALUE_CHAIN_MONITOR=0` disables its collection and section.
+Run `python3 src/switch_review.py --json` for the durable `value_chain` section; the
+existing weekly cadence writes it into `switch-review.json`. The declaration is
+registered by that production caller, with a heartbeat on the executed path, and is
+offered at `tick` and `rail-exercise:audit`. Source deployment remains manual.
+
 ## Important functionality (what actually runs, grouped by job)
 
 The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records zero-weight `fixture_observed` verdicts separately from production usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.

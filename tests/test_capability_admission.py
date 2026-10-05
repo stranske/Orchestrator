@@ -495,6 +495,7 @@ def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
         "route-weights-export",
         "rail-exercise-cadence",
         "synthesis-promotion",
+        "value-chain-monitor",
     }, exercise_bound
     for cap_id in exercise_bound:
         row = capabilities.KNOWN_DECLARATIONS.get(cap_id) or capabilities.KNOWN_GATES.get(cap_id)
