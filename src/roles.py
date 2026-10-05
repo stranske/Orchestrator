@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -251,7 +252,45 @@ def _as_lines(value: Any) -> list[str]:
     return [text] if text else []
 
 
+def _issue_body_prompt(ctx: dict) -> str:
+    """Author issue material, without imposing a worker dispatch contract."""
+    return "\n".join(
+        [
+            "You are PromptAgent, authoring a bounded AGENT_ISSUE_FORMAT issue body.",
+            "Use only the supplied evidence; do not invent files or acceptance criteria.",
+            'Return STRICT JSON: {"summary": "one sentence", "issue_body": "Markdown body", "confidence": "low|medium|high"}.',
+            "The body must have ## Why, ## Tasks (with - [ ] checkboxes),",
+            "## Acceptance Criteria (named test or documented live gate), and ## Non-Goals.",
+            "This is issue authoring: no task_type or commit/push/PR finish workflow is required.",
+            json.dumps(ctx, ensure_ascii=False),
+        ]
+    )
+
+
+def _validate_issue_body(proposal: Any) -> list[str]:
+    if not isinstance(proposal, dict):
+        return ["proposal is not a JSON object"]
+    errs = []
+    if not isinstance(proposal.get("summary"), str) or not proposal["summary"].strip():
+        errs.append("summary must be a non-empty string")
+    confidence = proposal.get("confidence")
+    if not isinstance(confidence, str) or confidence not in CONFIDENCE:
+        errs.append("confidence must be low, medium or high")
+    body = proposal.get("issue_body")
+    if not isinstance(body, str) or not body.strip():
+        return errs + ["issue_body must be a non-empty string"]
+    sections = dict(re.findall(r"^## ([^\r\n]+)\r?\n(.*?)(?=^## |\Z)", body, re.M | re.S))
+    for name in ("Why", "Tasks", "Acceptance Criteria", "Non-Goals"):
+        if not sections.get(name, "").strip():
+            errs.append(f"issue_body requires a non-empty ## {name} section")
+    if not re.search(r"^\s*- \[ \] \S", sections.get("Tasks", ""), re.M):
+        errs.append("issue_body Tasks requires unchecked task checkboxes")
+    return errs
+
+
 def _prompt_agent_prompt(ctx: dict) -> str:
+    if ctx.get("output") == "issue_body":
+        return _issue_body_prompt(ctx)
     target = ctx.get("target") or "(unknown target)"
     task_type = ctx.get("task_type") or "implement"
     lane = ctx.get("lane") or "(unspecified)"
@@ -2049,7 +2088,8 @@ def run_prompt_agent(
     *,
     target: str,
     goal: str,
-    task_type: str = "implement",
+    task_type: str | None = "implement",
+    output: str = "dispatch_prompt",
     target_detail: str = "",
     context: str = "",
     repo: str = "",
@@ -2066,13 +2106,18 @@ def run_prompt_agent(
     cwd: str = ".",
     timeout: int = 600,
     exploration_rate: float | None = None,
+    batch_id: str | None = None,
 ) -> dict:
     """SHADOW ONLY. Author a scoped delegation prompt; never delegates or mutates state."""
+    if output not in {"dispatch_prompt", "issue_body"}:
+        raise ValueError("output must be dispatch_prompt or issue_body")
     role = ROLE_REGISTRY["prompt"]
     if dispatch:
         _role_capability_event("prompt", "match", metadata={"target": target})
-    task_type = task_type or "implement"
+    dispatch_task_type = task_type or "implement"
+    task_type = dispatch_task_type if output == "dispatch_prompt" else task_type
     ctx = {
+        "output": output,
         "target": target,
         "goal": goal,
         "task_type": task_type,
@@ -2098,7 +2143,11 @@ def run_prompt_agent(
         )
         backend_name = routing["agent"] if routing else None
 
-    baseline_prompt = dispatcher.build_prompt(task_type, target, target_detail or goal, lane=lane)
+    baseline_prompt = (
+        dispatcher.build_prompt(dispatch_task_type, target, target_detail or goal, lane=lane)
+        if output == "dispatch_prompt"
+        else None
+    )
     proposal: dict | None = None
     errors: list[str] = []
     raw_output: str | None = None
@@ -2106,29 +2155,34 @@ def run_prompt_agent(
     backend_error_detail: str | None = None
     backend_model: str | None = None
 
-    if proposal_json is not None:
+    if dispatch and not backend_name:
+        errors.append("no eligible backend has capacity for the prompt role")
+    elif proposal_json is not None:
         proposal = proposal_json
-    elif dispatch:
-        if not backend_name:
-            errors.append("no eligible backend has capacity for the prompt role")
-        else:
-            _role_capability_event("prompt", "invocation", metadata={"backend": backend_name})
-            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
-            backend_run_id = res.get("run_id")
-            backend_model = res.get("model")
-            raw_output = res.get("output", "")
-            backend_error_detail = _backend_error_detail(res)
-            if res.get("exit") not in (0, None):
-                errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
-            proposal = _parse_json(raw_output)
-            if proposal is None:
-                errors.append("could not parse a JSON proposal from the backend output")
+    elif dispatch and backend_name is not None:
+        _role_capability_event("prompt", "invocation", metadata={"backend": backend_name})
+        res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
+        backend_run_id = res.get("run_id")
+        backend_model = res.get("model")
+        raw_output = res.get("output", "")
+        backend_error_detail = _backend_error_detail(res)
+        if res.get("exit") not in (0, None):
+            errors.append(f"backend exit={res.get('exit')} {res.get('error') or ''}".strip())
+        proposal = _parse_json(raw_output)
+        if proposal is None:
+            errors.append("could not parse a JSON proposal from the backend output")
 
     if proposal is not None:
-        verrs = role.validate(proposal)
-        if proposal.get("task_type") != task_type:
+        verrs = (
+            _validate_issue_body(proposal) if output == "issue_body" else role.validate(proposal)
+        )
+        if (
+            output == "dispatch_prompt"
+            and isinstance(proposal, dict)
+            and proposal.get("task_type") != dispatch_task_type
+        ):
             verrs.append(
-                f"task_type must stay on the deterministic rail-selected value {task_type!r}; "
+                f"task_type must stay on the deterministic rail-selected value {dispatch_task_type!r}; "
                 f"got {proposal.get('task_type')!r}"
             )
         if verrs:
@@ -2136,7 +2190,11 @@ def run_prompt_agent(
             proposal = None
 
     if proposal is not None:
-        dispatch_prompt = _prompt_agent_dispatch_prompt(proposal, target=target, lane=lane)
+        dispatch_prompt = (
+            _prompt_agent_dispatch_prompt(proposal, target=target, lane=lane)
+            if output == "dispatch_prompt"
+            else None
+        )
         decision_source = "prompt_agent"
     else:
         dispatch_prompt = baseline_prompt
@@ -2159,6 +2217,7 @@ def run_prompt_agent(
                 proposal=proposal,
                 # Cost telemetry, not provenance; None on the replay path (see run_redirect_agent).
                 model=backend_model,
+                batch_id=batch_id,
             )
         except Exception as exc:
             role_record_error = str(exc)
@@ -2174,6 +2233,10 @@ def run_prompt_agent(
 
     return {
         "role": "prompt",
+        "target": target,
+        "output": output,
+        "batch_id": batch_id,
+        "issue_body": proposal.get("issue_body") if proposal and output == "issue_body" else None,
         "shadow": True,
         "mutates_state": False,
         "backend": backend_name,
@@ -2190,6 +2253,106 @@ def run_prompt_agent(
         "raw_output": raw_output,
         "backend_error_detail": backend_error_detail,
     }
+
+
+def run_prompt_batch(items: list[dict], *, output: str = "dispatch_prompt", **kwargs: Any) -> dict:
+    """One deterministic routing decision, independently validated/scored item outputs."""
+    if output not in {"dispatch_prompt", "issue_body"}:
+        raise ValueError("output must be dispatch_prompt or issue_body")
+    if not isinstance(items, list) or not items:
+        raise ValueError("batch must be a non-empty list of item objects")
+    allowed = {
+        "target",
+        "goal",
+        "task_type",
+        "target_detail",
+        "context",
+        "repo",
+        "lane",
+        "acceptance_criteria",
+        "constraints",
+        "expected_paths",
+        "proposal_json",
+    }
+    for item in items:
+        if not isinstance(item, dict) or set(item) - allowed:
+            raise ValueError("batch item has unknown fields or is not an object")
+        if any(not isinstance(item.get(k), str) or not item[k].strip() for k in ("target", "goal")):
+            raise ValueError("each batch item requires a non-empty target and goal")
+        for key in ("task_type", "target_detail", "context", "repo", "lane"):
+            if item.get(key) is not None and not isinstance(item[key], str):
+                raise ValueError(f"batch item {key} must be a string or null")
+        for key in ("acceptance_criteria", "constraints", "expected_paths"):
+            if item.get(key) is not None and not isinstance(item[key], list):
+                raise ValueError(f"batch item {key} must be a list or null")
+        if item.get("proposal_json") is not None and not isinstance(item["proposal_json"], dict):
+            raise ValueError("batch item proposal_json must be an object or null")
+    batch_id = f"prompt-batch:{uuid.uuid4().hex}"
+    common = dict(kwargs)
+    backend = common.pop("backend", None)
+    routing = None
+    if backend is None:
+        routing = route_role(
+            "prompt",
+            **{
+                k: common[k]
+                for k in ("cap", "learned", "high_leverage", "exploration_rate")
+                if k in common
+            },
+        )
+        # An empty explicit backend prevents a no-capacity batch routing again per item.
+        backend = routing["agent"] if routing else ""
+    results = []
+    for item in items:
+        result = run_prompt_agent(
+            **(common | item), output=output, backend=backend, batch_id=batch_id
+        )
+        result["routing"] = routing
+        results.append(result)
+    return {
+        "batch_id": batch_id,
+        "output": output,
+        "routing": routing,
+        "backend": backend,
+        "items": results,
+    }
+
+
+def write_prompt_batch(result: dict, directory: Path) -> dict:
+    """Publish valid bodies only; persist every validator/recording verdict in a manifest."""
+    directory.mkdir(parents=True, exist_ok=False)
+    manifest = {"batch_id": result["batch_id"], "output": result["output"], "items": []}
+    for index, item in enumerate(result["items"], 1):
+        text = (
+            item.get("issue_body")
+            if result["output"] == "issue_body"
+            else item.get("dispatch_prompt")
+        )
+        body_file = None
+        valid = (
+            item.get("proposal") is not None
+            and not item["errors"]
+            and not item["role_record_error"]
+        )
+        if valid and text:
+            # Ordinals are safe regardless of untrusted target names and cannot collide within a batch.
+            path = directory / f"{index:03d}.md"
+            path.write_text(text.rstrip() + "\n", encoding="utf-8")
+            body_file = str(path)
+        manifest["items"].append(
+            {
+                "target": item["target"],
+                "role_run_id": item["role_run_id"],
+                "body_file": body_file,
+                "valid": valid,
+                "errors": item["errors"],
+                "role_record_error": item["role_record_error"],
+            }
+        )
+    (directory / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest
 
 
 def run_decomposer_agent(
@@ -3618,8 +3781,13 @@ def main(argv: list[str]) -> int:
     pp = sub.add_parser(
         "prompt", help="run PromptAgent in shadow and print a dispatch-ready prompt"
     )
-    pp.add_argument("--target", required=True)
-    pp.add_argument("--goal", required=True)
+    pp.add_argument("--target", default="")
+    pp.add_argument("--goal", default="")
+    pp.add_argument("--batch", default="", help="JSON list of target/goal item objects")
+    pp.add_argument(
+        "--output", choices=("dispatch_prompt", "issue_body"), default="dispatch_prompt"
+    )
+    pp.add_argument("--output-dir", default="", help="batch bodies and manifest directory")
     pp.add_argument("--task-type", default="implement")
     pp.add_argument("--target-detail", default="")
     pp.add_argument("--context", default="")
@@ -3776,6 +3944,36 @@ def main(argv: list[str]) -> int:
         print(json.dumps(result, indent=2) if args.as_json else format_human(result))
         return 0
     if args.cmd == "prompt":
+        if args.batch:
+            if args.output_dir and Path(args.output_dir).exists():
+                parser.error("--output-dir must be a fresh directory")
+            if args.target or args.goal or args.proposal_json or args.context_file or args.context:
+                parser.error("--batch uses item context/target/goal/proposal_json from its JSON")
+            try:
+                result = run_prompt_batch(
+                    json.loads(Path(args.batch).read_text(encoding="utf-8")),
+                    output=args.output,
+                    backend=(args.backend or None),
+                    dispatch=args.dispatch,
+                    cwd=args.cwd,
+                    timeout=args.timeout,
+                    high_leverage=args.high_leverage,
+                )
+            except (ValueError, OSError) as exc:
+                parser.error(str(exc))
+            directory = (
+                Path(args.output_dir)
+                if args.output_dir
+                else Path(args.cwd) / result["batch_id"].replace(":", "-")
+            )
+            try:
+                manifest = write_prompt_batch(result, directory)
+            except OSError as exc:
+                parser.error(str(exc))
+            print(json.dumps(manifest, indent=2))
+            return int(any(i["errors"] or i["role_record_error"] for i in manifest["items"]))
+        if not args.target or not args.goal:
+            parser.error("prompt requires --target and --goal, or --batch")
         context = args.context
         if args.context_file:
             context = (context + "\n\n" if context else "") + Path(args.context_file).read_text()
@@ -3783,6 +3981,7 @@ def main(argv: list[str]) -> int:
         result = run_prompt_agent(
             target=args.target,
             goal=args.goal,
+            output=args.output,
             task_type=args.task_type,
             target_detail=args.target_detail,
             context=context,
@@ -3798,7 +3997,24 @@ def main(argv: list[str]) -> int:
             cwd=args.cwd,
             timeout=args.timeout,
         )
-        print(json.dumps(result, indent=2) if args.as_json else format_prompt_human(result))
+        if args.output == "issue_body":
+            errors = result["errors"] + (
+                [result["role_record_error"]] if result["role_record_error"] else []
+            )
+            if errors:
+                print("\n".join(errors), file=sys.stderr)
+                if args.as_json:
+                    print(json.dumps(result, indent=2))
+                return 1
+        print(
+            json.dumps(result, indent=2)
+            if args.as_json
+            else (
+                (result["issue_body"] or "\n".join(result["errors"]))
+                if args.output == "issue_body"
+                else format_prompt_human(result)
+            )
+        )
         return 0
     if args.cmd == "decompose":
         context = args.context

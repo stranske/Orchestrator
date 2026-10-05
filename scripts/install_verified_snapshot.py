@@ -273,6 +273,12 @@ def _validate_payload(payload: Path) -> None:
 
 
 def _deployment_owned_relative(relative: Path, entries: set[Path]) -> bool:
+    # Bytecode is derived executable state, never shared runtime storage. A cache
+    # from the old tree may still pass Python's timestamp/size validation for a
+    # changed module, or resurrect a removed module through a root-level .pyc.
+    # Retain it with the old reader's tree, but let each new generation build its own.
+    if "__pycache__" in relative.parts or relative.suffix in (".pyc", ".pyo"):
+        return True
     if relative in entries:
         return True
     if relative.parts and relative.parts[0] in REPLACED_TREES:
