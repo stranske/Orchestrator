@@ -50,8 +50,8 @@ WHAT THIS DOES INSTEAD. Two functions on one daily cadence:
      `preview_link_applied_outcomes()` or `link_applied_outcomes(dry_run=True)`.
   2. `apply_candidates()` / `apply_one()` — the apply path, DEFAULT OFF behind
      `ORCH_REDIRECT_APPLY_BOOTSTRAP`. Candidates are the targets of the keepalive supervisor's
-     LATEST stage-2 run, read from the plan that cadence step writes — not a second discovery path,
-     and no extra gh traffic. With the flag off the cadence spends NOTHING: authorising means
+     LATEST stage-2 run and the sweep's current stalled lanes, read from their local artifacts
+     with no extra gh traffic. With the flag off the cadence spends NOTHING: authorising means
      running RedirectAgent, which costs a backend offload, and there is no point buying a proposal
      that cannot be applied. `apply_plan`'s contract is held by this module's selftest with
      injected runners. `--dry-run --spend-offloads` forces authorisation anyway for an operator who
@@ -132,7 +132,7 @@ TERMINAL_VERDICTS = {"PASS", "FAIL"}
 
 # A lane's liveness in the words of the report that describes it. watch.py and keepalive_shadow share
 # this vocabulary, and a keepalive report carries NO pid, so for it these words are the only liveness
-# evidence that exists. Only the two states in which the monitor itself says the lane is not
+# evidence that exists. Only the states in which the monitor itself says the lane is not
 # progressing let an unknown-pid lane through.
 REPORTED_NOT_LIVE_STATES = frozenset({"stalled", "exited", "escalated"})
 REPORTED_LIVE_STATES = frozenset({"running", "progress"})
@@ -683,7 +683,9 @@ def format_candidate_counts(counts: dict[str, int] | None) -> str:
     )
 
 
-def sweep_stalled_candidates(sweep_path: Path | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def sweep_stalled_candidates(
+    sweep_path: Path | None = None, *, now: int | None = None
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Actionable stalled lanes from the latest redirect-sweep report (apply's second source)."""
     import redirect_sweep
 
@@ -693,10 +695,23 @@ def sweep_stalled_candidates(sweep_path: Path | None = None) -> tuple[list[dict[
         return [], meta
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        generated_at = int(data["generated_at"])
+        reports = data.get("actionable", [])
+        if not isinstance(reports, list):
+            raise TypeError("'actionable' is not a list")
     except Exception as exc:  # noqa: BLE001
         return [], {**meta, "status": "unreadable", "reason": str(exc)[:80]}
+    current = int(time.time()) if now is None else int(now)
+    age = current - generated_at
+    meta.update(generated_at=generated_at, age_s=age, max_age_s=DAY_SECONDS)
+    if age < 0 or age > DAY_SECONDS:
+        return [], {
+            **meta,
+            "status": "stale",
+            "reason": "sweep must be from the last 24 hours; the next successful sweep clears this",
+        }
     rows: list[dict[str, Any]] = []
-    for report in data.get("actionable") or []:
+    for report in reports:
         if not isinstance(report, dict):
             continue
         if str(report.get("state") or "") != "stalled":
@@ -718,8 +733,13 @@ def _merge_apply_candidates(
     supervisor: list[dict[str, Any]] | None, sweep: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Supervisor plan first; sweep stalled proposals fill targets not already listed."""
-    sup_list = list(supervisor or [])
-    seen = {str(c["report"].get("target") or "") for c in sup_list}
+    sup_list: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for cand in supervisor or []:
+        target = str(cand["report"].get("target") or "")
+        if target and target not in seen:
+            sup_list.append(cand)
+            seen.add(target)
     sweep_only: list[dict[str, Any]] = []
     for cand in sweep:
         target = str(cand["report"].get("target") or "")
@@ -839,28 +859,16 @@ def _screen(
     pid_checker=None,
     now: int | None = None,
 ) -> dict[str, Any]:
-    """Screen the supervisor's current candidates, free.
+    """Screen current supervisor and sweep candidates, free.
 
     Shared by `screen_candidates` (the drainable count) and `apply_candidates` (which spends only on
     what passes), so the number a run prints is the number that run acted on.
     """
     population = stage2_population(plan_path, now=now)
-    if population["status"] == "current":
-        sweep_rows, sweep_meta = sweep_stalled_candidates(sweep_path)
-        candidates, supervisor_n, sweep_n = _merge_apply_candidates(
-            population["candidates"], sweep_rows
-        )
-    else:
-        sweep_rows, sweep_meta = (
-            [],
-            {
-                "status": "skipped",
-                "reason": population.get("reason") or "supervisor population not current",
-            },
-        )
-        candidates = population["candidates"]
-        supervisor_n = len(population["candidates"] or [])
-        sweep_n = 0
+    sweep_rows, sweep_meta = sweep_stalled_candidates(sweep_path, now=now)
+    candidates, supervisor_n, sweep_n = _merge_apply_candidates(
+        population["candidates"], sweep_rows
+    )
     on_disk = _reports_on_disk(report_dir)
     gate = gate_state(corpus_path)
     applied_targets, applies_today = _applied_history(corpus_path, now=now)
@@ -897,7 +905,7 @@ def _screen(
         key=lambda row: (row["last_judged"], row["target"]),
     )
     on_disk_targets = (str(row["report"].get("target") or "") for row in on_disk)
-    population_known = population["status"] == "current"
+    population_known = population["status"] == "current" or sweep_meta["status"] == "current"
     eligible_count = len(passing) if population_known else None
     candidate_counts = {
         "supervisor": supervisor_n if population["candidates"] is not None else 0,
@@ -921,6 +929,7 @@ def screen_candidates(
     *,
     report_dir: Path | None = None,
     plan_path: Path | None = None,
+    sweep_path: Path | None = None,
     corpus_path: Path | None = None,
     pid_checker=None,
     now: int | None = None,
@@ -938,6 +947,7 @@ def screen_candidates(
     screen = _screen(
         report_dir=Path(directory),
         plan_path=plan_path,
+        sweep_path=sweep_path,
         corpus_path=corpus,
         pid_checker=pid_checker,
         now=now,
@@ -966,6 +976,7 @@ def apply_candidates(
     *,
     report_dir: Path | None = None,
     plan_path: Path | None = None,
+    sweep_path: Path | None = None,
     limit: int = MAX_APPLIES_PER_DAY,
     max_offloads: int = MAX_OFFLOADS_PER_RUN,
     corpus_path: Path | None = None,
@@ -1013,6 +1024,7 @@ def apply_candidates(
     screen = _screen(
         report_dir=directory,
         plan_path=plan_path,
+        sweep_path=sweep_path,
         corpus_path=corpus,
         acceptance_criteria=acceptance_criteria,
         pid_checker=pid_checker,
@@ -1934,10 +1946,8 @@ def main(argv: list[str]) -> int:
         print(json.dumps(out, indent=2) if args.json else "\n".join(format_status(out)))
         return 0
 
-    # --apply: candidates are the targets of the SUPERVISOR'S LATEST RUN, read from the plan its
-    # own cadence step wrote. Deliberately not a second discovery path — re-running live_targets()
-    # would spend gh search budget to rediscover what is already on disk, and two discovery paths
-    # drift.
+    # --apply: combine the supervisor's latest plan and fresh stalled sweep lanes on disk.
+    # Neither source repeats GitHub discovery.
     out = apply_candidates(
         report_dir=report_dir,
         plan_path=plan_path,

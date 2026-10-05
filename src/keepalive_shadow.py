@@ -69,6 +69,8 @@ RATE_LIMIT_LABELS = {"agent:rate-limited", "blocked-on-rate-reset"}
 AUTH_LABELS = {"blocked-on-auth", "needs-human"}
 # Post-escalation keepalive PRs (keepalive_supervisor.ESCALATION_LABELS); must not read as live.
 ESCALATION_LABELS = frozenset({"needs-human", "agent:needs-attention"})
+# The current keepalive-state marker also records who owns a paused escalation.
+ESCALATION_DISPOSITIONS = frozenset({"needs-human", "challenge-due"})
 # keepalive-state marker: `<!-- keepalive-state:<version> {JSON} -->` (keepalive_state.js:5,7)
 STATE_REGEX = re.compile(r"<!--\s*keepalive-state(?::[\w.-]+)?\s+(.*?)\s*-->", re.DOTALL)
 
@@ -99,12 +101,19 @@ def normalize_signals(target: str, payload: dict | None, *, pr_state, labels) ->
     payload = payload or {}
     labels = list(labels or [])
     labels_lc = {str(label).strip().lower() for label in labels}
+    attention = payload.get("attention")
+    disposition = (
+        str(attention.get("disposition") or "").strip().lower()
+        if isinstance(attention, dict)
+        else ""
+    )
+    escalation_marker = disposition if disposition in ESCALATION_DISPOSITIONS else None
     state_lc = str(pr_state or "open").lower()
     if state_lc == "merged":
         outcome = "merged"
     elif state_lc == "closed":
         outcome = "closed_unmerged"
-    elif labels_lc & {"needs-human", "agent:needs-attention"}:
+    elif labels_lc & ESCALATION_LABELS or escalation_marker:
         outcome = (
             "needs_human"  # keepalive gave up -> a labeled failure trajectory (visible while open)
         )
@@ -117,6 +126,7 @@ def normalize_signals(target: str, payload: dict | None, *, pr_state, labels) ->
         "target": target,
         "pr_state": state_lc,
         "labels": labels,
+        "escalation_marker": escalation_marker,
         "outcome": outcome,
         "iteration": _int(payload.get("iteration")),
         "max_iterations": _int(payload.get("max_iterations")),
@@ -167,13 +177,21 @@ def synthesize_report(signals: dict) -> dict:
     drift: dict[str, Any] = {"severity": "none", "findings": []}
 
     escalation_hits = sorted(labels & ESCALATION_LABELS)
+    escalation_marker = signals.get("escalation_marker")
     if state_raw in ("closed", "merged"):
         state = "exited"
         recommended = "collect" if last_changes else "inspect"
-    elif escalation_hits:
+    elif escalation_hits or escalation_marker in ESCALATION_DISPOSITIONS:
         state = "escalated"
         recommended = "inspect"
-        hints.append({"kind": "escalation", "detail": escalation_hits[0]})
+        hints.extend({"kind": "escalation", "detail": label} for label in escalation_hits)
+        if escalation_marker in ESCALATION_DISPOSITIONS:
+            hints.append(
+                {
+                    "kind": "escalation",
+                    "detail": f"keepalive-state attention.disposition={escalation_marker}",
+                }
+            )
     elif signals.get("consecutive_no_progress", 0) >= KEEPALIVE_STALL_THRESHOLD:
         state = "stalled"
         recommended = "inspect"
