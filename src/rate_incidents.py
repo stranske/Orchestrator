@@ -127,7 +127,7 @@ def parse_relay_reset_at(text: str, *, now: int | None = None) -> int | None:
             normalized = zone if ":" in zone else zone[:3] + ":" + zone[3:]
             parsed = datetime.fromisoformat(parsed.isoformat() + normalized)
         reset_at = int(parsed.timestamp())
-    except ValueError:
+    except (ValueError, OverflowError, OSError):  # a date the platform clock cannot hold
         return None
     return reset_at if reset_at > int(now or time.time()) else None
 
@@ -260,6 +260,52 @@ def failed_stdout_evidence(agent: str, stdout: str) -> str:
     if agent != "codex":
         return stdout
     return "\n".join(failure_evidence(stdout.splitlines()))
+
+
+def _harness_error_messages(event: dict) -> list[str]:
+    """The text of one codex harness error event (`error`, `turn.failed`, or an error item)."""
+    kind = event.get("type")
+    if kind == "error":
+        holder: object = event
+    elif kind == "turn.failed":
+        holder = event.get("error")
+    else:
+        holder = event.get("item")
+        if not (isinstance(holder, dict) and holder.get("type") == "error"):
+            return []
+    if isinstance(holder, str):
+        return [holder]
+    message = holder.get("message") if isinstance(holder, dict) else None
+    return [message] if isinstance(message, str) else []
+
+
+def provider_reset_at(agent: str, lines: list[str], *, now: int | None = None) -> int | None:
+    """When the provider says it will serve again, from codex's own harness events, or None.
+
+    The reset is the provider's clock ("try again at Sep 28th, 2026 8:26 PM"), and it may come only
+    from the provider's text: the messages of the harness's `error` and `turn.failed` events among
+    the lines `failure_evidence` keeps. A plain line is never read. A codex run without `--json`
+    (`assess`) prints its transcript as text, and stderr can carry the agent's commands too, so a
+    plain line may be the agent's own work, and a reset read from it would hold the seat until
+    whatever date that work happened to mention. Every other agent's output is plain text; for
+    them the answer is None, and the seat sheds for the cooldown.
+
+    One reading for every observer of a run: the synchronous offload, `adapters.dispatch` and the
+    completion reconciler. They share one incident (`_idempotency_key`), and the first to record it
+    sets the shed, so a reading only one of them made would decide by which one ran first. Until
+    2026-10-05 the offload passed no reset at all: the two codex refusals of 2026-09-25
+    (offload:codex:1790322148167312000 and 1790322306091352000) named Sep 28 and shed for the 6 h
+    cooldown. Several stated resets in one run: the latest is the one that binds.
+    """
+    if agent != "codex":
+        return None
+    resets = []
+    for line in failure_evidence(lines):
+        for message in _harness_error_messages(json_event(line) or {}):
+            reset = parse_relay_reset_at(message, now=now)
+            if reset is not None:
+                resets.append(reset)
+    return max(resets) if resets else None
 
 
 def get_structured_evidence(
@@ -534,6 +580,12 @@ def _selftest() -> int:
             evidence="quota exhausted",
         )["deduped"]
         assert first["incident_id"]
+        # A reset comes from codex's harness error events only, never a plain line or another agent.
+        refusal = "You've hit your usage limit. Try again at Jan 5th, 2099 3:11 AM."
+        event = json.dumps({"type": "turn.failed", "error": {"message": refusal}})
+        assert provider_reset_at("codex", [event]) == parse_relay_reset_at(refusal) is not None
+        assert provider_reset_at("codex", [refusal]) is None
+        assert provider_reset_at("claude", [event]) is None
         print("rate_incidents.py selftest: OK")
         return 0
     finally:
