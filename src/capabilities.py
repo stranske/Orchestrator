@@ -1646,6 +1646,21 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # reconciliation seed it. Adding a capability here means its declaration is reviewed with the diff
 # rather than typed into a live JSON file nobody diffs.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "value-chain-monitor": {
+        "status": "wired",
+        "entrypoint": "switch_review.py:review value_chain_monitor.py:report",
+        "matcher": {"kind": "tick_phase", "equals": "switch-review"},
+        "trigger_cadence": "weekly switch-review",
+        "flags_defaults": {"ORCH_VALUE_CHAIN_MONITOR": "1"},
+        "output_artifact": "switch-review.json:value_chain",
+        "downstream_consumer": "switch_review.py:format_report",
+        "learning_sink": "capability_propensity exact-deliverable verdicts and existing feedback influence edges",
+        "kill_switch": "ORCH_VALUE_CHAIN_MONITOR=0",
+        "rollback": {"disable": "ORCH_VALUE_CHAIN_MONITOR=0"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": "Read-only demand versus invocation report is exercised on rail-exercise:audit; also offered on tick.",
+        "notes": "dedup: propensity funnel, firing monitor and activation audit exist; extend switch_review with independently measured situation_count, first broken step and dependency-aware silence. No second ledger or inventory.",
+    },
     "rail-exercise-cadence": {
         "status": "shadow",
         "entrypoint": "rail_exercise.py:main",

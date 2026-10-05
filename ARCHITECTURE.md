@@ -196,6 +196,7 @@ accepted downstream outcomes, `route_role()` prefers learned weights for `role:<
 | **TriageAgent** | `backlog` worth-it filter | which items now, skip underspecified, batch | **built, shadow (2026-06-20)** |
 | **AdjudicatorAgent** | `runtime_ac_panel` / `adversarial` dispute step | verify a lone reviewer veto vs. ground truth | **built, shadow (2026-06-20)** |
 
+<<<<<<< HEAD
 PromptAgent is offered at the `research-program` and `repo-audit:phase-4` batch-filing
 surfaces. `run_prompt_batch` consumes one per-cycle prompt-role decision for a whole
 batch; each body retains its own validated role run and outcome lineage. Explicit
@@ -203,6 +204,14 @@ batch authoring does not enable automatic dispatch roles: an unset `ORCH_ROLE_SH
 still leaves that seam off, and the delegate CLI reports the unset gate once.
 Single-body, one-prompt, and no-batch declines are `wrong_moment`, so they remain
 visible in surface counts without demoting the binding or rewriting past events.
+=======
+The weekly `switch_review` also consumes `value_chain_monitor`, a deterministic
+read-only rail beside Monitor and verify. It compares independent situation populations
+with ledger invocations and existing Brain influence edges, naming the earliest broken
+step and input switches held off. Unknown demand never becomes zero. It changes no
+selection, gate, dispatcher or lifecycle decision; the existing weekly artifact carries
+the section rather than a second audit log or inventory.
+>>>>>>> origin/main
 
 ## The feedback loop closes over both surfaces
 
