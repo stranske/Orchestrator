@@ -195,7 +195,9 @@ def _export(tmp_path, monkeypatch, *, publish=False, published=False):
     return beats
 
 
-def test_route_weights_export_heartbeats_invocation_without_a_publish(tmp_path, monkeypatch, capsys):
+def test_route_weights_export_heartbeats_invocation_without_a_publish(
+    tmp_path, monkeypatch, capsys
+):
     # An unchanged artifact is the original failure case: use the real writer and
     # preserve its old timestamp while the ledger records today's invocation.
     artifact = tmp_path / "route-weights-export.json"
