@@ -170,3 +170,41 @@ def test_delegate_logs_unset_role_activation_once_without_changing_default(
         "role activation off (ORCH_ROLE_SHADOW unset)\n" if setting is None else ""
     )
     assert roles._shadow_gate(None) is (setting == "1")
+
+
+def test_single_body_declines_for_other_capabilities_keep_their_kind(tmp_path):
+    path = tmp_path / "other-capabilities.json"
+    row = capabilities._blank_capability("offload")
+    row["status"] = "generated"
+    row["event_history"].append(
+        {
+            "type": "match",
+            "ref": "advice:historical-offload",
+            "timestamp": capabilities._now(),
+            "metadata": {
+                "source": propensity.DECLINE_SOURCE,
+                "surface": "closer-lane",
+                "decline_kind": "scope_too_small",
+                propensity.DECLINE_REASON_KEY: "a single-body read is too small",
+            },
+        }
+    )
+    capabilities.save({"offload": row}, path)
+    before = path.read_bytes()
+    historical = propensity.experiments(path=path)[0]
+    assert historical["decline_kinds"]["offload"] == "scope_too_small"
+    assert historical["declined_demotable"] == ["offload"]
+    assert path.read_bytes() == before
+    assert propensity.record_decline(
+        "offload",
+        "advice:new-offload",
+        reason="a single-body read is too small",
+        kind="scope_too_small",
+        surface="closer-lane",
+        path=path,
+    )
+    trial = next(
+        t for t in propensity.experiments(path=path) if t["experiment_id"] == "advice:new-offload"
+    )
+    assert trial["decline_kinds"]["offload"] == "scope_too_small"
+    assert trial["declined_demotable"] == ["offload"]

@@ -734,14 +734,18 @@ DECLINE_KINDS: dict[str, dict] = {
 DECLINE_KIND_DEFAULT = "unspecified"
 
 
-def classify_decline_kind(kind: str, reason: str) -> str:
+def classify_decline_kind(capability_id: str, kind: str, reason: str) -> str:
     """Read old single-body declines without rewriting their append-only events."""
     import re
 
-    if kind in {DECLINE_KIND_DEFAULT, "scope_too_small"} and re.search(
-        r"\b(?:single[ -]body|one[ -]prompt|single[ -]prompt|one[ -]body|no[ -]batch)\b",
-        reason,
-        re.IGNORECASE,
+    if (
+        capability_id == "role-prompt"
+        and kind in {DECLINE_KIND_DEFAULT, "scope_too_small"}
+        and re.search(
+            r"\b(?:single[ -]body|one[ -]prompt|single[ -]prompt|one[ -]body|no[ -]batch)\b",
+            reason,
+            re.IGNORECASE,
+        )
     ):
         return "wrong_moment"
     return kind
@@ -857,7 +861,7 @@ def experiments(*, path=None, window_days: int = WINDOW_DAYS, now: int | None = 
                     trial["decline_kinds"].setdefault(
                         cap_id,
                         classify_decline_kind(
-                            str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT), reason
+                            cap_id, str(meta.get(DECLINE_KIND_KEY) or DECLINE_KIND_DEFAULT), reason
                         ),
                     )
                     ts = event.get("timestamp") or 0
@@ -3723,7 +3727,7 @@ def record_decline(
         )
     if str(kind) not in DECLINE_KINDS:
         raise ValueError(f"unknown decline kind {kind!r}; expected one of {sorted(DECLINE_KINDS)}")
-    kind = classify_decline_kind(str(kind), str(reason))
+    kind = classify_decline_kind(capability_id, str(kind), str(reason))
     if not experiment_id.startswith(ADVICE_REF_PREFIX):
         raise ValueError(f"experiment_id must start with {ADVICE_REF_PREFIX!r}: {experiment_id!r}")
     return capabilities.heartbeat(
@@ -6986,8 +6990,18 @@ def _selftest_detection() -> None:
 
 def _selftest() -> None:
     assert not decline_kind_demotable("wrong_moment")
-    assert classify_decline_kind("scope_too_small", "a single-body moment") == "wrong_moment"
-    assert classify_decline_kind("scope_too_small", "one small function") == "scope_too_small"
+    assert (
+        classify_decline_kind("role-prompt", "scope_too_small", "a single-body moment")
+        == "wrong_moment"
+    )
+    assert (
+        classify_decline_kind("role-prompt", "scope_too_small", "one small function")
+        == "scope_too_small"
+    )
+    assert (
+        classify_decline_kind("offload", "scope_too_small", "a single-body read is too small")
+        == "scope_too_small"
+    )
     import tempfile
     from pathlib import Path
 
@@ -7594,7 +7608,7 @@ def main(argv: list[str]) -> int:
                     "--reason is required: an unexplained decline is indistinguishable from "
                     "inattention, which is the state this verb exists to replace"
                 )
-            args.kind = classify_decline_kind(args.kind, args.reason)
+            args.kind = classify_decline_kind(args.capability, args.kind, args.reason)
             ok = record_decline(
                 args.capability,
                 args.experiment,

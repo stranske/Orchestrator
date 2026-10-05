@@ -3456,6 +3456,40 @@ def _selftest() -> None:
         finally:
             _g["run"], _g["load_decision"] = _old_run, _old_load
 
+        # The CLI notice is observable behavior; exercise it without dispatching.
+        _old_delegate = globals()["delegate"]
+        _old_shadow = os.environ.get("ORCH_ROLE_SHADOW")
+        try:
+            globals()["delegate"] = lambda *a, **kw: {"ok": True}
+            for _setting in (None, "0", "1"):
+                os.environ.pop("ORCH_ROLE_SHADOW", None)
+                if _setting is not None:
+                    os.environ["ORCH_ROLE_SHADOW"] = _setting
+                _out, _err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(_out), contextlib.redirect_stderr(_err):
+                    assert (
+                        main(
+                            [
+                                "delegate",
+                                "--agent",
+                                "codex",
+                                "--target",
+                                "owner/repo#1",
+                                "--prompt",
+                                "Work",
+                            ]
+                        )
+                        == 0
+                    )
+                assert _err.getvalue() == (
+                    "role activation off (ORCH_ROLE_SHADOW unset)\n" if _setting is None else ""
+                ), (_setting, _err.getvalue())
+        finally:
+            globals()["delegate"] = _old_delegate
+            os.environ.pop("ORCH_ROLE_SHADOW", None)
+            if _old_shadow is not None:
+                os.environ["ORCH_ROLE_SHADOW"] = _old_shadow
+
         print(
             "dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
             "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
