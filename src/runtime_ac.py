@@ -1329,6 +1329,21 @@ def _valid_spec() -> dict[str, Any]:
     return json.loads(json.dumps(RUNTIME_AC_SCHEMA_EXAMPLE))
 
 
+def _issue_named_test_nodes(line: str) -> list[str]:
+    """Resolve shorthand within one obligation, never against another line's path."""
+    nodes = []
+    previous_path = ""
+    for match in re.finditer(
+        r"(?<![\w/])(?:(tests/[\w./-]+\.py)(::[\w:]+)?|(::test_[\w:]+))", line
+    ):
+        if match[1]:
+            previous_path = match[1]
+            nodes.append(previous_path + (match[2] or ""))
+        elif previous_path:
+            nodes.append(previous_path + match[3])
+    return list(dict.fromkeys(nodes))
+
+
 def author_issue_spec(
     issue: str, body: str, *, target: str | None = None, worktree: str | None = None
 ) -> dict[str, Any]:
@@ -1347,33 +1362,40 @@ def author_issue_spec(
         if heading:
             section = heading[1].lower()
         elif section in sections and raw.strip():
+            if section == "tasks" and not re.match(r"^\s*[-*]\s+\[[ xX]\]\s+", raw):
+                continue
             line = re.sub(r"^\s*[-*]\s*(?:\[[ xX]\]\s*)?", "", raw).strip()
             sections[section].append(line)
     criteria: list[dict[str, Any]] = []
-    previous_path = ""
-    named_nodes: list[str] = []
-    for line in sections["acceptance criteria"]:
+    obligations = [(line, False) for line in sections["acceptance criteria"]] + [
+        (line, True) for line in sections["tasks"]
+    ]
+    nodes_by_line = [_issue_named_test_nodes(line) for line, _ in obligations]
+    break_lines = [
+        bool(re.search(r"break\s*(?:→|->|then|and).*revert", line, re.I))
+        for line, _ in obligations
+    ]
+    # A break may precede the named tests, or those tests may live in Tasks.
+    named_nodes = list(
+        dict.fromkeys(
+            node
+            for nodes, is_break in zip(nodes_by_line, break_lines)
+            if not is_break
+            for node in nodes
+        )
+    )
+    for (line, is_task), nodes, is_break in zip(obligations, nodes_by_line, break_lines):
         checks: list[dict[str, Any]] = []
-        # Shorthand ::test_* inherits only the path on this same named-test line.
-        nodes = []
-        for match in re.finditer(
-            r"(?<![\w/])(?:(tests/[\w./-]+\.py)(::[\w:]+)?|(::test_[\w:]+))", line
-        ):
-            if match[1]:
-                previous_path = match[1]
-                nodes.append(previous_path + (match[2] or ""))
-            elif previous_path:
-                nodes.append(previous_path + match[3])
         ac_id = f"AC{len(criteria) + 1}"
-        is_break = bool(re.search(r"break\s*(?:→|->|then|and).*revert", line, re.I))
-        if is_break and named_nodes:
+        break_nodes = nodes or named_nodes
+        if is_break and break_nodes:
             checks.append(
                 {
                     "id": f"{ac_id}-BREAK",
                     "type": "deliberate_break",
                     "name": line,
-                    "test_cmd": "python3 -m pytest -p no:cov " + " ".join(named_nodes),
-                    "test_paths": sorted({node.split("::")[0] for node in named_nodes}),
+                    "test_cmd": "python3 -m pytest -p no:cov " + " ".join(break_nodes),
+                    "test_paths": sorted({node.split("::")[0] for node in break_nodes}),
                     "base_ref": "origin/main",
                     "confidence": 0.7,
                 }
@@ -1388,8 +1410,8 @@ def author_issue_spec(
                     "confidence": 0.0,
                 }
             )
-        elif nodes:
-            for idx, node in enumerate(dict.fromkeys(nodes)):
+        elif nodes and not is_break:
+            for idx, node in enumerate(nodes):
                 checks.append(
                     {
                         "id": f"{ac_id}-TEST{idx + 1}",
@@ -1400,11 +1422,10 @@ def author_issue_spec(
                         "confidence": 1.0,
                     }
                 )
-                named_nodes.append(node)
         else:
             checks.append(
                 {
-                    "id": f"{ac_id}-MANUAL",
+                    "id": f"{ac_id}-TASK" if is_task else f"{ac_id}-MANUAL",
                     "type": "manual",
                     "name": line,
                     "instructions": line,
@@ -1414,24 +1435,6 @@ def author_issue_spec(
         evidence = sorted(set().union(*(_evidence_for_check(c) for c in checks)))
         criteria.append(
             {"id": ac_id, "statement": line, "evidence_required": evidence, "checks": checks}
-        )
-    for line in sections["tasks"]:
-        ac_id = f"AC{len(criteria) + 1}"
-        criteria.append(
-            {
-                "id": ac_id,
-                "statement": line,
-                "evidence_required": ["manual_review"],
-                "checks": [
-                    {
-                        "id": f"{ac_id}-TASK",
-                        "type": "manual",
-                        "name": line,
-                        "instructions": line,
-                        "confidence": 0.0,
-                    }
-                ],
-            }
         )
     if not criteria:
         criteria = [
@@ -1518,6 +1521,26 @@ def _selftest() -> None:
     authored = author_issue_spec("owner/repo#1", "## Acceptance Criteria\n- Inspect the receipt.")
     assert validate_spec(authored) == [] and authored["verification"]["shadow_only"] is True
     assert authored["acceptance_criteria"][0]["checks"][0]["confidence"] == 0.0
+    task_authored = author_issue_spec(
+        "owner/repo#1",
+        "## Tasks\nComplete these in order.\n"
+        "- [ ] Named test: `tests/test_task.py::test_task`.\n"
+        "## Acceptance Criteria\n"
+        "- Deliberate-break → revert: remove reader → named test FAILS; revert.\n"
+        "- Named test: `::test_orphan` needs its own file.\n",
+    )
+    assert validate_spec(task_authored) == []
+    task_criteria = task_authored["acceptance_criteria"]
+    assert len(task_criteria) == 3
+    assert task_criteria[0]["checks"][0]["type"] == "deliberate_break"
+    assert task_criteria[0]["checks"][0]["test_paths"] == ["tests/test_task.py"]
+    assert task_criteria[1]["checks"][0]["type"] == "manual"
+    assert task_criteria[2]["checks"][0]["type"] == "command"
+    assert _issue_named_test_nodes("tests/test_task.py::test_task, ::test_second") == [
+        "tests/test_task.py::test_task",
+        "tests/test_task.py::test_second",
+    ]
+    assert _issue_named_test_nodes("::test_orphan") == []
     prompt = build_authoring_prompt(
         goal="Verify course progress end to end",
         repo="owner/repo",

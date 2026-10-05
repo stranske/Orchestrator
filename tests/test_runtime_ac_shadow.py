@@ -49,6 +49,39 @@ def test_author_builds_checks_from_tasks_and_acceptance_lines():
     assert all("confidence" in check for check in checks)
     assert spec["verification"]["shadow_only"] is True
 
+    # Tasks are evidence obligations too; section introductions are not checkboxes.
+    # A break can appear before its named test, and explicit break nodes narrow it.
+    reordered_body = """## Tasks
+Complete these in order.
+- [ ] Named test: `tests/test_task.py::test_task`.
+- [x] Inspect the saved receipt.
+- [ ] Deliberate-break -> revert: remove the reader; `tests/test_break.py::test_break` FAILS; revert.
+## Acceptance Criteria
+- Deliberate-break → revert: remove the reader → named tests FAIL; revert.
+- Named test: `tests/test_example.py::test_one`, `::test_two`.
+- Named test: `::test_orphan` requires an explicit file.
+"""
+    reordered = runtime_ac.author_issue_spec("owner/repo#1", reordered_body)
+    assert runtime_ac.validate_spec(reordered) == []
+    checks = [check for ac in reordered["acceptance_criteria"] for check in ac["checks"]]
+    assert [check["name"] for check in checks if check["type"] == "command"] == [
+        "tests/test_example.py::test_one",
+        "tests/test_example.py::test_two",
+        "tests/test_task.py::test_task",
+    ]
+    breaks = [check for check in checks if check["type"] == "deliberate_break"]
+    assert breaks[0]["test_cmd"] == (
+        "python3 -m pytest -p no:cov tests/test_example.py::test_one "
+        "tests/test_example.py::test_two tests/test_task.py::test_task"
+    )
+    assert breaks[1]["test_paths"] == ["tests/test_break.py"]
+    assert breaks[1]["test_cmd"].endswith("tests/test_break.py::test_break")
+    manual = [check["instructions"] for check in checks if check["type"] == "manual"]
+    assert "Named test: `::test_orphan` requires an explicit file." in manual
+    assert "Inspect the saved receipt." in manual
+    assert all(ac["statement"] != "Complete these in order." for ac in reordered["acceptance_criteria"])
+    assert all(0.0 <= check["confidence"] <= 1.0 for check in checks)
+
 
 def test_a_passing_named_test_under_coverage_flags_is_PASS(tmp_path, monkeypatch):
     (tmp_path / "test_one.py").write_text("def test_one():\n    assert True\n")
