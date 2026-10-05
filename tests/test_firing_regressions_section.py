@@ -1,0 +1,189 @@
+"""The weekly alarm reaches a reader with independent step and ledger evidence."""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+import capabilities
+import capability_firing_monitor as monitor
+import rail_exercise
+import route_weights_export as export
+import switch_review as switches
+
+NOW = 1_800_000_000
+DAY = 86400
+
+
+def _section(tmp_path, monkeypatch, *, stamp_age=3600, last_age=30 * DAY):
+    cap = "route-weights-export"
+    monkeypatch.setattr(
+        capabilities, "load_declared", lambda *_a: {cap: {"last_invocation": NOW - last_age}}
+    )
+    (tmp_path / "capability-firing-monitor.json").write_text(
+        json.dumps(
+            {
+                "generated_at": NOW - DAY,
+                "regressed": [{"capability_id": cap}],
+                "overdue": [{"capability_id": cap}],
+            }
+        )
+    )
+    for name, age in [
+        (".last-route-weights-export", stamp_age),
+        ("route-weights-export.json", 10 * DAY),
+    ]:
+        p = tmp_path / name
+        p.write_text("{}")
+        os.utime(p, (NOW - age, NOW - age))
+    return switches.firing_regressions(now=NOW, state_dir=tmp_path)
+
+
+def test_a_silent_heartbeat_with_a_fresh_stamp_prints_heartbeat_silent_step_ran(
+    tmp_path, monkeypatch
+):
+    section = _section(tmp_path, monkeypatch)
+    text = "\n".join(switches._firing_lines(section))
+    assert "heartbeat silent, step ran" in text
+    assert "stamp age seconds=3600" in text
+    assert "artifact mtime:" in text
+    assert len(section["rows"]) == 1  # Same row in two findings is rendered once.
+    step = section["rows"][0]["step_evidence"][0]
+    assert step["artifact_mtime"] == NOW - 10 * DAY
+    assert step["stamp_mtime"] == NOW - 3600
+
+
+def test_a_real_stop_prints_step_last_ran(tmp_path, monkeypatch):
+    section = _section(tmp_path, monkeypatch, stamp_age=25 * DAY)
+    text = "\n".join(switches._firing_lines(section))
+    assert "step last ran" in text
+    assert "heartbeat silent, step ran" not in text
+
+
+def test_artifact_without_stamp_does_not_claim_the_step_ran(tmp_path, monkeypatch):
+    _section(tmp_path, monkeypatch)
+    (tmp_path / ".last-route-weights-export").unlink()
+    text = "\n".join(
+        switches._firing_lines(switches.firing_regressions(now=NOW, state_dir=tmp_path))
+    )
+    assert "step last ran UNKNOWN (missing)" in text
+    assert "heartbeat silent, step ran" not in text
+
+
+def test_new_heartbeat_does_not_repeat_a_historical_silence_claim(tmp_path, monkeypatch):
+    section = _section(tmp_path, monkeypatch, last_age=60)
+    text = "\n".join(switches._firing_lines(section))
+    assert "heartbeat recorded since monitor snapshot" in text
+    assert "heartbeat silent, step ran" not in text
+    assert section["rows"][0]["findings"] == ["regressed", "overdue"]
+
+
+@pytest.mark.parametrize(
+    "content", [None, "broken json", '{"generated_at":1,"regressed":null,"overdue":[]}']
+)
+def test_missing_or_invalid_report_stays_unknown(tmp_path, content):
+    if content is not None:
+        (tmp_path / "capability-firing-monitor.json").write_text(content)
+    section = switches.firing_regressions(now=NOW, state_dir=tmp_path)
+    assert section["status"] == "unknown"
+    assert "UNKNOWN" in "\n".join(switches._firing_lines(section))
+
+
+def test_monitor_carries_step_evidence_without_changing_findings(tmp_path, monkeypatch):
+    cap = "route-weights-export"
+    monkeypatch.setattr(monitor, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(monitor, "_capability_heartbeat", lambda *_a: None)
+    monkeypatch.setattr(monitor, "_load_history", lambda: [])
+    monkeypatch.setattr(
+        capabilities,
+        "load_declared",
+        lambda *_a: {
+            cap: {
+                "status": "wired",
+                "last_invocation": NOW - 30 * DAY,
+                "trigger_cadence": "daily",
+                "matcher": {"kind": "transport"},
+            }
+        },
+    )
+    p = tmp_path / ".last-route-weights-export"
+    p.touch()
+    os.utime(p, (NOW - 60, NOW - 60))
+    rep = monitor.review(now=NOW, environ={})
+    assert rep["overdue_count"] == 1
+    row = rep["overdue"][0]
+    assert row["capability_id"] == cap
+    assert row["step_evidence"][0]["stamp_age_seconds"] == 60
+    assert rep["silence_evidence"][cap]["step_evidence"] == row["step_evidence"]
+
+
+def test_review_and_formatter_consume_the_firing_section(monkeypatch):
+    monkeypatch.setattr(switches, "_capability_heartbeat", lambda *_a: None)
+    monkeypatch.setattr(switches, "switch_states", lambda **_k: {"held_off": [], "on_but_idle": []})
+    for name in [
+        "stale_runners",
+        "mirror_drift",
+        "fleet_gates",
+        "_exploration_gate",
+        "gate_expiry",
+    ]:
+        monkeypatch.setattr(switches, name, lambda **_k: {})
+    section = {"status": "ok", "generated_at": NOW, "rows": []}
+    calls = []
+    monkeypatch.setattr(switches, "firing_regressions", lambda **kw: calls.append(kw) or section)
+    rep = switches.review(now=NOW, path=Path("private-ledger"))
+    assert calls == [{"now": NOW, "path": Path("private-ledger")}]
+    assert rep["firing_regressions"] is section
+    assert "Firing regressions and overdue steps" in switches.format_report(rep)
+    assert rep["raise_count"] == 0
+
+
+def _export(tmp_path, monkeypatch, *, publish=False, published=False):
+    beats = []
+    monkeypatch.setattr(
+        export.capabilities, "daily_heartbeat", lambda *a, **k: beats.append((a, k))
+    )
+    monkeypatch.setattr(export, "build_document", lambda *_a: {"source_version": 2})
+    monkeypatch.setattr(export, "write_document", lambda *_a: False)
+    monkeypatch.setattr(export, "publish_document", lambda *_a: published)
+    monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["route_weights_export.py", "--state-dir", str(tmp_path)]
+        + (["--publish"] if publish else []),
+    )
+    assert export.main() == 0
+    return beats
+
+
+def test_route_weights_export_heartbeats_invocation_without_a_publish(tmp_path, monkeypatch):
+    beats = _export(tmp_path, monkeypatch)
+    assert [a[1] for a, _ in beats] == ["invocation"]
+
+
+@pytest.mark.parametrize("published", [False, True])
+def test_export_success_means_a_completed_publication(tmp_path, monkeypatch, published):
+    beats = _export(tmp_path, monkeypatch, publish=True, published=published)
+    assert [a[1] for a, _ in beats] == (["invocation", "success"] if published else ["invocation"])
+    if published:
+        assert beats[-1][1]["metadata"]["published"] is True
+
+
+def test_rail_exercise_heartbeats_without_record(monkeypatch):
+    beats, record_flags = [], []
+    monkeypatch.setattr(
+        rail_exercise.capabilities, "daily_heartbeat", lambda *a, **k: beats.append(a)
+    )
+    monkeypatch.setattr(
+        rail_exercise,
+        "report",
+        lambda only, record: record_flags.append(record)
+        or {"totals": {"contracts": 1, "passed": 1, "failed": 0}, "tree": "fixture"},
+    )
+    monkeypatch.setattr(sys, "argv", ["rail_exercise.py", "--json"])
+    assert rail_exercise.main() == 0
+    assert record_flags == [False]
+    assert [a[1] for a in beats] == ["invocation", "success"]

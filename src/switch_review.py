@@ -1206,6 +1206,105 @@ def switch_states(
     return {"held_off": due, "on_but_idle": quiet}
 
 
+def firing_regressions(*, now: int, path=None, state_dir: Path | None = None) -> dict:
+    """Consume the weekly firing report without running or recording the monitor.
+
+    Re-read the ledger and cadence files: a historical alarm must not claim the
+    heartbeat is still silent after a repair. No finding is cleared or acted on.
+    """
+    import capability_firing_monitor as firing
+
+    root = (
+        state_dir
+        if state_dir is not None
+        else Path(os.environ.get("ORCH_STATE_DIR", str(Path.home() / ".codex/orchestrator")))
+    )
+    report_path = root / "capability-firing-monitor.json"
+    try:
+        report = json.loads(report_path.read_text())
+        if not isinstance(report, dict) or not isinstance(report.get("generated_at"), int):
+            raise ValueError("missing integer generated_at")
+        findings: dict[str, list[str]] = {}
+        for kind in ("regressed", "overdue"):
+            values = report[kind]
+            if not isinstance(values, list):
+                raise ValueError(f"{kind} is not a list")
+            for row in values:
+                cap_id = row["capability_id"]
+                if not isinstance(cap_id, str) or not cap_id:
+                    raise ValueError("missing capability_id")
+                findings.setdefault(cap_id, []).append(kind)
+        ledger = capabilities.load_declared(path or capabilities.REG)
+        rows = []
+        for cap_id, kinds in sorted(findings.items()):
+            cap = ledger.get(cap_id)
+            last = int(cap.get("last_invocation") or 0) if cap is not None else None
+            steps = firing.step_evidence(cap_id, now=now, state_dir=root)
+            rows.append(
+                {
+                    "capability_id": cap_id,
+                    "findings": kinds,
+                    "last_heartbeat": last,
+                    "step_evidence": steps,
+                }
+            )
+        return {
+            "status": "ok",
+            "report_path": str(report_path),
+            "generated_at": report["generated_at"],
+            "rows": rows,
+        }
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {
+            "status": "unknown",
+            "report_path": str(report_path),
+            "reason": str(exc),
+            "rows": [],
+        }
+
+
+def _firing_lines(section: dict) -> list[str]:
+    """Render heartbeat and step times independently; absent evidence stays unknown."""
+
+    def date(value):
+        return datetime.fromtimestamp(value, timezone.utc).isoformat() if value else "never"
+
+    lines = ["## Firing regressions and overdue steps", ""]
+    if section.get("status") != "ok":
+        return lines + [f"  UNKNOWN — {section.get('reason')}", ""]
+    lines.append(f"  monitor snapshot: {date(section['generated_at'])}")
+    for row in section["rows"]:
+        last = row["last_heartbeat"]
+        lines.append(f"  {row['capability_id']}: {', '.join(row['findings'])}")
+        lines.append(
+            f"      ledger last heartbeat: {date(last) if last is not None else 'UNKNOWN'}"
+        )
+        if last and last > section["generated_at"]:
+            lines.append(
+                "      heartbeat recorded since monitor snapshot; finding retained as history"
+            )
+        for step in row["step_evidence"]:
+            stamp, age = step["stamp_mtime"], step["stamp_age_seconds"]
+            if stamp is None:
+                phrase = f"step last ran UNKNOWN ({step['stamp_error'] or 'no stamp declared'})"
+            elif age < 0:
+                phrase = f"step last ran UNKNOWN (future stamp {date(stamp)})"
+            elif last is not None and stamp > (last or 0) and age <= step["stale_after_seconds"]:
+                phrase = f"heartbeat silent, step ran {date(stamp)}"
+            else:
+                phrase = f"step last ran {date(stamp)}"
+            lines.append(f"      {step['step']}: {phrase}; stamp age seconds={age}")
+            lines.append(
+                f"      artifact mtime: {date(step['artifact_mtime']) if step['artifact_mtime'] is not None else 'UNKNOWN'}"
+                f"; {step['artifact_path'] or 'no artifact declared'}"
+            )
+            if step.get("gate"):
+                lines.append(f"      enclosing-step evidence only; {step['gate']}")
+        if not row["step_evidence"]:
+            lines.append("      step last ran UNKNOWN (no declared cadence carrier)")
+    return lines + [""]
+
+
 def review(
     *,
     now: int | None = None,
@@ -1248,6 +1347,7 @@ def review(
         # landed, so both belong in this sweep rather than in a second auditor.
         "mirror_drift": mirror_drift(),
         "fleet_gates": fleet_gates(now=now),
+        "firing_regressions": firing_regressions(now=now, path=path),
         "exploration_gate": _exploration_gate(),
         # Same rule again: a row retired by its expiry with nobody having looked is a decision that
         # never happened. FYI only, so it is not counted in `raise_count` and raises no question.
@@ -1419,6 +1519,8 @@ def format_report(rep: dict) -> str:
             if row.get("drain"):
                 lines.append(f"      drain: {row['drain']['summary']}")
             lines.append("")
+    if "firing_regressions" in rep:
+        lines += _firing_lines(rep["firing_regressions"])
     if rep["unconditioned"]:
         lines += [
             "## Held with NO recorded criterion (a documentation gap, fix in "
@@ -1871,6 +1973,32 @@ def _selftest() -> None:
     finally:
         _GH_CALL_RUNNER = saved_runner
     _selftest_gate_expiry()
+    proof = {
+        "status": "ok",
+        "generated_at": 1_800_000_000,
+        "rows": [
+            {
+                "capability_id": "test-cap",
+                "findings": ["overdue"],
+                "last_heartbeat": 1,
+                "step_evidence": [
+                    {
+                        "step": "test",
+                        "stamp_mtime": 1_799_999_940,
+                        "stamp_age_seconds": 60,
+                        "stale_after_seconds": 86400,
+                        "artifact_mtime": None,
+                        "artifact_path": None,
+                    }
+                ],
+            }
+        ],
+    }
+    assert "heartbeat silent, step ran" in "\n".join(_firing_lines(proof))
+    proof["rows"][0]["step_evidence"][0]["stamp_age_seconds"] = 30 * 86400
+    text = "\n".join(_firing_lines(proof))
+    assert "step last ran" in text and "heartbeat silent, step ran" not in text
+    assert "UNKNOWN" in "\n".join(_firing_lines({"status": "unknown", "reason": "absent"}))
     print(
         "switch_review.py selftest: OK (held-off raised, ON-but-idle re-raised after the window, "
         "recently-triggering stays silent, a consult trial is named and not counted, "

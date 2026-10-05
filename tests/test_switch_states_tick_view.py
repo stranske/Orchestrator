@@ -83,6 +83,8 @@ def sandbox(tmp_path, monkeypatch):
         monkeypatch.delenv(flag, raising=False)
     monkeypatch.delenv("ORCH_CAPABILITY_HEARTBEATS", raising=False)
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    # Review now reads persisted firing evidence too; keep that state private.
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     plan = tmp_path / "stage2-plan.json"
     plan.write_text(json.dumps({"generated_at": NOW - 60, "plans": []}), encoding="utf-8")
     monkeypatch.setattr(
