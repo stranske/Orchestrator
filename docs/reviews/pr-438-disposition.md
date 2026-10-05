@@ -304,3 +304,25 @@ Installed deployment was not performed; source #389's actual publication accepta
 with PR #414 and is not closed by this evidence audit. PR #445 still requires current-head
 CI, expected-check reconciliation, zero active threads, the seven-minute floor, guarded
 squash and post-merge comparison before source #444 terminal disposition.
+
+## Source-binding revalidation in PR #456
+
+The [authenticated revalidation receipt](pr-438-source-binding-revalidation.json) records
+fresh PR, exact-head commit, complete recursive tree, and PR-file reads. All 2,165 tree
+records and 14 changed-file records match the retained metadata. Reacquisition retrieved
+all 22 complete blobs and reproduced the retained source manifest byte for byte, including
+all file/blob identities, modes, byte counts, SHA-256 digests and provenance URLs.
+The first retrieval task remains verified complete.
+
+The collector now requires valid blob IDs in the authenticated PR-file records and refuses
+any contradictory PR-file/tree blob identity before reading source or creating output.
+Six new regression cases cover missing/invalid IDs, a substituted real Git object, a
+non-blob tree entry, contradictory historical metadata and an absent changed-file binding.
+Absent bindings remain UNKNOWN with an owner and next action. [The retained test output](pr-438-source-binding-tests.txt)
+records 86 passed, zero failed and zero skipped, including full historical source replay.
+
+This acquisition revalidation leaves review PENDING and deployment NOT_OBSERVED; the
+independent Sol closeout above is separate evidence. Fresh reads also confirmed both
+deliberate-break run heads and failure conclusions; their detailed historical job/log
+evidence remains in the original receipt. This pass did not repeat the full pytest suite
+or perform an installed deployment.

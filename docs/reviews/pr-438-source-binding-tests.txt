@@ -1,0 +1,117 @@
+$ ORCH_CONTRACT_SOURCE_MANIFEST="$PWD/docs/reviews/pr-438-source-evidence.json" ORCH_CONTRACT_EXPECTED_HEAD=883ee0b84f5bd5b3bbee7c85c586004aafd58e5f node tests/test_capture_review_source_evidence.js
+UNKNOWN: 1/1 changed files retained; review PENDING
+✔ retains complete exact-head bytes and bindings despite working-tree drift (36.436083ms)
+✔ rejects a same-count changed-path substitution with another real tree file (24.420651ms)
+✔ rejects absent PR file records before writing a bundle (23.001482ms)
+✔ rejects incomplete PR file records before writing a bundle (23.67057ms)
+✔ rejects wrong head PR file records before writing a bundle (23.461648ms)
+✔ rejects omitted PR file records before writing a bundle (22.64236ms)
+✔ rejects duplicate PR file records before writing a bundle (22.793865ms)
+✔ rejects invalid filename PR file records before writing a bundle (22.482757ms)
+✔ compares the complete aggregated PR file set independently of ordering (29.334972ms)
+✔ rejects missing SHA PR/tree identity before reading source or writing a bundle (23.884378ms)
+✔ rejects invalid SHA PR/tree identity before reading source or writing a bundle (22.973968ms)
+✔ rejects different blob PR/tree identity before reading source or writing a bundle (25.176105ms)
+✔ rejects non-blob tree entry PR/tree identity before reading source or writing a bundle (22.060497ms)
+✔ retained PR receipt refuses a contradictory blob binding with unchanged filenames (31.10033ms)
+✔ an absent changed-file tree binding remains UNKNOWN with an owner and action (24.597894ms)
+✔ durable metadata receipt reproduces all manifest path/tree bindings without historical blobs (29.538342ms)
+✔ retained PR receipt rejects substituting its last changed file with a supporting tree file (28.087974ms)
+✔ replays the retained exact-head receipt into a complete byte-identical source bundle (99.004466ms)
+✔ rejects head metadata before writing a bundle (26.2393ms)
+✔ rejects commit metadata before writing a bundle (26.048174ms)
+✔ rejects tree metadata before writing a bundle (24.43037ms)
+✔ rejects truncated metadata before writing a bundle (24.315059ms)
+✔ rejects duplicates metadata before writing a bundle (24.524617ms)
+✔ rejects traversal metadata before writing a bundle (23.038458ms)
+✔ rejects omitted file metadata before writing a bundle (23.708698ms)
+✔ records truncation as UNKNOWN with an owner and action (24.685797ms)
+✔ records same-length corruption as UNKNOWN with an owner and action (23.912158ms)
+✔ records missing object as UNKNOWN with an owner and action (23.146732ms)
+✔ records missing binding as UNKNOWN with an owner and action (27.993045ms)
+✔ retains aliases by blob identity and preserves executable mode bindings (28.476635ms)
+✔ refuses to overwrite retained evidence or write inside the source via a symlink (26.508ms)
+✔ CLI reports incomplete retrieval with a nonzero exit and durable manifest (25.951133ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 897.690946
+
+$ node tests/test_review_contract_inputs.js
+✔ reads the historical floor from its bound object without rewriting the current floor (28.957535ms)
+✔ pins the exact manifest bytes used by a witness receipt (24.157875ms)
+✔ refuses an invalid or mismatched receipt digest (empty) before reading source (15.313175ms)
+✔ refuses an invalid or mismatched receipt digest (invalid) before reading source (16.772888ms)
+✔ refuses an invalid or mismatched receipt digest (0000000000000000000000000000000000000000000000000000000000000000) before reading source (15.49486ms)
+✔ retained installation manifest reproduces its receipt despite the later metadata re-export (1.316211ms)
+✔ witness runner refuses a receipt with replaced manifest before executing contract tests (57.669502ms)
+✔ witness runner refuses a receipt with missing manifest before executing contract tests (49.338521ms)
+✔ refuses bytes drift after the witness runs (32.146633ms)
+✔ refuses executable mode drift after the witness runs (28.524749ms)
+✔ refuses leaf symlink drift after the witness runs (28.152056ms)
+✔ refuses parent symlink drift after the witness runs (30.158111ms)
+✔ rejects head bindings before running a witness (14.377894ms)
+✔ rejects incomplete bindings before running a witness (14.018254ms)
+✔ rejects count bindings before running a witness (15.469983ms)
+✔ rejects duplicate bindings before running a witness (18.277777ms)
+✔ rejects traversal bindings before running a witness (18.77167ms)
+✔ rejects hash bindings before running a witness (21.050537ms)
+✔ rejects size bindings before running a witness (22.386861ms)
+✔ rejects blob bindings before running a witness (21.774874ms)
+✔ rejects floor bindings before running a witness (22.798936ms)
+✔ refuses a manifest omitting a required executable input (21.204753ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 22
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 529.375791
+
+$ node tests/test_capture_mirror_deployment_evidence.js
+✔ captures real publisher observations without declaring deployment complete (415.479086ms)
+✔ records digest mismatch and returns failure (353.718578ms)
+✔ records permissions mismatch and returns failure (324.550467ms)
+✔ records registry mismatch and returns failure (300.312611ms)
+✔ records wrapper mismatch and returns failure (300.882922ms)
+✔ records copier guard mismatch and returns failure (302.033467ms)
+✔ records unverified mismatch and returns failure (299.658932ms)
+✔ records unfinished wrapper mismatch and returns failure (303.34008ms)
+✔ records dirty checkout mismatch and returns failure (308.243979ms)
+✔ records failed publication exit 1 despite matching success markers (378.216308ms)
+✔ records failed publication exit 3 despite matching success markers (383.402683ms)
+✔ records failed publication exit 137 despite matching success markers (378.564044ms)
+✔ records failed publication exit 255 despite matching success markers (377.074198ms)
+✔ rejects malformed publication exit "" (217.968207ms)
+✔ rejects malformed publication exit "0" (215.889206ms)
+✔ rejects malformed publication exit "00\n" (213.895495ms)
+✔ rejects malformed publication exit "-1\n" (215.48645ms)
+✔ rejects malformed publication exit "256\n" (213.603761ms)
+✔ rejects malformed publication exit "0\n1\n" (216.840818ms)
+✔ rejects malformed publication exit "0\n\n" (213.391687ms)
+✔ rejects malformed publication exit "0\r\n" (215.147594ms)
+✔ rejects malformed publication exit "ok\n" (215.350172ms)
+✔ requires retained exit evidence even when the publication log indicates success (217.142553ms)
+✔ rejects malformed verifier receipt "" (217.314198ms)
+✔ rejects malformed verifier receipt "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (215.676921ms)
+✔ rejects malformed verifier receipt "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n" (215.914233ms)
+✔ rejects malformed verifier receipt "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nextra\n" (213.593424ms)
+✔ refuses to replace earlier evidence or write into deployment and input paths (572.484812ms)
+✔ flags a publication overlapping evidence collection instead of mixing observations (355.580299ms)
+✔ documented verified wrapper retains evidence safely with new receipt (283.346144ms)
+✔ documented verified wrapper retains evidence safely with existing receipt (193.477116ms)
+✔ documented verified wrapper retains evidence safely with missing parent (194.527165ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9055.876685
+
