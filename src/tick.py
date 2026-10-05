@@ -494,12 +494,12 @@ def remote_tick(
             continue
         tt = item.get("task_type", "implement")
         held = claims.holder(str(item.get("target")))
-        if held:
+        if held is not None:  # None is the one answer that means free; an unknown holder holds
             blocked.append(
                 {
                     "target": item.get("target"),
                     "task_type": tt,
-                    "reason": f"claimed by {held.get('agent')}",
+                    "reason": f"claimed by {held.get('agent') or 'an unknown holder'}",
                 }
             )
             continue
@@ -585,6 +585,7 @@ def remote_tick(
                 "agent": pick["agent"],
                 "applied": res.get("applied"),
                 "skip": res.get("skip"),
+                "labels_read": res.get("labels_read"),
                 "dry_run": dry_run,
             }
         )
@@ -698,6 +699,10 @@ def _selftest():
     # selftest evidence in a disposable Brain rather than the live learning DB.
     feedback.DB_PATH = Path(tmp_handoff) / "feedback.db"
     claims._handoff_dir = lambda: Path(tmp_handoff)  # type: ignore
+    # Offline, as the module says: every remote_tick below would otherwise read each target's labels
+    # from GitHub. Answered, with no labels, unless a case says otherwise.
+    old_target_labels = dispatcher._target_labels
+    dispatcher._target_labels = lambda target: (set(), "")  # type: ignore
     subject_conn = sqlite3.connect(":memory:")
     subject_conn.executescript(research_scheduler.feedback.SCHEMA)
     research_scheduler.feedback._migrate_schema(subject_conn)
@@ -763,6 +768,35 @@ def _selftest():
             research_tick_fn=no_research,
         )
         assert len(out3["chosen"]) == 1 and len(out3["deferred"]) == 1, out3
+        # Ownership GitHub did not answer for is REFUSED, in a shadow tick and an active one alike,
+        # with the reason in the plan; and a held claim whose meta is unreadable blocks the target.
+        # Both reads used to answer "free" (2026-10-04).
+        dispatcher._target_labels = lambda target: (None, "gh exit 1: HTTP 502")  # type: ignore
+        for shadow in (True, False):
+            refused = remote_tick(
+                [{"target": "o/r#901", "task_type": "implement"}],
+                all_keep,
+                dry_run=shadow,
+                do_ingest=False,
+                env={},
+                research_tick_fn=no_research,
+            )
+            row = refused["chosen"][0]
+            assert row["labels_read"] is False and not row["applied"], refused
+            assert "labels unread (gh exit 1: HTTP 502)" in str(row["skip"]), refused
+        dispatcher._target_labels = lambda target: (set(), "")  # type: ignore
+        unstamped = claims._claims_dir() / claims._slug("o/r#902")
+        unstamped.mkdir(parents=True)  # mkdir'd and never stamped: held, holder unknown
+        held_out = remote_tick(
+            [{"target": "o/r#902", "task_type": "implement"}],
+            all_keep,
+            dry_run=True,
+            do_ingest=False,
+            research_tick_fn=no_research,
+        )
+        assert not held_out["chosen"], held_out
+        assert held_out["blocked"][0]["reason"] == "claimed by an unknown holder", held_out
+        claims.release("o/r#902")
         research_arbitration = {}
 
         def capture_reserved_research(*args, **kwargs):
@@ -986,7 +1020,8 @@ def _selftest():
 
         print(
             "tick.py selftest: OK (remote choose->delegate per item, reserve-aware, learned weights, "
-            "no-capacity skip, per-tick cap, adversarial review hook, runtime AC gate hook, "
+            "no-capacity skip, per-tick cap, unread labels and unknown claim holders refuse, "
+            "adversarial review hook, runtime AC gate hook, "
             "production-before-research arbitration, true research task_type, "
             "shadow/opt-in research hook)"
         )
@@ -1004,6 +1039,7 @@ def _selftest():
         subject_conn.close()
         shutil.rmtree(tmp_handoff, ignore_errors=True)
         claims._handoff_dir = old_claims_handoff  # type: ignore
+        dispatcher._target_labels = old_target_labels  # type: ignore
         feedback.DB_PATH = old_feedback_db
 
 
@@ -1053,10 +1089,16 @@ def main(argv):
         chosen = out.get("chosen") or []
         applied = sum(bool(row.get("applied")) for row in chosen)
         skipped = len(chosen) - applied
+        # The ownership read's own pair: a target whose labels GitHub did not return is refused,
+        # and the next tick reads it again, so "0 unanswered" is this refusal fully drained. A row
+        # that never reached a read (an error) is in neither count.
+        answered = sum(row.get("labels_read") is True for row in chosen)
+        unanswered = sum(row.get("labels_read") is False for row in chosen)
         shadow = " (shadow)" if not lane_live else ""
         print(
             f"TICK-PLAN: {len(chosen)} targets chosen, {applied} applied, "
             f"{skipped} skipped{shadow}; "
+            f"label reads {answered} answered, {unanswered} unanswered (refused); "
             f"{len(out.get('no_capacity') or [])} no capacity, "
             f"{len(out.get('deferred') or [])} deferred, "
             f"{len(out.get('blocked') or [])} blocked -> {artifact}"

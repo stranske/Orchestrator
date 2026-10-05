@@ -752,7 +752,8 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         return None  # unknown agent — skip gracefully
     # Detached wrapper, in order: (1) PATH fix so local tools (agy, vibe, cursor-agent) resolve
     # without depending on the child agent's HOME; (2) run the agent in a subshell with writable
-    # per-agent state/cache/log dirs; (3) ALWAYS release the claim outside that subshell so
+    # per-agent state/cache/log dirs. The subshell is LAST on purpose: `_spawn` reads the status of
+    # this string as the agent's, and only then releases the claim, outside the subshell, so
     # claims.py still sees the real HOME/HANDOFF defaults.
     path_prefix = _path_prefix()
     # `set -a` auto-EXPORTS what the env file sets — the files are bare KEY=value (no `export`),
@@ -760,9 +761,10 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # the first demo hit). set -a around the source exports CURSOR_API_KEY / tokens to the agent.
     auth_prelude = _auth_prelude(agent)
     agent_prelude = _agent_runtime_prelude(agent)
-    release = shlex.join(["python3", str(CLAIMS_PY), "release", target, agent])
     # _net_hygiene_prelude lives INSIDE the agent subshell (release runs outside it, on the real env).
-    wrapped = f"{path_prefix}; ({_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}); {release}"
+    wrapped = (
+        f"{path_prefix}; ({_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)})"
+    )
     return {
         "agent": agent,
         "mode": mode,
@@ -998,9 +1000,19 @@ def _spawn(d: dict) -> int:
     )
     # Marker BEFORE the python completion: the python step gets SIGKILLed in the wild (audit F2);
     # the microsecond printf survives and ledger_reconcile backfills latency/exit from it.
-    marker_cmd = adapters.done_marker_cmd(run_id, logf, "orch_dispatch_rc")
+    marker_cmd = adapters.done_marker_cmd(
+        run_id, logf, "orch_dispatch_rc", release_rc_var="orch_release_rc"
+    )
+    # The AGENT's status is read first, straight after `d["wrapped"]` (the agent subshell is its
+    # last command), and only then is the claim released. The release has a status of its own (0
+    # it found the claim, 1 it was gone, 137 it was SIGKILLed), and until 2026-10-04 `$?` was read
+    # AFTER it, so the marker's rc, `complete --exit-code` and this wrapper's exit all reported the
+    # release: 106 of 106 live dispatch markers, 31 of them a release SIGKILLed after the agent had
+    # finished, which reconcile then classed as the agent's signal death. The release still always
+    # runs, and its status rides in the marker as `release_rc`, beside the agent's, never as it.
+    release = shlex.join(["python3", str(CLAIMS_PY), "release", d["target"], d["agent"]])
     wrapped = (
-        f'{d["wrapped"]}; orch_dispatch_rc=$?; {marker_cmd}; '
+        f'{d["wrapped"]}; orch_dispatch_rc=$?; {release}; orch_release_rc=$?; {marker_cmd}; '
         f'{complete_cmd} --exit-code "$orch_dispatch_rc"; exit $orch_dispatch_rc'
     )
     with logf.open("a") as fh:
@@ -1135,7 +1147,7 @@ def delegate(
     claims.reap_stale()
     if not claims.claim(target, agent):
         h = claims.holder(target)
-        return {"error": f"target already claimed by {h.get('agent') if h else 'another agent'}"}
+        return {"error": f"target already claimed by {(h or {}).get('agent') or 'another agent'}"}
     a: dict[str, object] = {
         "agent": agent,
         "target": target,
@@ -1949,6 +1961,10 @@ def offload(
 # orchestrator drives opener/closer work cheaply: it CHOOSES the agent (its value-add) + labels; the
 # keepalive executes. The choice is informed by the route-table + learned weights. See PLANNING.md.
 REMOTE_AGENTS = {"cursor", "codex", "claude", "gemini"}
+# How long the remote rail waits for GitHub to answer a target's label read. A read that does not
+# answer in time is unknown like any other failed read, so the target is refused and the next tick
+# asks again; without a bound, a hung `gh` hung the tick, and launchd starts no tick while one runs.
+LABEL_READ_TIMEOUT_S = 30
 
 
 def _remote_label_cmd(target: str, agent: str) -> list:
@@ -1967,23 +1983,55 @@ def _remote_label_cmd(target: str, agent: str) -> list:
     ]
 
 
-def _target_labels(target: str) -> set:
-    """Live: label names on the target ISSUE or PR via the issues API (works for both). Empty set on error."""
+def _target_labels(target: str) -> tuple[set[str] | None, str]:
+    """Live: label names on the target ISSUE or PR via the issues API (works for both).
+
+    Three answers, never two. GitHub answered with the issue's label list: `(names, "")`, where an
+    EMPTY set is its answer "no labels". It did not answer (gh could not run, exited non-zero, timed
+    out, or printed something that is not an issue with a label list): `(None, why)`. Until
+    2026-10-04 that third answer was an empty set, so the skip rail read a failed read as
+    "unassigned" and labelled two PRs that carried agent:codex (Trend_Model_Project#5913, #5944)."""
     repo, num = provision.parse_target(target)
-    r = subprocess.run(
-        ["gh", "api", f"repos/{repo}/issues/{num}", "--jq", ".labels[].name"],
-        capture_output=True,
-        text=True,
-    )
-    return set(r.stdout.split()) if r.returncode == 0 else set()
+    try:
+        r = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/{num}"],
+            capture_output=True,
+            text=True,
+            timeout=LABEL_READ_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"gh did not answer within {LABEL_READ_TIMEOUT_S}s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"gh could not run: {type(exc).__name__}: {exc}"[:200]
+    if r.returncode != 0:
+        err = " ".join((r.stderr or r.stdout or "").split())
+        return None, f"gh exit {r.returncode}: {err}"[:200]
+    try:
+        issue = json.loads(r.stdout)
+    except ValueError:
+        return None, "gh printed output that is not JSON"
+    labels = issue.get("labels") if isinstance(issue, dict) else None
+    # Every element must be a label with a name. Skipping a malformed one would drop the very
+    # agent:* label this read exists to find, which is the same unknown-as-no one level down.
+    if not isinstance(labels, list) or not all(
+        isinstance(lab, dict) and isinstance(lab.get("name"), str) for lab in labels
+    ):
+        return None, "gh printed no label list"
+    return {lab["name"] for lab in labels}, ""
 
 
-def _remote_skip_reason(labels: set, agent: str) -> str | None:
+def _remote_skip_reason(labels: set | None, agent: str, unread: str = "") -> str | None:
     """Gate #4 rails (pure): don't fight the keepalive/delegation policy, and DON'T re-assign work already
     in the agent pipeline. Skip if the PR is paused, OR already carries ANY `agent:*` label (it's already
     assigned/in-flight — the orchestrator only remote-delegates FRESH, unassigned items; in-flight PRs are
     the delegation policy's / closer's job). Lesson from the first supervised tick: it added agent:codex on
-    top of an existing agent:claude — that double-assignment is what this guards against."""
+    top of an existing agent:claude — that double-assignment is what this guards against.
+
+    `labels` of None means the read did not answer (`unread` says why), so ownership is UNKNOWN, and
+    that is refused too: "no agent:* label" is a fact only an answered read can establish. The next
+    tick reads again, so a refusal lasts exactly as long as GitHub cannot answer for the target."""
+    if labels is None:
+        return f"labels unread ({unread or 'no answer'}) — ownership unknown, not delegating"
     if "agents:paused" in labels:
         return "agents:paused (lane paused — respect it)"
     assigned = sorted(lab for lab in labels if lab.startswith("agent:"))
@@ -2010,7 +2058,9 @@ def delegate_remote(
     GitHub runs reusable-<agent>-run.yml on a runner. The orchestrator's CHOICE of agent is the value
     (route-table + learned weights); execution + capacity are remote. Records the decision (mode=remote)
     so keepalive outcomes join the feedback loop by PR later. Cooperates with the rails (gate #4): skips
-    a paused/already-owned PR. Does NOT spawn or claim locally. `labels` overrides the live lookup (tests).
+    a paused/already-owned PR, and one whose labels could not be read, in dry-run exactly as in an
+    active tick. Does NOT spawn or claim locally. `labels` overrides the live lookup (tests).
+    `labels_read` in the result says whether ownership was known; the tick counts the False ones.
     """
     if agent not in REMOTE_AGENTS:
         return {
@@ -2020,10 +2070,13 @@ def delegate_remote(
     if num is None:
         return {"error": f"remote delegation needs a PR number: {target!r}"}
     cmd = _remote_label_cmd(target, agent)
-    lbls = (
-        labels if labels is not None else _target_labels(target)
-    )  # fetch (read-only) so dry-run shadows the rails too
-    skip = _remote_skip_reason(lbls, agent)
+    lbls: set | None  # None: GitHub did not answer, so ownership is unknown
+    if labels is not None:
+        lbls, unread = labels, ""
+    else:  # fetch (read-only) so dry-run shadows the rails too
+        lbls, unread = _target_labels(target)
+    skip = _remote_skip_reason(lbls, agent, unread)
+    labels_read = lbls is not None
     if dry_run:
         return {
             "target": target,
@@ -2032,9 +2085,16 @@ def delegate_remote(
             "cmd": cmd,
             "dry_run": True,
             "skip": skip,
+            "labels_read": labels_read,
         }
-    if skip:  # rails: respect pause / existing ownership
-        return {"target": target, "agent": agent, "applied": False, "skip": skip}
+    if skip:  # rails: respect pause / existing or unknown ownership
+        return {
+            "target": target,
+            "agent": agent,
+            "applied": False,
+            "skip": skip,
+            "labels_read": labels_read,
+        }
     res = subprocess.run(cmd, capture_output=True, text=True)
     applied = res.returncode == 0
     try:  # decision capture — keepalive outcomes (merge/durability) join this by PR later
@@ -2061,6 +2121,7 @@ def delegate_remote(
         "label": f"agent:{agent}",
         "applied": applied,
         "stderr": (res.stderr or "")[-300:] if not applied else "",
+        "labels_read": labels_read,
     }
 
 
@@ -2072,6 +2133,47 @@ def load_decision() -> dict:
 
 
 # ---------------------------------------------------------------------------
+def _selftest_spawn_reads_the_agents_status(plan: dict, root: Path) -> None:
+    """Run `_spawn`'s own wrapper with a stub agent (exit 7), claim release (exit 3) and completion
+    step, and read what it recorded. The marker's rc, `complete --exit-code` and the wrapper's exit
+    are the AGENT's; the release still runs after a failed agent, and its status is `release_rc`."""
+    global CLAIMS_PY, ORCH_DIR
+    stubs = root / "spawn-stubs"
+    stubs.mkdir()
+    calls = stubs / "calls.log"
+    for name, step, rc in (("claims.py", "release", 3), ("ledger_reconcile.py", "complete", 0)):
+        (stubs / name).write_text(
+            f"import sys\nopen({str(calls)!r}, 'a').write({step!r} + ' ' + ' '.join(sys.argv[2:])"
+            f" + '\\n')\nsys.exit({rc})\n"
+        )
+    seen: dict = {}
+
+    class _Proc:
+        pid = 4242
+
+    def _capture(argv, **_kw):
+        seen["wrapped"] = argv[-1]
+        return _Proc()
+
+    real_popen, real_claims, real_orch = subprocess.Popen, CLAIMS_PY, ORCH_DIR
+    setattr(subprocess, "Popen", _capture)  # scoped to the one `_spawn` call below
+    CLAIMS_PY, ORCH_DIR = stubs / "claims.py", stubs
+    try:
+        _spawn({**plan, "run_id": "selftest-agent-rc", "cwd": str(stubs), "wrapped": "(exit 7)"})
+    finally:
+        setattr(subprocess, "Popen", real_popen)
+        CLAIMS_PY, ORCH_DIR = real_claims, real_orch
+    ran = subprocess.run(["bash", "-c", seen["wrapped"]], cwd=stubs, capture_output=True, text=True)
+    marker = json.loads((DISPATCH_LOG_DIR / "done" / "selftest-agent-rc.json").read_text())
+    steps = calls.read_text().splitlines()
+    assert ran.returncode == 7, ("the wrapper exits with the agent's status", ran)
+    assert marker["rc"] == 7 and marker["rc_of"] == adapters.MARKER_RC_OF_AGENT, marker
+    assert marker["release_rc"] == 3, ("the release keeps its own status", marker)
+    assert [s.split()[0] for s in steps] == ["release", "complete"], steps
+    assert steps[0].endswith(f"{plan['target']} {plan['agent']}"), steps
+    assert "--exit-code 7" in steps[1], ("complete is told the agent's status", steps)
+
+
 def _selftest() -> None:
     import tempfile
 
@@ -2262,8 +2364,8 @@ def _selftest() -> None:
         # review prompt is advisory/non-gating
         rev_argv = by_t["stranske/Repo#3"]["argv"]
         assert any("non-gating" in tok.lower() for tok in rev_argv), rev_argv
-        # wrapper prepends a PATH fix (local-bin tools) + always releases the claim afterward
-        # (target is shlex-quoted for the shell, so it ends '... release <target> cursor')
+        # wrapper prepends a PATH fix (local-bin tools) and ENDS with the agent subshell: `_spawn`
+        # reads that status as the agent's and only then releases the claim (checked by running it)
         w = by_t["stranske/Repo#1"]["wrapped"]
         assert f"{REAL_HOME}/.local/bin" in w, w  # PATH fix independent of child HOME
         assert "ORCH_AGENT_RUNTIME" in w and "agent-runtime/cursor" in w, w
@@ -2272,12 +2374,8 @@ def _selftest() -> None:
             "CURSOR_CONFIG_DIR=" in w and "NODE_COMPILE_CACHE=" in w and "export HOME=" not in w
         ), w
         assert "cursor-agent.env" in w and "$HOME/.cursor" not in w and "set -a" in w, w
-        assert (
-            "claims.py" in w
-            and " release " in w
-            and "Repo#1" in w
-            and w.rstrip().endswith("cursor")
-        ), w
+        assert w.rstrip().endswith(")") and f"{CLAIMS_PY}" not in w, w
+        _selftest_spawn_reads_the_agents_status(by_t["stranske/Repo#1"], Path(tmp))
         # net hygiene: the proxy family is unset BEFORE the agent runs (inside the subshell) so a stray
         # *_PROXY can't blackhole the agent's HTTPS (the in-session offload-hang root cause, 2026-06-20).
         assert "unset " in w and "HTTPS_PROXY" in w and "ALL_PROXY" in w, w
@@ -3100,6 +3198,55 @@ def _selftest() -> None:
         assert drp["skip"] and "paused" in drp["skip"], drp
         dra = delegate_remote("cursor", "o/r#9", dry_run=True, labels={"agent:claude"})
         assert dra["skip"] and "agent pipeline" in dra["skip"], dra
+        # An UNANSWERED label read is refused, never read as "no labels" (2026-10-04): a failed read
+        # used to return an empty set, and the rail labelled two PRs that carried agent:codex.
+        unread_reason = _remote_skip_reason(None, "cursor", "gh exit 1: HTTP 502")
+        assert unread_reason and "labels unread" in unread_reason, unread_reason
+        assert "HTTP 502" in unread_reason, "the refusal names why the read did not answer"
+        assert _remote_skip_reason(set(), "cursor") is None, "an ANSWERED empty list delegates"
+        subprocess_any: Any = subprocess
+        real_subprocess_run = subprocess_any.run
+        label_answer: dict[str, Any] = {}
+        label_posts: list = []
+
+        def label_run(cmd, *_args, **_kwargs):
+            if "--method" in cmd:  # the label WRITE; the read never carries a method
+                label_posts.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            if isinstance(label_answer["now"], BaseException):
+                raise label_answer["now"]
+            return label_answer["now"]
+
+        unanswered = {
+            "exit": subprocess.CompletedProcess([], 1, "", "gh: Server Error (HTTP 502)"),
+            "timeout": subprocess.TimeoutExpired(["gh"], LABEL_READ_TIMEOUT_S),
+            "no gh": FileNotFoundError(2, "No such file or directory", "gh"),
+            "not json": subprocess.CompletedProcess([], 0, "<html>busy</html>", ""),
+            "no list": subprocess.CompletedProcess([], 0, '{"message": "Moved"}', ""),
+            "nameless": subprocess.CompletedProcess([], 0, '{"labels": [{"id": 1}]}', ""),
+        }
+        try:
+            subprocess_any.run = label_run
+            for why, answer in unanswered.items():
+                label_answer["now"] = answer
+                got, unread = _target_labels("o/r#7")
+                assert got is None and unread, (why, got, unread)
+            label_answer["now"] = subprocess.CompletedProcess([], 0, '{"labels": []}', "")
+            assert _target_labels("o/r#7") == (set(), ""), "GitHub's 'no labels' is an answer"
+            label_answer["now"] = subprocess.CompletedProcess(
+                [], 0, '{"labels": [{"name": "status: ready"}, {"name": "agent:codex"}]}', ""
+            )
+            spaced = _target_labels("o/r#7")
+            assert spaced == ({"status: ready", "agent:codex"}, ""), "a spaced name stays whole"
+            label_answer["now"] = unanswered["exit"]
+            dru = delegate_remote("cursor", "o/r#7", dry_run=True)
+            assert dru["skip"] and "labels unread" in dru["skip"], dru
+            assert dru["labels_read"] is False, dru
+            aru = delegate_remote("cursor", "o/r#7")
+            assert aru["applied"] is False and "labels unread" in aru["skip"], aru
+            assert label_posts == [], f"an unread target was labelled: {label_posts}"
+        finally:
+            subprocess_any.run = real_subprocess_run
 
         # Exercised-capability tagging: each condition must mirror the capability's own heartbeat
         # condition, and must NOT fire otherwise — a tag that fires too widely credits a capability
@@ -3296,7 +3443,8 @@ def _selftest() -> None:
             "dispatcher.py selftest: OK (plan→argv via adapters, task-type prompts, "
             "claim-release wrapper, worktree-seam fallback, offload no-commit guard + isolation, "
             "offload run_id ledger reconciliation + Gemini progress-only/log-tail fail-closed, heartbeat, bogus-agent skip, "
-            "delegate_remote label + guards, proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL, "
+            "delegate_remote label + guards (an unread label list refuses), "
+            "proxy-env scrub + ORCH_KEEP_PROXY + stdin=DEVNULL, "
             "offload profile selection, help/typo never dispatches)"
         )
     finally:

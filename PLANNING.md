@@ -421,7 +421,7 @@ remote repo system, with some local coding:
 1. ✅ `dispatcher.delegate_remote(agent, target)` — applies `agent:X` to drive the remote keepalive (mode=remote, records decision).
 2. ✅ `router.select_remote_agent(task_type, cap, learned)` — route-table + learned-weights + capacity, restricted to KEEPALIVE_AGENTS.
 3. ✅ `outcomes.ingest_outcomes()` + `feedback.runs_needing_outcome()` — reads keepalive PR state → records merged/abandoned outcomes (durability pending) → live data for the learner.
-4. ✅ rails: `dispatcher._remote_skip_reason()` skips `agents:paused` / already-owned PRs (cooperates with the delegation policy).
+4. ✅ rails: `dispatcher._remote_skip_reason()` skips `agents:paused` / already-owned PRs (cooperates with the delegation policy). Since 2026-10-04 it also skips a target whose labels GitHub did not return: a failed read used to read as "no labels", which labelled two `agent:codex` PRs for a second agent (Trend_Model_Project#5913, #5944).
 
 5. ✅ **tick-wiring** (`tick.py` + `orchestrate.sh --active`): the autonomous tick now uses the REMOTE
    model — for each backlog item, `select_remote_agent` (reserve-aware) → `delegate_remote` (apply
